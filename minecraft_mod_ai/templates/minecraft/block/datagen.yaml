@@ -7,21 +7,31 @@ inputs:
 - name: block_identity
   type: identifier
   required: true
+- name: block_datagen_input
+  type: specification
+  required: true
 outputs:
 - name: block_datagen_receipt
   type: receipt
+- name: block_datagen_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - REGISTER_BLOCK
+  symbols:
+  - register_block
+  - resource_key_create
+  schemas: []
 implementation_key: fabric/block/datagen
 validators:
-- json_schema
+- java_parse
 context_projection:
   max_bytes: 4096
   include:
   - mod_id
   - registry_path
   - package_path
+  - block_properties
 repair:
   scope:
   - minecraft/block/datagen
@@ -44,3 +54,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required block prerequisite receipt is missing; never invent defaults.
 - Output must satisfy json_schema validator before completion.
+postconditions:
+- block datagen matches host version contract
+- block datagen receipts emitted with verified context

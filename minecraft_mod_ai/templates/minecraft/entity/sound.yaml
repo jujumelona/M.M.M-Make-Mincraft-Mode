@@ -7,12 +7,20 @@ inputs:
 - name: entity_identity
   type: identifier
   required: true
+- name: entity_sound_input
+  type: specification
+  required: true
 outputs:
 - name: entity_sound_receipt
   type: receipt
+- name: entity_sound_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - REGISTER_ENTITY
+  - ENTITY_EXISTS
+  symbols:
+  - EntityType
+  schemas: []
 implementation_key: fabric/entity/sound
 validators:
 - java_parse
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - entity_properties
 repair:
   scope:
   - minecraft/entity/sound
@@ -44,3 +53,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required entity prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- entity sound matches host version contract
+- entity sound receipts emitted with verified context

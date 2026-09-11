@@ -7,12 +7,20 @@ inputs:
 - name: datagen_identity
   type: identifier
   required: true
+- name: datagen_run_input
+  type: specification
+  required: true
 outputs:
 - name: datagen_run_receipt
   type: receipt
+- name: datagen_run_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - DATA_GENERATOR
+  - TAGS
+  - RECIPE_CRAFTING
+  symbols: []
+  schemas: []
 implementation_key: fabric/datagen/run
 validators:
 - java_parse
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - datagen_properties
 repair:
   scope:
   - minecraft/datagen/run
@@ -44,3 +53,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required datagen prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- datagen run matches host version contract
+- datagen run receipts emitted with verified context

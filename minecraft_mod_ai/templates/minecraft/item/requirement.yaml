@@ -7,12 +7,23 @@ inputs:
 - name: item_identity
   type: identifier
   required: true
+- name: item_requirement_input
+  type: specification
+  required: true
 outputs:
-- name: item_contract
-  type: contract_receipt
+- name: item_requirement_receipt
+  type: receipt
+- name: item_requirement_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - REGISTER_ITEM
+  - ITEM_SETTINGS
+  symbols:
+  - register_item
+  - resource_key_create
+  - item_stacks_to
+  schemas: []
 implementation_key: fabric/item/requirement
 validators:
 - semantic_contract
@@ -22,6 +33,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - item_properties
 repair:
   scope:
   - minecraft/item/requirement
@@ -44,3 +56,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required item prerequisite receipt is missing; never invent defaults.
 - Output must satisfy semantic_contract validator before completion.
+postconditions:
+- item requirement matches host version contract
+- item requirement receipts emitted with verified context

@@ -7,12 +7,22 @@ inputs:
 - name: block_entity_identity
   type: identifier
   required: true
+- name: block_entity_requirement_input
+  type: specification
+  required: true
 outputs:
-- name: block_entity_contract
-  type: contract_receipt
+- name: block_entity_requirement_receipt
+  type: receipt
+- name: block_entity_requirement_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - BLOCK_ENTITY
+  - BLOCK_ENTITY_EXISTS
+  - REGISTER_BLOCK
+  symbols:
+  - BlockEntityType
+  - register_block
+  schemas: []
 implementation_key: fabric/block_entity/requirement
 validators:
 - semantic_contract
@@ -22,6 +32,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - block_entity_properties
 repair:
   scope:
   - minecraft/block_entity/requirement
@@ -45,3 +56,6 @@ rules:
 - Fail closed if required block_entity prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy semantic_contract validator before completion.
+postconditions:
+- block_entity requirement matches host version contract
+- block_entity requirement receipts emitted with verified context

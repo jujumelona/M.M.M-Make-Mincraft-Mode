@@ -2,26 +2,36 @@ id: minecraft/texture/generation
 task: Implement only the generation responsibility of the supplied texture artifact.
 execution_mode: model
 side:
-- server
+- client
 inputs:
 - name: texture_identity
   type: identifier
   required: true
+- name: texture_generation_input
+  type: specification
+  required: true
 outputs:
 - name: texture_generation_receipt
   type: receipt
+- name: texture_generation_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - TEXTURE_ASSET
+  - REGISTER_ITEM
+  symbols:
+  - register_item
+  schemas: []
 implementation_key: fabric/texture/generation
 validators:
 - java_parse
+- client_side_only
 context_projection:
   max_bytes: 4096
   include:
   - mod_id
   - registry_path
   - package_path
+  - texture_properties
 repair:
   scope:
   - minecraft/texture/generation
@@ -44,3 +54,6 @@ rules:
 - Target side must remain server; reject cross-side symbol leakage.
 - Fail closed if required texture prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- texture generation matches host version contract
+- texture generation receipts emitted with verified context

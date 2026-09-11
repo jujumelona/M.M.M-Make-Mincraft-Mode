@@ -2,17 +2,25 @@ id: minecraft/model/requirement
 task: Implement only the requirement responsibility of the supplied model artifact.
 execution_mode: deterministic
 side:
-- client
+- common
 inputs:
 - name: model_identity
   type: identifier
   required: true
+- name: model_requirement_input
+  type: specification
+  required: true
 outputs:
-- name: model_contract
-  type: contract_receipt
+- name: model_requirement_receipt
+  type: receipt
+- name: model_requirement_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - MODEL_DEFINITION
+  - REGISTER_ITEM
+  symbols: []
+  schemas:
+  - fabric/item/model_basic
 implementation_key: fabric/model/requirement
 validators:
 - semantic_contract
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - model_properties
 repair:
   scope:
   - minecraft/model/requirement
@@ -44,3 +53,6 @@ rules:
 - Target side must remain client; reject cross-side symbol leakage.
 - Fail closed if required model prerequisite receipt is missing; never invent defaults.
 - Output must satisfy semantic_contract validator before completion.
+postconditions:
+- model requirement matches host version contract
+- model requirement receipts emitted with verified context

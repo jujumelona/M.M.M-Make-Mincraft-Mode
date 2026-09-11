@@ -2,17 +2,24 @@ id: minecraft/dimension/requirement
 task: Implement only the requirement responsibility of the supplied dimension artifact.
 execution_mode: deterministic
 side:
-- server
+- common
 inputs:
 - name: dimension_identity
   type: identifier
   required: true
+- name: dimension_requirement_input
+  type: specification
+  required: true
 outputs:
-- name: dimension_contract
-  type: contract_receipt
+- name: dimension_requirement_receipt
+  type: receipt
+- name: dimension_requirement_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - DIMENSION
+  symbols: []
+  schemas: []
 implementation_key: fabric/dimension/requirement
 validators:
 - semantic_contract
@@ -22,6 +29,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - dimension_properties
 repair:
   scope:
   - minecraft/dimension/requirement
@@ -45,3 +53,6 @@ rules:
 - Fail closed if required dimension prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy semantic_contract validator before completion.
+postconditions:
+- dimension requirement matches host version contract
+- dimension requirement receipts emitted with verified context

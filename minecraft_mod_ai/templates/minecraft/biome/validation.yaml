@@ -2,17 +2,24 @@ id: minecraft/biome/validation
 task: Implement only the validation responsibility of the supplied biome artifact.
 execution_mode: deterministic
 side:
-- server
+- common
 inputs:
 - name: biome_identity
   type: identifier
   required: true
+- name: biome_validation_input
+  type: specification
+  required: true
 outputs:
 - name: biome_validation_receipt
   type: receipt
+- name: biome_validation_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - BIOME
+  symbols: []
+  schemas: []
 implementation_key: fabric/biome/validation
 validators:
 - mod_integration_test
@@ -22,6 +29,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - biome_properties
 repair:
   scope:
   - minecraft/biome/validation
@@ -43,3 +51,6 @@ rules:
 - Target side must remain server; reject cross-side symbol leakage.
 - Fail closed if required biome prerequisite receipt is missing; never invent defaults.
 - Output must satisfy mod_integration_test validator before completion.
+postconditions:
+- biome validation matches host version contract
+- biome validation receipts emitted with verified context

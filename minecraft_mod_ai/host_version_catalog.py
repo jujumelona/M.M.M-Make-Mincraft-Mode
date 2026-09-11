@@ -43,7 +43,7 @@ def host_target(version):
     return result
 
 
-def audit_host_catalog():
+def coverage_audit():
     """Completeness audit: verify complete leaf coverage and template admission across all bundles."""
     from .task_template_catalog import load_template
     from .structural_routing_contract import CANONICAL_ARTIFACT_KINDS
@@ -96,5 +96,53 @@ def audit_host_catalog():
     }
 
 
+def audit_host_catalog():
+    return coverage_audit()
+
+
+def production_readiness_audit(supported_scope=None):
+    """Production readiness audit: enforce zero unreviewed leaves and valid implementations across supported scope."""
+    from .task_template_catalog import load_template
+
+    resolver, bundles = load_host_catalog()
+    if supported_scope is None:
+        # Default supported scope: all admitted leaves in the first bundle
+        supported_scope = [
+            leaf
+            for leaf, binding in bundles[0].facts.get("leaf_bindings", {}).items()
+            if binding.get("state") == "admitted"
+        ]
+    scope_set = set(supported_scope)
+
+    for context in bundles:
+        bindings = context.facts.get("leaf_bindings", {})
+        unreviewed = [leaf for leaf in scope_set if bindings.get(leaf, {}).get("state") == "not_reviewed"]
+        if unreviewed:
+            raise VersionContextError(
+                "PRODUCTION_AUDIT_FAILED",
+                unreviewed=sorted(unreviewed),
+                context_id=context.context_id,
+                minecraft=context.minecraft,
+            )
+        for leaf in scope_set:
+            binding = bindings.get(leaf)
+            if not binding:
+                raise VersionContextError("HOST_LEAF_UNAVAILABLE", leaf=leaf, minecraft=context.minecraft)
+            state = binding.get("state")
+            if state == "admitted":
+                impl = binding.get("implementation", {})
+                template_id = impl.get("template")
+                if template_id and template_id in context.facts["artifact_rules"]:
+                    context.admit_template(load_template(template_id))
+
+    return {
+        "schema_version": "mmm/host-production-readiness-audit-v1",
+        "bundles_evaluated": len(bundles),
+        "scope_size": len(scope_set),
+        "status": "PASS",
+    }
+
+
 if __name__ == "__main__":
     print(json.dumps(audit_host_catalog(), indent=2, sort_keys=True))
+

@@ -2,30 +2,34 @@ id: minecraft/structure/registry
 task: Implement only the registry responsibility of the supplied structure artifact.
 execution_mode: model
 side:
-- server
+- common
 inputs:
 - name: structure_identity
   type: identifier
   required: true
+- name: structure_registry_input
+  type: specification
+  required: true
 outputs:
-- name: structure_registry_id
-  type: string
-- name: structure_java_symbol
-  type: string
+- name: structure_registry_receipt
+  type: receipt
+- name: structure_registry_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - WORLDGEN_STRUCTURE
+  - WORLDGEN_FEATURE
+  symbols: []
+  schemas: []
 implementation_key: fabric/structure/registry
 validators:
 - java_parse
-- registry_identifier_unique
 context_projection:
   max_bytes: 4096
   include:
   - mod_id
   - registry_path
   - package_path
-  - java_constant
+  - structure_properties
 repair:
   scope:
   - minecraft/structure/registry
@@ -50,3 +54,6 @@ rules:
 - Fail closed if required structure prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- structure registry matches host version contract
+- structure registry receipts emitted with verified context

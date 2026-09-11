@@ -7,12 +7,19 @@ inputs:
 - name: advancement_identity
   type: identifier
   required: true
+- name: advancement_requirement_input
+  type: specification
+  required: true
 outputs:
-- name: advancement_contract
-  type: contract_receipt
+- name: advancement_requirement_receipt
+  type: receipt
+- name: advancement_requirement_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - ADVANCEMENT
+  symbols: []
+  schemas: []
 implementation_key: fabric/advancement/requirement
 validators:
 - semantic_contract
@@ -22,6 +29,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - advancement_properties
 repair:
   scope:
   - minecraft/advancement/requirement
@@ -45,3 +53,6 @@ rules:
 - Fail closed if required advancement prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy semantic_contract validator before completion.
+postconditions:
+- advancement requirement matches host version contract
+- advancement requirement receipts emitted with verified context

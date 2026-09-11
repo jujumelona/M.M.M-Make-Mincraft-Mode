@@ -1,27 +1,36 @@
 id: minecraft/attribute/bounds
 task: Implement only the bounds responsibility of the supplied attribute artifact.
-execution_mode: deterministic
+execution_mode: model
 side:
 - common
 inputs:
 - name: attribute_identity
   type: identifier
   required: true
+- name: attribute_bounds_input
+  type: specification
+  required: true
 outputs:
 - name: attribute_bounds_receipt
   type: receipt
+- name: attribute_bounds_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - ENTITY_ATTRIBUTES
+  - REGISTER_ITEM
+  symbols:
+  - register_item
+  schemas: []
 implementation_key: fabric/attribute/bounds
 validators:
-- json_schema
+- java_parse
 context_projection:
   max_bytes: 4096
   include:
   - mod_id
   - registry_path
   - package_path
+  - attribute_properties
 repair:
   scope:
   - minecraft/attribute/bounds
@@ -45,3 +54,6 @@ rules:
 - Fail closed if required attribute prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy json_schema validator before completion.
+postconditions:
+- attribute bounds matches host version contract
+- attribute bounds receipts emitted with verified context

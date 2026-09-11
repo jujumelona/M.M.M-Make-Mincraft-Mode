@@ -1,27 +1,37 @@
 id: minecraft/animation/keyframe
 task: Implement only the keyframe responsibility of the supplied animation artifact.
-execution_mode: deterministic
+execution_mode: model
 side:
 - client
 inputs:
 - name: animation_identity
   type: identifier
   required: true
+- name: animation_keyframe_input
+  type: specification
+  required: true
 outputs:
 - name: animation_keyframe_receipt
   type: receipt
+- name: animation_keyframe_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - ANIMATION_DEFINITION
+  - ENTITY_EXISTS
+  symbols:
+  - EntityType
+  schemas: []
 implementation_key: fabric/animation/keyframe
 validators:
-- json_schema
+- java_parse
+- client_side_only
 context_projection:
   max_bytes: 4096
   include:
   - mod_id
   - registry_path
   - package_path
+  - animation_properties
 repair:
   scope:
   - minecraft/animation/keyframe
@@ -45,3 +55,6 @@ rules:
 - Fail closed if required animation prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy json_schema validator before completion.
+postconditions:
+- animation keyframe matches host version contract
+- animation keyframe receipts emitted with verified context

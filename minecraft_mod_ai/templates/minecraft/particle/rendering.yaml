@@ -2,27 +2,35 @@ id: minecraft/particle/rendering
 task: Implement only the rendering responsibility of the supplied particle artifact.
 execution_mode: model
 side:
-- client
+- common
 inputs:
 - name: particle_identity
   type: identifier
   required: true
+- name: particle_rendering_input
+  type: specification
+  required: true
 outputs:
 - name: particle_rendering_receipt
   type: receipt
+- name: particle_rendering_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - PARTICLE_TYPE
+  symbols:
+  - ParticleType
+  schemas: []
 implementation_key: fabric/particle/rendering
 validators:
 - java_parse
-- client_side_only
 context_projection:
   max_bytes: 4096
   include:
   - mod_id
   - registry_path
   - package_path
+  - particle_properties
 repair:
   scope:
   - minecraft/particle/rendering
@@ -45,3 +53,6 @@ rules:
 - Target side must remain client; reject cross-side symbol leakage.
 - Fail closed if required particle prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- particle rendering matches host version contract
+- particle rendering receipts emitted with verified context

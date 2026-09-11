@@ -2,17 +2,25 @@ id: minecraft/mob/spawning
 task: Implement only the spawning responsibility of the supplied mob artifact.
 execution_mode: model
 side:
-- server
+- common
 inputs:
 - name: mob_identity
   type: identifier
   required: true
+- name: mob_spawning_input
+  type: specification
+  required: true
 outputs:
 - name: mob_spawning_receipt
   type: receipt
+- name: mob_spawning_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - REGISTER_MOB
+  - ENTITY_EXISTS
+  symbols:
+  - EntityType
+  schemas: []
 implementation_key: fabric/mob/spawning
 validators:
 - java_parse
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - mob_properties
 repair:
   scope:
   - minecraft/mob/spawning
@@ -44,3 +53,6 @@ rules:
 - Target side must remain server; reject cross-side symbol leakage.
 - Fail closed if required mob prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- mob spawning matches host version contract
+- mob spawning receipts emitted with verified context

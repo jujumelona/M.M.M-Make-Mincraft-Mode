@@ -7,12 +7,20 @@ inputs:
 - name: effect_identity
   type: identifier
   required: true
+- name: effect_requirement_input
+  type: specification
+  required: true
 outputs:
-- name: effect_contract
-  type: contract_receipt
+- name: effect_requirement_receipt
+  type: receipt
+- name: effect_requirement_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - STATUS_EFFECT
+  symbols:
+  - StatusEffect
+  schemas: []
 implementation_key: fabric/effect/requirement
 validators:
 - semantic_contract
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - effect_properties
 repair:
   scope:
   - minecraft/effect/requirement
@@ -44,3 +53,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required effect prerequisite receipt is missing; never invent defaults.
 - Output must satisfy semantic_contract validator before completion.
+postconditions:
+- effect requirement matches host version contract
+- effect requirement receipts emitted with verified context

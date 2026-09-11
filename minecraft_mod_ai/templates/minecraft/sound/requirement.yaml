@@ -2,17 +2,25 @@ id: minecraft/sound/requirement
 task: Implement only the requirement responsibility of the supplied sound artifact.
 execution_mode: deterministic
 side:
-- client
+- common
 inputs:
 - name: sound_identity
   type: identifier
   required: true
+- name: sound_requirement_input
+  type: specification
+  required: true
 outputs:
-- name: sound_contract
-  type: contract_receipt
+- name: sound_requirement_receipt
+  type: receipt
+- name: sound_requirement_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - SOUND_EVENT
+  symbols:
+  - SoundEvent
+  schemas: []
 implementation_key: fabric/sound/requirement
 validators:
 - semantic_contract
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - sound_properties
 repair:
   scope:
   - minecraft/sound/requirement
@@ -44,3 +53,6 @@ rules:
 - Target side must remain client; reject cross-side symbol leakage.
 - Fail closed if required sound prerequisite receipt is missing; never invent defaults.
 - Output must satisfy semantic_contract validator before completion.
+postconditions:
+- sound requirement matches host version contract
+- sound requirement receipts emitted with verified context

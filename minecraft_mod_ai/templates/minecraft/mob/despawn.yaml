@@ -7,12 +7,20 @@ inputs:
 - name: mob_identity
   type: identifier
   required: true
+- name: mob_despawn_input
+  type: specification
+  required: true
 outputs:
 - name: mob_despawn_receipt
   type: receipt
+- name: mob_despawn_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - REGISTER_MOB
+  - ENTITY_EXISTS
+  symbols:
+  - EntityType
+  schemas: []
 implementation_key: fabric/mob/despawn
 validators:
 - java_parse
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - mob_properties
 repair:
   scope:
   - minecraft/mob/despawn
@@ -43,3 +52,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required mob prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- mob despawn matches host version contract
+- mob despawn receipts emitted with verified context

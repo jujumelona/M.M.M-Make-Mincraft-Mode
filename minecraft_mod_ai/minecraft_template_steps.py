@@ -113,55 +113,76 @@ def steps_for_artifact(artifact_kind: str) -> tuple[TemplateStep, ...]:
         if not anchors:
             raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} anchor_kinds must not be empty")
 
-        raw_exec_mode = record.get("execution_mode", "model")
+        if "execution_mode" not in record:
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY_MISSING_CONTRACT: {identifier} missing execution_mode")
+        raw_exec_mode = record["execution_mode"]
         if raw_exec_mode not in {"model", "deterministic", "composite"}:
             raise ValueError(
                 f"TEMPLATE_RESPONSIBILITY: {identifier} invalid execution_mode {raw_exec_mode!r}"
             )
 
-        raw_side = record.get("side", ("common",))
+        if "side" not in record:
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY_MISSING_CONTRACT: {identifier} missing side")
+        raw_side = record["side"]
         if isinstance(raw_side, str):
             raw_side = [raw_side]
-        if not isinstance(raw_side, (list, tuple)):
-            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} side must be a list or string")
+        if not isinstance(raw_side, (list, tuple)) or not raw_side:
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} side must be a non-empty list")
         side_values = []
         for s in raw_side:
             if s not in {"client", "server", "common"}:
                 raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} invalid side {s!r}")
             side_values.append(s)
-        side = tuple(side_values) or ("common",)
+        side = tuple(side_values)
 
-        raw_inputs = record.get("inputs", ())
-        if not isinstance(raw_inputs, (list, tuple)):
-            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} inputs must be a list")
+        if "inputs" not in record:
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY_MISSING_CONTRACT: {identifier} missing inputs")
+        raw_inputs = record["inputs"]
+        if not isinstance(raw_inputs, (list, tuple)) or not raw_inputs:
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} inputs must be a non-empty list")
+        for item in raw_inputs:
+            if not isinstance(item, dict) or not item.get("name") or not item.get("type"):
+                raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} input {item!r} missing name/type")
         inputs = tuple(raw_inputs)
 
-        raw_outputs = record.get("outputs", ())
-        if not isinstance(raw_outputs, (list, tuple)):
-            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} outputs must be a list")
+        if "outputs" not in record:
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY_MISSING_CONTRACT: {identifier} missing outputs")
+        raw_outputs = record["outputs"]
+        if not isinstance(raw_outputs, (list, tuple)) or not raw_outputs:
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} outputs must be a non-empty list")
+        for item in raw_outputs:
+            if not isinstance(item, dict) or not item.get("name") or not item.get("type"):
+                raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} output {item!r} missing name/type")
         outputs = tuple(raw_outputs)
 
-        raw_host_req = record.get("host_requirements", ())
-        if isinstance(raw_host_req, dict):
-            host_requirements = tuple(sorted(raw_host_req.items()))
-        elif isinstance(raw_host_req, (list, tuple)):
-            host_requirements = tuple(raw_host_req)
-        else:
-            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} host_requirements must be a list or dict")
+        if "host_requirements" not in record:
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY_MISSING_CONTRACT: {identifier} missing host_requirements")
+        raw_host_req = record["host_requirements"]
+        if not isinstance(raw_host_req, dict) or not {"capabilities", "symbols", "schemas"}.issubset(raw_host_req.keys()):
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} host_requirements must be a dict with capabilities, symbols, schemas")
+        host_requirements = tuple(sorted(raw_host_req.items()))
 
-        implementation_key = str(record.get("implementation_key", "") or "")
+        if "implementation_key" not in record or not str(record["implementation_key"]).strip():
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY_MISSING_CONTRACT: {identifier} missing implementation_key")
+        implementation_key = str(record["implementation_key"]).strip()
 
-        raw_validators = record.get("validators", ())
-        if not isinstance(raw_validators, (list, tuple)):
-            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} validators must be a list")
+        if "validators" not in record:
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY_MISSING_CONTRACT: {identifier} missing validators")
+        raw_validators = record["validators"]
+        if not isinstance(raw_validators, (list, tuple)) or not raw_validators:
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} validators must be a non-empty list")
         validators = tuple(str(v) for v in raw_validators)
 
-        raw_postconditions = record.get("postconditions", ())
-        if not isinstance(raw_postconditions, (list, tuple)):
-            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} postconditions must be a list")
+        if "postconditions" not in record:
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY_MISSING_CONTRACT: {identifier} missing postconditions")
+        raw_postconditions = record["postconditions"]
+        if not isinstance(raw_postconditions, (list, tuple)) or not raw_postconditions:
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} postconditions must be a non-empty list")
         postconditions = tuple(str(p) for p in raw_postconditions)
 
-        raw_proj = record.get("context_projection", {})
+        if "context_projection" not in record:
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY_MISSING_CONTRACT: {identifier} missing context_projection")
+        raw_proj = record["context_projection"]
         if not isinstance(raw_proj, dict):
             raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} context_projection must be a dict")
         max_bytes = raw_proj.get("max_bytes", 4096)
@@ -172,14 +193,18 @@ def steps_for_artifact(artifact_kind: str) -> tuple[TemplateStep, ...]:
                 f"TEMPLATE_RESPONSIBILITY: {identifier} context_projection max_bytes {max_bytes} > 4096"
             )
         include = tuple(raw_proj.get("include", ()))
+        if raw_exec_mode == "model" and not include:
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} model leaf must declare context_projection.include")
         context_projection = ContextProjection(max_bytes=max_bytes, include=include)
 
-        raw_repair = record.get("repair", {})
-        if not isinstance(raw_repair, dict):
-            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} repair must be a dict")
+        if "repair" not in record:
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY_MISSING_CONTRACT: {identifier} missing repair")
+        raw_repair = record["repair"]
+        if not isinstance(raw_repair, dict) or not raw_repair.get("scope") or not raw_repair.get("writable_anchors"):
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} repair must declare scope and writable_anchors")
         repair = RepairContract(
-            scope=tuple(raw_repair.get("scope", ())),
-            writable_anchors=tuple(raw_repair.get("writable_anchors", ())),
+            scope=tuple(raw_repair["scope"]),
+            writable_anchors=tuple(raw_repair["writable_anchors"]),
         )
 
         responsibility = identifier.rsplit("/", 1)[-1]

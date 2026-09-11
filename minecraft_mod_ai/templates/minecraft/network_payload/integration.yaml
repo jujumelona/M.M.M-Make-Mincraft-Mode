@@ -8,14 +8,20 @@ inputs:
 - name: network_payload_identity
   type: identifier
   required: true
+- name: network_payload_integration_input
+  type: specification
+  required: true
 outputs:
 - name: network_payload_integration_receipt
   type: receipt
+- name: network_payload_integration_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - NETWORKING
+  - NETWORK_PACKET
   symbols:
-  - payload_type_register
+  - register_item
+  schemas: []
 implementation_key: fabric/network_payload/integration
 validators:
 - java_parse
@@ -25,6 +31,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - network_payload_properties
 repair:
   scope:
   - minecraft/network_payload/integration
@@ -48,3 +55,6 @@ rules:
 - Fail closed if required network_payload prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- network_payload integration matches host version contract
+- network_payload integration receipts emitted with verified context

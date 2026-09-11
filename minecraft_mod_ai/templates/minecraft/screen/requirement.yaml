@@ -7,12 +7,20 @@ inputs:
 - name: screen_identity
   type: identifier
   required: true
+- name: screen_requirement_input
+  type: specification
+  required: true
 outputs:
-- name: screen_contract
-  type: contract_receipt
+- name: screen_requirement_receipt
+  type: receipt
+- name: screen_requirement_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - SCREEN_CLIENT
+  - GUI_EXISTS
+  symbols:
+  - ScreenHandlerType
+  schemas: []
 implementation_key: fabric/screen/requirement
 validators:
 - semantic_contract
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - screen_properties
 repair:
   scope:
   - minecraft/screen/requirement
@@ -44,3 +53,6 @@ rules:
 - Target side must remain client; reject cross-side symbol leakage.
 - Fail closed if required screen prerequisite receipt is missing; never invent defaults.
 - Output must satisfy semantic_contract validator before completion.
+postconditions:
+- screen requirement matches host version contract
+- screen requirement receipts emitted with verified context

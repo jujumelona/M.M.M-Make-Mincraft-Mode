@@ -7,12 +7,21 @@ inputs:
 - name: block_identity
   type: identifier
   required: true
+- name: block_validation_input
+  type: specification
+  required: true
 outputs:
 - name: block_validation_receipt
   type: receipt
+- name: block_validation_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - REGISTER_BLOCK
+  symbols:
+  - register_block
+  - resource_key_create
+  schemas: []
 implementation_key: fabric/block/validation
 validators:
 - mod_integration_test
@@ -22,6 +31,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - block_properties
 repair:
   scope:
   - minecraft/block/validation
@@ -44,3 +54,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required block prerequisite receipt is missing; never invent defaults.
 - Output must satisfy mod_integration_test validator before completion.
+postconditions:
+- block validation matches host version contract
+- block validation receipts emitted with verified context

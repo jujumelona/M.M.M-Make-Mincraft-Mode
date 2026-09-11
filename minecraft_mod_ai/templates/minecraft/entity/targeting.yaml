@@ -7,12 +7,20 @@ inputs:
 - name: entity_identity
   type: identifier
   required: true
+- name: entity_targeting_input
+  type: specification
+  required: true
 outputs:
 - name: entity_targeting_receipt
   type: receipt
+- name: entity_targeting_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - REGISTER_ENTITY
+  - ENTITY_EXISTS
+  symbols:
+  - EntityType
+  schemas: []
 implementation_key: fabric/entity/targeting
 validators:
 - java_parse
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - entity_properties
 repair:
   scope:
   - minecraft/entity/targeting
@@ -44,3 +53,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required entity prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- entity targeting matches host version contract
+- entity targeting receipts emitted with verified context

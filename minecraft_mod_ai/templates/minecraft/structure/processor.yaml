@@ -2,17 +2,24 @@ id: minecraft/structure/processor
 task: Implement only the processor responsibility of the supplied structure artifact.
 execution_mode: model
 side:
-- server
+- common
 inputs:
 - name: structure_identity
   type: identifier
   required: true
+- name: structure_processor_input
+  type: specification
+  required: true
 outputs:
 - name: structure_processor_receipt
   type: receipt
+- name: structure_processor_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - WORLDGEN_STRUCTURE
+  - WORLDGEN_FEATURE
+  symbols: []
+  schemas: []
 implementation_key: fabric/structure/processor
 validators:
 - java_parse
@@ -22,6 +29,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - structure_properties
 repair:
   scope:
   - minecraft/structure/processor
@@ -45,3 +53,6 @@ rules:
 - Fail closed if required structure prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- structure processor matches host version contract
+- structure processor receipts emitted with verified context

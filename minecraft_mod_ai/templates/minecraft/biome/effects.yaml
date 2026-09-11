@@ -2,27 +2,34 @@ id: minecraft/biome/effects
 task: Implement only the effects responsibility of the supplied biome artifact.
 execution_mode: model
 side:
-- client
+- common
 inputs:
 - name: biome_identity
   type: identifier
   required: true
+- name: biome_effects_input
+  type: specification
+  required: true
 outputs:
 - name: biome_effects_receipt
   type: receipt
+- name: biome_effects_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - BIOME
+  symbols: []
+  schemas: []
 implementation_key: fabric/biome/effects
 validators:
 - java_parse
-- client_side_only
 context_projection:
   max_bytes: 4096
   include:
   - mod_id
   - registry_path
   - package_path
+  - biome_properties
 repair:
   scope:
   - minecraft/biome/effects
@@ -44,3 +51,6 @@ rules:
 - Target side must remain client; reject cross-side symbol leakage.
 - Fail closed if required biome prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- biome effects matches host version contract
+- biome effects receipts emitted with verified context

@@ -7,12 +7,20 @@ inputs:
 - name: attribute_identity
   type: identifier
   required: true
+- name: attribute_type_input
+  type: specification
+  required: true
 outputs:
 - name: attribute_type_receipt
   type: receipt
+- name: attribute_type_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - ENTITY_ATTRIBUTES
+  - REGISTER_ITEM
+  symbols:
+  - register_item
+  schemas: []
 implementation_key: fabric/attribute/type
 validators:
 - java_parse
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - attribute_properties
 repair:
   scope:
   - minecraft/attribute/type
@@ -45,3 +54,6 @@ rules:
 - Fail closed if required attribute prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- attribute type matches host version contract
+- attribute type receipts emitted with verified context

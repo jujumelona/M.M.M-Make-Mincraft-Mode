@@ -7,12 +7,20 @@ inputs:
 - name: texture_identity
   type: identifier
   required: true
+- name: texture_transparency_input
+  type: specification
+  required: true
 outputs:
 - name: texture_transparency_receipt
   type: receipt
+- name: texture_transparency_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - TEXTURE_ASSET
+  - REGISTER_ITEM
+  symbols:
+  - register_item
+  schemas: []
 implementation_key: fabric/texture/transparency
 validators:
 - java_parse
@@ -23,6 +31,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - texture_properties
 repair:
   scope:
   - minecraft/texture/transparency
@@ -45,3 +54,6 @@ rules:
 - Target side must remain client; reject cross-side symbol leakage.
 - Fail closed if required texture prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- texture transparency matches host version contract
+- texture transparency receipts emitted with verified context

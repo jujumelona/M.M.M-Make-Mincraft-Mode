@@ -2,17 +2,25 @@ id: minecraft/keybind/requirement
 task: Implement only the requirement responsibility of the supplied keybind artifact.
 execution_mode: deterministic
 side:
-- client
+- common
 inputs:
 - name: keybind_identity
   type: identifier
   required: true
+- name: keybind_requirement_input
+  type: specification
+  required: true
 outputs:
-- name: keybind_contract
-  type: contract_receipt
+- name: keybind_requirement_receipt
+  type: receipt
+- name: keybind_requirement_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - KEYBIND_REGISTRATION
+  - GUI_EXISTS
+  symbols:
+  - ScreenHandlerType
+  schemas: []
 implementation_key: fabric/keybind/requirement
 validators:
 - semantic_contract
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - keybind_properties
 repair:
   scope:
   - minecraft/keybind/requirement
@@ -44,3 +53,6 @@ rules:
 - Target side must remain client; reject cross-side symbol leakage.
 - Fail closed if required keybind prerequisite receipt is missing; never invent defaults.
 - Output must satisfy semantic_contract validator before completion.
+postconditions:
+- keybind requirement matches host version contract
+- keybind requirement receipts emitted with verified context

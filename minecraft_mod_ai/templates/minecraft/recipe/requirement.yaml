@@ -7,12 +7,22 @@ inputs:
 - name: recipe_identity
   type: identifier
   required: true
+- name: recipe_requirement_input
+  type: specification
+  required: true
 outputs:
-- name: recipe_contract
-  type: contract_receipt
+- name: recipe_requirement_receipt
+  type: receipt
+- name: recipe_requirement_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - RECIPE_CRAFTING
+  - RECIPE_SMELTING
+  symbols: []
+  schemas:
+  - fabric/recipe/shaped
+  - fabric/recipe/shapeless
 implementation_key: fabric/recipe/requirement
 validators:
 - semantic_contract
@@ -22,6 +32,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - recipe_properties
 repair:
   scope:
   - minecraft/recipe/requirement
@@ -44,3 +55,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required recipe prerequisite receipt is missing; never invent defaults.
 - Output must satisfy semantic_contract validator before completion.
+postconditions:
+- recipe requirement matches host version contract
+- recipe requirement receipts emitted with verified context

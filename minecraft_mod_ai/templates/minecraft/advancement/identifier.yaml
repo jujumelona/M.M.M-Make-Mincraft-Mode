@@ -7,12 +7,19 @@ inputs:
 - name: advancement_identity
   type: identifier
   required: true
+- name: advancement_identifier_input
+  type: specification
+  required: true
 outputs:
 - name: advancement_identifier_receipt
   type: receipt
+- name: advancement_identifier_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - ADVANCEMENT
+  symbols: []
+  schemas: []
 implementation_key: fabric/advancement/identifier
 validators:
 - java_parse
@@ -22,6 +29,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - advancement_properties
 repair:
   scope:
   - minecraft/advancement/identifier
@@ -45,3 +53,6 @@ rules:
 - Fail closed if required advancement prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- advancement identifier matches host version contract
+- advancement identifier receipts emitted with verified context

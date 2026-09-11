@@ -7,14 +7,20 @@ inputs:
 - name: effect_identity
   type: identifier
   required: true
+- name: effect_integration_input
+  type: specification
+  required: true
 outputs:
 - name: effect_integration_receipt
   type: receipt
+- name: effect_integration_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - STATUS_EFFECT
   symbols:
-  - status_effect_register
+  - StatusEffect
+  schemas: []
 implementation_key: fabric/effect/integration
 validators:
 - java_parse
@@ -24,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - effect_properties
 repair:
   scope:
   - minecraft/effect/integration
@@ -46,3 +53,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required effect prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- effect integration matches host version contract
+- effect integration receipts emitted with verified context

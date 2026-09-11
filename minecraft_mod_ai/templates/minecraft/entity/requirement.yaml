@@ -7,12 +7,20 @@ inputs:
 - name: entity_identity
   type: identifier
   required: true
+- name: entity_requirement_input
+  type: specification
+  required: true
 outputs:
-- name: entity_contract
-  type: contract_receipt
+- name: entity_requirement_receipt
+  type: receipt
+- name: entity_requirement_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - REGISTER_ENTITY
+  - ENTITY_EXISTS
+  symbols:
+  - EntityType
+  schemas: []
 implementation_key: fabric/entity/requirement
 validators:
 - semantic_contract
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - entity_properties
 repair:
   scope:
   - minecraft/entity/requirement
@@ -44,3 +53,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required entity prerequisite receipt is missing; never invent defaults.
 - Output must satisfy semantic_contract validator before completion.
+postconditions:
+- entity requirement matches host version contract
+- entity requirement receipts emitted with verified context

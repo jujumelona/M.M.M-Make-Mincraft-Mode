@@ -1,27 +1,36 @@
 id: minecraft/saved_data/default
 task: Implement only the default responsibility of the supplied saved data artifact.
-execution_mode: deterministic
+execution_mode: model
 side:
-- server
+- common
 inputs:
 - name: saved_data_identity
   type: identifier
   required: true
+- name: saved_data_default_input
+  type: specification
+  required: true
 outputs:
 - name: saved_data_default_receipt
   type: receipt
+- name: saved_data_default_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - PERSISTENT_STATE
+  - REGISTER_ITEM
+  symbols:
+  - register_item
+  schemas: []
 implementation_key: fabric/saved_data/default
 validators:
-- json_schema
+- java_parse
 context_projection:
   max_bytes: 4096
   include:
   - mod_id
   - registry_path
   - package_path
+  - saved_data_properties
 repair:
   scope:
   - minecraft/saved_data/default
@@ -45,3 +54,6 @@ rules:
 - Fail closed if required saved_data prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy json_schema validator before completion.
+postconditions:
+- saved_data default matches host version contract
+- saved_data default receipts emitted with verified context

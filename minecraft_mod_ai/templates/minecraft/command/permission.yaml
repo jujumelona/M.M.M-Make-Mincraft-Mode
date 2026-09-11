@@ -2,17 +2,25 @@ id: minecraft/command/permission
 task: Implement only the permission responsibility of the supplied command artifact.
 execution_mode: model
 side:
-- server
+- common
 inputs:
 - name: command_identity
   type: identifier
   required: true
+- name: command_permission_input
+  type: specification
+  required: true
 outputs:
 - name: command_permission_receipt
   type: receipt
+- name: command_permission_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - COMMAND_REGISTRATION
+  - REGISTER_ITEM
+  symbols:
+  - register_item
+  schemas: []
 implementation_key: fabric/command/permission
 validators:
 - java_parse
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - command_properties
 repair:
   scope:
   - minecraft/command/permission
@@ -44,3 +53,6 @@ rules:
 - Target side must remain server; reject cross-side symbol leakage.
 - Fail closed if required command prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- command permission matches host version contract
+- command permission receipts emitted with verified context

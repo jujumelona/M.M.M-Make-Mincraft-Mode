@@ -2,26 +2,34 @@ id: minecraft/biome/datagen
 task: Implement only the datagen responsibility of the supplied biome artifact.
 execution_mode: deterministic
 side:
-- server
+- common
 inputs:
 - name: biome_identity
   type: identifier
   required: true
+- name: biome_datagen_input
+  type: specification
+  required: true
 outputs:
 - name: biome_datagen_receipt
   type: receipt
+- name: biome_datagen_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - BIOME
+  symbols: []
+  schemas: []
 implementation_key: fabric/biome/datagen
 validators:
-- json_schema
+- java_parse
 context_projection:
   max_bytes: 4096
   include:
   - mod_id
   - registry_path
   - package_path
+  - biome_properties
 repair:
   scope:
   - minecraft/biome/datagen
@@ -43,3 +51,6 @@ rules:
 - Target side must remain server; reject cross-side symbol leakage.
 - Fail closed if required biome prerequisite receipt is missing; never invent defaults.
 - Output must satisfy json_schema validator before completion.
+postconditions:
+- biome datagen matches host version contract
+- biome datagen receipts emitted with verified context

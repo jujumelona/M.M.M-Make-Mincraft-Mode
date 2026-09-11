@@ -2,30 +2,34 @@ id: minecraft/biome/registry
 task: Implement only the registry responsibility of the supplied biome artifact.
 execution_mode: model
 side:
-- server
+- common
 inputs:
 - name: biome_identity
   type: identifier
   required: true
+- name: biome_registry_input
+  type: specification
+  required: true
 outputs:
-- name: biome_registry_id
-  type: string
-- name: biome_java_symbol
-  type: string
+- name: biome_registry_receipt
+  type: receipt
+- name: biome_registry_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - BIOME
+  symbols: []
+  schemas: []
 implementation_key: fabric/biome/registry
 validators:
 - java_parse
-- registry_identifier_unique
 context_projection:
   max_bytes: 4096
   include:
   - mod_id
   - registry_path
   - package_path
-  - java_constant
+  - biome_properties
 repair:
   scope:
   - minecraft/biome/registry
@@ -48,3 +52,6 @@ rules:
 - Target side must remain server; reject cross-side symbol leakage.
 - Fail closed if required biome prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- biome registry matches host version contract
+- biome registry receipts emitted with verified context

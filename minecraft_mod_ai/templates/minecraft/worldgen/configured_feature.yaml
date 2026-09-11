@@ -3,17 +3,24 @@ task: Implement only the configured feature responsibility of the supplied world
   artifact.
 execution_mode: model
 side:
-- server
+- common
 inputs:
 - name: worldgen_identity
   type: identifier
   required: true
+- name: worldgen_configured_feature_input
+  type: specification
+  required: true
 outputs:
 - name: worldgen_configured_feature_receipt
   type: receipt
+- name: worldgen_configured_feature_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - WORLDGEN_FEATURE
+  symbols: []
+  schemas: []
 implementation_key: fabric/worldgen/configured_feature
 validators:
 - java_parse
@@ -23,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - worldgen_properties
 repair:
   scope:
   - minecraft/worldgen/configured_feature
@@ -45,3 +53,6 @@ rules:
 - Target side must remain server; reject cross-side symbol leakage.
 - Fail closed if required worldgen prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- worldgen configured_feature matches host version contract
+- worldgen configured_feature receipts emitted with verified context

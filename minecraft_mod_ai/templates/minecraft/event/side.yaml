@@ -7,12 +7,20 @@ inputs:
 - name: event_identity
   type: identifier
   required: true
+- name: event_side_input
+  type: specification
+  required: true
 outputs:
 - name: event_side_receipt
   type: receipt
+- name: event_side_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - EVENT_LISTENER
+  - REGISTER_ITEM
+  symbols:
+  - register_item
+  schemas: []
 implementation_key: fabric/event/side
 validators:
 - java_parse
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - event_properties
 repair:
   scope:
   - minecraft/event/side
@@ -44,3 +53,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required event prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- event side matches host version contract
+- event side receipts emitted with verified context

@@ -2,17 +2,24 @@ id: minecraft/biome/spawning
 task: Implement only the spawning responsibility of the supplied biome artifact.
 execution_mode: model
 side:
-- server
+- common
 inputs:
 - name: biome_identity
   type: identifier
   required: true
+- name: biome_spawning_input
+  type: specification
+  required: true
 outputs:
 - name: biome_spawning_receipt
   type: receipt
+- name: biome_spawning_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - BIOME
+  symbols: []
+  schemas: []
 implementation_key: fabric/biome/spawning
 validators:
 - java_parse
@@ -22,6 +29,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - biome_properties
 repair:
   scope:
   - minecraft/biome/spawning
@@ -43,3 +51,6 @@ rules:
 - Target side must remain server; reject cross-side symbol leakage.
 - Fail closed if required biome prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- biome spawning matches host version contract
+- biome spawning receipts emitted with verified context

@@ -7,14 +7,20 @@ inputs:
 - name: hud_identity
   type: identifier
   required: true
+- name: hud_integration_input
+  type: specification
+  required: true
 outputs:
 - name: hud_integration_receipt
   type: receipt
+- name: hud_integration_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - HUD_RENDER
+  - GUI_EXISTS
   symbols:
-  - hud_render_callback_register
+  - ScreenHandlerType
+  schemas: []
 implementation_key: fabric/hud/integration
 validators:
 - java_parse
@@ -25,6 +31,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - hud_properties
 repair:
   scope:
   - minecraft/hud/integration
@@ -47,3 +54,6 @@ rules:
 - Target side must remain client; reject cross-side symbol leakage.
 - Fail closed if required hud prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- hud integration matches host version contract
+- hud integration receipts emitted with verified context

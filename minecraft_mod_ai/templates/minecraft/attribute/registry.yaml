@@ -7,27 +7,30 @@ inputs:
 - name: attribute_identity
   type: identifier
   required: true
+- name: attribute_registry_input
+  type: specification
+  required: true
 outputs:
-- name: attribute_registry_id
-  type: string
-- name: attribute_java_symbol
-  type: string
+- name: attribute_registry_receipt
+  type: receipt
+- name: attribute_registry_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - ENTITY_ATTRIBUTES
+  - REGISTER_ITEM
   symbols:
-  - attribute_register
+  - register_item
+  schemas: []
 implementation_key: fabric/attribute/registry
 validators:
 - java_parse
-- registry_identifier_unique
 context_projection:
   max_bytes: 4096
   include:
   - mod_id
   - registry_path
   - package_path
-  - java_constant
+  - attribute_properties
 repair:
   scope:
   - minecraft/attribute/registry
@@ -52,3 +55,6 @@ rules:
 - Fail closed if required attribute prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- attribute registry matches host version contract
+- attribute registry receipts emitted with verified context

@@ -7,12 +7,20 @@ inputs:
 - name: texture_identity
   type: identifier
   required: true
+- name: texture_requirement_input
+  type: specification
+  required: true
 outputs:
-- name: texture_contract
-  type: contract_receipt
+- name: texture_requirement_receipt
+  type: receipt
+- name: texture_requirement_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - TEXTURE_ASSET
+  - REGISTER_ITEM
+  symbols:
+  - register_item
+  schemas: []
 implementation_key: fabric/texture/requirement
 validators:
 - semantic_contract
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - texture_properties
 repair:
   scope:
   - minecraft/texture/requirement
@@ -44,3 +53,6 @@ rules:
 - Target side must remain client; reject cross-side symbol leakage.
 - Fail closed if required texture prerequisite receipt is missing; never invent defaults.
 - Output must satisfy semantic_contract validator before completion.
+postconditions:
+- texture requirement matches host version contract
+- texture requirement receipts emitted with verified context

@@ -2,17 +2,24 @@ id: minecraft/biome/climate
 task: Implement only the climate responsibility of the supplied biome artifact.
 execution_mode: model
 side:
-- server
+- common
 inputs:
 - name: biome_identity
   type: identifier
   required: true
+- name: biome_climate_input
+  type: specification
+  required: true
 outputs:
 - name: biome_climate_receipt
   type: receipt
+- name: biome_climate_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - BIOME
+  symbols: []
+  schemas: []
 implementation_key: fabric/biome/climate
 validators:
 - java_parse
@@ -22,6 +29,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - biome_properties
 repair:
   scope:
   - minecraft/biome/climate
@@ -43,3 +51,6 @@ rules:
 - Target side must remain server; reject cross-side symbol leakage.
 - Fail closed if required biome prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- biome climate matches host version contract
+- biome climate receipts emitted with verified context

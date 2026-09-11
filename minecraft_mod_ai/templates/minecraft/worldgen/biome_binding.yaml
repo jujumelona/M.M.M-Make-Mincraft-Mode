@@ -2,17 +2,24 @@ id: minecraft/worldgen/biome_binding
 task: Implement only the biome binding responsibility of the supplied worldgen artifact.
 execution_mode: model
 side:
-- server
+- common
 inputs:
 - name: worldgen_identity
   type: identifier
   required: true
+- name: worldgen_biome_binding_input
+  type: specification
+  required: true
 outputs:
 - name: worldgen_biome_binding_receipt
   type: receipt
+- name: worldgen_biome_binding_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - WORLDGEN_FEATURE
+  symbols: []
+  schemas: []
 implementation_key: fabric/worldgen/biome_binding
 validators:
 - java_parse
@@ -22,6 +29,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - worldgen_properties
 repair:
   scope:
   - minecraft/worldgen/biome_binding
@@ -44,3 +52,6 @@ rules:
 - Target side must remain server; reject cross-side symbol leakage.
 - Fail closed if required worldgen prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- worldgen biome_binding matches host version contract
+- worldgen biome_binding receipts emitted with verified context

@@ -7,12 +7,20 @@ inputs:
 - name: menu_identity
   type: identifier
   required: true
+- name: menu_quick_move_input
+  type: specification
+  required: true
 outputs:
 - name: menu_quick_move_receipt
   type: receipt
+- name: menu_quick_move_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - SCREEN_HANDLER
+  - GUI_EXISTS
+  symbols:
+  - ScreenHandlerType
+  schemas: []
 implementation_key: fabric/menu/quick_move
 validators:
 - java_parse
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - menu_properties
 repair:
   scope:
   - minecraft/menu/quick_move
@@ -44,3 +53,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required menu prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- menu quick_move matches host version contract
+- menu quick_move receipts emitted with verified context

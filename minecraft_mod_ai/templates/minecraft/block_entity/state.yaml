@@ -1,18 +1,28 @@
 id: minecraft/block_entity/state
 task: Implement only the state responsibility of the supplied block entity artifact.
-execution_mode: model
+execution_mode: deterministic
 side:
 - common
 inputs:
 - name: block_entity_identity
   type: identifier
   required: true
+- name: block_entity_state_input
+  type: specification
+  required: true
 outputs:
 - name: block_entity_state_receipt
   type: receipt
+- name: block_entity_state_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - BLOCK_ENTITY
+  - BLOCK_ENTITY_EXISTS
+  - REGISTER_BLOCK
+  symbols:
+  - BlockEntityType
+  - register_block
+  schemas: []
 implementation_key: fabric/block_entity/state
 validators:
 - java_parse
@@ -22,7 +32,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
-  - java_constant
+  - block_entity_properties
 repair:
   scope:
   - minecraft/block_entity/state
@@ -46,3 +56,6 @@ rules:
 - Fail closed if required block_entity prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- block_entity state matches host version contract
+- block_entity state receipts emitted with verified context

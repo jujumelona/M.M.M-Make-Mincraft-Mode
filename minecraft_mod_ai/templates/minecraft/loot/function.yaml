@@ -7,12 +7,20 @@ inputs:
 - name: loot_identity
   type: identifier
   required: true
+- name: loot_function_input
+  type: specification
+  required: true
 outputs:
 - name: loot_function_receipt
   type: receipt
+- name: loot_function_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - LOOT_TABLE
+  symbols: []
+  schemas:
+  - fabric/loot/block_drop
 implementation_key: fabric/loot/function
 validators:
 - java_parse
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - loot_properties
 repair:
   scope:
   - minecraft/loot/function
@@ -43,3 +52,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required loot prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- loot function matches host version contract
+- loot function receipts emitted with verified context

@@ -7,12 +7,20 @@ inputs:
 - name: component_identity
   type: identifier
   required: true
+- name: component_validation_input
+  type: specification
+  required: true
 outputs:
 - name: component_validation_receipt
   type: receipt
+- name: component_validation_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - DATA_COMPONENTS
+  - DATA_COMPONENT
+  symbols:
+  - ComponentType
+  schemas: []
 implementation_key: fabric/component/validation
 validators:
 - mod_integration_test
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - component_properties
 repair:
   scope:
   - minecraft/component/validation
@@ -45,3 +54,6 @@ rules:
 - Fail closed if required component prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy mod_integration_test validator before completion.
+postconditions:
+- component validation matches host version contract
+- component validation receipts emitted with verified context

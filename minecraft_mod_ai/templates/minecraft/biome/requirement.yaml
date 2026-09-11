@@ -2,17 +2,24 @@ id: minecraft/biome/requirement
 task: Implement only the requirement responsibility of the supplied biome artifact.
 execution_mode: deterministic
 side:
-- server
+- common
 inputs:
 - name: biome_identity
   type: identifier
   required: true
+- name: biome_requirement_input
+  type: specification
+  required: true
 outputs:
-- name: biome_contract
-  type: contract_receipt
+- name: biome_requirement_receipt
+  type: receipt
+- name: biome_requirement_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - BIOME
+  symbols: []
+  schemas: []
 implementation_key: fabric/biome/requirement
 validators:
 - semantic_contract
@@ -22,6 +29,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - biome_properties
 repair:
   scope:
   - minecraft/biome/requirement
@@ -43,3 +51,6 @@ rules:
 - Target side must remain server; reject cross-side symbol leakage.
 - Fail closed if required biome prerequisite receipt is missing; never invent defaults.
 - Output must satisfy semantic_contract validator before completion.
+postconditions:
+- biome requirement matches host version contract
+- biome requirement receipts emitted with verified context

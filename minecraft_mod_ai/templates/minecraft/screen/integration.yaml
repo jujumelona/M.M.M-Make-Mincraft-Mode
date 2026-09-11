@@ -7,14 +7,20 @@ inputs:
 - name: screen_identity
   type: identifier
   required: true
+- name: screen_integration_input
+  type: specification
+  required: true
 outputs:
 - name: screen_integration_receipt
   type: receipt
+- name: screen_integration_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - SCREEN_CLIENT
+  - GUI_EXISTS
   symbols:
-  - handled_screens_register
+  - ScreenHandlerType
+  schemas: []
 implementation_key: fabric/screen/integration
 validators:
 - java_parse
@@ -25,6 +31,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - screen_properties
 repair:
   scope:
   - minecraft/screen/integration
@@ -47,3 +54,6 @@ rules:
 - Target side must remain client; reject cross-side symbol leakage.
 - Fail closed if required screen prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- screen integration matches host version contract
+- screen integration receipts emitted with verified context

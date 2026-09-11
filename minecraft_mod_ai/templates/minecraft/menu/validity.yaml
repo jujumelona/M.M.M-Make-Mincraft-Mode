@@ -7,12 +7,20 @@ inputs:
 - name: menu_identity
   type: identifier
   required: true
+- name: menu_validity_input
+  type: specification
+  required: true
 outputs:
 - name: menu_validity_receipt
   type: receipt
+- name: menu_validity_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - SCREEN_HANDLER
+  - GUI_EXISTS
+  symbols:
+  - ScreenHandlerType
+  schemas: []
 implementation_key: fabric/menu/validity
 validators:
 - java_parse
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - menu_properties
 repair:
   scope:
   - minecraft/menu/validity
@@ -44,3 +53,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required menu prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- menu validity matches host version contract
+- menu validity receipts emitted with verified context

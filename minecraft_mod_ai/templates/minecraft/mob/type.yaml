@@ -7,12 +7,20 @@ inputs:
 - name: mob_identity
   type: identifier
   required: true
+- name: mob_type_input
+  type: specification
+  required: true
 outputs:
 - name: mob_type_receipt
   type: receipt
+- name: mob_type_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - REGISTER_MOB
+  - ENTITY_EXISTS
+  symbols:
+  - EntityType
+  schemas: []
 implementation_key: fabric/mob/type
 validators:
 - java_parse
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - mob_properties
 repair:
   scope:
   - minecraft/mob/type
@@ -43,3 +52,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required mob prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- mob type matches host version contract
+- mob type receipts emitted with verified context

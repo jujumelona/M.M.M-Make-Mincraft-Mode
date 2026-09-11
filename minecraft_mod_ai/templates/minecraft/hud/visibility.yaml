@@ -7,12 +7,20 @@ inputs:
 - name: hud_identity
   type: identifier
   required: true
+- name: hud_visibility_input
+  type: specification
+  required: true
 outputs:
 - name: hud_visibility_receipt
   type: receipt
+- name: hud_visibility_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - HUD_RENDER
+  - GUI_EXISTS
+  symbols:
+  - ScreenHandlerType
+  schemas: []
 implementation_key: fabric/hud/visibility
 validators:
 - java_parse
@@ -23,6 +31,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - hud_properties
 repair:
   scope:
   - minecraft/hud/visibility
@@ -45,3 +54,6 @@ rules:
 - Target side must remain client; reject cross-side symbol leakage.
 - Fail closed if required hud prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- hud visibility matches host version contract
+- hud visibility receipts emitted with verified context

@@ -7,12 +7,20 @@ inputs:
 - name: attribute_identity
   type: identifier
   required: true
+- name: attribute_requirement_input
+  type: specification
+  required: true
 outputs:
-- name: attribute_contract
-  type: contract_receipt
+- name: attribute_requirement_receipt
+  type: receipt
+- name: attribute_requirement_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - ENTITY_ATTRIBUTES
+  - REGISTER_ITEM
+  symbols:
+  - register_item
+  schemas: []
 implementation_key: fabric/attribute/requirement
 validators:
 - semantic_contract
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - attribute_properties
 repair:
   scope:
   - minecraft/attribute/requirement
@@ -45,3 +54,6 @@ rules:
 - Fail closed if required attribute prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy semantic_contract validator before completion.
+postconditions:
+- attribute requirement matches host version contract
+- attribute requirement receipts emitted with verified context

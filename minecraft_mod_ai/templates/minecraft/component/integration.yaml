@@ -7,14 +7,20 @@ inputs:
 - name: component_identity
   type: identifier
   required: true
+- name: component_integration_input
+  type: specification
+  required: true
 outputs:
 - name: component_integration_receipt
   type: receipt
+- name: component_integration_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - DATA_COMPONENTS
+  - DATA_COMPONENT
   symbols:
-  - component_type_register
+  - ComponentType
+  schemas: []
 implementation_key: fabric/component/integration
 validators:
 - java_parse
@@ -24,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - component_properties
 repair:
   scope:
   - minecraft/component/integration
@@ -47,3 +54,6 @@ rules:
 - Fail closed if required component prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- component integration matches host version contract
+- component integration receipts emitted with verified context

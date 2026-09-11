@@ -1,27 +1,36 @@
 id: minecraft/loot/pool
 task: Implement only the pool responsibility of the supplied loot artifact.
-execution_mode: deterministic
+execution_mode: model
 side:
 - common
 inputs:
 - name: loot_identity
   type: identifier
   required: true
+- name: loot_pool_input
+  type: specification
+  required: true
 outputs:
 - name: loot_pool_receipt
   type: receipt
+- name: loot_pool_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - LOOT_TABLE
+  symbols: []
+  schemas:
+  - fabric/loot/block_drop
 implementation_key: fabric/loot/pool
 validators:
-- json_schema
+- java_parse
 context_projection:
   max_bytes: 4096
   include:
   - mod_id
   - registry_path
   - package_path
+  - loot_properties
 repair:
   scope:
   - minecraft/loot/pool
@@ -43,3 +52,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required loot prerequisite receipt is missing; never invent defaults.
 - Output must satisfy json_schema validator before completion.
+postconditions:
+- loot pool matches host version contract
+- loot pool receipts emitted with verified context

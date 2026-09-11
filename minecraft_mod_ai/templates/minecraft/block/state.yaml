@@ -1,18 +1,27 @@
 id: minecraft/block/state
 task: Implement only the state responsibility of the supplied block artifact.
-execution_mode: model
+execution_mode: deterministic
 side:
 - common
 inputs:
 - name: block_identity
   type: identifier
   required: true
+- name: block_state_input
+  type: specification
+  required: true
 outputs:
 - name: block_state_receipt
   type: receipt
+- name: block_state_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - REGISTER_BLOCK
+  symbols:
+  - register_block
+  - resource_key_create
+  schemas: []
 implementation_key: fabric/block/state
 validators:
 - java_parse
@@ -22,7 +31,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
-  - java_constant
+  - block_properties
 repair:
   scope:
   - minecraft/block/state
@@ -45,3 +54,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required block prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- block state matches host version contract
+- block state receipts emitted with verified context

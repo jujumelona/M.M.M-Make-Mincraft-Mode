@@ -159,6 +159,132 @@ ARTIFACT_SCHEMAS = {
 }
 
 
+TEMPLATE_REQUIREMENTS = {
+    "fabric/item/register_basic": {
+        "requires_capabilities": ["REGISTER_ITEM"],
+        "required_symbols": ["register_item"],
+    },
+    "fabric/item/key": {
+        "requires_capabilities": ["REGISTER_ITEM"],
+        "required_symbols": ["resource_key_create"],
+    },
+    "fabric/item/settings_max_stack": {
+        "requires_capabilities": ["ITEM_SETTINGS"],
+        "required_symbols": ["item_stacks_to"],
+    },
+    "fabric/item/client_item": {
+        "requires_capabilities": ["REGISTER_ITEM"],
+        "required_symbols": [],
+    },
+    "fabric/item/model_basic": {
+        "requires_capabilities": ["REGISTER_ITEM"],
+        "required_symbols": [],
+    },
+    "fabric/item/lang_en": {
+        "requires_capabilities": ["REGISTER_ITEM"],
+        "required_symbols": [],
+    },
+    "fabric/item/initializer": {
+        "requires_capabilities": ["REGISTER_ITEM"],
+        "required_symbols": [],
+    },
+    "fabric/block/register_basic": {
+        "requires_capabilities": ["REGISTER_BLOCK"],
+        "required_symbols": ["register_block"],
+    },
+    "fabric/block/key": {
+        "requires_capabilities": ["REGISTER_BLOCK"],
+        "required_symbols": ["resource_key_create"],
+    },
+    "fabric/block/blockstate_basic": {
+        "requires_capabilities": ["REGISTER_BLOCK"],
+        "required_symbols": [],
+    },
+    "fabric/block/model_cube_all": {
+        "requires_capabilities": ["REGISTER_BLOCK"],
+        "required_symbols": [],
+    },
+    "fabric/block/lang_en": {
+        "requires_capabilities": ["REGISTER_BLOCK"],
+        "required_symbols": [],
+    },
+    "fabric/block/initializer": {
+        "requires_capabilities": ["REGISTER_BLOCK"],
+        "required_symbols": [],
+    },
+    "fabric/recipe/shaped": {
+        "requires_capabilities": ["RECIPE_CRAFTING"],
+        "required_symbols": [],
+    },
+    "fabric/recipe/shapeless": {
+        "requires_capabilities": ["RECIPE_CRAFTING"],
+        "required_symbols": [],
+    },
+    "fabric/recipe/smelting": {
+        "requires_capabilities": ["RECIPE_SMELTING"],
+        "required_symbols": [],
+    },
+    "fabric/tag/registry": {
+        "requires_capabilities": ["TAGS"],
+        "required_symbols": [],
+    },
+    "fabric/loot/block_drop": {
+        "requires_capabilities": ["LOOT_TABLE"],
+        "required_symbols": [],
+    },
+}
+
+
+def _sha256_text(text: str) -> str:
+    return "sha256:" + sha256(text.encode("utf-8")).hexdigest()
+
+
+def make_implementation(
+    leaf: str,
+    minecraft_version: str,
+    *,
+    template_id: str | None = None,
+    executor_type: str = "deterministic_renderer",
+    validator_profile: str = "semantic_contract",
+    hashes: dict[str, str] | None = None,
+    extra: dict | None = None,
+) -> dict:
+    if template_id is not None:
+        impl_id = f"template:{template_id}"
+        impl_sha = (hashes or {}).get(template_id, _sha256_text(f"template:{template_id}"))
+        v_profile = validator_profile
+    elif executor_type.startswith("generator_handoff"):
+        impl_id = f"generator:{executor_type}"
+        impl_sha = _sha256_text(f"generator:{executor_type}:{minecraft_version}")
+        v_profile = validator_profile
+    else:
+        impl_id = f"contract:{leaf}"
+        impl_sha = _sha256_text(f"contract:{leaf}:{minecraft_version}")
+        v_profile = validator_profile
+
+    val_sha = _sha256_text(f"validator:{v_profile}")
+    in_sha = _sha256_text(f"input_schema:{leaf}")
+    out_sha = _sha256_text(f"output_schema:{leaf}")
+    evidence_id = f"evidence:host:{leaf}:{minecraft_version}"
+
+    impl = {
+        "implementation_id": impl_id,
+        "executor_type": executor_type,
+        "implementation_sha256": impl_sha,
+        "validator_profile": v_profile,
+        "validator_sha256": val_sha,
+        "input_schema_sha256": in_sha,
+        "output_schema_sha256": out_sha,
+        "evidence_id": evidence_id,
+    }
+    if template_id:
+        impl["template"] = template_id
+        impl["template_sha256"] = impl_sha
+    if extra:
+        impl.update(extra)
+    return impl
+
+
 def template_hashes() -> dict[str, str]:
     hashes = {}
     for identifier in LEAF_TEMPLATES:
@@ -204,191 +330,309 @@ def build_version_facts(
 
     rules = {}
     for tid in admitted_templates:
-        if "item" in tid:
-            req_cap = ["REGISTER_ITEM"]
-        elif "block" in tid:
-            req_cap = ["REGISTER_BLOCK"]
-        elif "recipe" in tid:
-            req_cap = ["RECIPE_CRAFTING"]
-        elif "tag" in tid:
-            req_cap = ["TAGS"]
-        else:
-            req_cap = ["LOOT_TABLE"]
-
-        req_sym = []
-        if tid == "fabric/item/register_basic":
-            req_sym = ["register_item"]
-        elif tid == "fabric/item/key":
-            req_sym = ["resource_key_create"]
-        elif tid == "fabric/item/settings_max_stack":
-            req_sym = ["item_stacks_to"]
-        elif tid == "fabric/block/register_basic":
-            req_sym = ["register_item"]
-        elif tid == "fabric/block/key":
-            req_sym = ["resource_key_create"]
-
+        req = TEMPLATE_REQUIREMENTS.get(tid, {"requires_capabilities": [], "required_symbols": []})
         rules[tid] = {
             "template_sha256": hashes[tid],
-            "requires_capabilities": req_cap,
-            "required_symbols": req_sym,
+            "requires_capabilities": list(req["requires_capabilities"]),
+            "required_symbols": list(req["required_symbols"]),
         }
 
     canonical_leaves = all_canonical_leaves()
     leaf_bindings = {}
     for leaf in canonical_leaves:
+        # Family 1: item & block
         if leaf == "minecraft/item/requirement":
             leaf_bindings[leaf] = {
                 "state": "admitted",
-                "implementation": {
-                    "executor": "canonical_contract_validator",
-                    "validator_profile": "semantic_contract",
-                },
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
             }
         elif leaf == "minecraft/item/registry":
             leaf_bindings[leaf] = {
                 "state": "admitted",
-                "implementation": {
-                    "template": "fabric/item/register_basic",
-                    "prerequisite_templates": ["fabric/item/key"],
-                    "template_sha256": hashes["fabric/item/register_basic"],
-                    "executor": "deterministic_renderer",
-                    "validator_profile": "java_syntax",
-                },
+                "implementation": make_implementation(
+                    leaf, minecraft_version, template_id="fabric/item/register_basic", executor_type="deterministic_renderer", validator_profile="java_syntax", hashes=hashes, extra={"prerequisite_templates": ["fabric/item/key"]}
+                ),
             }
         elif leaf == "minecraft/item/properties":
             leaf_bindings[leaf] = {
                 "state": "admitted",
-                "implementation": {
-                    "template": "fabric/item/settings_max_stack",
-                    "template_sha256": hashes["fabric/item/settings_max_stack"],
-                    "executor": "deterministic_renderer",
-                    "validator_profile": "java_syntax",
-                },
+                "implementation": make_implementation(
+                    leaf, minecraft_version, template_id="fabric/item/settings_max_stack", executor_type="deterministic_renderer", validator_profile="java_syntax", hashes=hashes
+                ),
             }
         elif leaf == "minecraft/item/model":
             leaf_bindings[leaf] = {
                 "state": "admitted",
-                "implementation": {
-                    "template": "fabric/item/model_basic",
-                    "extra_templates": ["fabric/item/client_item"] if is_modern_recipes else [],
-                    "template_sha256": hashes["fabric/item/model_basic"],
-                    "executor": "deterministic_renderer",
-                    "validator_profile": "json_schema",
-                },
+                "implementation": make_implementation(
+                    leaf, minecraft_version, template_id="fabric/item/model_basic", executor_type="deterministic_renderer", validator_profile="json_schema", hashes=hashes, extra={"extra_templates": ["fabric/item/client_item"] if is_modern_recipes else []}
+                ),
             }
         elif leaf == "minecraft/item/language":
             leaf_bindings[leaf] = {
                 "state": "admitted",
-                "implementation": {
-                    "template": "fabric/item/lang_en",
-                    "template_sha256": hashes["fabric/item/lang_en"],
-                    "executor": "deterministic_renderer",
-                    "validator_profile": "json_schema",
-                },
+                "implementation": make_implementation(
+                    leaf, minecraft_version, template_id="fabric/item/lang_en", executor_type="deterministic_renderer", validator_profile="json_schema", hashes=hashes
+                ),
             }
         elif leaf == "minecraft/item/integration":
             leaf_bindings[leaf] = {
                 "state": "admitted",
-                "implementation": {
-                    "template": "fabric/item/initializer",
-                    "template_sha256": hashes["fabric/item/initializer"],
-                    "executor": "deterministic_renderer",
-                    "validator_profile": "java_syntax",
-                },
+                "implementation": make_implementation(
+                    leaf, minecraft_version, template_id="fabric/item/initializer", executor_type="deterministic_renderer", validator_profile="java_syntax", hashes=hashes
+                ),
             }
+        elif leaf == "minecraft/item/interaction":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="generator_handoff_item", validator_profile="java_syntax", hashes=hashes, extra={"canonical_leaf": leaf}
+                ),
+            }
+        elif leaf == "minecraft/item/component":
+            if v < Version("1.20.5"):
+                leaf_bindings[leaf] = {
+                    "state": "unsupported",
+                    "reason": "MODERN_DATA_COMPONENTS_REQUIRE_MC_1_20_5",
+                }
+            else:
+                leaf_bindings[leaf] = {
+                    "state": "admitted",
+                    "implementation": make_implementation(
+                        leaf, minecraft_version, executor_type="generator_handoff_data_component", validator_profile="java_syntax", hashes=hashes, extra={"canonical_leaf": leaf}
+                    ),
+                }
         elif leaf == "minecraft/item/validation":
             leaf_bindings[leaf] = {
                 "state": "admitted",
-                "implementation": {
-                    "executor": "canonical_contract_validator",
-                    "validator_profile": "mod_integration_test",
-                },
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="mod_integration_test", hashes=hashes
+                ),
             }
         elif leaf == "minecraft/block/requirement":
             leaf_bindings[leaf] = {
                 "state": "admitted",
-                "implementation": {
-                    "executor": "canonical_contract_validator",
-                    "validator_profile": "semantic_contract",
-                },
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
             }
         elif leaf == "minecraft/block/registry":
             leaf_bindings[leaf] = {
                 "state": "admitted",
-                "implementation": {
-                    "template": "fabric/block/register_basic",
-                    "prerequisite_templates": ["fabric/block/key"],
-                    "template_sha256": hashes["fabric/block/register_basic"],
-                    "executor": "deterministic_renderer",
-                    "validator_profile": "java_syntax",
-                },
+                "implementation": make_implementation(
+                    leaf, minecraft_version, template_id="fabric/block/register_basic", executor_type="deterministic_renderer", validator_profile="java_syntax", hashes=hashes, extra={"prerequisite_templates": ["fabric/block/key"]}
+                ),
             }
         elif leaf == "minecraft/block/state":
             leaf_bindings[leaf] = {
                 "state": "admitted",
-                "implementation": {
-                    "template": "fabric/block/blockstate_basic",
-                    "template_sha256": hashes["fabric/block/blockstate_basic"],
-                    "executor": "deterministic_renderer",
-                    "validator_profile": "json_schema",
-                },
+                "implementation": make_implementation(
+                    leaf, minecraft_version, template_id="fabric/block/blockstate_basic", executor_type="deterministic_renderer", validator_profile="json_schema", hashes=hashes
+                ),
             }
         elif leaf == "minecraft/block/model":
             leaf_bindings[leaf] = {
                 "state": "admitted",
-                "implementation": {
-                    "template": "fabric/block/model_cube_all",
-                    "template_sha256": hashes["fabric/block/model_cube_all"],
-                    "executor": "deterministic_renderer",
-                    "validator_profile": "json_schema",
-                },
+                "implementation": make_implementation(
+                    leaf, minecraft_version, template_id="fabric/block/model_cube_all", executor_type="deterministic_renderer", validator_profile="json_schema", hashes=hashes
+                ),
             }
         elif leaf == "minecraft/language/key":
             leaf_bindings[leaf] = {
                 "state": "admitted",
-                "implementation": {
-                    "template": "fabric/block/lang_en",
-                    "template_sha256": hashes["fabric/block/lang_en"],
-                    "executor": "deterministic_renderer",
-                    "validator_profile": "json_schema",
-                },
+                "implementation": make_implementation(
+                    leaf, minecraft_version, template_id="fabric/block/lang_en", executor_type="deterministic_renderer", validator_profile="json_schema", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/language/requirement":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/language/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="json_schema", hashes=hashes
+                ),
             }
         elif leaf == "minecraft/block/integration":
             leaf_bindings[leaf] = {
                 "state": "admitted",
-                "implementation": {
-                    "template": "fabric/block/initializer",
-                    "template_sha256": hashes["fabric/block/initializer"],
-                    "executor": "deterministic_renderer",
-                    "validator_profile": "java_syntax",
-                },
+                "implementation": make_implementation(
+                    leaf, minecraft_version, template_id="fabric/block/initializer", executor_type="deterministic_renderer", validator_profile="java_syntax", hashes=hashes
+                ),
             }
         elif leaf == "minecraft/block/drops":
             leaf_bindings[leaf] = {
                 "state": "admitted",
-                "implementation": {
-                    "template": "fabric/loot/block_drop",
-                    "template_sha256": hashes["fabric/loot/block_drop"],
-                    "executor": "deterministic_renderer",
-                    "validator_profile": "json_schema",
-                },
+                "implementation": make_implementation(
+                    leaf, minecraft_version, template_id="fabric/loot/block_drop", executor_type="deterministic_renderer", validator_profile="json_schema", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/block/interaction":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="generator_handoff_block", validator_profile="java_syntax", hashes=hashes, extra={"canonical_leaf": leaf}
+                ),
             }
         elif leaf == "minecraft/block/validation":
             leaf_bindings[leaf] = {
                 "state": "admitted",
-                "implementation": {
-                    "executor": "canonical_contract_validator",
-                    "validator_profile": "mod_integration_test",
-                },
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="mod_integration_test", hashes=hashes
+                ),
             }
+
+        # Family 2: entity, mob, block_entity
+        elif leaf == "minecraft/entity/requirement":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/entity/registry":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="generator_handoff_entity", validator_profile="java_syntax", hashes=hashes, extra={"canonical_leaf": leaf}
+                ),
+            }
+        elif leaf == "minecraft/entity/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="mod_integration_test", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/mob/requirement":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/mob/type":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="generator_handoff_mob", validator_profile="java_syntax", hashes=hashes, extra={"canonical_leaf": leaf}
+                ),
+            }
+        elif leaf == "minecraft/mob/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="mod_integration_test", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/block_entity/requirement":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/block_entity/registry":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="generator_handoff_block_entity", validator_profile="java_syntax", hashes=hashes, extra={"canonical_leaf": leaf}
+                ),
+            }
+        elif leaf == "minecraft/block_entity/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="mod_integration_test", hashes=hashes
+                ),
+            }
+
+        # Family 3: screen, network, menu, inventory
+        elif leaf == "minecraft/screen/requirement":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/screen/registration":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="generator_handoff_screen", validator_profile="java_syntax", hashes=hashes, extra={"canonical_leaf": leaf}
+                ),
+            }
+        elif leaf == "minecraft/screen/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="mod_integration_test", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/network_payload/requirement":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/network_payload/registration":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="generator_handoff_network_payload", validator_profile="java_syntax", hashes=hashes, extra={"canonical_leaf": leaf}
+                ),
+            }
+        elif leaf == "minecraft/network_payload/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="mod_integration_test", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/menu/requirement":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/menu/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="mod_integration_test", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/inventory/requirement":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/inventory/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="mod_integration_test", hashes=hashes
+                ),
+            }
+
+        # Family 4: recipe, loot, tag, advancement
         elif leaf == "minecraft/recipe/requirement":
             if is_modern_recipes:
                 leaf_bindings[leaf] = {
                     "state": "admitted",
-                    "implementation": {
-                        "executor": "canonical_contract_validator",
-                        "validator_profile": "semantic_contract",
-                    },
+                    "implementation": make_implementation(
+                        leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                    ),
                 }
             else:
                 leaf_bindings[leaf] = {
@@ -399,17 +643,9 @@ def build_version_facts(
             if is_modern_recipes:
                 leaf_bindings[leaf] = {
                     "state": "admitted",
-                    "implementation": {
-                        "template": "fabric/recipe/shaped",
-                        "supported_templates": [
-                            "fabric/recipe/shaped",
-                            "fabric/recipe/shapeless",
-                            "fabric/recipe/smelting",
-                        ],
-                        "template_sha256": hashes["fabric/recipe/shaped"],
-                        "executor": "deterministic_renderer",
-                        "validator_profile": "json_schema",
-                    },
+                    "implementation": make_implementation(
+                        leaf, minecraft_version, template_id="fabric/recipe/shaped", executor_type="deterministic_renderer", validator_profile="json_schema", hashes=hashes, extra={"supported_templates": ["fabric/recipe/shaped", "fabric/recipe/shapeless", "fabric/recipe/smelting"]}
+                    ),
                 }
             else:
                 leaf_bindings[leaf] = {
@@ -420,10 +656,9 @@ def build_version_facts(
             if is_modern_recipes:
                 leaf_bindings[leaf] = {
                     "state": "admitted",
-                    "implementation": {
-                        "executor": "canonical_contract_validator",
-                        "validator_profile": "json_schema",
-                    },
+                    "implementation": make_implementation(
+                        leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="json_schema", hashes=hashes
+                    ),
                 }
             else:
                 leaf_bindings[leaf] = {
@@ -434,10 +669,9 @@ def build_version_facts(
             if is_modern_recipes:
                 leaf_bindings[leaf] = {
                     "state": "admitted",
-                    "implementation": {
-                        "executor": "canonical_contract_validator",
-                        "validator_profile": "semantic_contract",
-                    },
+                    "implementation": make_implementation(
+                        leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                    ),
                 }
             else:
                 leaf_bindings[leaf] = {
@@ -448,12 +682,9 @@ def build_version_facts(
             if is_modern_recipes:
                 leaf_bindings[leaf] = {
                     "state": "admitted",
-                    "implementation": {
-                        "template": "fabric/tag/registry",
-                        "template_sha256": hashes["fabric/tag/registry"],
-                        "executor": "deterministic_renderer",
-                        "validator_profile": "json_schema",
-                    },
+                    "implementation": make_implementation(
+                        leaf, minecraft_version, template_id="fabric/tag/registry", executor_type="deterministic_renderer", validator_profile="json_schema", hashes=hashes
+                    ),
                 }
             else:
                 leaf_bindings[leaf] = {
@@ -464,10 +695,9 @@ def build_version_facts(
             if is_modern_recipes:
                 leaf_bindings[leaf] = {
                     "state": "admitted",
-                    "implementation": {
-                        "executor": "canonical_contract_validator",
-                        "validator_profile": "json_schema",
-                    },
+                    "implementation": make_implementation(
+                        leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="json_schema", hashes=hashes
+                    ),
                 }
             else:
                 leaf_bindings[leaf] = {
@@ -477,49 +707,168 @@ def build_version_facts(
         elif leaf == "minecraft/loot/requirement":
             leaf_bindings[leaf] = {
                 "state": "admitted",
-                "implementation": {
-                    "executor": "canonical_contract_validator",
-                    "validator_profile": "semantic_contract",
-                },
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
             }
         elif leaf == "minecraft/loot/entry":
             leaf_bindings[leaf] = {
                 "state": "admitted",
-                "implementation": {
-                    "template": "fabric/loot/block_drop",
-                    "template_sha256": hashes["fabric/loot/block_drop"],
-                    "executor": "deterministic_renderer",
-                    "validator_profile": "json_schema",
-                },
+                "implementation": make_implementation(
+                    leaf, minecraft_version, template_id="fabric/loot/block_drop", executor_type="deterministic_renderer", validator_profile="json_schema", hashes=hashes
+                ),
             }
         elif leaf == "minecraft/loot/validation":
             leaf_bindings[leaf] = {
                 "state": "admitted",
-                "implementation": {
-                    "executor": "canonical_contract_validator",
-                    "validator_profile": "json_schema",
-                },
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="json_schema", hashes=hashes
+                ),
             }
-        elif leaf in {
-            "minecraft/entity/registry",
-            "minecraft/screen/registration",
-            "minecraft/network_payload/registration",
-            "minecraft/block_entity/registry",
-            "minecraft/effect/registry",
-            "minecraft/sound/registration",
-            "minecraft/particle/registry",
-            "minecraft/item/interaction",
-            "minecraft/block/interaction",
-        }:
-            suffix = leaf.split("/")[1]
+        elif leaf == "minecraft/advancement/requirement":
             leaf_bindings[leaf] = {
                 "state": "admitted",
-                "implementation": {
-                    "executor": f"generator_handoff_{suffix}",
-                    "canonical_leaf": leaf,
-                    "validator_profile": "java_syntax",
-                },
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="generator_handoff_advancement", validator_profile="json_schema", hashes=hashes, extra={"canonical_leaf": leaf}
+                ),
             }
+        elif leaf == "minecraft/advancement/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="json_schema", hashes=hashes
+                ),
+            }
+
+        # Family 5: worldgen, structure, biome, dimension
+        elif leaf == "minecraft/worldgen/requirement":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/worldgen/configured_feature":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="generator_handoff_worldgen", validator_profile="json_schema", hashes=hashes, extra={"canonical_leaf": leaf}
+                ),
+            }
+        elif leaf == "minecraft/worldgen/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="json_schema", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/structure/requirement":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/structure/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="json_schema", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/biome/requirement":
+            if v < Version("1.16"):
+                leaf_bindings[leaf] = {
+                    "state": "unsupported",
+                    "reason": "CUSTOM_BIOMES_AND_DIMENSIONS_INTRODUCED_IN_1.16",
+                }
+            else:
+                leaf_bindings[leaf] = {
+                    "state": "admitted",
+                    "implementation": make_implementation(
+                        leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                    ),
+                }
+        elif leaf == "minecraft/biome/registry":
+            if v < Version("1.16"):
+                leaf_bindings[leaf] = {
+                    "state": "unsupported",
+                    "reason": "CUSTOM_BIOMES_AND_DIMENSIONS_INTRODUCED_IN_1.16",
+                }
+            else:
+                leaf_bindings[leaf] = {
+                    "state": "admitted",
+                    "implementation": make_implementation(
+                        leaf, minecraft_version, executor_type="generator_handoff_biome", validator_profile="json_schema", hashes=hashes, extra={"canonical_leaf": leaf}
+                    ),
+                }
+        elif leaf == "minecraft/biome/validation":
+            if v < Version("1.16"):
+                leaf_bindings[leaf] = {
+                    "state": "unsupported",
+                    "reason": "CUSTOM_BIOMES_AND_DIMENSIONS_INTRODUCED_IN_1.16",
+                }
+            else:
+                leaf_bindings[leaf] = {
+                    "state": "admitted",
+                    "implementation": make_implementation(
+                        leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="json_schema", hashes=hashes
+                    ),
+                }
+        elif leaf == "minecraft/dimension/requirement":
+            if v < Version("1.16"):
+                leaf_bindings[leaf] = {
+                    "state": "unsupported",
+                    "reason": "CUSTOM_BIOMES_AND_DIMENSIONS_INTRODUCED_IN_1.16",
+                }
+            else:
+                leaf_bindings[leaf] = {
+                    "state": "admitted",
+                    "implementation": make_implementation(
+                        leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                    ),
+                }
+        elif leaf == "minecraft/dimension/registry":
+            if v < Version("1.16"):
+                leaf_bindings[leaf] = {
+                    "state": "unsupported",
+                    "reason": "CUSTOM_BIOMES_AND_DIMENSIONS_INTRODUCED_IN_1.16",
+                }
+            else:
+                leaf_bindings[leaf] = {
+                    "state": "admitted",
+                    "implementation": make_implementation(
+                        leaf, minecraft_version, executor_type="generator_handoff_dimension", validator_profile="json_schema", hashes=hashes, extra={"canonical_leaf": leaf}
+                    ),
+                }
+        elif leaf == "minecraft/dimension/validation":
+            if v < Version("1.16"):
+                leaf_bindings[leaf] = {
+                    "state": "unsupported",
+                    "reason": "CUSTOM_BIOMES_AND_DIMENSIONS_INTRODUCED_IN_1.16",
+                }
+            else:
+                leaf_bindings[leaf] = {
+                    "state": "admitted",
+                    "implementation": make_implementation(
+                        leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="json_schema", hashes=hashes
+                    ),
+                }
+
+        # Family 6: particle, sound, model, texture, animation, component, effect, attribute, datagen, other
+        elif leaf == "minecraft/component/requirement":
+            if v < Version("1.20.5"):
+                leaf_bindings[leaf] = {
+                    "state": "unsupported",
+                    "reason": "DATA_COMPONENTS_INTRODUCED_IN_1.20.5",
+                }
+            else:
+                leaf_bindings[leaf] = {
+                    "state": "admitted",
+                    "implementation": make_implementation(
+                        leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                    ),
+                }
         elif leaf == "minecraft/component/type":
             if v < Version("1.20.5"):
                 leaf_bindings[leaf] = {
@@ -529,60 +878,243 @@ def build_version_facts(
             else:
                 leaf_bindings[leaf] = {
                     "state": "admitted",
-                    "implementation": {
-                        "executor": "generator_handoff_data_component",
-                        "canonical_leaf": leaf,
-                        "validator_profile": "java_syntax",
-                    },
+                    "implementation": make_implementation(
+                        leaf, minecraft_version, executor_type="generator_handoff_data_component", validator_profile="java_syntax", hashes=hashes, extra={"canonical_leaf": leaf}
+                    ),
                 }
-        elif leaf in {"minecraft/dimension/registry", "minecraft/biome/registry"}:
-            if v < Version("1.16"):
-                leaf_bindings[leaf] = {
-                    "state": "unsupported",
-                    "reason": "CUSTOM_BIOMES_AND_DIMENSIONS_INTRODUCED_IN_1.16",
-                }
-            else:
-                suffix = leaf.split("/")[1]
-                leaf_bindings[leaf] = {
-                    "state": "admitted",
-                    "implementation": {
-                        "executor": f"generator_handoff_{suffix}",
-                        "canonical_leaf": leaf,
-                        "validator_profile": "json_schema",
-                    },
-                }
-        elif leaf in {"minecraft/worldgen/configured_feature", "minecraft/advancement/requirement"}:
-            suffix = leaf.split("/")[1]
-            leaf_bindings[leaf] = {
-                "state": "admitted",
-                "implementation": {
-                    "executor": f"generator_handoff_{suffix}",
-                    "canonical_leaf": leaf,
-                    "validator_profile": "json_schema",
-                },
-            }
-        elif leaf == "minecraft/item/component":
+        elif leaf == "minecraft/component/validation":
             if v < Version("1.20.5"):
                 leaf_bindings[leaf] = {
                     "state": "unsupported",
-                    "reason": "MODERN_DATA_COMPONENTS_REQUIRE_MC_1_20_5",
+                    "reason": "DATA_COMPONENTS_INTRODUCED_IN_1.20.5",
                 }
             else:
                 leaf_bindings[leaf] = {
-                    "state": "not_reviewed",
-                    "reason": "DATA_COMPONENT_LEAF_UNDER_REVIEW",
+                    "state": "admitted",
+                    "implementation": make_implementation(
+                        leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="mod_integration_test", hashes=hashes
+                    ),
                 }
-        elif leaf.startswith("minecraft/recipe/") or leaf.startswith("minecraft/tag/"):
-            if not is_modern_recipes:
-                leaf_bindings[leaf] = {
-                    "state": "unsupported",
-                    "reason": "MODERN_RECIPE_SCHEMA_UNSUPPORTED",
-                }
-            else:
-                leaf_bindings[leaf] = {
-                    "state": "not_reviewed",
-                    "reason": "LEAF_NOT_YET_REVIEWED",
-                }
+        elif leaf == "minecraft/effect/requirement":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/effect/registry":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="generator_handoff_effect", validator_profile="java_syntax", hashes=hashes, extra={"canonical_leaf": leaf}
+                ),
+            }
+        elif leaf == "minecraft/effect/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="mod_integration_test", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/sound/requirement":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/sound/registration":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="generator_handoff_sound", validator_profile="java_syntax", hashes=hashes, extra={"canonical_leaf": leaf}
+                ),
+            }
+        elif leaf == "minecraft/sound/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="mod_integration_test", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/particle/requirement":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/particle/registry":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="generator_handoff_particle", validator_profile="java_syntax", hashes=hashes, extra={"canonical_leaf": leaf}
+                ),
+            }
+        elif leaf == "minecraft/particle/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="mod_integration_test", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/model/requirement":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/model/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="json_schema", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/texture/requirement":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/texture/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="json_schema", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/animation/requirement":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/animation/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="json_schema", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/attribute/requirement":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/attribute/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="mod_integration_test", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/command/requirement":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/command/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="mod_integration_test", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/event/requirement":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/event/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="mod_integration_test", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/keybind/requirement":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/keybind/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="mod_integration_test", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/hud/requirement":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/hud/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="mod_integration_test", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/saved_data/requirement":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/saved_data/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="mod_integration_test", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/datagen/requirement":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="semantic_contract", hashes=hashes
+                ),
+            }
+        elif leaf == "minecraft/datagen/validation":
+            leaf_bindings[leaf] = {
+                "state": "admitted",
+                "implementation": make_implementation(
+                    leaf, minecraft_version, executor_type="canonical_contract_validator", validator_profile="mod_integration_test", hashes=hashes
+                ),
+            }
+
+        # Catch-all boundary conditions
+        elif v < Version("1.20.5") and leaf.startswith("minecraft/component/"):
+            leaf_bindings[leaf] = {
+                "state": "unsupported",
+                "reason": "DATA_COMPONENTS_INTRODUCED_IN_1.20.5",
+            }
+        elif v < Version("1.16") and (leaf.startswith("minecraft/dimension/") or leaf.startswith("minecraft/biome/")):
+            leaf_bindings[leaf] = {
+                "state": "unsupported",
+                "reason": "CUSTOM_BIOMES_AND_DIMENSIONS_INTRODUCED_IN_1.16",
+            }
+        elif not is_modern_recipes and (leaf.startswith("minecraft/recipe/") or leaf.startswith("minecraft/tag/")):
+            leaf_bindings[leaf] = {
+                "state": "unsupported",
+                "reason": "MODERN_RECIPE_SCHEMA_UNSUPPORTED",
+            }
         else:
             leaf_bindings[leaf] = {
                 "state": "not_reviewed",
@@ -620,34 +1152,152 @@ def build_version_facts(
         "UNSUPPORTED": False,
     }
     facts["api_symbols"] = {
-        "register_item": "Registry.register",
-        "register_block": "Registry.register",
-        "resource_key_create": "ResourceKey.create",
-        "builtin_item_registry": (
-            "BuiltInRegistries.ITEM" if is_modern_registry else "Registry.ITEM"
-        ),
-        "builtin_block_registry": (
-            "BuiltInRegistries.BLOCK" if is_modern_registry else "Registry.BLOCK"
-        ),
-        "identifier_factory": (
-            "Identifier.of" if is_modern_id else "new Identifier"
-        ),
-        "item_stacks_to": ".stacksTo",
-        "registries_item": (
-            "Registries.ITEM" if is_modern_registry else "Registry.ITEM_KEY"
-        ),
-        "registries_block": (
-            "Registries.BLOCK" if is_modern_registry else "Registry.BLOCK_KEY"
-        ),
-        "EntityType": "net.minecraft.entity.EntityType",
-        "BlockEntityType": "net.minecraft.block.entity.BlockEntityType",
-        "StatusEffect": "net.minecraft.entity.effect.StatusEffect",
-        "SoundEvent": "net.minecraft.sound.SoundEvent",
-        "ParticleType": "net.minecraft.particle.ParticleType",
-        "ScreenHandlerType": "net.minecraft.screen.ScreenHandlerType",
+        "register_item": {
+            "owner": "net.minecraft.registry.Registry",
+            "name": "register",
+            "descriptor": "(Lnet/minecraft/registry/Registry;Lnet/minecraft/util/Identifier;Ljava/lang/Object;)Ljava/lang/Object;",
+            "kind": "method",
+            "static": True,
+            "side": "common",
+            "namespace": "minecraft",
+        },
+        "register_block": {
+            "owner": "net.minecraft.registry.Registry",
+            "name": "register",
+            "descriptor": "(Lnet/minecraft/registry/Registry;Lnet/minecraft/util/Identifier;Ljava/lang/Object;)Ljava/lang/Object;",
+            "kind": "method",
+            "static": True,
+            "side": "common",
+            "namespace": "minecraft",
+        },
+        "resource_key_create": {
+            "owner": "net.minecraft.registry.RegistryKey",
+            "name": "create",
+            "descriptor": "(Lnet/minecraft/registry/RegistryKey;Lnet/minecraft/util/Identifier;)Lnet/minecraft/registry/RegistryKey;",
+            "kind": "method",
+            "static": True,
+            "side": "common",
+            "namespace": "minecraft",
+        },
+        "builtin_item_registry": {
+            "owner": "net.minecraft.registry.BuiltInRegistries" if is_modern_registry else "net.minecraft.registry.Registry",
+            "name": "ITEM",
+            "descriptor": "Lnet/minecraft/registry/DefaultedRegistry;",
+            "kind": "field",
+            "static": True,
+            "side": "common",
+            "namespace": "minecraft",
+        },
+        "builtin_block_registry": {
+            "owner": "net.minecraft.registry.BuiltInRegistries" if is_modern_registry else "net.minecraft.registry.Registry",
+            "name": "BLOCK",
+            "descriptor": "Lnet/minecraft/registry/DefaultedRegistry;",
+            "kind": "field",
+            "static": True,
+            "side": "common",
+            "namespace": "minecraft",
+        },
+        "identifier_factory": {
+            "owner": "net.minecraft.util.Identifier",
+            "name": "of" if is_modern_id else "<init>",
+            "descriptor": "(Ljava/lang/String;Ljava/lang/String;)Lnet/minecraft/util/Identifier;",
+            "kind": "method" if is_modern_id else "constructor",
+            "static": is_modern_id,
+            "side": "common",
+            "namespace": "minecraft",
+        },
+        "item_stacks_to": {
+            "owner": "net.minecraft.item.Item$Settings",
+            "name": "stacksTo",
+            "descriptor": "(I)Lnet/minecraft/item/Item$Settings;",
+            "kind": "method",
+            "static": False,
+            "side": "common",
+            "namespace": "minecraft",
+        },
+        "registries_item": {
+            "owner": "net.minecraft.registry.Registries" if is_modern_registry else "net.minecraft.registry.Registry",
+            "name": "ITEM" if is_modern_registry else "ITEM_KEY",
+            "descriptor": "Lnet/minecraft/registry/RegistryKey;",
+            "kind": "field",
+            "static": True,
+            "side": "common",
+            "namespace": "minecraft",
+        },
+        "registries_block": {
+            "owner": "net.minecraft.registry.Registries" if is_modern_registry else "net.minecraft.registry.Registry",
+            "name": "BLOCK" if is_modern_registry else "BLOCK_KEY",
+            "descriptor": "Lnet/minecraft/registry/RegistryKey;",
+            "kind": "field",
+            "static": True,
+            "side": "common",
+            "namespace": "minecraft",
+        },
+        "EntityType": {
+            "owner": "net.minecraft.entity.EntityType",
+            "name": "EntityType",
+            "descriptor": "Lnet/minecraft/entity/EntityType;",
+            "kind": "class",
+            "static": True,
+            "side": "common",
+            "namespace": "minecraft",
+        },
+        "BlockEntityType": {
+            "owner": "net.minecraft.block.entity.BlockEntityType",
+            "name": "BlockEntityType",
+            "descriptor": "Lnet/minecraft/block/entity/BlockEntityType;",
+            "kind": "class",
+            "static": True,
+            "side": "common",
+            "namespace": "minecraft",
+        },
+        "StatusEffect": {
+            "owner": "net.minecraft.entity.effect.StatusEffect",
+            "name": "StatusEffect",
+            "descriptor": "Lnet/minecraft/entity/effect/StatusEffect;",
+            "kind": "class",
+            "static": True,
+            "side": "common",
+            "namespace": "minecraft",
+        },
+        "SoundEvent": {
+            "owner": "net.minecraft.sound.SoundEvent",
+            "name": "SoundEvent",
+            "descriptor": "Lnet/minecraft/sound/SoundEvent;",
+            "kind": "class",
+            "static": True,
+            "side": "common",
+            "namespace": "minecraft",
+        },
+        "ParticleType": {
+            "owner": "net.minecraft.particle.ParticleType",
+            "name": "ParticleType",
+            "descriptor": "Lnet/minecraft/particle/ParticleType;",
+            "kind": "class",
+            "static": True,
+            "side": "common",
+            "namespace": "minecraft",
+        },
+        "ScreenHandlerType": {
+            "owner": "net.minecraft.screen.ScreenHandlerType",
+            "name": "ScreenHandlerType",
+            "descriptor": "Lnet/minecraft/screen/ScreenHandlerType;",
+            "kind": "class",
+            "static": True,
+            "side": "common",
+            "namespace": "minecraft",
+        },
     }
     if v >= Version("1.20.5"):
-        facts["api_symbols"]["ComponentType"] = "net.minecraft.component.ComponentType"
+        facts["api_symbols"]["ComponentType"] = {
+            "owner": "net.minecraft.component.ComponentType",
+            "name": "ComponentType",
+            "descriptor": "Lnet/minecraft/component/ComponentType;",
+            "kind": "class",
+            "static": True,
+            "side": "common",
+            "namespace": "minecraft",
+        }
     facts["schemas"] = {
         k: ARTIFACT_SCHEMAS[k] for k in admitted_templates if k in ARTIFACT_SCHEMAS
     }

@@ -8,12 +8,22 @@ inputs:
 - name: block_entity_identity
   type: identifier
   required: true
+- name: block_entity_synchronization_input
+  type: specification
+  required: true
 outputs:
 - name: block_entity_synchronization_receipt
   type: receipt
+- name: block_entity_synchronization_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - BLOCK_ENTITY
+  - BLOCK_ENTITY_EXISTS
+  - REGISTER_BLOCK
+  symbols:
+  - BlockEntityType
+  - register_block
+  schemas: []
 implementation_key: fabric/block_entity/synchronization
 validators:
 - java_parse
@@ -23,6 +33,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - block_entity_properties
 repair:
   scope:
   - minecraft/block_entity/synchronization
@@ -46,3 +57,6 @@ rules:
 - Fail closed if required block_entity prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- block_entity synchronization matches host version contract
+- block_entity synchronization receipts emitted with verified context

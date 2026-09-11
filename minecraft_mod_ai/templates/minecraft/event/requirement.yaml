@@ -7,12 +7,20 @@ inputs:
 - name: event_identity
   type: identifier
   required: true
+- name: event_requirement_input
+  type: specification
+  required: true
 outputs:
-- name: event_contract
-  type: contract_receipt
+- name: event_requirement_receipt
+  type: receipt
+- name: event_requirement_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - EVENT_LISTENER
+  - REGISTER_ITEM
+  symbols:
+  - register_item
+  schemas: []
 implementation_key: fabric/event/requirement
 validators:
 - semantic_contract
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - event_properties
 repair:
   scope:
   - minecraft/event/requirement
@@ -44,3 +53,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required event prerequisite receipt is missing; never invent defaults.
 - Output must satisfy semantic_contract validator before completion.
+postconditions:
+- event requirement matches host version contract
+- event requirement receipts emitted with verified context

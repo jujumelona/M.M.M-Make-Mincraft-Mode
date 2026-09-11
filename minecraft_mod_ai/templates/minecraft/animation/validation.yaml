@@ -7,12 +7,20 @@ inputs:
 - name: animation_identity
   type: identifier
   required: true
+- name: animation_validation_input
+  type: specification
+  required: true
 outputs:
 - name: animation_validation_receipt
   type: receipt
+- name: animation_validation_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - ANIMATION_DEFINITION
+  - ENTITY_EXISTS
+  symbols:
+  - EntityType
+  schemas: []
 implementation_key: fabric/animation/validation
 validators:
 - mod_integration_test
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - animation_properties
 repair:
   scope:
   - minecraft/animation/validation
@@ -45,3 +54,6 @@ rules:
 - Fail closed if required animation prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy mod_integration_test validator before completion.
+postconditions:
+- animation validation matches host version contract
+- animation validation receipts emitted with verified context

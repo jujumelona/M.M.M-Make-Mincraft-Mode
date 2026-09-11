@@ -7,12 +7,21 @@ inputs:
 - name: block_identity
   type: identifier
   required: true
+- name: block_requirement_input
+  type: specification
+  required: true
 outputs:
-- name: block_contract
-  type: contract_receipt
+- name: block_requirement_receipt
+  type: receipt
+- name: block_requirement_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - REGISTER_BLOCK
+  symbols:
+  - register_block
+  - resource_key_create
+  schemas: []
 implementation_key: fabric/block/requirement
 validators:
 - semantic_contract
@@ -22,6 +31,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - block_properties
 repair:
   scope:
   - minecraft/block/requirement
@@ -44,3 +54,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required block prerequisite receipt is missing; never invent defaults.
 - Output must satisfy semantic_contract validator before completion.
+postconditions:
+- block requirement matches host version contract
+- block requirement receipts emitted with verified context

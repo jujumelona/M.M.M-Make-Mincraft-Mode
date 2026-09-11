@@ -7,12 +7,20 @@ inputs:
 - name: effect_identity
   type: identifier
   required: true
+- name: effect_rendering_input
+  type: specification
+  required: true
 outputs:
 - name: effect_rendering_receipt
   type: receipt
+- name: effect_rendering_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - STATUS_EFFECT
+  symbols:
+  - StatusEffect
+  schemas: []
 implementation_key: fabric/effect/rendering
 validators:
 - java_parse
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - effect_properties
 repair:
   scope:
   - minecraft/effect/rendering
@@ -44,3 +53,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required effect prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- effect rendering matches host version contract
+- effect rendering receipts emitted with verified context

@@ -7,12 +7,20 @@ inputs:
 - name: tag_identity
   type: identifier
   required: true
+- name: tag_entries_input
+  type: specification
+  required: true
 outputs:
-- name: tag_json
-  type: resource_file
+- name: tag_entries_receipt
+  type: receipt
+- name: tag_entries_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - TAGS
+  symbols: []
+  schemas:
+  - fabric/tag/registry
 implementation_key: fabric/tag/entries
 validators:
 - json_schema
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - tag_properties
 repair:
   scope:
   - minecraft/tag/entries
@@ -43,3 +52,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required tag prerequisite receipt is missing; never invent defaults.
 - Output must satisfy json_schema validator before completion.
+postconditions:
+- tag entries matches host version contract
+- tag entries receipts emitted with verified context

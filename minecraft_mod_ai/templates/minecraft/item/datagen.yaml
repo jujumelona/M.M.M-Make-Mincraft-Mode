@@ -7,21 +7,33 @@ inputs:
 - name: item_identity
   type: identifier
   required: true
+- name: item_datagen_input
+  type: specification
+  required: true
 outputs:
 - name: item_datagen_receipt
   type: receipt
+- name: item_datagen_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - REGISTER_ITEM
+  - ITEM_SETTINGS
+  symbols:
+  - register_item
+  - resource_key_create
+  - item_stacks_to
+  schemas: []
 implementation_key: fabric/item/datagen
 validators:
-- json_schema
+- java_parse
 context_projection:
   max_bytes: 4096
   include:
   - mod_id
   - registry_path
   - package_path
+  - item_properties
 repair:
   scope:
   - minecraft/item/datagen
@@ -44,3 +56,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required item prerequisite receipt is missing; never invent defaults.
 - Output must satisfy json_schema validator before completion.
+postconditions:
+- item datagen matches host version contract
+- item datagen receipts emitted with verified context

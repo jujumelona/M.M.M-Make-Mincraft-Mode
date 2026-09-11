@@ -7,12 +7,20 @@ inputs:
 - name: model_identity
   type: identifier
   required: true
+- name: model_animation_input
+  type: specification
+  required: true
 outputs:
 - name: model_animation_receipt
   type: receipt
+- name: model_animation_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - MODEL_DEFINITION
+  - REGISTER_ITEM
+  symbols: []
+  schemas:
+  - fabric/item/model_basic
 implementation_key: fabric/model/animation
 validators:
 - java_parse
@@ -23,6 +31,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - model_properties
 repair:
   scope:
   - minecraft/model/animation
@@ -45,3 +54,6 @@ rules:
 - Target side must remain client; reject cross-side symbol leakage.
 - Fail closed if required model prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- model animation matches host version contract
+- model animation receipts emitted with verified context

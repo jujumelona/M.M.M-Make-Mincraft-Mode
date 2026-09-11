@@ -7,12 +7,20 @@ inputs:
 - name: entity_identity
   type: identifier
   required: true
+- name: entity_model_input
+  type: specification
+  required: true
 outputs:
 - name: entity_model_receipt
   type: receipt
+- name: entity_model_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - REGISTER_ENTITY
+  - ENTITY_EXISTS
+  symbols:
+  - EntityType
+  schemas: []
 implementation_key: fabric/entity/model
 validators:
 - java_parse
@@ -23,7 +31,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
-  - java_constant
+  - entity_properties
 repair:
   scope:
   - minecraft/entity/model
@@ -46,3 +54,6 @@ rules:
 - Target side must remain client; reject cross-side symbol leakage.
 - Fail closed if required entity prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- entity model matches host version contract
+- entity model receipts emitted with verified context

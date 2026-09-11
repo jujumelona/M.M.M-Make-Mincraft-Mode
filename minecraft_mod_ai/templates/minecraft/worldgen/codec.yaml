@@ -2,17 +2,24 @@ id: minecraft/worldgen/codec
 task: Implement only the codec responsibility of the supplied worldgen artifact.
 execution_mode: model
 side:
-- server
+- common
 inputs:
 - name: worldgen_identity
   type: identifier
   required: true
+- name: worldgen_codec_input
+  type: specification
+  required: true
 outputs:
 - name: worldgen_codec_receipt
   type: receipt
+- name: worldgen_codec_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - WORLDGEN_FEATURE
+  symbols: []
+  schemas: []
 implementation_key: fabric/worldgen/codec
 validators:
 - java_parse
@@ -22,6 +29,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - worldgen_properties
 repair:
   scope:
   - minecraft/worldgen/codec
@@ -44,3 +52,6 @@ rules:
 - Target side must remain server; reject cross-side symbol leakage.
 - Fail closed if required worldgen prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- worldgen codec matches host version contract
+- worldgen codec receipts emitted with verified context

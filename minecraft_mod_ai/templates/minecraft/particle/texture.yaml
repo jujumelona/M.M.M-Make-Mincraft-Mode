@@ -7,12 +7,20 @@ inputs:
 - name: particle_identity
   type: identifier
   required: true
+- name: particle_texture_input
+  type: specification
+  required: true
 outputs:
 - name: particle_texture_receipt
   type: receipt
+- name: particle_texture_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - PARTICLE_TYPE
+  symbols:
+  - ParticleType
+  schemas: []
 implementation_key: fabric/particle/texture
 validators:
 - java_parse
@@ -23,6 +31,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - particle_properties
 repair:
   scope:
   - minecraft/particle/texture
@@ -45,3 +54,6 @@ rules:
 - Target side must remain client; reject cross-side symbol leakage.
 - Fail closed if required particle prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- particle texture matches host version contract
+- particle texture receipts emitted with verified context

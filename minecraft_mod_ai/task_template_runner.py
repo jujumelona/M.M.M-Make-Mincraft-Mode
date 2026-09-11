@@ -618,10 +618,17 @@ def execute_artifact_template(
             validation_receipts.append({"validator": validator_name, "status": "PASS"})
 
     canonical_leaf = str(_job_value(job, "canonical_leaf", "") or "")
-    if canonical_leaf:
+    impl_id = str(_job_value(job, "implementation_id", "") or "")
+    exec_type = str(_job_value(job, "executor_type", "") or "")
+    if canonical_leaf or impl_id or exec_type:
         for receipt in validation_receipts:
-            if isinstance(receipt, dict) and "canonical_leaf" not in receipt:
-                receipt["canonical_leaf"] = canonical_leaf
+            if isinstance(receipt, dict):
+                if canonical_leaf and "canonical_leaf" not in receipt:
+                    receipt["canonical_leaf"] = canonical_leaf
+                if impl_id and "implementation_id" not in receipt:
+                    receipt["implementation_id"] = impl_id
+                if exec_type and "executor_type" not in receipt:
+                    receipt["executor_type"] = exec_type
 
     if hasattr(job, "validation_receipts"):
         job.validation_receipts = validation_receipts

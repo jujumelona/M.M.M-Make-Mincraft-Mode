@@ -7,12 +7,19 @@ inputs:
 - name: advancement_identity
   type: identifier
   required: true
+- name: advancement_datagen_input
+  type: specification
+  required: true
 outputs:
 - name: advancement_datagen_receipt
   type: receipt
+- name: advancement_datagen_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - ADVANCEMENT
+  symbols: []
+  schemas: []
 implementation_key: fabric/advancement/datagen
 validators:
 - json_schema
@@ -22,6 +29,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - advancement_properties
 repair:
   scope:
   - minecraft/advancement/datagen
@@ -45,3 +53,6 @@ rules:
 - Fail closed if required advancement prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy json_schema validator before completion.
+postconditions:
+- advancement datagen matches host version contract
+- advancement datagen receipts emitted with verified context

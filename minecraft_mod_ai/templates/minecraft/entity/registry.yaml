@@ -7,27 +7,30 @@ inputs:
 - name: entity_identity
   type: identifier
   required: true
+- name: entity_registry_input
+  type: specification
+  required: true
 outputs:
-- name: entity_registry_id
-  type: string
-- name: entity_java_symbol
-  type: string
+- name: entity_registry_receipt
+  type: receipt
+- name: entity_registry_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - REGISTER_ENTITY
+  - ENTITY_EXISTS
   symbols:
-  - entity_type_register
+  - EntityType
+  schemas: []
 implementation_key: fabric/entity/registry
 validators:
 - java_parse
-- registry_identifier_unique
 context_projection:
   max_bytes: 4096
   include:
   - mod_id
   - registry_path
   - package_path
-  - java_constant
+  - entity_properties
 repair:
   scope:
   - minecraft/entity/registry
@@ -51,3 +54,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required entity prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- entity registry matches host version contract
+- entity registry receipts emitted with verified context

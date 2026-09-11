@@ -2,17 +2,24 @@ id: minecraft/dimension/generator
 task: Implement only the generator responsibility of the supplied dimension artifact.
 execution_mode: model
 side:
-- server
+- common
 inputs:
 - name: dimension_identity
   type: identifier
   required: true
+- name: dimension_generator_input
+  type: specification
+  required: true
 outputs:
 - name: dimension_generator_receipt
   type: receipt
+- name: dimension_generator_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - DIMENSION
+  symbols: []
+  schemas: []
 implementation_key: fabric/dimension/generator
 validators:
 - java_parse
@@ -22,6 +29,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - dimension_properties
 repair:
   scope:
   - minecraft/dimension/generator
@@ -45,3 +53,6 @@ rules:
 - Fail closed if required dimension prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- dimension generator matches host version contract
+- dimension generator receipts emitted with verified context

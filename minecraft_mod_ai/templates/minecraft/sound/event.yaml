@@ -2,27 +2,35 @@ id: minecraft/sound/event
 task: Implement only the event responsibility of the supplied sound artifact.
 execution_mode: model
 side:
-- client
+- common
 inputs:
 - name: sound_identity
   type: identifier
   required: true
+- name: sound_event_input
+  type: specification
+  required: true
 outputs:
 - name: sound_event_receipt
   type: receipt
+- name: sound_event_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - SOUND_EVENT
+  symbols:
+  - SoundEvent
+  schemas: []
 implementation_key: fabric/sound/event
 validators:
 - java_parse
-- client_side_only
 context_projection:
   max_bytes: 4096
   include:
   - mod_id
   - registry_path
   - package_path
+  - sound_properties
 repair:
   scope:
   - minecraft/sound/event
@@ -44,3 +52,6 @@ rules:
 - Target side must remain client; reject cross-side symbol leakage.
 - Fail closed if required sound prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- sound event matches host version contract
+- sound event receipts emitted with verified context

@@ -2,17 +2,24 @@ id: minecraft/structure/template
 task: Implement only the template responsibility of the supplied structure artifact.
 execution_mode: model
 side:
-- server
+- common
 inputs:
 - name: structure_identity
   type: identifier
   required: true
+- name: structure_template_input
+  type: specification
+  required: true
 outputs:
 - name: structure_template_receipt
   type: receipt
+- name: structure_template_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - WORLDGEN_STRUCTURE
+  - WORLDGEN_FEATURE
+  symbols: []
+  schemas: []
 implementation_key: fabric/structure/template
 validators:
 - java_parse
@@ -22,6 +29,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - structure_properties
 repair:
   scope:
   - minecraft/structure/template
@@ -45,3 +53,6 @@ rules:
 - Fail closed if required structure prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- structure template matches host version contract
+- structure template receipts emitted with verified context

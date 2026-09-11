@@ -2,19 +2,25 @@ id: minecraft/saved_data/integration
 task: Implement only the integration responsibility of the supplied saved data artifact.
 execution_mode: model
 side:
-- server
+- common
 inputs:
 - name: saved_data_identity
   type: identifier
   required: true
+- name: saved_data_integration_input
+  type: specification
+  required: true
 outputs:
 - name: saved_data_integration_receipt
   type: receipt
+- name: saved_data_integration_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - PERSISTENT_STATE
+  - REGISTER_ITEM
   symbols:
-  - persistent_state_get
+  - register_item
+  schemas: []
 implementation_key: fabric/saved_data/integration
 validators:
 - java_parse
@@ -24,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - saved_data_properties
 repair:
   scope:
   - minecraft/saved_data/integration
@@ -47,3 +54,6 @@ rules:
 - Fail closed if required saved_data prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- saved_data integration matches host version contract
+- saved_data integration receipts emitted with verified context

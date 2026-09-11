@@ -7,27 +7,30 @@ inputs:
 - name: effect_identity
   type: identifier
   required: true
+- name: effect_registry_input
+  type: specification
+  required: true
 outputs:
-- name: effect_registry_id
-  type: string
-- name: effect_java_symbol
-  type: string
+- name: effect_registry_receipt
+  type: receipt
+- name: effect_registry_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - STATUS_EFFECT
   symbols:
-  - status_effect_register
+  - StatusEffect
+  schemas: []
 implementation_key: fabric/effect/registry
 validators:
 - java_parse
-- registry_identifier_unique
 context_projection:
   max_bytes: 4096
   include:
   - mod_id
   - registry_path
   - package_path
-  - java_constant
+  - effect_properties
 repair:
   scope:
   - minecraft/effect/registry
@@ -51,3 +54,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required effect prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- effect registry matches host version contract
+- effect registry receipts emitted with verified context

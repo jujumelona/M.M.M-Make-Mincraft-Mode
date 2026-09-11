@@ -7,12 +7,20 @@ inputs:
 - name: hud_identity
   type: identifier
   required: true
+- name: hud_requirement_input
+  type: specification
+  required: true
 outputs:
-- name: hud_contract
-  type: contract_receipt
+- name: hud_requirement_receipt
+  type: receipt
+- name: hud_requirement_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - HUD_RENDER
+  - GUI_EXISTS
+  symbols:
+  - ScreenHandlerType
+  schemas: []
 implementation_key: fabric/hud/requirement
 validators:
 - semantic_contract
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - hud_properties
 repair:
   scope:
   - minecraft/hud/requirement
@@ -44,3 +53,6 @@ rules:
 - Target side must remain client; reject cross-side symbol leakage.
 - Fail closed if required hud prerequisite receipt is missing; never invent defaults.
 - Output must satisfy semantic_contract validator before completion.
+postconditions:
+- hud requirement matches host version contract
+- hud requirement receipts emitted with verified context

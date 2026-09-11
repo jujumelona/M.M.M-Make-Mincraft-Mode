@@ -7,12 +7,22 @@ inputs:
 - name: recipe_identity
   type: identifier
   required: true
+- name: recipe_serializer_input
+  type: specification
+  required: true
 outputs:
-- name: recipe_json
-  type: resource_file
+- name: recipe_serializer_receipt
+  type: receipt
+- name: recipe_serializer_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - RECIPE_CRAFTING
+  - RECIPE_SMELTING
+  symbols: []
+  schemas:
+  - fabric/recipe/shaped
+  - fabric/recipe/shapeless
 implementation_key: fabric/recipe/serializer
 validators:
 - json_schema
@@ -22,6 +32,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - recipe_properties
 repair:
   scope:
   - minecraft/recipe/serializer
@@ -44,3 +55,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required recipe prerequisite receipt is missing; never invent defaults.
 - Output must satisfy json_schema validator before completion.
+postconditions:
+- recipe serializer matches host version contract
+- recipe serializer receipts emitted with verified context

@@ -431,6 +431,16 @@ def expand_facts_to_jobs(
                 render_binding(port["binding"]) for port in template["produces"]
             ]
 
+            impl_id = ""
+            exec_type = "deterministic_renderer"
+            if version_context is not None:
+                binding = version_context.require_leaf_binding(canonical_leaf)
+                impl_dict = binding.get("implementation", {})
+                impl_id = impl_dict.get("implementation_id", f"template:{template_id}")
+                exec_type = impl_dict.get("executor_type", "deterministic_renderer")
+            else:
+                impl_id = f"template:{template_id}"
+
             candidate = ArtifactJob(
                 job_id=job_id,
                 template_id=template_id,
@@ -446,6 +456,8 @@ def expand_facts_to_jobs(
                 deterministic_inputs=deterministic_inputs,
                 context_id=version_context.context_id if version_context is not None else "",
                 canonical_leaf=canonical_leaf,
+                implementation_id=impl_id,
+                executor_type=exec_type,
             )
             prior = seen_jobs.get(job_id)
             if prior is not None:

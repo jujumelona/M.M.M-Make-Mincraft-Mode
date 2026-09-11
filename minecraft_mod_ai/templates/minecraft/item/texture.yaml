@@ -7,12 +7,23 @@ inputs:
 - name: item_identity
   type: identifier
   required: true
+- name: item_texture_input
+  type: specification
+  required: true
 outputs:
 - name: item_texture_receipt
   type: receipt
+- name: item_texture_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - REGISTER_ITEM
+  - ITEM_SETTINGS
+  symbols:
+  - register_item
+  - resource_key_create
+  - item_stacks_to
+  schemas: []
 implementation_key: fabric/item/texture
 validators:
 - java_parse
@@ -23,6 +34,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - item_properties
 repair:
   scope:
   - minecraft/item/texture
@@ -45,3 +57,6 @@ rules:
 - Target side must remain client; reject cross-side symbol leakage.
 - Fail closed if required item prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- item texture matches host version contract
+- item texture receipts emitted with verified context

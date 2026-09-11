@@ -1,27 +1,36 @@
 id: minecraft/language/format
 task: Implement only the format responsibility of the supplied language artifact.
-execution_mode: deterministic
+execution_mode: model
 side:
 - common
 inputs:
 - name: language_identity
   type: identifier
   required: true
+- name: language_format_input
+  type: specification
+  required: true
 outputs:
 - name: language_format_receipt
   type: receipt
+- name: language_format_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - LANGUAGE_ASSET
+  - REGISTER_ITEM
+  symbols: []
+  schemas:
+  - fabric/item/lang_en
 implementation_key: fabric/language/format
 validators:
-- json_schema
+- java_parse
 context_projection:
   max_bytes: 4096
   include:
   - mod_id
   - registry_path
   - package_path
+  - language_properties
 repair:
   scope:
   - minecraft/language/format
@@ -44,3 +53,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required language prerequisite receipt is missing; never invent defaults.
 - Output must satisfy json_schema validator before completion.
+postconditions:
+- language format matches host version contract
+- language format receipts emitted with verified context

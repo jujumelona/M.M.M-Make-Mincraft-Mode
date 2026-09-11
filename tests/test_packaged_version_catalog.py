@@ -70,9 +70,19 @@ def test_unreviewed_capability_is_not_authorized_by_metadata(monkeypatch):
 
 
 def test_audit_host_catalog_admissions_match(monkeypatch):
-    from minecraft_mod_ai.host_version_catalog import audit_host_catalog
+    from minecraft_mod_ai.host_version_catalog import audit_host_catalog, coverage_audit, production_readiness_audit
 
     monkeypatch.delenv("MMM_VERSION_BUNDLE_CATALOG", raising=False)
     report = audit_host_catalog()
     assert report["schema_version"] == "mmm/host-version-catalog-audit-v1"
     assert len(report["contexts"]) == 43
+
+    cov_report = coverage_audit()
+    assert cov_report["schema_version"] == "mmm/host-version-catalog-audit-v1"
+    assert len(cov_report["contexts"]) == 43
+
+    prod_report = production_readiness_audit()
+    assert prod_report["schema_version"] == "mmm/host-production-readiness-audit-v1"
+    assert prod_report["bundles_evaluated"] == 43
+    assert prod_report["status"] == "PASS"
+

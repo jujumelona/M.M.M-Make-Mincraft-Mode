@@ -2,17 +2,25 @@ id: minecraft/particle/requirement
 task: Implement only the requirement responsibility of the supplied particle artifact.
 execution_mode: deterministic
 side:
-- client
+- common
 inputs:
 - name: particle_identity
   type: identifier
   required: true
+- name: particle_requirement_input
+  type: specification
+  required: true
 outputs:
-- name: particle_contract
-  type: contract_receipt
+- name: particle_requirement_receipt
+  type: receipt
+- name: particle_requirement_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - PARTICLE_TYPE
+  symbols:
+  - ParticleType
+  schemas: []
 implementation_key: fabric/particle/requirement
 validators:
 - semantic_contract
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - particle_properties
 repair:
   scope:
   - minecraft/particle/requirement
@@ -44,3 +53,6 @@ rules:
 - Target side must remain client; reject cross-side symbol leakage.
 - Fail closed if required particle prerequisite receipt is missing; never invent defaults.
 - Output must satisfy semantic_contract validator before completion.
+postconditions:
+- particle requirement matches host version contract
+- particle requirement receipts emitted with verified context

@@ -2,17 +2,25 @@ id: minecraft/particle/validation
 task: Implement only the validation responsibility of the supplied particle artifact.
 execution_mode: deterministic
 side:
-- client
+- common
 inputs:
 - name: particle_identity
   type: identifier
   required: true
+- name: particle_validation_input
+  type: specification
+  required: true
 outputs:
 - name: particle_validation_receipt
   type: receipt
+- name: particle_validation_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - PARTICLE_TYPE
+  symbols:
+  - ParticleType
+  schemas: []
 implementation_key: fabric/particle/validation
 validators:
 - mod_integration_test
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - particle_properties
 repair:
   scope:
   - minecraft/particle/validation
@@ -44,3 +53,6 @@ rules:
 - Target side must remain client; reject cross-side symbol leakage.
 - Fail closed if required particle prerequisite receipt is missing; never invent defaults.
 - Output must satisfy mod_integration_test validator before completion.
+postconditions:
+- particle validation matches host version contract
+- particle validation receipts emitted with verified context

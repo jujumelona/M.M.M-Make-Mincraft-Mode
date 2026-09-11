@@ -7,25 +7,30 @@ inputs:
 - name: tag_identity
   type: identifier
   required: true
+- name: tag_registry_input
+  type: specification
+  required: true
 outputs:
-- name: tag_registry_id
-  type: string
-- name: tag_java_symbol
-  type: string
+- name: tag_registry_receipt
+  type: receipt
+- name: tag_registry_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - TAGS
+  symbols: []
+  schemas:
+  - fabric/tag/registry
 implementation_key: fabric/tag/registry
 validators:
 - java_parse
-- registry_identifier_unique
 context_projection:
   max_bytes: 4096
   include:
   - mod_id
   - registry_path
   - package_path
-  - java_constant
+  - tag_properties
 repair:
   scope:
   - minecraft/tag/registry
@@ -48,3 +53,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required tag prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- tag registry matches host version contract
+- tag registry receipts emitted with verified context

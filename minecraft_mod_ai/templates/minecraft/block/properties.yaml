@@ -7,12 +7,21 @@ inputs:
 - name: block_identity
   type: identifier
   required: true
+- name: block_properties_input
+  type: specification
+  required: true
 outputs:
 - name: block_properties_receipt
   type: receipt
+- name: block_properties_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - REGISTER_BLOCK
+  symbols:
+  - register_block
+  - resource_key_create
+  schemas: []
 implementation_key: fabric/block/properties
 validators:
 - java_parse
@@ -22,7 +31,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
-  - java_constant
+  - block_properties
 repair:
   scope:
   - minecraft/block/properties
@@ -45,3 +54,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required block prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- block properties matches host version contract
+- block properties receipts emitted with verified context

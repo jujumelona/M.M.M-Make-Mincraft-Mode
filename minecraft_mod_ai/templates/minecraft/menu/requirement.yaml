@@ -7,12 +7,20 @@ inputs:
 - name: menu_identity
   type: identifier
   required: true
+- name: menu_requirement_input
+  type: specification
+  required: true
 outputs:
-- name: menu_contract
-  type: contract_receipt
+- name: menu_requirement_receipt
+  type: receipt
+- name: menu_requirement_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - SCREEN_HANDLER
+  - GUI_EXISTS
+  symbols:
+  - ScreenHandlerType
+  schemas: []
 implementation_key: fabric/menu/requirement
 validators:
 - semantic_contract
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - menu_properties
 repair:
   scope:
   - minecraft/menu/requirement
@@ -44,3 +53,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required menu prerequisite receipt is missing; never invent defaults.
 - Output must satisfy semantic_contract validator before completion.
+postconditions:
+- menu requirement matches host version contract
+- menu requirement receipts emitted with verified context

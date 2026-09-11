@@ -7,12 +7,22 @@ inputs:
 - name: block_entity_identity
   type: identifier
   required: true
+- name: block_entity_tick_input
+  type: specification
+  required: true
 outputs:
 - name: block_entity_tick_receipt
   type: receipt
+- name: block_entity_tick_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - BLOCK_ENTITY
+  - BLOCK_ENTITY_EXISTS
+  - REGISTER_BLOCK
+  symbols:
+  - BlockEntityType
+  - register_block
+  schemas: []
 implementation_key: fabric/block_entity/tick
 validators:
 - java_parse
@@ -22,6 +32,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - block_entity_properties
 repair:
   scope:
   - minecraft/block_entity/tick
@@ -45,3 +56,6 @@ rules:
 - Fail closed if required block_entity prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- block_entity tick matches host version contract
+- block_entity tick receipts emitted with verified context

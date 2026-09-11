@@ -2,17 +2,25 @@ id: minecraft/saved_data/requirement
 task: Implement only the requirement responsibility of the supplied saved data artifact.
 execution_mode: deterministic
 side:
-- server
+- common
 inputs:
 - name: saved_data_identity
   type: identifier
   required: true
+- name: saved_data_requirement_input
+  type: specification
+  required: true
 outputs:
-- name: saved_data_contract
-  type: contract_receipt
+- name: saved_data_requirement_receipt
+  type: receipt
+- name: saved_data_requirement_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - PERSISTENT_STATE
+  - REGISTER_ITEM
+  symbols:
+  - register_item
+  schemas: []
 implementation_key: fabric/saved_data/requirement
 validators:
 - semantic_contract
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - saved_data_properties
 repair:
   scope:
   - minecraft/saved_data/requirement
@@ -45,3 +54,6 @@ rules:
 - Fail closed if required saved_data prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy semantic_contract validator before completion.
+postconditions:
+- saved_data requirement matches host version contract
+- saved_data requirement receipts emitted with verified context

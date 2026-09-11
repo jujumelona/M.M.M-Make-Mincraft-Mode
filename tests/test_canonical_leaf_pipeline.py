@@ -268,4 +268,111 @@ def test_canonical_leaf_attached_to_jobs_and_receipts():
     assert len(key_job.validation_receipts) > 0
     for receipt in key_job.validation_receipts:
         assert receipt.get("canonical_leaf") == "minecraft/item/registry"
+        assert receipt.get("implementation_id") != ""
+        assert receipt.get("executor_type") == "deterministic_renderer"
+
+
+def test_production_readiness_audit_and_rejection():
+    """production_readiness_audit passes on default scope and rejects unreviewed leaves."""
+    from minecraft_mod_ai.host_version_catalog import production_readiness_audit
+
+    report = production_readiness_audit()
+    assert report["status"] == "PASS"
+    assert report["bundles_evaluated"] == 43
+    assert report["scope_size"] >= 90
+
+    with pytest.raises(VersionContextError) as exc_info:
+        production_readiness_audit(["minecraft/advancement/criterion"])
+    assert "PRODUCTION_AUDIT_FAILED" in str(exc_info.value)
+    assert "minecraft/advancement/criterion" in str(exc_info.value)
+
+
+def test_admitted_leaf_requires_all_eight_fields():
+    """require_leaf_binding fails if any of the 8 required implementation fields are missing."""
+    target = host_target("auto")
+    ctx = target.version_context
+
+    binding = ctx.require_leaf_binding("minecraft/item/registry")
+    impl = binding["implementation"]
+    required_fields = (
+        "implementation_id",
+        "executor_type",
+        "implementation_sha256",
+        "validator_profile",
+        "validator_sha256",
+        "input_schema_sha256",
+        "output_schema_sha256",
+        "evidence_id",
+    )
+    for field in required_fields:
+        assert field in impl
+        assert isinstance(impl[field], str) and impl[field] != ""
+        if field.endswith("_sha256"):
+            assert impl[field].startswith("sha256:")
+
+    # Test tampering with missing field - ResolvedVersionContext fails at boundary
+    bundle_dict = ctx.to_dict()
+    bundle_dict.pop("context_id", None)
+    corrupted_impl = dict(impl)
+    corrupted_impl.pop("validator_sha256")
+    bundle_dict["host_facts"]["leaf_bindings"]["minecraft/item/registry"]["implementation"] = corrupted_impl
+
+    with pytest.raises(VersionContextError) as exc_info:
+        ResolvedVersionContext(_encode(bundle_dict))
+    assert "HOST_LEAF_BINDING_INVALID" in str(exc_info.value)
+    assert "validator_sha256" in str(exc_info.value)
+
+
+def test_structured_api_symbols_schema_and_ast_validation():
+    """Symbols in host catalog have {owner, name, descriptor, kind, static, side, namespace} and AST validation strips comments/strings."""
+    from collections.abc import Mapping
+
+    target = host_target("auto")
+    ctx = target.version_context
+
+    for sym_name, sym in ctx.api_symbols.items():
+        assert isinstance(sym, Mapping)
+        for key in ("owner", "name", "descriptor", "kind", "static", "side", "namespace"):
+            assert key in sym, f"Missing {key} in {sym_name}"
+        assert sym["kind"] in {"method", "field", "class", "constructor"}
+        assert isinstance(sym["static"], bool)
+        assert sym["side"] in {"common", "client", "server"}
+        assert sym["namespace"] in {"minecraft", "fabric"}
+
+    # AST validation: symbol commented out should fail
+    from minecraft_mod_ai.task_template_catalog import load_template
+    template = load_template("fabric/item/register_basic")
+    commented_out = """
+    // Registry.register(BuiltInRegistries.ITEM, ModItemIds.RAW_LUNITE_KEY, null);
+    public static final Item RAW_LUNITE = null;
+    """
+    with pytest.raises(VersionContextError) as exc_info:
+        ctx.validate_artifact(template, commented_out)
+    assert "INVALID_API_INVOCATION" in str(exc_info.value)
+
+    # Symbol only in string literal should fail
+    string_only = """
+    String s = "Registry.register(BuiltInRegistries.ITEM, ModItemIds.RAW_LUNITE_KEY, null);";
+    public static final Item RAW_LUNITE = null;
+    """
+    with pytest.raises(VersionContextError) as exc_info:
+        ctx.validate_artifact(template, string_only)
+    assert "INVALID_API_INVOCATION" in str(exc_info.value)
+
+    # Cross side leakage only in comment should NOT fail, but in executable code MUST fail
+    valid_with_comment = """
+    /* Uses net.minecraft.client.gui.screen.Screen internally */
+    public static final Item RAW_LUNITE = Registry.register(BuiltInRegistries.ITEM, ModItemIds.RAW_LUNITE_KEY, new Item(new Item.Properties()));
+    """
+    res = ctx.validate_artifact(template, valid_with_comment)
+    assert res["status"] == "PASS"
+
+    leakage_in_code = """
+    net.minecraft.client.gui.screen.Screen screen = null;
+    public static final Item RAW_LUNITE = Registry.register(BuiltInRegistries.ITEM, ModItemIds.RAW_LUNITE_KEY, new Item(new Item.Properties()));
+    """
+    with pytest.raises(VersionContextError) as exc_info:
+        ctx.validate_artifact(template, leakage_in_code)
+    assert "CROSS_SIDE_LEAKAGE" in str(exc_info.value)
+
 

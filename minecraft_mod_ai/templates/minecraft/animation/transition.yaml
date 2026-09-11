@@ -7,12 +7,20 @@ inputs:
 - name: animation_identity
   type: identifier
   required: true
+- name: animation_transition_input
+  type: specification
+  required: true
 outputs:
 - name: animation_transition_receipt
   type: receipt
+- name: animation_transition_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - ANIMATION_DEFINITION
+  - ENTITY_EXISTS
+  symbols:
+  - EntityType
+  schemas: []
 implementation_key: fabric/animation/transition
 validators:
 - java_parse
@@ -23,6 +31,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - animation_properties
 repair:
   scope:
   - minecraft/animation/transition
@@ -46,3 +55,6 @@ rules:
 - Fail closed if required animation prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- animation transition matches host version contract
+- animation transition receipts emitted with verified context

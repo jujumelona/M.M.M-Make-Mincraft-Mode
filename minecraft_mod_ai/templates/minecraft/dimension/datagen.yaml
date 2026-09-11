@@ -2,26 +2,34 @@ id: minecraft/dimension/datagen
 task: Implement only the datagen responsibility of the supplied dimension artifact.
 execution_mode: deterministic
 side:
-- server
+- common
 inputs:
 - name: dimension_identity
   type: identifier
   required: true
+- name: dimension_datagen_input
+  type: specification
+  required: true
 outputs:
 - name: dimension_datagen_receipt
   type: receipt
+- name: dimension_datagen_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - DIMENSION
+  symbols: []
+  schemas: []
 implementation_key: fabric/dimension/datagen
 validators:
-- json_schema
+- java_parse
 context_projection:
   max_bytes: 4096
   include:
   - mod_id
   - registry_path
   - package_path
+  - dimension_properties
 repair:
   scope:
   - minecraft/dimension/datagen
@@ -45,3 +53,6 @@ rules:
 - Fail closed if required dimension prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy json_schema validator before completion.
+postconditions:
+- dimension datagen matches host version contract
+- dimension datagen receipts emitted with verified context

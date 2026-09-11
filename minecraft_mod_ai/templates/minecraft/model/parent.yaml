@@ -2,27 +2,35 @@ id: minecraft/model/parent
 task: Implement only the parent responsibility of the supplied model artifact.
 execution_mode: model
 side:
-- client
+- common
 inputs:
 - name: model_identity
   type: identifier
   required: true
+- name: model_parent_input
+  type: specification
+  required: true
 outputs:
 - name: model_parent_receipt
   type: receipt
+- name: model_parent_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - MODEL_DEFINITION
+  - REGISTER_ITEM
+  symbols: []
+  schemas:
+  - fabric/item/model_basic
 implementation_key: fabric/model/parent
 validators:
 - java_parse
-- client_side_only
 context_projection:
   max_bytes: 4096
   include:
   - mod_id
   - registry_path
   - package_path
+  - model_properties
 repair:
   scope:
   - minecraft/model/parent
@@ -45,3 +53,6 @@ rules:
 - Target side must remain client; reject cross-side symbol leakage.
 - Fail closed if required model prerequisite receipt is missing; never invent defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- model parent matches host version contract
+- model parent receipts emitted with verified context

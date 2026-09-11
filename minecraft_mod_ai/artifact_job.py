@@ -25,6 +25,8 @@ class ArtifactJob:
     rendered_output: str = ""
     context_id: str = ""
     canonical_leaf: str = ""
+    implementation_id: str = ""
+    executor_type: str = "deterministic_renderer"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -45,6 +47,8 @@ class ArtifactJob:
             "rendered_output": self.rendered_output,
             "context_id": self.context_id,
             "canonical_leaf": self.canonical_leaf,
+            "implementation_id": self.implementation_id,
+            "executor_type": self.executor_type,
         }
 
     @classmethod
@@ -67,4 +71,6 @@ class ArtifactJob:
             rendered_output=str(data.get("rendered_output", "")),
             context_id=str(data.get("context_id", "")),
             canonical_leaf=str(data.get("canonical_leaf", "")),
+            implementation_id=str(data.get("implementation_id", "")),
+            executor_type=str(data.get("executor_type", "deterministic_renderer")),
         )

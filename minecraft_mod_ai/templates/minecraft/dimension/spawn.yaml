@@ -2,17 +2,24 @@ id: minecraft/dimension/spawn
 task: Implement only the spawn responsibility of the supplied dimension artifact.
 execution_mode: model
 side:
-- server
+- common
 inputs:
 - name: dimension_identity
   type: identifier
   required: true
+- name: dimension_spawn_input
+  type: specification
+  required: true
 outputs:
 - name: dimension_spawn_receipt
   type: receipt
+- name: dimension_spawn_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - DIMENSION
+  symbols: []
+  schemas: []
 implementation_key: fabric/dimension/spawn
 validators:
 - java_parse
@@ -22,6 +29,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - dimension_properties
 repair:
   scope:
   - minecraft/dimension/spawn
@@ -45,3 +53,6 @@ rules:
 - Fail closed if required dimension prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- dimension spawn matches host version contract
+- dimension spawn receipts emitted with verified context

@@ -7,21 +7,30 @@ inputs:
 - name: entity_identity
   type: identifier
   required: true
+- name: entity_datagen_input
+  type: specification
+  required: true
 outputs:
 - name: entity_datagen_receipt
   type: receipt
+- name: entity_datagen_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - REGISTER_ENTITY
+  - ENTITY_EXISTS
+  symbols:
+  - EntityType
+  schemas: []
 implementation_key: fabric/entity/datagen
 validators:
-- json_schema
+- java_parse
 context_projection:
   max_bytes: 4096
   include:
   - mod_id
   - registry_path
   - package_path
+  - entity_properties
 repair:
   scope:
   - minecraft/entity/datagen
@@ -44,3 +53,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required entity prerequisite receipt is missing; never invent defaults.
 - Output must satisfy json_schema validator before completion.
+postconditions:
+- entity datagen matches host version contract
+- entity datagen receipts emitted with verified context

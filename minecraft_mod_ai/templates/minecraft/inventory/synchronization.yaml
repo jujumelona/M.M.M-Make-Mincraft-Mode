@@ -8,12 +8,20 @@ inputs:
 - name: inventory_identity
   type: identifier
   required: true
+- name: inventory_synchronization_input
+  type: specification
+  required: true
 outputs:
 - name: inventory_synchronization_receipt
   type: receipt
+- name: inventory_synchronization_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - INVENTORY_CAPABILITY
+  - REGISTER_ITEM
+  symbols:
+  - register_item
+  schemas: []
 implementation_key: fabric/inventory/synchronization
 validators:
 - java_parse
@@ -23,6 +31,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - inventory_properties
 repair:
   scope:
   - minecraft/inventory/synchronization
@@ -46,3 +55,6 @@ rules:
 - Fail closed if required inventory prerequisite receipt is missing; never invent
   defaults.
 - Output must satisfy java_parse validator before completion.
+postconditions:
+- inventory synchronization matches host version contract
+- inventory synchronization receipts emitted with verified context

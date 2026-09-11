@@ -7,12 +7,20 @@ inputs:
 - name: tag_identity
   type: identifier
   required: true
+- name: tag_validation_input
+  type: specification
+  required: true
 outputs:
 - name: tag_validation_receipt
   type: receipt
+- name: tag_validation_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
   - TAGS
+  symbols: []
+  schemas:
+  - fabric/tag/registry
 implementation_key: fabric/tag/validation
 validators:
 - mod_integration_test
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - tag_properties
 repair:
   scope:
   - minecraft/tag/validation
@@ -43,3 +52,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required tag prerequisite receipt is missing; never invent defaults.
 - Output must satisfy mod_integration_test validator before completion.
+postconditions:
+- tag validation matches host version contract
+- tag validation receipts emitted with verified context

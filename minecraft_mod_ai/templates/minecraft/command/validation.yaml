@@ -2,17 +2,25 @@ id: minecraft/command/validation
 task: Implement only the validation responsibility of the supplied command artifact.
 execution_mode: deterministic
 side:
-- server
+- common
 inputs:
 - name: command_identity
   type: identifier
   required: true
+- name: command_validation_input
+  type: specification
+  required: true
 outputs:
 - name: command_validation_receipt
   type: receipt
+- name: command_validation_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - COMMAND_REGISTRATION
+  - REGISTER_ITEM
+  symbols:
+  - register_item
+  schemas: []
 implementation_key: fabric/command/validation
 validators:
 - mod_integration_test
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - command_properties
 repair:
   scope:
   - minecraft/command/validation
@@ -44,3 +53,6 @@ rules:
 - Target side must remain server; reject cross-side symbol leakage.
 - Fail closed if required command prerequisite receipt is missing; never invent defaults.
 - Output must satisfy mod_integration_test validator before completion.
+postconditions:
+- command validation matches host version contract
+- command validation receipts emitted with verified context

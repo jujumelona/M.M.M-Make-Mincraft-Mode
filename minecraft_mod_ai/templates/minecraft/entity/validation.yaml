@@ -7,12 +7,20 @@ inputs:
 - name: entity_identity
   type: identifier
   required: true
+- name: entity_validation_input
+  type: specification
+  required: true
 outputs:
 - name: entity_validation_receipt
   type: receipt
+- name: entity_validation_artifact
+  type: code_fragment
 host_requirements:
   capabilities:
-  - REGISTER_ENTITY
+  - ENTITY_EXISTS
+  symbols:
+  - EntityType
+  schemas: []
 implementation_key: fabric/entity/validation
 validators:
 - mod_integration_test
@@ -22,6 +30,7 @@ context_projection:
   - mod_id
   - registry_path
   - package_path
+  - entity_properties
 repair:
   scope:
   - minecraft/entity/validation
@@ -44,3 +53,6 @@ rules:
 - Target side must remain common; reject cross-side symbol leakage.
 - Fail closed if required entity prerequisite receipt is missing; never invent defaults.
 - Output must satisfy mod_integration_test validator before completion.
+postconditions:
+- entity validation matches host version contract
+- entity validation receipts emitted with verified context
