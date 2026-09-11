@@ -1,0 +1,37 @@
+id: fabric/item/key_identifier
+artifact: java_fragment
+target:
+  operation: JAVA_PATCH
+  file: src/main/java/{{package_path}}/registry/ModItemIds.java
+  anchor: "/* MMM:item_keys */"
+requires:
+  - mod_id
+  - registry_path
+  - java_constant
+  - package_path
+dependencies: []
+produces:
+  - name: item_key_symbol
+    binding: "{{subject}}.key_symbol"
+    kind: JAVA_SYMBOL
+    target_type: "ResourceKey<Item>"
+    value: "ModItemIds.{{java_constant}}_KEY"
+ai_slots: []
+render:
+  language: java
+  body: |
+    public static final ResourceKey<Item> {{java_constant}}_KEY =
+        ResourceKey.create(Registries.ITEM, Identifier.fromNamespaceAndPath("{{mod_id}}", "{{registry_path}}"));
+validators:
+  - java_parse
+fixture:
+  input:
+    mod_id: space
+    package_path: com/foo/space
+    java_constant: RAW_LUNITE
+    registry_path: raw_lunite
+  expected_contains:
+    - "ResourceKey.create"
+    - "Registries.ITEM"
+    - "Identifier.fromNamespaceAndPath"
+    - "RAW_LUNITE_KEY"
