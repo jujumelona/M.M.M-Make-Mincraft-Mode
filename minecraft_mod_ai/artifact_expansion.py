@@ -9,6 +9,7 @@ from typing import Any
 from .artifact_job import ArtifactJob
 from .artifact_ports import PortKind
 from .implementation_fact import ImplementationFact
+from .implementation_identity import ExecutorType
 from .implementation_template_renderer import render_template
 from .prompt_fact_types import FactType, PromptFact
 from .task_template_catalog import load_template
@@ -16,6 +17,27 @@ from .task_template_catalog import load_template
 
 class ArtifactExpansionError(ValueError):
     pass
+
+
+def _executor_type_from_string(exec_type_str: str) -> ExecutorType:
+    """Convert string executor_type to ExecutorType enum.
+    
+    P0-2: Centralized conversion to ensure only valid ExecutorType enums reach ArtifactJob.
+    """
+    exec_type_map = {
+        "deterministic_renderer": ExecutorType.DETERMINISTIC,
+        "deterministic": ExecutorType.DETERMINISTIC,
+        "python_generator": ExecutorType.PYTHON_GENERATOR,
+        "template": ExecutorType.TEMPLATE,
+        "model": ExecutorType.MODEL,
+    }
+    
+    result = exec_type_map.get(exec_type_str)
+    if result is None:
+        raise ArtifactExpansionError(
+            f"EXECUTOR_TYPE_UNKNOWN: {exec_type_str!r} not in {list(exec_type_map.keys())}"
+        )
+    return result
 
 
 _REGISTRY_PATH = re.compile(r"^[a-z0-9_.-]+$")
@@ -221,27 +243,6 @@ def validate_expansion_catalog() -> None:
                     raise ArtifactExpansionError(
                         f"ARTIFACT_PORT_KIND: {identifier}"
                     ) from exc
-            ):
-                raise ArtifactExpansionError(
-                    f"ARTIFACT_DEPENDENCIES_REQUIRED: {identifier}"
-                )
-            ports = template.get("produces")
-            if not isinstance(ports, list):
-                raise ArtifactExpansionError(f"ARTIFACT_PORT_DECLARATION: {identifier}")
-            for port in ports:
-                if not isinstance(port, dict) or any(
-                    not isinstance(port.get(key), str) or not port[key].strip()
-                    for key in ("name", "binding", "kind", "target_type", "value")
-                ):
-                    raise ArtifactExpansionError(
-                        f"ARTIFACT_PORT_DECLARATION: {identifier}"
-                    )
-                try:
-                    PortKind(port["kind"])
-                except ValueError as exc:
-                    raise ArtifactExpansionError(
-                        f"ARTIFACT_PORT_KIND: {identifier}"
-                    ) from exc
 
 
 def expand_facts_to_jobs(
@@ -357,6 +358,9 @@ def expand_facts_to_jobs(
                     "minecraft_version": minecraft_version,
                 }
                 
+                # Convert executor_type string to enum
+                exec_type_enum = _executor_type_from_string(exec_type)
+                
                 candidate = ArtifactJob(
                     job_id=job_id,
                     template_id="",  # No template for PYTHON_GENERATOR
@@ -371,7 +375,7 @@ def expand_facts_to_jobs(
                     context_id=version_context.context_id,
                     canonical_leaf=canonical_leaf,
                     implementation_id=impl_id,
-                    executor_type=exec_type,
+                    executor_type=exec_type_enum,
                 )
                 
                 prior = seen_jobs.get(job_id)
@@ -464,6 +468,9 @@ def expand_facts_to_jobs(
                 exec_type = impl_dict.get("executor_type", "deterministic_renderer")
             else:
                 impl_id = f"template:{template_id}"
+            
+            # Convert executor_type string to enum
+            exec_type_enum = _executor_type_from_string(exec_type)
 
             candidate = ArtifactJob(
                 job_id=job_id,
@@ -481,7 +488,7 @@ def expand_facts_to_jobs(
                 context_id=version_context.context_id if version_context is not None else "",
                 canonical_leaf=canonical_leaf,
                 implementation_id=impl_id,
-                executor_type=exec_type,
+                executor_type=exec_type_enum,
             )
             prior = seen_jobs.get(job_id)
             if prior is not None:
