@@ -328,13 +328,25 @@ def _mutation_target_error(
 
     if tool_name != "apply_source_edit":
         return None
-    if context is None or not context.is_mutation_ready:
+    if context is None:
         return (
             "MUTATION_TARGET_UNBOUND: apply_source_edit requires a READY "
             "repository-localized target context."
         )
 
     pinned = _canonical_mutation_path(context.target_path)
+    operation = str(arguments.get("operation", "")).strip().casefold()
+    if pinned and not context.is_new_file and operation in _SOURCE_CREATE_OPERATIONS:
+        return (
+            "MUTATION_TARGET_CREATION_CONFLICT: existing localized target "
+            f"{pinned!r} cannot be recreated by {operation!r}."
+        )
+    if not context.is_mutation_ready:
+        return (
+            "MUTATION_TARGET_UNBOUND: apply_source_edit requires a READY "
+            "repository-localized target context."
+        )
+
     supplied = ""
     for key in _SOURCE_EDIT_PATH_KEYS:
         value = arguments.get(key)
@@ -353,12 +365,6 @@ def _mutation_target_error(
             f"apply_source_edit requested {supplied!r}."
         )
 
-    operation = str(arguments.get("operation", "")).strip().casefold()
-    if not context.is_new_file and operation in _SOURCE_CREATE_OPERATIONS:
-        return (
-            "MUTATION_TARGET_CREATION_CONFLICT: existing localized target "
-            f"{pinned!r} cannot be recreated by {operation!r}."
-        )
     return None
 
 

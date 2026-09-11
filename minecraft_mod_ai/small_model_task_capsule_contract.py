@@ -315,6 +315,19 @@ def compile_task_capsule(module: Any) -> TaskCapsule | None:
         )
     unsupported = [anchor for anchor in anchors if not target_is_writable(anchor.status)]
     if unsupported:
+        provisional_bindings = _matching_bindings(task, task_id)
+        provisional_candidates = _binding_symbol_candidates(provisional_bindings)
+        if len(provisional_candidates) == 1:
+            provisional_primary_path, _ = provisional_candidates[0]
+            provisional_primary = next(
+                (anchor for anchor in unsupported if anchor.path == provisional_primary_path),
+                None,
+            )
+            if provisional_primary is not None:
+                raise TaskCapsuleContractError(
+                    "TASK_CAPSULE_PRIMARY_NOT_RESERVED: planned custom-Java primary target has "
+                    f"unsupported status {provisional_primary.status!r}."
+                )
         rendered = [f"{anchor.locator}:{anchor.status or '<empty>'}" for anchor in unsupported]
         raise TaskCapsuleContractError(
             "TASK_CAPSULE_TARGET_STATUS_INVALID: owned workspace targets use unsupported status "

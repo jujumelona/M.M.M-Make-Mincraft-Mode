@@ -64,7 +64,7 @@ def test_source_patch_is_hash_guarded_and_transactional(tmp_path: Path) -> None:
 def test_geckolib_generator_accumulates_real_entity_bindings(tmp_path: Path) -> None:
     project = _project(tmp_path / 'project')
     for entity_id in ('frost_guard', 'ember_guard'):
-        result = generate_geckolib_entity_assets(project_root=project, mod_id='complete_test', package_name='ai.minecraft.complete_test', entity_id=entity_id)
+        result = generate_geckolib_entity_assets(project_root=project, mod_id='complete_test', package_name='ai.minecraft.complete_test', entity_id=entity_id, spawn_group='monster', texture_color='#5ba6d8')
         assert result['status'] == 'fabric_binding_generated'
     registrar = project / 'src/main/java/ai/minecraft/complete_test/geckolib/GeneratedGeckoEntities.java'
     text = registrar.read_text(encoding='utf-8')
@@ -88,7 +88,7 @@ def test_geckolib_generator_accumulates_real_entity_bindings(tmp_path: Path) -> 
 
 def test_complete_orchestrator_source_only_connects_all_generators(tmp_path: Path) -> None:
     base = MinecraftModPipeline(planner=HeuristicPlanner()).plan('Create one frost item')
-    proposal = complete_proposal_from_parts(requested_prompt='weapon, quest, animated entity and menu', base_proposal=base, game_design={'title': 'Integrated'}, modules=(ProductionModule('frost_blade', 'weapon', {'attack_damage': 6}), ProductionModule('first_quest', 'quest', {}, ('frost_blade',)), ProductionModule('frost_guard', 'entity', {'max_health': 60}), ProductionModule('status_menu', 'gui', {'template': 'read_only_menu'})), acceptance_tests=('all generated systems are present',))
+    proposal = complete_proposal_from_parts(requested_prompt='weapon, quest, animated entity and menu', base_proposal=base, game_design={'title': 'Integrated'}, modules=(ProductionModule('frost_blade', 'weapon', {'attack_damage': 6}), ProductionModule('first_quest', 'quest', {}, ('frost_blade',)), ProductionModule('frost_guard', 'entity', {'max_health': 60, 'attack_damage': 8, 'movement_speed': 0.27, 'follow_range': 40, 'archetype': 'biped', 'behavior': 'hostile_melee', 'entity_width': 0.8, 'entity_height': 2.0, 'spawn_group': 'monster', 'main_color': '#5ba6d8'}), ProductionModule('status_menu', 'gui', {'template': 'read_only_menu'})), acceptance_tests=('all generated systems are present',))
     result = CompleteProductionOrchestrator(workspace_root=tmp_path / 'out').execute(proposal, approval_hash=proposal.calculate_hash(), run_name='integrated', options=CompleteExecutionOptions(source_only=True, run_jdt=False, run_blockbench=False, run_runtime=False, run_client=False, run_mineflayer=False, run_visual_review=False))
     assert result.status == 'SOURCE_READY'
     project = Path(result.project_root)
