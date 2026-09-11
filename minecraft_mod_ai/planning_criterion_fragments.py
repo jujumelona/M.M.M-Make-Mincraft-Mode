@@ -90,7 +90,6 @@ def _run_concern_batch(
         )
 
     states: dict[str, dict[str, Any]] = {}
-    slots: dict[str, str] = {}
     for index, identifier in enumerate(identifiers):
         template = load_record_template(identifier)
         normalized = task_context(template, context)
@@ -98,10 +97,8 @@ def _run_concern_batch(
         saved = deepcopy((progress or {}).get(binding, []))
         if not isinstance(saved, list):
             raise ValueError("TEMPLATE_PROGRESS: expected response array")
-        slot = f"c{index}"
-        slots[slot] = identifier
         states[identifier] = {
-            "slot": slot,
+            "slot": f"c{index}",
             "template": template,
             "context": normalized,
             "binding": binding,
@@ -181,10 +178,10 @@ def _run_concern_batch(
             if slot not in generated:
                 raise ValueError(f"DETAIL_CONCERN_BATCH: missing response for {identifier}")
             value = deepcopy(generated[slot])
+            evidence_from_value = value.pop("evidence_refs", None)
             validator = Draft202012Validator(record_response_schema(state["template"]))
             validator.validate(value)
 
-            evidence_from_value = value.pop("evidence_refs", None)
             if evidence_from_value is not None:
                 value["evidence_refs"] = list(evidence_from_value)
             else:
