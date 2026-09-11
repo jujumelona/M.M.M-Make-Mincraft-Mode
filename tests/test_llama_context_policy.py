@@ -45,7 +45,8 @@ def test_base_args_default_to_model_native_context(monkeypatch) -> None:
         _generic_config(),
         8910,
     )
-    assert args[args.index("--ctx-size") + 1] == "0"
+    assert "--ctx-size" not in args
+    assert "-c" not in args
 
 
 def test_base_args_honor_explicit_context_override(monkeypatch) -> None:
@@ -59,7 +60,7 @@ def test_base_args_honor_explicit_context_override(monkeypatch) -> None:
     assert args[args.index("--ctx-size") + 1] == "24576"
 
 
-def test_profile_authority_defaults_generic_server_to_model_native_context(monkeypatch) -> None:
+def test_profile_authority_removes_generic_inherited_context_without_override(monkeypatch) -> None:
     monkeypatch.delenv("MMM_LLAMA_SERVER_CTX", raising=False)
 
     def base(binary, model, config, port):
@@ -68,7 +69,8 @@ def test_profile_authority_defaults_generic_server_to_model_native_context(monke
     holder = SimpleNamespace(_base_args=base)
     _install_context_authority(holder)
     args = holder._base_args("server", "model", _generic_config(), 8910)
-    assert args[args.index("--ctx-size") + 1] == "0"
+    assert "--ctx-size" not in args
+    assert "-c" not in args
 
 
 def test_profile_authority_honors_explicit_generic_context_override(monkeypatch) -> None:
@@ -137,4 +139,6 @@ def test_qwen_registry_capacity_is_not_forced_into_server_ctx(monkeypatch) -> No
     holder = SimpleNamespace(_base_args=base)
     _install_context_authority(holder)
     args = holder._base_args("server", "model", _qwen_config(262144), 8910)
-    assert args[args.index("--ctx-size") + 1] == "0"
+    # The Qwen hotpath owns its native-auto sentinel. Profile authority must not
+    # substitute registry max_context when no explicit override exists.
+    assert args[args.index("--ctx-size") + 1] == "8192"
