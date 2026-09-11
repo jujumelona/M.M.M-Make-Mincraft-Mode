@@ -248,7 +248,15 @@ def test_invalid_json_page_repair_stays_argument_only_and_schema_bounded() -> No
         observed.append(page_request)
         if len(observed) == 1:
             from minecraft_mod_ai.model_adapters.base import ToolCall
-            return GenerationResponse(tool_calls=(ToolCall(id="call_bad", name="repairable_action", arguments={"bad": 1}),))
+            return GenerationResponse(
+                tool_calls=(
+                    ToolCall(
+                        id="call_bad",
+                        name="repairable_action",
+                        arguments={"bad": 1},
+                    ),
+                )
+            )
         return _valid_page_response(page_request)
 
     response = forced.host_selected_argument_turn(
@@ -268,7 +276,8 @@ def test_invalid_json_page_repair_stays_argument_only_and_schema_bounded() -> No
 
 def test_oversized_single_nested_field_fails_closed_before_model_generation() -> None:
     nested_properties = {
-        f"nested_{index}": {"type": "string", "maxLength": 64} for index in range(40)
+        f"nested_{index}": {"type": "string", "maxLength": 64}
+        for index in range(40)
     }
     schema = {
         "type": "function",
@@ -293,7 +302,10 @@ def test_oversized_single_nested_field_fails_closed_before_model_generation() ->
         messages=({"role": "user", "content": "perform the fixed action"},),
         tools=(schema,),
         tool_validation_schemas=(schema,),
-        tool_choice={"type": "function", "function": {"name": "oversized_nested_action"}},
+        tool_choice={
+            "type": "function",
+            "function": {"name": "oversized_nested_action"},
+        },
         response_format="text",
     )
     calls = 0
@@ -313,7 +325,10 @@ def test_oversized_single_nested_field_fails_closed_before_model_generation() ->
     assert calls == 0
 
 
-@pytest.mark.parametrize("kind", ["depth", "properties", "unbounded_string", "unbounded_array"])
+@pytest.mark.parametrize(
+    "kind",
+    ["depth", "properties", "unbounded_string", "unbounded_array"],
+)
 def test_schema_violating_bounds_is_rejected(kind):
     if kind == "depth":
         schema = {
@@ -324,7 +339,18 @@ def test_schema_violating_bounds_is_rejected(kind):
                     "properties": {
                         "level2": {
                             "type": "object",
-                            "properties": {"level3": {"type": "string", "maxLength": 32}},
+                            "properties": {
+                                "level3": {
+                                    "type": "object",
+                                    "properties": {
+                                        "level4": {
+                                            "type": "string",
+                                            "maxLength": 32,
+                                        }
+                                    },
+                                    "additionalProperties": False,
+                                }
+                            },
                             "additionalProperties": False,
                         }
                     },
@@ -336,7 +362,10 @@ def test_schema_violating_bounds_is_rejected(kind):
     elif kind == "properties":
         schema = {
             "type": "object",
-            "properties": {f"field_{i}": {"type": "string", "maxLength": 32} for i in range(10)},
+            "properties": {
+                f"field_{i}": {"type": "string", "maxLength": 32}
+                for i in range(10)
+            },
             "additionalProperties": False,
         }
     elif kind == "unbounded_string":
