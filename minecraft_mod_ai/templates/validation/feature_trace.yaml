@@ -1,12 +1,9 @@
 id: validation/feature_trace
+execution: host
 input:
   atomic_features:
   artifact_receipts:
   test_receipts:
-task:
-  trace_features_to_artifacts_and_tests:
-rules:
-  - Preserve atomic feature identity through implementation and tests.
 output:
   traces:
   unproven_features:

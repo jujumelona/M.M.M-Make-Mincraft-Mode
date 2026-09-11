@@ -1,12 +1,8 @@
 id: validation/runtime_test
+execution: host
 input:
   runtime_scenarios:
   target_runtime:
-task:
-  execute_runtime_scenarios:
-rules:
-  - Run only after compile and static prerequisites pass.
-  - Capture observable runtime results, not self-reported success.
 output:
   passed:
   observations:

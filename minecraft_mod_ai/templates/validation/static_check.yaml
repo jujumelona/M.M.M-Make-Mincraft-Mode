@@ -1,11 +1,8 @@
 id: validation/static_check
+execution: host
 input:
   generated_project:
   static_rules:
-task:
-  run_static_checks:
-rules:
-  - Check syntax-independent contracts, ownership boundaries, identifiers, and forbidden patterns.
 output:
   passed:
   failed_checks:

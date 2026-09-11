@@ -1,11 +1,8 @@
 id: validation/unit_test
+execution: host
 input:
   unit_tests:
   target_cell:
-task:
-  run_unit_tests:
-rules:
-  - Execute tests for pure or isolated responsibilities before integration claims.
 output:
   passed:
   failures:

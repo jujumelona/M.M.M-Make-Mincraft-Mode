@@ -1,12 +1,9 @@
 id: validation/requirement_trace
+execution: host
 input:
   requirements:
   implementation_receipts:
   test_receipts:
-task:
-  trace_requirements_to_proof:
-rules:
-  - Every mandatory requirement needs implementation and verification evidence.
 output:
   traces:
   unproven_requirements:

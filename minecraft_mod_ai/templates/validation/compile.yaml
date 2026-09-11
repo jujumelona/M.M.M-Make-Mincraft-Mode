@@ -1,12 +1,8 @@
 id: validation/compile
+execution: host
 input:
   generated_project:
   target_cell:
-task:
-  run_target_compile_gate:
-rules:
-  - Use the resolved target build path.
-  - Preserve compiler output as evidence.
 output:
   passed:
   diagnostics:

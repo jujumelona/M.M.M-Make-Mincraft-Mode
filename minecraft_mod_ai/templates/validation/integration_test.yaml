@@ -1,12 +1,8 @@
 id: validation/integration_test
+execution: host
 input:
   integration_tests:
   integrated_project:
-task:
-  run_integration_tests:
-rules:
-  - Exercise declared component and feature boundaries.
-  - Preserve failure evidence for each boundary.
 output:
   passed:
   failures:

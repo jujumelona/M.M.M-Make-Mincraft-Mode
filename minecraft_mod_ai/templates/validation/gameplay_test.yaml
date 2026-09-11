@@ -1,12 +1,8 @@
 id: validation/gameplay_test
+execution: host
 input:
   atomic_feature_acceptance:
   runtime_observations:
-task:
-  verify_gameplay_acceptance:
-rules:
-  - Check success, rejection, boundaries, and state transitions required by the feature.
-  - Do not substitute compile success for gameplay proof.
 output:
   passed:
   failed_acceptance:

@@ -1,14 +1,10 @@
 id: validation/completeness
+execution: host
 input:
   requirement_trace:
   feature_trace:
   resource_trace:
   validation_receipts:
-task:
-  calculate_completion_state:
-rules:
-  - Completion is host-calculated from required proof receipts.
-  - Any blocked, failed, missing, or unresolved mandatory proof prevents completion.
 output:
   complete:
   blockers:

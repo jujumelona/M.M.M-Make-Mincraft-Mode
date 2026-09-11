@@ -1,12 +1,9 @@
 id: validation/resource_trace
+execution: host
 input:
   resource_requirements:
   generated_resources:
   resource_validation_receipts:
-task:
-  trace_resources_to_validation:
-rules:
-  - Required resources must exist and validate; extra resources must have an owner.
 output:
   traces:
   missing_resources:
