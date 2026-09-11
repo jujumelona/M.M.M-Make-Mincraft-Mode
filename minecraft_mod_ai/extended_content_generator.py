@@ -207,6 +207,7 @@ def generate_extended_content(
         "schema_version": "mmm/extended-content-v2",
         "status": "GENERATED",
         "modules": [item["module_id"] for item in generation_records],
+        "module_ids": [module.module_id for module in selected],
         "catalog_module_count": committed_count,
         "shard_count": len(java_items),
         "shard_size": policy.java_shard_size,

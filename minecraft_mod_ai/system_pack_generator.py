@@ -140,6 +140,7 @@ def generate_system_pack(
     return {
         "schema_version": "mmm/system-pack-generation-v5",
         "pack_id": pack_id,
+        "module_ids": [str(item["module_id"]) for item in modules],
         "input_definition_count": len(modules),
         "definition_count": len(merged_modules),
         "definition_record_count": len(merged_modules),
