@@ -110,14 +110,8 @@ class NativeLlamaTuningPipeline:
         )
 
     @staticmethod
-    def _context_value(config: Any) -> int:
-        """Resolve the launch context from explicit operator or registry policy.
-
-        ``--ctx-size 0`` remains available for profiles that intentionally use the
-        model-native context. Resource-constrained profiles may declare a
-        ``runtime_context_default`` so runtime allocation can differ from the model's
-        advertised maximum without changing that model capability.
-        """
+    def _context_value(config: Any) -> int | None:
+        """Resolve explicit/profile launch context, or preserve native auto sizing."""
 
         extra = getattr(config, "extra", {})
         metadata = extra if isinstance(extra, dict) else {}
@@ -158,7 +152,7 @@ class NativeLlamaTuningPipeline:
                     "runtime_context_default cannot exceed the registered max_context"
                 )
             return value
-        return 0
+        return None
 
     def _install_profile_context_authority(self) -> None:
         """Install the final context owner after every lower-level tuning wrapper."""
@@ -170,6 +164,8 @@ class NativeLlamaTuningPipeline:
         def profile_context(binary: str, model_path: str, config: Any, port: int) -> list[str]:
             args = list(current(binary, model_path, config, port))
             context = self._context_value(config)
+            if context is None:
+                return args
             for name in ("--ctx-size", "-c"):
                 if name in args:
                     index = args.index(name)
