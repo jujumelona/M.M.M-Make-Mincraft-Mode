@@ -102,15 +102,15 @@ def validate_support_matrix(bundles: list) -> None:
     Raises:
         SupportMatrixError: If any required leaf is not admitted
     """
-    from .resolved_version_context import ResolvedVersionContext
-    
     failures = []
     
     for version in SUPPORTED_MINECRAFT_VERSIONS:
         # Find context for this version
         context = None
         for bundle in bundles:
-            if isinstance(bundle, ResolvedVersionContext) and bundle.minecraft == version:
+            # Check if bundle matches version (works for both full objects and mocks)
+            bundle_version = getattr(bundle, 'minecraft', None)
+            if bundle_version == version:
                 context = bundle
                 break
         

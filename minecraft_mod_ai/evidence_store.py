@@ -170,8 +170,10 @@ class EvidenceStore:
             evidence_id (SHA-256 of record)
         """
         # Verify evidence_id matches content
+        # Must exclude evidence_id itself from hash computation
         record_dict = record.to_dict()
-        computed_id = EvidenceRecord.compute_evidence_id(record_dict)
+        record_dict_for_hash = {k: v for k, v in record_dict.items() if k != "evidence_id"}
+        computed_id = EvidenceRecord.compute_evidence_id(record_dict_for_hash)
         
         if record.evidence_id != computed_id:
             raise EvidenceStoreError(
