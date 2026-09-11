@@ -19,6 +19,10 @@ from typing import Any
 
 from .acceptance_contracts import is_public_acceptance as _is_public_acceptance
 
+# Runtime composition verifies this exact canonical binding. Keep a static use here so
+# linting and the runtime boundary enforce the same ownership contract.
+_CANONICAL_PUBLIC_ACCEPTANCE = _is_public_acceptance
+
 from .structural_minecraft_runtime_contract import (
     RESEARCH_BASIS, TEMPLATE_CATALOG_SCHEMA, _compile_tasks,
     _requirement_branch_features as requirement_branch_features,
