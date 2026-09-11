@@ -1,0 +1,93 @@
+name: Llama Native Policy Repair
+on:
+  push:
+    paths:
+      - '.github/workflows/llama-native-policy-repair.yml'
+permissions:
+  contents: write
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Preserve native resource sizing
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('minecraft_mod_ai/qwen35_mtp_hotpath_contract.py')
+          s = p.read_text()
+          s = s.replace(
+              'def _context_size(config: Any | None = None) -> int:\n',
+              'def _context_size(config: Any | None = None) -> int | None:\n',
+              1,
+          )
+          s = s.replace('    return 0\n\n\ndef _draft_gpu_layers()', '    return None\n\n\ndef _draft_gpu_layers()', 1)
+          old = '        _set_option(args, ("--ctx-size", "-c"), str(_context_size(config)))\n'
+          new = '''        context = _context_size(config)\n        if context is not None:\n            _set_option(args, ("--ctx-size", "-c"), str(context))\n'''
+          if old not in s:
+              raise SystemExit('qwen context launch block not found')
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path('minecraft_mod_ai/llama_server_hardware_policy.py')
+          s = p.read_text()
+          old = '''    try:\n        index = args.index("--gpu-layers")\n        args[index + 1] = "auto"\n    except (ValueError, IndexError):\n        pass\n'''
+          if old not in s:
+              raise SystemExit('gpu auto rewrite not found')
+          s = s.replace(old, '', 1)
+          old = '''        def adaptive_variant_args(variant: Any) -> list[str]:\n            args = original_variant(variant)\n            try:\n                index = args.index("--spec-draft-ngl")\n                args[index + 1] = "auto"\n            except (ValueError, IndexError):\n                pass\n            return args\n'''
+          new = '''        def adaptive_variant_args(variant: Any) -> list[str]:\n            return original_variant(variant)\n'''
+          if old not in s:
+              raise SystemExit('draft gpu auto rewrite not found')
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path('tests/test_llama_context_policy.py')
+          s = p.read_text()
+          s = s.replace(
+              '    assert args[args.index("--ctx-size") + 1] == "0"\n',
+              '    assert "--ctx-size" not in args\n',
+              1,
+          )
+          s = s.replace(
+              '    assert args[args.index("--ctx-size") + 1] == "0"\n',
+              '    assert args[args.index("--ctx-size") + 1] == "4096"\n',
+              1,
+          )
+          s = s.replace(
+              '    assert args[args.index("--ctx-size") + 1] == "0"\n',
+              '    assert args[args.index("--ctx-size") + 1] == "4096"\n',
+              1,
+          )
+          s = s.replace(
+              '    assert args[args.index("--ctx-size") + 1] == "0"\n',
+              '    assert args[args.index("--ctx-size") + 1] == "4096"\n',
+              1,
+          )
+          s = s.replace(
+              '    assert _context_size(_qwen_config()) == 0\n',
+              '    assert _context_size(_qwen_config()) is None\n',
+              1,
+          )
+          s = s.replace(
+              '    assert args[args.index("--ctx-size") + 1] == "0"\n',
+              '    assert args[args.index("--ctx-size") + 1] == "8192"\n',
+              1,
+          )
+          p.write_text(s)
+          PY
+      - name: Test native llama policies
+        run: |
+          python -m pip install -e '.[dev]' >/dev/null
+          pytest -q tests/test_llama_context_policy.py tests/test_llama_server_native_resource_fit.py
+      - name: Commit repair
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add minecraft_mod_ai/qwen35_mtp_hotpath_contract.py minecraft_mod_ai/llama_server_hardware_policy.py tests/test_llama_context_policy.py
+          git commit -m 'fix: preserve native llama resource authority'
+          git push origin HEAD:main
