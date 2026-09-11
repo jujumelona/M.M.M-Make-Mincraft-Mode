@@ -1,4 +1,4 @@
-"""Small-model-safe template execution with host-owned bounded batching."""
+"One declared concern per model call, plus deterministic executable leaf templates."
 
 import json
 from collections.abc import Mapping
@@ -32,18 +32,6 @@ _HOST_SEQUENCE_TEMPLATES = frozenset({
 _HOST_FIRST_RECORD_REQUIRED = frozenset({
     "design/content_entity",
 })
-
-_PROPERTY_BATCH_WIDTH = 3
-_RELATION_BATCH_WIDTH = 4
-_RELATION_TYPES = (
-    "consumes", "produces", "contains", "drops", "requires", "unlocks",
-    "upgrades", "opens", "controls", "spawns", "transports_to", "displays",
-    "synchronizes",
-)
-_KEY_RELATION_TYPES = tuple(
-    "key_" + token for token in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-)
-_ALL_RELATION_TYPES = _RELATION_TYPES + _KEY_RELATION_TYPES
 
 
 def _contains_blank_string(value, schema=None):
@@ -98,240 +86,6 @@ def _accepted_record_index(identifier, records):
     ]
 
 
-def _chunks(values: list[str], width: int):
-    for start in range(0, len(values), width):
-        yield values[start : start + width]
-
-
-def _generate_host_batch(
-    router,
-    *,
-    template,
-    context,
-    allowed_refs,
-    progress,
-    checkpoint,
-    binding_prefix: str,
-    system_prompt: str,
-    response_schema: Mapping[str, Any],
-    tool_name: str,
-):
-    """Generate one bounded fixed-template batch with deterministic checkpoint reuse."""
-    binding = binding_prefix + task_binding(template, context, allowed_refs)
-    saved = (progress or {}).get(binding)
-    if saved is not None:
-        if not isinstance(saved, Mapping):
-            raise ValueError(f"TEMPLATE_BATCH_PROGRESS: expected object for {binding_prefix}")
-        value = deepcopy(dict(saved))
-    else:
-        value = generate_fixed_template_value(
-            router,
-            "planner",
-            [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
-            ],
-            response_schema=response_schema,
-            enable_tools=False,
-            tool_name=tool_name,
-        )
-        if checkpoint is not None:
-            checkpoint(binding, deepcopy(value))
-    Draft202012Validator(dict(response_schema)).validate(value)
-    return dict(value)
-
-
-def _run_property_batches(
-    router,
-    *,
-    template,
-    normalized_context,
-    allowed_refs,
-    progress,
-    checkpoint,
-):
-    allowed = normalized_context.get("allowed_properties")
-    required = normalized_context.get("required_properties")
-    allowed_set = {str(name) for name in allowed} if isinstance(allowed, list) else set()
-    required_properties = (
-        list(dict.fromkeys(str(name) for name in required))
-        if isinstance(required, list)
-        else []
-    )
-    unknown = [name for name in required_properties if name not in allowed_set]
-    if unknown:
-        raise TemplateBlocked(f"TEMPLATE_REQUIRED_PROPERTY_UNKNOWN: {unknown}")
-
-    records: list[dict[str, Any]] = []
-    for batch_index, requested_properties in enumerate(
-        _chunks(required_properties, _PROPERTY_BATCH_WIDTH)
-    ):
-        schema = {
-            "type": "object",
-            "properties": {
-                name: {"type": "string", "minLength": 1, "maxLength": 256}
-                for name in requested_properties
-            },
-            "required": list(requested_properties),
-            "additionalProperties": False,
-        }
-        batch_context = {
-            **normalized_context,
-            "allowed_properties": list(requested_properties),
-            "required_properties": list(requested_properties),
-            "requested_properties": list(requested_properties),
-            "accepted_property_names": [row["property"] for row in records],
-            "batch_index": batch_index,
-        }
-        value = _generate_host_batch(
-            router,
-            template=template,
-            context=batch_context,
-            allowed_refs=allowed_refs,
-            progress=progress,
-            checkpoint=checkpoint,
-            binding_prefix="property-batch:",
-            system_prompt=(
-                "Resolve exactly the host-listed Minecraft design properties in one bounded "
-                "atomic batch. Every output key is already the exact property name; fill only "
-                "its value string. Do not add, omit, rename, or explain fields. Use only the "
-                "active requirement, design state, relations, supplied evidence, and allowed "
-                "resource identifiers. Numeric values must be canonical decimal strings."
-            ),
-            response_schema=schema,
-            tool_name="submit_content_property_batch",
-        )
-        for requested_property in requested_properties:
-            raw = value.get(requested_property)
-            if not isinstance(raw, str) or not raw.strip():
-                raise TemplateBlocked(
-                    f"TEMPLATE_REQUIRED_PROPERTY_MISMATCH: missing {requested_property}"
-                )
-            records.append({"property": requested_property, "value": raw.strip()})
-    return records
-
-
-def _run_relation_batches(
-    router,
-    *,
-    template,
-    normalized_context,
-    allowed_refs,
-    progress,
-    checkpoint,
-):
-    raw_entity_ids = normalized_context.get("entity_ids")
-    if not isinstance(raw_entity_ids, list):
-        raise TemplateBlocked("TEMPLATE_RELATION_ENTITY_IDS_REQUIRED")
-    entity_ids = list(dict.fromkeys(str(value) for value in raw_entity_ids if str(value)))
-    records: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
-
-    for source_id in entity_ids:
-        target_ids = [target_id for target_id in entity_ids if target_id != source_id]
-        if not target_ids:
-            continue
-        accepted_for_source: list[str] = []
-        batch_index = 0
-        while True:
-            schema = {
-                "type": "object",
-                "properties": {
-                    "target_ids": {
-                        "type": "array",
-                        "maxItems": _RELATION_BATCH_WIDTH,
-                        "items": {"type": "string", "enum": target_ids},
-                    },
-                    "relation_types": {
-                        "type": "array",
-                        "maxItems": _RELATION_BATCH_WIDTH,
-                        "items": {"type": "string", "enum": list(_ALL_RELATION_TYPES)},
-                    },
-                    "overflow": {"type": "boolean"},
-                },
-                "required": ["target_ids", "relation_types", "overflow"],
-                "additionalProperties": False,
-            }
-            batch_context = {
-                **normalized_context,
-                "source_id": source_id,
-                "allowed_target_ids": target_ids,
-                "allowed_relation_types": list(_ALL_RELATION_TYPES),
-                "accepted_relations": list(accepted_for_source),
-                "batch_index": batch_index,
-            }
-            decision = _generate_host_batch(
-                router,
-                template=template,
-                context=batch_context,
-                allowed_refs=allowed_refs,
-                progress=progress,
-                checkpoint=checkpoint,
-                binding_prefix="relation-batch:",
-                system_prompt=(
-                    "Select only explicit directed relationships required by the active "
-                    "requirement for the fixed source_id. Return aligned target_ids and "
-                    "relation_types arrays: position i describes exactly one edge from "
-                    "source_id to target_ids[i]. Use only allowed targets and relation types, "
-                    "never repeat an accepted edge, and return empty arrays when there are no "
-                    "edges. Set overflow=true only when more required explicit edges remain "
-                    "after this batch. key_A through key_9 represent crafting-key relations."
-                ),
-                response_schema=schema,
-                tool_name="submit_content_relation_batch",
-            )
-            selected_targets = decision.get("target_ids")
-            selected_types = decision.get("relation_types")
-            if not isinstance(selected_targets, list) or not isinstance(selected_types, list):
-                raise TemplateBlocked(f"TEMPLATE_RELATION_BATCH_INVALID: {source_id}")
-            if len(selected_targets) != len(selected_types):
-                raise TemplateBlocked(
-                    f"TEMPLATE_RELATION_BATCH_ARITY: {source_id}: "
-                    f"{len(selected_targets)} targets != {len(selected_types)} relations"
-                )
-
-            new_edges = 0
-            for target_id, relation_type in zip(selected_targets, selected_types, strict=True):
-                target_id = str(target_id)
-                relation_type = str(relation_type)
-                edge = (relation_type, source_id, target_id)
-                if target_id not in target_ids or relation_type not in _ALL_RELATION_TYPES:
-                    raise TemplateBlocked(
-                        f"TEMPLATE_RELATION_UNSUPPORTED: {source_id}->{target_id}: {relation_type}"
-                    )
-                if edge in seen:
-                    raise TemplateBlocked(
-                        f"TEMPLATE_RELATION_DUPLICATE: {source_id}->{target_id}: {relation_type}"
-                    )
-                seen.add(edge)
-                accepted_for_source.append(
-                    f"{relation_type}:{source_id}:{target_id}"
-                )
-                records.append(
-                    {
-                        "relation_type": relation_type,
-                        "source_id": source_id,
-                        "target_id": target_id,
-                    }
-                )
-                new_edges += 1
-
-            overflow = bool(decision.get("overflow"))
-            if not overflow:
-                break
-            if new_edges == 0:
-                raise TemplateBlocked(
-                    f"TEMPLATE_NO_PROGRESS: relation overflow without a new edge for {source_id}"
-                )
-            possible_edges = len(target_ids) * len(_ALL_RELATION_TYPES)
-            if len(accepted_for_source) >= possible_edges:
-                raise TemplateBlocked(
-                    f"TEMPLATE_RELATION_OVERFLOW_INVALID: exhausted finite edge universe for {source_id}"
-                )
-            batch_index += 1
-    return records
-
-
 def _run_host_owned_records(
     router,
     identifier,
@@ -341,7 +95,7 @@ def _run_host_owned_records(
     progress=None,
     checkpoint=None,
 ):
-    """Run exact/sequence design records with host-owned cardinality and batching."""
+    """Run exact/sequence design records without giving the model a `done` control field."""
     from .single_record_template import run_single_record_template
 
     template = load_record_template(identifier)
@@ -362,14 +116,38 @@ def _run_host_owned_records(
     seen: set[str] = set()
 
     if identifier == "design/content_property":
-        records = _run_property_batches(
-            router,
-            template=template,
-            normalized_context=normalized_context,
-            allowed_refs=allowed_refs,
-            progress=progress,
-            checkpoint=checkpoint,
+        allowed = normalized_context.get("allowed_properties")
+        required = normalized_context.get("required_properties")
+        allowed_set = {str(name) for name in allowed} if isinstance(allowed, list) else set()
+        required_properties = (
+            list(dict.fromkeys(str(name) for name in required))
+            if isinstance(required, list)
+            else []
         )
+        unknown = [name for name in required_properties if name not in allowed_set]
+        if unknown:
+            raise TemplateBlocked(f"TEMPLATE_REQUIRED_PROPERTY_UNKNOWN: {unknown}")
+        for index, requested_property in enumerate(required_properties):
+            record = run_single_record_template(
+                router,
+                identifier,
+                context={
+                    **normalized_context,
+                    "allowed_properties": [requested_property],
+                    "requested_property": requested_property,
+                    "record_index": index,
+                    "record_count": len(required_properties),
+                    "accepted_records": deepcopy(records),
+                },
+                progress=progress,
+                checkpoint=checkpoint,
+            )
+            if record.get("property") != requested_property:
+                raise TemplateBlocked(
+                    f"TEMPLATE_REQUIRED_PROPERTY_MISMATCH: expected {requested_property}, "
+                    f"received {record.get('property')}"
+                )
+            records.append(record)
         return {"records": records, "reason": "", "evidence_refs": refs}
 
     if identifier == "design/content_entity":
@@ -406,14 +184,65 @@ def _run_host_owned_records(
         return {"records": records, "reason": "", "evidence_refs": refs}
 
     if identifier == "design/content_relation":
-        records = _run_relation_batches(
-            router,
-            template=template,
-            normalized_context=normalized_context,
-            allowed_refs=allowed_refs,
-            progress=progress,
-            checkpoint=checkpoint,
+        entity_ids = normalized_context.get("entity_ids")
+        if not isinstance(entity_ids, list):
+            raise TemplateBlocked("TEMPLATE_RELATION_ENTITY_IDS_REQUIRED")
+        relation_types = (
+            "consumes", "produces", "contains", "drops", "requires", "unlocks",
+            "upgrades", "opens", "controls", "spawns", "transports_to", "displays",
+            "synchronizes",
         )
+        for source_id in entity_ids:
+            for target_id in entity_ids:
+                if source_id == target_id:
+                    continue
+                decision = run_single_record_template(
+                    router,
+                    "design/relation_set",
+                    context={
+                        **normalized_context,
+                        "source_id": source_id,
+                        "target_id": target_id,
+                        "allowed_relation_types": list(relation_types),
+                    },
+                    progress=progress,
+                    checkpoint=checkpoint,
+                )
+                if decision.get("overflow"):
+                    raise TemplateBlocked(
+                        f"TEMPLATE_RELATION_CARDINALITY_EXCEEDED: {source_id}->{target_id}"
+                    )
+                selected = decision.get("relations", [])
+                if not isinstance(selected, list) or any(item not in relation_types for item in selected):
+                    raise TemplateBlocked(
+                        f"TEMPLATE_RELATION_UNSUPPORTED: {source_id}->{target_id}: {selected}"
+                    )
+                if len(selected) != len(set(selected)):
+                    raise TemplateBlocked(
+                        f"TEMPLATE_RELATION_DUPLICATE: {source_id}->{target_id}: {selected}"
+                    )
+                for relation_type in selected:
+                    records.append(
+                        {
+                            "relation_type": relation_type,
+                            "source_id": str(source_id),
+                            "target_id": str(target_id),
+                        }
+                    )
+                key_code = int(decision.get("key_code", 0))
+                if key_code:
+                    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+                    if not 1 <= key_code <= len(alphabet):
+                        raise TemplateBlocked(
+                            f"TEMPLATE_RELATION_KEY_INVALID: {source_id}->{target_id}: {key_code}"
+                        )
+                    records.append(
+                        {
+                            "relation_type": "key_" + alphabet[key_code - 1],
+                            "source_id": str(source_id),
+                            "target_id": str(target_id),
+                        }
+                    )
         return {"records": records, "reason": "", "evidence_refs": refs}
 
     # Research facts and design decisions still use the generic host-owned loop;
@@ -685,13 +514,6 @@ def execute_artifact_template(
     from .implementation_template_renderer import render_template
     from .task_template_catalog import load_template
 
-    from .implementation_identity import ExecutorType
-    executor = _job_value(job, "executor_type", "")
-    if executor == ExecutorType.PYTHON_GENERATOR or executor == "python_generator":
-        from .integrity_dispatcher import execute_generator_job
-        return execute_generator_job(job, context=dict(context or {}), router=router,
-                                     port_registry=port_registry, base_dir=base_dir)
-
     template_id = str(_job_value(job, "template_id", ""))
     if not template_id:
         raise ValueError("TEMPLATE_JOB_ID: artifact job has no template_id")
@@ -702,34 +524,8 @@ def execute_artifact_template(
         )
 
     context_map = dict(context or {})
-    from .resolved_version_context import execution_context
-    from .version_template_context import (
-        resolved_template_values,
-        validate_resolved_template_overrides,
-    )
-
-    resolved = execution_context(context_map, job)
-    if resolved is not None:
-        from .integrity_dispatcher import verify_job_binding
-        resolved.admit_template(template)
-    if resolved is not None and port_registry is not None:
-        port_registry.bind_context(resolved.context_id)
     det_inputs = dict(_job_value(job, "deterministic_inputs", {}) or {})
-    if resolved is not None:
-        validate_resolved_template_overrides(resolved, context_map, det_inputs)
-        values: dict[str, Any] = resolved_template_values(
-            {
-                **context_map,
-                **det_inputs,
-                "resolved_version_context": resolved,
-            }
-        )
-    else:
-        values = {**context_map, **det_inputs}
-    if resolved is not None:
-        authority = verify_job_binding(job, resolved, context_map)
-        from .integrity_dispatcher import canonical_contract
-        canonical_contract(job, resolved, context_map, authority)
+    values: dict[str, Any] = {**context_map, **det_inputs}
 
     from .artifact_target_contract import validate_artifact_target
 
@@ -765,21 +561,12 @@ def execute_artifact_template(
             anchor = render_template({"render": target_spec["anchor"]}, values)
 
     validation_receipts = []
-    if resolved is not None:
-        from .integrity_dispatcher import validate_canonical_output
-        validation_receipts.extend(validate_canonical_output(job, rendered_output, resolved=resolved,
-            context=context_map, authority=authority, target_path=target_file, anchor=anchor))
-        validation_receipts.append(resolved.validate_artifact(template, rendered_output))
     supported_validators = {
         "java_parse",
         "registry_identifier_unique",
         "registry_identifier",
         "json_parse",
-        "json_schema",
         "resource_references",
-        "semantic_contract",
-        "mod_integration_test",
-        "client_side_only",
     }
     declared_validators = tuple(template.get("validators", ()) or ())
     unknown = [name for name in declared_validators if name not in supported_validators]
@@ -804,43 +591,6 @@ def execute_artifact_template(
             )
         elif validator_name == "json_parse":
             validation_receipts.append(validate_json_resource(rendered_output))
-        elif validator_name == "json_schema":
-            from .integrity_validators import validate_json_schema
-            schema = template.get("output_schema") or values.get("output_schema")
-            if schema is None and resolved is not None:
-                schema = resolved.require_fact("schemas", template_id)
-            if schema is None:
-                raise ValueError("JSON_SCHEMA_REQUIRED")
-            validation_receipts.append(validate_json_schema(json.loads(rendered_output), schema))
-        elif validator_name == "semantic_contract":
-            from .integrity_validators import validate_semantic_contract
-            validation_receipts.append(validate_semantic_contract(rendered_output,
-                contract=values["semantic_contract"], context_id=resolved.context_id if resolved else values["context_id"],
-                leaf_id=_job_value(job, "canonical_leaf", "")))
-        elif validator_name == "client_side_only":
-            from .integrity_validators import validate_side
-            validation_receipts.append(validate_side(rendered_output,
-                leaf_id=_job_value(job, "canonical_leaf", ""), side=values["side"],
-                classpath=values["java_classpath"], java_version=str(values["java_version"])))
-        elif validator_name == "mod_integration_test":
-            from .integrity_validators import validate_mod_integration
-            from .evidence_store import EvidenceStore
-            validation_receipts.append(validate_mod_integration(
-                store=EvidenceStore(Path(values["evidence_store"])), evidence_id=values["evidence_id"],
-                expected=values["evidence_expected"]))
-
-    canonical_leaf = str(_job_value(job, "canonical_leaf", "") or "")
-    impl_id = str(_job_value(job, "implementation_id", "") or "")
-    exec_type = str(_job_value(job, "executor_type", "") or "")
-    if canonical_leaf or impl_id or exec_type:
-        for receipt in validation_receipts:
-            if isinstance(receipt, dict):
-                if canonical_leaf and "canonical_leaf" not in receipt:
-                    receipt["canonical_leaf"] = canonical_leaf
-                if impl_id and "implementation_id" not in receipt:
-                    receipt["implementation_id"] = impl_id
-                if exec_type and "executor_type" not in receipt:
-                    receipt["executor_type"] = exec_type
 
     if hasattr(job, "validation_receipts"):
         job.validation_receipts = validation_receipts
@@ -859,10 +609,6 @@ def execute_artifact_template(
     ports_published: dict[str, Any] = {}
     for logical_name, published_name in zip(logical_outputs, published_names, strict=True):
         port_obj = _logical_port(logical_name, published_name, values, template_id)
-        if resolved is not None:
-            from dataclasses import replace
-
-            port_obj = replace(port_obj, context_id=resolved.context_id)
         if published_name in ports_published:
             raise ValueError(f"TEMPLATE_PORT_DUPLICATE: {published_name}")
         if port_registry is not None:
@@ -925,7 +671,6 @@ def execute_artifact_template(
         "job_id": str(_job_value(job, "job_id", "")),
         "template_id": template_id,
         "target_file": target_file,
-        "context_id": resolved.context_id if resolved is not None else "",
         "anchor": anchor,
         "rendered_output": rendered_output,
         "validations": validation_receipts,
