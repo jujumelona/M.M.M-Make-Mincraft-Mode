@@ -10,6 +10,7 @@ import pytest
 import yaml
 
 import minecraft_mod_ai.progress_aware_tool_loop as tool_loop
+from minecraft_mod_ai.config_paths import config_path
 from minecraft_mod_ai.llama_finish_reason_contract import (
     CONTEXT_PRESSURE,
     LlamaCompletionBoundaryError,
@@ -321,8 +322,7 @@ def test_compaction_preserves_tool_pairs_latest_mutation_and_archives_old_histor
 
 
 def test_t4_registry_keeps_model_capability_and_finite_runtime_page() -> None:
-    root = Path(__file__).resolve().parents[1]
-    registry = yaml.safe_load((root / "config" / "model_registry.yaml").read_text())
+    registry = yaml.safe_load(config_path("model_registry.yaml").read_text(encoding="utf-8"))
     coder = registry["profiles"]["Qwen3.5-9B_6GB"]["roles"]["coder"]
 
     assert coder["max_context"] == 262_144
@@ -361,7 +361,6 @@ def test_superseded_context_and_coder_route_modules_are_deleted() -> None:
         source = path.read_text(encoding="utf-8")
         for module_name in retired:
             assert module_name not in source, f"retired module referenced by {path}"
-
 
 
 def test_exact_context_recovery_uses_live_tokens_not_fixed_40k(monkeypatch) -> None:
