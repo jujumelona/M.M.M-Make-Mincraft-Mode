@@ -1,0 +1,47 @@
+name: Apply Entity Cardinality
+on:
+  push:
+    paths:
+      - '.github/workflows/apply-entity-cardinality.yml'
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Patch host-owned entity cardinality
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('minecraft_mod_ai/task_template_runner.py')
+          s = p.read_text(encoding='utf-8')
+          old = '''    if identifier == "design/content_entity":\n        target_count = 1\n        for index in range(target_count):\n'''
+          new = '''    if identifier == "design/content_entity":\n        cardinality = run_single_record_template(\n            router,\n            "design/content_entity_count",\n            context={**normalized_context, "accepted_records": []},\n            progress=progress,\n            checkpoint=checkpoint,\n        )\n        target_count = int(cardinality["count"])\n        if not 1 <= target_count <= 64:\n            raise TemplateBlocked(\n                f"TEMPLATE_ENTITY_CARDINALITY_INVALID: {target_count}"\n            )\n        for index in range(target_count):\n'''
+          if old not in s:
+              raise SystemExit('entity target_count=1 block not found')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+          PY
+      - name: Verify patch
+        run: |
+          python -m pip install -e '.[dev]' >/dev/null
+          python -m compileall -q minecraft_mod_ai
+          python - <<'PY'
+          from pathlib import Path
+          s = Path('minecraft_mod_ai/task_template_runner.py').read_text()
+          assert 'target_count = 1' not in s
+          assert 'design/content_entity_count' in s
+          PY
+          pytest -q tests/test_task_template_atomicity_contract.py
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add minecraft_mod_ai/task_template_runner.py
+          git commit -m 'fix: make entity cardinality host owned'
+          git push origin HEAD:main
