@@ -1,19 +1,36 @@
 id: design/content_capability
-task: Select the single base Minecraft capability needed to implement this content
-  entity.
+task: Select exactly one base Minecraft FactType required by this content entity.
 record_schema:
   type: object
   properties:
     fact_type:
       type: string
-      minLength: 1
-      maxLength: 64
+      enum:
+        - ITEM_EXISTS
+        - BLOCK_EXISTS
+        - CRAFTING_RECIPE
+        - SMELTING_RECIPE
+        - REGISTRY_TAG
+        - ENTITY_EXISTS
+        - GUI_EXISTS
+        - NETWORK_PACKET
+        - BLOCK_ENTITY_EXISTS
+        - DATA_COMPONENT
+        - WORLDGEN_FEATURE
+        - DIMENSION
+        - BIOME
+        - STATUS_EFFECT
+        - SOUND_EVENT
+        - PARTICLE_TYPE
+        - ENTITY_LOOT
+        - ADVANCEMENT
+        - EQUIPMENT_ARMOR
+        - CUSTOM_ITEM_BEHAVIOR
+        - CUSTOM_BLOCK_BEHAVIOR
+        - UNSUPPORTED
   required:
-  - fact_type
+    - fact_type
   additionalProperties: false
 rules:
-- Return an exact FactType name. Use UNSUPPORTED when no known capability represents
-  the entity.
-- Do not convert a machine, worldgen feature, entity, GUI, or sound to an item merely
-  because it is easier.
-- Supported base facts are ITEM_EXISTS, BLOCK_EXISTS, CRAFTING_RECIPE, SMELTING_RECIPE, REGISTRY_TAG, ENTITY_EXISTS, GUI_EXISTS, NETWORK_PACKET, BLOCK_ENTITY_EXISTS, DATA_COMPONENT, WORLDGEN_FEATURE, DIMENSION, BIOME, STATUS_EFFECT, SOUND_EVENT, PARTICLE_TYPE, ENTITY_LOOT, ADVANCEMENT, EQUIPMENT_ARMOR, CUSTOM_ITEM_BEHAVIOR, CUSTOM_BLOCK_BEHAVIOR. Other requested capabilities must remain explicit and unsupported.
+  - Use UNSUPPORTED when none of the enumerated FactTypes exactly represents the required capability.
+  - Never substitute an easier artifact type for the requested content entity.
