@@ -26,10 +26,11 @@ def test_notebook_is_single_registry_driven_source() -> None:
         "built-in 폴백",
         "deterministic-fallback",
         "model_name_or_path=LOCAL_MODEL_ID",
+        "config/model_registry.yaml",
     )
     raw = NOTEBOOK_PATH.read_text(encoding="utf-8")
     assert "MODEL_PROFILE" in raw
-    assert "config/model_registry.yaml" in raw
+    assert "ModelRegistry().to_public_dict()" in raw
     assert all(token not in raw for token in forbidden)
     assert not OBSOLETE_NOTEBOOK_PATH.exists()
 
@@ -107,22 +108,17 @@ def test_setup_stops_managed_server_before_same_commit_engine_reload(
     assert "LLAMA_SERVER_URL" not in __import__("os").environ
 
 
-def test_notebook_checks_setup_and_reports_registry_selected_planner() -> None:
+def test_notebook_uses_setup_module_and_registry_selected_profile() -> None:
     cells = _cells()
     assert 'PERFORMANCE_MODE = "Auto"' in cells["configuration"]
     assert 'os.environ["MMM_PERFORMANCE_MODE"] = performance_mode' in cells["configuration"]
     assert 'os.environ["MMM_PERFORMANCE_MODE"]' not in cells["plan"]
-    assert "def assert_current_colab_setup" in cells["registry"]
-    assert "COLAB_SETUP_MODULE.assert_setup_state(" in cells["registry"]
-    assert "planner_config = registry_manager.role" in cells["registry"]
-    assert "planner_config.model_id" in cells["registry"]
-    assert "planner_config.provider" in cells["registry"]
-    assert "planner_config.adapter" in cells["registry"]
-    assert "planner_config.quantization" in cells["registry"]
-    assert "planner_config.max_context" in cells["registry"]
-    assert "기획 native context:" in cells["registry"]
-    assert "assert_current_colab_setup()" in cells["plan"]
-    assert "assert_current_colab_setup()" in cells["build"]
+    assert 'REPO_DIR / "tools" / "colab_runtime_setup.py"' in cells["setup"]
+    assert "module.setup_colab_runtime(" in cells["setup"]
+    assert "from minecraft_mod_ai import ModelRegistry" in cells["registry"]
+    assert "registry = ModelRegistry().to_public_dict()" in cells["registry"]
+    assert 'MODEL_PROFILE not in registry["profiles"]' in cells["registry"]
+    assert "model_profile=MODEL_PROFILE" in cells["plan"]
 
 
 def test_qwen_fastpath_extra_is_linux_only_and_includes_fixed_fla() -> None:
