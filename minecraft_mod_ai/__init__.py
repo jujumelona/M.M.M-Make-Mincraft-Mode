@@ -1,7 +1,5 @@
 """M.M.M Make Mincraft Mode: scalable multimodal Minecraft mod production tools."""
 
-import os
-
 from .custom_checkpoint_performance_installation import install as install_checkpoint_performance
 from .hardware_concurrency_installation import install as install_hardware_concurrency
 from .runtime_bootstrap import initialize_runtime
@@ -13,22 +11,6 @@ from .template_contract_validation import runtime_consumer_roots, validate_catal
 from .versioned_reference_context_installation import install as install_versioned_reference_context
 
 
-def _configure_default_llama_parallelism() -> None:
-    """Use the reviewed scheduler maximum unless server capacity is explicit."""
-    if os.environ.get("MMM_LLAMA_ACTIVE_PARALLEL", "").strip():
-        return
-    raw_server_parallel = os.environ.get("MMM_LLAMA_PARALLEL", "").strip()
-    try:
-        explicit_server_parallel = int(raw_server_parallel)
-    except ValueError:
-        explicit_server_parallel = 0
-    if explicit_server_parallel > 0:
-        active = max(1, min(8, explicit_server_parallel))
-    else:
-        active = 8
-    os.environ["MMM_LLAMA_ACTIVE_PARALLEL"] = str(active)
-
-
 def _validate_runtime_template_authority() -> None:
     """Fail before model decode when any runtime template is orphaned or structurally invalid."""
     validate_catalog(
@@ -37,7 +19,8 @@ def _validate_runtime_template_authority() -> None:
     )
 
 
-_configure_default_llama_parallelism()
+# MMM_LLAMA_ACTIVE_PARALLEL describes proven live server capacity.  Importing the
+# package must never synthesize that receipt from a desired/default server width.
 install_hardware_concurrency()
 initialize_runtime()
 _validate_runtime_template_authority()
