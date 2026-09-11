@@ -43,3 +43,4 @@ jobs:
           git fetch origin main
           git rebase origin/main
           git push origin HEAD:main
+      # Retry marker: item-sprite consumer/template authority is restored before generation.
