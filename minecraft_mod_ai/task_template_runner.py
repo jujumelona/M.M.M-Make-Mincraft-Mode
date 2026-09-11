@@ -531,7 +531,11 @@ def execute_artifact_template(
         )
 
     context_map = dict(context or {})
-    from .resolved_version_context import execution_context, VersionContextError
+    from .resolved_version_context import execution_context
+    from .version_template_context import (
+        resolved_template_values,
+        validate_resolved_template_overrides,
+    )
 
     resolved = execution_context(context_map, job)
     if resolved is not None:
@@ -541,13 +545,16 @@ def execute_artifact_template(
         port_registry.bind_context(resolved.context_id)
     det_inputs = dict(_job_value(job, "deterministic_inputs", {}) or {})
     if resolved is not None:
-        host_target = resolved.to_dict()["target"]
-        for key in ("minecraft_version", "java_version", "fabric_loader", "fabric_api", "fabric_loom", "gradle", "resource_pack_format", "data_pack_version", "resource_pack_version"):
-            for supplied in (context_map, det_inputs):
-                if key in supplied and supplied[key] != host_target[key]:
-                    raise VersionContextError("HOST_FACT_OVERRIDE", field=key, context_id=resolved.context_id)
-            det_inputs[key] = host_target[key]
-    values: dict[str, Any] = {**context_map, **det_inputs}
+        validate_resolved_template_overrides(resolved, context_map, det_inputs)
+        values: dict[str, Any] = resolved_template_values(
+            {
+                **context_map,
+                **det_inputs,
+                "resolved_version_context": resolved,
+            }
+        )
+    else:
+        values = {**context_map, **det_inputs}
     if resolved is not None:
         authority = verify_job_binding(job, resolved, context_map)
         from .integrity_dispatcher import canonical_contract
