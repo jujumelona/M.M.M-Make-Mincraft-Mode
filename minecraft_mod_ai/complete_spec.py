@@ -261,15 +261,21 @@ class CompleteProposal:
             from .resolved_version_context import ResolvedVersionContext, VersionContextError
 
             resolved = self.base_proposal.spec.platform.version_context
-            stored = ResolvedVersionContext.from_dict(self.game_design.get("_resolved_version_context", {}))
-            resolved.assert_context(stored.context_id)
-            bindings = self.game_design.get("_artifact_version_contexts", {})
-            expected = {"module:" + module.module_id for module in self.modules}
-            expected.update("asset:" + asset.asset_id for asset in self.assets)
-            if not isinstance(bindings, dict) or set(bindings) != expected:
-                raise VersionContextError("ARTIFACT_CONTEXT_BINDING_MISSING")
-            for identifier in bindings.values():
-                resolved.assert_context(identifier)
+            stored_payload = self.game_design.get("_resolved_version_context")
+            if stored_payload is not None:
+                if not isinstance(stored_payload, dict) or not stored_payload:
+                    raise VersionContextError("INVALID_VERSION_CONTEXT")
+                stored = ResolvedVersionContext.from_dict(stored_payload)
+                resolved.assert_context(stored.context_id)
+
+            bindings = self.game_design.get("_artifact_version_contexts")
+            if bindings is not None:
+                expected = {"module:" + module.module_id for module in self.modules}
+                expected.update("asset:" + asset.asset_id for asset in self.assets)
+                if not isinstance(bindings, dict) or set(bindings) != expected:
+                    raise VersionContextError("ARTIFACT_CONTEXT_BINDING_MISSING")
+                for identifier in bindings.values():
+                    resolved.assert_context(identifier)
             for job in self.game_design.get("_artifact_jobs", ()):
                 resolved.assert_context(job.get("context_id"))
         try:

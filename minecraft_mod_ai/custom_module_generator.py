@@ -450,24 +450,22 @@ def _coder_project_context_budget(
     *,
     fast_mode: bool,
 ) -> int:
-    """Bound source grounding by the live request capacity, not model capability."""
+    """Bound the first exact-source page; continuation owns additional context."""
 
-    hard_cap = max(1024, int(policy.model_context_bytes))
-    if fast_mode:
-        return min(hard_cap, 4 * 1024)
-    fallback = min(hard_cap, 12 * 1024)
+    del fast_mode  # Atomic source-page size is mode-independent.
+    hard_cap = min(max(1024, int(policy.model_context_bytes)), 4 * 1024)
     registry = getattr(router, "registry", None)
     resolve_role = getattr(registry, "role", None)
     profile = str(getattr(router, "profile", "") or "").strip()
     if not callable(resolve_role) or not profile:
-        return fallback
+        return hard_cap
     try:
         config = resolve_role(profile, "coder")
         live_request_bytes = int(request_message_budget(config, ()))
     except Exception:
-        return fallback
+        return hard_cap
     if live_request_bytes <= 0:
-        return fallback
+        return hard_cap
     return min(hard_cap, max(1024, live_request_bytes // 2))
 
 

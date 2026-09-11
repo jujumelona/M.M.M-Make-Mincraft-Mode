@@ -148,8 +148,12 @@ def compile_target_decision(
         if adapter.host_facts_json:
             from .resolved_version_context import ResolvedVersionContext
 
-            supplied_context = ResolvedVersionContext.from_dict(raw.get("resolved_version_context", {}))
-            adapter.version_context.assert_context(supplied_context.context_id)
+            supplied_payload = raw.get("resolved_version_context")
+            if supplied_payload is not None:
+                if not isinstance(supplied_payload, Mapping) or not supplied_payload:
+                    raise ValueError("resolved_version_context must be a non-empty mapping when supplied")
+                supplied_context = ResolvedVersionContext.from_dict(supplied_payload)
+                adapter.version_context.assert_context(supplied_context.context_id)
     else:
         target = {
             "minecraft_version": "unresolved",

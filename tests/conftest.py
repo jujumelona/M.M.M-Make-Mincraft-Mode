@@ -248,8 +248,8 @@ def _isolate_test_runtime_state(
 
     @wraps(original_generate)
     def generate_with_explicit_test_target(self, spec, root):
-        if spec.platform.is_unresolved():
-            spec = replace(spec, platform=_platform_lock_from_adapter(synthetic_adapter))
+        if spec.platform.is_unresolved() or not spec.platform.deterministic_module_kinds:
+            object.__setattr__(spec, "platform", _platform_lock_from_adapter(synthetic_adapter))
         return original_generate(self, spec, root)
 
     monkeypatch.setattr(

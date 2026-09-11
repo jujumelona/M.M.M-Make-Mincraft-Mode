@@ -22,7 +22,7 @@ def _project(root: Path) -> Path:
 
 def _extended_metrics(root: Path, count: int) -> tuple[int, int]:
     project = _project(root)
-    modules = tuple(ProductionModule(module_id=f'command_{index:05d}', kind='command', config={'literal': f'catalog{index:05d}', 'message': f'Catalog command {index:05d}'}) for index in range(count))
+    modules = tuple(ProductionModule(module_id=f'command_{index:05d}', kind='command', config={'literal': f'catalog{index:05d}', 'message': f'Catalog command {index:05d}', 'permission_level': 0}) for index in range(count))
     result = generate_extended_content(project_root=project, mod_id='catalog_test', package_name='ai.minecraft.catalog_test', modules=modules, policy=ScalePolicy(java_shard_size=8))
     catalog_root = project / '.minecraft_ai/extended-modules.json'
     catalog = json.loads(catalog_root.read_text(encoding='utf-8'))
@@ -54,8 +54,8 @@ def test_extended_catalog_reader_preserves_legacy_monolith_compatibility(tmp_pat
 
 def test_extended_generation_updates_only_the_new_content_unit(tmp_path: Path) -> None:
     project = _project(tmp_path / 'incremental')
-    first = ProductionModule(module_id='first_command', kind='command', config={'literal': 'first', 'message': 'First'})
-    second = ProductionModule(module_id='second_command', kind='command', config={'literal': 'second', 'message': 'Second'})
+    first = ProductionModule(module_id='first_command', kind='command', config={'literal': 'first', 'message': 'First', 'permission_level': 0})
+    second = ProductionModule(module_id='second_command', kind='command', config={'literal': 'second', 'message': 'Second', 'permission_level': 0})
     generate_extended_content(project_root=project, mod_id='catalog_test', package_name='ai.minecraft.catalog_test', modules=(first,), policy=ScalePolicy(java_shard_size=8))
     units_before = sorted(project.rglob('GeneratedContentUnit*.java'))
     assert len(units_before) == 1
