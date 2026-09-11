@@ -1,11 +1,16 @@
 id: translation/resource_mapping
 input:
-  atomic_feature:
-  resource_requirements:
-  asset_requirements:
+  atomic_feature: {}
+  resource_requirements: []
+  asset_requirements: []
+
+input_schema:
+  atomic_feature: object
+  resource_requirements: list[string]
+  asset_requirements: list[string]
 
 task:
-  map_resource_artifacts:
+  map_resource_artifacts: true
 
 rules:
   - Emit only explicitly required data or client resource artifacts.
@@ -13,9 +18,14 @@ rules:
   - Do not fabricate resource identifiers or paths when they are unresolved.
 
 output:
-  resource_artifacts:
-  asset_artifacts:
-  unresolved_inputs:
+  resource_artifacts: []
+  asset_artifacts: []
+  unresolved_inputs: []
+
+output_schema:
+  resource_artifacts: list[string]
+  asset_artifacts: list[string]
+  unresolved_inputs: list[string]
 
 proof:
   predicate: every resource artifact is explicitly required and has a known owner or is reported unresolved
