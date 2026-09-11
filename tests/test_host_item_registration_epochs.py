@@ -1,10 +1,8 @@
-import minecraft_mod_ai.populate_version_artifact_rules as artifact_rules
+from minecraft_mod_ai.host_item_registration import item_registration_epoch
 
 
 def _epoch(version: str) -> dict:
-    resolver = getattr(artifact_rules, "_item_registration_epoch", None)
-    assert resolver is not None, "HOST item registration epoch resolver is missing"
-    return resolver(version)
+    return item_registration_epoch(version)
 
 
 def test_item_registration_epoch_before_1_21_2_is_direct_resource_location():
@@ -41,3 +39,9 @@ def test_item_registration_epoch_uses_mojang_mapped_registry_owners():
     assert epoch["builtin_registries_owner"] == "net.minecraft.core.registries.BuiltInRegistries"
     assert epoch["registries_owner"] == "net.minecraft.core.registries.Registries"
     assert epoch["resource_key_owner"] == "net.minecraft.resources.ResourceKey"
+
+
+def test_item_registration_epoch_returns_fresh_host_fact_mapping():
+    first = _epoch("1.21.5")
+    first["id"] = "mutated"
+    assert _epoch("1.21.5")["id"] == "keyed_resource_location"
