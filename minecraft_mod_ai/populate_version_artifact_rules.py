@@ -25,6 +25,10 @@ ITEM_EPOCH_TEMPLATES = (
     "fabric/item/key_identifier",
     "fabric/item/register_keyed",
 )
+# Templates selected directly by HOST code rather than YAML sequence edges.  Template
+# reachability validation must count these as real code consumers, but deliberately
+# excludes legacy templates so they can become detectable/deletable once core use ends.
+HOST_TEMPLATE_CANDIDATES = ITEM_EPOCH_TEMPLATES
 LEAF_TEMPLATES = tuple(dict.fromkeys((*_core.LEAF_TEMPLATES, *ITEM_EPOCH_TEMPLATES)))
 ARTIFACT_SCHEMAS = _core.ARTIFACT_SCHEMAS
 TEMPLATE_REQUIREMENTS = dict(_core.TEMPLATE_REQUIREMENTS)
