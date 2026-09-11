@@ -117,7 +117,9 @@ def _validate_host_workflows(templates: Mapping[str, Mapping]) -> None:
     """Host-owned workflow children are deterministic manifests, never hidden prompts."""
     for workflow_id in _HOST_WORKFLOWS:
         workflow = templates.get(workflow_id)
-        if workflow is None or workflow.get("execution") != "sequence":
+        if workflow is None:
+            continue
+        if workflow.get("execution") != "sequence":
             raise ValueError(f"HOST_WORKFLOW: {workflow_id} must be a sequence")
         for identifier in workflow.get("steps", ()):
             template = templates.get(identifier)
