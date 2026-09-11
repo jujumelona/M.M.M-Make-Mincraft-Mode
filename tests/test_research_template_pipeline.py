@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 from minecraft_mod_ai.research_template_pipeline import (
-    RESEARCH_SEQUENCE,
     execute_research_template,
     run_research_pipeline,
     validate_research_template_sequence,
 )
+from minecraft_mod_ai.task_template_catalog import load_template
+
+
+def _research_sequence() -> tuple[str, ...]:
+    return tuple(load_template("research/workflow").get("steps") or ())
 
 
 def test_research_template_sequence_is_canonical():
     validate_research_template_sequence()
-    assert len(RESEARCH_SEQUENCE) == 9
-    assert RESEARCH_SEQUENCE[0] == "research/reference_identity"
-    assert RESEARCH_SEQUENCE[-1] == "research/evidence_check"
+    sequence = _research_sequence()
+    assert len(sequence) == 9
+    assert sequence[0] == "research/reference_identity"
+    assert sequence[-1] == "research/evidence_check"
 
 
 def test_run_research_pipeline_generates_all_receipts():
@@ -29,11 +34,12 @@ def test_run_research_pipeline_generates_all_receipts():
         saved_progress[binding] = receipt
 
     result = run_research_pipeline(state, evidence_items=evidence, checkpoint=checkpoint)
-    assert len(result["receipts"]) == 9
-    assert len(saved_progress) == 9
+    sequence = _research_sequence()
+    assert len(result["receipts"]) == len(sequence)
+    assert len(saved_progress) == len(sequence)
 
     receipt_ids = [r["template_id"] for r in result["receipts"]]
-    assert tuple(receipt_ids) == RESEARCH_SEQUENCE
+    assert tuple(receipt_ids) == sequence
     assert all(r["status"] == "PASS" for r in result["receipts"])
     assert all(r["proof"]["passed"] is True for r in result["receipts"])
 
