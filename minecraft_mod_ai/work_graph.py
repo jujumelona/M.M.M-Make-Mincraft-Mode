@@ -188,7 +188,7 @@ class DurableWorkLedger:
             raise WorkGraphError('Work graph contains duplicate node identifiers.')
         missing_dependencies = sorted({dependency for node in plan.nodes for dependency in node.dependencies if dependency not in node_ids})
         if missing_dependencies:
-            raise WorkGraphError(f'Work graph contains unknown dependencies: {missing_dependencies[:8]}')
+            raise WorkGraphError(f'Production work graph contains unknown dependencies: {missing_dependencies[:8]}')
         now = time.time()
         connection = self._connect()
         with connection:
@@ -686,11 +686,10 @@ def _module_shards(
 
     def shard_size_for(stage: str) -> int:
         if stage == 'content':
-            return _pipeline_shard_size(
-                'MMM_CONTENT_PIPELINE_SHARD_SIZE',
-                1,
-                max(1, int(policy.java_shard_size)),
-            )
+            # Deterministic content aggregation is part of ScalePolicy. Runtime
+            # environment tuning must not explode one bounded aggregate into one
+            # work node per module.
+            return max(1, int(policy.java_shard_size))
         if stage == 'system':
             return _pipeline_shard_size(
                 'MMM_SYSTEM_PIPELINE_SHARD_SIZE',
@@ -700,7 +699,7 @@ def _module_shards(
         if stage == 'entity':
             return _pipeline_shard_size(
                 'MMM_ENTITY_PIPELINE_SHARD_SIZE',
-                1,
+                2,
                 max(1, int(policy.entity_shard_size)),
             )
         if stage == 'custom':
