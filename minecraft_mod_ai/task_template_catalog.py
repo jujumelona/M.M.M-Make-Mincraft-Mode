@@ -73,18 +73,17 @@ def _apply_shared_policy(identifier: str, value: dict):
 
 def load_template(identifier: str):
     requested = _canonical_identifier(identifier)
-    concrete = (RUNTIME_TEMPLATE_ROOT / f"{requested}.yaml").resolve()
-    canonical = (
-        requested
-        if concrete.is_relative_to(RUNTIME_TEMPLATE_ROOT) and concrete.is_file()
-        else _CRITERION_ALIASES.get(requested, requested)
-    )
+    canonical = _CRITERION_ALIASES.get(requested, requested)
     return _apply_shared_policy(canonical, deepcopy(_load(canonical)))
 
 
 def load_record_template(identifier: str):
     requested = _canonical_identifier(identifier)
-    value = load_template(requested)
+    concrete = (RUNTIME_TEMPLATE_ROOT / f"{requested}.yaml").resolve()
+    if concrete.is_relative_to(RUNTIME_TEMPLATE_ROOT) and concrete.is_file():
+        value = _apply_shared_policy(requested, deepcopy(_load(requested)))
+    else:
+        value = load_template(requested)
     if "record_schema" not in value:
         raise ValueError(f"TEMPLATE_RECORD_SCHEMA: missing record schema for {requested}")
     return value
