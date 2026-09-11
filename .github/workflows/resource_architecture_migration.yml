@@ -1,10 +1,15 @@
 name: Resource architecture migration
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/.resource_migration_parts/**'
+      - 'tools/finalize_resource_architecture_migration.py'
+      - '.github/workflows/resource_architecture_migration.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: resource-architecture-migration-main
@@ -12,7 +17,7 @@ concurrency:
 
 jobs:
   migrate:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -45,15 +50,7 @@ jobs:
           compile(source, str(target), 'exec')
           PY
           python tools/migrate_resource_architecture.py
-          python - <<'PY'
-          from pathlib import Path
-          target = Path('minecraft_mod_ai/resource_contracts.py')
-          text = target.read_text(encoding='utf-8')
-          old = 'from pathlib import Path, PurePosixPath'
-          if text.count(old) != 1:
-              raise SystemExit('resource_contracts pathlib import anchor mismatch')
-          target.write_text(text.replace(old, 'from pathlib import PurePosixPath', 1), encoding='utf-8')
-          PY
+          python tools/finalize_resource_architecture_migration.py
       - name: Install development dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Compile and static-check changed architecture
@@ -64,6 +61,8 @@ jobs:
             minecraft_mod_ai/resource_prompt_compiler.py \
             minecraft_mod_ai/model_adapters/image_diffusion.py \
             minecraft_mod_ai/resource_asset_production.py \
+            minecraft_mod_ai/asset_resume_efficiency_contract.py \
+            minecraft_mod_ai/runtime_bootstrap.py \
             minecraft_mod_ai/complete_spec.py \
             minecraft_mod_ai/production_contract.py \
             minecraft_mod_ai/work_graph.py \
@@ -71,6 +70,7 @@ jobs:
             minecraft_mod_ai/complete_orchestrator.py \
             minecraft_mod_ai/extended_content_generator.py \
             tests/test_resource_architecture.py \
+            tools/finalize_resource_architecture_migration.py \
             --select F,E7,E9
       - name: Run resource and template contract tests
         run: |
@@ -85,28 +85,26 @@ jobs:
           from minecraft_mod_ai.template_contract_validation import runtime_consumer_roots, validate_catalog
           validate_catalog(RUNTIME_TEMPLATE_ROOT, consumer_roots=runtime_consumer_roots())
           PY
-      - name: Remove one-shot migration machinery from proposed result
+      - name: Remove one-shot migration payloads
         run: |
           rm -f tools/migrate_resource_architecture.py
+          rm -f tools/finalize_resource_architecture_migration.py
           rm -rf tools/.resource_migration_parts
-          rm -f .github/workflows/resource_architecture_migration.yml
-      - name: Build validated migration patch
+      - name: Commit validated migration to main
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git diff --cached --check
           if git diff --cached --quiet; then
             echo "Migration produced no changes"
             exit 1
           fi
-          git diff --cached --binary --full-index > /tmp/resource-architecture-migration.patch
-          git status --short > /tmp/resource-architecture-migration.status.txt
-          test -s /tmp/resource-architecture-migration.patch
-      - name: Upload validated migration patch
-        uses: actions/upload-artifact@v4
-        with:
-          name: resource-architecture-migration-${{ github.sha }}
-          path: |
-            /tmp/resource-architecture-migration.patch
-            /tmp/resource-architecture-migration.status.txt
-          retention-days: 14
-          if-no-files-found: error
+          git commit -m "refactor: canonicalize Minecraft resource generation"
+          git fetch origin main
+          if [ "$(git rev-parse HEAD^)" != "$(git rev-parse origin/main)" ]; then
+            git rebase origin/main
+          fi
+          git push origin HEAD:main
