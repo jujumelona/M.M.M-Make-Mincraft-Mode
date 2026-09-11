@@ -636,10 +636,6 @@ def _module_stage(
         return 'entity'
     if module.kind in {'quest', 'class', 'skill', 'economy', 'shop', 'gui', 'networking', 'party', 'guild'}:
         return 'system'
-    # Only kinds both implemented by ExtendedContentGenerator and explicitly
-    # reviewed by the authoritative target adapter belong on the deterministic
-    # content lane. Unsupported target/kind pairs must use target-grounded source
-    # editing instead of reaching the fail-closed mutation guard.
     extended_kinds = {'item', 'block', 'effect', 'enchantment', 'command', 'recipe', 'tag', 'advancement', 'loot', 'tool', 'weapon', 'armor', 'food', 'crop', 'machine'}
     if module.kind in extended_kinds:
         if deterministic_module_kinds is None or module.kind in deterministic_module_kinds:
@@ -690,11 +686,11 @@ def _module_shards(
 
     def shard_size_for(stage: str) -> int:
         if stage == 'content':
-            return _pipeline_shard_size(
-                'MMM_CONTENT_PIPELINE_SHARD_SIZE',
-                max(1, int(policy.java_shard_size)),
-                max(1, int(policy.java_shard_size)),
-            )
+            # Deterministic extended-content aggregation is governed by the explicit
+            # ScalePolicy. Environment-tuned pipeline widths belong to model-owned
+            # stages; allowing them here can silently explode one bounded aggregate
+            # into one work node per deterministic content module.
+            return max(1, int(policy.java_shard_size))
         if stage == 'system':
             return _pipeline_shard_size(
                 'MMM_SYSTEM_PIPELINE_SHARD_SIZE',
