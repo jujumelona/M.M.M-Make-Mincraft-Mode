@@ -91,13 +91,7 @@ def _provider_only_adapter(
     *,
     version_constraint: str | None,
 ):
-    """Resolve one executable receipt without consulting ecosystem/live catalogues.
-
-    ``MMM_ECOSYSTEM_DISCOVERY=off`` is an explicit isolation boundary. In that mode the
-    platform provider is the sole authority for candidate versions; using Mojang's live
-    stable catalogue here both violated that boundary and made deterministic tests drift
-    to whatever release happened to be newest.
-    """
+    """Resolve one executable receipt without consulting ecosystem/live catalogues."""
 
     requested = str(version_constraint or "").strip()
     failures: list[str] = []
@@ -131,6 +125,11 @@ def _provider_only_adapter(
                     )
                 return adapter
             except Exception as exc:  # noqa: BLE001
+                if requested:
+                    from .resolved_version_context import VersionContextError
+
+                    if isinstance(exc, VersionContextError):
+                        raise
                 failures.append(f"{loader}/{version}: {type(exc).__name__}: {exc}")
     detail = "; ".join(failures) or "providers returned no executable candidates"
     raise SpecValidationError(
@@ -198,39 +197,9 @@ def resolve_platform_fail_closed(
     if discovery_mode not in {"auto", "on", "off"}:
         raise SpecValidationError("MMM_ECOSYSTEM_DISCOVERY must be auto, on or off.")
 
-    # Isolation is stronger than provider implementation identity. When discovery is
-    # explicitly off, the installed provider is the only candidate/version authority.
-    # This must run before the production host-snapshot shortcut so test/offline or
-    # operator-supplied providers cannot be silently replaced by a live host target.
-    if discovery_mode == "off":
-        loaders = (
-            (provider_for_loader(explicit_loader).loader,)
-            if explicit_loader
-            else resolver.executable_loaders()
-        )
-        adapter = _provider_only_adapter(
-            tuple(loaders),
-            version_constraint=explicit_version,
-        )
-        resolver._require_supported_kinds(
-            adapter,
-            kinds,
-            explicit=bool(explicit_version),
-        )
-        return PlatformSelection(
-            adapter=adapter,
-            source="provider_receipt_only",
-            reason=(
-                f"Ecosystem discovery is disabled; executable provider receipt "
-                f"{adapter.adapter_id} selected {adapter.minecraft_version}/{adapter.loader}."
-            ),
-            explicit_version=bool(explicit_version),
-            explicit_loader=bool(explicit_loader),
-            migration_requested=migration_requested,
-        )
-
-    # The default Fabric provider selects a single host-admitted snapshot before
-    # semantic research or ecosystem scoring. Those stages cannot choose versions.
+    # A host-coherent provider is already an immutable local receipt catalogue. Selecting
+    # from it performs no ecosystem/live discovery, so isolation must not demote this
+    # stronger authority to generic provider discovery semantics.
     if provider.provider_id == "host-coherent-version-catalog-v1":
         from .host_version_catalog import host_target
 
@@ -249,6 +218,40 @@ def resolve_platform_fail_closed(
                 f"{adapter.minecraft_version}."
             ),
             explicit_version=bool(requested),
+            explicit_loader=bool(explicit_loader),
+            preserved_existing_target=bool(
+                existing_version and not migration_requested
+            ),
+            migration_requested=migration_requested,
+        )
+
+    if discovery_mode == "off":
+        loaders = (
+            (provider_for_loader(explicit_loader).loader,)
+            if explicit_loader
+            else resolver.executable_loaders()
+        )
+        adapter = _provider_only_adapter(
+            tuple(loaders),
+            version_constraint=(
+                existing_version
+                if existing_version and not migration_requested
+                else explicit_version
+            ),
+        )
+        resolver._require_supported_kinds(
+            adapter,
+            kinds,
+            explicit=bool(explicit_version or existing_version),
+        )
+        return PlatformSelection(
+            adapter=adapter,
+            source="provider_receipt_only",
+            reason=(
+                f"Ecosystem discovery is disabled; executable provider receipt "
+                f"{adapter.adapter_id} selected {adapter.minecraft_version}/{adapter.loader}."
+            ),
+            explicit_version=bool(explicit_version),
             explicit_loader=bool(explicit_loader),
             preserved_existing_target=bool(
                 existing_version and not migration_requested
