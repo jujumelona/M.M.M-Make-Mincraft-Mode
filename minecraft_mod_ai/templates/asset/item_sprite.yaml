@@ -1,0 +1,14 @@
+id: asset/item_sprite
+task: Render one Minecraft item sprite prompt from the supplied visual description.
+inputs:
+  visual_description:
+    type: string
+    minLength: 1
+    maxLength: 512
+    required: true
+rules:
+  - Use visual_description exactly as supplied; do not invent missing visual requirements.
+  - Preserve isolated-sprite framing and transparent-background intent.
+render:
+  language: text
+  body: "Pixel Art, PixArFK, isolated item sprite, transparent background, {{visual_description}}"
