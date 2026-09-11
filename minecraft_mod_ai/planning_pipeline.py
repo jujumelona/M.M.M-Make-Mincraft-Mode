@@ -278,12 +278,8 @@ class PlanningPipeline:
             for asset in design.get("_atomic_assets", ()):
                 if not isinstance(asset, AssetRequest):
                     raise PlanningStageError(PlanningStage.DESIGN, "atomic asset must be typed")
-                parts = asset.target_path.split("/")
-                if len(parts) < 3 or parts[0] != "assets":
-                    raise PlanningStageError(PlanningStage.DESIGN, "atomic asset has invalid namespace path")
-                parts[1] = proposal.spec.mod_id
-                assets.append(replace(asset, target_path="/".join(parts)))
-            design = {**design, "assets":assets, "_atomic_assets":assets}
+                assets.append(asset)
+            design = {**design, "assets": assets, "_atomic_assets": assets}
         if proposal.requested_prompt != prompt:
             proposal = replace(
                 proposal,

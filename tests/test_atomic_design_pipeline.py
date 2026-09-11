@@ -451,7 +451,7 @@ def test_recipe_content_graph_reaches_artifact_files(tmp_path, monkeypatch):
     assert data["result"]["id"] == "bound_target:processed_material"
 
 
-def test_normal_planning_projection_keeps_graph_content_and_asset_namespace(
+def test_normal_planning_projection_keeps_graph_content_and_semantic_assets(
     monkeypatch,
 ):
     from contextlib import nullcontext
@@ -486,7 +486,8 @@ def test_normal_planning_projection_keeps_graph_content_and_asset_namespace(
     assert proposal.spec.contents == ()
     assert proposal.spec.boss is None
     assert len(design["_content_entities"]) == 2
-    assert all(
-        a.target_path.startswith(f"assets/{proposal.spec.mod_id}/")
-        for a in design["_atomic_assets"]
-    )
+    assert design["_atomic_assets"]
+    assert all(a.container in {"mod", "resource_pack"} for a in design["_atomic_assets"])
+    assert all(a.render_kind for a in design["_atomic_assets"])
+    assert all(a.subject_id for a in design["_atomic_assets"])
+    assert all(not hasattr(a, "target_path") for a in design["_atomic_assets"])
