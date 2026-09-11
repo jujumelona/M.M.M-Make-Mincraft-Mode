@@ -1,11 +1,7 @@
 id: integration/registration
+execution: host
 input:
   registration_operations:
-task:
-  connect_registration_operations:
-rules:
-  - Preserve initialization order and identifier ownership.
-  - Do not register the same identifier twice.
 output:
   registration_edges:
   conflicts:

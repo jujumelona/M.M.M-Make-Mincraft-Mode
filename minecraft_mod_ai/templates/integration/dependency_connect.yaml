@@ -1,12 +1,8 @@
 id: integration/dependency_connect
+execution: host
 input:
   dependency_plan:
   generation_units:
-task:
-  connect_dependency_edges:
-rules:
-  - Connect only declared provider-consumer dependencies.
-  - Reject cycles unless an explicit runtime indirection contract resolves them.
 output:
   dependency_edges:
   cycles:

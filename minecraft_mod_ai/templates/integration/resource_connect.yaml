@@ -1,12 +1,8 @@
 id: integration/resource_connect
+execution: host
 input:
   resource_artifacts:
   code_references:
-task:
-  connect_resource_references:
-rules:
-  - Match identifiers and paths exactly.
-  - Report missing or orphaned resources rather than fabricating references.
 output:
   resource_edges:
   missing_resources:

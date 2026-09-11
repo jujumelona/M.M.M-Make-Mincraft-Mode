@@ -1,12 +1,8 @@
 id: integration/feature_connect
+execution: host
 input:
   atomic_features:
   feature_connections:
-task:
-  connect_feature_interfaces:
-rules:
-  - Connect only explicit feature interfaces and dependencies.
-  - Keep internal state ownership inside its owning feature.
 output:
   feature_edges:
   unresolved_connections:

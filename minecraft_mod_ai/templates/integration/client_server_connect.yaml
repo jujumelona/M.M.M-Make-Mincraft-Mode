@@ -1,12 +1,8 @@
 id: integration/client_server_connect
+execution: host
 input:
   side_mapping:
   network_mapping:
-task:
-  connect_logical_side_boundaries:
-rules:
-  - Preserve server authority and client presentation boundaries.
-  - Cross-side mutation requires an explicit validated network path.
 output:
   side_edges:
   authority_violations:

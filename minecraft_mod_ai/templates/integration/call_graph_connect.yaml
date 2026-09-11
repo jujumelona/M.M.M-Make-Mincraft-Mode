@@ -1,12 +1,8 @@
 id: integration/call_graph_connect
+execution: host
 input:
   call_edges:
   generation_units:
-task:
-  assemble_call_graph:
-rules:
-  - Preserve declared ordering, ownership, and dependency direction.
-  - Reject missing callers, callees, and unintended recursion.
 output:
   call_graph:
   invalid_edges:
