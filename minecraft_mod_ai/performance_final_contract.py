@@ -50,13 +50,12 @@ def _install_locked_source_patcher(source_patch_module: Any) -> None:
                 target = root / relative
                 before[relative] = target.read_bytes() if target.is_file() and (not target.is_symlink()) else None
             capture_records.append({'root': str(root), 'operations': copy.deepcopy(operation_list), 'before': before})
-            receipt = original(self, operation_list)
-            _persist_active_custom_checkpoint(root)
-            return receipt
-        with project_write_lock(root):
-            receipt = original(self, operation_list)
-            _persist_active_custom_checkpoint(root)
-            return receipt
+        # TransactionalSourcePatcher owns exact path-set fencing. Re-introducing a
+        # project-wide lock here would silently collapse every disjoint transaction
+        # back onto one serial lane. The wrapper only adds capture/checkpoint behavior.
+        receipt = original(self, operation_list)
+        _persist_active_custom_checkpoint(root)
+        return receipt
     locked_apply._mmm_path_commit_contract = True
     patcher.apply = locked_apply
 
