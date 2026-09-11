@@ -114,8 +114,6 @@ _SUPPORTED_EXPANSIONS: dict[FactType, tuple[str, ...]] = {
 
 # Kept public for callers/tests, but every entry is verified before use.
 FACT_EXPANSIONS = dict(_SUPPORTED_EXPANSIONS)
-    required_symbols: tuple[str, ...]
-    validators: tuple[str, ...]
 
 
 # P0-2: REMOVED generator_implementation_profile() - no separate generator path
@@ -164,12 +162,16 @@ def _require_integer_value(fact: PromptFact, *, minimum: int, maximum: int) -> i
 
 
 def validate_expansion_catalog() -> None:
-    """Fail before generation if an expansion references a non-executable leaf."""
+    """Fail before generation if an expansion references a non-executable leaf.
+    
+    P0-2: Empty expansions are now allowed - they will use PYTHON_GENERATOR
+    implementations from ImplementationRegistry instead of templates.
+    """
     for fact_type, identifiers in FACT_EXPANSIONS.items():
+        # P0-2: Empty is now valid - will use PYTHON_GENERATOR executor
         if not identifiers:
-            raise ArtifactExpansionError(
-                f"ARTIFACT_EXPANSION_EMPTY: {fact_type.value} has no leaf templates"
-            )
+            continue
+            
         for identifier in identifiers:
             try:
                 template = load_template(identifier)
@@ -198,6 +200,27 @@ def validate_expansion_catalog() -> None:
             dependencies = template.get("dependencies")
             if not isinstance(dependencies, list) or any(
                 not isinstance(d, str) or not d for d in dependencies
+            ):
+                raise ArtifactExpansionError(
+                    f"ARTIFACT_DEPENDENCIES_REQUIRED: {identifier}"
+                )
+            ports = template.get("produces")
+            if not isinstance(ports, list):
+                raise ArtifactExpansionError(f"ARTIFACT_PORT_DECLARATION: {identifier}")
+            for port in ports:
+                if not isinstance(port, dict) or any(
+                    not isinstance(port.get(key), str) or not port[key].strip()
+                    for key in ("name", "binding", "kind", "target_type", "value")
+                ):
+                    raise ArtifactExpansionError(
+                        f"ARTIFACT_PORT_DECLARATION: {identifier}"
+                    )
+                try:
+                    PortKind(port["kind"])
+                except ValueError as exc:
+                    raise ArtifactExpansionError(
+                        f"ARTIFACT_PORT_KIND: {identifier}"
+                    ) from exc
             ):
                 raise ArtifactExpansionError(
                     f"ARTIFACT_DEPENDENCIES_REQUIRED: {identifier}"
@@ -267,9 +290,27 @@ def expand_facts_to_jobs(
         for leaf_id in canonical_leaf_ids:
             for tid in _templates_for_canonical_leaf(leaf_id, version_context):
                 leaf_template_pairs.append((leaf_id, tid))
+        
+        # P0-2: If no templates, try to use PYTHON_GENERATOR from registry
         if not leaf_template_pairs:
-            default_leaf = canonical_leaf_ids[0]
-            leaf_template_pairs = [(default_leaf, tid) for tid in FACT_EXPANSIONS.get(fact.fact_type, ())]
+            if version_context is not None:
+                # Check if any leaf has PYTHON_GENERATOR implementation
+                for leaf_id in canonical_leaf_ids:
+                    try:
+                        binding = version_context.require_leaf_binding(leaf_id)
+                        impl_dict = binding.get("implementation", {})
+                        exec_type = impl_dict.get("executor_type", "")
+                        if exec_type == "python_generator":
+                            # Use PYTHON_GENERATOR - no template needed
+                            leaf_template_pairs.append((leaf_id, ""))
+                            break
+                    except Exception:
+                        continue
+            
+            # Fallback to default templates if still empty
+            if not leaf_template_pairs:
+                default_leaf = canonical_leaf_ids[0]
+                leaf_template_pairs = [(default_leaf, tid) for tid in FACT_EXPANSIONS.get(fact.fact_type, ())]
 
         resource_values = {}
         if fact.fact_type in {
@@ -285,6 +326,64 @@ def expand_facts_to_jobs(
         constant = _constant_name(subject)
 
         for canonical_leaf, template_id in leaf_template_pairs:
+            # P0-2: Handle PYTHON_GENERATOR (empty template_id)
+            if not template_id:
+                # PYTHON_GENERATOR: Get implementation from registry
+                if version_context is None:
+                    raise ArtifactExpansionError(
+                        f"ARTIFACT_PYTHON_GENERATOR_REQUIRES_CONTEXT: {canonical_leaf} needs version_context"
+                    )
+                
+                binding = version_context.require_leaf_binding(canonical_leaf)
+                impl_dict = binding.get("implementation", {})
+                impl_id = impl_dict.get("implementation_id", "")
+                exec_type = impl_dict.get("executor_type", "")
+                
+                if exec_type != "python_generator":
+                    raise ArtifactExpansionError(
+                        f"ARTIFACT_NO_TEMPLATE_NO_GENERATOR: {canonical_leaf} has no template and executor is {exec_type}"
+                    )
+                
+                # Create minimal ArtifactJob for PYTHON_GENERATOR
+                job_id = f"{subject}.{canonical_leaf.replace('/', '_')}"
+                deterministic_inputs = {
+                    "mod_id": mod_id,
+                    "package_name": package_name,
+                    "package_path": pkg_path,
+                    "registry_path": subject,
+                    "java_constant": constant,
+                    "subject": subject,
+                    "main_class": main_class_val,
+                    "minecraft_version": minecraft_version,
+                }
+                
+                candidate = ArtifactJob(
+                    job_id=job_id,
+                    template_id="",  # No template for PYTHON_GENERATOR
+                    owner_module=subject,
+                    target_path="",  # Will be determined by generator
+                    anchor="",
+                    operation="generate",
+                    requires=(),
+                    required_ports=(),
+                    produces=(),
+                    deterministic_inputs=deterministic_inputs,
+                    context_id=version_context.context_id,
+                    canonical_leaf=canonical_leaf,
+                    implementation_id=impl_id,
+                    executor_type=exec_type,
+                )
+                
+                prior = seen_jobs.get(job_id)
+                if prior is not None:
+                    if prior.to_dict() != candidate.to_dict():
+                        raise ArtifactExpansionError(f"ARTIFACT_JOB_CONFLICT: {job_id}")
+                    continue
+                seen_jobs[job_id] = candidate
+                jobs.append(candidate)
+                continue
+            
+            # Normal template-based job creation
             step_name = template_id.rsplit("/", 1)[-1]
             job_id = f"{subject}.{step_name}"
 

@@ -255,65 +255,96 @@ def make_implementation(
 ) -> dict:
     """Create implementation metadata using ImplementationRegistry.
     
-    P0-1: Now uses real content hashes from ImplementationRegistry,
-    not fake hashes from string concatenation.
+    P0-1: FAIL-CLOSED - Must have real registry object, no fallback.
+    All admitted leaves must reference actual ImplementationRegistry entries.
     """
-    from .implementation_registry import get_global_registry
+    from .implementation_registry import get_global_registry, ImplementationNotFoundError
     from .implementation_identity import ExecutorType, ValidatorType
+    from .type_registry import get_global_type_registry, TypeNotFoundError
     
     registry = get_global_registry()
+    type_registry = get_global_type_registry()
     
-    # Get real implementation hash from registry
+    # FAIL-CLOSED: Get real implementation hash from registry
     if template_id is not None:
         impl_id = f"template:{template_id}"
         
-        # Try to get from registry first
         try:
             impl = registry.get_implementation(template_id)
-            impl_sha = impl.content_sha256
-        except Exception:
-            # Fallback: register it now if template file exists
-            try:
-                from .task_template_catalog import TEMPLATE_DIR
-                template_path = TEMPLATE_DIR / f"{template_id}.yaml"
-                if template_path.exists():
-                    impl = registry.register_template(template_id, template_path)
-                    impl_sha = impl.content_sha256
-                else:
-                    # Last resort: use provided hash or compute from template content
-                    impl_sha = (hashes or {}).get(template_id, _sha256_text(f"FALLBACK:template:{template_id}"))
-            except Exception:
-                impl_sha = (hashes or {}).get(template_id, _sha256_text(f"FALLBACK:template:{template_id}"))
+            impl_sha = f"sha256:{impl.content_sha256}"
+        except ImplementationNotFoundError:
+            # Try to register from file
+            from .task_template_catalog import TEMPLATE_DIR
+            template_path = TEMPLATE_DIR / f"{template_id}.yaml"
+            if not template_path.exists():
+                raise ValueError(
+                    f"IMPLEMENTATION_NOT_IN_REGISTRY: {template_id} not found and no template file exists"
+                )
+            impl = registry.register_template(template_id, template_path)
+            impl_sha = f"sha256:{impl.content_sha256}"
         
         v_profile = validator_profile
     else:
         # Contract or generator case
         impl_id = f"contract:{leaf}"
-        impl_sha = _sha256_text(f"contract:{leaf}:{minecraft_version}")
-        v_profile = validator_profile
+        # FAIL-CLOSED: No fake hash allowed
+        raise ValueError(
+            f"IMPLEMENTATION_REQUIRES_TEMPLATE: {leaf} has no template_id, cannot admit without actual implementation"
+        )
     
-    # Validator hash - try registry first
+    # FAIL-CLOSED: Validator must be registered
+    validator_type_map = {
+        "semantic_contract": ValidatorType.CUSTOM,
+        "java_syntax": ValidatorType.JAVA_SYNTAX,
+        "json_schema": ValidatorType.JSON_SCHEMA,
+    }
+    val_type = validator_type_map.get(v_profile)
+    if val_type is None:
+        raise ValueError(f"VALIDATOR_PROFILE_UNKNOWN: {v_profile}")
+    
+    # Get validator hash from registry
     try:
-        # Map profile name to validator type
-        validator_type_map = {
-            "semantic_contract": ValidatorType.CUSTOM,
-            "java_syntax": ValidatorType.JAVA_SYNTAX,
-            "json_schema": ValidatorType.JSON_SCHEMA,
-        }
-        val_type = validator_type_map.get(v_profile, ValidatorType.CUSTOM)
-        
-        # For now, generate placeholder validator hash
-        # TODO P1-2: Register actual validator functions
-        val_sha = _sha256_text(f"validator:{v_profile}")
+        validator = registry.get_validator(v_profile)
+        val_sha = f"sha256:{validator.source_sha256}"
     except Exception:
-        val_sha = _sha256_text(f"validator:{v_profile}")
+        # FAIL-CLOSED: Must have actual validator
+        raise ValueError(
+            f"VALIDATOR_NOT_IN_REGISTRY: {v_profile} validator not registered"
+        )
     
-    # Schema hashes - TODO P0-8: Use TypeRegistry
-    in_sha = _sha256_text(f"input_schema:{leaf}")
-    out_sha = _sha256_text(f"output_schema:{leaf}")
+    # FAIL-CLOSED: Schemas must exist in TypeRegistry
+    try:
+        input_type = type_registry.get_type(f"{leaf}:input")
+        in_sha = f"sha256:{input_type.schema_hash}"
+    except TypeNotFoundError:
+        # FAIL-CLOSED: Must have registered schema
+        raise ValueError(
+            f"INPUT_SCHEMA_NOT_IN_REGISTRY: {leaf}:input not found in TypeRegistry"
+        )
     
-    # Evidence ID - TODO P1-3: Use EvidenceStore
-    evidence_id = f"evidence:host:{leaf}:{minecraft_version}"
+    try:
+        output_type = type_registry.get_type(f"{leaf}:output")
+        out_sha = f"sha256:{output_type.schema_hash}"
+    except TypeNotFoundError:
+        raise ValueError(
+            f"OUTPUT_SCHEMA_NOT_IN_REGISTRY: {leaf}:output not found in TypeRegistry"
+        )
+    
+    # FAIL-CLOSED: Evidence must exist for production
+    # For now, construct expected evidence ID, actual check happens in production_readiness_audit
+    from .evidence_store import EvidenceRecord
+    
+    evidence_template = {
+        "context_id": f"host:{minecraft_version}",
+        "leaf_id": leaf,
+        "implementation_hash": impl_sha,
+        "validator_hashes": {v_profile: val_sha},
+        "minecraft_version": minecraft_version,
+    }
+    
+    # Compute evidence ID (without evidence_id field itself)
+    evidence_id_dict = {k: v for k, v in evidence_template.items()}
+    evidence_id = EvidenceRecord.compute_evidence_id(evidence_id_dict)
     
     impl = {
         "implementation_id": impl_id,
@@ -323,6 +354,14 @@ def make_implementation(
         "validator_sha256": val_sha,
         "input_schema_sha256": in_sha,
         "output_schema_sha256": out_sha,
+        "evidence_id": evidence_id,
+    }
+    if template_id:
+        impl["template"] = template_id,
+        impl["template_sha256"] = impl_sha
+    if extra:
+        impl.update(extra)
+    return impl
         "evidence_id": evidence_id,
     }
     if template_id:
@@ -336,9 +375,9 @@ def make_implementation(
 def template_hashes() -> dict[str, str]:
     """Compute real template hashes using ImplementationRegistry.
     
-    P0-1: Now uses actual template file content, not fake hashes.
+    P0-1: FAIL-CLOSED - All templates must be in registry.
     """
-    from .implementation_registry import get_global_registry
+    from .implementation_registry import get_global_registry, ImplementationNotFoundError
     from .task_template_catalog import TEMPLATE_DIR
     
     registry = get_global_registry()
@@ -348,24 +387,16 @@ def template_hashes() -> dict[str, str]:
         try:
             # Try to get from registry
             impl = registry.get_implementation(identifier)
-            hashes[identifier] = impl.content_sha256
-        except Exception:
+            hashes[identifier] = f"sha256:{impl.content_sha256}"
+        except ImplementationNotFoundError:
             # Register template from file
-            try:
-                template_path = TEMPLATE_DIR / f"{identifier}.yaml"
-                if template_path.exists():
-                    impl = registry.register_template(identifier, template_path)
-                    hashes[identifier] = impl.content_sha256
-                else:
-                    # Fallback: load template and hash its content
-                    template = load_template(identifier)
-                    digest = "sha256:" + sha256(_encode(template).encode()).hexdigest()
-                    hashes[identifier] = digest
-            except Exception:
-                # Last resort fallback
-                template = load_template(identifier)
-                digest = "sha256:" + sha256(_encode(template).encode()).hexdigest()
-                hashes[identifier] = digest
+            template_path = TEMPLATE_DIR / f"{identifier}.yaml"
+            if not template_path.exists():
+                raise ValueError(
+                    f"TEMPLATE_NOT_FOUND: {identifier} not in registry and no file at {template_path}"
+                )
+            impl = registry.register_template(identifier, template_path)
+            hashes[identifier] = f"sha256:{impl.content_sha256}"
     
     return hashes
 
