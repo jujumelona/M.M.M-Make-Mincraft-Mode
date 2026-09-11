@@ -35,6 +35,13 @@ def main() -> None:
         "drift-before-creation suffix",
     )
 
+    replace_once(
+        "minecraft_mod_ai/coder_mutation_authority_contract.py",
+        '''        if tool_name == "apply_source_edit" and context is not None:\n            pinned = loop_module._canonical_mutation_path(\n                getattr(context, "target_path", None)\n            )\n            operation = str(arguments.get("operation") or "").strip().casefold()\n            if (\n                pinned\n                and not bool(getattr(context, "is_new_file", False))\n                and operation in loop_module._SOURCE_CREATE_OPERATIONS\n            ):\n                return (\n                    "MUTATION_TARGET_CREATION_CONFLICT: existing localized target "\n                    f"{pinned!r} cannot be recreated by {operation!r}."\n                )\n        return original(tool_name, arguments, context)\n''',
+        '''        if tool_name == "apply_source_edit" and context is not None:\n            pinned = loop_module._canonical_mutation_path(\n                getattr(context, "target_path", None)\n            )\n            supplied = ""\n            for key in loop_module._SOURCE_EDIT_PATH_KEYS:\n                value = arguments.get(key)\n                if isinstance(value, str) and value.strip():\n                    supplied = loop_module._canonical_mutation_path(value)\n                    break\n            operation = str(arguments.get("operation") or "").strip().casefold()\n            if (\n                pinned\n                and supplied == pinned\n                and not bool(getattr(context, "is_new_file", False))\n                and operation in loop_module._SOURCE_CREATE_OPERATIONS\n            ):\n                return (\n                    "MUTATION_TARGET_CREATION_CONFLICT: existing localized target "\n                    f"{pinned!r} cannot be recreated by {operation!r}."\n                )\n        return original(tool_name, arguments, context)\n''',
+        "coder wrapper drift precedence",
+    )
+
 
 if __name__ == "__main__":
     main()
