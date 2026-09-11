@@ -11,6 +11,14 @@ ROOT = Path(__file__).resolve().parents[1]
 PKG = ROOT / "minecraft_mod_ai"
 TEMPLATES = PKG / "templates"
 SYSTEM_ROOT = TEMPLATES / "implementation" / "system_pack"
+HOST_WORKFLOWS = (
+    "code/workflow",
+    "asset/workflow",
+    "integration/workflow",
+    "validation/workflow",
+    "research/workflow",
+    "reuse/workflow",
+)
 
 SYSTEM_FIELDS = {
     "persistent_store": {"package_name", "mod_id"},
@@ -93,6 +101,23 @@ def test_workflow_sequences_have_one_authority() -> None:
     assert "REUSE_SEQUENCE" not in reuse
     assert 'load_template("research/workflow")' in research
     assert 'load_template("reuse/workflow")' in reuse
+    for identifier in ("research/workflow", "reuse/workflow"):
+        workflow = yaml.safe_load((TEMPLATES / f"{identifier}.yaml").read_text(encoding="utf-8"))
+        assert "standalone" not in workflow
+
+
+def test_host_workflow_children_are_manifests_not_dead_prompts() -> None:
+    for workflow_id in HOST_WORKFLOWS:
+        workflow = yaml.safe_load((TEMPLATES / f"{workflow_id}.yaml").read_text(encoding="utf-8"))
+        assert workflow["execution"] == "sequence"
+        for identifier in workflow["steps"]:
+            child = yaml.safe_load((TEMPLATES / f"{identifier}.yaml").read_text(encoding="utf-8"))
+            assert child["execution"] == "host"
+            assert "task" not in child
+            assert "rules" not in child
+            assert isinstance(child.get("input"), dict)
+            assert isinstance(child.get("output"), dict)
+            assert str(child.get("proof", {}).get("predicate") or "").strip()
 
 
 def test_prompt_policy_is_shared_and_capture_is_removed() -> None:

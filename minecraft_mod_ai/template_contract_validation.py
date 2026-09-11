@@ -10,6 +10,14 @@ from jsonschema import Draft202012Validator
 import yaml
 
 PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
+_HOST_WORKFLOWS = (
+    "code/workflow",
+    "asset/workflow",
+    "integration/workflow",
+    "validation/workflow",
+    "research/workflow",
+    "reuse/workflow",
+)
 _SYSTEM_SOURCE_FIELDS = {
     "persistent_store": {"package_name", "mod_id"},
     "config_loader": {"package_name", "mod_id"},
@@ -105,6 +113,32 @@ def _validate_system_source_templates(root: Path) -> None:
             )
 
 
+def _validate_host_workflows(templates: Mapping[str, Mapping]) -> None:
+    """Host-owned workflow children are deterministic manifests, never hidden prompts."""
+    for workflow_id in _HOST_WORKFLOWS:
+        workflow = templates.get(workflow_id)
+        if workflow is None or workflow.get("execution") != "sequence":
+            raise ValueError(f"HOST_WORKFLOW: {workflow_id} must be a sequence")
+        for identifier in workflow.get("steps", ()):
+            template = templates.get(identifier)
+            if template is None:
+                raise ValueError(f"HOST_WORKFLOW_MISSING: {identifier}")
+            if template.get("execution") != "host":
+                raise ValueError(f"HOST_TEMPLATE_EXECUTION: {identifier} must use execution: host")
+            dead_prompt_fields = sorted(key for key in ("task", "rules") if key in template)
+            if dead_prompt_fields:
+                raise ValueError(
+                    f"HOST_TEMPLATE_PROMPT: {identifier} contains dead prompt fields {dead_prompt_fields}"
+                )
+            if not isinstance(template.get("input"), Mapping):
+                raise ValueError(f"HOST_TEMPLATE_INPUT: {identifier} must declare input")
+            if not isinstance(template.get("output"), Mapping):
+                raise ValueError(f"HOST_TEMPLATE_OUTPUT: {identifier} must declare output")
+            proof = template.get("proof")
+            if not isinstance(proof, Mapping) or not str(proof.get("predicate") or "").strip():
+                raise ValueError(f"HOST_TEMPLATE_PROOF: {identifier} must declare a proof predicate")
+
+
 def validate_catalog(root: Path, *, consumer_roots=None):
     templates = {}
     for path in sorted(root.rglob("*.yaml")):
@@ -135,6 +169,7 @@ def validate_catalog(root: Path, *, consumer_roots=None):
 
     for identifier in templates:
         visit(identifier)
+    _validate_host_workflows(templates)
     if consumer_roots is not None:
         consumed = set()
 
