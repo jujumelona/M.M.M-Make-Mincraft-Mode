@@ -23,6 +23,7 @@ class ArtifactJob:
     status: str = "PENDING"
     validation_receipts: list[dict[str, Any]] = field(default_factory=list)
     rendered_output: str = ""
+    context_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -41,6 +42,7 @@ class ArtifactJob:
             "status": self.status,
             "validation_receipts": list(self.validation_receipts),
             "rendered_output": self.rendered_output,
+            "context_id": self.context_id,
         }
 
     @classmethod
@@ -61,4 +63,5 @@ class ArtifactJob:
             status=str(data.get("status", "PENDING")),
             validation_receipts=list(data.get("validation_receipts", [])),
             rendered_output=str(data.get("rendered_output", "")),
+            context_id=str(data.get("context_id", "")),
         )

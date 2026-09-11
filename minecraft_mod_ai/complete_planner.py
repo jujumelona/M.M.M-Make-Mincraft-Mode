@@ -439,7 +439,8 @@ def _lower_implementation_facts_and_jobs(
     if existing_facts is not None:
         jobs = expand_facts_to_jobs(implementation_facts, mod_id=spec.mod_id,
             package_name=spec.package_name, main_class=getattr(spec, "main_class", "") or "",
-            minecraft_version=getattr(getattr(spec,"platform",None),"minecraft_version", ""))
+            minecraft_version=getattr(getattr(spec,"platform",None),"minecraft_version", ""),
+            version_context=spec.platform.version_context)
         return [fact.to_dict() for fact in implementation_facts], [job.to_dict() for job in jobs]
 
     item_module_ids = {m.module_id for m in modules if m.kind == "item"}
@@ -552,6 +553,7 @@ def _lower_implementation_facts_and_jobs(
             package_name=spec.package_name,
             main_class=getattr(spec, "main_class", "") or "",
             minecraft_version=getattr(getattr(spec,"platform",None),"minecraft_version", ""),
+            version_context=spec.platform.version_context,
         )
         artifact_jobs = [job.to_dict() for job in jobs]
 
@@ -559,4 +561,3 @@ def _lower_implementation_facts_and_jobs(
 
 
 __all__ = ["CompleteGameDesignPlanner"]
-

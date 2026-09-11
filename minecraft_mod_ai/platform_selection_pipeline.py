@@ -121,6 +121,10 @@ def _provider_only_adapter(
             try:
                 adapter = provider.resolve(version)
                 adapter.validate()
+                if adapter.minecraft_version != version:
+                    from .resolved_version_context import VersionContextError
+
+                    raise VersionContextError("PINNED_VERSION_SUBSTITUTION", requested=version, actual=adapter.minecraft_version)
                 return adapter
             except Exception as exc:  # noqa: BLE001
                 failures.append(f"{loader}/{version}: {type(exc).__name__}: {exc}")
@@ -148,7 +152,10 @@ def resolve_platform_fail_closed(
     host_version, host_loader = _host_target_constraints(text)
     parsed_version = resolver._explicit_minecraft_version(text)
     parsed_loader = None if host_loader else resolver._explicit_loader(text)
-    explicit_version = host_version or parsed_version
+    from .resolved_version_context import VersionRequest
+
+    version_request = VersionRequest.from_input(host_version or parsed_version)
+    explicit_version = version_request.requested_minecraft
     explicit_loader = host_loader or parsed_loader
     host_retarget = _host_retarget_requested(
         existing_version=existing_version,
@@ -160,12 +167,34 @@ def resolve_platform_fail_closed(
         existing_version and (resolver._MIGRATION_RE.search(text) or host_retarget)
     )
     kinds = tuple(str(value).strip() for value in module_kinds if str(value).strip())
+    if existing_version and explicit_version and existing_version != explicit_version and not migration_requested:
+        from .resolved_version_context import VersionContextError
+
+        raise VersionContextError("VERSION_MIGRATION_REQUIRED", existing=existing_version, requested=explicit_version)
 
     if explicit_loader:
         try:
             provider_for_loader(explicit_loader)
         except ValueError as exc:
             raise SpecValidationError(str(exc)) from exc
+
+    # The default Fabric provider selects a single host-admitted snapshot before
+    # semantic research or ecosystem scoring. Those stages cannot choose versions.
+    selected_loader = explicit_loader or existing_loader or "fabric"
+    provider = provider_for_loader(selected_loader)
+    if provider.provider_id == "host-coherent-version-catalog-v1":
+        from .host_version_catalog import host_target
+
+        requested = existing_version if existing_version and not migration_requested else explicit_version
+        adapter = host_target(requested)
+        resolver._require_supported_kinds(adapter, kinds, explicit=bool(requested))
+        return PlatformSelection(
+            adapter=adapter, source="host_coherent_bundle",
+            reason=f"Host snapshot {adapter.version_context.context_id} selected {adapter.minecraft_version}.",
+            explicit_version=bool(requested), explicit_loader=bool(explicit_loader),
+            preserved_existing_target=bool(existing_version and not migration_requested),
+            migration_requested=migration_requested,
+        )
 
     if existing_version and not migration_requested:
         adapter = resolver._existing_adapter(existing_version, existing_loader)

@@ -109,6 +109,11 @@ def _restore_checkpoint(job, receipt, registry):
 
 
 def execute_checkpointed_job(job, *, context, router, registry, base_dir, execute):
+    from .resolved_version_context import execution_context
+
+    resolved = execution_context(context, job)
+    if resolved is not None:
+        registry.bind_context(resolved.context_id)
     if base_dir is None:
         return execute(job, context=context, router=router, port_registry=registry)
     root = Path(base_dir).resolve()
@@ -138,6 +143,8 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
         prior = _read_job_record(root, job.job_id)
         recorded = _read_path_hash(root, relative)
         if prior is not None:
+            if resolved is not None:
+                resolved.assert_context(prior["receipt"].get("context_id"), code="REUSE_VERSION_INCOMPATIBLE")
             if prior["input_hash"] != binding:
                 raise ValueError(
                     f"ARTIFACT_ADAPT_REQUIRED: changed inputs for {job.job_id}"

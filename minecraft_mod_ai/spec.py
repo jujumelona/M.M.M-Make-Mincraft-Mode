@@ -123,6 +123,9 @@ def platform_receipt_payload(value: Any) -> dict[str, Any]:
         if field_name == "deterministic_module_kinds":
             item = sorted(str(entry) for entry in (item or ()))
         payload[field_name] = item
+    host_facts = _platform_receipt_value(value, "host_facts_json", "")
+    if host_facts:
+        payload["host_facts_json"] = host_facts
     return payload
 
 
@@ -155,6 +158,14 @@ class PlatformLock:
     source_api_family: str = ""
     deterministic_module_kinds: tuple[str, ...] = ()
     receipt_sha256: str = ""
+    host_facts_json: str = ""
+
+    @property
+    def version_context(self):
+        from .target_contract import target_contract_from_mapping
+
+        self.validate()
+        return target_contract_from_mapping(asdict(self)).version_context
 
     def is_unresolved(self) -> bool:
         return not any(

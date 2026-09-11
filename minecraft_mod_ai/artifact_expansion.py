@@ -189,9 +189,16 @@ def expand_facts_to_jobs(
     package_name: str,
     main_class: str = "",
     minecraft_version: str = "",
+    version_context=None,
 ) -> list[ArtifactJob]:
     """Lower only explicitly supported facts; never invent a fallback implementation."""
     validate_expansion_catalog()
+    if version_context is not None:
+        from .resolved_version_context import VersionContextError
+
+        if minecraft_version and minecraft_version != version_context.minecraft:
+            raise VersionContextError("VERSION_CONTEXT_MISMATCH", expected=version_context.minecraft, actual=minecraft_version)
+        minecraft_version = version_context.minecraft
     mod_id = str(mod_id or "").strip()
     if not _REGISTRY_PATH.fullmatch(mod_id):
         raise ArtifactExpansionError(
@@ -259,6 +266,8 @@ def expand_facts_to_jobs(
                 deterministic_inputs["drop_item"] = fact.object
 
             template = load_template(template_id)
+            if version_context is not None:
+                version_context.admit_template(template)
             from .artifact_target_contract import validate_artifact_target
 
             validate_artifact_target(template, minecraft_version)
@@ -310,6 +319,7 @@ def expand_facts_to_jobs(
                 ),
                 produces=tuple(produces),
                 deterministic_inputs=deterministic_inputs,
+                context_id=version_context.context_id if version_context is not None else "",
             )
             prior = seen_jobs.get(job_id)
             if prior is not None:

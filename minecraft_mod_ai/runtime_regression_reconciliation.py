@@ -98,8 +98,6 @@ def install() -> None:
         source_transplant,
     )
     from .canonical_capability_ontology import resolve_capabilities_from_phrase_structured
-    from .platform_catalog import provider_for_loader
-    from .spec import SpecValidationError
 
     def optimize(
         prompt: str,
@@ -131,58 +129,12 @@ def install() -> None:
         target_research_fn: Any | None = None,
     ):
         del router
-        text = str(prompt or "")
-        explicit_version = platform_resolver._explicit_minecraft_version(text)
-        explicit_loader = platform_resolver._explicit_loader(text)
-        migration_requested = bool(
-            existing_version and platform_resolver._MIGRATION_RE.search(text)
-        )
-        kinds = tuple(str(value).strip() for value in module_kinds if str(value).strip())
+        from .platform_selection_pipeline import resolve_platform_fail_closed
 
-        if explicit_loader:
-            try:
-                provider_for_loader(explicit_loader)
-            except ValueError as exc:
-                raise SpecValidationError(str(exc)) from exc
-
-        if existing_version and not migration_requested:
-            adapter = platform_resolver._existing_adapter(existing_version, existing_loader)
-            platform_resolver._require_supported_kinds(adapter, kinds, explicit=True)
-            return platform_resolver.PlatformSelection(
-                adapter=adapter,
-                source="existing_project_target",
-                reason=(
-                    f"Existing project target {adapter.minecraft_version}/{adapter.loader} "
-                    "is preserved because no migration was requested."
-                ),
-                explicit_version=False,
-                explicit_loader=False,
-                preserved_existing_target=True,
-            )
-
-        optimization = platform_resolver._optimize(
-            text,
-            design=design,
-            module_kinds=kinds,
-            loader_constraint=explicit_loader,
-            version_hint=explicit_version,
+        return resolve_platform_fail_closed(
+            prompt, design=design, module_kinds=module_kinds,
+            existing_version=existing_version, existing_loader=existing_loader,
             target_research_fn=target_research_fn,
-        )
-        platform_resolver._require_supported_kinds(
-            optimization.selected,
-            kinds,
-            explicit=bool(explicit_version or explicit_loader),
-        )
-        return platform_resolver._optimized_selection(
-            optimization,
-            source=(
-                "host_reuse_optimizer_with_version_hint"
-                if explicit_version
-                else "host_reuse_optimizer"
-            ),
-            explicit_version=bool(explicit_version),
-            explicit_loader=bool(explicit_loader),
-            migration_requested=migration_requested,
         )
 
     original_decompose = reuse.decompose_capability_graph

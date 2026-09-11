@@ -231,6 +231,20 @@ def build_host_planning_context(
     if not isinstance(target, Mapping) or not target:
         raise ValueError("host planning context requires a resolved platform target receipt")
 
+    if target.get("host_facts_json"):
+        from .target_contract import target_contract_from_mapping
+        from .resolved_version_context import ResolvedVersionContext
+
+        resolved = target_contract_from_mapping(target).version_context
+        supplied = ResolvedVersionContext.from_dict(selection.get("resolved_version_context", {}))
+        resolved.assert_context(supplied.context_id)
+        return {
+            "schema_version": HOST_CONTEXT_SCHEMA, "authority": "host_only",
+            "target": resolved.to_dict()["target"],
+            "resolved_version_context": resolved.to_dict(),
+            "context_id": resolved.context_id,
+        }
+
     requested_version = getattr(router, "_mmm_requested_minecraft_version", None)
     requested_loader = getattr(router, "_mmm_requested_loader", None)
     return {

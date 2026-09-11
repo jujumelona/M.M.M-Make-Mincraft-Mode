@@ -118,6 +118,8 @@ class PlatformSelection:
             "migration_requested": self.migration_requested,
             "target": self.adapter.public_dict(),
         }
+        if self.adapter.host_facts_json:
+            payload["resolved_version_context"] = self.adapter.version_context.to_dict()
         if self.optimization is not None:
             payload["optimizer"] = self.optimization.to_dict()
         return payload
@@ -141,7 +143,13 @@ def compile_target_decision(
     raw = _mapping(selection_payload)
     raw_target = raw.get("target")
     if isinstance(raw_target, Mapping) and raw_target:
-        target = target_contract_from_mapping(raw_target).public_dict()
+        adapter = target_contract_from_mapping(raw_target)
+        target = adapter.public_dict()
+        if adapter.host_facts_json:
+            from .resolved_version_context import ResolvedVersionContext
+
+            supplied_context = ResolvedVersionContext.from_dict(raw.get("resolved_version_context", {}))
+            adapter.version_context.assert_context(supplied_context.context_id)
     else:
         target = {
             "minecraft_version": "unresolved",
@@ -279,6 +287,7 @@ def lock_from_adapter(adapter: TargetContract) -> PlatformLock:
         release_metadata_url=adapter.release_metadata_url,
         source_api_family=adapter.source_api_family,
         deterministic_module_kinds=tuple(sorted(adapter.deterministic_module_kinds)),
+        host_facts_json=adapter.host_facts_json,
     )
     lock = replace(lock, receipt_sha256=platform_receipt_sha256(lock))
     lock.validate()
@@ -433,6 +442,11 @@ def _require_supported_kinds(
     *,
     explicit: bool,
 ) -> None:
+    if adapter.host_facts_json:
+        context = adapter.version_context
+        for kind in module_kinds:
+            context.require_capability(str(kind))
+        return
     if adapter.source_api_family == "fabric_live_ai":
         return
     kinds = {str(value).strip() for value in module_kinds if str(value).strip()}

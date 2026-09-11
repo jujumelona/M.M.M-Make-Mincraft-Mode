@@ -751,7 +751,8 @@ class CompleteProductionOrchestrator:
                     )
                     graph_receipt = execute_artifact_graph(
                         artifact_jobs_to_run,
-                        context={"project_root": project_root, "base_dir": project_root},
+                        context={"project_root": project_root, "base_dir": project_root,
+                                 "resolved_version_context": spec.platform.version_context.to_dict()},
                         base_dir=project_root,
                     )
                     touched_paths: list[str] = [
@@ -864,6 +865,13 @@ class CompleteProductionOrchestrator:
                 receipts.extend(generate_custom(module) for module in members)
             else:
                 raise CompleteProductionError(f'Unsupported generation work stage: {stage}')
+            if spec.platform.host_facts_json:
+                resolved_context = spec.platform.version_context
+                for receipt in receipts:
+                    if isinstance(receipt, dict):
+                        if "context_id" in receipt:
+                            resolved_context.assert_context(receipt["context_id"])
+                        receipt["context_id"] = resolved_context.context_id
             semantic_observations = [
                 observation
                 for module, receipt in zip(members, receipts, strict=False)

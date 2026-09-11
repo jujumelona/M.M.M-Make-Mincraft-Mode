@@ -84,6 +84,11 @@ def _validate_completed_job(
     base_dir: Any,
 ) -> None:
     """Validate one materialized artifact without mutating scheduler state."""
+    from .resolved_version_context import execution_context
+
+    resolved = execution_context(context, job)
+    if resolved is not None:
+        resolved.assert_context(receipt.get("context_id"))
     if receipt.get("status") != "PASS":
         raise ArtifactGraphError(
             f"ARTIFACT_JOB_FAILED: {job.job_id!r} returned {receipt.get('status')!r}"
@@ -133,9 +138,17 @@ def execute_artifact_graph(
     instead of degenerating toward quadratic work on large artifact sets.
     """
     ordered_jobs = list(jobs)
+    from .resolved_version_context import execution_context
+
+    for job in ordered_jobs:
+        execution_context(context, job)
     if len({job.job_id for job in ordered_jobs}) != len(ordered_jobs):
         raise ArtifactGraphError("ARTIFACT_DUPLICATE_JOB_ID")
     registry = port_registry or PortRegistry()
+    if context and context.get("resolved_version_context"):
+        from .resolved_version_context import ResolvedVersionContext
+
+        registry.bind_context(ResolvedVersionContext.from_dict(context["resolved_version_context"]).context_id)
     if not ordered_jobs:
         return {
             "status": "PASS",

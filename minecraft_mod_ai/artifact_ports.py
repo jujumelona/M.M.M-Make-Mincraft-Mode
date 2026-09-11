@@ -30,6 +30,7 @@ class TypedPort:
     port_kind: PortKind
     target_type: str
     value: str
+    context_id: str = ""
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -37,6 +38,7 @@ class TypedPort:
             "port_kind": self.port_kind.value,
             "target_type": self.target_type,
             "value": self.value,
+            "context_id": self.context_id,
         }
 
     @classmethod
@@ -46,6 +48,7 @@ class TypedPort:
             port_kind=PortKind(data["port_kind"]),
             target_type=str(data["target_type"]),
             value=str(data["value"]),
+            context_id=str(data.get("context_id", "")),
         )
 
     def matches(self, expected_kind: PortKind | str, expected_target_type: str) -> bool:
@@ -80,11 +83,22 @@ class PortRegistry:
     def __init__(self) -> None:
         self._ports: dict[str, TypedPort] = {}
         self._lock = RLock()
+        self._context_id = ""
+
+    def bind_context(self, context_id: str) -> None:
+        with self._lock:
+            if not context_id or (self._context_id and self._context_id != context_id):
+                raise PortConnectionError("VERSION_CONTEXT_MISMATCH")
+            if any(port.context_id != context_id for port in self._ports.values()):
+                raise PortConnectionError("VERSION_CONTEXT_MISMATCH: existing port belongs to another context")
+            self._context_id = context_id
 
     def publish(self, port: TypedPort) -> None:
         if not port.name or not port.value:
             raise PortConnectionError("PORT_EMPTY: published ports need non-empty name and value")
         with self._lock:
+            if self._context_id and port.context_id != self._context_id:
+                raise PortConnectionError("VERSION_CONTEXT_MISMATCH: cannot publish a foreign port")
             existing = self._ports.get(port.name)
             if existing is not None and existing != port:
                 raise PortConnectionError(

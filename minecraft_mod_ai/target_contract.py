@@ -307,6 +307,13 @@ class TargetContract:
     release_metadata_url: str
     source_api_family: str
     deterministic_module_kinds: frozenset[str]
+    host_facts_json: str = ""
+
+    @property
+    def version_context(self):
+        from .resolved_version_context import ResolvedVersionContext
+
+        return ResolvedVersionContext.from_target(self)
 
     @property
     def mappings_applicable(self) -> bool:

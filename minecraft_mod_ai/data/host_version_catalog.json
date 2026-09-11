@@ -1,0 +1,1984 @@
+{
+  "auto_context_id": "sha256:ec8805a6bcaf19a50a95546e03c87ea3436879364a8657f076a589a2cbc5aacc",
+  "bundles": [
+    {
+      "context_id": "sha256:ec8805a6bcaf19a50a95546e03c87ea3436879364a8657f076a589a2cbc5aacc",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.159.0+26.2",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "25",
+          "loom_plugin": "net.fabricmc.fabric-loom",
+          "minecraft": "com.mojang:minecraft:26.2"
+        },
+        "host_revision": "sha256:2019c4e53bf935408129133dad4da70031534a16dde97219715d2d8497597f20",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-26.2",
+        "data_pack_version": "107.1",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.159.0+26.2",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "25",
+        "loader": "fabric",
+        "mappings_kind": "",
+        "mappings_version": "",
+        "minecraft_version": "26.2",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/bd23a7ec14eb492bc20d8d06508b6ebb0a63c31a/26.2.json",
+        "resource_pack_format": 88,
+        "resource_pack_version": "88.0",
+        "source_api_family": "mojang",
+        "yarn_mappings": ""
+      }
+    },
+    {
+      "context_id": "sha256:e2aa2b287f1060c86d3a2d9a00ef0c90a048fcdc75cea61cda9dfac0d3446a31",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.155.2+26.1.2",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "25",
+          "loom_plugin": "net.fabricmc.fabric-loom",
+          "minecraft": "com.mojang:minecraft:26.1.2"
+        },
+        "host_revision": "sha256:50f7acd579ea92197aa7a1af76c017332283a462b6c709c299a6d6938207b6e3",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-26.1.2",
+        "data_pack_version": "101.1",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.155.2+26.1.2",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "25",
+        "loader": "fabric",
+        "mappings_kind": "",
+        "mappings_version": "",
+        "minecraft_version": "26.1.2",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/a61802714c7980f7dd2c94e1783a178c3860f866/26.1.2.json",
+        "resource_pack_format": 84,
+        "resource_pack_version": "84.0",
+        "source_api_family": "mojang",
+        "yarn_mappings": ""
+      }
+    },
+    {
+      "context_id": "sha256:fea7720654ab8438412b4069e47c552c7abd6fa3549b156392a176790f7ea838",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.145.4+26.1.1",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "25",
+          "loom_plugin": "net.fabricmc.fabric-loom",
+          "minecraft": "com.mojang:minecraft:26.1.1"
+        },
+        "host_revision": "sha256:8783cff4ebe02a954c8c0a008fde1d7fb0bb6d77c20c78bf7b93ab979ca7cef9",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-26.1.1",
+        "data_pack_version": "101.1",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.145.4+26.1.1",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "25",
+        "loader": "fabric",
+        "mappings_kind": "",
+        "mappings_version": "",
+        "minecraft_version": "26.1.1",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/6d338d506894d81389b9e2ef480be67512b3720b/26.1.1.json",
+        "resource_pack_format": 84,
+        "resource_pack_version": "84.0",
+        "source_api_family": "mojang",
+        "yarn_mappings": ""
+      }
+    },
+    {
+      "context_id": "sha256:7acae07adbc437853ba8ab071bd7bb9f89a992ab29138053f2fd8f0c1f1e273e",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.145.1+26.1",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "25",
+          "loom_plugin": "net.fabricmc.fabric-loom",
+          "minecraft": "com.mojang:minecraft:26.1"
+        },
+        "host_revision": "sha256:8ed8ec5ddd33725d0262ded503b778ea194fc1b5f240fcd69c0886f7fb398101",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-26.1",
+        "data_pack_version": "101.1",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.145.1+26.1",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "25",
+        "loader": "fabric",
+        "mappings_kind": "",
+        "mappings_version": "",
+        "minecraft_version": "26.1",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/17e07eb50a0a1f5a82dfd7803358564d8dc7c199/26.1.json",
+        "resource_pack_format": 84,
+        "resource_pack_version": "84.0",
+        "source_api_family": "mojang",
+        "yarn_mappings": ""
+      }
+    },
+    {
+      "context_id": "sha256:73c848235b85a63797c2c657b153f6c9ebe97c6d529ba072eb1b5c85a5a69d62",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.141.6+1.21.11",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.21.11"
+        },
+        "host_revision": "sha256:eec4d5aedad28075876a91bd3f6193c59bf8de57039572d3cb9bae3349317df9",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.21.11",
+        "data_pack_version": "94.1",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.141.6+1.21.11",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "21",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.21.11",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/d88e59bdf332d3fb154faec2c51d938dbead54d6/1.21.11.json",
+        "resource_pack_format": 75,
+        "resource_pack_version": "75.0",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:5ad0697c6f48c8aeae0d30c98dfcac6a6653cfec240788515542fe799c637f0a",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.138.4+1.21.10",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.21.10"
+        },
+        "host_revision": "sha256:00c98b4a44293b32aaa2f924f430488bfbda7af0f5a9a32770a3f08c8615b63c",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.21.10",
+        "data_pack_version": "88.0",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.138.4+1.21.10",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "21",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.21.10",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/e77547a38bcbc9a50844d8e74ee4bea01f64aa68/1.21.10.json",
+        "resource_pack_format": 69,
+        "resource_pack_version": "69.0",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:88718fece19e856b24f8cb8a316bd2353ac9aef8fad4458de7dcde960032f8a5",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.134.1+1.21.9",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.21.9"
+        },
+        "host_revision": "sha256:2af611dd428c911b980f2c98600b50e8d8a3659ee99fe1ba757df14d36d7d664",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.21.9",
+        "data_pack_version": "88.0",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.134.1+1.21.9",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "21",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.21.9",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/5cf8837ebf5fa08b3452929592ea33fee5577020/1.21.9.json",
+        "resource_pack_format": 69,
+        "resource_pack_version": "69.0",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:82c1a9c4242bcad46baba540a8e72292f2c694935a698de872dddd99af8a0cb1",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.136.1+1.21.8",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.21.8"
+        },
+        "host_revision": "sha256:65b5d9f1a7b6aae36130632fdcb8457ec0337d4716ffcbc067ff268545b0785f",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.21.8",
+        "data_pack_version": "81",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.136.1+1.21.8",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "21",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.21.8",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/9e193b6adc9521687b9d444044cec4bba5789655/1.21.8.json",
+        "resource_pack_format": 64,
+        "resource_pack_version": "64",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:137bd08c4147c149ad471ff1d51913bcc6c51590f742fd2fb462e22cba68b524",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.129.0+1.21.7",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.21.7"
+        },
+        "host_revision": "sha256:db6106bd725300c1bf5b64107be3d8f68e08dc44ee65fcc678a21131b6522b76",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.21.7",
+        "data_pack_version": "81",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.129.0+1.21.7",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "21",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.21.7",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/f8baf1254705dc9b80488999cd2964d4026acc09/1.21.7.json",
+        "resource_pack_format": 64,
+        "resource_pack_version": "64",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:0e3405da8aa748e7c38695761cf1a9f5535f9e331d6937897385a86997c3d9a8",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.128.2+1.21.6",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.21.6"
+        },
+        "host_revision": "sha256:0540d9270419ec9cd016455c5fdec27c333c963e3657ef8357c65850cdf91ae3",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.21.6",
+        "data_pack_version": "80",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.128.2+1.21.6",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "21",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.21.6",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/0b03f4b4dd85ab8ac9b26073131e5edff362d3f9/1.21.6.json",
+        "resource_pack_format": 63,
+        "resource_pack_version": "63",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:a9445d43b9dc812643e41a15f7618fd3a932cad7ac6df8113a8ba988e3cc5c6a",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.128.2+1.21.5",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.21.5"
+        },
+        "host_revision": "sha256:d39c3d2ac53eb7f6de2d7660074b0e3acfd91e632afe83d47ed20d38a322baed",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.21.5",
+        "data_pack_version": "71",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.128.2+1.21.5",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "21",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.21.5",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/59bd833994872d1b5037dde9fc5a0ce0005c63bb/1.21.5.json",
+        "resource_pack_format": 55,
+        "resource_pack_version": "55",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:451c27a5c16b4ad39e19957771ad46a90bd065f90444d7c079153c1c51eb74c6",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.119.4+1.21.4",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.21.4"
+        },
+        "host_revision": "sha256:bee1872032e4ffc0856ecb3c7de2994ee43e7608d42b3f9915f7c7a5e550087a",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.21.4",
+        "data_pack_version": "61",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.119.4+1.21.4",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "21",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.21.4",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/a15eac24543d2a5e70f3ee28f033463adc1637e6/1.21.4.json",
+        "resource_pack_format": 46,
+        "resource_pack_version": "46",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:d3a8edde3e4a725aad7b62fdd746381fb9c6ba2fca3617cab38ab5808d967fb7",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.114.1+1.21.3",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.21.3"
+        },
+        "host_revision": "sha256:73806c2ec643f10e47013ce2126a67f85465f658472989fc6056588436ff4f44",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.21.3",
+        "data_pack_version": "57",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.114.1+1.21.3",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "21",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.21.3",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/2a45ab0ec1076068d48c61bc1032a3b04ea17614/1.21.3.json",
+        "resource_pack_format": 42,
+        "resource_pack_version": "42",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:77a78bc33352f7e69bf8df51ac58fc735593877721041fff43db2196e4df5d35",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.106.1+1.21.2",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.21.2"
+        },
+        "host_revision": "sha256:582255bfec48c9a6a02bca9899bdba453834084f5b9cd4fb1a63617a24ee260a",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.21.2",
+        "data_pack_version": "57",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.106.1+1.21.2",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "21",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.21.2",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/59e0a746d13b4bbc4c3de442237609c195dcceea/1.21.2.json",
+        "resource_pack_format": 42,
+        "resource_pack_version": "42",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:75c1b72f9ab4b01af6442f3c0f854063f36267fbdfa875315f0c874a0cf9057b",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.116.17+1.21.1",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.21.1"
+        },
+        "host_revision": "sha256:266c8a9997b42bcc578026d9b3a5bcae0e444a0f239dbb99247e459b5b87e723",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.21.1",
+        "data_pack_version": "48",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.116.17+1.21.1",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "21",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.21.1",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/efe5efea609895bb0127994d59115a0f9795b0b2/1.21.1.json",
+        "resource_pack_format": 34,
+        "resource_pack_version": "34",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:f2520add51aa85643af3b447110979e48306b45743f4a6f16b538af00f328917",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.102.0+1.21",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.21"
+        },
+        "host_revision": "sha256:a62dc095e8430d8fd9d71ea2221b311bd82f17d341e90593839a775fa62b96cd",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.21",
+        "data_pack_version": "48",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.102.0+1.21",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "21",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.21",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/7c4d6ae09d26fa24e8c16e46b6d969c963adfb8b/1.21.json",
+        "resource_pack_format": 34,
+        "resource_pack_version": "34",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:af801d02822754b9da857e130835ccf6d62df5866aab7995f0e1b53206ee557d",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.100.8+1.20.6",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.20.6"
+        },
+        "host_revision": "sha256:3465628ddc74ef5f7233a37a5b80dbbc47ac66822f696e06cc12dfa96b1080d1",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.20.6",
+        "data_pack_version": "41",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.100.8+1.20.6",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "21",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.20.6",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/e3f5e38e11eab79177e8b0bb3269f9293c07d21c/1.20.6.json",
+        "resource_pack_format": 32,
+        "resource_pack_version": "32",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:ee45ced5bad2db1661fc28acf9b9a02d63d7a9ef831841213cc5c44537d8f981",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.97.8+1.20.5",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.20.5"
+        },
+        "host_revision": "sha256:f754bc4339d838f37490c2e31a2d31d825cd43c0f4c3e24afae67e2e86e0a45e",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.20.5",
+        "data_pack_version": "41",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.97.8+1.20.5",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "21",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.20.5",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/21147b6efe6d4bf70ee8c77bbf32f88c5853c50b/1.20.5.json",
+        "resource_pack_format": 32,
+        "resource_pack_version": "32",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:1f4303ad18a20b84325a0de99aef4f60e60421a43bfde760d2bef55db28c6dd4",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.97.3+1.20.4",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.20.4"
+        },
+        "host_revision": "sha256:bb6bf03a4c528960831bcac6e18dc7626812ac276c048aec4971c3a65fffc02f",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.20.4",
+        "data_pack_version": "26",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.97.3+1.20.4",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "17",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.20.4",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/6f1e86f876536c71cbfadf4b3ad464e000a60b79/1.20.4.json",
+        "resource_pack_format": 22,
+        "resource_pack_version": "22",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:889002788c467be07a8567883404c3d247d05d2e2e3417c35add788d3cc5ee05",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.91.1+1.20.3",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.20.3"
+        },
+        "host_revision": "sha256:b3ef86922dcd3722c034377f0e1e01b02dcf9fb1cf3befa174c9988c0c822d5a",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.20.3",
+        "data_pack_version": "26",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.91.1+1.20.3",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "17",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.20.3",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/f2b442d5505dd020725a9f9f982d800f1ceb839e/1.20.3.json",
+        "resource_pack_format": 22,
+        "resource_pack_version": "22",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:935ad7d67d1db0f44f48758419750a322e1f72a207c1ba0c87be89bd02036a28",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.91.6+1.20.2",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.20.2"
+        },
+        "host_revision": "sha256:ca7802202eff9387e056823cc1c8728badb132026bcd7c0db1e2783ab5545980",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.20.2",
+        "data_pack_version": "18",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.91.6+1.20.2",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "17",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.20.2",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/aa79dcb21c8b77084c7a73f774196a2a2a34d021/1.20.2.json",
+        "resource_pack_format": 18,
+        "resource_pack_version": "18",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:3e374c7cd9fe5e1fea3a65ed41078cafd231163d2e69313170c815477ae761bb",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.92.12+1.20.1",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.20.1"
+        },
+        "host_revision": "sha256:b335a359cc293f48344a1e265dba3ce0fe7e1d22958740c8fd8bc855d4087e80",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.20.1",
+        "data_pack_version": "15",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.92.12+1.20.1",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "17",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.20.1",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/5f96a10c9d6b9d2f6deda4a9ad2e2ad451cde997/1.20.1.json",
+        "resource_pack_format": 15,
+        "resource_pack_version": "15",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:0cba21e520678aff4282ec1b4f34f890f624f52f604708307959d8dcca7b4575",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.83.0+1.20",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.20"
+        },
+        "host_revision": "sha256:022cd7470eb37f7ea1536935ac896694a3d75dcdde99f22206592ec06e8678b6",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.20",
+        "data_pack_version": "15",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.83.0+1.20",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "17",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.20",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/11729473c3df1c3d62cf16b0452a04d981aa8f46/1.20.json",
+        "resource_pack_format": 15,
+        "resource_pack_version": "15",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:c82bbaffab7766403ee4a9b1249425e73ec3a2e5e6b24fc9c24ce9472b28e15c",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.87.2+1.19.4",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.19.4"
+        },
+        "host_revision": "sha256:d440987fe2ad5a30b5d29b1dbbec4046b2abbd733823af4b471fe02a4a845fd5",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.19.4",
+        "data_pack_version": "12",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.87.2+1.19.4",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "17",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.19.4",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/3369f7471daf62667dcca9f1ab76e966d8a5e7e2/1.19.4.json",
+        "resource_pack_format": 13,
+        "resource_pack_version": "13",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:5ff11667ddb02f71bad2199148c1ba990214d2ed97cf603e7e85177631790965",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.76.1+1.19.3",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.19.3"
+        },
+        "host_revision": "sha256:b907ba9ef86c20bff2fa5ba1a49b87e740fd6e00efe31351d8b151417a390a88",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.19.3",
+        "data_pack_version": "10",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.76.1+1.19.3",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "17",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.19.3",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/d5b8ba8a71e5a3b6f45579cf8da59b36a8be994b/1.19.3.json",
+        "resource_pack_format": 12,
+        "resource_pack_version": "12",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:e87357fb58eb98d898e1f522b55cf6518385fa239f93bfadaf6e6988338e387d",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.77.0+1.19.2",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.19.2"
+        },
+        "host_revision": "sha256:35dbc44f9350562b8a53c85dec95f39e5e3422841f673b76b7a7716bb5a9a4bb",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.19.2",
+        "data_pack_version": "10",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.77.0+1.19.2",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "17",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.19.2",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/ed548106acf3ac7e8205a6ee8fd2710facfa164f/1.19.2.json",
+        "resource_pack_format": 9,
+        "resource_pack_version": "9",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:574fe1279bef1e0acea5fff421f3b4eff092596f8e432e55f37355f372e9bf6b",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.58.5+1.19.1",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.19.1"
+        },
+        "host_revision": "sha256:4102df8060103a01ceb29fc86c6f0857ff9280936366d1293df784031692e1ed",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.19.1",
+        "data_pack_version": "10",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.58.5+1.19.1",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "17",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.19.1",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/39d5e8925d37490c6f2abb2e02b8c6f1b35719df/1.19.1.json",
+        "resource_pack_format": 9,
+        "resource_pack_version": "9",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:7eb8b8eb0e8c4e960e696033b6a5db6b3c59df27fdc25c0842bd78481f2bd76f",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.58.0+1.19",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.19"
+        },
+        "host_revision": "sha256:03bef776aee6014726c1046cf5a6114b6f62229f25e405fd629f4ae13b5cfc1b",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.19",
+        "data_pack_version": "10",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.58.0+1.19",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "17",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.19",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/14bbfb25fb1c1c798e3c9b9482b081a78d1f3a9d/1.19.json",
+        "resource_pack_format": 9,
+        "resource_pack_version": "9",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:762ec6f6ad59f86cefda27a96997b30e4c76bc4f70b88f56c4954452c57b7349",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.77.0+1.18.2",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.18.2"
+        },
+        "host_revision": "sha256:9249dc694d9a9de09d5623e8ef0af9e75a3c53f94a3438f9a303e93e3ff88ed6",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.18.2",
+        "data_pack_version": "9",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.77.0+1.18.2",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "17",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.18.2",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/334b33fcba3c9be4b7514624c965256535bd7eba/1.18.2.json",
+        "resource_pack_format": 8,
+        "resource_pack_version": "8",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:38b00e1492c84d31f34109ba0e2c69af7b91a6f6e2fd6d31370905727edf07ea",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.46.6+1.18",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.18.1"
+        },
+        "host_revision": "sha256:8fa6d4b6d9b6e5cb460fec5370b9d1b3161516e6b6370cf72013987b431890a6",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.18.1",
+        "data_pack_version": "8",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.46.6+1.18",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "17",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.18.1",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/7ff864e988a2c29907154d5f9701e87e5d5e554a/1.18.1.json",
+        "resource_pack_format": 8,
+        "resource_pack_version": "8",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:f6357c4ea3632890061a31ba83fda256b9955d513b3abb597fd0c56d657b9a47",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.44.0+1.18",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.18"
+        },
+        "host_revision": "sha256:db74bd6efec5137e5b14f2fcb62fe74da34d65ca4ace6d52f159db298d5c333f",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.18",
+        "data_pack_version": "8",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.44.0+1.18",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "17",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.18",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/7367ea8b7cad7c7830192441bb2846be0d2ceeac/1.18.json",
+        "resource_pack_format": 8,
+        "resource_pack_version": "8",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:0a13b56f640926611079c42b840abc32fb44fd5f8902762bd366662000345077",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.46.1+1.17",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.17.1"
+        },
+        "host_revision": "sha256:12e2cb571eca74ed40c3df678a4c5c906fae93f99642d3811597d1aae8892caa",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.17.1",
+        "data_pack_version": "7",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.46.1+1.17",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "16",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.17.1",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/e0e7ab5ed6f55bbd874ef95be3c9356d67e64b57/1.17.1.json",
+        "resource_pack_format": 7,
+        "resource_pack_version": "7",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:257bd6a1b7a44d46f0ca2e9be42777130b3047ca05fa6f531a80d22eae2e29e3",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.46.1+1.17",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.17"
+        },
+        "host_revision": "sha256:b551de3183edd9a093926ab70815178731f599dee45682eea16b728c127e3fac",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.17",
+        "data_pack_version": "7",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.46.1+1.17",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "16",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.17",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/0d9ace8a2ecfd1f4c782786f4b985a499240ff12/1.17.json",
+        "resource_pack_format": 7,
+        "resource_pack_version": "7",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:7d5b162743c37fde995e62bb08e410a9458657c1185897bb4f0bd3771bcabd22",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.42.0+1.16",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.16.5"
+        },
+        "host_revision": "sha256:e290e369a708271e0114ba98208ab54be61a468a1efe7ba948b371ab6958e5c6",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.16.5",
+        "data_pack_version": "6",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.42.0+1.16",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "8",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.16.5",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/fba9f7833e858a1257d810d21a3a9e3c967f9077/1.16.5.json",
+        "resource_pack_format": 6,
+        "resource_pack_version": "6",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:07debe74eb1b66e52b1ab34576487f6d06e90c0e778bacac18433d62d32a2676",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.42.0+1.16",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.16.4"
+        },
+        "host_revision": "sha256:962e9d8b6c14b5443457bd9958a4c838303be0a1fc9e1fc0ae2f930e4c412208",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.16.4",
+        "data_pack_version": "6",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.42.0+1.16",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "8",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.16.4",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/596ad61fda7612d9edf8881cf81869276bdb7f82/1.16.4.json",
+        "resource_pack_format": 6,
+        "resource_pack_version": "6",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:72183e22ee859dc83a7b6f6a44fac5e04c083f38762cec0df68c601ae755946d",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.42.0+1.16",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.16.3"
+        },
+        "host_revision": "sha256:41b2d833db702c2757b8c923a0d6ff233f520e85186f805111a8779e545deb0c",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.16.3",
+        "data_pack_version": "6",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.42.0+1.16",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "8",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.16.3",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/6485dd131ef68c968041a9f6fd73094b027e42e1/1.16.3.json",
+        "resource_pack_format": 6,
+        "resource_pack_version": "6",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:fe61326ea4b2cf82cf22154f7cb5364b0006aa4afef9cc98d783acfc7a4e5de2",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.42.0+1.16",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.16.2"
+        },
+        "host_revision": "sha256:43644bc3f5315d9b33d2d1be33b77d7193131bcae9f2b0fe2e5e1b5a663b1040",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.16.2",
+        "data_pack_version": "6",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.42.0+1.16",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "8",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.16.2",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/998d9ef5770d05c20d760dc16cf85151f35009f2/1.16.2.json",
+        "resource_pack_format": 6,
+        "resource_pack_version": "6",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:9a5aa16bd1aa4f0627e212e91f91adb49767dc9526a79f345e62cf570fa33350",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.42.0+1.16",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.16.1"
+        },
+        "host_revision": "sha256:e87df7b3a5df4b7f753219a2606c1438e76ec7de1eebc5ef4a902c4154caf181",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.16.1",
+        "data_pack_version": "5",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.42.0+1.16",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "8",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.16.1",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/54fa3af57d041d2771e66d390197b2c0288e697c/1.16.1.json",
+        "resource_pack_format": 5,
+        "resource_pack_version": "5",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:15b132d76b060e6ccf4949f9063d8f9850b705bfde188c714fbcdd8a8630ccf0",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.42.0+1.16",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.16"
+        },
+        "host_revision": "sha256:7bb6932869b25e949d29eb92449d77b91c52ec2593b222664821492cb84dc482",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.16",
+        "data_pack_version": "5",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.42.0+1.16",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "8",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.16",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/e9d21d375f9c961f0e9731d4e463306d76e77c48/1.16.json",
+        "resource_pack_format": 5,
+        "resource_pack_version": "5",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:0f99c8c9f677aff1eff1cb85baabdbe2d63e471c48a6d5b65b54a0da2ea435d5",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.28.5+1.15",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.15.2"
+        },
+        "host_revision": "sha256:2ddc1555ea897668f5d09986dcfabeefc5b6927d69962a4b7b460e10d1620e6d",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.15.2",
+        "data_pack_version": "5",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.28.5+1.15",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "8",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.15.2",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/e9d0adb8f642abe422909ede50f651b2b58a3573/1.15.2.json",
+        "resource_pack_format": 5,
+        "resource_pack_version": "5",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:d1000a0b6fd1e00886684ab5239c1c75d9ad0da0c9e914ad1764588e691041ce",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.28.5+1.15",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.15.1"
+        },
+        "host_revision": "sha256:0828759535b3283c28e54ba3ba6776d770a6eced867d992f066db6852345967a",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.15.1",
+        "data_pack_version": "5",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.28.5+1.15",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "8",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.15.1",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/18c3063de87ae126b4e017121219ba802be0755b/1.15.1.json",
+        "resource_pack_format": 5,
+        "resource_pack_version": "5",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:9b2e090512cd682bd13389b7747b114c3c40f9fb7b02ba2268a0893e67a49dde",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.28.5+1.15",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.15"
+        },
+        "host_revision": "sha256:7b80c1edd9ba629a7687ef306706aa36eb068089659fe5e9ad79eab0aa4a862a",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.15",
+        "data_pack_version": "5",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.28.5+1.15",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "8",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.15",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/833322370ab320e77717097082effe1d124d48bd/1.15.json",
+        "resource_pack_format": 5,
+        "resource_pack_version": "5",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    },
+    {
+      "context_id": "sha256:82a5878dfb905934e7ccd16f2e5c6958ee26651bd279956b00fea4022dfb4273",
+      "host_facts": {
+        "api_symbols": {},
+        "artifact_rules": {},
+        "capabilities": {},
+        "dependency_coordinates": {
+          "fabric_api": "net.fabricmc.fabric-api:fabric-api:0.28.5+1.14",
+          "fabric_loader": "net.fabricmc:fabric-loader:0.19.5",
+          "fabric_loom": "net.fabricmc:fabric-loom:1.17.20",
+          "gradle_jvm_major": "21",
+          "loom_plugin": "net.fabricmc.fabric-loom-remap",
+          "minecraft": "com.mojang:minecraft:1.14.4"
+        },
+        "host_revision": "sha256:aa9b4a53e283d4df529b931908ba16bea03a91d65d63f1a2c8b014ace00b9048",
+        "replacements": {},
+        "repositories": [
+          "https://maven.fabricmc.net/",
+          "https://libraries.minecraft.net/",
+          "https://repo.maven.apache.org/maven2/"
+        ],
+        "schemas": {}
+      },
+      "source": "HOST",
+      "target": {
+        "adapter_id": "official-fabric-1.14.4",
+        "data_pack_version": "4",
+        "deterministic_module_kinds": [],
+        "edition": "java",
+        "fabric_api": "0.28.5+1.14",
+        "fabric_loader": "0.19.5",
+        "fabric_loom": "1.17.20",
+        "gradle": "9.5.1",
+        "gradle_sha256": "bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f",
+        "java_version": "8",
+        "loader": "fabric",
+        "mappings_kind": "mojang",
+        "mappings_version": "mojang",
+        "minecraft_version": "1.14.4",
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/be146d5f66a3627ed0a87c234c4d8dde8ab35098/1.14.4.json",
+        "resource_pack_format": 4,
+        "resource_pack_version": "4",
+        "source_api_family": "mojang",
+        "yarn_mappings": "mojang"
+      }
+    }
+  ],
+  "schema_version": "mmm/host-version-catalog-v1"
+}

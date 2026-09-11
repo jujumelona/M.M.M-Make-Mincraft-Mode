@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import pytest
 
-from minecraft_mod_ai.platform_catalog import adapter_for_target
+from test_resolved_version_context import target_fixture
 from minecraft_mod_ai.platform_resolver import compile_target_decision
 from minecraft_mod_ai.spec import SpecValidationError
 
 
 def _selection() -> dict[str, object]:
     return {
-        "target": adapter_for_target("1.21.1", "fabric").public_dict(),
+        "target": target_fixture().public_dict(),
+        "resolved_version_context": target_fixture().version_context.to_dict(),
         "preserved_existing_target": True,
         "migration_requested": False,
     }

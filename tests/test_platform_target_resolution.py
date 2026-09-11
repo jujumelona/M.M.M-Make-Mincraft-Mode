@@ -1,209 +1,79 @@
-from __future__ import annotations
-
+from dataclasses import replace
 import json
 from pathlib import Path
 
 import pytest
 
 from minecraft_mod_ai import platform_catalog as catalog
-from minecraft_mod_ai import platform_resolver as resolver
 from minecraft_mod_ai.generator import FabricProjectGenerator, GenerationError
 from minecraft_mod_ai.knowledge import evidence_for_target
-from minecraft_mod_ai.platform_evidence_pipeline import PlatformOptimization, TargetEvidence
-from minecraft_mod_ai.platform_live_discovery import LiveFabricTarget
 from minecraft_mod_ai.platform_resolver import lock_from_adapter, resolve_platform
-from minecraft_mod_ai.spec import (
-    ContentKind,
-    ContentSpec,
-    ModSpec,
-    PlatformLock,
-    SpecValidationError,
-)
+from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec, PlatformLock, SpecValidationError
+from minecraft_mod_ai.resolved_version_context import VersionContextError
+from test_resolved_version_context import target_fixture
 
 
-def _fabric_1201():
-    return catalog.adapter_for_target("1.20.1", "fabric")
+@pytest.fixture(autouse=True)
+def host_catalog(tmp_path, monkeypatch):
+    bundles = []
+    for version in ("1.21.1", "1.20.1", "27.0"):
+        native = version == "27.0"
+        target = replace(target_fixture(), adapter_id="host_fixture_" + version,
+                         minecraft_version=version, java_version="25" if native else "21",
+                         yarn_mappings="" if native else "mojang",
+                         mappings_kind="" if native else "mojang",
+                         mappings_version="" if native else "mojang")
+        bundles.append(target.version_context.to_dict())
+    path = tmp_path / "host-catalog.json"
+    path.write_text(json.dumps({"schema_version": "mmm/host-version-catalog-v1",
+                               "auto_context_id": bundles[0]["context_id"], "bundles": bundles}))
+    monkeypatch.setenv("MMM_VERSION_BUNDLE_CATALOG", str(path))
+    monkeypatch.setitem(catalog._PROVIDERS, "fabric", catalog.PlatformProvider(
+        "fabric", "host-coherent-version-catalog-v1", catalog._fabric_versions, catalog._fabric_adapter))
 
 
 def _fabric_1211():
     return catalog.adapter_for_target("1.21.1", "fabric")
 
 
-def _simple_spec(adapter) -> ModSpec:
-    return ModSpec(
-        mod_id="target_probe",
-        mod_name="Target Probe",
-        package_name="ai.minecraft.generated.target_probe",
-        version="1.0.0",
-        summary="Target-aware generator probe",
-        contents=(
-            ContentSpec(
-                content_id="probe_item",
-                kind=ContentKind.ITEM,
-                display_name_en="Probe Item",
-                display_name_ko="프로브 아이템",
-                recipe=True,
-            ),
-        ),
-        platform=lock_from_adapter(adapter),
-    )
+def _simple_spec(adapter):
+    return ModSpec(mod_id="target_test", mod_name="Target Test", package_name="generated.targettest",
+                   version="1.0.0", summary="Synthetic target test",
+                   contents=(ContentSpec(kind=ContentKind.ITEM, content_id="target_crystal",
+                                         display_name_en="Target Crystal", display_name_ko="테스트", recipe=True),),
+                   platform=lock_from_adapter(adapter))
 
 
-def _future_live(version: str = "27.0") -> LiveFabricTarget:
-    return LiveFabricTarget(
-        minecraft_version=version,
-        stable=True,
-        loader_version="0.20.0",
-        fabric_api_version=f"0.200.0+{version}",
-        loom_version="1.20-SNAPSHOT",
-        java_version="25",
-        gradle_version="9.7",
-        gradle_sha256="a" * 64,
-        mappings_kind="mojang",
-        mappings_version="mojang",
-        data_pack_version="100.0",
-        resource_pack_version="100.0",
-        release_metadata_url="https://www.minecraft.net/en-us/article/minecraft-java-edition-27-0",
-        discovery_sha256="sha256:" + "b" * 64,
-    )
+def test_supported_versions_are_host_catalog_not_source_allowlist():
+    assert catalog.supported_minecraft_versions(loader="fabric")[:2] == ("1.21.1", "1.20.1")
 
 
-def _optimization(adapter) -> PlatformOptimization:
-    evidence = TargetEvidence(
-        adapter=adapter,
-        requested_capabilities=(),
-        covered_capabilities=(),
-        exact_projects=(),
-        exact_versions=1,
-        verified_hash_files=1,
-        dependency_edges=0,
-        maintenance_signals=1,
-        adoption=0,
-        freshness=0.0,
-        evidence_quality=1.0,
-        integration_risk=0.0,
-        residual_cost=0,
-        dependency_complexity=0,
-    )
-    return PlatformOptimization(
-        selected=adapter,
-        evidence=evidence,
-        candidates=(evidence,),
-        capability_queries=("test capability",),
-        discovery_mode="test-host-evidence",
-    )
-
-
-def test_supported_versions_are_provider_discovery_not_source_allowlist(monkeypatch) -> None:
-    provider = catalog.provider_for_loader("fabric")
-    monkeypatch.setitem(
-        catalog._PROVIDERS,
-        "fabric",
-        catalog.PlatformProvider(
-            loader="fabric",
-            provider_id=provider.provider_id,
-            discover_versions=lambda limit=32: ("1.21.1", "1.20.1")[:limit],
-            resolve=provider.resolve,
-        ),
-    )
-    assert catalog.supported_minecraft_versions(loader="fabric")[:2] == (
-        "1.21.1",
-        "1.20.1",
-    )
-
-
-def test_future_version_needs_no_new_platform_catalog_entry(monkeypatch) -> None:
-    monkeypatch.setattr(catalog, "discover_fabric_target", lambda version: _future_live(version))
-    provider = catalog.provider_for_loader("fabric")
-    monkeypatch.setitem(
-        catalog._PROVIDERS,
-        "fabric",
-        catalog.PlatformProvider(
-            loader="fabric",
-            provider_id=provider.provider_id,
-            discover_versions=lambda limit=32: ("27.0",)[:limit],
-            resolve=catalog._fabric_adapter,
-        ),
-    )
+def test_future_version_uses_whole_host_bundle():
     selected = catalog.adapter_for_target("27.0", "fabric")
     assert selected.minecraft_version == "27.0"
-    assert selected.source_api_family == "fabric_live_ai"
-    assert selected.adapter_id.startswith("fabric_live_27_0_")
+    assert selected.version_context.facts["host_revision"] == "fixture-a"
 
 
-class _ChoiceRouter:
-    def __init__(self, selected: str) -> None:
-        self.selected = selected
-        self.calls = 0
-
-    def generate_text(self, *_args, **_kwargs) -> str:
-        self.calls += 1
-        return json.dumps(
-            {
-                "minecraft_version": self.selected,
-                "reason": "model coordinate guess",
-            }
-        )
+def test_public_resolver_never_asks_model_for_coordinates():
+    class Router:
+        def generate_text(self, *args, **kwargs):
+            pytest.fail("model must not select version")
+    result = resolve_platform("Create a mod", router=Router())
+    assert result.adapter.minecraft_version == "1.21.1"
+    assert result.source == "host_coherent_bundle"
 
 
-def test_host_optimizer_is_coordinate_authority(monkeypatch) -> None:
-    selected_adapter = _fabric_1211()
-    monkeypatch.setattr(
-        resolver,
-        "_optimize",
-        lambda *_args, **_kwargs: _optimization(selected_adapter),
-    )
-    router = _ChoiceRouter("1.20.1")
-
-    selected = resolve_platform("새 모드를 만들어줘", router=router)
-
-    assert router.calls == 0
-    assert selected.adapter.adapter_id == selected_adapter.adapter_id
-    assert selected.source == "host_reuse_optimizer"
-
-
-def test_model_cannot_invent_platform_coordinate(monkeypatch) -> None:
-    selected_adapter = _fabric_1201()
-    monkeypatch.setattr(
-        resolver,
-        "_optimize",
-        lambda *_args, **_kwargs: _optimization(selected_adapter),
-    )
-    router = _ChoiceRouter("99.99")
-
-    selected = resolve_platform("새 모드를 만들어줘", router=router)
-
-    assert router.calls == 0
-    assert selected.adapter.minecraft_version == "1.20.1"
-    assert selected.adapter.minecraft_version != router.selected
-
-
-def test_explicit_future_version_is_nonbinding_optimizer_hint(monkeypatch) -> None:
-    selected_adapter = _fabric_1201()
-    monkeypatch.setattr(
-        resolver,
-        "_optimize",
-        lambda *_args, **_kwargs: _optimization(selected_adapter),
-    )
-
-    selected = resolve_platform("Minecraft 27.0 Fabric에 아이템 하나 추가")
-
-    assert selected.adapter.adapter_id == selected_adapter.adapter_id
-    assert selected.adapter.minecraft_version != "27.0"
+def test_pinned_is_exact_not_optimizer_hint():
+    selected = resolve_platform("Minecraft 27.0 Fabric item")
+    assert selected.adapter.minecraft_version == "27.0"
     assert selected.explicit_version is True
-    assert selected.source == "host_reuse_optimizer_with_version_hint"
-
-    with pytest.raises(SpecValidationError):
-        resolve_platform("Minecraft 27.0 NeoForge에 아이템 하나 추가")
+    with pytest.raises(VersionContextError, match="UNSUPPORTED_MINECRAFT_VERSION"):
+        resolve_platform("Minecraft 99.99 Fabric item")
 
 
-def test_revise_preserves_existing_target_without_migration_request() -> None:
-    selected = resolve_platform(
-        "기존 모드에 아이템 하나 추가",
-        existing_version="1.20.1",
-        existing_loader="fabric",
-    )
-    assert selected.adapter.adapter_id == _fabric_1201().adapter_id
+def test_revise_preserves_existing_target_without_migration_request():
+    selected = resolve_platform("Add an item", existing_version="1.20.1", existing_loader="fabric")
+    assert selected.adapter.minecraft_version == "1.20.1"
     assert selected.preserved_existing_target is True
 
 

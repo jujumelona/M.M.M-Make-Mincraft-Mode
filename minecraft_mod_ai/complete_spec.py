@@ -257,6 +257,21 @@ class CompleteProposal:
         self.base_proposal.validate()
         if not isinstance(self.game_design, dict) or not self.game_design:
             raise SpecValidationError("game_design must be a non-empty object.")
+        if self.base_proposal.spec.platform.host_facts_json:
+            from .resolved_version_context import ResolvedVersionContext, VersionContextError
+
+            resolved = self.base_proposal.spec.platform.version_context
+            stored = ResolvedVersionContext.from_dict(self.game_design.get("_resolved_version_context", {}))
+            resolved.assert_context(stored.context_id)
+            bindings = self.game_design.get("_artifact_version_contexts", {})
+            expected = {"module:" + module.module_id for module in self.modules}
+            expected.update("asset:" + asset.asset_id for asset in self.assets)
+            if not isinstance(bindings, dict) or set(bindings) != expected:
+                raise VersionContextError("ARTIFACT_CONTEXT_BINDING_MISSING")
+            for identifier in bindings.values():
+                resolved.assert_context(identifier)
+            for job in self.game_design.get("_artifact_jobs", ()):
+                resolved.assert_context(job.get("context_id"))
         try:
             validate_canonical_json(self.game_design)
         except (CanonicalJsonError, RecursionError) as exc:
@@ -649,6 +664,20 @@ def complete_proposal_from_parts(
         )
         sanitized.validate()
         sanitized_assets.append(sanitized)
+
+    if base_proposal.spec.platform.host_facts_json:
+        from .resolved_version_context import ResolvedVersionContext
+
+        resolved = base_proposal.spec.platform.version_context
+        prior = game_design.get("_resolved_version_context")
+        if prior is not None:
+            resolved.assert_context(ResolvedVersionContext.from_dict(prior).context_id)
+        bindings = {"module:" + module.module_id: resolved.context_id for module in modules}
+        bindings.update({"asset:" + asset.asset_id: resolved.context_id for asset in sanitized_assets})
+        for identifier in game_design.get("_artifact_version_contexts", {}).values():
+            resolved.assert_context(identifier)
+        game_design = {**game_design, "_resolved_version_context": resolved.to_dict(),
+                       "_artifact_version_contexts": bindings}
 
     schema_version = (
         "mmm/complete-proposal-v2"

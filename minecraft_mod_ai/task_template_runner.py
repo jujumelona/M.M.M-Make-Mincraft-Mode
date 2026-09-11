@@ -524,7 +524,21 @@ def execute_artifact_template(
         )
 
     context_map = dict(context or {})
+    from .resolved_version_context import execution_context, VersionContextError
+
+    resolved = execution_context(context_map, job)
+    if resolved is not None:
+        resolved.admit_template(template)
+    if resolved is not None and port_registry is not None:
+        port_registry.bind_context(resolved.context_id)
     det_inputs = dict(_job_value(job, "deterministic_inputs", {}) or {})
+    if resolved is not None:
+        host_target = resolved.to_dict()["target"]
+        for key in ("minecraft_version", "java_version", "fabric_loader", "fabric_api", "fabric_loom", "gradle", "resource_pack_format", "data_pack_version", "resource_pack_version"):
+            for supplied in (context_map, det_inputs):
+                if key in supplied and supplied[key] != host_target[key]:
+                    raise VersionContextError("HOST_FACT_OVERRIDE", field=key, context_id=resolved.context_id)
+            det_inputs[key] = host_target[key]
     values: dict[str, Any] = {**context_map, **det_inputs}
 
     from .artifact_target_contract import validate_artifact_target
@@ -561,6 +575,8 @@ def execute_artifact_template(
             anchor = render_template({"render": target_spec["anchor"]}, values)
 
     validation_receipts = []
+    if resolved is not None:
+        validation_receipts.append(resolved.validate_artifact(template, rendered_output))
     supported_validators = {
         "java_parse",
         "registry_identifier_unique",
@@ -609,6 +625,10 @@ def execute_artifact_template(
     ports_published: dict[str, Any] = {}
     for logical_name, published_name in zip(logical_outputs, published_names, strict=True):
         port_obj = _logical_port(logical_name, published_name, values, template_id)
+        if resolved is not None:
+            from dataclasses import replace
+
+            port_obj = replace(port_obj, context_id=resolved.context_id)
         if published_name in ports_published:
             raise ValueError(f"TEMPLATE_PORT_DUPLICATE: {published_name}")
         if port_registry is not None:
@@ -671,6 +691,7 @@ def execute_artifact_template(
         "job_id": str(_job_value(job, "job_id", "")),
         "template_id": template_id,
         "target_file": target_file,
+        "context_id": resolved.context_id if resolved is not None else "",
         "anchor": anchor,
         "rendered_output": rendered_output,
         "validations": validation_receipts,

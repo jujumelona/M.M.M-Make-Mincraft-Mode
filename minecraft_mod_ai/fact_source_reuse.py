@@ -134,9 +134,11 @@ class FactReuseClassifier:
         self,
         project_root: Path | str | None = None,
         project_index: Mapping[str, Any] | None = None,
+        version_context=None,
     ) -> None:
         self.project_root = Path(project_root) if project_root else None
         self.project_index = dict(project_index) if project_index is not None else None
+        self.version_context = version_context
         self._symbol_cache: dict[str, tuple[str, str]] | None = None
 
     def _build_cache(self) -> dict[str, tuple[str, str]]:
@@ -182,6 +184,10 @@ class FactReuseClassifier:
         return cache
 
     def classify(self, fact: ImplementationFact) -> FactReuseDecision:
+        if self.version_context is not None and (self.project_root or self.project_index):
+            self.version_context.assert_context(
+                (self.project_index or {}).get("context_id"), code="REUSE_VERSION_INCOMPATIBLE"
+            )
         cache = self._build_cache()
         subject = str(fact.subject or "").strip().lower()
         if not subject:

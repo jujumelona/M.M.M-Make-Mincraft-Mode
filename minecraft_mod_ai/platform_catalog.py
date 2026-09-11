@@ -18,12 +18,9 @@ from typing import Any
 from .platform_live_discovery import (
     PlatformDiscoveryError,
     _emit_discovery_log,
-    discover_fabric_target,
-    latest_stable_versions,
 )
 from .target_contract import (
     TargetContract,
-    uses_native_names,
 )
 
 # Platform evidence uses adapter as domain vocabulary, but the executable receipt has
@@ -101,6 +98,8 @@ def _resolve_candidate(
     try:
         adapter = provider.resolve(version)
         adapter.validate()
+        if adapter.minecraft_version != version or adapter.loader != provider.loader:
+            raise ValueError("PINNED_VERSION_SUBSTITUTION: provider changed the requested target")
         return adapter, None
     except (PlatformDiscoveryError, ValueError) as exc:
         return None, f"{type(exc).__name__}: {exc}"
@@ -210,6 +209,10 @@ def adapter_for_target(minecraft_version: str, loader: str) -> TargetContract:
     try:
         adapter = provider.resolve(version)
         adapter.validate()
+        if adapter.minecraft_version != version or adapter.loader != normalized_loader:
+            from .resolved_version_context import VersionContextError
+
+            raise VersionContextError("PINNED_VERSION_SUBSTITUTION", requested=version, actual=adapter.minecraft_version)
         return adapter
     except (PlatformDiscoveryError, ValueError) as exc:
         _emit_discovery_log(
@@ -400,57 +403,15 @@ def platform_catalog_receipt() -> dict[str, Any]:
 
 
 def _fabric_versions(limit: int) -> tuple[str, ...]:
-    try:
-        return latest_stable_versions(limit=max(1, int(limit)))
-    except PlatformDiscoveryError as exc:
-        _emit_discovery_log(
-            f"Fabric stable-version discovery failed: {type(exc).__name__}: {exc}",
-            exc_info=True,
-        )
-        raise
+    from .host_version_catalog import host_versions
+
+    return host_versions(max(1, int(limit)))
 
 
 def _fabric_adapter(minecraft_version: str) -> TargetContract:
-    version = str(minecraft_version).strip()
-    if not version:
-        raise ValueError("Minecraft version must not be empty for Fabric discovery.")
-    try:
-        target = discover_fabric_target(version)
-    except PlatformDiscoveryError as exc:
-        raise ValueError(str(exc)) from None
-    digest = target.discovery_sha256.split(":", 1)[-1][:12]
-    try:
-        resource_major = int(target.resource_pack_version.split(".", 1)[0])
-    except (ValueError, AttributeError) as exc:
-        raise ValueError(
-            "Official target discovery returned an invalid resource-pack version."
-        ) from exc
-    native_names = uses_native_names(target.minecraft_version)
-    mappings_kind = "" if native_names else target.mappings_kind
-    mappings_version = "" if native_names else target.mappings_version
-    adapter = TargetContract(
-        adapter_id=f"fabric_live_{_safe_id(version)}_{digest}",
-        edition="java",
-        loader="fabric",
-        minecraft_version=target.minecraft_version,
-        java_version=target.java_version,
-        yarn_mappings=mappings_version,
-        mappings_kind=mappings_kind,
-        mappings_version=mappings_version,
-        fabric_loader=target.loader_version,
-        fabric_api=target.fabric_api_version,
-        fabric_loom=target.loom_version,
-        gradle=target.gradle_version,
-        gradle_sha256=target.gradle_sha256,
-        data_pack_version=target.data_pack_version,
-        resource_pack_version=target.resource_pack_version,
-        resource_pack_format=resource_major,
-        release_metadata_url=target.release_metadata_url,
-        source_api_family="fabric_live_ai",
-        deterministic_module_kinds=frozenset(),
-    )
-    adapter.validate()
-    return adapter
+    from .host_version_catalog import host_target
+
+    return host_target(minecraft_version)
 
 
 def _read_gradle_properties(path: Path) -> dict[str, str]:
@@ -477,7 +438,7 @@ def _safe_id(value: str) -> str:
 register_platform_provider(
     PlatformProvider(
         loader="fabric",
-        provider_id="official-fabric-meta-maven-minecraft-release-v3",
+        provider_id="host-coherent-version-catalog-v1",
         discover_versions=_fabric_versions,
         resolve=_fabric_adapter,
     )

@@ -122,7 +122,16 @@ def _adapter_from_receipt(value: Any):
         raise SpecValidationError("Execution platform receipt Gradle SHA-256 is invalid.")
 
     raw = dict(value) if isinstance(value, dict) else asdict(value)
-    return target_contract_from_mapping(raw)
+    adapter = target_contract_from_mapping(raw)
+    if adapter.host_facts_json:
+        from .resolved_version_context import ResolvedVersionContext
+
+        context = adapter.version_context
+        if "context_id" in raw:
+            context.assert_context(raw["context_id"])
+        if "resolved_version_context" in raw:
+            context.assert_context(ResolvedVersionContext.from_dict(raw["resolved_version_context"]).context_id)
+    return adapter
 
 
 
@@ -177,6 +186,7 @@ def install() -> None:
             "release_metadata_url": adapter.release_metadata_url,
             "source_api_family": adapter.source_api_family,
             "deterministic_module_kinds": tuple(sorted(adapter.deterministic_module_kinds)),
+            "host_facts_json": adapter.host_facts_json,
         }
         values["receipt_sha256"] = platform_receipt_sha256(values)
         lock = PlatformLock(**values)
@@ -231,10 +241,17 @@ def install() -> None:
             "release_metadata_url": adapter.release_metadata_url,
             "source_api_family": adapter.source_api_family,
             "deterministic_module_kinds": sorted(adapter.deterministic_module_kinds),
+            "host_facts_json": adapter.host_facts_json,
         }
         payload["receipt_sha256"] = platform_receipt_sha256(payload)
         if extra:
+            for name, value in extra.items():
+                if name in payload and value != payload[name]:
+                    raise SpecValidationError(f"HOST_FACT_OVERRIDE: {name}")
             payload.update(extra)
+        if adapter.host_facts_json:
+            payload["resolved_version_context"] = adapter.version_context.to_dict()
+            payload["context_id"] = adapter.version_context.context_id
         target.write_text(
             json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
             encoding="utf-8",

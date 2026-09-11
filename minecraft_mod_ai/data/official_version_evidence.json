@@ -1,0 +1,3363 @@
+{
+  "retrieved_at": "2026-09-11T06:47:51.527931+00:00",
+  "schema_version": "mmm/official-version-research-v1",
+  "scope": "all stable Fabric game versions with official example release branches",
+  "skipped": [
+    {
+      "minecraft": "1.14.3",
+      "reason": "NO_COHERENT_OFFICIAL_EXAMPLE_BUNDLE; partial Mojang and Fabric facts recorded",
+      "verified_partial_facts": {
+        "minecraft_java_minimum": 8,
+        "mojang_mappings_available": false,
+        "mojang_version_json": {
+          "build_time": "2019-06-24T12:51:13+00:00",
+          "id": "1.14.3",
+          "name": "1.14.3",
+          "pack_version": 4,
+          "protocol_version": 490,
+          "release_target": "1.14.3",
+          "stable": true,
+          "world_version": 1968
+        },
+        "published_yarn_coordinates": [
+          "net.fabricmc:yarn:1.14.3+build.13",
+          "net.fabricmc:yarn:1.14.3+build.12",
+          "net.fabricmc:yarn:1.14.3+build.11",
+          "net.fabricmc:yarn:1.14.3+build.10",
+          "net.fabricmc:yarn:1.14.3+build.9",
+          "net.fabricmc:yarn:1.14.3+build.8",
+          "net.fabricmc:yarn:1.14.3+build.7",
+          "net.fabricmc:yarn:1.14.3+build.6",
+          "net.fabricmc:yarn:1.14.3+build.5",
+          "net.fabricmc:yarn:1.14.3+build.4",
+          "net.fabricmc:yarn:1.14.3+build.3",
+          "net.fabricmc:yarn:1.14.3+build.2",
+          "net.fabricmc:yarn:1.14.3+build.1"
+        ],
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/e21618620e02be5a14543d1d17ffdba941d09aa8/1.14.3.json"
+      }
+    },
+    {
+      "minecraft": "1.14.2",
+      "reason": "NO_COHERENT_OFFICIAL_EXAMPLE_BUNDLE; partial Mojang and Fabric facts recorded",
+      "verified_partial_facts": {
+        "minecraft_java_minimum": 8,
+        "mojang_mappings_available": false,
+        "mojang_version_json": {
+          "build_time": "2019-05-27T11:46:41+00:00",
+          "id": "1.14.2 / f647ba8dc371474797bee24b2b312ff4",
+          "name": "1.14.2",
+          "pack_version": 4,
+          "protocol_version": 485,
+          "release_target": "1.14.2",
+          "stable": true,
+          "world_version": 1963
+        },
+        "published_yarn_coordinates": [
+          "net.fabricmc:yarn:1.14.2+build.7",
+          "net.fabricmc:yarn:1.14.2+build.6",
+          "net.fabricmc:yarn:1.14.2+build.5",
+          "net.fabricmc:yarn:1.14.2+build.4",
+          "net.fabricmc:yarn:1.14.2+build.3",
+          "net.fabricmc:yarn:1.14.2+build.2",
+          "net.fabricmc:yarn:1.14.2+build.1"
+        ],
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/83299b3bf3139ebd9ae5547b3144dcf68d4cb1fd/1.14.2.json"
+      }
+    },
+    {
+      "minecraft": "1.14.1",
+      "reason": "NO_COHERENT_OFFICIAL_EXAMPLE_BUNDLE; partial Mojang and Fabric facts recorded",
+      "verified_partial_facts": {
+        "minecraft_java_minimum": 8,
+        "mojang_mappings_available": false,
+        "mojang_version_json": {
+          "build_time": "2019-05-13T11:08:37+00:00",
+          "id": "1.14.1 / a8f78b0d43c74598a199d6d80cda413f",
+          "name": "1.14.1",
+          "pack_version": 4,
+          "protocol_version": 480,
+          "release_target": "1.14.1",
+          "stable": false,
+          "world_version": 1957
+        },
+        "published_yarn_coordinates": [
+          "net.fabricmc:yarn:1.14.1+build.10",
+          "net.fabricmc:yarn:1.14.1+build.9",
+          "net.fabricmc:yarn:1.14.1+build.8",
+          "net.fabricmc:yarn:1.14.1+build.7",
+          "net.fabricmc:yarn:1.14.1+build.6",
+          "net.fabricmc:yarn:1.14.1+build.5",
+          "net.fabricmc:yarn:1.14.1+build.4",
+          "net.fabricmc:yarn:1.14.1+build.3",
+          "net.fabricmc:yarn:1.14.1+build.2",
+          "net.fabricmc:yarn:1.14.1+build.1"
+        ],
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/183e49ba0fabb5ef8a304f8f5907fa887f40c466/1.14.1.json"
+      }
+    },
+    {
+      "minecraft": "1.14",
+      "reason": "NO_COHERENT_OFFICIAL_EXAMPLE_BUNDLE; partial Mojang and Fabric facts recorded",
+      "verified_partial_facts": {
+        "minecraft_java_minimum": 8,
+        "mojang_mappings_available": false,
+        "mojang_version_json": {
+          "build_time": "2019-04-23T14:51:09+00:00",
+          "id": "1.14 / 5dac5567e13e46bdb0c1d90aa8d8b3f7",
+          "name": "1.14",
+          "pack_version": 4,
+          "protocol_version": 477,
+          "release_target": "1.14",
+          "stable": false,
+          "world_version": 1952
+        },
+        "published_yarn_coordinates": [
+          "net.fabricmc:yarn:1.14+build.21",
+          "net.fabricmc:yarn:1.14+build.20",
+          "net.fabricmc:yarn:1.14+build.19",
+          "net.fabricmc:yarn:1.14+build.18",
+          "net.fabricmc:yarn:1.14+build.17",
+          "net.fabricmc:yarn:1.14+build.16",
+          "net.fabricmc:yarn:1.14+build.15",
+          "net.fabricmc:yarn:1.14+build.14",
+          "net.fabricmc:yarn:1.14+build.13",
+          "net.fabricmc:yarn:1.14+build.12",
+          "net.fabricmc:yarn:1.14+build.11",
+          "net.fabricmc:yarn:1.14+build.10",
+          "net.fabricmc:yarn:1.14+build.9",
+          "net.fabricmc:yarn:1.14+build.8",
+          "net.fabricmc:yarn:1.14+build.7",
+          "net.fabricmc:yarn:1.14+build.6",
+          "net.fabricmc:yarn:1.14+build.5",
+          "net.fabricmc:yarn:1.14+build.4",
+          "net.fabricmc:yarn:1.14+build.3",
+          "net.fabricmc:yarn:1.14+build.2",
+          "net.fabricmc:yarn:1.14+build.1"
+        ],
+        "release_metadata_url": "https://piston-meta.mojang.com/v1/packages/0fd01dd81eaa451d3130b1cf025a10f129585b10/1.14.json"
+      }
+    }
+  ],
+  "sources": {
+    "https://api.github.com/repos/FabricMC/fabric-example-mod/branches?per_page=100": {
+      "bytes": 9015,
+      "sha256": "dfedbcf67d599964c8b8664720e2096ebd3fb60d4a125de8193129bfdf63e54a"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.100.8+1.20.6/fabric-api-0.100.8+1.20.6.pom": {
+      "bytes": 10145,
+      "sha256": "2a3509af2cc321b7ceac3a9e664d01c742f4c35dac16a71ef1ebefe7b265454e"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.102.0+1.21/fabric-api-0.102.0+1.21.pom": {
+      "bytes": 10144,
+      "sha256": "b011d492d962ba83edb722220440c3e03eeffb2bf2e87950c25a50952fef522e"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.106.1+1.21.2/fabric-api-0.106.1+1.21.2.pom": {
+      "bytes": 10144,
+      "sha256": "11c884945743a33f4c17c0ab2a864511ec750350a1c875ba23ba733ee74ed81e"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.114.1+1.21.3/fabric-api-0.114.1+1.21.3.pom": {
+      "bytes": 10348,
+      "sha256": "dc8bfc236cc282b827c22a22d6bb24d714d41baf814ad6962f2f2b946841710a"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.116.17+1.21.1/fabric-api-0.116.17+1.21.1.pom": {
+      "bytes": 10348,
+      "sha256": "273141a35ae8716ac13f512bd76f6da6fc6b62a00824ebbeec259602cd3dc355"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.119.4+1.21.4/fabric-api-0.119.4+1.21.4.pom": {
+      "bytes": 10570,
+      "sha256": "5fec69e5f914676fae6335101520cea58bcad35440b1d46de59c356c6f7573b9"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.128.2+1.21.5/fabric-api-0.128.2+1.21.5.pom": {
+      "bytes": 10571,
+      "sha256": "ed72676e7e52fe659f8d625486359cc684175ec6c5e1aec477542bf26ca74264"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.128.2+1.21.6/fabric-api-0.128.2+1.21.6.pom": {
+      "bytes": 10146,
+      "sha256": "5ca3c9c0bea656eff68f75fc0334add889613817c52dde705b1603c6f2ea3a65"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.129.0+1.21.7/fabric-api-0.129.0+1.21.7.pom": {
+      "bytes": 10145,
+      "sha256": "c8f63bdd0ebb37a45b845150726bd417de005226005ea7c6efe510f1e11d8433"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.134.1+1.21.9/fabric-api-0.134.1+1.21.9.pom": {
+      "bytes": 10575,
+      "sha256": "56041f364a3248d672d8f9e8c1d80c61ca6156bad1553fc1086e782c1d0aba29"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.136.1+1.21.8/fabric-api-0.136.1+1.21.8.pom": {
+      "bytes": 10358,
+      "sha256": "b4eadf7a52bfcd95d894ba060036e8bcdba93e62473176757d7fe81a46d6f066"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.138.4+1.21.10/fabric-api-0.138.4+1.21.10.pom": {
+      "bytes": 10574,
+      "sha256": "4cc22a118105775153058bde176d7dcab827e2b713eedb1218b68529ce357ad5"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.141.6+1.21.11/fabric-api-0.141.6+1.21.11.pom": {
+      "bytes": 10363,
+      "sha256": "95caad234e6595925b33aa29c0e8ad196f2113b416446d0b3d32c1c76bd9e273"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.145.1+26.1/fabric-api-0.145.1+26.1.pom": {
+      "bytes": 10547,
+      "sha256": "ddb562d13131043c7305987f3e543e8d695f2e54c88c99121ce4b22966d897b0"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.145.4+26.1.1/fabric-api-0.145.4+26.1.1.pom": {
+      "bytes": 10551,
+      "sha256": "b901f297eb8973afdba382be541ced6bb34c41f575490921376291810091e3b5"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.155.2+26.1.2/fabric-api-0.155.2+26.1.2.pom": {
+      "bytes": 10757,
+      "sha256": "06b42d36c369047d8c0b486d5a282a2beabc506d8c645de04b5bb5a715d447a5"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.159.0+26.2/fabric-api-0.159.0+26.2.pom": {
+      "bytes": 10756,
+      "sha256": "5d9af94d66224c20325e52d5623f6a540ad7e5bc4f370aeeaa34a993631c0db5"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.28.5+1.14/fabric-api-0.28.5+1.14.pom": {
+      "bytes": 7556,
+      "sha256": "4b1f65ae3c331c323011498fd29312e352f9cd5a79f340f17e8d432e22567312"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.28.5+1.15/fabric-api-0.28.5+1.15.pom": {
+      "bytes": 8617,
+      "sha256": "b2679685830f2b87db94525e916cf8438af447aecce0f50d8307f39fea94c435"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.42.0+1.16/fabric-api-0.42.0+1.16.pom": {
+      "bytes": 9885,
+      "sha256": "5f268948ab6cb1af149fa11984fa0e7523f0201c727f7a52cfd71cb9324b3e34"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.44.0+1.18/fabric-api-0.44.0+1.18.pom": {
+      "bytes": 10122,
+      "sha256": "11d222cbde05952493cb9c0f842b59e3431d83fc12d1a05748597a6f6f02be81"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.46.1+1.17/fabric-api-0.46.1+1.17.pom": {
+      "bytes": 10559,
+      "sha256": "ddc7bbc052bb86bae93ce9e0f31dc6a17f880ff73f8fd96f3833c00da7f2baf3"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.46.6+1.18/fabric-api-0.46.6+1.18.pom": {
+      "bytes": 10353,
+      "sha256": "967d4c74ea2d6d71e85a5cde259ebce6e064a8eea5ac706c4ee45e6716645581"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.58.0+1.19/fabric-api-0.58.0+1.19.pom": {
+      "bytes": 8469,
+      "sha256": "c73017b10304a0a32c20be8e9c9fbf3c015e794bcb88d8a4549f82ba2ca04859"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.58.5+1.19.1/fabric-api-0.58.5+1.19.1.pom": {
+      "bytes": 8472,
+      "sha256": "d16fb776d25ab6f203e991e758402bd2be1067f7ab4264f10358477515c44354"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.76.1+1.19.3/fabric-api-0.76.1+1.19.3.pom": {
+      "bytes": 9108,
+      "sha256": "754d9d4baedacff519ba2c5b47aa8fa5d935f5340e760163259c88ec8d9a873b"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.77.0+1.18.2/fabric-api-0.77.0+1.18.2.pom": {
+      "bytes": 10141,
+      "sha256": "8979dbae1e581613bafcec2864a8050e6ad594213fc7df3b92e7357327ed95d4"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.77.0+1.19.2/fabric-api-0.77.0+1.19.2.pom": {
+      "bytes": 9302,
+      "sha256": "5529d437e810b91366afc3e3b8f8247d8dfa8375e37e6b5031f719df804f4b62"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.83.0+1.20/fabric-api-0.83.0+1.20.pom": {
+      "bytes": 9937,
+      "sha256": "69e752fda1a92778ebb0e248c9bcb302f9cb9bf7e410904ee2e4f775648a452b"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.87.2+1.19.4/fabric-api-0.87.2+1.19.4.pom": {
+      "bytes": 10152,
+      "sha256": "c73152d65356faa82e075f9c9432123c74b6e374f3780b81d957921f7ea43699"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.91.1+1.20.3/fabric-api-0.91.1+1.20.3.pom": {
+      "bytes": 10148,
+      "sha256": "4a7ee895a409b1280459363551f394e2a24f83382d2ad67272f2114cc80675e0"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.91.6+1.20.2/fabric-api-0.91.6+1.20.2.pom": {
+      "bytes": 10148,
+      "sha256": "85b9f9aa1326fc7b1ea2daa5004ad0cc1dca4d622cf5e09e9eebc6c299100da9"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.92.12+1.20.1/fabric-api-0.92.12+1.20.1.pom": {
+      "bytes": 10566,
+      "sha256": "d596aa5031c5a7695c73219038646765b1a7ed22176cb2be93fe55abbedf84ba"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.97.3+1.20.4/fabric-api-0.97.3+1.20.4.pom": {
+      "bytes": 10360,
+      "sha256": "e6e482d31c69215ea802aeb6b3f76cabc92ed3abf4c6e1dc4436bcdba3950435"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/0.97.8+1.20.5/fabric-api-0.97.8+1.20.5.pom": {
+      "bytes": 10145,
+      "sha256": "480b9bcc4c0c5cebc95e14f68a8584c92e8d8048d9ae8719d4bb95475ebb6062"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-loader/0.19.5/fabric-loader-0.19.5.pom": {
+      "bytes": 429,
+      "sha256": "7be3f6664a1d7ca8cf91fee3ca2ad9c2ddfd4eff25d8513605118206e4f90f0c"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-loom-remap/net.fabricmc.fabric-loom-remap.gradle.plugin/1.17.20/net.fabricmc.fabric-loom-remap.gradle.plugin-1.17.20.pom": {
+      "bytes": 659,
+      "sha256": "9848b6b9f8ffb165074b3ad930370832d498f15ba3305723df4920695292a136"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-loom/1.17-SNAPSHOT/fabric-loom-1.17-20260825.194323-19.module": {
+      "bytes": 6235,
+      "sha256": "d60c33c52a046a8deae9d6c15525f6096bcd00a790c814c0341a8231344ab85e"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-loom/1.17-SNAPSHOT/maven-metadata.xml": {
+      "bytes": 1163,
+      "sha256": "a4dad514fe0c95a96a32566a2e68c964eec43d86541bd4614ceca379bea24546"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-loom/1.17.20/fabric-loom-1.17.20.jar": {
+      "bytes": 1411394,
+      "sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-loom/1.17.20/fabric-loom-1.17.20.module": {
+      "bytes": 6189,
+      "sha256": "6130ad25a773c65fda81c013d9c895930e258ad31f0e9631dc6748e3926524b1"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-loom/maven-metadata.xml": {
+      "bytes": 30810,
+      "sha256": "9c55a149999bba3b027433886a60a8d3d6c90295f76940102c22266fac5a9312"
+    },
+    "https://maven.fabricmc.net/net/fabricmc/fabric-loom/net.fabricmc.fabric-loom.gradle.plugin/1.17.20/net.fabricmc.fabric-loom.gradle.plugin-1.17.20.pom": {
+      "bytes": 647,
+      "sha256": "1b6ad2bc6f9e5cc7976df41706347302f55590d817039d35330a7834ef859082"
+    },
+    "https://meta.fabricmc.net/v2/versions/game": {
+      "bytes": 29941,
+      "sha256": "843c9723f0ea01413e89a16df2765cdd813282c20943962f729c28ef64513041"
+    },
+    "https://meta.fabricmc.net/v2/versions/yarn/1.14": {
+      "bytes": 3776,
+      "sha256": "303a1e22ad9d0e9244057ae04288f2be1e2d608a306aaa4572d4245db531873d"
+    },
+    "https://meta.fabricmc.net/v2/versions/yarn/1.14.1": {
+      "bytes": 1845,
+      "sha256": "6d026a20d6165444f67df52ddcc29f575f0267ab4b545c3bb427e5803c434873"
+    },
+    "https://meta.fabricmc.net/v2/versions/yarn/1.14.2": {
+      "bytes": 1290,
+      "sha256": "a65478802722f65b4dfec15e8a732872f2836e1e9b7ae95d7086c601b07f1d81"
+    },
+    "https://meta.fabricmc.net/v2/versions/yarn/1.14.3": {
+      "bytes": 2406,
+      "sha256": "85ad2c9e3ff892f5a6d5b774b869ed6b6dbdd26de9a46d1a37b5c739e73c8766"
+    },
+    "https://piston-data.mojang.com/v1/objects/031a68bebf55d824f66d6573d8c752f0e1bf232a/client.txt": {
+      "bytes": 11779287,
+      "sha256": "517799a8485e107e932dc1bd27c002b2d0b9207eb2396b685bcfe6c3321a9fbd"
+    },
+    "https://piston-data.mojang.com/v1/objects/0530a206839eb1e9b35ec86acbbe394b07a2d9fb/client.txt": {
+      "bytes": 9597156,
+      "sha256": "127485d79248d4ae2955a7d061c3626d38853ecb054c4d008707732264b0aac1"
+    },
+    "https://piston-data.mojang.com/v1/objects/054ee5085ec49b6d037d10d43c04fd4c9c3b9f4b/client.txt": {
+      "bytes": 4963044,
+      "sha256": "f46186d0ed9d17e073e16ae2c98675dbbc70b4a29495700837aa5de9c1b42c34"
+    },
+    "https://piston-data.mojang.com/v1/objects/055b30d860ead928cba3849ba920c88b6950b654/client.jar": {
+      "bytes": 21644740,
+      "sha256": "e1ac65de9b471b6916cc457fdcff00c1bafac17027aa79100c4df893b3d956db"
+    },
+    "https://piston-data.mojang.com/v1/objects/05b6f1c6b46a29d6ea82b4e0d42190e42402030f/client.jar": {
+      "bytes": 26565641,
+      "sha256": "02dfd345ac1ad55692d5dbc8486ac7e4fea72cd54ac494a79cd48963048e56b2"
+    },
+    "https://piston-data.mojang.com/v1/objects/0837de813d1a6b67e23da3c520a84e872c8d2f0e/client.txt": {
+      "bytes": 5746047,
+      "sha256": "93f188a0038fec8c2402d78e7acca983680978d6a9237c1fab80f22caddb00fe"
+    },
+    "https://piston-data.mojang.com/v1/objects/0c3ec587af28e5a785c0b4a7b8a30f9a8f78f838/client.jar": {
+      "bytes": 23028853,
+      "sha256": "56b71336d2b4fdffd197f56595b0da93e32a946f78f382a299b8f4b92758bb0f"
+    },
+    "https://piston-data.mojang.com/v1/objects/0cf2a0b7f056da1a5a5dd99fc6dc752f33987150/client.txt": {
+      "bytes": 10323161,
+      "sha256": "48b502ccc5e855b49da8aa9c0c0d7c565bec54c9f5da3a3664528aff7b9fdf23"
+    },
+    "https://piston-data.mojang.com/v1/objects/0e9a07b9bb3390602f977073aa12884a4ce12431/client.jar": {
+      "bytes": 26836080,
+      "sha256": "4b56bc9b44de7e88f9fbb52e716c18240da34469fcbafa5ed2e75b04d60617e8"
+    },
+    "https://piston-data.mojang.com/v1/objects/1321521b2caf934f7fc9665aab7e059a7b2bfcdf/client.jar": {
+      "bytes": 17505781,
+      "sha256": "da85197babd989a7de318774cf5d97bcef95e89a70c9fa9a4c8180463e9589fa"
+    },
+    "https://piston-data.mojang.com/v1/objects/150346d1c0b4acec0b4eb7f58b86e3ea1aa730f3/client.txt": {
+      "bytes": 7123832,
+      "sha256": "9e31de7fc15b1bac0e58abc441a5e56c320266112feaea981bcffd41dd6201e1"
+    },
+    "https://piston-data.mojang.com/v1/objects/16d12d67cd5341bfc848340f61f3ff6b957537fe/client.txt": {
+      "bytes": 5722352,
+      "sha256": "c95a7046ab43371cc476b8b51978c6f2155c62f4cc5756b05c8ef81e0f11691f"
+    },
+    "https://piston-data.mojang.com/v1/objects/191771837687b766537a8c4607cb6fad79c533a1/client.jar": {
+      "bytes": 38113398,
+      "sha256": "bc6194c61566b587f196090d730698f2191170f7580adb143e4ff839939d3840"
+    },
+    "https://piston-data.mojang.com/v1/objects/1952d94a0784e7abda230aae6a1e8fc0522dba99/client.jar": {
+      "bytes": 17546582,
+      "sha256": "d6740464ee2bdf37d285c5d368d2e16497492427fb5783e2db3482bbf0079ed0"
+    },
+    "https://piston-data.mojang.com/v1/objects/1cf89c77ed5e72401b869f66410934804f3d6f52/client.jar": {
+      "bytes": 19536133,
+      "sha256": "14122287d4e4256c2d65ec8c0ccfa3b56448495fa3ccabc87d0f0eeb4fa1c30f"
+    },
+    "https://piston-data.mojang.com/v1/objects/1fbf9f0bc9c326af859b3ccf71c2a8f5edc47ef8/client.txt": {
+      "bytes": 4972120,
+      "sha256": "65ad295b6cf63821f5d8f961c128128475e6d39386358d22eb238a3ce6e31777"
+    },
+    "https://piston-data.mojang.com/v1/objects/2244b6f072256667bcd9a73df124d6c58de77992/client.txt": {
+      "bytes": 9598610,
+      "sha256": "140c47931cccc8fc9e4c22d7603e2d714d1a953a146f51ea7397d95c955536ec"
+    },
+    "https://piston-data.mojang.com/v1/objects/227d16f520848747a59bef6f490ae19dc290a804/client.txt": {
+      "bytes": 6431705,
+      "sha256": "191b957aaa40b294402feef29651ae7a9f1263ec22c5382f3b8fa0a4918b0471"
+    },
+    "https://piston-data.mojang.com/v1/objects/228fdf45541c4c2fe8aec4f20e880cb8fcd46621/client.jar": {
+      "bytes": 17492200,
+      "sha256": "00740ef4475d4cd0a1d7064f89602f759c45ff9afe29da9b0ee0b9037ebb2a71"
+    },
+    "https://piston-data.mojang.com/v1/objects/2dc72797acbc1b63fc16a11c4ac393605f453754/client.jar": {
+      "bytes": 39193383,
+      "sha256": "40896ee9f1e2bec3c934daac7e93d41e9e3d9c2f8ae0ca366d52ffbfd1afa290"
+    },
+    "https://piston-data.mojang.com/v1/objects/2e9a3e3107cca00d6bc9c97bf7d149cae163ef21/client.jar": {
+      "bytes": 20259661,
+      "sha256": "1d09e3639644b6b2254499469d0765cc005a286d19f3fa595b0ed8fb07971ec7"
+    },
+    "https://piston-data.mojang.com/v1/objects/30c73b1c5da787909b2f73340419fdf13b9def88/client.jar": {
+      "bytes": 26836906,
+      "sha256": "499f6897d1837516680f3114072d8106e11c9adcd933fe5cf051b551089b0c99"
+    },
+    "https://piston-data.mojang.com/v1/objects/3641ccb54eac2153c7e8274823c5a8e046beaba0/client.txt": {
+      "bytes": 11510637,
+      "sha256": "f223e9775abb66b6712c505cb1a73b48d615efebaf43a9f81dd58df9a9b1c7b3"
+    },
+    "https://piston-data.mojang.com/v1/objects/374c6b789574afbdc901371207155661e0509e17/client.txt": {
+      "bytes": 5746047,
+      "sha256": "7931ed6d723eceb1d621d05a76e10ddf643bf468c6ecf1c4ecf377bd72cf8b8c"
+    },
+    "https://piston-data.mojang.com/v1/objects/377031a9e733ba8ab4d355959a8f6fb8eb707556/client.jar": {
+      "bytes": 38113231,
+      "sha256": "8c109be6177f40d10d0afd820b06542f9609597874242b96e16c5b0dc9e1fef3"
+    },
+    "https://piston-data.mojang.com/v1/objects/37fd3c903861eeff3bc24b71eed48f828b5269c8/client.jar": {
+      "bytes": 17547153,
+      "sha256": "00b5ebbc33e95ea88c1ab80601599c9827e9aa861d93ccc2cfcbbfd996e86263"
+    },
+    "https://piston-data.mojang.com/v1/objects/42366909cc612e76208d34bf1356f05a88e08a1d/client.txt": {
+      "bytes": 7574170,
+      "sha256": "f72a4675ae77fa16966a0338567e30ee3a64bb7476932e264e8b25937f664a1b"
+    },
+    "https://piston-data.mojang.com/v1/objects/42c2292dfc21de314dee5205760332c807cad411/client.txt": {
+      "bytes": 10178949,
+      "sha256": "e92a9cb01c233075b51a6233d0c22f56dcda3fcab46438d3f7a1781d104dcd41"
+    },
+    "https://piston-data.mojang.com/v1/objects/4e618f09a0c649dde3fdf829df443ce0b8831e65/client.jar": {
+      "bytes": 38113927,
+      "sha256": "b1b3158572666445eff01e82fad8c7de2e4953db6d354f311730d77a8359d0b0"
+    },
+    "https://piston-data.mojang.com/v1/objects/55ba86ddcbc3579397f41910463ffd4056e1e523/client.jar": {
+      "bytes": 18814947,
+      "sha256": "7194d1326cf796f62ac55f3cb56f851c232895639ae27510f3207d5a73f91814"
+    },
+    "https://piston-data.mojang.com/v1/objects/57669731d542f98646772e91a0d68628f9827a5c/client.txt": {
+      "bytes": 10670987,
+      "sha256": "3907657ade3e61bc8cffb4ca0a1bcba15f57986be4e613900947119364a206e5"
+    },
+    "https://piston-data.mojang.com/v1/objects/580c412cfa5869318a3a02d6b018a83781bf3ae7/client.txt": {
+      "bytes": 4963019,
+      "sha256": "11415bc25024658f0ef1c1a0028df282135299e526a689de2f29c4662edf931a"
+    },
+    "https://piston-data.mojang.com/v1/objects/5c292ff7d3161977041116698e295083fd5ec8f5/client.txt": {
+      "bytes": 8578898,
+      "sha256": "d4e2eb2b32ae7bd2e95ea3a8391813a7b6795e20884cf01d989dce68f906e2fd"
+    },
+    "https://piston-data.mojang.com/v1/objects/6073e4ba6949217eb708c4512be2ccc1850a603f/client.txt": {
+      "bytes": 4709268,
+      "sha256": "2dd53a5e70ba493cf6e33c0fc52bbdf4c57f9429c7a13842565aa825fd44d910"
+    },
+    "https://piston-data.mojang.com/v1/objects/653e97a2d1d76f87653f02242d243cdee48a5144/client.jar": {
+      "bytes": 17505439,
+      "sha256": "19960f4e3c60f2723f361844d2b4020b8bf2160bd91a1e1efde8ce5aea4ff73d"
+    },
+    "https://piston-data.mojang.com/v1/objects/65b1468c44fbf34382716416b5c1a16d2949217a/client.txt": {
+      "bytes": 9421856,
+      "sha256": "9afdb3b7fcc4c6acbec3bc6ccb46192bfc6460e12bf9e268e29bfee46bc7fbac"
+    },
+    "https://piston-data.mojang.com/v1/objects/6c48521eed01fe2e8ecdadbd5ae348415f3c47da/client.txt": {
+      "bytes": 8001795,
+      "sha256": "67bfc33ef0c7103f002d6ac134f8eddd3d67e2ce45d266e83816d1a2e2c9b01d"
+    },
+    "https://piston-data.mojang.com/v1/objects/6f67d19b4467240639cb2c368ffd4b94ba889705/client.jar": {
+      "bytes": 27844259,
+      "sha256": "25190c556bc56d11070638ccab3b3c6efd76bb9684c92a2680a4de01c3c7138b"
+    },
+    "https://piston-data.mojang.com/v1/objects/740a125b83dd3447feaa3c5e891ead7fbb21ae28/client.jar": {
+      "bytes": 29516555,
+      "sha256": "9592df8587d6d3ec0334c873ad432dc76006d6129afdce9a7eac52638339a24a"
+    },
+    "https://piston-data.mojang.com/v1/objects/7a762a59345c13af7d87111207a93f5a8607f6c0/client.jar": {
+      "bytes": 18796546,
+      "sha256": "93907cbf0655aa5f10d049efa4d745f4250eecc5d0d5d1268046eec3144f323a"
+    },
+    "https://piston-data.mojang.com/v1/objects/7b07fd09d1e3aae1bc7a1304fedc73bfe5d81800/client.jar": {
+      "bytes": 15517346,
+      "sha256": "41eee66b4c8e76c018745a63a46a15097cc1c6482c94b38801054938a010b21b"
+    },
+    "https://piston-data.mojang.com/v1/objects/7e46fb47609401970e2818989fa584fd467cd036/client.jar": {
+      "bytes": 20042090,
+      "sha256": "737c28a56c8980fcd8574465c61538ebde8f511bdd035c69d0cbe27953f892aa"
+    },
+    "https://piston-data.mojang.com/v1/objects/7e62354a697f95cf5e7d5981face0583676a9ef7/client.txt": {
+      "bytes": 11511143,
+      "sha256": "2a6f53f4c1fd048e8fa956e3a3fbbb0afc02d5bbc23e52a16b328aed61b9bf39"
+    },
+    "https://piston-data.mojang.com/v1/objects/82d1974e75fc984c5ed4b038e764e50958ac61a0/client.jar": {
+      "bytes": 23186213,
+      "sha256": "fa1a19be56a506426308abbc1cad85f299a7fc6dae4335559351ba0246713fda"
+    },
+    "https://piston-data.mojang.com/v1/objects/848855615bc81e3db1c85e69b6afb150807a1261/client.txt": {
+      "bytes": 10987575,
+      "sha256": "2ff82b34ce5f849aaafdff51e23b9448c4263881238b780a441fe1061a6fc261"
+    },
+    "https://piston-data.mojang.com/v1/objects/8b11614bea9293592a947ea8f4fd72981ea66677/client.jar": {
+      "bytes": 15518397,
+      "sha256": "6e28ecd008d0ca5e1dcd346dbc2882430f02a77a78864d57acc49fc8bc1b5358"
+    },
+    "https://piston-data.mojang.com/v1/objects/8c325a0c5bd674dd747d6ebaa4c791fd363ad8a9/client.jar": {
+      "bytes": 25191691,
+      "sha256": "b3b2a798e2d67b566008fe4a03767ae2c7ff3f8c7ba6751e7b71fc7299672d0a"
+    },
+    "https://piston-data.mojang.com/v1/objects/8d83af626cae1865deaf55fbf96934be4886fd45/client.txt": {
+      "bytes": 10988969,
+      "sha256": "328f2c5849c7c5fc4f2b1eae4f74a7cfe6bb337c7938242ac5c4f9eac89b1e50"
+    },
+    "https://piston-data.mojang.com/v1/objects/8d9b65467c7913fcf6f5b2e729d44a1e00fde150/client.jar": {
+      "bytes": 19546842,
+      "sha256": "a49b4a56c5bbe15c9ed9fe53efa9a591f265a1f5ba7d6aa9739a58ea7a92b79d"
+    },
+    "https://piston-data.mojang.com/v1/objects/8e8c9be5dc27802caba47053d4fdea328f7f89bd/client.txt": {
+      "bytes": 7236064,
+      "sha256": "c5db94c44c1ce6c5d3bfce64152831090310c202f4abe4375adbb3454afcec76"
+    },
+    "https://piston-data.mojang.com/v1/objects/90d438c3e432add8848a9f9f368ce5a52f6bc4a7/client.jar": {
+      "bytes": 21643604,
+      "sha256": "146d4018cfed50c5e77483940653091f186d2eea9ad42fc40939f5c72d6b7f52"
+    },
+    "https://piston-data.mojang.com/v1/objects/9539840a7dbea682b305858fe138bd03ee7823cf/client.txt": {
+      "bytes": 5632455,
+      "sha256": "53d46abe149aadd367be8789207c53a7cee46ba8382e5bfd60247eb22984119d"
+    },
+    "https://piston-data.mojang.com/v1/objects/958928a560c9167687bea0cefeb7375da1e552a8/client.jar": {
+      "bytes": 23476620,
+      "sha256": "0e79cf7f07c107e9a1fe22ed703e472372b44149e64114944f0811abbd25f3ec"
+    },
+    "https://piston-data.mojang.com/v1/objects/977727ec9ab8b4631e5c12839f064092f17663f8/client.jar": {
+      "bytes": 22704188,
+      "sha256": "b7228c23dbc8988129561af3918dd469577de842d2eb3c7dabe00316bf9a44d6"
+    },
+    "https://piston-data.mojang.com/v1/objects/99ade839eacf69b8bed88c91bd70ca660aee47bb/client.txt": {
+      "bytes": 6611464,
+      "sha256": "a7a4109255dfb74b9552b339482f0714bb0e7e7143d1059b0bf62a526d2c2a84"
+    },
+    "https://piston-data.mojang.com/v1/objects/a19d9badbea944a4369fd0059e53bf7286597576/client.jar": {
+      "bytes": 29525242,
+      "sha256": "ea74e9c5e92d01f95f3d39196ddb734e19a077a58b4c433c34109487d600276f"
+    },
+    "https://piston-data.mojang.com/v1/objects/a2db1ea98c37b2d00c83f6867fb8bb581a593e07/client.jar": {
+      "bytes": 29522178,
+      "sha256": "6d0aa64c6a0aee3270253317f51e9e816f94cd3b16b44f5d605615c39fc62fb9"
+    },
+    "https://piston-data.mojang.com/v1/objects/a4cd9a97400f7ecfe4dba23e427549ebc5815d66/client.txt": {
+      "bytes": 8001434,
+      "sha256": "fdd921d6bcc7657850f78514d36bb57af0b8a340786d12c46ec18d9c46c039de"
+    },
+    "https://piston-data.mojang.com/v1/objects/a661c6a55a0600bd391bdbbd6827654c05b2109c/client.txt": {
+      "bytes": 6716693,
+      "sha256": "a2aa6ee1030bfef79e9b2e08e79de1637fdd7ecb5bf8891cf2e9a4b186042543"
+    },
+    "https://piston-data.mojang.com/v1/objects/a7e5a6024bfd3cd614625aa05629adf760020304/client.jar": {
+      "bytes": 28335587,
+      "sha256": "c17c450c6e72cc51297daa57ce38f800aa01cf022b743daa21a0512d326d894e"
+    },
+    "https://piston-data.mojang.com/v1/objects/af100b34ec7ef2b8b9cf7775b544d21d690dddec/client.jar": {
+      "bytes": 18813147,
+      "sha256": "4063062677433988e012fba53e42e4c21adb6919ac7f061f19f3c6e75b334e07"
+    },
+    "https://piston-data.mojang.com/v1/objects/b178a327a96f2cf1c9f98a45e5588d654a3e4369/client.jar": {
+      "bytes": 24445920,
+      "sha256": "bef21938224902dd925e2d89dcfe1d2540656d4cf7a5abd2b93e0402d135c655"
+    },
+    "https://piston-data.mojang.com/v1/objects/b88808bbb3da8d9f453694b5d8f74a3396f1a533/client.jar": {
+      "bytes": 28984409,
+      "sha256": "522672ad20b460c02c2e39b6c5035ef6a849af28eb11ab2ac7eb293d395a8c11"
+    },
+    "https://piston-data.mojang.com/v1/objects/ba2df812c2d12e0219c489c4cd9a5e1f0760f5bd/client.jar": {
+      "bytes": 31152600,
+      "sha256": "1473c9489ac50fda3c435049a76a70d61a10b8610db27f5ba9d8756b686cd3bd"
+    },
+    "https://piston-data.mojang.com/v1/objects/bdeb624c3aefba11d9d40f34bc96176350b549b6/client.txt": {
+      "bytes": 10989738,
+      "sha256": "dce035fedcc047ce0306c69892176b5eb9036bcc2845c87198163f12bb1d67ca"
+    },
+    "https://piston-data.mojang.com/v1/objects/be76ecc174ea25580bdc9bf335481a5192d9f3b7/client.txt": {
+      "bytes": 8897012,
+      "sha256": "ad03c803d866062909dd378ed5f1611687dc0ed0a76cc7fd57e968a99d641e5f"
+    },
+    "https://piston-data.mojang.com/v1/objects/c0898ec7c6a5a2eaa317770203a1554260699994/client.jar": {
+      "bytes": 21462385,
+      "sha256": "ffd4fb3037d4110085b4d3d2dc47b760695528eb14292c3e5f7c758983c6d764"
+    },
+    "https://piston-data.mojang.com/v1/objects/c6b92b2374a629f20802bb284f98a4ee790e950a/client.jar": {
+      "bytes": 26565623,
+      "sha256": "49d5949adbb1021a7eb00c1b949f9e39934b10249cbf86d25004774d1b3ff510"
+    },
+    "https://piston-data.mojang.com/v1/objects/c7ac2d0d86f4ca416cab9064ff8a281852ad0c7b/client.jar": {
+      "bytes": 27842947,
+      "sha256": "613091da0f62426ae8dcf9afb30eb639485f493b81cda3a2b96b1fb8a6b9976c"
+    },
+    "https://piston-data.mojang.com/v1/objects/c9abbe8ee4fa490751ca70635340b7cf00db83ff/client.jar": {
+      "bytes": 17492432,
+      "sha256": "b4831e7b63b10588ff06ea86322108d916c536446f3aea3ae988b7fe3e1f66ef"
+    },
+    "https://piston-data.mojang.com/v1/objects/ca6c5a139045967229975c0c0b7f93e78b4314c2/client.jar": {
+      "bytes": 18794327,
+      "sha256": "9b740c9fd4955981125ebd3cd086baa8b4392963d043a3480b5b942a96637c25"
+    },
+    "https://piston-data.mojang.com/v1/objects/ce0ed2eb99175df9ec5166324e3fdd1f87cee827/client.txt": {
+      "bytes": 10178587,
+      "sha256": "e37560e4889168916a73dbc4922c563002eff70fbecfe1cf5c50a7b222f451b2"
+    },
+    "https://piston-data.mojang.com/v1/objects/ce92fd8d1b2460c41ceda07ae7b3fe863a80d045/client.jar": {
+      "bytes": 30591861,
+      "sha256": "40c0a32c46601f71f6a61dae9f126202ded5cc453cfb8da6e42ae73f2a3f5c1b"
+    },
+    "https://piston-data.mojang.com/v1/objects/d3bdf582a7fa723ce199f3665588dcfe6bf9aca8/client.jar": {
+      "bytes": 30592168,
+      "sha256": "e65ca028bc58da12bf8413066c90ecd4d48c94fb351d9bbd22ecdff5c87f9482"
+    },
+    "https://piston-data.mojang.com/v1/objects/d49eb6caed53d23927648c97451503442f9e26fd/client.jar": {
+      "bytes": 20038427,
+      "sha256": "381e090ef22584526113bcccf26ae38a310a22094d14c2d0dec72b71fdf65aaa"
+    },
+    "https://piston-data.mojang.com/v1/objects/ddf517a4f6750f4c15189de4e03246ae1f916cf5/client.txt": {
+      "bytes": 5632455,
+      "sha256": "6cc374f819bca44d940f8912044b07bdac3e240a02e37117ae1d4ad63c21409b"
+    },
+    "https://piston-data.mojang.com/v1/objects/de46c8f33d7826eb83e8ef0e9f80dc1f08cb9498/client.txt": {
+      "bytes": 9422442,
+      "sha256": "27f4ef3a9362e9874e2c33edac981b6f485ad97f92c4e35b497525b646aae745"
+    },
+    "https://piston-data.mojang.com/v1/objects/e3f78cd16f9eb9a52307ed96ebec64241cc5b32d/client.jar": {
+      "bytes": 15531492,
+      "sha256": "4a73008a73f3824b7c711750a5a37556df8614f193c0a531e292dad159a73a7c"
+    },
+    "https://piston-data.mojang.com/v1/objects/e4d540e0cba05a6097e885dffdf363e621f87d3f/client.txt": {
+      "bytes": 6437531,
+      "sha256": "2b28ded68f8602aaf2f35ef92dd10ee41ba2cf9723e29570155d60e1723848e9"
+    },
+    "https://piston-data.mojang.com/v1/objects/e575a48efda46cf88111ba05b624ef90c520eef1/client.jar": {
+      "bytes": 23028278,
+      "sha256": "5ac9ead135746f5f27048f2e01d8d5bdc2dabc4d91422f73ef2435f4c3d24aff"
+    },
+    "https://piston-data.mojang.com/v1/objects/e824c89c612c0b9cb438ef739c44726c59bbf679/client.txt": {
+      "bytes": 6610979,
+      "sha256": "b4c7d514328050fa09ac04818d21e4be0b58e75c6b0847e56ce09f6637b8877b"
+    },
+    "https://piston-data.mojang.com/v1/objects/f14771b764f943c154d3a6fcb47694477e328148/client.txt": {
+      "bytes": 7844191,
+      "sha256": "5ef270b938f89cfc77371e0deee9f9044c41d9a373fa11dcb1fd1923272c4606"
+    },
+    "https://piston-data.mojang.com/v1/objects/faac5028fbca3859db970cc4ca041aeec55f6d9d/client.txt": {
+      "bytes": 5722449,
+      "sha256": "c41c58faaf3a3b651d8883b9b1df355cb6ad59c4d6296b2e1ffc3dfe2bf9be3e"
+    },
+    "https://piston-data.mojang.com/v1/objects/fc8e22d42c0e4eb1899e2acf7e97eae917e1cb94/client.txt": {
+      "bytes": 7235104,
+      "sha256": "9b2dfe745719f4de1ce3fb23baeb24e31623c1fcc249e39bbdb068ad7f600236"
+    },
+    "https://piston-data.mojang.com/v1/objects/fd19469fed4a4b4c15b2d5133985f0e3e7816a8a/client.jar": {
+      "bytes": 24445539,
+      "sha256": "9221ab461a491bf9661cd8e773a5e662aaa43d600fa7970b8c12bbfb0431b838"
+    },
+    "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json": {
+      "bytes": 275643,
+      "sha256": "264caec1d4e18fb8ce2f3bf34ebcf2c6c682b7c928b5bf6fee88d5dc0f8f0a77"
+    },
+    "https://piston-meta.mojang.com/v1/packages/0b03f4b4dd85ab8ac9b26073131e5edff362d3f9/1.21.6.json": {
+      "bytes": 43719,
+      "sha256": "69ea01017c36d3ba9f515f10fae92674f27b4c29243cf2f9af1f774ccf882697"
+    },
+    "https://piston-meta.mojang.com/v1/packages/0d9ace8a2ecfd1f4c782786f4b985a499240ff12/1.17.json": {
+      "bytes": 30311,
+      "sha256": "537c6fa7e6ab13caa76ce2e84e4748882d36fcd5a076fa6903f894880e1df0f6"
+    },
+    "https://piston-meta.mojang.com/v1/packages/0fd01dd81eaa451d3130b1cf025a10f129585b10/1.14.json": {
+      "bytes": 21595,
+      "sha256": "3d05fc911c8559105767713365ea1c29bbbeccf57214f286c86a598ce51f22a6"
+    },
+    "https://piston-meta.mojang.com/v1/packages/11729473c3df1c3d62cf16b0452a04d981aa8f46/1.20.json": {
+      "bytes": 34972,
+      "sha256": "f547eaa82669bd9e3201036e1b9f80f79eab4af6680a9c0fd54bdbb872a29544"
+    },
+    "https://piston-meta.mojang.com/v1/packages/14bbfb25fb1c1c798e3c9b9482b081a78d1f3a9d/1.19.json": {
+      "bytes": 34498,
+      "sha256": "3b12ffa1842005466c70cc73b91f5717081d878f41ff39c2b5bdfaa18efda87a"
+    },
+    "https://piston-meta.mojang.com/v1/packages/17e07eb50a0a1f5a82dfd7803358564d8dc7c199/26.1.json": {
+      "bytes": 42489,
+      "sha256": "5f17ee3a66f1db5104bc751b347de9bc0c92d247f9e7b7471586d686e4b9b8b8"
+    },
+    "https://piston-meta.mojang.com/v1/packages/183e49ba0fabb5ef8a304f8f5907fa887f40c466/1.14.1.json": {
+      "bytes": 21597,
+      "sha256": "71c39840d012fcbe8fedb7be876bd008365b62ec7b1c9c5c7bd34d9a29c8ca22"
+    },
+    "https://piston-meta.mojang.com/v1/packages/18c3063de87ae126b4e017121219ba802be0755b/1.15.1.json": {
+      "bytes": 29346,
+      "sha256": "dda0859bca7447ff5f071643006b35a51f54e2fbef851a6665b424cf5743c598"
+    },
+    "https://piston-meta.mojang.com/v1/packages/21147b6efe6d4bf70ee8c77bbf32f88c5853c50b/1.20.5.json": {
+      "bytes": 38403,
+      "sha256": "65ca7034ea5838bdb1c98994690a66d7141466e3e14e9e5fc2825cb5dcc92afd"
+    },
+    "https://piston-meta.mojang.com/v1/packages/2a45ab0ec1076068d48c61bc1032a3b04ea17614/1.21.3.json": {
+      "bytes": 43664,
+      "sha256": "d47bd1e7608a43bfa3a00c19c553f75bb0010d66b5ae9e7056602a26b1de3b94"
+    },
+    "https://piston-meta.mojang.com/v1/packages/334b33fcba3c9be4b7514624c965256535bd7eba/1.18.2.json": {
+      "bytes": 30469,
+      "sha256": "3df8f7b5e0ae5ccfd73adc9e00daf407a7274b138daab5793e58d14f2ab74144"
+    },
+    "https://piston-meta.mojang.com/v1/packages/3369f7471daf62667dcca9f1ab76e966d8a5e7e2/1.19.4.json": {
+      "bytes": 34407,
+      "sha256": "cd220db9a570b0e85be019a15f0b03eddf1b67b34bfb03db1cca426e96f13e36"
+    },
+    "https://piston-meta.mojang.com/v1/packages/39d5e8925d37490c6f2abb2e02b8c6f1b35719df/1.19.1.json": {
+      "bytes": 34505,
+      "sha256": "9d52a382a06cb133f16a021a3278dfd91b8d2a28d7094a45480ed931abc4043e"
+    },
+    "https://piston-meta.mojang.com/v1/packages/54fa3af57d041d2771e66d390197b2c0288e697c/1.16.1.json": {
+      "bytes": 29287,
+      "sha256": "9688ec094a807c45513733388f7c8426d80a58cee96ed86be5380cb6a45f4a73"
+    },
+    "https://piston-meta.mojang.com/v1/packages/596ad61fda7612d9edf8881cf81869276bdb7f82/1.16.4.json": {
+      "bytes": 29287,
+      "sha256": "667fff4ca7fd0f56ab78b757224515e8e64375868e8d1ce6040091d7b63a0cb5"
+    },
+    "https://piston-meta.mojang.com/v1/packages/59bd833994872d1b5037dde9fc5a0ce0005c63bb/1.21.5.json": {
+      "bytes": 43719,
+      "sha256": "1b9049970e922f6b4fa149b75c4410868d262617e26b6dc854584b2dd5a02144"
+    },
+    "https://piston-meta.mojang.com/v1/packages/59e0a746d13b4bbc4c3de442237609c195dcceea/1.21.2.json": {
+      "bytes": 43664,
+      "sha256": "0b77bd2450ba8511989a7f6ff8ff4d68907654e41d1eb4cd88821a61bc590405"
+    },
+    "https://piston-meta.mojang.com/v1/packages/5cf8837ebf5fa08b3452929592ea33fee5577020/1.21.9.json": {
+      "bytes": 44431,
+      "sha256": "7d2d84ca1ed7706e2fb445cc99dc6b1f719407afe4344f8e2e01c91cbe8e9489"
+    },
+    "https://piston-meta.mojang.com/v1/packages/5f96a10c9d6b9d2f6deda4a9ad2e2ad451cde997/1.20.1.json": {
+      "bytes": 34974,
+      "sha256": "83e11a350ea281b796eaaecf9287031e362a35a6383a8120aaffb4aafb864292"
+    },
+    "https://piston-meta.mojang.com/v1/packages/6485dd131ef68c968041a9f6fd73094b027e42e1/1.16.3.json": {
+      "bytes": 29287,
+      "sha256": "193c5226095ce9e8a317f1e35ddbe4d976f176f6df7ac649ecfa669e17160ead"
+    },
+    "https://piston-meta.mojang.com/v1/packages/6d338d506894d81389b9e2ef480be67512b3720b/26.1.1.json": {
+      "bytes": 42491,
+      "sha256": "54f9a4bec210a0b2cefacb3382e2f64ec131e1d3f4378eabf8492a541e956a1f"
+    },
+    "https://piston-meta.mojang.com/v1/packages/6f1e86f876536c71cbfadf4b3ad464e000a60b79/1.20.4.json": {
+      "bytes": 35014,
+      "sha256": "9bbf2b499a4335c9bdd9e7c06a52ea0267cbcdc4744f89622f0eb2850162045a"
+    },
+    "https://piston-meta.mojang.com/v1/packages/7367ea8b7cad7c7830192441bb2846be0d2ceeac/1.18.json": {
+      "bytes": 30176,
+      "sha256": "40e076b63d116d21b8eaf7f9d3e09651e4bbc5853cde47edc13b4d5ea0b6631b"
+    },
+    "https://piston-meta.mojang.com/v1/packages/7c4d6ae09d26fa24e8c16e46b6d969c963adfb8b/1.21.json": {
+      "bytes": 38401,
+      "sha256": "63a38bc5d770c1963137f761c41feb455d0df7189e2367dadeaca22228b66292"
+    },
+    "https://piston-meta.mojang.com/v1/packages/7ff864e988a2c29907154d5f9701e87e5d5e554a/1.18.1.json": {
+      "bytes": 30178,
+      "sha256": "b854990db7e1948661c0f0359e3b2dbf32610a7a61b4efa4d5471399bcf68fd1"
+    },
+    "https://piston-meta.mojang.com/v1/packages/83299b3bf3139ebd9ae5547b3144dcf68d4cb1fd/1.14.2.json": {
+      "bytes": 21597,
+      "sha256": "237aa8d499b71bb17122cbee40b8748efcd5ac9d8362c68c89e99ab0703e66b8"
+    },
+    "https://piston-meta.mojang.com/v1/packages/833322370ab320e77717097082effe1d124d48bd/1.15.json": {
+      "bytes": 29344,
+      "sha256": "d154eaf07885a7fd6dfc6014bb9caf08fecc19ccd9a0862b31b1c7d1639e7785"
+    },
+    "https://piston-meta.mojang.com/v1/packages/998d9ef5770d05c20d760dc16cf85151f35009f2/1.16.2.json": {
+      "bytes": 29287,
+      "sha256": "f696986f4c07cd12dede183c86266d5cd34def6846eb0f014e1a84c2a76688d4"
+    },
+    "https://piston-meta.mojang.com/v1/packages/9e193b6adc9521687b9d444044cec4bba5789655/1.21.8.json": {
+      "bytes": 43719,
+      "sha256": "f001a5806721a32f6c92f7211268887af34f11b20fc62588bbf8d750024f0a2a"
+    },
+    "https://piston-meta.mojang.com/v1/packages/a15eac24543d2a5e70f3ee28f033463adc1637e6/1.21.4.json": {
+      "bytes": 43714,
+      "sha256": "126e6924bf6e9343f9e7f6393aba78a19582fa92108ef2bd4d24465714e83d96"
+    },
+    "https://piston-meta.mojang.com/v1/packages/a61802714c7980f7dd2c94e1783a178c3860f866/26.1.2.json": {
+      "bytes": 42491,
+      "sha256": "c66434011ae20029658829384b4220d83c97053a81015331b78043b86c72e496"
+    },
+    "https://piston-meta.mojang.com/v1/packages/aa79dcb21c8b77084c7a73f774196a2a2a34d021/1.20.2.json": {
+      "bytes": 35011,
+      "sha256": "947c5341edf5ed033b660eada324233d10276d49433cbd894612a7b830b75e2b"
+    },
+    "https://piston-meta.mojang.com/v1/packages/bd23a7ec14eb492bc20d8d06508b6ebb0a63c31a/26.2.json": {
+      "bytes": 51781,
+      "sha256": "3797228753b5d70ff1aa0db48ea0d2e3ade2bfda357b4702262534b651fc80c6"
+    },
+    "https://piston-meta.mojang.com/v1/packages/be146d5f66a3627ed0a87c234c4d8dde8ab35098/1.14.4.json": {
+      "bytes": 26942,
+      "sha256": "615f466a39d2c19ae9b6e2401aa7bd07dbda337f976bcce383326b8d6ba4e532"
+    },
+    "https://piston-meta.mojang.com/v1/packages/d5b8ba8a71e5a3b6f45579cf8da59b36a8be994b/1.19.3.json": {
+      "bytes": 34704,
+      "sha256": "c903568902fdf9d33db959374a6c4ed4744ea3151081558d2f8ae03de752b297"
+    },
+    "https://piston-meta.mojang.com/v1/packages/d88e59bdf332d3fb154faec2c51d938dbead54d6/1.21.11.json": {
+      "bytes": 42184,
+      "sha256": "1c57ce7db5b99ab3a158340ae7863baaaf64c57fad109809ffcf9027c0f1c6ab"
+    },
+    "https://piston-meta.mojang.com/v1/packages/e0e7ab5ed6f55bbd874ef95be3c9356d67e64b57/1.17.1.json": {
+      "bytes": 30313,
+      "sha256": "b6125f5a4410c3a71c1cf177dbdbf8c9e409bde8e435fb094bedd5ad6ce07902"
+    },
+    "https://piston-meta.mojang.com/v1/packages/e21618620e02be5a14543d1d17ffdba941d09aa8/1.14.3.json": {
+      "bytes": 21598,
+      "sha256": "ebf2df95d9bd83c6687f287d5a6f5f41f74bc1b39159fcbb74ff6d1d19d8464c"
+    },
+    "https://piston-meta.mojang.com/v1/packages/e3f5e38e11eab79177e8b0bb3269f9293c07d21c/1.20.6.json": {
+      "bytes": 38403,
+      "sha256": "12687741ee1e09be45e080dcdc78ddd2222453c1f3c5a832e51072b12c5a97f1"
+    },
+    "https://piston-meta.mojang.com/v1/packages/e77547a38bcbc9a50844d8e74ee4bea01f64aa68/1.21.10.json": {
+      "bytes": 44432,
+      "sha256": "a7b4f15efc1c7cbfa283ca32907d239459d953993df50087fef42b36f64da71e"
+    },
+    "https://piston-meta.mojang.com/v1/packages/e9d0adb8f642abe422909ede50f651b2b58a3573/1.15.2.json": {
+      "bytes": 29346,
+      "sha256": "e974511243e845b2427ab635eba5612481cb420a70c0630aa041eab3eeb590c5"
+    },
+    "https://piston-meta.mojang.com/v1/packages/e9d21d375f9c961f0e9731d4e463306d76e77c48/1.16.json": {
+      "bytes": 29285,
+      "sha256": "32ea7a259475ba6f2dc03f979bb2429115ba4137727f776dfd22cc55b1483297"
+    },
+    "https://piston-meta.mojang.com/v1/packages/ed548106acf3ac7e8205a6ee8fd2710facfa164f/1.19.2.json": {
+      "bytes": 34505,
+      "sha256": "daa5085a617194df8ab930c0b03161ef01a654ccd15cc57f97c659f4c96e986f"
+    },
+    "https://piston-meta.mojang.com/v1/packages/efe5efea609895bb0127994d59115a0f9795b0b2/1.21.1.json": {
+      "bytes": 38408,
+      "sha256": "8e79b76b71045d5638689bf48d80d5cb6be7c97f245b55b81971fa3dfb897606"
+    },
+    "https://piston-meta.mojang.com/v1/packages/f2b442d5505dd020725a9f9f982d800f1ceb839e/1.20.3.json": {
+      "bytes": 35014,
+      "sha256": "5190f2d25405b6617814a1dc75a684fa3a0d994700560795667f3917b26f638b"
+    },
+    "https://piston-meta.mojang.com/v1/packages/f8baf1254705dc9b80488999cd2964d4026acc09/1.21.7.json": {
+      "bytes": 43719,
+      "sha256": "9954e53e1e4337451b61a62ec9f3c43aae825b83738a5e211c5aa93d44776713"
+    },
+    "https://piston-meta.mojang.com/v1/packages/fba9f7833e858a1257d810d21a3a9e3c967f9077/1.16.5.json": {
+      "bytes": 29287,
+      "sha256": "3eeeab7b3165cc5263dc26ff8fe114fdb718b75a0244efead9d19635d090ba72"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/00cafbf94624c61147c409f111f16184590fbbdf/build.gradle": {
+      "bytes": 2192,
+      "sha256": "344c8f3dbf852d84d3f8e71b5a4a435d9b3309f7dfb2162feee85898f091f060"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/00cafbf94624c61147c409f111f16184590fbbdf/gradle.properties": {
+      "bytes": 507,
+      "sha256": "22696c0c7f4d462fcec49dbe8b5949f2b19342383bb0ade09da7f36b814ea110"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/00cafbf94624c61147c409f111f16184590fbbdf/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/04c3eecff217befb170d80acac7c592f938867e7/build.gradle": {
+      "bytes": 2192,
+      "sha256": "344c8f3dbf852d84d3f8e71b5a4a435d9b3309f7dfb2162feee85898f091f060"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/04c3eecff217befb170d80acac7c592f938867e7/gradle.properties": {
+      "bytes": 509,
+      "sha256": "dc6b7c1e30fbead16852c745b5eac848d5f981407b0e8896bbf95acefb6eb1bd"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/04c3eecff217befb170d80acac7c592f938867e7/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/0fe7f6e4605aabdfefd69e1b5f2be8a283026272/build.gradle": {
+      "bytes": 2192,
+      "sha256": "344c8f3dbf852d84d3f8e71b5a4a435d9b3309f7dfb2162feee85898f091f060"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/0fe7f6e4605aabdfefd69e1b5f2be8a283026272/gradle.properties": {
+      "bytes": 510,
+      "sha256": "491ef1f20e15bad26fffe5e98150c5652ab0ddf5c6f5c66b09fae0fa692b0597"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/0fe7f6e4605aabdfefd69e1b5f2be8a283026272/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/22478178627e7450de46154b42cf3a66881acb66/build.gradle": {
+      "bytes": 2065,
+      "sha256": "2a6e41d5aac6e90b1ce88d410ac7b7b3684cab714f3cf4882b37d58c78b7401f"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/22478178627e7450de46154b42cf3a66881acb66/gradle.properties": {
+      "bytes": 505,
+      "sha256": "184de2324d007a67d2568cb00a2cb2a606c0e32daaae46e5420d171f26372192"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/22478178627e7450de46154b42cf3a66881acb66/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/2d16058ef73718f5f402fdf3b0bb85fe09604d80/build.gradle": {
+      "bytes": 2192,
+      "sha256": "344c8f3dbf852d84d3f8e71b5a4a435d9b3309f7dfb2162feee85898f091f060"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/2d16058ef73718f5f402fdf3b0bb85fe09604d80/gradle.properties": {
+      "bytes": 508,
+      "sha256": "3a73912ea1fe73e8c7b1a4bc41412329ec44332ca06f03db59ab3e6fb61cc6b1"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/2d16058ef73718f5f402fdf3b0bb85fe09604d80/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/3196fdc4f43d00350892e70d66ce0ef5b3f55609/build.gradle": {
+      "bytes": 2065,
+      "sha256": "2a6e41d5aac6e90b1ce88d410ac7b7b3684cab714f3cf4882b37d58c78b7401f"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/3196fdc4f43d00350892e70d66ce0ef5b3f55609/gradle.properties": {
+      "bytes": 505,
+      "sha256": "c7277a78c3dea16a22ed25f57f1f5f6edf961e23060dcdb008e6cbf896ba65fc"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/3196fdc4f43d00350892e70d66ce0ef5b3f55609/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/32bca4c06923a1b22801448eb3b446bcec0ffdc1/build.gradle": {
+      "bytes": 2064,
+      "sha256": "6bd38cd1e0efca2c8e0ee16ff64352143a0436aa14142fa733d08caf8d119716"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/32bca4c06923a1b22801448eb3b446bcec0ffdc1/gradle.properties": {
+      "bytes": 507,
+      "sha256": "1a432b47af4eebf44cff11eed91099a4c909194364426b6ecb6696be56e09581"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/32bca4c06923a1b22801448eb3b446bcec0ffdc1/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/347909aa7fffe661b451472b41aa7b190a070cc4/build.gradle": {
+      "bytes": 2064,
+      "sha256": "6bd38cd1e0efca2c8e0ee16ff64352143a0436aa14142fa733d08caf8d119716"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/347909aa7fffe661b451472b41aa7b190a070cc4/gradle.properties": {
+      "bytes": 503,
+      "sha256": "75116217342fcc24852d58129035b01ca5ba994fa065bee4e6ba4325b3d1d760"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/347909aa7fffe661b451472b41aa7b190a070cc4/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/3b1223799ac568329419664e95e281e3566f1657/build.gradle": {
+      "bytes": 2140,
+      "sha256": "57c9264059d1721d276416aaf506555954acf78ba3aa64cab3ecad3171da844d"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/3b1223799ac568329419664e95e281e3566f1657/gradle.properties": {
+      "bytes": 504,
+      "sha256": "3304894a7f14d2e9974a6ee314c92991f0106cc208c994e0934b2f712be7bd9b"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/3b1223799ac568329419664e95e281e3566f1657/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/3f6e0d36efa63ed6b672c1828c007109bb273b56/build.gradle": {
+      "bytes": 2192,
+      "sha256": "668b6fda850892657252d4458051ad9964d550af0d45a3ff89e420a27ee6c78d"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/3f6e0d36efa63ed6b672c1828c007109bb273b56/gradle.properties": {
+      "bytes": 503,
+      "sha256": "48a93d00e1e898d75eb1df0f674c9df1ae615e116438a78bc8c5a36d0317a5c0"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/3f6e0d36efa63ed6b672c1828c007109bb273b56/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/40109cfdef662b9cda4f38794fc71202e197c49e/build.gradle": {
+      "bytes": 2192,
+      "sha256": "668b6fda850892657252d4458051ad9964d550af0d45a3ff89e420a27ee6c78d"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/40109cfdef662b9cda4f38794fc71202e197c49e/gradle.properties": {
+      "bytes": 507,
+      "sha256": "186ea98bc9d8c73923eee4be457a7c1a69e2e459ba9cc6b9983cebc40c943c72"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/40109cfdef662b9cda4f38794fc71202e197c49e/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/40d278b93501e8019e2eab169465d34efc61865a/build.gradle": {
+      "bytes": 2192,
+      "sha256": "344c8f3dbf852d84d3f8e71b5a4a435d9b3309f7dfb2162feee85898f091f060"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/40d278b93501e8019e2eab169465d34efc61865a/gradle.properties": {
+      "bytes": 510,
+      "sha256": "fcb9f9af6123b025cd77cba9336c51908931866efab2e842e3e5e6a315888e93"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/40d278b93501e8019e2eab169465d34efc61865a/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/486251db04735a087548964b801c1d36ebc8b05a/build.gradle": {
+      "bytes": 2192,
+      "sha256": "344c8f3dbf852d84d3f8e71b5a4a435d9b3309f7dfb2162feee85898f091f060"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/486251db04735a087548964b801c1d36ebc8b05a/gradle.properties": {
+      "bytes": 508,
+      "sha256": "95ec6fb92fc6f8b5263ccfda127956ab41f6b89c185dd4353339f74e3c95a68c"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/486251db04735a087548964b801c1d36ebc8b05a/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/49f55d9da5a530fe6340cd3aced12d84594d1844/build.gradle": {
+      "bytes": 2065,
+      "sha256": "2a6e41d5aac6e90b1ce88d410ac7b7b3684cab714f3cf4882b37d58c78b7401f"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/49f55d9da5a530fe6340cd3aced12d84594d1844/gradle.properties": {
+      "bytes": 503,
+      "sha256": "4b7713144f8ab121542b91afde5cc288ab52dac5728dd055559e2affdf9c3661"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/49f55d9da5a530fe6340cd3aced12d84594d1844/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/49fe784d23dfd0dd063a2b8bb75156d57e95d7cd/build.gradle": {
+      "bytes": 2065,
+      "sha256": "2a6e41d5aac6e90b1ce88d410ac7b7b3684cab714f3cf4882b37d58c78b7401f"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/49fe784d23dfd0dd063a2b8bb75156d57e95d7cd/gradle.properties": {
+      "bytes": 505,
+      "sha256": "c5dd5ad77d2f17c0a257939f27b59f7d57fcb314072fc9dfffd4eb32f0221ac8"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/49fe784d23dfd0dd063a2b8bb75156d57e95d7cd/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/5196db45f1c733447bb3ca789db7b6bf3e7e614f/build.gradle": {
+      "bytes": 2192,
+      "sha256": "344c8f3dbf852d84d3f8e71b5a4a435d9b3309f7dfb2162feee85898f091f060"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/5196db45f1c733447bb3ca789db7b6bf3e7e614f/gradle.properties": {
+      "bytes": 508,
+      "sha256": "3eb9c98be7bf3c45bf1113ed2008e848c7ed5770743b4b0250eafdd735b6aabf"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/5196db45f1c733447bb3ca789db7b6bf3e7e614f/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/547c9d4902bfb12f39dc4336684ad0c8b0455709/build.gradle": {
+      "bytes": 2192,
+      "sha256": "344c8f3dbf852d84d3f8e71b5a4a435d9b3309f7dfb2162feee85898f091f060"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/547c9d4902bfb12f39dc4336684ad0c8b0455709/gradle.properties": {
+      "bytes": 503,
+      "sha256": "7001eb206c573e9f1ca14c17273d892f48b92e6e4de906361b15b13f17a1ade6"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/547c9d4902bfb12f39dc4336684ad0c8b0455709/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/573e851ce6818d7de8e346a511ef466a53fe5506/build.gradle": {
+      "bytes": 2064,
+      "sha256": "6bd38cd1e0efca2c8e0ee16ff64352143a0436aa14142fa733d08caf8d119716"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/573e851ce6818d7de8e346a511ef466a53fe5506/gradle.properties": {
+      "bytes": 505,
+      "sha256": "7f69ddf4d42340cffc3596c81be33dfba3903f255428a446d850ce98cd42148d"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/573e851ce6818d7de8e346a511ef466a53fe5506/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/610664bfb97aceace820f0dedf4feec273bac8fb/build.gradle": {
+      "bytes": 2192,
+      "sha256": "668b6fda850892657252d4458051ad9964d550af0d45a3ff89e420a27ee6c78d"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/610664bfb97aceace820f0dedf4feec273bac8fb/gradle.properties": {
+      "bytes": 507,
+      "sha256": "0ef364c31c7e66bfc027438a55363cf79056cae947694ba715f52e95ffd2d58c"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/610664bfb97aceace820f0dedf4feec273bac8fb/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/64fe93a188fc1b1f76a47b14f8b17dda42b324f0/build.gradle": {
+      "bytes": 2140,
+      "sha256": "57c9264059d1721d276416aaf506555954acf78ba3aa64cab3ecad3171da844d"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/64fe93a188fc1b1f76a47b14f8b17dda42b324f0/gradle.properties": {
+      "bytes": 504,
+      "sha256": "d1ca5c2ce87d3f12b6f8763837149a8a64bbc90749ea4ec41e999b06c13bdee8"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/64fe93a188fc1b1f76a47b14f8b17dda42b324f0/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/6542cd583d07f84359b65d5e498e25f8afafc30a/build.gradle": {
+      "bytes": 2192,
+      "sha256": "344c8f3dbf852d84d3f8e71b5a4a435d9b3309f7dfb2162feee85898f091f060"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/6542cd583d07f84359b65d5e498e25f8afafc30a/gradle.properties": {
+      "bytes": 508,
+      "sha256": "d3bbaa6dd0d0435b4c52b6b6051890f7491154dc452e075ebdf1158081718e26"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/6542cd583d07f84359b65d5e498e25f8afafc30a/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/66c890f00b0f1ba2cca58714c87e77b47139cc5b/build.gradle": {
+      "bytes": 2065,
+      "sha256": "2a6e41d5aac6e90b1ce88d410ac7b7b3684cab714f3cf4882b37d58c78b7401f"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/66c890f00b0f1ba2cca58714c87e77b47139cc5b/gradle.properties": {
+      "bytes": 505,
+      "sha256": "a7cb26f1f5ac348867dd3d46bebdc777ff64751b93041da9ab2913f8405ebc81"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/66c890f00b0f1ba2cca58714c87e77b47139cc5b/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/6e80a5c1a463a62239d849d7d04b689f2a2a6d88/build.gradle": {
+      "bytes": 2192,
+      "sha256": "344c8f3dbf852d84d3f8e71b5a4a435d9b3309f7dfb2162feee85898f091f060"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/6e80a5c1a463a62239d849d7d04b689f2a2a6d88/gradle.properties": {
+      "bytes": 508,
+      "sha256": "ea6a0ed2739fe412872147f21c5ef95d52f3726c2f1dcb95510b4848adef27d8"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/6e80a5c1a463a62239d849d7d04b689f2a2a6d88/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/7249145564cdfff2758b38867854faef93845cf5/build.gradle": {
+      "bytes": 2065,
+      "sha256": "2a6e41d5aac6e90b1ce88d410ac7b7b3684cab714f3cf4882b37d58c78b7401f"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/7249145564cdfff2758b38867854faef93845cf5/gradle.properties": {
+      "bytes": 505,
+      "sha256": "c49c42dd76cf18bd1fa18f2df40221634b8bdbb9615751e9fc74b85002e41acd"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/7249145564cdfff2758b38867854faef93845cf5/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/73b8cb38578391af67cd0e5c9e075f281af62a91/build.gradle": {
+      "bytes": 2192,
+      "sha256": "344c8f3dbf852d84d3f8e71b5a4a435d9b3309f7dfb2162feee85898f091f060"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/73b8cb38578391af67cd0e5c9e075f281af62a91/gradle.properties": {
+      "bytes": 508,
+      "sha256": "44de7c5c936c222eac7bfb8826e83b68c666edcb3e6ef6ebc2d5cf592330836e"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/73b8cb38578391af67cd0e5c9e075f281af62a91/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/78f7a962f4e679ce3c1b4134d6ce051b07870bf8/build.gradle": {
+      "bytes": 2192,
+      "sha256": "668b6fda850892657252d4458051ad9964d550af0d45a3ff89e420a27ee6c78d"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/78f7a962f4e679ce3c1b4134d6ce051b07870bf8/gradle.properties": {
+      "bytes": 507,
+      "sha256": "7cbdd0fac3976341dd258701f2ae79762d1a311d18c27e6bd99dfb0e5b31ed26"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/78f7a962f4e679ce3c1b4134d6ce051b07870bf8/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/8123b32980f6f49db06a27ec0da3d60a769c8a38/build.gradle": {
+      "bytes": 2065,
+      "sha256": "2a6e41d5aac6e90b1ce88d410ac7b7b3684cab714f3cf4882b37d58c78b7401f"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/8123b32980f6f49db06a27ec0da3d60a769c8a38/gradle.properties": {
+      "bytes": 503,
+      "sha256": "fed17c9ce9e704d3f3b38ed8e2c751b8cdbef87028a03cca26fd8b6a53782b16"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/8123b32980f6f49db06a27ec0da3d60a769c8a38/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/81417e41ad77eb13df85f1a76b53d40476f62c1c/build.gradle": {
+      "bytes": 2192,
+      "sha256": "344c8f3dbf852d84d3f8e71b5a4a435d9b3309f7dfb2162feee85898f091f060"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/81417e41ad77eb13df85f1a76b53d40476f62c1c/gradle.properties": {
+      "bytes": 504,
+      "sha256": "e086993f6512f74716d1b1b1a1b5c61617ca9e321643c88784ace2fd4489bda2"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/81417e41ad77eb13df85f1a76b53d40476f62c1c/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/8f273dde9160e1be954d3a135cc88fe9251ec5fa/build.gradle": {
+      "bytes": 2064,
+      "sha256": "81fc3569d405d26c421c11663123f8e28a70d24dff3072baf33e283395d57855"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/8f273dde9160e1be954d3a135cc88fe9251ec5fa/gradle.properties": {
+      "bytes": 503,
+      "sha256": "ae6df8829621111dd9047889669325351a1328ea36e00e04285d5146e37c3567"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/8f273dde9160e1be954d3a135cc88fe9251ec5fa/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/96f78c9e11c58b69f68b93c9f385b6869fcf21c6/build.gradle": {
+      "bytes": 2192,
+      "sha256": "668b6fda850892657252d4458051ad9964d550af0d45a3ff89e420a27ee6c78d"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/96f78c9e11c58b69f68b93c9f385b6869fcf21c6/gradle.properties": {
+      "bytes": 507,
+      "sha256": "5189d2948df8e130233c937ffbc6ae880c039500a6c55cfbe4dde92e02e660e7"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/96f78c9e11c58b69f68b93c9f385b6869fcf21c6/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/9cc62c76791b782f4e6706c1a66beaa8ec163c05/build.gradle": {
+      "bytes": 2140,
+      "sha256": "57c9264059d1721d276416aaf506555954acf78ba3aa64cab3ecad3171da844d"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/9cc62c76791b782f4e6706c1a66beaa8ec163c05/gradle.properties": {
+      "bytes": 508,
+      "sha256": "118f0af30b6050f0ff9420365be500a2a9e23d8260b1806965af3e1a0fba1579"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/9cc62c76791b782f4e6706c1a66beaa8ec163c05/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/a6b78364647fadc74d7c96860b404bc9cdbcf22e/build.gradle": {
+      "bytes": 2064,
+      "sha256": "81fc3569d405d26c421c11663123f8e28a70d24dff3072baf33e283395d57855"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/a6b78364647fadc74d7c96860b404bc9cdbcf22e/gradle.properties": {
+      "bytes": 505,
+      "sha256": "795ae556194bf6e2e6728fb80490a767120bff15464df5d5295074ed90d5a23f"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/a6b78364647fadc74d7c96860b404bc9cdbcf22e/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/aaf14b23079b4e629541fa7ecb3dbd2a4cdf8bf6/build.gradle": {
+      "bytes": 2192,
+      "sha256": "668b6fda850892657252d4458051ad9964d550af0d45a3ff89e420a27ee6c78d"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/aaf14b23079b4e629541fa7ecb3dbd2a4cdf8bf6/gradle.properties": {
+      "bytes": 507,
+      "sha256": "0569498b126f2d2ee0ecc16b3035d8db551bb7ec2d4dc7262e8ccc61201a55a4"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/aaf14b23079b4e629541fa7ecb3dbd2a4cdf8bf6/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/c014b008a8448e1776e67280b61a8fc43af04963/build.gradle": {
+      "bytes": 2065,
+      "sha256": "2a6e41d5aac6e90b1ce88d410ac7b7b3684cab714f3cf4882b37d58c78b7401f"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/c014b008a8448e1776e67280b61a8fc43af04963/gradle.properties": {
+      "bytes": 505,
+      "sha256": "2502b73012572bdd52f4b8f44076d6a267cc5290bd6e61a8be3912beebfae302"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/c014b008a8448e1776e67280b61a8fc43af04963/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/d658cbf138777c0875b7c8cddbc73dbed9e86ee8/build.gradle": {
+      "bytes": 2192,
+      "sha256": "344c8f3dbf852d84d3f8e71b5a4a435d9b3309f7dfb2162feee85898f091f060"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/d658cbf138777c0875b7c8cddbc73dbed9e86ee8/gradle.properties": {
+      "bytes": 508,
+      "sha256": "878a32accaeb57da260c606f9aaa2e4f93495be0f556db10ac9e3b33987972f9"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/d658cbf138777c0875b7c8cddbc73dbed9e86ee8/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/da15fc152af63ab29c81f6d3d3067486d83f72a2/build.gradle": {
+      "bytes": 2192,
+      "sha256": "344c8f3dbf852d84d3f8e71b5a4a435d9b3309f7dfb2162feee85898f091f060"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/da15fc152af63ab29c81f6d3d3067486d83f72a2/gradle.properties": {
+      "bytes": 508,
+      "sha256": "88367dbdf21a3e25209f9ea37f19768015458c6ca32daf47fd19dd9c4ea84692"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/da15fc152af63ab29c81f6d3d3067486d83f72a2/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/dfc832402f3ef35c2f7752fea28b1a52ce2b184c/build.gradle": {
+      "bytes": 2140,
+      "sha256": "57c9264059d1721d276416aaf506555954acf78ba3aa64cab3ecad3171da844d"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/dfc832402f3ef35c2f7752fea28b1a52ce2b184c/gradle.properties": {
+      "bytes": 508,
+      "sha256": "641c137bc44b50208382a092e3ed52bf4cf9eab446f0e0f8dfcbf8a656ae2d8c"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/dfc832402f3ef35c2f7752fea28b1a52ce2b184c/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/e1cc17e1468cb85a3369a3da29d7abf8c0703312/build.gradle": {
+      "bytes": 2192,
+      "sha256": "668b6fda850892657252d4458051ad9964d550af0d45a3ff89e420a27ee6c78d"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/e1cc17e1468cb85a3369a3da29d7abf8c0703312/gradle.properties": {
+      "bytes": 508,
+      "sha256": "e9279d87e3150fe033c3f9e9f1d805bbc94028630e25cc72166a3d14f3be3942"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/e1cc17e1468cb85a3369a3da29d7abf8c0703312/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/e603aeb8ab279bcd8ef89a8f176c0a2be6134742/build.gradle": {
+      "bytes": 2192,
+      "sha256": "668b6fda850892657252d4458051ad9964d550af0d45a3ff89e420a27ee6c78d"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/e603aeb8ab279bcd8ef89a8f176c0a2be6134742/gradle.properties": {
+      "bytes": 507,
+      "sha256": "fe014c90df23f9cf50b43ebb8995dce2af07d1876827235c2cd5c97887552229"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/e603aeb8ab279bcd8ef89a8f176c0a2be6134742/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/e7cedae058196ce5107bbd224ba9f7d69f3d82f7/build.gradle": {
+      "bytes": 2065,
+      "sha256": "2a6e41d5aac6e90b1ce88d410ac7b7b3684cab714f3cf4882b37d58c78b7401f"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/e7cedae058196ce5107bbd224ba9f7d69f3d82f7/gradle.properties": {
+      "bytes": 505,
+      "sha256": "18afb8d13e83fd82056a6ac7e25a94e25f7228eefedb75d27366b0fd4df14073"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/e7cedae058196ce5107bbd224ba9f7d69f3d82f7/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/e99aab8e833dc20ca13038591327dc0f898ea570/build.gradle": {
+      "bytes": 2065,
+      "sha256": "2a6e41d5aac6e90b1ce88d410ac7b7b3684cab714f3cf4882b37d58c78b7401f"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/e99aab8e833dc20ca13038591327dc0f898ea570/gradle.properties": {
+      "bytes": 505,
+      "sha256": "e6090fc60510fcffef8b0e1eeac3c9d1d8cd1e308923c1634c165f7962af1f4d"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/e99aab8e833dc20ca13038591327dc0f898ea570/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/eaa3e4552d4cb9b803391581ac65230dda78bc97/build.gradle": {
+      "bytes": 2192,
+      "sha256": "668b6fda850892657252d4458051ad9964d550af0d45a3ff89e420a27ee6c78d"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/eaa3e4552d4cb9b803391581ac65230dda78bc97/gradle.properties": {
+      "bytes": 507,
+      "sha256": "57106af074c721d46af5ce80f43d483bb995209dcad2deb5695f078d4b94c356"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/eaa3e4552d4cb9b803391581ac65230dda78bc97/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/fed5e607cfc5bcf679446558751f63c762f2a719/build.gradle": {
+      "bytes": 2192,
+      "sha256": "344c8f3dbf852d84d3f8e71b5a4a435d9b3309f7dfb2162feee85898f091f060"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/fed5e607cfc5bcf679446558751f63c762f2a719/gradle.properties": {
+      "bytes": 508,
+      "sha256": "623199eeb3ac26a682dff485670897e03eb4e9ca0df9ca43ab56d1c2b609016b"
+    },
+    "https://raw.githubusercontent.com/FabricMC/fabric-example-mod/fed5e607cfc5bcf679446558751f63c762f2a719/gradle/wrapper/gradle-wrapper.properties": {
+      "bytes": 281,
+      "sha256": "e0846bd420bf1543f500e0c9b35c01d84611b0f1afe01e24a82d0eca53c33ccb"
+    },
+    "https://services.gradle.org/distributions/gradle-9.5.1-bin.zip.sha256": {
+      "bytes": 64,
+      "sha256": "7d58378e1a4a6acd7e66ad6a3ab955e18ee1b20f71f3a3cfe824eb1efe52af9f"
+    }
+  },
+  "versions": [
+    {
+      "build_java_minimum": 25,
+      "compile": "not_run",
+      "context_id": "sha256:ec8805a6bcaf19a50a95546e03c87ea3436879364a8657f076a589a2cbc5aacc",
+      "example_commit": "64fe93a188fc1b1f76a47b14f8b17dda42b324f0",
+      "example_properties": {
+        "fabric_api_version": "0.159.0+26.2",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "26.2",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "26.2",
+      "minecraft_java_minimum": 25,
+      "mojang_version_json": {
+        "build_time": "2026-06-16T12:01:27+00:00",
+        "id": "26.2",
+        "java_component": "java-runtime-epsilon",
+        "java_version": 25,
+        "name": "26.2",
+        "pack_version": {
+          "data_major": 107,
+          "data_minor": 1,
+          "resource_major": 88,
+          "resource_minor": 0
+        },
+        "protocol_version": 776,
+        "series_id": "main",
+        "stable": true,
+        "use_editor": false,
+        "world_version": 4903
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 25,
+      "compile": "not_run",
+      "context_id": "sha256:e2aa2b287f1060c86d3a2d9a00ef0c90a048fcdc75cea61cda9dfac0d3446a31",
+      "example_commit": "9cc62c76791b782f4e6706c1a66beaa8ec163c05",
+      "example_properties": {
+        "fabric_api_version": "0.155.2+26.1.2",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "26.1.2",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "26.1.2",
+      "minecraft_java_minimum": 25,
+      "mojang_version_json": {
+        "build_time": "2026-04-09T10:11:03+00:00",
+        "id": "26.1.2",
+        "java_component": "java-runtime-epsilon",
+        "java_version": 25,
+        "name": "26.1.2",
+        "pack_version": {
+          "data_major": 101,
+          "data_minor": 1,
+          "resource_major": 84,
+          "resource_minor": 0
+        },
+        "protocol_version": 775,
+        "series_id": "main",
+        "stable": true,
+        "use_editor": false,
+        "world_version": 4790
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 25,
+      "compile": "not_run",
+      "context_id": "sha256:fea7720654ab8438412b4069e47c552c7abd6fa3549b156392a176790f7ea838",
+      "example_commit": "dfc832402f3ef35c2f7752fea28b1a52ce2b184c",
+      "example_properties": {
+        "fabric_api_version": "0.145.4+26.1.1",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "26.1.1",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "26.1.1",
+      "minecraft_java_minimum": 25,
+      "mojang_version_json": {
+        "build_time": "2026-04-01T09:05:14+00:00",
+        "id": "26.1.1",
+        "java_component": "java-runtime-epsilon",
+        "java_version": 25,
+        "name": "26.1.1",
+        "pack_version": {
+          "data_major": 101,
+          "data_minor": 1,
+          "resource_major": 84,
+          "resource_minor": 0
+        },
+        "protocol_version": 775,
+        "series_id": "main",
+        "stable": true,
+        "use_editor": false,
+        "world_version": 4788
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 25,
+      "compile": "not_run",
+      "context_id": "sha256:7acae07adbc437853ba8ab071bd7bb9f89a992ab29138053f2fd8f0c1f1e273e",
+      "example_commit": "3b1223799ac568329419664e95e281e3566f1657",
+      "example_properties": {
+        "fabric_api_version": "0.145.1+26.1",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "26.1",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "26.1",
+      "minecraft_java_minimum": 25,
+      "mojang_version_json": {
+        "build_time": "2026-03-24T12:09:43+00:00",
+        "id": "26.1",
+        "java_component": "java-runtime-epsilon",
+        "java_version": 25,
+        "name": "26.1",
+        "pack_version": {
+          "data_major": 101,
+          "data_minor": 1,
+          "resource_major": 84,
+          "resource_minor": 0
+        },
+        "protocol_version": 775,
+        "series_id": "main",
+        "stable": true,
+        "use_editor": false,
+        "world_version": 4786
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:73c848235b85a63797c2c657b153f6c9ebe97c6d529ba072eb1b5c85a5a69d62",
+      "example_commit": "0fe7f6e4605aabdfefd69e1b5f2be8a283026272",
+      "example_properties": {
+        "fabric_api_version": "0.141.6+1.21.11",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.21.11",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.21.11",
+      "minecraft_java_minimum": 21,
+      "mojang_version_json": {
+        "build_time": "2025-12-09T12:20:42+00:00",
+        "id": "1.21.11",
+        "java_component": "java-runtime-delta",
+        "java_version": 21,
+        "name": "1.21.11",
+        "pack_version": {
+          "data_major": 94,
+          "data_minor": 1,
+          "resource_major": 75,
+          "resource_minor": 0
+        },
+        "protocol_version": 774,
+        "series_id": "main",
+        "stable": true,
+        "use_editor": false,
+        "world_version": 4671
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:5ad0697c6f48c8aeae0d30c98dfcac6a6653cfec240788515542fe799c637f0a",
+      "example_commit": "40d278b93501e8019e2eab169465d34efc61865a",
+      "example_properties": {
+        "fabric_api_version": "0.138.4+1.21.10",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.21.10",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.21.10",
+      "minecraft_java_minimum": 21,
+      "mojang_version_json": {
+        "build_time": "2025-10-07T09:14:11+00:00",
+        "id": "1.21.10",
+        "java_component": "java-runtime-delta",
+        "java_version": 21,
+        "name": "1.21.10",
+        "pack_version": {
+          "data_major": 88,
+          "data_minor": 0,
+          "resource_major": 69,
+          "resource_minor": 0
+        },
+        "protocol_version": 773,
+        "series_id": "main",
+        "stable": true,
+        "use_editor": false,
+        "world_version": 4556
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:88718fece19e856b24f8cb8a316bd2353ac9aef8fad4458de7dcde960032f8a5",
+      "example_commit": "486251db04735a087548964b801c1d36ebc8b05a",
+      "example_properties": {
+        "fabric_api_version": "0.134.1+1.21.9",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.21.9",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.21.9",
+      "minecraft_java_minimum": 21,
+      "mojang_version_json": {
+        "build_time": "2025-09-30T11:55:33+00:00",
+        "id": "1.21.9",
+        "java_component": "java-runtime-delta",
+        "java_version": 21,
+        "name": "1.21.9",
+        "pack_version": {
+          "data_major": 88,
+          "data_minor": 0,
+          "resource_major": 69,
+          "resource_minor": 0
+        },
+        "protocol_version": 773,
+        "series_id": "main",
+        "stable": true,
+        "use_editor": false,
+        "world_version": 4554
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:82c1a9c4242bcad46baba540a8e72292f2c694935a698de872dddd99af8a0cb1",
+      "example_commit": "6542cd583d07f84359b65d5e498e25f8afafc30a",
+      "example_properties": {
+        "fabric_api_version": "0.136.1+1.21.8",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.21.8",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.21.8",
+      "minecraft_java_minimum": 21,
+      "mojang_version_json": {
+        "build_time": "2025-07-17T12:00:57+00:00",
+        "id": "1.21.8",
+        "java_component": "java-runtime-delta",
+        "java_version": 21,
+        "name": "1.21.8",
+        "pack_version": {
+          "data": 81,
+          "resource": 64
+        },
+        "protocol_version": 772,
+        "series_id": "main",
+        "stable": true,
+        "use_editor": false,
+        "world_version": 4440
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:137bd08c4147c149ad471ff1d51913bcc6c51590f742fd2fb462e22cba68b524",
+      "example_commit": "2d16058ef73718f5f402fdf3b0bb85fe09604d80",
+      "example_properties": {
+        "fabric_api_version": "0.129.0+1.21.7",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.21.7",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.21.7",
+      "minecraft_java_minimum": 21,
+      "mojang_version_json": {
+        "build_time": "2025-06-30T09:29:28+00:00",
+        "id": "1.21.7",
+        "java_component": "java-runtime-delta",
+        "java_version": 21,
+        "name": "1.21.7",
+        "pack_version": {
+          "data": 81,
+          "resource": 64
+        },
+        "protocol_version": 772,
+        "series_id": "main",
+        "stable": true,
+        "use_editor": false,
+        "world_version": 4438
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:0e3405da8aa748e7c38695761cf1a9f5535f9e331d6937897385a86997c3d9a8",
+      "example_commit": "d658cbf138777c0875b7c8cddbc73dbed9e86ee8",
+      "example_properties": {
+        "fabric_api_version": "0.128.2+1.21.6",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.21.6",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.21.6",
+      "minecraft_java_minimum": 21,
+      "mojang_version_json": {
+        "build_time": "2025-06-17T11:07:28+00:00",
+        "id": "1.21.6",
+        "java_component": "java-runtime-delta",
+        "java_version": 21,
+        "name": "1.21.6",
+        "pack_version": {
+          "data": 80,
+          "resource": 63
+        },
+        "protocol_version": 771,
+        "series_id": "main",
+        "stable": true,
+        "use_editor": false,
+        "world_version": 4435
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:a9445d43b9dc812643e41a15f7618fd3a932cad7ac6df8113a8ba988e3cc5c6a",
+      "example_commit": "5196db45f1c733447bb3ca789db7b6bf3e7e614f",
+      "example_properties": {
+        "fabric_api_version": "0.128.2+1.21.5",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.21.5",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.21.5",
+      "minecraft_java_minimum": 21,
+      "mojang_version_json": {
+        "build_time": "2025-03-25T12:11:48+00:00",
+        "id": "1.21.5",
+        "java_component": "java-runtime-delta",
+        "java_version": 21,
+        "name": "1.21.5",
+        "pack_version": {
+          "data": 71,
+          "resource": 55
+        },
+        "protocol_version": 770,
+        "series_id": "main",
+        "stable": true,
+        "use_editor": false,
+        "world_version": 4325
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:451c27a5c16b4ad39e19957771ad46a90bd065f90444d7c079153c1c51eb74c6",
+      "example_commit": "da15fc152af63ab29c81f6d3d3067486d83f72a2",
+      "example_properties": {
+        "fabric_api_version": "0.119.4+1.21.4",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.21.4",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.21.4",
+      "minecraft_java_minimum": 21,
+      "mojang_version_json": {
+        "build_time": "2024-12-03T10:09:48+00:00",
+        "id": "1.21.4",
+        "java_component": "java-runtime-delta",
+        "java_version": 21,
+        "name": "1.21.4",
+        "pack_version": {
+          "data": 61,
+          "resource": 46
+        },
+        "protocol_version": 769,
+        "series_id": "main",
+        "stable": true,
+        "use_editor": false,
+        "world_version": 4189
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:d3a8edde3e4a725aad7b62fdd746381fb9c6ba2fca3617cab38ab5808d967fb7",
+      "example_commit": "6e80a5c1a463a62239d849d7d04b689f2a2a6d88",
+      "example_properties": {
+        "fabric_api_version": "0.114.1+1.21.3",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.21.3",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.21.3",
+      "minecraft_java_minimum": 21,
+      "mojang_version_json": {
+        "build_time": "2024-10-23T12:25:27+00:00",
+        "id": "1.21.3",
+        "java_component": "java-runtime-delta",
+        "java_version": 21,
+        "name": "1.21.3",
+        "pack_version": {
+          "data": 57,
+          "resource": 42
+        },
+        "protocol_version": 768,
+        "series_id": "main",
+        "stable": true,
+        "use_editor": false,
+        "world_version": 4082
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:77a78bc33352f7e69bf8df51ac58fc735593877721041fff43db2196e4df5d35",
+      "example_commit": "73b8cb38578391af67cd0e5c9e075f281af62a91",
+      "example_properties": {
+        "fabric_api_version": "0.106.1+1.21.2",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.21.2",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.21.2",
+      "minecraft_java_minimum": 21,
+      "mojang_version_json": {
+        "build_time": "2024-10-22T09:55:49+00:00",
+        "id": "1.21.2",
+        "java_component": "java-runtime-delta",
+        "java_version": 21,
+        "name": "1.21.2",
+        "pack_version": {
+          "data": 57,
+          "resource": 42
+        },
+        "protocol_version": 768,
+        "series_id": "main",
+        "stable": true,
+        "use_editor": false,
+        "world_version": 4080
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:75c1b72f9ab4b01af6442f3c0f854063f36267fbdfa875315f0c874a0cf9057b",
+      "example_commit": "04c3eecff217befb170d80acac7c592f938867e7",
+      "example_properties": {
+        "fabric_api_version": "0.116.17+1.21.1",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.21.1",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.21.1",
+      "minecraft_java_minimum": 21,
+      "mojang_version_json": {
+        "build_time": "2024-08-08T12:21:55+00:00",
+        "id": "1.21.1",
+        "java_component": "java-runtime-delta",
+        "java_version": 21,
+        "name": "1.21.1",
+        "pack_version": {
+          "data": 48,
+          "resource": 34
+        },
+        "protocol_version": 767,
+        "series_id": "main",
+        "stable": true,
+        "use_editor": false,
+        "world_version": 3955
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:f2520add51aa85643af3b447110979e48306b45743f4a6f16b538af00f328917",
+      "example_commit": "81417e41ad77eb13df85f1a76b53d40476f62c1c",
+      "example_properties": {
+        "fabric_api_version": "0.102.0+1.21",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.21",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.21",
+      "minecraft_java_minimum": 21,
+      "mojang_version_json": {
+        "build_time": "2024-06-13T08:21:21+00:00",
+        "id": "1.21",
+        "java_component": "java-runtime-delta",
+        "java_version": 21,
+        "name": "1.21",
+        "pack_version": {
+          "data": 48,
+          "resource": 34
+        },
+        "protocol_version": 767,
+        "series_id": "main",
+        "stable": true,
+        "use_editor": false,
+        "world_version": 3953
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:af801d02822754b9da857e130835ccf6d62df5866aab7995f0e1b53206ee557d",
+      "example_commit": "fed5e607cfc5bcf679446558751f63c762f2a719",
+      "example_properties": {
+        "fabric_api_version": "0.100.8+1.20.6",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.20.6",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.20.6",
+      "minecraft_java_minimum": 21,
+      "mojang_version_json": {
+        "build_time": "2024-04-29T12:38:06+00:00",
+        "id": "1.20.6",
+        "java_component": "java-runtime-delta",
+        "java_version": 21,
+        "name": "1.20.6",
+        "pack_version": {
+          "data": 41,
+          "resource": 32
+        },
+        "protocol_version": 766,
+        "series_id": "main",
+        "stable": true,
+        "use_editor": false,
+        "world_version": 3839
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:ee45ced5bad2db1661fc28acf9b9a02d63d7a9ef831841213cc5c44537d8f981",
+      "example_commit": "00cafbf94624c61147c409f111f16184590fbbdf",
+      "example_properties": {
+        "fabric_api_version": "0.97.8+1.20.5",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.20.5",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.20.5",
+      "minecraft_java_minimum": 21,
+      "mojang_version_json": {
+        "build_time": "2024-04-23T11:51:33+00:00",
+        "id": "1.20.5",
+        "java_component": "java-runtime-delta",
+        "java_version": 21,
+        "name": "1.20.5",
+        "pack_version": {
+          "data": 41,
+          "resource": 32
+        },
+        "protocol_version": 766,
+        "series_id": "main",
+        "stable": true,
+        "use_editor": false,
+        "world_version": 3837
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:1f4303ad18a20b84325a0de99aef4f60e60421a43bfde760d2bef55db28c6dd4",
+      "example_commit": "eaa3e4552d4cb9b803391581ac65230dda78bc97",
+      "example_properties": {
+        "fabric_api_version": "0.97.3+1.20.4",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.20.4",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.20.4",
+      "minecraft_java_minimum": 17,
+      "mojang_version_json": {
+        "build_time": "2023-12-07T12:53:30+00:00",
+        "id": "1.20.4",
+        "java_component": "java-runtime-gamma",
+        "java_version": 17,
+        "name": "1.20.4",
+        "pack_version": {
+          "data": 26,
+          "resource": 22
+        },
+        "protocol_version": 765,
+        "series_id": "main",
+        "stable": true,
+        "use_editor": false,
+        "world_version": 3700
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:889002788c467be07a8567883404c3d247d05d2e2e3417c35add788d3cc5ee05",
+      "example_commit": "e603aeb8ab279bcd8ef89a8f176c0a2be6134742",
+      "example_properties": {
+        "fabric_api_version": "0.91.1+1.20.3",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.20.3",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.20.3",
+      "minecraft_java_minimum": 17,
+      "mojang_version_json": {
+        "build_time": "2023-12-04T12:04:50+00:00",
+        "id": "1.20.3",
+        "java_component": "java-runtime-gamma",
+        "java_version": 17,
+        "name": "1.20.3",
+        "pack_version": {
+          "data": 26,
+          "resource": 22
+        },
+        "protocol_version": 765,
+        "series_id": "main",
+        "stable": true,
+        "use_editor": false,
+        "world_version": 3698
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:935ad7d67d1db0f44f48758419750a322e1f72a207c1ba0c87be89bd02036a28",
+      "example_commit": "aaf14b23079b4e629541fa7ecb3dbd2a4cdf8bf6",
+      "example_properties": {
+        "fabric_api_version": "0.91.6+1.20.2",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.20.2",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.20.2",
+      "minecraft_java_minimum": 17,
+      "mojang_version_json": {
+        "build_time": "2023-09-20T09:00:26+00:00",
+        "id": "1.20.2",
+        "java_component": "java-runtime-gamma",
+        "java_version": 17,
+        "name": "1.20.2",
+        "pack_version": {
+          "data": 18,
+          "resource": 18
+        },
+        "protocol_version": 764,
+        "series_id": "main",
+        "stable": true,
+        "use_editor": false,
+        "world_version": 3578
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:3e374c7cd9fe5e1fea3a65ed41078cafd231163d2e69313170c815477ae761bb",
+      "example_commit": "e1cc17e1468cb85a3369a3da29d7abf8c0703312",
+      "example_properties": {
+        "fabric_api_version": "0.92.12+1.20.1",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.20.1",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.20.1",
+      "minecraft_java_minimum": 17,
+      "mojang_version_json": {
+        "build_time": "2023-06-12T13:23:26+00:00",
+        "id": "1.20.1",
+        "java_component": "java-runtime-gamma",
+        "java_version": 17,
+        "name": "1.20.1",
+        "pack_version": {
+          "data": 15,
+          "resource": 15
+        },
+        "protocol_version": 763,
+        "series_id": "main",
+        "stable": true,
+        "world_version": 3465
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:0cba21e520678aff4282ec1b4f34f890f624f52f604708307959d8dcca7b4575",
+      "example_commit": "547c9d4902bfb12f39dc4336684ad0c8b0455709",
+      "example_properties": {
+        "fabric_api_version": "0.83.0+1.20",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.20",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.20",
+      "minecraft_java_minimum": 17,
+      "mojang_version_json": {
+        "build_time": "2023-06-02T08:33:51+00:00",
+        "id": "1.20",
+        "java_component": "java-runtime-gamma",
+        "java_version": 17,
+        "name": "1.20",
+        "pack_version": {
+          "data": 15,
+          "resource": 15
+        },
+        "protocol_version": 763,
+        "series_id": "main",
+        "stable": true,
+        "world_version": 3463
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:c82bbaffab7766403ee4a9b1249425e73ec3a2e5e6b24fc9c24ce9472b28e15c",
+      "example_commit": "40109cfdef662b9cda4f38794fc71202e197c49e",
+      "example_properties": {
+        "fabric_api_version": "0.87.2+1.19.4",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.19.4",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.19.4",
+      "minecraft_java_minimum": 17,
+      "mojang_version_json": {
+        "build_time": "2023-03-14T12:53:56+00:00",
+        "id": "1.19.4",
+        "java_component": "java-runtime-gamma",
+        "java_version": 17,
+        "name": "1.19.4",
+        "pack_version": {
+          "data": 12,
+          "resource": 13
+        },
+        "protocol_version": 762,
+        "series_id": "main",
+        "stable": true,
+        "world_version": 3337
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:5ff11667ddb02f71bad2199148c1ba990214d2ed97cf603e7e85177631790965",
+      "example_commit": "78f7a962f4e679ce3c1b4134d6ce051b07870bf8",
+      "example_properties": {
+        "fabric_api_version": "0.76.1+1.19.3",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.19.3",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.19.3",
+      "minecraft_java_minimum": 17,
+      "mojang_version_json": {
+        "build_time": "2022-12-07T08:14:04+00:00",
+        "id": "1.19.3",
+        "java_component": "java-runtime-gamma",
+        "java_version": 17,
+        "name": "1.19.3",
+        "pack_version": {
+          "data": 10,
+          "resource": 12
+        },
+        "protocol_version": 761,
+        "series_id": "main",
+        "stable": true,
+        "world_version": 3218
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:e87357fb58eb98d898e1f522b55cf6518385fa239f93bfadaf6e6988338e387d",
+      "example_commit": "96f78c9e11c58b69f68b93c9f385b6869fcf21c6",
+      "example_properties": {
+        "fabric_api_version": "0.77.0+1.19.2",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.19.2",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.19.2",
+      "minecraft_java_minimum": 17,
+      "mojang_version_json": {
+        "build_time": "2022-08-05T11:55:20+00:00",
+        "id": "1.19.2",
+        "java_component": "java-runtime-gamma",
+        "java_version": 17,
+        "name": "1.19.2",
+        "pack_version": {
+          "data": 10,
+          "resource": 9
+        },
+        "protocol_version": 760,
+        "release_target": "1.19.2",
+        "series_id": "main",
+        "stable": true,
+        "world_version": 3120
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:574fe1279bef1e0acea5fff421f3b4eff092596f8e432e55f37355f372e9bf6b",
+      "example_commit": "610664bfb97aceace820f0dedf4feec273bac8fb",
+      "example_properties": {
+        "fabric_api_version": "0.58.5+1.19.1",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.19.1",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.19.1",
+      "minecraft_java_minimum": 17,
+      "mojang_version_json": {
+        "build_time": "2022-07-27T09:23:42+00:00",
+        "id": "1.19.1",
+        "java_component": "java-runtime-gamma",
+        "java_version": 17,
+        "name": "1.19.1",
+        "pack_version": {
+          "data": 10,
+          "resource": 9
+        },
+        "protocol_version": 760,
+        "release_target": "1.19.1",
+        "series_id": "main",
+        "stable": true,
+        "world_version": 3117
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:7eb8b8eb0e8c4e960e696033b6a5db6b3c59df27fdc25c0842bd78481f2bd76f",
+      "example_commit": "3f6e0d36efa63ed6b672c1828c007109bb273b56",
+      "example_properties": {
+        "fabric_api_version": "0.58.0+1.19",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.19",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.19",
+      "minecraft_java_minimum": 17,
+      "mojang_version_json": {
+        "build_time": "2022-06-07T09:40:26+00:00",
+        "id": "1.19",
+        "java_component": "java-runtime-gamma",
+        "java_version": 17,
+        "name": "1.19",
+        "pack_version": {
+          "data": 10,
+          "resource": 9
+        },
+        "protocol_version": 759,
+        "release_target": "1.19",
+        "series_id": "main",
+        "stable": true,
+        "world_version": 3105
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:762ec6f6ad59f86cefda27a96997b30e4c76bc4f70b88f56c4954452c57b7349",
+      "example_commit": "32bca4c06923a1b22801448eb3b446bcec0ffdc1",
+      "example_properties": {
+        "fabric_api_version": "0.77.0+1.18.2",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.18.2",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.18.2",
+      "minecraft_java_minimum": 17,
+      "mojang_version_json": {
+        "build_time": "2022-02-28T10:40:37+00:00",
+        "id": "1.18.2",
+        "java_component": "java-runtime-beta",
+        "java_version": 17,
+        "name": "1.18.2",
+        "pack_version": {
+          "data": 9,
+          "resource": 8
+        },
+        "protocol_version": 758,
+        "release_target": "1.18.2",
+        "series_id": "main",
+        "stable": true,
+        "world_version": 2975
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:38b00e1492c84d31f34109ba0e2c69af7b91a6f6e2fd6d31370905727edf07ea",
+      "example_commit": "573e851ce6818d7de8e346a511ef466a53fe5506",
+      "example_properties": {
+        "fabric_api_version": "0.46.6+1.18",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.18.1",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.18.1",
+      "minecraft_java_minimum": 17,
+      "mojang_version_json": {
+        "build_time": "2021-12-10T08:21:01+00:00",
+        "id": "1.18.1",
+        "java_component": "java-runtime-beta",
+        "java_version": 17,
+        "name": "1.18.1",
+        "pack_version": {
+          "data": 8,
+          "resource": 8
+        },
+        "protocol_version": 757,
+        "release_target": "1.18.1",
+        "series_id": "main",
+        "stable": true,
+        "world_version": 2865
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:f6357c4ea3632890061a31ba83fda256b9955d513b3abb597fd0c56d657b9a47",
+      "example_commit": "347909aa7fffe661b451472b41aa7b190a070cc4",
+      "example_properties": {
+        "fabric_api_version": "0.44.0+1.18",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.18",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.18",
+      "minecraft_java_minimum": 17,
+      "mojang_version_json": {
+        "build_time": "2021-11-30T09:14:30+00:00",
+        "id": "1.18",
+        "java_component": "java-runtime-beta",
+        "java_version": 17,
+        "name": "1.18",
+        "pack_version": {
+          "data": 8,
+          "resource": 8
+        },
+        "protocol_version": 757,
+        "release_target": "1.18",
+        "series_id": "main",
+        "stable": true,
+        "world_version": 2860
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:0a13b56f640926611079c42b840abc32fb44fd5f8902762bd366662000345077",
+      "example_commit": "a6b78364647fadc74d7c96860b404bc9cdbcf22e",
+      "example_properties": {
+        "fabric_api_version": "0.46.1+1.17",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.17.1",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.17.1",
+      "minecraft_java_minimum": 16,
+      "mojang_version_json": {
+        "build_time": "2021-07-06T11:59:45+00:00",
+        "id": "1.17.1",
+        "java_component": "java-runtime-alpha",
+        "java_version": 16,
+        "name": "1.17.1",
+        "pack_version": {
+          "data": 7,
+          "resource": 7
+        },
+        "protocol_version": 756,
+        "release_target": "1.17.1",
+        "stable": true,
+        "world_version": 2730
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:257bd6a1b7a44d46f0ca2e9be42777130b3047ca05fa6f531a80d22eae2e29e3",
+      "example_commit": "8f273dde9160e1be954d3a135cc88fe9251ec5fa",
+      "example_properties": {
+        "fabric_api_version": "0.46.1+1.17",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.17",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.17",
+      "minecraft_java_minimum": 16,
+      "mojang_version_json": {
+        "build_time": "2021-06-08T10:58:54+00:00",
+        "id": "1.17",
+        "java_component": "java-runtime-alpha",
+        "java_version": 16,
+        "name": "1.17",
+        "pack_version": {
+          "data": 7,
+          "resource": 7
+        },
+        "protocol_version": 755,
+        "release_target": "1.17",
+        "stable": true,
+        "world_version": 2724
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:7d5b162743c37fde995e62bb08e410a9458657c1185897bb4f0bd3771bcabd22",
+      "example_commit": "3196fdc4f43d00350892e70d66ce0ef5b3f55609",
+      "example_properties": {
+        "fabric_api_version": "0.42.0+1.16",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.16.5",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.16.5",
+      "minecraft_java_minimum": 8,
+      "mojang_version_json": {
+        "build_time": "2021-01-14T16:03:41+00:00",
+        "id": "1.16.5",
+        "name": "1.16.5",
+        "pack_version": 6,
+        "protocol_version": 754,
+        "release_target": "1.16.5",
+        "stable": true,
+        "world_version": 2586
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:07debe74eb1b66e52b1ab34576487f6d06e90c0e778bacac18433d62d32a2676",
+      "example_commit": "c014b008a8448e1776e67280b61a8fc43af04963",
+      "example_properties": {
+        "fabric_api_version": "0.42.0+1.16",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.16.4",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.16.4",
+      "minecraft_java_minimum": 8,
+      "mojang_version_json": {
+        "build_time": "2020-10-29T15:47:51+00:00",
+        "id": "1.16.4",
+        "name": "1.16.4",
+        "pack_version": 6,
+        "protocol_version": 754,
+        "release_target": "1.16.4",
+        "stable": true,
+        "world_version": 2584
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:72183e22ee859dc83a7b6f6a44fac5e04c083f38762cec0df68c601ae755946d",
+      "example_commit": "7249145564cdfff2758b38867854faef93845cf5",
+      "example_properties": {
+        "fabric_api_version": "0.42.0+1.16",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.16.3",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.16.3",
+      "minecraft_java_minimum": 8,
+      "mojang_version_json": {
+        "build_time": "2020-09-10T13:40:50+00:00",
+        "id": "1.16.3",
+        "name": "1.16.3",
+        "pack_version": 6,
+        "protocol_version": 753,
+        "release_target": "1.16.3",
+        "stable": true,
+        "world_version": 2580
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:fe61326ea4b2cf82cf22154f7cb5364b0006aa4afef9cc98d783acfc7a4e5de2",
+      "example_commit": "22478178627e7450de46154b42cf3a66881acb66",
+      "example_properties": {
+        "fabric_api_version": "0.42.0+1.16",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.16.2",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.16.2",
+      "minecraft_java_minimum": 8,
+      "mojang_version_json": {
+        "build_time": "2020-08-11T10:11:57+00:00",
+        "id": "1.16.2",
+        "name": "1.16.2",
+        "pack_version": 6,
+        "protocol_version": 751,
+        "release_target": "1.16.2",
+        "stable": true,
+        "world_version": 2578
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:9a5aa16bd1aa4f0627e212e91f91adb49767dc9526a79f345e62cf570fa33350",
+      "example_commit": "49fe784d23dfd0dd063a2b8bb75156d57e95d7cd",
+      "example_properties": {
+        "fabric_api_version": "0.42.0+1.16",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.16.1",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.16.1",
+      "minecraft_java_minimum": 8,
+      "mojang_version_json": {
+        "build_time": "2020-06-24T10:29:54+00:00",
+        "id": "1.16.1",
+        "name": "1.16.1",
+        "pack_version": 5,
+        "protocol_version": 736,
+        "release_target": "1.16.1",
+        "stable": true,
+        "world_version": 2567
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:15b132d76b060e6ccf4949f9063d8f9850b705bfde188c714fbcdd8a8630ccf0",
+      "example_commit": "8123b32980f6f49db06a27ec0da3d60a769c8a38",
+      "example_properties": {
+        "fabric_api_version": "0.42.0+1.16",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.16",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.16",
+      "minecraft_java_minimum": 8,
+      "mojang_version_json": {
+        "build_time": "2020-06-23T16:19:09+00:00",
+        "id": "1.16",
+        "name": "1.16",
+        "pack_version": 5,
+        "protocol_version": 735,
+        "release_target": "1.16",
+        "stable": true,
+        "world_version": 2566
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:0f99c8c9f677aff1eff1cb85baabdbe2d63e471c48a6d5b65b54a0da2ea435d5",
+      "example_commit": "66c890f00b0f1ba2cca58714c87e77b47139cc5b",
+      "example_properties": {
+        "fabric_api_version": "0.28.5+1.15",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.15.2",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.15.2",
+      "minecraft_java_minimum": 8,
+      "mojang_version_json": {
+        "build_time": "2020-01-17T10:02:11+00:00",
+        "id": "1.15.2",
+        "name": "1.15.2",
+        "pack_version": 5,
+        "protocol_version": 578,
+        "release_target": "1.15.2",
+        "stable": true,
+        "world_version": 2230
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:d1000a0b6fd1e00886684ab5239c1c75d9ad0da0c9e914ad1764588e691041ce",
+      "example_commit": "e7cedae058196ce5107bbd224ba9f7d69f3d82f7",
+      "example_properties": {
+        "fabric_api_version": "0.28.5+1.15",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.15.1",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.15.1",
+      "minecraft_java_minimum": 8,
+      "mojang_version_json": {
+        "build_time": "2019-12-16T10:28:09+00:00",
+        "id": "1.15.1",
+        "name": "1.15.1",
+        "pack_version": 5,
+        "protocol_version": 575,
+        "release_target": "1.15.1",
+        "stable": true,
+        "world_version": 2227
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:9b2e090512cd682bd13389b7747b114c3c40f9fb7b02ba2268a0893e67a49dde",
+      "example_commit": "49f55d9da5a530fe6340cd3aced12d84594d1844",
+      "example_properties": {
+        "fabric_api_version": "0.28.5+1.15",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.15",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.15",
+      "minecraft_java_minimum": 8,
+      "mojang_version_json": {
+        "build_time": "2019-12-09T13:11:56+00:00",
+        "id": "1.15",
+        "name": "1.15",
+        "pack_version": 5,
+        "protocol_version": 573,
+        "release_target": "1.15",
+        "stable": true,
+        "world_version": 2225
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    },
+    {
+      "build_java_minimum": 21,
+      "compile": "not_run",
+      "context_id": "sha256:82a5878dfb905934e7ccd16f2e5c6958ee26651bd279956b00fea4022dfb4273",
+      "example_commit": "e99aab8e833dc20ca13038591327dc0f898ea570",
+      "example_properties": {
+        "fabric_api_version": "0.28.5+1.14",
+        "group": "com.example",
+        "loader_version": "0.19.5",
+        "loom_version": "1.17-SNAPSHOT",
+        "minecraft_version": "1.14.4",
+        "version": "1.0.0"
+      },
+      "gametest": "not_run",
+      "loom_selection": {
+        "binary_sha256": "3aa6f0f7107f8f63762b0a014214e9341b7e4a33c05769f3e8783e750d5eb167",
+        "fixed_release": "1.17.20",
+        "minimum_gradle": "9.5.0",
+        "policy": "fixed_release_binary_and_dependencies_match_official_recommendation",
+        "requested": "1.17-SNAPSHOT"
+      },
+      "minecraft": "1.14.4",
+      "minecraft_java_minimum": 8,
+      "mojang_version_json": {
+        "build_time": "2019-07-19T09:24:08+00:00",
+        "id": "1.14.4",
+        "name": "1.14.4",
+        "pack_version": 4,
+        "protocol_version": 498,
+        "release_target": "1.14.4",
+        "stable": true,
+        "world_version": 1976
+      },
+      "unverified": [
+        "template_semantics",
+        "artifact_schemas",
+        "symbol_replacements",
+        "runtime"
+      ],
+      "validation_level": "official_metadata"
+    }
+  ]
+}
