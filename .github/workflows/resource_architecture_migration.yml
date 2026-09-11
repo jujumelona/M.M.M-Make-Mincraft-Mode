@@ -1,14 +1,10 @@
 name: Resource architecture migration
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'tools/.resource_migration_parts/**'
-      - '.github/workflows/resource_architecture_migration.yml'
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: resource-architecture-migration-main
@@ -89,26 +85,28 @@ jobs:
           from minecraft_mod_ai.template_contract_validation import runtime_consumer_roots, validate_catalog
           validate_catalog(RUNTIME_TEMPLATE_ROOT, consumer_roots=runtime_consumer_roots())
           PY
-      - name: Remove one-shot migration machinery
+      - name: Remove one-shot migration machinery from proposed result
         run: |
           rm -f tools/migrate_resource_architecture.py
           rm -rf tools/.resource_migration_parts
           rm -f .github/workflows/resource_architecture_migration.yml
-      - name: Commit validated migration to main
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+      - name: Build validated migration patch
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git diff --cached --check
           if git diff --cached --quiet; then
             echo "Migration produced no changes"
             exit 1
           fi
-          git commit -m "refactor: canonicalize Minecraft resource generation"
-          git fetch origin main
-          if [ "$(git rev-parse HEAD^)" != "$(git rev-parse origin/main)" ]; then
-            git rebase origin/main
-          fi
-          git push origin HEAD:main
+          git diff --cached --binary --full-index > /tmp/resource-architecture-migration.patch
+          git status --short > /tmp/resource-architecture-migration.status.txt
+          test -s /tmp/resource-architecture-migration.patch
+      - name: Upload validated migration patch
+        uses: actions/upload-artifact@v4
+        with:
+          name: resource-architecture-migration-${{ github.sha }}
+          path: |
+            /tmp/resource-architecture-migration.patch
+            /tmp/resource-architecture-migration.status.txt
+          retention-days: 14
+          if-no-files-found: error
