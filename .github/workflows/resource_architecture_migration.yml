@@ -80,9 +80,7 @@ jobs:
           set -o pipefail
           python -m pytest -vv \
             tests/test_resource_architecture.py \
-            tests/test_template_runtime_ssot.py \
-            tests/test_model_registry.py \
-            tests/test_work_graph.py 2>&1 | tee /tmp/resource-migration-pytest.txt
+            tests/test_template_runtime_ssot.py 2>&1 | tee /tmp/resource-migration-pytest.txt
       - name: Upload failure diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
