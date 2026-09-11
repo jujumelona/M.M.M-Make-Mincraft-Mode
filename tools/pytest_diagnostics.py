@@ -253,7 +253,13 @@ def _remove_stale_outputs(log_path: Path, junit_path: Path) -> bool:
     return True
 
 
-def _redact_file(source: Path, destination: Path, *, replacement: str = "<redacted>") -> None:
+def _redact_file(
+    source: Path,
+    destination: Path,
+    *,
+    replacement: str = "<redacted>",
+    preserve_xml_declaration: bool = False,
+) -> None:
     redactor = StreamingRedactor(
         _environment_secret_values(),
         replacement=replacement,
@@ -261,19 +267,31 @@ def _redact_file(source: Path, destination: Path, *, replacement: str = "<redact
     with source.open("r", encoding="utf-8", errors="replace") as source_handle, destination.open(
         "w", encoding="utf-8", errors="replace"
     ) as destination_handle:
-        while True:
-            chunk = source_handle.read(_OUTPUT_CHUNK_CHARS)
-            if not chunk:
-                break
+        chunk = source_handle.read(_OUTPUT_CHUNK_CHARS)
+        if preserve_xml_declaration and chunk.startswith("<?xml"):
+            declaration_end = chunk.find("?>")
+            if declaration_end >= 0:
+                declaration_end += 2
+                destination_handle.write(chunk[:declaration_end])
+                chunk = chunk[declaration_end:]
+
+        while chunk:
             safe = redactor.feed(chunk)
             if safe:
                 destination_handle.write(safe)
+            chunk = source_handle.read(_OUTPUT_CHUNK_CHARS)
+
         final = redactor.finish()
         if final:
             destination_handle.write(final)
 
 
-def _redact_file_in_place(path: Path, *, replacement: str = "<redacted>") -> None:
+def _redact_file_in_place(
+    path: Path,
+    *,
+    replacement: str = "<redacted>",
+    preserve_xml_declaration: bool = False,
+) -> None:
     temporary_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -285,7 +303,12 @@ def _redact_file_in_place(path: Path, *, replacement: str = "<redacted>") -> Non
             delete=False,
         ) as handle:
             temporary_path = Path(handle.name)
-        _redact_file(path, temporary_path, replacement=replacement)
+        _redact_file(
+            path,
+            temporary_path,
+            replacement=replacement,
+            preserve_xml_declaration=preserve_xml_declaration,
+        )
         temporary_path.replace(path)
         temporary_path = None
     finally:
@@ -419,7 +442,11 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     if args.junit.is_file():
         try:
-            _redact_file_in_place(args.junit, replacement=_XML_REDACTION_MARKER)
+            _redact_file_in_place(
+                args.junit,
+                replacement=_XML_REDACTION_MARKER,
+                preserve_xml_declaration=True,
+            )
         except OSError as exc:
             print(
                 _render_internal_failure(
