@@ -117,10 +117,13 @@ def _strong_adapt_match(subject: str, candidate: str) -> bool:
     if not overlap:
         return False
     union = subject_tokens | candidate_tokens
-    # One-token identifiers must match exactly; multi-token identifiers need both
-    # substantial overlap and at most one differing semantic token.
-    if len(subject_tokens) == 1 or len(candidate_tokens) == 1:
-        return subject_tokens == candidate_tokens
+    # Exact identity is handled by REUSE before this function.  A single semantic
+    # token may adapt to one additional modifier (for example lunite -> raw_lunite),
+    # but never to a broad multi-token substring match.
+    if len(subject_tokens) == 1:
+        return subject_tokens <= candidate_tokens and len(candidate_tokens) <= 2
+    if len(candidate_tokens) == 1:
+        return candidate_tokens <= subject_tokens and len(subject_tokens) <= 2
     return len(overlap) >= 2 and len(union - overlap) <= 1 and len(overlap) / len(union) >= 2 / 3
 
 
@@ -188,7 +191,6 @@ class FactReuseClassifier:
                 rationale="Empty subject requires new implementation",
             )
 
-        # Exact normalized identity is the only REUSE condition.
         exact_keys = {subject, subject.replace("-", "_")}
         for exact_key in exact_keys:
             if exact_key in cache:
@@ -202,7 +204,6 @@ class FactReuseClassifier:
                         rationale=f"Exact compatible symbol {sym!r} found in {file_path or 'project index'}",
                     )
 
-        # ADAPT is deliberately conservative: compatible path plus strong token overlap.
         candidates: list[tuple[float, str, str]] = []
         subject_tokens = set(_identity_tokens(subject))
         for key, (sym, file_path) in cache.items():
