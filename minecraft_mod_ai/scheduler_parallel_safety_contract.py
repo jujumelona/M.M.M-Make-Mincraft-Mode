@@ -36,8 +36,28 @@ _SHARED_LOCAL_GPU_LANE: ContextVar[bool] = ContextVar(
 )
 
 
+def _positive_int(value: Any) -> int | None:
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def recommended_cpu_io_workers(*, cpu_count: int | None = None) -> int:
+    """Use the host directly, reserving one logical CPU for the model/OS when possible."""
+
+    explicit = _positive_int(os.environ.get("MMM_CPU_IO_WORKERS"))
+    if explicit is not None:
+        return explicit
+    logical = _positive_int(cpu_count)
+    if logical is None:
+        logical = _positive_int(os.cpu_count()) or 2
+    return logical if logical <= 2 else logical - 1
+
+
 def _cpu_capacity() -> int:
-    return max(1, min(4, os.cpu_count() or 2))
+    return recommended_cpu_io_workers()
 
 
 def _capacities() -> dict[str, int]:
@@ -511,4 +531,5 @@ __all__ = [
     "_receipt_touched_paths",
     "_stage_write_lock",
     "install",
+    "recommended_cpu_io_workers",
 ]
