@@ -1,11 +1,7 @@
 id: research/visual_extraction
+execution: host
 input:
   visual_evidence:
-task:
-  extract_observed_visual_requirements:
-rules:
-  - Separate observed geometry, material, texture, color, animation, and UI facts.
-  - Do not infer unseen visual details.
 output:
   visual_records:
   evidence_refs:

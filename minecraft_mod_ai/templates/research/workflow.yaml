@@ -1,7 +1,5 @@
-﻿id: research/workflow
+id: research/workflow
 execution: sequence
-standalone: true
-# Descriptive manifest; the runtime executes RESEARCH_SEQUENCE directly.
 steps:
 - research/reference_identity
 - research/reference_research
