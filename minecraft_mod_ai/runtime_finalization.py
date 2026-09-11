@@ -50,6 +50,7 @@ def finalize_runtime() -> None:
             production_tools,
             progress_aware_tool_loop,
             quality_evidence,
+            reference_source_research,
             repository_grounding,
             research_rag_performance,
             retrieval_cpu_budget_contract,
@@ -95,6 +96,7 @@ def finalize_runtime() -> None:
         from .procedural_skill_identity_contract import install as install_procedural_skill_identity
         from .production_boundary_contract import install_production_boundary_contract
         from .quality_public_acceptance_view_contract import install as install_quality_public_acceptance_view
+        from .reference_query_parallelism_contract import install as install_reference_query_parallelism
         from .requirement_branch_scope_contract import install_requirement_branch_scope_contract
         from .retrieval_model_residency import install as install_retrieval_residency
         from .runtime_hot_path_contract import assert_installed as assert_runtime_hot_paths
@@ -143,6 +145,7 @@ def finalize_runtime() -> None:
         install_llama_server_response_resilience(llama_cpp_adapter)
         install_work_graph_receipt_integrity(work_graph)
         install_verifier_receipt_truth(work_graph)
+        install_reference_query_parallelism(reference_source_research)
 
         install_evidence_first_pipeline()
         install_planner_design_readiness()
