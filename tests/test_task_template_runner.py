@@ -7,12 +7,8 @@ from minecraft_mod_ai import task_template_runner as runner
 from minecraft_mod_ai.task_template_catalog import ROOT, load_template
 
 
-def reply(records=None, blocked_reason="", refs=None):
-    return {
-        "records": records or [],
-        "blocked_reason": blocked_reason,
-        "evidence_refs": refs or [],
-    }
+def count_reply(count=0, blocked_reason=""):
+    return {"count": count, "blocked_reason": blocked_reason}
 
 
 def drive(monkeypatch, replies):
@@ -26,9 +22,9 @@ def drive(monkeypatch, replies):
     return calls
 
 
-def test_record_roundtrip_uses_exact_catalog_contract(monkeypatch):
+def test_record_roundtrip_uses_cardinality_then_exact_record(monkeypatch):
     record = {"trigger": "right click", "owner": "server player"}
-    calls = drive(monkeypatch, iter([reply([record])]))
+    calls = drive(monkeypatch, iter([count_reply(1), record]))
     result = runner.run_record_template(
         None,
         "feature/behavior_contract/entry_conditions",
@@ -36,15 +32,17 @@ def test_record_roundtrip_uses_exact_catalog_contract(monkeypatch):
         allowed_refs=set(),
     )
     assert result["records"] == [record]
-    assert len(calls) == 1
-    assert (
-        calls[0]["response_schema"]["properties"]["records"]["items"]
-        == load_template("feature/behavior_contract/entry_conditions")["record_schema"]
-    )
+    assert len(calls) == 2
+    count_schema = calls[0]["response_schema"]
+    assert count_schema["properties"]["count"] == {"type": "integer", "minimum": 0}
+    assert "maximum" not in count_schema["properties"]["count"]
+    assert calls[1]["response_schema"] == load_template(
+        "feature/behavior_contract/entry_conditions"
+    )["record_schema"]
 
 
 def test_empty_result_is_host_owned_completion(monkeypatch):
-    drive(monkeypatch, iter([reply()]))
+    calls = drive(monkeypatch, iter([count_reply(0)]))
     result = runner.run_record_template(
         None,
         "feature/behavior_contract/entry_conditions",
@@ -53,23 +51,12 @@ def test_empty_result_is_host_owned_completion(monkeypatch):
     )
     assert result["records"] == []
     assert result["reason"]
+    assert len(calls) == 1
 
 
-def test_unproven_evidence_is_rejected(monkeypatch):
-    record = {"trigger": "x", "owner": "y"}
-    drive(monkeypatch, iter([reply([record], refs=["invented"])]))
-    with pytest.raises(ValueError, match="TEMPLATE_EVIDENCE"):
-        runner.run_record_template(
-            None,
-            "feature/behavior_contract/entry_conditions",
-            context={},
-            allowed_refs=set(),
-        )
-
-
-def test_repeated_record_stops_without_model_continuation(monkeypatch):
+def test_repeated_record_fails_closed_without_model_continuation(monkeypatch):
     record = {"trigger": "right click", "owner": "server player"}
-    drive(monkeypatch, iter([reply([record, record])]))
+    drive(monkeypatch, iter([count_reply(2), record, record]))
     with pytest.raises(runner.TemplateBlocked, match="NO_PROGRESS"):
         runner.run_record_template(
             None,
@@ -79,8 +66,8 @@ def test_repeated_record_stops_without_model_continuation(monkeypatch):
         )
 
 
-def test_missing_information_blocks_without_status_protocol(monkeypatch):
-    drive(monkeypatch, iter([reply(blocked_reason="trigger not established")]))
+def test_missing_information_blocks_before_record_loop(monkeypatch):
+    calls = drive(monkeypatch, iter([count_reply(blocked_reason="trigger not established")]))
     with pytest.raises(runner.TemplateBlocked, match="trigger not established"):
         runner.run_record_template(
             None,
@@ -88,6 +75,7 @@ def test_missing_information_blocks_without_status_protocol(monkeypatch):
             context={},
             allowed_refs=set(),
         )
+    assert len(calls) == 1
 
 
 def test_catalog_manifests_resolve_every_declared_task():
@@ -99,7 +87,7 @@ def test_catalog_manifests_resolve_every_declared_task():
 
 def test_allowed_evidence_is_not_automatically_attached(monkeypatch):
     record = {"trigger": "click", "owner": "server"}
-    drive(monkeypatch, iter([reply([record])]))
+    drive(monkeypatch, iter([count_reply(1), record]))
     result = runner.run_record_template(
         None,
         "feature/behavior_contract/entry_conditions",
@@ -109,9 +97,22 @@ def test_allowed_evidence_is_not_automatically_attached(monkeypatch):
     assert result["evidence_refs"] == []
 
 
-def test_legacy_status_protocol_is_absent():
+def test_host_context_can_admit_known_evidence(monkeypatch):
+    record = {"trigger": "click", "owner": "server"}
+    drive(monkeypatch, iter([count_reply(1), record]))
+    result = runner.run_record_template(
+        None,
+        "feature/behavior_contract/entry_conditions",
+        context={"evidence": ["e1", "not-allowed"]},
+        allowed_refs={"e1"},
+    )
+    assert result["evidence_refs"] == ["e1"]
+
+
+def test_legacy_status_and_record_array_protocol_are_absent():
     schema = runner.record_response_schema(
         load_template("feature/behavior_contract/entry_conditions")
     )
     assert "status" not in schema["properties"]
-    assert "records" in schema["properties"]
+    assert "records" not in schema["properties"]
+    assert set(schema["properties"]) == {"count", "blocked_reason"}
