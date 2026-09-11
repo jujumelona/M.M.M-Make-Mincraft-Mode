@@ -24,7 +24,6 @@ def replace_once(path: str, old: str, new: str) -> None:
     write(path, value.replace(old, new, 1))
 
 
-# Production: visual fields required by generated assets must be host-requested.
 path = "minecraft_mod_ai/content_design_graph.py"
 value = read(path)
 replacements = {
@@ -45,12 +44,10 @@ for old, new in replacements.items():
     value = value.replace(old, new, 1)
 write(path, value)
 
-# Respect the executor selected by the implementation profile. An earlier wave may
-# already have applied this exact repair, so replace_once is deliberately idempotent.
 replace_once(
     "minecraft_mod_ai/populate_version_artifact_rules.py",
-    '            "executor_type": "deterministic_renderer" if template_id else "python_generator",\n',
-    '            "executor_type": executor_type,\n',
+    '        "executor_type": "deterministic_renderer" if template_id else "python_generator",\n',
+    '        "executor_type": executor_type,\n',
 )
 
 DEFAULT_PROPERTY_BLOCK = '''                defaults = {
