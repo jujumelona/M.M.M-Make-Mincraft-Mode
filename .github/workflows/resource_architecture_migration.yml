@@ -69,9 +69,9 @@ jobs:
           set -o pipefail
           python -m minecraft_mod_ai.populate_version_artifact_rules 2>&1 | tee /tmp/resource-migration-catalog.txt
           python - <<'PY'
-          from minecraft_mod_ai.host_version_catalog import load_host_version_catalog
-          catalog = load_host_version_catalog()
-          if not catalog:
+          from minecraft_mod_ai.host_version_catalog import load_host_catalog
+          _, bundles = load_host_catalog()
+          if not bundles:
               raise SystemExit('host version catalog is empty after regeneration')
           PY
       - name: Compile and static-check changed architecture
