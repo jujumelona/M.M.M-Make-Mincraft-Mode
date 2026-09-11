@@ -51,13 +51,15 @@ class SlotDefinition:
 
 
 def _bounded_context(context: Mapping[str, Any]) -> str:
-    # Project the immutable HOST snapshot into its compact deterministic target facts.
-    # The full resolved_version_context contains schemas/evidence/admission data that the
-    # small model neither needs nor should spend context budget reading.
+    # Project immutable HOST target facts, but keep build catalogs out of model context.
+    # dependency/repository/replacement facts are deterministic template inputs: the small
+    # model must not spend context budget re-reading facts it has no authority to choose.
     from .version_template_context import resolved_template_values
 
     projected = resolved_template_values(context)
     projected.pop("resolved_version_context", None)
+    for host_only_key in ("dependency_coordinates", "repositories", "replacements"):
+        projected.pop(host_only_key, None)
     try:
         encoded = json.dumps(
             projected,
