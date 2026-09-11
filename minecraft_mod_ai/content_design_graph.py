@@ -241,7 +241,6 @@ def compile_content_graph(
                 "display_name",
                 "category",
                 "health",
-                "attack_damage",
                 "speed",
                 "tracking_range",
                 "width",
@@ -299,9 +298,39 @@ def compile_content_graph(
             FactType.SMELTING_RECIPE: {"cooking_type", "experience", "cookingtime"},
             FactType.REGISTRY_TAG: {"registry_kind"},
         }[fact_type]
+        required_properties = {
+            FactType.ITEM_EXISTS: {"display_name"},
+            FactType.BLOCK_EXISTS: {"display_name"},
+            FactType.ENTITY_EXISTS: {
+                "display_name", "category", "health", "speed", "tracking_range",
+                "width", "height", "archetype", "behavior", "main_color",
+            },
+            FactType.GUI_EXISTS: {"display_name", "screen_type"},
+            FactType.NETWORK_PACKET: {"display_name", "packet_name", "channel", "direction"},
+            FactType.BLOCK_ENTITY_EXISTS: {"display_name", "sync_type", "container_size"},
+            FactType.DATA_COMPONENT: {"display_name", "component_name", "value_type", "codec"},
+            FactType.WORLDGEN_FEATURE: {"display_name", "feature_type", "step", "biomes"},
+            FactType.DIMENSION: {"display_name", "dimension_type", "ambient_light", "coordinate_scale"},
+            FactType.BIOME: {"display_name", "temperature", "downfall", "precipitation"},
+            FactType.STATUS_EFFECT: {"display_name", "category", "color", "beneficial"},
+            FactType.SOUND_EVENT: {"display_name", "sound_id", "category"},
+            FactType.PARTICLE_TYPE: {"display_name", "particle_name", "override_limiter"},
+            FactType.ENTITY_LOOT: {"display_name", "loot_table_id", "type"},
+            FactType.ADVANCEMENT: {"display_name", "frame_type"},
+            FactType.EQUIPMENT_ARMOR: {"display_name", "slot", "defense", "toughness"},
+            FactType.CUSTOM_ITEM_BEHAVIOR: {"display_name", "action", "cooldown"},
+            FactType.CUSTOM_BLOCK_BEHAVIOR: {"display_name", "trigger", "interaction"},
+            FactType.CRAFTING_RECIPE: {"recipe_kind", "count"},
+            FactType.SMELTING_RECIPE: {"cooking_type", "experience", "cookingtime"},
+            FactType.REGISTRY_TAG: {"registry_kind"},
+        }[fact_type]
         for prop in records(
             "design/content_property",
-            {**context, "allowed_properties": sorted(allowed_properties)},
+            {
+                **context,
+                "allowed_properties": sorted(allowed_properties),
+                "required_properties": sorted(required_properties),
+            },
         ):
             key, value = prop["property"], prop["value"]
             if key in props:
@@ -309,6 +338,21 @@ def compile_content_graph(
             if key not in allowed_properties:
                 raise SlotFillError(f"CONTENT_PROPERTY_UNSUPPORTED: {eid}.{key}")
             props[key] = value
+        if fact_type == FactType.ENTITY_EXISTS:
+            behavior_value = str(props.get("behavior", "")).strip().lower()
+            if behavior_value in {"hostile_melee", "neutral_melee"} and "attack_damage" not in props:
+                combat_rows = records(
+                    "design/content_property",
+                    {
+                        **context,
+                        "allowed_properties": ["attack_damage"],
+                        "required_properties": ["attack_damage"],
+                    },
+                )
+                if len(combat_rows) != 1 or combat_rows[0]["property"] != "attack_damage":
+                    raise SlotFillError(f"CONTENT_PROPERTY_UNRESOLVED: {eid}.attack_damage")
+                props["attack_damage"] = combat_rows[0]["value"]
+
         if fact_type in {
             FactType.CRAFTING_RECIPE,
             FactType.SMELTING_RECIPE,
@@ -322,7 +366,6 @@ def compile_content_graph(
             required_entity_properties = {
                 "category",
                 "health",
-                "attack_damage",
                 "speed",
                 "tracking_range",
                 "width",
@@ -354,6 +397,19 @@ def compile_content_graph(
                     raise SlotFillError(
                         f"CONTENT_PROPERTY_INVALID: {eid}.{numeric_key}"
                     )
+            if "attack_damage" in props:
+                try:
+                    attack_damage = float(props["attack_damage"])
+                except (TypeError, ValueError) as exc:
+                    raise SlotFillError(f"CONTENT_PROPERTY_INVALID: {eid}.attack_damage") from exc
+                if attack_damage < 0 or (
+                    props["behavior"].strip().lower() in {"hostile_melee", "neutral_melee"}
+                    and attack_damage <= 0
+                ):
+                    raise SlotFillError(f"CONTENT_PROPERTY_INVALID: {eid}.attack_damage")
+            elif props["behavior"].strip().lower() in {"hostile_melee", "neutral_melee"}:
+                raise SlotFillError(f"CONTENT_PROPERTY_UNRESOLVED: {eid}.attack_damage")
+
             if props["category"].strip().lower() not in {
                 "monster",
                 "creature",
@@ -428,7 +484,7 @@ def compile_content_graph(
             config.update(
                 {
                     "max_health": float(props["health"]),
-                    "attack_damage": float(props["attack_damage"]),
+                    "attack_damage": float(props.get("attack_damage", "0")),
                     "movement_speed": float(props["speed"]),
                     "follow_range": float(props["tracking_range"]),
                     "entity_width": float(props["width"]),
@@ -498,6 +554,16 @@ def compile_content_graph(
     module_by_id = {m.module_id: m for m in modules}
     module_deps = {m.module_id: list(m.depends_on) for m in modules}
 
+    def require_relation_codegen(module_id, relation_type, target_id):
+        module = module_by_id.get(module_id)
+        if module is None:
+            return
+        module.config["requires_custom_generation"] = True
+        binding = {"relation": relation_type, "target": target_id}
+        bindings = module.config.setdefault("executable_relations", [])
+        if binding not in bindings:
+            bindings.append(binding)
+
     for edge in relations:
         source, target = edge["source_id"], edge["target_id"]
         rel_type = edge["relation_type"]
@@ -552,6 +618,7 @@ def compile_content_graph(
             if source in module_by_id:
                 module_deps[source].append(target)
                 module_by_id[source].config.setdefault(rel_type, []).append(target)
+                require_relation_codegen(source, rel_type, target)
 
         elif rel_type == "unlocks":
             facts.append(
@@ -568,6 +635,7 @@ def compile_content_graph(
             if target in module_by_id:
                 module_deps[target].append(source)
                 module_by_id[target].config.setdefault("unlocked_by", []).append(source)
+                require_relation_codegen(target, "unlocked_by", source)
 
         elif rel_type == "opens":
             if tgt_cap != FactType.GUI_EXISTS:
@@ -586,6 +654,7 @@ def compile_content_graph(
             if source in module_by_id:
                 module_deps[source].append(target)
                 module_by_id[source].config["opens_gui"] = target
+                require_relation_codegen(source, "opens", target)
 
         elif rel_type == "controls":
             if tgt_cap not in {FactType.BLOCK_ENTITY_EXISTS, FactType.ENTITY_EXISTS}:
@@ -604,6 +673,7 @@ def compile_content_graph(
             if source in module_by_id:
                 module_deps[source].append(target)
                 module_by_id[source].config["controls"] = target
+                require_relation_codegen(source, "controls", target)
 
         elif rel_type == "spawns":
             if tgt_cap != FactType.ENTITY_EXISTS:
@@ -622,6 +692,7 @@ def compile_content_graph(
             if source in module_by_id:
                 module_deps[source].append(target)
                 module_by_id[source].config["spawns"] = target
+                require_relation_codegen(source, "spawns", target)
 
         elif rel_type == "transports_to":
             if tgt_cap not in {FactType.DIMENSION, FactType.BIOME}:
@@ -640,6 +711,7 @@ def compile_content_graph(
             if source in module_by_id:
                 module_deps[source].append(target)
                 module_by_id[source].config["transports_to"] = target
+                require_relation_codegen(source, "transports_to", target)
 
         elif rel_type == "displays":
             if src_cap != FactType.GUI_EXISTS:
@@ -658,6 +730,7 @@ def compile_content_graph(
             if source in module_by_id:
                 module_deps[source].append(target)
                 module_by_id[source].config.setdefault("displays", []).append(target)
+                require_relation_codegen(source, "displays", target)
 
         elif rel_type == "synchronizes":
             if tgt_cap != FactType.NETWORK_PACKET:
@@ -676,6 +749,7 @@ def compile_content_graph(
             if source in module_by_id:
                 module_deps[source].append(target)
                 module_by_id[source].config["sync_packet"] = target
+                require_relation_codegen(source, "synchronizes", target)
 
         else:
             raise SlotFillError(f"CONTENT_RELATION_UNSUPPORTED: {edge}")

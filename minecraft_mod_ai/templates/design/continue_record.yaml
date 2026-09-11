@@ -9,7 +9,7 @@ record_schema:
     - required
   additionalProperties: false
 rules:
-  - Return required=true only when the target task still has one distinct unresolved concern that is not represented by accepted_records.
-  - Return required=false when the target task is complete, not applicable, or another record would duplicate accepted_records.
+  - Return required=true only when the target task still has one distinct unresolved concern that is not represented by accepted_record_ids.
+  - Return required=false when the target task is complete, not applicable, or another record would duplicate accepted_record_ids.
   - Do not invent a new requirement merely to continue iteration.
   - The host owns repetition and termination; this record only answers the current one-step continuation question.

@@ -806,7 +806,7 @@ class CompleteProductionOrchestrator:
                     receipts.append(generate_extended_content(project_root=project_root, mod_id=spec.mod_id, package_name=spec.package_name, modules=deterministic, policy=self.policy))
                 sidecars = [module for module in members if module.kind == 'integration' and module.config.get('integration_type') == LOCAL_AI_SIDECAR_INTEGRATION_TYPE]
                 receipts.extend(generate_local_ai_sidecar(project_root=project_root, mod_id=spec.mod_id, package_name=spec.package_name, module=module, policy=self.policy) for module in sidecars)
-                receipts.extend(generate_custom(module) for module in members if module.kind not in extended_kinds and module not in sidecars and (module not in research_shards) and (module not in artifact_handled_members))
+                receipts.extend(generate_custom(module) for module in members if (module.kind not in extended_kinds or module.config.get("requires_custom_generation")) and module not in sidecars and (module not in research_shards) and (module not in artifact_handled_members))
             elif stage == 'system':
                 for pack_id, pack_modules in _system_groups(members).items():
                     receipts.append(generate_system_pack(project_root=project_root, pack_id=pack_id, mod_id=spec.mod_id, package_name=spec.package_name, config={'modules': [_module_dict(item) for item in pack_modules]}, policy=self.policy))
@@ -856,6 +856,8 @@ class CompleteProductionOrchestrator:
                             policy=self.policy,
                         )
                     )
+                    if config.get("requires_custom_generation"):
+                        receipts.append(generate_custom(module))
             elif stage == 'custom':
                 receipts.extend(generate_custom(module) for module in members)
             else:

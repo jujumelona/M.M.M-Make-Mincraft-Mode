@@ -23,3 +23,4 @@ rules:
   - Do not substitute generic defaults merely because a property is missing; resolve only a property justified by the active requirement, accepted design state, relations, or grounded evidence.
   - Use display_name for the authored English display name and stack_limit only when the active requirement or design state requires a non-default stack limit.
   - Recipe pattern rows use pattern_1 through pattern_3; emit each property as a separate record.
+  - When requested_property is supplied by the host, return exactly that property and no other property.

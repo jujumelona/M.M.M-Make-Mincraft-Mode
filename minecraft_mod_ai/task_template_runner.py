@@ -1,6 +1,7 @@
 "One declared concern per model call, plus deterministic executable leaf templates."
 
 import json
+import re
 from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
@@ -114,49 +115,164 @@ def _run_host_owned_records(
 
     records: list[dict[str, Any]] = []
     seen: set[str] = set()
-    while True:
-        if identifier in _HOST_FIRST_RECORD_REQUIRED and not records:
-            required = True
-        else:
-            continuation = run_single_record_template(
+
+    if identifier == "design/content_property":
+        allowed = normalized_context.get("allowed_properties")
+        required = normalized_context.get("required_properties")
+        allowed_set = {str(name) for name in allowed} if isinstance(allowed, list) else set()
+        required_properties = (
+            list(dict.fromkeys(str(name) for name in required))
+            if isinstance(required, list)
+            else []
+        )
+        unknown = [name for name in required_properties if name not in allowed_set]
+        if unknown:
+            raise TemplateBlocked(f"TEMPLATE_REQUIRED_PROPERTY_UNKNOWN: {unknown}")
+        for index, requested_property in enumerate(required_properties):
+            record = run_single_record_template(
                 router,
-                "design/continue_record",
+                identifier,
                 context={
-                    "target_template": identifier,
-                    "target_task": template["task"],
-                    "target_rules": list(template.get("rules", ())),
-                    "active_context": normalized_context,
-                    "accepted_record_ids": _accepted_record_index(identifier, records),
+                    **normalized_context,
+                    "allowed_properties": [requested_property],
+                    "requested_property": requested_property,
+                    "record_index": index,
+                    "record_count": len(required_properties),
+                    "accepted_records": deepcopy(records),
                 },
                 progress=progress,
                 checkpoint=checkpoint,
             )
-            required = bool(continuation["required"])
-        if not required:
-            return {"records": records, "reason": "", "evidence_refs": refs}
+            if record.get("property") != requested_property:
+                raise TemplateBlocked(
+                    f"TEMPLATE_REQUIRED_PROPERTY_MISMATCH: expected {requested_property}, "
+                    f"received {record.get('property')}"
+                )
+            records.append(record)
+        return {"records": records, "reason": "", "evidence_refs": refs}
 
-        record_context = {
-            **normalized_context,
-            "accepted_records": deepcopy(records),
+    if identifier == "design/content_entity":
+        requirement = str(normalized_context.get("requirement") or "").lower()
+        number_words = {
+            "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+            "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+            "한": 1, "하나": 1, "두": 2, "둘": 2, "세": 3, "셋": 3,
+            "네": 4, "넷": 4, "다섯": 5, "여섯": 6, "일곱": 7,
+            "여덟": 8, "아홉": 9, "열": 10,
         }
-        if identifier == "design/content_property":
-            allowed_properties = normalized_context.get("allowed_properties")
-            if isinstance(allowed_properties, list):
-                used = {str(row.get("property", "")) for row in records}
-                remaining = [name for name in allowed_properties if name not in used]
-                if not remaining:
-                    return {"records": records, "reason": "", "evidence_refs": refs}
-                record_context["allowed_properties"] = remaining
+        explicit_counts = [int(value) for value in re.findall(r"(?<![A-Za-z0-9_])(\d{1,2})(?![A-Za-z0-9_])", requirement)]
+        tokens = re.findall(r"[a-z]+|[가-힣]+", requirement)
+        explicit_counts.extend(number_words[token] for token in tokens if token in number_words)
+        target_count = max(explicit_counts, default=1)
+        if not 1 <= target_count <= 64:
+            raise TemplateBlocked(f"TEMPLATE_ENTITY_CARDINALITY_UNSUPPORTED: {target_count}")
+        for index in range(target_count):
+            record = run_single_record_template(
+                router,
+                identifier,
+                context={
+                    **normalized_context,
+                    "entity_ordinal": index + 1,
+                    "entity_count": target_count,
+                    "accepted_records": deepcopy(records),
+                },
+                progress=progress,
+                checkpoint=checkpoint,
+            )
+            key = json.dumps(record, sort_keys=True, ensure_ascii=False)
+            if key in seen:
+                raise TemplateBlocked(f"TEMPLATE_NO_PROGRESS: repeated record in {identifier}")
+            seen.add(key)
+            records.append(record)
+        return {"records": records, "reason": "", "evidence_refs": refs}
 
-        record = run_single_record_template(
+    if identifier == "design/content_relation":
+        entity_ids = normalized_context.get("entity_ids")
+        if not isinstance(entity_ids, list):
+            raise TemplateBlocked("TEMPLATE_RELATION_ENTITY_IDS_REQUIRED")
+        relation_types = (
+            "consumes", "produces", "contains", "drops", "requires", "unlocks",
+            "upgrades", "opens", "controls", "spawns", "transports_to", "displays",
+            "synchronizes",
+        )
+        for source_id in entity_ids:
+            for target_id in entity_ids:
+                if source_id == target_id:
+                    continue
+                decision = run_single_record_template(
+                    router,
+                    "design/relation_set",
+                    context={
+                        **normalized_context,
+                        "source_id": source_id,
+                        "target_id": target_id,
+                        "allowed_relation_types": list(relation_types),
+                    },
+                    progress=progress,
+                    checkpoint=checkpoint,
+                )
+                if decision.get("overflow"):
+                    raise TemplateBlocked(
+                        f"TEMPLATE_RELATION_CARDINALITY_EXCEEDED: {source_id}->{target_id}"
+                    )
+                selected = decision.get("relations", [])
+                if not isinstance(selected, list) or any(item not in relation_types for item in selected):
+                    raise TemplateBlocked(
+                        f"TEMPLATE_RELATION_UNSUPPORTED: {source_id}->{target_id}: {selected}"
+                    )
+                if len(selected) != len(set(selected)):
+                    raise TemplateBlocked(
+                        f"TEMPLATE_RELATION_DUPLICATE: {source_id}->{target_id}: {selected}"
+                    )
+                for relation_type in selected:
+                    records.append(
+                        {
+                            "relation_type": relation_type,
+                            "source_id": str(source_id),
+                            "target_id": str(target_id),
+                        }
+                    )
+                key_code = int(decision.get("key_code", 0))
+                if key_code:
+                    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+                    if not 1 <= key_code <= len(alphabet):
+                        raise TemplateBlocked(
+                            f"TEMPLATE_RELATION_KEY_INVALID: {source_id}->{target_id}: {key_code}"
+                        )
+                    records.append(
+                        {
+                            "relation_type": "key_" + alphabet[key_code - 1],
+                            "source_id": str(source_id),
+                            "target_id": str(target_id),
+                        }
+                    )
+        return {"records": records, "reason": "", "evidence_refs": refs}
+
+    # Research facts and design decisions still use the generic host-owned loop;
+    # they are not graph-cardinality closure surfaces.
+    while True:
+        continuation = run_single_record_template(
             router,
-            identifier,
-            context=record_context,
+            "design/continue_record",
+            context={
+                "target_template": identifier,
+                "target_task": template["task"],
+                "target_rules": list(template.get("rules", ())),
+                "active_context": normalized_context,
+                "accepted_record_ids": _accepted_record_index(identifier, records),
+            },
             progress=progress,
             checkpoint=checkpoint,
         )
-        if _contains_blank_string(record, template["record_schema"]):
-            raise ValueError(f"TEMPLATE_RECORD: empty record in {identifier}")
+        if not bool(continuation["required"]):
+            return {"records": records, "reason": "", "evidence_refs": refs}
+        record = run_single_record_template(
+            router,
+            identifier,
+            context={**normalized_context, "accepted_records": deepcopy(records)},
+            progress=progress,
+            checkpoint=checkpoint,
+        )
         key = json.dumps(record, sort_keys=True, ensure_ascii=False)
         if key in seen:
             raise TemplateBlocked(f"TEMPLATE_NO_PROGRESS: repeated record in {identifier}")

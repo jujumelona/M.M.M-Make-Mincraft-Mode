@@ -1,0 +1,25 @@
+id: design/relation_set
+task: Select all explicit relationships from the fixed host-supplied source entity to the fixed host-supplied target entity.
+record_schema:
+  type: object
+  properties:
+    relations:
+      type: array
+      maxItems: 4
+      uniqueItems: true
+      items:
+        type: string
+        enum: [consumes, produces, contains, drops, requires, unlocks, upgrades, opens, controls, spawns, transports_to, displays, synchronizes]
+    key_code:
+      type: integer
+      minimum: 0
+      maximum: 36
+    overflow:
+      type: boolean
+  required: [relations, key_code, overflow]
+  additionalProperties: false
+rules:
+  - Select only relationships explicitly required by the active requirement; an empty relations array means none.
+  - The source_id and target_id are fixed by the host and must not be reinterpreted.
+  - Set overflow=true rather than silently omitting a fifth or later ordinary relation for this exact ordered pair.
+  - key_code is 0 when there is no crafting-key relation; otherwise 1-26 encode A-Z and 27-36 encode 0-9.

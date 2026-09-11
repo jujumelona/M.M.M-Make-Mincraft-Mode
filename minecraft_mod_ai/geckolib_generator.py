@@ -74,7 +74,6 @@ def generate_geckolib_entity_assets(
         )
     for name, value in {
         "max_health": max_health,
-        "attack_damage": attack_damage,
         "movement_speed": movement_speed,
         "entity_width": entity_width,
         "entity_height": entity_height,
@@ -87,6 +86,15 @@ def generate_geckolib_entity_assets(
             or float(value) <= 0
         ):
             raise GeckoLibGenerationError(f"{name} must be a positive finite number.")
+    if (
+        isinstance(attack_damage, bool)
+        or not isinstance(attack_damage, (int, float))
+        or not math.isfinite(float(attack_damage))
+        or float(attack_damage) < 0
+    ):
+        raise GeckoLibGenerationError("attack_damage must be a non-negative finite number.")
+    if behavior in {"hostile_melee", "neutral_melee"} and float(attack_damage) <= 0:
+        raise GeckoLibGenerationError("combat entity attack_damage must be positive.")
     if archetype not in _ARCHETYPES or (archetype == "custom" and not custom_bones):
         raise GeckoLibGenerationError("Unknown or incomplete entity archetype.")
     if behavior not in _BEHAVIORS:
