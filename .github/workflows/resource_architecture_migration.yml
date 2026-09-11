@@ -49,6 +49,15 @@ jobs:
           compile(source, str(target), 'exec')
           PY
           python tools/migrate_resource_architecture.py
+          python - <<'PY'
+          from pathlib import Path
+          target = Path('minecraft_mod_ai/resource_contracts.py')
+          text = target.read_text(encoding='utf-8')
+          old = 'from pathlib import Path, PurePosixPath'
+          if text.count(old) != 1:
+              raise SystemExit('resource_contracts pathlib import anchor mismatch')
+          target.write_text(text.replace(old, 'from pathlib import PurePosixPath', 1), encoding='utf-8')
+          PY
       - name: Install development dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Compile and static-check changed architecture
