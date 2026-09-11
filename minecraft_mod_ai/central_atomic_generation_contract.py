@@ -3,9 +3,9 @@ from __future__ import annotations
 """Decompose central-intelligence structured outputs into physically atomic model calls.
 
 Central specialists and reviewers may reason in parallel, but each individual model
-response must stay within the small-model atomicity envelope.  This adapter preserves
-the public merged payload while splitting wide nested objects into bounded fragments
-that the host deterministically joins.
+response must stay within the small-model atomicity envelope. This adapter preserves
+the public merged payload while splitting nested wide objects into flat bounded
+fragments that the host deterministically joins.
 """
 
 import json
@@ -39,6 +39,8 @@ def _fragment_schema(
     source_schema: Mapping[str, Any],
     names: Sequence[str],
 ) -> dict[str, Any]:
+    """Flatten one nested central object so arrays stay within schema depth two."""
+
     outer = source_schema["properties"][field]
     properties = outer["properties"]
     fragment_properties = {
@@ -47,15 +49,8 @@ def _fragment_schema(
     }
     return {
         "type": "object",
-        "properties": {
-            field: {
-                "type": "object",
-                "properties": fragment_properties,
-                "required": list(names),
-                "additionalProperties": False,
-            }
-        },
-        "required": [field],
+        "properties": fragment_properties,
+        "required": list(names),
         "additionalProperties": False,
     }
 
@@ -110,12 +105,14 @@ def install(central_module: ModuleType) -> None:
             )
             raw = current(router, role, messages, **fragment_kwargs)
             value = json.loads(raw)
-            fragment = value.get(field)
-            if not isinstance(fragment, Mapping):
+            if not isinstance(value, Mapping):
+                raise ValueError("central atomic fragment must be a JSON object")
+            missing = [name for name in names if name not in value]
+            if missing:
                 raise ValueError(
-                    f"central atomic fragment omitted {field!r} object"
+                    f"central atomic fragment omitted fields {missing!r} for {field!r}"
                 )
-            merged.update(fragment)
+            merged.update({name: value[name] for name in names})
         return json.dumps({field: merged}, ensure_ascii=False, separators=(",", ":"))
 
     setattr(atomic_generate, _MARKER, True)
