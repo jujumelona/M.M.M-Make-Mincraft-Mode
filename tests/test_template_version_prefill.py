@@ -5,6 +5,7 @@ import pytest
 from minecraft_mod_ai.atomic_slot_executor import _bounded_context
 from minecraft_mod_ai.implementation_template_renderer import render_template
 from minecraft_mod_ai.resolved_version_context import ResolvedVersionContext, VersionContextError
+from minecraft_mod_ai.task_template_runner import execute_artifact_template
 
 
 class _ResolvedFixture:
@@ -35,8 +36,42 @@ class _ResolvedFixture:
                 "source_api_family": "fixture-family",
                 "deterministic_module_kinds": ["REGISTER_ITEM"],
             },
-            "host_facts": {},
+            "host_facts": {
+                "dependency_coordinates": {
+                    "minecraft": {
+                        "group": "com.mojang",
+                        "artifact": "minecraft",
+                        "version": "26.2",
+                    },
+                    "loader": {
+                        "group": "net.fabricmc",
+                        "artifact": "fabric-loader",
+                        "version": "fixture-loader",
+                    },
+                    "api": {
+                        "group": "net.fabricmc.fabric-api",
+                        "artifact": "fabric-api",
+                        "version": "fixture-api",
+                    },
+                    "loom": {
+                        "group": "net.fabricmc",
+                        "artifact": "fabric-loom",
+                        "version": "fixture-loom",
+                    },
+                },
+                "repositories": {
+                    "fabric": {"maven": "https://maven.fabricmc.net/"},
+                    "gradle_plugin_portal": {"plugins": "https://plugins.gradle.org/m2/"},
+                },
+                "replacements": {"legacy-loader-coordinate": "loader"},
+            },
         }
+
+    def admit_template(self, template):
+        return None
+
+    def validate_artifact(self, template, rendered_output):
+        return {"status": "PASS", "validator": "fixture-host-context"}
 
 
 @pytest.fixture
@@ -129,6 +164,53 @@ def test_renderer_prefills_derived_version_facts(resolved_context):
     assert '"resource_major": 69' in rendered
 
 
+def test_renderer_prefills_immutable_ecosystem_facts(resolved_context):
+    template = {
+        "id": "fixture/ecosystem-prefill",
+        "inputs": {
+            "dependency_coordinates": {"type": "object", "required": True},
+            "repositories": {"type": "object", "required": True},
+            "replacements": {"type": "object", "required": True},
+        },
+        "render": {
+            "language": "json",
+            "body": {
+                "dependencies": "{{dependency_coordinates}}",
+                "repositories": "{{repositories}}",
+                "replacements": "{{replacements}}",
+            },
+        },
+    }
+
+    rendered = json.loads(
+        render_template(template, {"resolved_version_context": {"synthetic": True}})
+    )
+
+    assert rendered["dependencies"]["loader"]["version"] == "fixture-loader"
+    assert rendered["repositories"]["fabric"]["maven"] == "https://maven.fabricmc.net/"
+    assert rendered["replacements"] == {"legacy-loader-coordinate": "loader"}
+
+
+def test_renderer_rejects_ecosystem_fact_override(resolved_context):
+    template = {
+        "id": "fixture/ecosystem-conflict",
+        "inputs": {"repositories": {"type": "object", "required": True}},
+        "render": {"language": "json", "body": "{{repositories}}"},
+    }
+
+    with pytest.raises(VersionContextError) as error:
+        render_template(
+            template,
+            {
+                "resolved_version_context": {"synthetic": True},
+                "repositories": {"fabric": {"maven": "https://caller.invalid/"}},
+            },
+        )
+
+    assert error.value.diagnostic["code"] == "HOST_FACT_OVERRIDE"
+    assert error.value.diagnostic["field"] == "repositories"
+
+
 def test_atomic_slot_context_gets_prefill_without_full_host_snapshot(resolved_context):
     payload = json.loads(
         _bounded_context(
@@ -140,6 +222,9 @@ def test_atomic_slot_context_gets_prefill_without_full_host_snapshot(resolved_co
     )
 
     assert "resolved_version_context" not in payload
+    assert "dependency_coordinates" not in payload
+    assert "repositories" not in payload
+    assert "replacements" not in payload
     assert payload["mod_id"] == "demo"
     assert payload["minecraft_version"] == "26.2"
     assert payload["loader"] == "fabric"
@@ -152,3 +237,50 @@ def test_atomic_slot_context_gets_prefill_without_full_host_snapshot(resolved_co
         "resource": "69.0",
         "resource_major": 69,
     }
+
+
+def test_runner_requires_uses_same_resolved_projection(monkeypatch, resolved_context):
+    template = {
+        "id": "fixture/runner-requires-host-facts",
+        "requires": ["gradle_sha256", "dependency_coordinates", "repositories"],
+        "inputs": {
+            "gradle_sha256": {"type": "string", "required": True},
+            "dependency_coordinates": {"type": "object", "required": True},
+            "repositories": {"type": "object", "required": True},
+        },
+        "render": {"language": "text", "body": "{{gradle_sha256}}"},
+    }
+
+    import minecraft_mod_ai.integrity_dispatcher as integrity_dispatcher
+    import minecraft_mod_ai.resolved_version_context as resolved_version_context
+    import minecraft_mod_ai.task_template_catalog as task_template_catalog
+
+    monkeypatch.setattr(task_template_catalog, "load_template", lambda identifier: template)
+    monkeypatch.setattr(
+        resolved_version_context,
+        "execution_context",
+        lambda context, job: resolved_context,
+    )
+    monkeypatch.setattr(
+        integrity_dispatcher,
+        "verify_job_binding",
+        lambda job, resolved, context: {"fixture": True},
+    )
+    monkeypatch.setattr(
+        integrity_dispatcher,
+        "canonical_contract",
+        lambda job, resolved, context, authority: None,
+    )
+    monkeypatch.setattr(
+        integrity_dispatcher,
+        "validate_canonical_output",
+        lambda *args, **kwargs: [],
+    )
+
+    receipt = execute_artifact_template(
+        {"template_id": template["id"], "deterministic_inputs": {}},
+        context={"resolved_version_context": {"synthetic": True}},
+    )
+
+    assert receipt["status"] == "PASS"
+    assert receipt["rendered_output"] == "a" * 64
