@@ -4,13 +4,13 @@ from minecraft_mod_ai import hardware_concurrency_installation as hardware
 from minecraft_mod_ai import scheduler_parallel_safety_contract as scheduler
 
 
-def test_cpu_io_workers_scale_beyond_previous_four_worker_cap(monkeypatch):
+def test_cpu_io_workers_scale_with_host_and_reserve_one_cpu(monkeypatch):
     monkeypatch.delenv("MMM_CPU_IO_WORKERS", raising=False)
 
     assert hardware.recommended_cpu_io_workers(cpu_count=2) == 2
     assert hardware.recommended_cpu_io_workers(cpu_count=8) == 7
     assert hardware.recommended_cpu_io_workers(cpu_count=16) == 15
-    assert hardware.recommended_cpu_io_workers(cpu_count=64) == 32
+    assert hardware.recommended_cpu_io_workers(cpu_count=64) == 63
 
 
 def test_cpu_io_worker_override_is_dynamic(monkeypatch):
