@@ -192,15 +192,19 @@ def test_unknown_tool_or_validator_cannot_compile(tmp_path: Path) -> None:
     skill_dir = tmp_path / "gather-adaptive-minecraft-evidence"
     skill_dir.mkdir()
 
+    tool_anchor = "- retrieve_source_excerpt\n"
+    assert tool_anchor in text
     (skill_dir / "SKILL.md").write_text(
-        text.replace("  - search_code_rag\n", "  - arbitrary_shell\n"),
+        text.replace(tool_anchor, tool_anchor + "- arbitrary_shell\n", 1),
         encoding="utf-8",
     )
     with pytest.raises(SkillPolicyError, match="unreviewed tools"):
         compile_skill_contract("gather-adaptive-minecraft-evidence", tmp_path)
 
+    validator_anchor = "- grounded_generation\n"
+    assert validator_anchor in text
     (skill_dir / "SKILL.md").write_text(
-        text.replace("  - source_provenance\n", "  - trust_the_model\n"),
+        text.replace(validator_anchor, validator_anchor + "- trust_the_model\n", 1),
         encoding="utf-8",
     )
     with pytest.raises(SkillPolicyError, match="unreviewed validator"):
