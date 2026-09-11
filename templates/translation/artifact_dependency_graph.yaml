@@ -1,11 +1,11 @@
 input:
-  artifact_kinds:
+  artifact_kinds: []
 
 input_schema:
   artifact_kinds: list[string]
 
 task:
-  expand_required_minecraft_dependencies:
+  expand_required_minecraft_dependencies: true
 
 rules:
   - Dependencies are defined only between canonical Minecraft artifact kinds.
@@ -14,7 +14,7 @@ rules:
   - Emit each artifact kind exactly once.
 
 output:
-  artifact_kinds:
+  artifact_kinds: []
 
 output_schema:
   artifact_kinds: list[string]
