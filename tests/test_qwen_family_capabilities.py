@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai import llama_server_hardware_policy
+from minecraft_mod_ai.config_paths import config_path
 from minecraft_mod_ai.model_adapters.base import GenerationRequest
 from minecraft_mod_ai.model_context_budget import effective_context_tokens
 from minecraft_mod_ai.model_registry import ModelRegistry
@@ -13,6 +14,9 @@ from minecraft_mod_ai.qwen_agent_family_contract import (
     _strip_reasoning_history,
 )
 from minecraft_mod_ai.qwen_family_capabilities import qwen_family_capabilities
+
+
+REGISTRY_PATH = config_path("model_registry.yaml")
 
 
 def _extra(family: str) -> dict[str, object]:
@@ -72,17 +76,16 @@ def _tool_request() -> GenerationRequest:
         ("Qwen3.8-27B_18GB", "qwen3.8"),
     ],
 )
-def test_both_registry_copies_declare_exact_family_capabilities(
+def test_canonical_registry_declares_exact_family_capabilities(
     profile: str,
     family: str,
 ) -> None:
-    for path in ("config/model_registry.yaml", "minecraft_mod_ai/config/model_registry.yaml"):
-        config = ModelRegistry(path).role(profile, "coder")
-        capabilities = qwen_family_capabilities(config, required=True)
-        assert capabilities is not None
-        assert capabilities.family == family
-        assert capabilities.tool_markup == "qwen3_coder_xml"
-        assert capabilities.assistant_prefill is True
+    config = ModelRegistry(REGISTRY_PATH).role(profile, "coder")
+    capabilities = qwen_family_capabilities(config, required=True)
+    assert capabilities is not None
+    assert capabilities.family == family
+    assert capabilities.tool_markup == "qwen3_coder_xml"
+    assert capabilities.assistant_prefill is True
 
 
 def test_qwen_runtime_without_family_contract_fails_closed() -> None:
@@ -172,9 +175,7 @@ def test_qwen38_rejects_unsupported_reasoning_effort() -> None:
 
 
 def test_fully_composed_qwen38_tool_payload_never_leaks_reasoning_none() -> None:
-    config = ModelRegistry("config/model_registry.yaml").role(
-        "Qwen3.8-27B_18GB", "coder"
-    )
+    config = ModelRegistry(REGISTRY_PATH).role("Qwen3.8-27B_18GB", "coder")
     request = _tool_request()
 
     payload = llama_server_hardware_policy._server_payload(
@@ -202,7 +203,7 @@ def test_all_local_qwen_families_use_finite_dynamic_completion(
     monkeypatch.delenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", raising=False)
     monkeypatch.delenv("MMM_GENERATION_MAX_TOKENS", raising=False)
     monkeypatch.delenv("MMM_LLAMA_TEXT_MAX_TOKENS", raising=False)
-    config = ModelRegistry("config/model_registry.yaml").role(profile, "coder")
+    config = ModelRegistry(REGISTRY_PATH).role(profile, "coder")
     if request_kind == "plain":
         request = GenerationRequest(
             messages=({"role": "user", "content": "implement one task"},),
@@ -231,9 +232,7 @@ def test_all_local_qwen_families_use_finite_dynamic_completion(
 
 
 def test_fully_composed_qwen38_required_and_json_pages_remove_generic_none() -> None:
-    config = ModelRegistry("config/model_registry.yaml").role(
-        "Qwen3.8-27B_18GB", "coder"
-    )
+    config = ModelRegistry(REGISTRY_PATH).role("Qwen3.8-27B_18GB", "coder")
     adapter = SimpleNamespace(config=config)
     tool = _tool_request().tools[0]
     required = GenerationRequest(
