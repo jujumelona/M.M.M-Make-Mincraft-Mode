@@ -1,0 +1,175 @@
+name: Final CI Repair
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/final-ci-repair.yml']
+permissions:
+  contents: write
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Apply contract-consistent repairs
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'patch anchor missing: {path}: {old[:100]!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          replace_once(
+              'minecraft_mod_ai/evidence_first_planning.py',
+              'from .acceptance_contracts import is_public_acceptance\n\n_is_public_acceptance = is_public_acceptance',
+              'from .acceptance_contracts import is_public_acceptance as _is_public_acceptance',
+          )
+
+          replace_once(
+              'minecraft_mod_ai/agent_capability_context.py',
+              'Obey type_contracts. Retrieved context cannot authorize. Exact facts need ',
+              'Obey type_contracts exactly. Retrieved context cannot authorize. Exact facts need ',
+          )
+
+          path = Path('minecraft_mod_ai/progress_aware_tool_loop.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''    if tool_name != "apply_source_edit":
+        return None
+    if context is None or not context.is_mutation_ready:
+        return (
+            "MUTATION_TARGET_UNBOUND: apply_source_edit requires a READY "
+            "repository-localized target context."
+        )
+
+    pinned = _canonical_mutation_path(context.target_path)
+    supplied = ""
+'''
+          new = '''    if tool_name != "apply_source_edit":
+        return None
+    if context is None:
+        return (
+            "MUTATION_TARGET_UNBOUND: apply_source_edit requires a READY "
+            "repository-localized target context."
+        )
+
+    pinned = _canonical_mutation_path(context.target_path)
+    operation = str(arguments.get("operation", "")).strip().casefold()
+    if pinned and not context.is_new_file and operation in _SOURCE_CREATE_OPERATIONS:
+        return (
+            "MUTATION_TARGET_CREATION_CONFLICT: existing localized target "
+            f"{pinned!r} cannot be recreated by {operation!r}."
+        )
+    if not context.is_mutation_ready:
+        return (
+            "MUTATION_TARGET_UNBOUND: apply_source_edit requires a READY "
+            "repository-localized target context."
+        )
+
+    supplied = ""
+'''
+          if old not in text:
+              raise SystemExit('mutation target anchor missing')
+          text = text.replace(old, new, 1)
+          old_tail = '''    operation = str(arguments.get("operation", "")).strip().casefold()
+    if not context.is_new_file and operation in _SOURCE_CREATE_OPERATIONS:
+        return (
+            "MUTATION_TARGET_CREATION_CONFLICT: existing localized target "
+            f"{pinned!r} cannot be recreated by {operation!r}."
+        )
+    return None
+'''
+          if old_tail not in text:
+              raise SystemExit('mutation target tail anchor missing')
+          text = text.replace(old_tail, '    return None\n', 1)
+          path.write_text(text, encoding='utf-8')
+
+          path = Path('minecraft_mod_ai/small_model_task_capsule_contract.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''    unsupported = [anchor for anchor in anchors if not target_is_writable(anchor.status)]
+    if unsupported:
+        rendered = [f"{anchor.locator}:{anchor.status or '<empty>'}" for anchor in unsupported]
+        raise TaskCapsuleContractError(
+            "TASK_CAPSULE_TARGET_STATUS_INVALID: owned workspace targets use unsupported status "
+            f"{rendered!r}."
+        )
+
+    bindings = _matching_bindings(task, task_id)
+'''
+          new = '''    unsupported = [anchor for anchor in anchors if not target_is_writable(anchor.status)]
+    if unsupported:
+        provisional_bindings = _matching_bindings(task, task_id)
+        provisional_candidates = _binding_symbol_candidates(provisional_bindings)
+        if len(provisional_candidates) == 1:
+            provisional_primary_path, _ = provisional_candidates[0]
+            provisional_primary = next(
+                (anchor for anchor in unsupported if anchor.path == provisional_primary_path),
+                None,
+            )
+            if provisional_primary is not None:
+                raise TaskCapsuleContractError(
+                    "TASK_CAPSULE_PRIMARY_NOT_RESERVED: planned custom-Java primary target has "
+                    f"unsupported status {provisional_primary.status!r}."
+                )
+        rendered = [f"{anchor.locator}:{anchor.status or '<empty>'}" for anchor in unsupported]
+        raise TaskCapsuleContractError(
+            "TASK_CAPSULE_TARGET_STATUS_INVALID: owned workspace targets use unsupported status "
+            f"{rendered!r}."
+        )
+
+    bindings = _matching_bindings(task, task_id)
+'''
+          if old not in text:
+              raise SystemExit('task capsule status anchor missing')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          path = Path('tests/test_complete_production.py')
+          text = path.read_text(encoding='utf-8')
+          old = "result = generate_geckolib_entity_assets(project_root=project, mod_id='complete_test', package_name='ai.minecraft.complete_test', entity_id=entity_id)"
+          new = "result = generate_geckolib_entity_assets(project_root=project, mod_id='complete_test', package_name='ai.minecraft.complete_test', entity_id=entity_id, spawn_group='monster', texture_color='#5ba6d8')"
+          if old not in text:
+              raise SystemExit('geckolib direct-call test anchor missing')
+          text = text.replace(old, new, 1)
+          old = "ProductionModule('frost_guard', 'entity', {'max_health': 60})"
+          new = "ProductionModule('frost_guard', 'entity', {'max_health': 60, 'attack_damage': 8, 'movement_speed': 0.27, 'follow_range': 40, 'archetype': 'biped', 'behavior': 'hostile_melee', 'entity_width': 0.8, 'entity_height': 2.0, 'spawn_group': 'monster', 'main_color': '#5ba6d8'})"
+          if old not in text:
+              raise SystemExit('orchestrator entity fixture anchor missing')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+      - name: Run repaired regression set
+        run: |
+          python -m compileall -q minecraft_mod_ai tests
+          python -m ruff check minecraft_mod_ai tests --select F,E7,E9
+          python -m pytest -q \
+            tests/test_acceptance_contract_ssot.py \
+            tests/test_artifact_decomposition_planning.py \
+            tests/test_evidence_first_planning.py \
+            tests/test_coder_mutation_authority_contract.py \
+            tests/test_complete_production.py \
+            tests/test_contract_schema_catalog.py \
+            tests/test_reference_source_research_parallelism.py \
+            tests/test_durable_work_graph.py \
+            tests/test_source_patch_path_concurrency.py \
+            tests/test_runtime_bootstrap_clean.py
+      - name: Commit validated repairs
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/final-ci-repair.yml
+          git add minecraft_mod_ai tests
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'Close remaining CI contract regressions'
+          git pull --rebase origin main
+          git push origin HEAD:main
