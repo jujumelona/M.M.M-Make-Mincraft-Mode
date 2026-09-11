@@ -23,6 +23,7 @@ record_schema:
     - role
   additionalProperties: false
 rules:
+  - Use an exact semantic kind from allowed_kinds supplied by the host; never invent a new kind vocabulary.
   - Describe a semantic content role, not an implementation module.
   - Reuse a host-supplied existing entity_id only when its meaning and role are identical; otherwise create one deterministic lowercase identifier from the explicit requirement.
   - Emit one entity per record. The host controls repetition and must stop or block before invoking this template when meaning is unresolved.
