@@ -102,13 +102,6 @@ def run_record_template_batch(
             + ("\n" + local_rules if local_rules else "")
         )
 
-    schema = {
-        "type": "object",
-        "properties": properties,
-        "required": required,
-        "additionalProperties": False,
-    }
-
     saved_values: dict[str, Any] = {}
     missing: list[str] = []
     for identifier, state in states.items():
