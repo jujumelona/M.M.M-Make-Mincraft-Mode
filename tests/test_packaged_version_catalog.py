@@ -29,7 +29,10 @@ def test_packaged_catalog_has_exact_requests_and_evidence_bindings(monkeypatch):
         assert row["loom_selection"]["fixed_release"] == context.target["fabric_loom"]
         assert row["loom_selection"]["policy"] == "fixed_release_binary_and_dependencies_match_official_recommendation"
         assert len(row["loom_selection"]["binary_sha256"]) == 64
-        assert not context.facts["artifact_rules"]
+        assert context.facts["artifact_rules"]
+        assert len(context.facts["artifact_rules"]) >= 14
+        assert context.facts["capabilities"]["REGISTER_ITEM"] is True
+        assert context.facts["capabilities"]["REGISTER_BLOCK"] is True
     assert all(len(source["sha256"]) == 64 and source["bytes"] > 0 for source in report["sources"].values())
     assert {row["minecraft"] for row in report["skipped"]} == {"1.14", "1.14.1", "1.14.2", "1.14.3"}
     for row in report["skipped"]:
@@ -56,7 +59,20 @@ def test_official_pack_and_java_coordinates(monkeypatch, version, java, data, re
 def test_unreviewed_capability_is_not_authorized_by_metadata(monkeypatch):
     monkeypatch.delenv("MMM_VERSION_BUNDLE_CATALOG", raising=False)
     context = host_target("auto").version_context
+    context.require_capability("REGISTER_ITEM")
+    context.require_capability("REGISTER_BLOCK")
     with pytest.raises(VersionContextError):
-        context.require_capability("REGISTER_ITEM")
+        context.require_capability("UNSUPPORTED")
+    with pytest.raises(VersionContextError):
+        context.require_capability("UNREVIEWED_FEATURE")
     with pytest.raises(VersionContextError, match="UNSUPPORTED_MINECRAFT_VERSION"):
         host_target("1.14.3")
+
+
+def test_audit_host_catalog_admissions_match(monkeypatch):
+    from minecraft_mod_ai.host_version_catalog import audit_host_catalog
+
+    monkeypatch.delenv("MMM_VERSION_BUNDLE_CATALOG", raising=False)
+    report = audit_host_catalog()
+    assert report["schema_version"] == "mmm/host-version-catalog-audit-v1"
+    assert len(report["contexts"]) == 43

@@ -2,13 +2,25 @@ from __future__ import annotations
 
 """Compile canonical Minecraft artifact responsibilities into narrow execution steps."""
 
-from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import Any
 
 from .minecraft_template_catalog import validate_artifact_kinds
 from .task_template_catalog import load_template
 
 ROOT_PROVIDE = "translation:artifact_dependency_graph"
+
+
+@dataclass(frozen=True)
+class ContextProjection:
+    max_bytes: int = 4096
+    include: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RepairContract:
+    scope: tuple[str, ...] = ()
+    writable_anchors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -20,6 +32,16 @@ class TemplateStep:
     anchor_kinds: tuple[str, ...]
     template_id: str = ""
     branch_features: tuple[str, ...] = ()
+    execution_mode: str = "model"
+    side: tuple[str, ...] = ("common",)
+    inputs: tuple[Any, ...] = ()
+    outputs: tuple[Any, ...] = ()
+    host_requirements: tuple[Any, ...] = ()
+    implementation_key: str = ""
+    validators: tuple[str, ...] = ()
+    postconditions: tuple[str, ...] = ()
+    context_projection: ContextProjection = ContextProjection()
+    repair: RepairContract = RepairContract()
 
 
 def _string_contract(identifier: str, field: str, raw) -> tuple[str, ...]:
@@ -83,6 +105,75 @@ def steps_for_artifact(artifact_kind: str) -> tuple[TemplateStep, ...]:
         if not anchors:
             raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} anchor_kinds must not be empty")
 
+        raw_exec_mode = record.get("execution_mode", "model")
+        if raw_exec_mode not in {"model", "deterministic", "composite"}:
+            raise ValueError(
+                f"TEMPLATE_RESPONSIBILITY: {identifier} invalid execution_mode {raw_exec_mode!r}"
+            )
+
+        raw_side = record.get("side", ("common",))
+        if isinstance(raw_side, str):
+            raw_side = [raw_side]
+        if not isinstance(raw_side, (list, tuple)):
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} side must be a list or string")
+        side_values = []
+        for s in raw_side:
+            if s not in {"client", "server", "common"}:
+                raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} invalid side {s!r}")
+            side_values.append(s)
+        side = tuple(side_values) or ("common",)
+
+        raw_inputs = record.get("inputs", ())
+        if not isinstance(raw_inputs, (list, tuple)):
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} inputs must be a list")
+        inputs = tuple(raw_inputs)
+
+        raw_outputs = record.get("outputs", ())
+        if not isinstance(raw_outputs, (list, tuple)):
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} outputs must be a list")
+        outputs = tuple(raw_outputs)
+
+        raw_host_req = record.get("host_requirements", ())
+        if isinstance(raw_host_req, dict):
+            host_requirements = tuple(sorted(raw_host_req.items()))
+        elif isinstance(raw_host_req, (list, tuple)):
+            host_requirements = tuple(raw_host_req)
+        else:
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} host_requirements must be a list or dict")
+
+        implementation_key = str(record.get("implementation_key", "") or "")
+
+        raw_validators = record.get("validators", ())
+        if not isinstance(raw_validators, (list, tuple)):
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} validators must be a list")
+        validators = tuple(str(v) for v in raw_validators)
+
+        raw_postconditions = record.get("postconditions", ())
+        if not isinstance(raw_postconditions, (list, tuple)):
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} postconditions must be a list")
+        postconditions = tuple(str(p) for p in raw_postconditions)
+
+        raw_proj = record.get("context_projection", {})
+        if not isinstance(raw_proj, dict):
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} context_projection must be a dict")
+        max_bytes = raw_proj.get("max_bytes", 4096)
+        if not isinstance(max_bytes, int) or max_bytes < 1:
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} max_bytes must be a positive int")
+        if max_bytes > 4096:
+            raise ValueError(
+                f"TEMPLATE_RESPONSIBILITY: {identifier} context_projection max_bytes {max_bytes} > 4096"
+            )
+        include = tuple(raw_proj.get("include", ()))
+        context_projection = ContextProjection(max_bytes=max_bytes, include=include)
+
+        raw_repair = record.get("repair", {})
+        if not isinstance(raw_repair, dict):
+            raise ValueError(f"TEMPLATE_RESPONSIBILITY: {identifier} repair must be a dict")
+        repair = RepairContract(
+            scope=tuple(raw_repair.get("scope", ())),
+            writable_anchors=tuple(raw_repair.get("writable_anchors", ())),
+        )
+
         responsibility = identifier.rsplit("/", 1)[-1]
         completion = f"{identifier}:complete"
         consumes = tuple(dict.fromkeys((previous, *declared_consumes)))
@@ -97,6 +188,16 @@ def steps_for_artifact(artifact_kind: str) -> tuple[TemplateStep, ...]:
                 consumes=consumes,
                 provides=provides,
                 anchor_kinds=anchors,
+                execution_mode=raw_exec_mode,
+                side=side,
+                inputs=inputs,
+                outputs=outputs,
+                host_requirements=host_requirements,
+                implementation_key=implementation_key,
+                validators=validators,
+                postconditions=postconditions,
+                context_projection=context_projection,
+                repair=repair,
             )
         )
         previous = completion
@@ -111,14 +212,9 @@ def steps_for_artifacts(artifact_kinds: Iterable[str]) -> tuple[TemplateStep, ..
         artifact_steps = list(steps_for_artifact(artifact_kind))
         if artifact_steps and previous != ROOT_PROVIDE:
             first = artifact_steps[0]
-            artifact_steps[0] = TemplateStep(
-                name=first.name,
-                template_id=first.template_id,
-                outcome=first.outcome,
+            artifact_steps[0] = replace(
+                first,
                 consumes=tuple(dict.fromkeys((previous, *first.consumes))),
-                provides=first.provides,
-                anchor_kinds=first.anchor_kinds,
-                branch_features=first.branch_features,
             )
         if artifact_steps:
             previous = artifact_steps[-1].provides[0]
@@ -127,7 +223,9 @@ def steps_for_artifacts(artifact_kinds: Iterable[str]) -> tuple[TemplateStep, ..
 
 
 __all__ = [
+    "ContextProjection",
     "ROOT_PROVIDE",
+    "RepairContract",
     "TemplateStep",
     "responsibility_ids_for_artifact",
     "steps_for_artifact",

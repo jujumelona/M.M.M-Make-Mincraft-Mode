@@ -1391,9 +1391,11 @@
   },
   "versions": [
     {
+      "artifact_rules_count": 18,
       "build_java_minimum": 25,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:ec8805a6bcaf19a50a95546e03c87ea3436879364a8657f076a589a2cbc5aacc",
+      "context_id": "sha256:a076b8f86f567b96332f32029e0a93c89dbc9cfe51db42dd013156852a148341",
       "example_commit": "64fe93a188fc1b1f76a47b14f8b17dda42b324f0",
       "example_properties": {
         "fabric_api_version": "0.159.0+26.2",
@@ -1432,17 +1434,16 @@
         "world_version": 4903
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 18,
       "build_java_minimum": 25,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:e2aa2b287f1060c86d3a2d9a00ef0c90a048fcdc75cea61cda9dfac0d3446a31",
+      "context_id": "sha256:7918f569b0c891bc3f62c6e5f999561883800ee261189b87fd02db6cb1ed00cd",
       "example_commit": "9cc62c76791b782f4e6706c1a66beaa8ec163c05",
       "example_properties": {
         "fabric_api_version": "0.155.2+26.1.2",
@@ -1481,17 +1482,16 @@
         "world_version": 4790
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 18,
       "build_java_minimum": 25,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:fea7720654ab8438412b4069e47c552c7abd6fa3549b156392a176790f7ea838",
+      "context_id": "sha256:c0f784db15b03213bd3c1dc09346a3286ede0176235952f8bfa2b154f020c2f2",
       "example_commit": "dfc832402f3ef35c2f7752fea28b1a52ce2b184c",
       "example_properties": {
         "fabric_api_version": "0.145.4+26.1.1",
@@ -1530,17 +1530,16 @@
         "world_version": 4788
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 18,
       "build_java_minimum": 25,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:7acae07adbc437853ba8ab071bd7bb9f89a992ab29138053f2fd8f0c1f1e273e",
+      "context_id": "sha256:0edde5606d8b37fae0f4a79228137487759b0e1d05c80d984143dd935cc14071",
       "example_commit": "3b1223799ac568329419664e95e281e3566f1657",
       "example_properties": {
         "fabric_api_version": "0.145.1+26.1",
@@ -1579,17 +1578,16 @@
         "world_version": 4786
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 18,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:73c848235b85a63797c2c657b153f6c9ebe97c6d529ba072eb1b5c85a5a69d62",
+      "context_id": "sha256:76da4b7b3027956caf699c090f4149c24a15c2d0cc954cff37914750ea3c5a4e",
       "example_commit": "0fe7f6e4605aabdfefd69e1b5f2be8a283026272",
       "example_properties": {
         "fabric_api_version": "0.141.6+1.21.11",
@@ -1628,17 +1626,16 @@
         "world_version": 4671
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 18,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:5ad0697c6f48c8aeae0d30c98dfcac6a6653cfec240788515542fe799c637f0a",
+      "context_id": "sha256:110b4c6cbe891c48552997395ee40eef36eaba18d0d0fa198ae7b961bc037eb2",
       "example_commit": "40d278b93501e8019e2eab169465d34efc61865a",
       "example_properties": {
         "fabric_api_version": "0.138.4+1.21.10",
@@ -1677,17 +1674,16 @@
         "world_version": 4556
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 18,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:88718fece19e856b24f8cb8a316bd2353ac9aef8fad4458de7dcde960032f8a5",
+      "context_id": "sha256:3a8fa6f8245b50584cb106889865921cbc27b18dd31b348850e94c0369cc9d38",
       "example_commit": "486251db04735a087548964b801c1d36ebc8b05a",
       "example_properties": {
         "fabric_api_version": "0.134.1+1.21.9",
@@ -1726,17 +1722,16 @@
         "world_version": 4554
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 18,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:82c1a9c4242bcad46baba540a8e72292f2c694935a698de872dddd99af8a0cb1",
+      "context_id": "sha256:494185954dbbfe56c133b1b8e29a7471fdb1fe580a179cf2fe6391ec338e0f59",
       "example_commit": "6542cd583d07f84359b65d5e498e25f8afafc30a",
       "example_properties": {
         "fabric_api_version": "0.136.1+1.21.8",
@@ -1773,17 +1768,16 @@
         "world_version": 4440
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 18,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:137bd08c4147c149ad471ff1d51913bcc6c51590f742fd2fb462e22cba68b524",
+      "context_id": "sha256:4c7e8318916ab2978a577d322c239e0ceca9d5336baa997014765d84bad26798",
       "example_commit": "2d16058ef73718f5f402fdf3b0bb85fe09604d80",
       "example_properties": {
         "fabric_api_version": "0.129.0+1.21.7",
@@ -1820,17 +1814,16 @@
         "world_version": 4438
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 18,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:0e3405da8aa748e7c38695761cf1a9f5535f9e331d6937897385a86997c3d9a8",
+      "context_id": "sha256:197f86292c4fbfa7bbb272bef92490b35020ef25b50276b812c7699b69c815f8",
       "example_commit": "d658cbf138777c0875b7c8cddbc73dbed9e86ee8",
       "example_properties": {
         "fabric_api_version": "0.128.2+1.21.6",
@@ -1867,17 +1860,16 @@
         "world_version": 4435
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 18,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:a9445d43b9dc812643e41a15f7618fd3a932cad7ac6df8113a8ba988e3cc5c6a",
+      "context_id": "sha256:30e19829307e2e917bc258b3810158a0b46e78292a5800b32442d67675167f56",
       "example_commit": "5196db45f1c733447bb3ca789db7b6bf3e7e614f",
       "example_properties": {
         "fabric_api_version": "0.128.2+1.21.5",
@@ -1914,17 +1906,16 @@
         "world_version": 4325
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 18,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:451c27a5c16b4ad39e19957771ad46a90bd065f90444d7c079153c1c51eb74c6",
+      "context_id": "sha256:b9705c20ba99a8a9b4892487a1f0720a59f874df1754405a43b491ea7d40d778",
       "example_commit": "da15fc152af63ab29c81f6d3d3067486d83f72a2",
       "example_properties": {
         "fabric_api_version": "0.119.4+1.21.4",
@@ -1961,17 +1952,16 @@
         "world_version": 4189
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 18,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:d3a8edde3e4a725aad7b62fdd746381fb9c6ba2fca3617cab38ab5808d967fb7",
+      "context_id": "sha256:88b9d9d3c768699927e564dbf919142bbf7c3cc8a056f4126fd812aadfa867a6",
       "example_commit": "6e80a5c1a463a62239d849d7d04b689f2a2a6d88",
       "example_properties": {
         "fabric_api_version": "0.114.1+1.21.3",
@@ -2008,17 +1998,16 @@
         "world_version": 4082
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 18,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:77a78bc33352f7e69bf8df51ac58fc735593877721041fff43db2196e4df5d35",
+      "context_id": "sha256:ba9e8d7a61dbe27d6db45481cc082a6b16370969eef6193daaa9f3aff89a71cc",
       "example_commit": "73b8cb38578391af67cd0e5c9e075f281af62a91",
       "example_properties": {
         "fabric_api_version": "0.106.1+1.21.2",
@@ -2055,17 +2044,16 @@
         "world_version": 4080
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:75c1b72f9ab4b01af6442f3c0f854063f36267fbdfa875315f0c874a0cf9057b",
+      "context_id": "sha256:5a0391327f8ffbbdfe7b1bc1fb6320d093db58806b4602df681a28208a60ac04",
       "example_commit": "04c3eecff217befb170d80acac7c592f938867e7",
       "example_properties": {
         "fabric_api_version": "0.116.17+1.21.1",
@@ -2102,17 +2090,16 @@
         "world_version": 3955
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:f2520add51aa85643af3b447110979e48306b45743f4a6f16b538af00f328917",
+      "context_id": "sha256:4196a6bce914f407398411809d4bad936526e036377db7b4f4abba89d68c9b68",
       "example_commit": "81417e41ad77eb13df85f1a76b53d40476f62c1c",
       "example_properties": {
         "fabric_api_version": "0.102.0+1.21",
@@ -2149,17 +2136,16 @@
         "world_version": 3953
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:af801d02822754b9da857e130835ccf6d62df5866aab7995f0e1b53206ee557d",
+      "context_id": "sha256:951b6119e65e661b863e21c7e5233da7dc450911c3ba2204ef5f56af4a92ed01",
       "example_commit": "fed5e607cfc5bcf679446558751f63c762f2a719",
       "example_properties": {
         "fabric_api_version": "0.100.8+1.20.6",
@@ -2196,17 +2182,16 @@
         "world_version": 3839
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:ee45ced5bad2db1661fc28acf9b9a02d63d7a9ef831841213cc5c44537d8f981",
+      "context_id": "sha256:c8f4a56c46b2bb6460fec81728471faabc4b9fcbe696c9f6951a5b9562f0d4d6",
       "example_commit": "00cafbf94624c61147c409f111f16184590fbbdf",
       "example_properties": {
         "fabric_api_version": "0.97.8+1.20.5",
@@ -2243,17 +2228,16 @@
         "world_version": 3837
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:1f4303ad18a20b84325a0de99aef4f60e60421a43bfde760d2bef55db28c6dd4",
+      "context_id": "sha256:f384abb588d66d281ee2e95f93e108cb009923e5e6239bd6d1d04e02ee5d76a2",
       "example_commit": "eaa3e4552d4cb9b803391581ac65230dda78bc97",
       "example_properties": {
         "fabric_api_version": "0.97.3+1.20.4",
@@ -2290,17 +2274,16 @@
         "world_version": 3700
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:889002788c467be07a8567883404c3d247d05d2e2e3417c35add788d3cc5ee05",
+      "context_id": "sha256:b1747ee5daeb19497472c787a2de1c13aba59b5011bd1768c3653d8248517001",
       "example_commit": "e603aeb8ab279bcd8ef89a8f176c0a2be6134742",
       "example_properties": {
         "fabric_api_version": "0.91.1+1.20.3",
@@ -2337,17 +2320,16 @@
         "world_version": 3698
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:935ad7d67d1db0f44f48758419750a322e1f72a207c1ba0c87be89bd02036a28",
+      "context_id": "sha256:9ca3a1306965c49923113dee20b8f337c62f5346401b88c8a58062d177d61710",
       "example_commit": "aaf14b23079b4e629541fa7ecb3dbd2a4cdf8bf6",
       "example_properties": {
         "fabric_api_version": "0.91.6+1.20.2",
@@ -2384,17 +2366,16 @@
         "world_version": 3578
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:3e374c7cd9fe5e1fea3a65ed41078cafd231163d2e69313170c815477ae761bb",
+      "context_id": "sha256:abcd43f94d668f35a89c2e3e2eab04ce1e2ad9321dd4935686463ebf5c1d5742",
       "example_commit": "e1cc17e1468cb85a3369a3da29d7abf8c0703312",
       "example_properties": {
         "fabric_api_version": "0.92.12+1.20.1",
@@ -2430,17 +2411,16 @@
         "world_version": 3465
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:0cba21e520678aff4282ec1b4f34f890f624f52f604708307959d8dcca7b4575",
+      "context_id": "sha256:ca816bc66e40d071750f18b9d0a6876b342b317a2a2c93b4a1635dae2acd4863",
       "example_commit": "547c9d4902bfb12f39dc4336684ad0c8b0455709",
       "example_properties": {
         "fabric_api_version": "0.83.0+1.20",
@@ -2476,17 +2456,16 @@
         "world_version": 3463
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:c82bbaffab7766403ee4a9b1249425e73ec3a2e5e6b24fc9c24ce9472b28e15c",
+      "context_id": "sha256:2ffec8379a90df3b23f3cc12d04e29561fe6a141ce4cb4603d57019b5d20323c",
       "example_commit": "40109cfdef662b9cda4f38794fc71202e197c49e",
       "example_properties": {
         "fabric_api_version": "0.87.2+1.19.4",
@@ -2522,17 +2501,16 @@
         "world_version": 3337
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:5ff11667ddb02f71bad2199148c1ba990214d2ed97cf603e7e85177631790965",
+      "context_id": "sha256:30c405696335eeaab6ef779b6f2e25cc098c5e82ea956e195bbd853a3aef7691",
       "example_commit": "78f7a962f4e679ce3c1b4134d6ce051b07870bf8",
       "example_properties": {
         "fabric_api_version": "0.76.1+1.19.3",
@@ -2568,17 +2546,16 @@
         "world_version": 3218
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:e87357fb58eb98d898e1f522b55cf6518385fa239f93bfadaf6e6988338e387d",
+      "context_id": "sha256:6e4cc04e4dbabc9949750c0551f00b5a57c257bb013a7289496e22fffff4b95f",
       "example_commit": "96f78c9e11c58b69f68b93c9f385b6869fcf21c6",
       "example_properties": {
         "fabric_api_version": "0.77.0+1.19.2",
@@ -2615,17 +2592,16 @@
         "world_version": 3120
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:574fe1279bef1e0acea5fff421f3b4eff092596f8e432e55f37355f372e9bf6b",
+      "context_id": "sha256:8e9e245e3dfeb48a8179d6e489f72007d39ffc28adae28341be4477fe091e932",
       "example_commit": "610664bfb97aceace820f0dedf4feec273bac8fb",
       "example_properties": {
         "fabric_api_version": "0.58.5+1.19.1",
@@ -2662,17 +2638,16 @@
         "world_version": 3117
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:7eb8b8eb0e8c4e960e696033b6a5db6b3c59df27fdc25c0842bd78481f2bd76f",
+      "context_id": "sha256:9a489906880b9fde8a697773b1ca520b08210041eabe747d7c6d91b88172f5a4",
       "example_commit": "3f6e0d36efa63ed6b672c1828c007109bb273b56",
       "example_properties": {
         "fabric_api_version": "0.58.0+1.19",
@@ -2709,17 +2684,16 @@
         "world_version": 3105
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:762ec6f6ad59f86cefda27a96997b30e4c76bc4f70b88f56c4954452c57b7349",
+      "context_id": "sha256:bcc29896f8756fc1c082d3ef95d0ba70d3573e077e24fbbc0c9c200b7f467f73",
       "example_commit": "32bca4c06923a1b22801448eb3b446bcec0ffdc1",
       "example_properties": {
         "fabric_api_version": "0.77.0+1.18.2",
@@ -2756,17 +2730,16 @@
         "world_version": 2975
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:38b00e1492c84d31f34109ba0e2c69af7b91a6f6e2fd6d31370905727edf07ea",
+      "context_id": "sha256:d2153fdd510cb3c5c0ec333b98ed556eba518f04da71d3d55d620fb5b7577ecc",
       "example_commit": "573e851ce6818d7de8e346a511ef466a53fe5506",
       "example_properties": {
         "fabric_api_version": "0.46.6+1.18",
@@ -2803,17 +2776,16 @@
         "world_version": 2865
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:f6357c4ea3632890061a31ba83fda256b9955d513b3abb597fd0c56d657b9a47",
+      "context_id": "sha256:bfac2570c1dc45a549da30e644b8e276e53653fa168810dfedd2a423f6585a81",
       "example_commit": "347909aa7fffe661b451472b41aa7b190a070cc4",
       "example_properties": {
         "fabric_api_version": "0.44.0+1.18",
@@ -2850,17 +2822,16 @@
         "world_version": 2860
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:0a13b56f640926611079c42b840abc32fb44fd5f8902762bd366662000345077",
+      "context_id": "sha256:2785fc9bd1d2a034888404e1085d46a9d7311345cee1214e7cd0a020e9a73cad",
       "example_commit": "a6b78364647fadc74d7c96860b404bc9cdbcf22e",
       "example_properties": {
         "fabric_api_version": "0.46.1+1.17",
@@ -2896,17 +2867,16 @@
         "world_version": 2730
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:257bd6a1b7a44d46f0ca2e9be42777130b3047ca05fa6f531a80d22eae2e29e3",
+      "context_id": "sha256:6d029de3ecc1da3ab1b1e6779f07d3530edac070294a4da734347c100599446c",
       "example_commit": "8f273dde9160e1be954d3a135cc88fe9251ec5fa",
       "example_properties": {
         "fabric_api_version": "0.46.1+1.17",
@@ -2942,17 +2912,16 @@
         "world_version": 2724
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:7d5b162743c37fde995e62bb08e410a9458657c1185897bb4f0bd3771bcabd22",
+      "context_id": "sha256:598e892ec7ef4168e6a8db743356b425f96f06123d349886bafc0d146d94e76b",
       "example_commit": "3196fdc4f43d00350892e70d66ce0ef5b3f55609",
       "example_properties": {
         "fabric_api_version": "0.42.0+1.16",
@@ -2983,17 +2952,16 @@
         "world_version": 2586
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:07debe74eb1b66e52b1ab34576487f6d06e90c0e778bacac18433d62d32a2676",
+      "context_id": "sha256:2dd2d17b6a7570522f2b146e31c381e186d39b2c7ed1a4b1dfdda0cf62e30376",
       "example_commit": "c014b008a8448e1776e67280b61a8fc43af04963",
       "example_properties": {
         "fabric_api_version": "0.42.0+1.16",
@@ -3024,17 +2992,16 @@
         "world_version": 2584
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:72183e22ee859dc83a7b6f6a44fac5e04c083f38762cec0df68c601ae755946d",
+      "context_id": "sha256:983ef66c9a4c1d194801328ec8d31f6dda572fbebabc2de2b02e07a7720fe8c6",
       "example_commit": "7249145564cdfff2758b38867854faef93845cf5",
       "example_properties": {
         "fabric_api_version": "0.42.0+1.16",
@@ -3065,17 +3032,16 @@
         "world_version": 2580
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:fe61326ea4b2cf82cf22154f7cb5364b0006aa4afef9cc98d783acfc7a4e5de2",
+      "context_id": "sha256:b145147db675dc7b1e8844e67093485bab9359532a4b3120bbaf48aaa694820d",
       "example_commit": "22478178627e7450de46154b42cf3a66881acb66",
       "example_properties": {
         "fabric_api_version": "0.42.0+1.16",
@@ -3106,17 +3072,16 @@
         "world_version": 2578
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:9a5aa16bd1aa4f0627e212e91f91adb49767dc9526a79f345e62cf570fa33350",
+      "context_id": "sha256:8f0ebaebda4e3aa7b00cfd96e4814159ca0ed81363f0053e032c76938eaa7d67",
       "example_commit": "49fe784d23dfd0dd063a2b8bb75156d57e95d7cd",
       "example_properties": {
         "fabric_api_version": "0.42.0+1.16",
@@ -3147,17 +3112,16 @@
         "world_version": 2567
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:15b132d76b060e6ccf4949f9063d8f9850b705bfde188c714fbcdd8a8630ccf0",
+      "context_id": "sha256:d9ada541fa36196ce059d0b97a9bdbb79de76ca551bf89a36096753b4079d1eb",
       "example_commit": "8123b32980f6f49db06a27ec0da3d60a769c8a38",
       "example_properties": {
         "fabric_api_version": "0.42.0+1.16",
@@ -3188,17 +3152,16 @@
         "world_version": 2566
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:0f99c8c9f677aff1eff1cb85baabdbe2d63e471c48a6d5b65b54a0da2ea435d5",
+      "context_id": "sha256:539ab6fc7e92a8005bcf49f3626954b799fc24bd006b051169cf5a9dc51ec7f3",
       "example_commit": "66c890f00b0f1ba2cca58714c87e77b47139cc5b",
       "example_properties": {
         "fabric_api_version": "0.28.5+1.15",
@@ -3229,17 +3192,16 @@
         "world_version": 2230
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:d1000a0b6fd1e00886684ab5239c1c75d9ad0da0c9e914ad1764588e691041ce",
+      "context_id": "sha256:932e4cda3d495ffa3d71ddeeb233480f25078f41d11ae460e88ac6d0556686d5",
       "example_commit": "e7cedae058196ce5107bbd224ba9f7d69f3d82f7",
       "example_properties": {
         "fabric_api_version": "0.28.5+1.15",
@@ -3270,17 +3232,16 @@
         "world_version": 2227
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:9b2e090512cd682bd13389b7747b114c3c40f9fb7b02ba2268a0893e67a49dde",
+      "context_id": "sha256:a3c0b1a834024ec47881552311e4edc0f81e391c79a27d3ba2b07a8656fc4f86",
       "example_commit": "49f55d9da5a530fe6340cd3aced12d84594d1844",
       "example_properties": {
         "fabric_api_version": "0.28.5+1.15",
@@ -3311,17 +3272,16 @@
         "world_version": 2225
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"
     },
     {
+      "artifact_rules_count": 14,
       "build_java_minimum": 21,
+      "capabilities_count": 13,
       "compile": "not_run",
-      "context_id": "sha256:82a5878dfb905934e7ccd16f2e5c6958ee26651bd279956b00fea4022dfb4273",
+      "context_id": "sha256:93b5714111a60d457b6c7603638116a05fe7d162bde8aef98980e7e1d34c8901",
       "example_commit": "e99aab8e833dc20ca13038591327dc0f898ea570",
       "example_properties": {
         "fabric_api_version": "0.28.5+1.14",
@@ -3352,9 +3312,6 @@
         "world_version": 1976
       },
       "unverified": [
-        "template_semantics",
-        "artifact_schemas",
-        "symbol_replacements",
         "runtime"
       ],
       "validation_level": "official_metadata"

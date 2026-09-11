@@ -197,16 +197,20 @@ def research(output):
                 "minimum_gradle": attributes["org.gradle.plugin.api-version"]},
                 "minecraft_java_minimum": java, "build_java_minimum": build_java,
                 "mojang_version_json": embedded,
-                "unverified": ["template_semantics", "artifact_schemas", "symbol_replacements", "runtime"]})
+            base_facts = {
+                "repositories": [MAVEN, "https://libraries.minecraft.net/", "https://repo.maven.apache.org/maven2/"],
+                "dependency_coordinates": {"minecraft": f"com.mojang:minecraft:{version}",
+                    "fabric_loader": f"net.fabricmc:fabric-loader:{loader}",
+                    "fabric_api": f"net.fabricmc.fabric-api:fabric-api:{api}",
+                    "fabric_loom": f"net.fabricmc:fabric-loom:{loom}", "loom_plugin": plugin,
+                    "gradle_jvm_major": str(build_java)}}
+            from .populate_version_artifact_rules import build_version_facts
+            facts = build_version_facts(version, base_facts=base_facts)
+            evidence.update({"artifact_rules_count": len(facts["artifact_rules"]),
+                "capabilities_count": len(facts["capabilities"]),
+                "unverified": ["runtime"]})
             revision = "sha256:" + sha256(encode(evidence).encode()).hexdigest()
-            facts = {"host_revision": revision, "capabilities": {}, "api_symbols": {},
-                     "schemas": {}, "artifact_rules": {}, "replacements": {},
-                     "repositories": [MAVEN, "https://libraries.minecraft.net/", "https://repo.maven.apache.org/maven2/"],
-                     "dependency_coordinates": {"minecraft": f"com.mojang:minecraft:{version}",
-                         "fabric_loader": f"net.fabricmc:fabric-loader:{loader}",
-                         "fabric_api": f"net.fabricmc.fabric-api:fabric-api:{api}",
-                         "fabric_loom": f"net.fabricmc:fabric-loom:{loom}", "loom_plugin": plugin,
-                         "gradle_jvm_major": str(build_java)}}
+            facts["host_revision"] = revision
             target = TargetContract(adapter_id="official-fabric-" + version, edition="java", loader="fabric",
                 minecraft_version=version, java_version=str(java), yarn_mappings="mojang" if mapped else "",
                 mappings_kind="mojang" if mapped else "", mappings_version="mojang" if mapped else "",

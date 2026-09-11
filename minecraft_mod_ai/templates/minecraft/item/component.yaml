@@ -1,5 +1,34 @@
 id: minecraft/item/component
 task: Implement only the component responsibility of the supplied item artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: component_type
+  type: string
+  required: true
+- name: component_value
+  type: any
+outputs:
+- name: component_application
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - DATA_COMPONENTS
+implementation_key: fabric/item/component
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - java_constant
+repair:
+  scope:
+  - minecraft/item/component
+  writable_anchors:
+  - /* MMM:item_component */
 consumes:
 - artifact_requirement
 - target_cell

@@ -1,5 +1,39 @@
 id: minecraft/block/registry
 task: Implement only the registry responsibility of the supplied block artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: block_identity
+  type: identifier
+  required: true
+outputs:
+- name: block_registry_id
+  type: string
+- name: java_symbol
+  type: string
+host_requirements:
+  capabilities:
+  - REGISTER_BLOCK
+  symbols:
+  - register_block
+  - builtin_block_registry
+implementation_key: fabric/block/register_basic
+validators:
+- java_parse
+- registry_identifier_unique
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - java_constant
+  - package_path
+repair:
+  scope:
+  - minecraft/block/registry
+  writable_anchors:
+  - /* MMM:block_registry */
 consumes:
 - artifact_requirement
 - target_cell

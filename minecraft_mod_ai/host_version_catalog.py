@@ -44,17 +44,56 @@ def host_target(version):
 
 
 def audit_host_catalog():
-    """Check every admitted template against this checkout before using a catalog."""
+    """Completeness audit: verify complete leaf coverage and template admission across all bundles."""
     from .task_template_catalog import load_template
+    from .structural_routing_contract import CANONICAL_ARTIFACT_KINDS
+    from .minecraft_template_steps import responsibility_ids_for_artifact
 
     resolver, bundles = load_host_catalog()
+    all_leaves = set()
+    for kind in CANONICAL_ARTIFACT_KINDS:
+        all_leaves.update(responsibility_ids_for_artifact(kind))
+
     for context in bundles:
+        bindings = context.facts.get("leaf_bindings", {})
+        missing_leaves = all_leaves - set(bindings)
+        if missing_leaves:
+            raise VersionContextError(
+                "HOST_LEAF_COVERAGE_INCOMPLETE",
+                missing=sorted(missing_leaves),
+                context_id=context.context_id,
+                minecraft=context.minecraft,
+            )
+        for leaf_id, binding in bindings.items():
+            state = binding.get("state")
+            if state not in {"admitted", "unsupported", "not_reviewed"}:
+                raise VersionContextError(
+                    "HOST_LEAF_BINDING_INVALID",
+                    leaf=leaf_id,
+                    state=state,
+                    context_id=context.context_id,
+                )
+            if state == "admitted":
+                impl = binding.get("implementation", {})
+                template_id = impl.get("template")
+                if template_id and template_id in context.facts["artifact_rules"]:
+                    context.admit_template(load_template(template_id))
+
         for identifier in context.facts["artifact_rules"]:
             context.admit_template(load_template(identifier))
-    return {"schema_version": "mmm/host-version-catalog-audit-v1",
-            "auto_context_id": resolver.resolve(VersionRequest()).context_id,
-            "contexts": [{"context_id": item.context_id, "minecraft": item.minecraft,
-                          "host_revision": item.host_revision} for item in bundles]}
+
+    return {
+        "schema_version": "mmm/host-version-catalog-audit-v1",
+        "auto_context_id": resolver.resolve(VersionRequest()).context_id,
+        "contexts": [
+            {
+                "context_id": item.context_id,
+                "minecraft": item.minecraft,
+                "host_revision": item.host_revision,
+            }
+            for item in bundles
+        ],
+    }
 
 
 if __name__ == "__main__":

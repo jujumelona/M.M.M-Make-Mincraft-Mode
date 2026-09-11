@@ -1,5 +1,31 @@
 id: minecraft/entity/renderer
 task: Implement only the renderer responsibility of the supplied entity artifact.
+execution_mode: model
+side:
+- client
+inputs:
+- name: entity_identity
+  type: identifier
+  required: true
+outputs:
+- name: client_renderer_symbol
+  type: string
+host_requirements:
+  capabilities:
+  - ENTITY_RENDERER
+implementation_key: fabric/entity/renderer
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+repair:
+  scope:
+  - minecraft/entity/renderer
+  writable_anchors:
+  - /* MMM:entity_renderer */
 consumes:
 - artifact_requirement
 - target_cell

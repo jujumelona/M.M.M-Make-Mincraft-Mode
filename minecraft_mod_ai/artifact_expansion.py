@@ -19,28 +19,73 @@ class ArtifactExpansionError(ValueError):
 
 
 _REGISTRY_PATH = re.compile(r"^[a-z0-9_.-]+$")
-_SUPPORTED_EXPANSIONS: dict[FactType, tuple[str, ...]] = {
+
+FACT_TO_CANONICAL_LEAVES: dict[FactType, tuple[str, ...]] = {
     FactType.ITEM_EXISTS: (
-        "fabric/item/key",
-        "fabric/item/register_basic",
-        "fabric/item/client_item",
-        "fabric/item/model_basic",
-        "fabric/item/lang_en",
-        "fabric/item/initializer",
+        "minecraft/item/registry",
+        "minecraft/item/model",
+        "minecraft/item/language",
+        "minecraft/item/integration",
     ),
-    FactType.ITEM_STACK_LIMIT: ("fabric/item/settings_max_stack",),
+    FactType.ITEM_STACK_LIMIT: ("minecraft/item/properties",),
     FactType.BLOCK_EXISTS: (
-        "fabric/block/key",
-        "fabric/block/register_basic",
-        "fabric/block/blockstate_basic",
-        "fabric/block/model_cube_all",
-        "fabric/block/lang_en",
-        "fabric/block/initializer",
+        "minecraft/block/registry",
+        "minecraft/block/state",
+        "minecraft/block/model",
+        "minecraft/language/key",
+        "minecraft/block/integration",
     ),
-    FactType.CRAFTING_RECIPE: ("fabric/recipe/shaped", "fabric/recipe/shapeless"),
-    FactType.SMELTING_RECIPE: ("fabric/recipe/smelting",),
-    FactType.REGISTRY_TAG: ("fabric/tag/registry",),
-    FactType.BLOCK_DROP: ("fabric/loot/block_drop",),
+    FactType.CRAFTING_RECIPE: ("minecraft/recipe/serializer",),
+    FactType.SMELTING_RECIPE: ("minecraft/recipe/serializer",),
+    FactType.REGISTRY_TAG: ("minecraft/tag/entries",),
+    FactType.BLOCK_DROP: ("minecraft/block/drops",),
+}
+
+CANONICAL_LEAF_DEFAULT_TEMPLATES: dict[str, tuple[str, ...]] = {
+    "minecraft/item/registry": ("fabric/item/key", "fabric/item/register_basic"),
+    "minecraft/item/properties": ("fabric/item/settings_max_stack",),
+    "minecraft/item/model": ("fabric/item/client_item", "fabric/item/model_basic"),
+    "minecraft/item/language": ("fabric/item/lang_en",),
+    "minecraft/item/integration": ("fabric/item/initializer",),
+    "minecraft/block/registry": ("fabric/block/key", "fabric/block/register_basic"),
+    "minecraft/block/state": ("fabric/block/blockstate_basic",),
+    "minecraft/block/model": ("fabric/block/model_cube_all",),
+    "minecraft/language/key": ("fabric/block/lang_en",),
+    "minecraft/block/integration": ("fabric/block/initializer",),
+    "minecraft/block/drops": ("fabric/loot/block_drop",),
+    "minecraft/recipe/serializer": ("fabric/recipe/shaped", "fabric/recipe/shapeless"),
+    "minecraft/tag/entries": ("fabric/tag/registry",),
+    "minecraft/loot/entry": ("fabric/loot/block_drop",),
+}
+
+
+def _templates_for_canonical_leaf(leaf_id: str, version_context=None) -> tuple[str, ...]:
+    if version_context is not None:
+        binding = version_context.require_leaf_binding(leaf_id)
+        impl = binding.get("implementation", {})
+        templates = []
+        if "prerequisite_templates" in impl:
+            templates.extend(impl["prerequisite_templates"])
+        if "template" in impl and impl["template"]:
+            templates.append(impl["template"])
+        if "extra_templates" in impl:
+            templates.extend(impl["extra_templates"])
+        if templates:
+            return tuple(dict.fromkeys(templates))
+    return CANONICAL_LEAF_DEFAULT_TEMPLATES.get(leaf_id, ())
+
+
+_SUPPORTED_EXPANSIONS: dict[FactType, tuple[str, ...]] = {
+    fact_type: (
+        ("fabric/recipe/smelting",)
+        if fact_type == FactType.SMELTING_RECIPE
+        else tuple(
+            tid
+            for leaf_id in leaf_ids
+            for tid in CANONICAL_LEAF_DEFAULT_TEMPLATES.get(leaf_id, ())
+        )
+    )
+    for fact_type, leaf_ids in FACT_TO_CANONICAL_LEAVES.items()
 }
 
 # Kept public for callers/tests, but every entry is verified before use.
@@ -219,7 +264,16 @@ def expand_facts_to_jobs(
             # module generator selected from its content capability.  It is deliberately
             # not represented as a fake/empty ArtifactJob.
             continue
-        template_ids = FACT_EXPANSIONS[fact.fact_type]
+        canonical_leaf_ids = FACT_TO_CANONICAL_LEAVES[fact.fact_type]
+        if version_context is not None:
+            for leaf_id in canonical_leaf_ids:
+                version_context.require_leaf_binding(leaf_id)
+
+        template_ids = []
+        for leaf_id in canonical_leaf_ids:
+            template_ids.extend(_templates_for_canonical_leaf(leaf_id, version_context))
+        if not template_ids:
+            template_ids = list(FACT_EXPANSIONS[fact.fact_type])
 
         resource_values = {}
         if fact.fact_type in {

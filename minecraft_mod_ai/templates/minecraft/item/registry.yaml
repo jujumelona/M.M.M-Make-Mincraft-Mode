@@ -1,5 +1,39 @@
 id: minecraft/item/registry
 task: Implement only the registry responsibility of the supplied item artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: item_identity
+  type: identifier
+  required: true
+outputs:
+- name: registry_id
+  type: string
+- name: java_symbol
+  type: string
+host_requirements:
+  capabilities:
+  - REGISTER_ITEM
+  symbols:
+  - register_item
+  - builtin_item_registry
+implementation_key: fabric/item/register_basic
+validators:
+- java_parse
+- registry_identifier_unique
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - java_constant
+  - package_path
+repair:
+  scope:
+  - minecraft/item/registry
+  writable_anchors:
+  - /* MMM:item_registry */
 consumes:
 - artifact_requirement
 - target_cell

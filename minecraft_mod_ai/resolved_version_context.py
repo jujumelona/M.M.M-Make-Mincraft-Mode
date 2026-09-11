@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from hashlib import sha256
 import json
 from types import MappingProxyType
@@ -15,6 +16,12 @@ class VersionContextError(ValueError):
 
 def _encode(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+@lru_cache(maxsize=256)
+def _check_schema_cached(encoded_schema: str):
+    from jsonschema import Draft202012Validator
+    Draft202012Validator.check_schema(json.loads(encoded_schema))
 
 
 def _freeze(value):
@@ -57,7 +64,7 @@ class VersionRequest:
 
 _FACT_FIELDS = frozenset({
     "host_revision", "capabilities", "api_symbols", "schemas", "artifact_rules",
-    "dependency_coordinates", "repositories", "replacements",
+    "dependency_coordinates", "repositories", "replacements", "leaf_bindings",
 })
 
 
@@ -84,21 +91,40 @@ class ResolvedVersionContext:
                 raise VersionContextError("HOST_FACT_TYPE", field=key)
         if any(type(item) is not bool for item in facts["capabilities"].values()):
             raise VersionContextError("HOST_CAPABILITY_TYPE")
-        from jsonschema import Draft202012Validator
-
         for name, schema in facts["schemas"].items():
             if not isinstance(schema, dict):
                 raise VersionContextError("HOST_SCHEMA_INVALID", name=name)
-            Draft202012Validator.check_schema(schema)
+            try:
+                _check_schema_cached(_encode(schema))
+            except Exception as exc:
+                raise VersionContextError("HOST_SCHEMA_INVALID", name=name) from exc
         for name, rule in facts["artifact_rules"].items():
             if not isinstance(rule, dict) or set(rule) != {"template_sha256", "required_symbols", "requires_capabilities"}:
                 raise VersionContextError("HOST_ARTIFACT_RULE_INVALID", name=name)
             for category, field in (("api_symbols", "required_symbols"), ("capabilities", "requires_capabilities")):
                 if not isinstance(rule[field], list) or any(not isinstance(key, str) or key not in facts[category] for key in rule[field]):
                     raise VersionContextError("HOST_ARTIFACT_RULE_INVALID", name=name, field=field)
-        for key in ("api_symbols", "dependency_coordinates", "replacements"):
+        for sym_name, sym_val in facts["api_symbols"].items():
+            if isinstance(sym_val, str):
+                if not sym_val.strip():
+                    raise VersionContextError("HOST_FACT_TYPE", field="api_symbols")
+            elif isinstance(sym_val, dict):
+                if not isinstance(sym_val.get("name"), str) or not sym_val.get("name").strip():
+                    raise VersionContextError("HOST_FACT_TYPE", field="api_symbols")
+            else:
+                raise VersionContextError("HOST_FACT_TYPE", field="api_symbols")
+        for key in ("dependency_coordinates", "replacements"):
             if any(not isinstance(item, str) or not item.strip() for item in facts[key].values()):
                 raise VersionContextError("HOST_FACT_TYPE", field=key)
+        for leaf_name, binding in facts.get("leaf_bindings", {}).items():
+            if not isinstance(binding, dict) or "state" not in binding:
+                raise VersionContextError("HOST_LEAF_BINDING_INVALID", leaf=leaf_name)
+            state = binding["state"]
+            if state not in {"admitted", "unsupported", "not_reviewed"}:
+                raise VersionContextError("HOST_LEAF_BINDING_INVALID", leaf=leaf_name, state=state)
+            if state == "admitted":
+                if "implementation" not in binding or not isinstance(binding["implementation"], dict):
+                    raise VersionContextError("HOST_LEAF_BINDING_INVALID", leaf=leaf_name)
         if not isinstance(facts["repositories"], list) or any(
             not isinstance(url, str) or not url.startswith("https://") for url in facts["repositories"]
         ):
@@ -136,8 +162,16 @@ class ResolvedVersionContext:
         return self.target["resource_pack_format"]
 
     @property
-    def data_pack_format(self):
-        return int(self.target["data_pack_version"].split(".", 1)[0])
+    def data_pack_version(self) -> str:
+        return str(self.target["data_pack_version"])
+
+    @property
+    def data_pack_major(self) -> int:
+        return int(str(self.target["data_pack_version"]).split(".", 1)[0])
+
+    @property
+    def data_pack_format(self) -> str:
+        return self.data_pack_version
 
     @property
     def facts(self):
@@ -150,6 +184,10 @@ class ResolvedVersionContext:
     @property
     def api_symbols(self):
         return self.facts["api_symbols"]
+
+    @property
+    def leaf_bindings(self):
+        return self.facts.get("leaf_bindings", {})
 
     def to_dict(self):
         return {**json.loads(self.snapshot_json), "context_id": self.context_id}
@@ -198,12 +236,23 @@ class ResolvedVersionContext:
             self.require_fact("api_symbols", name)
         return rule
 
+    def require_leaf_binding(self, leaf_id: str):
+        bindings = self.facts.get("leaf_bindings", {})
+        if not isinstance(bindings, Mapping) or leaf_id not in bindings:
+            raise VersionContextError("HOST_FACT_UNAVAILABLE", category="leaf_bindings", name=leaf_id, context_id=self.context_id)
+        binding = bindings[leaf_id]
+        state = binding.get("state") if isinstance(binding, Mapping) else None
+        if state != "admitted":
+            raise VersionContextError("UNSUPPORTED_LEAF", leaf=leaf_id, state=state, context_id=self.context_id)
+        return binding
+
     def validate_artifact(self, template, output):
         from jsonschema import Draft202012Validator
 
         rule = self.admit_template(template)
         for name in rule.get("required_symbols", ()):
-            expected = self.require_fact("api_symbols", name)
+            sym = self.require_fact("api_symbols", name)
+            expected = sym["name"] if isinstance(sym, Mapping) else sym
             if expected not in output:
                 raise VersionContextError("INVALID_API_SYMBOL", artifact=template["id"], symbol=name,
                                           expected_symbol=expected, context_id=self.context_id,
