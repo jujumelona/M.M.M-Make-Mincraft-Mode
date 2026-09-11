@@ -534,7 +534,7 @@ def install(autotune: Any) -> None:
         previous_widths = os.environ.get("MMM_LLAMA_MTP_WIDTHS")
         previous_active = os.environ.get(_ACTIVE_TUNING_ENV)
         context_override = _context_size(config)
-        if context_override > 0:
+        if context_override is not None and context_override > 0:
             os.environ["MMM_LLAMA_SERVER_CTX"] = str(context_override)
         os.environ[_ACTIVE_TUNING_ENV] = "1"
         registry_widths = _registry_mtp_widths(config)
