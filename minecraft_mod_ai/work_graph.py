@@ -692,7 +692,7 @@ def _module_shards(
         if stage == 'content':
             return _pipeline_shard_size(
                 'MMM_CONTENT_PIPELINE_SHARD_SIZE',
-                1,
+                max(1, int(policy.java_shard_size)),
                 max(1, int(policy.java_shard_size)),
             )
         if stage == 'system':
@@ -704,7 +704,7 @@ def _module_shards(
         if stage == 'entity':
             return _pipeline_shard_size(
                 'MMM_ENTITY_PIPELINE_SHARD_SIZE',
-                1,
+                2,
                 max(1, int(policy.entity_shard_size)),
             )
         if stage == 'custom':
