@@ -18,57 +18,19 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m pip install --prefer-binary -e '.[dev]'
-      - name: Patch validator
+      - name: Patch validator and add regression
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
           p = Path('minecraft_mod_ai/validator.py')
           s = p.read_text(encoding='utf-8')
-          old = '''        for path in sorted({*root.rglob("*.json"), *root.rglob("*.mcmeta")}):
-              checks += 1
-              self._load_json(path, findings, root)
-
-          java_files = sorted(
-          '''
-          # Preserve source indentation exactly rather than weakening validation.
-          old = old.replace('              ', '            ').replace('          java_files', '        java_files')
-          new = '''        for path in sorted({*root.rglob("*.json"), *root.rglob("*.mcmeta")}):
-            checks += 1
-            self._load_json(path, findings, root)
-
-        extended_catalog = root / ".minecraft_ai/extended-modules.json"
-        if extended_catalog.exists():
-            checks += 1
-            try:
-                from .extended_content_generator import ExtendedContentError, iter_extended_module_records
-                tuple(iter_extended_module_records(root))
-            except (ExtendedContentError, OSError, ValueError) as exc:
-                findings.append(Finding(
-                    "EXTENDED_CATALOG_INVALID",
-                    "error",
-                    self._rel(root, extended_catalog),
-                    f"Extended module catalog failed structural validation: {exc}",
-                ))
-
-        java_files = sorted(
-          '''
+          old = '        for path in sorted({*root.rglob("*.json"), *root.rglob("*.mcmeta")}):\n            checks += 1\n            self._load_json(path, findings, root)\n\n        java_files = sorted(\n'
+          new = '        for path in sorted({*root.rglob("*.json"), *root.rglob("*.mcmeta")}):\n            checks += 1\n            self._load_json(path, findings, root)\n\n        extended_catalog = root / ".minecraft_ai/extended-modules.json"\n        if extended_catalog.exists():\n            checks += 1\n            try:\n                from .extended_content_generator import ExtendedContentError, iter_extended_module_records\n                tuple(iter_extended_module_records(root))\n            except (ExtendedContentError, OSError, ValueError) as exc:\n                findings.append(Finding(\n                    "EXTENDED_CATALOG_INVALID",\n                    "error",\n                    self._rel(root, extended_catalog),\n                    f"Extended module catalog failed structural validation: {exc}",\n                ))\n\n        java_files = sorted(\n'
           if old not in s:
               raise SystemExit('validator insertion point not found')
           p.write_text(s.replace(old, new, 1), encoding='utf-8')
-          PY
-      - name: Add regression test
-        shell: bash
-        run: |
-          cat > tests/test_extended_catalog_validation_gate.py <<'PY'
-          from __future__ import annotations
-          import inspect
-          import minecraft_mod_ai.validator as validator
-
-          def test_extended_catalog_is_structurally_validated_once():
-              source = inspect.getsource(validator.ProjectValidator.validate)
-              assert source.count('iter_extended_module_records(root)') == 1
-              assert 'EXTENDED_CATALOG_INVALID' in source
+          Path('tests/test_extended_catalog_validation_gate.py').write_text('''from __future__ import annotations\nimport inspect\nimport minecraft_mod_ai.validator as validator\n\ndef test_extended_catalog_is_structurally_validated_once():\n    source = inspect.getsource(validator.ProjectValidator.validate)\n    assert source.count("iter_extended_module_records(root)") == 1\n    assert "EXTENDED_CATALOG_INVALID" in source\n''', encoding='utf-8')
           PY
       - name: Verify
         run: |
@@ -81,7 +43,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           rm .github/workflows/finalize-validator-bottleneck.yml
-          git add minecraft_mod_ai/validator.py tests/test_extended_catalog_validation_gate.py .github/workflows/finalize-validator-bottleneck.yml
+          git add -A
           git commit -m 'Validate extended catalog once at source gate'
           git pull --rebase origin main
           git push origin HEAD:main
