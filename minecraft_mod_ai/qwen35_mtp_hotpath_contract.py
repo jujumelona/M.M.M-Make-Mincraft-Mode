@@ -87,7 +87,7 @@ def _registry_mtp_widths(config: Any) -> str | None:
     return ",".join(normalized) or None
 
 
-def _context_size(config: Any | None = None) -> int:
+def _context_size(config: Any | None = None) -> int | None:
     """Return runtime context override when explicitly configured by the operator."""
 
     del config
@@ -100,7 +100,7 @@ def _context_size(config: Any | None = None) -> int:
         if value < 0:
             raise ValueError("MMM_QWEN35_MTP_CTX must be a non-negative integer")
         return min(_MAX_CTX, value)
-    return 0
+    return None
 
 
 def _draft_gpu_layers() -> str:
@@ -217,7 +217,9 @@ def _install_measured_fast_base_args(autotune: Any) -> None:
         _set_option(args, ("--batch-size", "-b"), "2048")
         _set_option(args, ("--ubatch-size", "-ub"), "512")
         _set_option(args, ("--parallel", "-np"), "1")
-        _set_option(args, ("--ctx-size", "-c"), str(_context_size(config)))
+        context = _context_size(config)
+        if context is not None:
+            _set_option(args, ("--ctx-size", "-c"), str(context))
 
         # Main KV cache options are owned by the decode-speed autotuner.
         _drop_option(args, ("--load-mode", "-lm"))

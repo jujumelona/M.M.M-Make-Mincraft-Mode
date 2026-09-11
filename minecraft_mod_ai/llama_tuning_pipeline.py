@@ -133,7 +133,7 @@ class NativeLlamaTuningPipeline:
                     value = int(raw)
                 except ValueError:
                     value = -1
-                if value >= 0:
+                if value > 0:
                     return value
 
         configured_default = metadata.get("runtime_context_default")
@@ -165,6 +165,12 @@ class NativeLlamaTuningPipeline:
             args = list(current(binary, model_path, config, port))
             context = self._context_value(config)
             if context is None:
+                for name in ("--ctx-size", "-c"):
+                    while name in args:
+                        index = args.index(name)
+                        del args[index]
+                        if index < len(args):
+                            del args[index]
                 return args
             for name in ("--ctx-size", "-c"):
                 if name in args:
@@ -289,7 +295,6 @@ class NativeLlamaTuningPipeline:
                 self.runtime_tuning,
             )
             install_qwen35_request_policy(self.autotune, self.hardware_policy)
-            self._install_profile_context_authority()
             install_single_stream_agentic_policy(
                 agentic_optimization_contract,
                 repair_engine,
@@ -330,6 +335,7 @@ class NativeLlamaTuningPipeline:
             TuningStage("kernel-autotune", install_kernel_stage),
             TuningStage("qwen-transport", install_qwen_runtime_transport),
             TuningStage("multimodal", install_multimodal_stage),
+            TuningStage("context-authority", self._install_profile_context_authority),
         )
 
     def _callable_boundaries(self):

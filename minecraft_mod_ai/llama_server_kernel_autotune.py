@@ -446,25 +446,31 @@ def install(autotune: Any, runtime_tuning: Any) -> None:
             if os.environ.get(_BYPASS_ENV, "").strip() == "1":
                 return list(current_base(binary, model_path, config, port))
             args = list(current_base(binary, model_path, config, port))
-            baseline = _baseline_config()
-            active = _active_config(baseline)
             explicit_flash = os.environ.get("MMM_LLAMA_FLASH_ATTN", "").strip().lower()
-            flash = explicit_flash if explicit_flash in _ALLOWED_FLASH else active.flash_attn
-            batch = _operator_batch() or active.batch
-            generic_kv = _valid_kv(os.environ.get("MMM_KV_CACHE_QUANT", "q4_0"))
-            k = _valid_kv(os.environ.get("MMM_LLAMA_CACHE_TYPE_K", active.cache_type_k or generic_kv))
-            v = _valid_kv(os.environ.get("MMM_LLAMA_CACHE_TYPE_V", active.cache_type_v or generic_kv))
-            _replace_option(args, ("--flash-attn", "-fa"), flash)
-            _replace_option(args, ("--batch-size", "-b"), str(batch))
-            _replace_option(args, ("--cache-type-k", "-ctk"), k)
-            _replace_option(args, ("--cache-type-v", "-ctv"), v)
-            # Never leave physical batch above logical batch after an auto batch choice.
-            for name in ("--ubatch-size", "-ub"):
-                if name in args:
-                    index = args.index(name)
-                    if index + 1 < len(args):
-                        args[index + 1] = str(min(batch, _int(args[index + 1], batch)))
-                    break
+            active_flash = os.environ.get("MMM_LLAMA_ACTIVE_FLASH_ATTN", "").strip().lower()
+            if explicit_flash in _ALLOWED_FLASH:
+                _replace_option(args, ("--flash-attn", "-fa"), explicit_flash)
+            elif active_flash in _ALLOWED_FLASH:
+                _replace_option(args, ("--flash-attn", "-fa"), active_flash)
+
+            explicit_batch = _operator_batch()
+            active_batch = os.environ.get("MMM_LLAMA_ACTIVE_BATCH", "").strip()
+            if explicit_batch is not None:
+                _replace_option(args, ("--batch-size", "-b"), str(explicit_batch))
+            elif active_batch:
+                _replace_option(args, ("--batch-size", "-b"), str(_int(active_batch, 2048)))
+
+            generic_kv = os.environ.get("MMM_KV_CACHE_QUANT", "").strip().lower()
+            explicit_k = os.environ.get("MMM_LLAMA_CACHE_TYPE_K", "").strip().lower()
+            explicit_v = os.environ.get("MMM_LLAMA_CACHE_TYPE_V", "").strip().lower()
+            active_k = os.environ.get("MMM_LLAMA_ACTIVE_CACHE_TYPE_K", "").strip().lower()
+            active_v = os.environ.get("MMM_LLAMA_ACTIVE_CACHE_TYPE_V", "").strip().lower()
+            k = explicit_k or (generic_kv if generic_kv in _ALLOWED_KV else active_k)
+            v = explicit_v or (generic_kv if generic_kv in _ALLOWED_KV else active_v)
+            if k in _ALLOWED_KV:
+                _replace_option(args, ("--cache-type-k", "-ctk"), k)
+            if v in _ALLOWED_KV:
+                _replace_option(args, ("--cache-type-v", "-ctv"), v)
             return args
 
         kernel_base_args._mmm_kernel_axes = True  # type: ignore[attr-defined]
@@ -477,7 +483,7 @@ def install(autotune: Any, runtime_tuning: Any) -> None:
             explicit = os.environ.get("MMM_LLAMA_UBATCH", "").strip()
             batch = autotune_module._env_int("MMM_LLAMA_BATCH", 2048)
             if explicit:
-                return (min(batch, _int(explicit, 512)),)
+                return (_int(explicit, 512),)
             hardware = autotune_module._hardware_identity()
             default = "128,256,512,1024,2048" if "t4" in hardware.casefold() else "256,512,1024"
             raw = os.environ.get("MMM_LLAMA_UBATCH_CANDIDATES", default)

@@ -621,11 +621,6 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
 def _apply_hardware_launch_policy(args: list[str]) -> list[str]:
     """Apply managed llama-server launch policy without enabling unused endpoints."""
 
-    try:
-        index = args.index("--gpu-layers")
-        args[index + 1] = "auto"
-    except (ValueError, IndexError):
-        pass
     if "--parallel" not in args and "-np" not in args:
         args.extend(["--parallel", "1"])
     if _auxiliary_native_telemetry_enabled():
@@ -674,13 +669,7 @@ def install(autotune_module: Any) -> None:
 
         @wraps(original_variant)
         def adaptive_variant_args(variant: Any) -> list[str]:
-            args = original_variant(variant)
-            try:
-                index = args.index("--spec-draft-ngl")
-                args[index + 1] = "auto"
-            except (ValueError, IndexError):
-                pass
-            return args
+            return original_variant(variant)
 
         adaptive_variant_args._mmm_auto_draft_layers = True  # type: ignore[attr-defined]
         autotune_module._variant_args = adaptive_variant_args
