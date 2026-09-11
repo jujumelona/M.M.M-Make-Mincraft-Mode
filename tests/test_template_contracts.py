@@ -71,3 +71,22 @@ def test_asset_render_placeholders_have_explicit_required_input_contracts() -> N
             assert contract.get("type") == "string", f"asset input must be a string: {path}:{name}"
             assert contract.get("required") is True, f"asset input must be required: {path}:{name}"
             assert contract.get("minLength", 0) >= 1, f"asset input must reject empty strings: {path}:{name}"
+
+
+def test_translation_templates_type_every_declared_input_and_output() -> None:
+    for path in sorted((TEMPLATES / "translation").glob("*.yaml")):
+        data = _load(path)
+        inputs = data.get("input")
+        outputs = data.get("output")
+        input_schema = data.get("input_schema")
+        output_schema = data.get("output_schema")
+        assert isinstance(inputs, dict) and inputs, f"translation inputs missing: {path}"
+        assert isinstance(outputs, dict) and outputs, f"translation outputs missing: {path}"
+        assert isinstance(input_schema, dict), f"translation input schema missing: {path}"
+        assert isinstance(output_schema, dict), f"translation output schema missing: {path}"
+        assert set(input_schema) == set(inputs), f"translation input/schema mismatch: {path}"
+        assert set(output_schema) == set(outputs), f"translation output/schema mismatch: {path}"
+        for name, type_spec in input_schema.items():
+            assert isinstance(type_spec, str) and type_spec, f"untyped translation input: {path}:{name}"
+        for name, type_spec in output_schema.items():
+            assert isinstance(type_spec, str) and type_spec, f"untyped translation output: {path}:{name}"
