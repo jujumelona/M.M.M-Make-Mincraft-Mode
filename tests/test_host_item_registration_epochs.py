@@ -1,4 +1,5 @@
 from minecraft_mod_ai.host_item_registration import item_registration_epoch
+from minecraft_mod_ai.populate_version_artifact_rules import _item_template_ids
 
 
 def _epoch(version: str) -> dict:
@@ -55,3 +56,22 @@ def test_item_registration_epoch_returns_fresh_host_fact_mapping():
     first = _epoch("1.21.5")
     first["id"] = "mutated"
     assert _epoch("1.21.5")["id"] == "keyed_resource_location"
+
+
+def test_host_selects_exact_item_lowering_template_by_target():
+    assert _item_template_ids("1.20.6") == (
+        "fabric/item/register_direct_resource_location_ctor",
+        None,
+    )
+    assert _item_template_ids("1.21.1") == (
+        "fabric/item/register_direct_resource_location_factory",
+        None,
+    )
+    assert _item_template_ids("1.21.5") == (
+        "fabric/item/register_keyed",
+        "fabric/item/key_resource_location",
+    )
+    assert _item_template_ids("1.21.11") == (
+        "fabric/item/register_keyed",
+        "fabric/item/key_identifier",
+    )
