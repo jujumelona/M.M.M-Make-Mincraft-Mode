@@ -200,7 +200,7 @@ def resolve_platform_fail_closed(
     # A host-coherent provider is already an immutable local receipt catalogue. Selecting
     # from it performs no ecosystem/live discovery, so isolation must not demote this
     # stronger authority to generic provider discovery semantics.
-    if provider.provider_id == "host-coherent-version-catalog-v1":
+    if provider.host_authoritative:
         from .host_version_catalog import host_target
 
         requested = (

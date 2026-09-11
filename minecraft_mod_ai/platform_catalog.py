@@ -35,6 +35,7 @@ class PlatformProvider:
     provider_id: str
     discover_versions: Callable[[int], tuple[str, ...]]
     resolve: Callable[[str], TargetContract]
+    host_authoritative: bool = False
 
 
 _PROVIDER_LOCK = RLock()
@@ -51,6 +52,7 @@ def register_platform_provider(provider: PlatformProvider, *, replace: bool = Fa
             provider_id=provider.provider_id,
             discover_versions=provider.discover_versions,
             resolve=provider.resolve,
+            host_authoritative=provider.host_authoritative,
         )
     with _PROVIDER_LOCK:
         if loader in _PROVIDERS and not replace:
@@ -441,5 +443,6 @@ register_platform_provider(
         provider_id="host-coherent-version-catalog-v1",
         discover_versions=_fabric_versions,
         resolve=_fabric_adapter,
+        host_authoritative=True,
     )
 )
