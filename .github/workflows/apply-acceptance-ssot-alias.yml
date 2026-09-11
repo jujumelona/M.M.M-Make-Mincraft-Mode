@@ -1,0 +1,39 @@
+name: Apply acceptance SSOT alias repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/_fix_acceptance_ssot_alias.py'
+      - '.github/workflows/apply-acceptance-ssot-alias.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Apply source patch
+        run: python tools/_fix_acceptance_ssot_alias.py
+      - name: Verify focused contracts
+        run: |
+          python -m compileall -q minecraft_mod_ai/evidence_first_planning.py
+          python -m pytest -q tests/test_acceptance_contract_ssot.py tests/test_evidence_first_planning.py
+      - name: Commit source repair
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/evidence_first_planning.py
+          git commit -m 'Restore canonical acceptance SSOT alias'
+          git pull --rebase origin main
+          git push origin HEAD:main
