@@ -41,7 +41,37 @@ class _CouncilRouter:
         assert response_format == "json"
         schema = response_schema or {}
         required = set(schema.get("required", ()))
+        council_values = {
+            "must_preserve": ["requested feature"],
+            "must_not_invent": ["unrequested map"],
+            "subproblems": ["state", "behavior"],
+            "risks": ["integration"],
+            "research_questions": ["which API is authoritative?"],
+            "confidence": 0.8,
+        }
+        synthesis_values = {
+            "requirements": ["requested feature"],
+            "negative_constraints": ["unrequested map"],
+            "subproblem_order": ["state", "behavior"],
+            "acceptance_observables": ["observable in game"],
+            "unresolved_questions": [],
+        }
+        review_values = {
+            "missing_requirements": [],
+            "unsupported_additions": [],
+            "contradictions": [],
+            "research_gaps": [],
+            "affected_sections": [],
+            "severity": "none",
+            "confidence": 0.9,
+        }
+
         if "analysis" in required:
+            allowed = schema["properties"]["analysis"]["properties"]
+            return json.dumps(
+                {"analysis": {key: council_values[key] for key in allowed}}
+            )
+        if required and required <= council_values.keys():
             with self._lock:
                 self.committee_active += 1
                 self.committee_max = max(self.committee_max, self.committee_active)
@@ -50,27 +80,20 @@ class _CouncilRouter:
             finally:
                 with self._lock:
                     self.committee_active -= 1
-            values = {
-                "must_preserve": ["requested feature"],
-                "must_not_invent": ["unrequested map"],
-                "subproblems": ["state", "behavior"],
-                "risks": ["integration"],
-                "research_questions": ["which API is authoritative?"],
-                "confidence": 0.8,
-            }
-            allowed = schema["properties"]["analysis"]["properties"]
-            return json.dumps({"analysis": {key: values[key] for key in allowed}})
+            return json.dumps({key: council_values[key] for key in required})
+
         if "synthesis" in required:
-            values = {
-                "requirements": ["requested feature"],
-                "negative_constraints": ["unrequested map"],
-                "subproblem_order": ["state", "behavior"],
-                "acceptance_observables": ["observable in game"],
-                "unresolved_questions": [],
-            }
             allowed = schema["properties"]["synthesis"]["properties"]
-            return json.dumps({"synthesis": {key: values[key] for key in allowed}})
+            return json.dumps(
+                {"synthesis": {key: synthesis_values[key] for key in allowed}}
+            )
+        if required and required <= synthesis_values.keys():
+            return json.dumps({key: synthesis_values[key] for key in required})
+
         if "review" in required:
+            allowed = schema["properties"]["review"]["properties"]
+            return json.dumps({"review": {key: review_values[key] for key in allowed}})
+        if required and required <= review_values.keys():
             with self._lock:
                 self.review_active += 1
                 self.review_max = max(self.review_max, self.review_active)
@@ -79,17 +102,7 @@ class _CouncilRouter:
             finally:
                 with self._lock:
                     self.review_active -= 1
-            values = {
-                "missing_requirements": [],
-                "unsupported_additions": [],
-                "contradictions": [],
-                "research_gaps": [],
-                "affected_sections": [],
-                "severity": "none",
-                "confidence": 0.9,
-            }
-            allowed = schema["properties"]["review"]["properties"]
-            return json.dumps({"review": {key: values[key] for key in allowed}})
+            return json.dumps({key: review_values[key] for key in required})
         raise AssertionError(f"unexpected schema: {response_schema}")
 
 
