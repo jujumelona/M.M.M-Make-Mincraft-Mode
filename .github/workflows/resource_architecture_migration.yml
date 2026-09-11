@@ -44,11 +44,11 @@ jobs:
               raise SystemExit(f'expected 6 migration payload parts, found {len(parts)}')
           payload = ''.join(path.read_text(encoding='utf-8').strip() for path in parts)
           source = zlib.decompress(base64.b64decode(payload))
-          target = Path('/tmp/migrate_resource_architecture.py')
+          target = Path('tools/migrate_resource_architecture.py')
           target.write_bytes(source)
           compile(source, str(target), 'exec')
           PY
-          python /tmp/migrate_resource_architecture.py
+          python tools/migrate_resource_architecture.py
       - name: Install development dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Compile and static-check changed architecture
@@ -84,6 +84,7 @@ jobs:
           PY
       - name: Remove one-shot migration machinery
         run: |
+          rm -f tools/migrate_resource_architecture.py
           rm -rf tools/.resource_migration_parts
           rm -f .github/workflows/resource_architecture_migration.yml
       - name: Commit validated migration to main
