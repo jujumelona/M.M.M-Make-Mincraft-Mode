@@ -33,6 +33,14 @@ def _walk(value: Any) -> Iterable[Any]:
             yield from _walk(child)
 
 
+def _enum_rejects_blank_string(spec: dict[str, Any]) -> bool:
+    enum = spec.get("enum")
+    if not isinstance(enum, list) or not enum:
+        return False
+    string_values = [value for value in enum if isinstance(value, str)]
+    return bool(string_values) and all(value.strip() for value in string_values)
+
+
 def _assert_schema_required_strings_are_nonempty(node: Any, path: Path) -> None:
     if isinstance(node, dict):
         properties = node.get("properties")
@@ -47,7 +55,7 @@ def _assert_schema_required_strings_are_nonempty(node: Any, path: Path) -> None:
                     isinstance(type_spec, list) and "string" in type_spec
                 )
                 nullable = isinstance(type_spec, list) and "null" in type_spec
-                if string_typed and not nullable:
+                if string_typed and not nullable and not _enum_rejects_blank_string(spec):
                     assert spec.get("minLength", 0) >= 1, (
                         f"{path}: required string property {name!r} must reject empty strings"
                     )
