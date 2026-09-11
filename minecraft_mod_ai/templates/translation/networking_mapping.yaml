@@ -1,11 +1,16 @@
 id: translation/networking_mapping
 input:
-  atomic_feature:
-  authority_boundary:
-  synchronization_requirement:
+  atomic_feature: {}
+  authority_boundary: {}
+  synchronization_requirement: {}
+
+input_schema:
+  atomic_feature: object
+  authority_boundary: object
+  synchronization_requirement: object
 
 task:
-  map_network_payload_responsibilities:
+  map_network_payload_responsibilities: true
 
 rules:
   - Emit networking only when data crosses a logical-side or player synchronization boundary.
@@ -13,10 +18,16 @@ rules:
   - Never create a packet because a gameplay category usually has one.
 
 output:
-  payload_artifacts:
-  directions:
-  validation_requirements:
-  unresolved_inputs:
+  payload_artifacts: []
+  directions: []
+  validation_requirements: []
+  unresolved_inputs: []
+
+output_schema:
+  payload_artifacts: list[string]
+  directions: list[string]
+  validation_requirements: list[string]
+  unresolved_inputs: list[string]
 
 proof:
   predicate: every payload has an explicit boundary, direction, and authority reason
