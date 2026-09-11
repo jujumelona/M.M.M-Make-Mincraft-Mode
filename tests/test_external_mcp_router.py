@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from minecraft_mod_ai.config_paths import config_path
 from minecraft_mod_ai.external_mcp import ExternalMCPRegistry
 from minecraft_mod_ai.external_mcp_router import (
     ExternalMCPError,
@@ -215,11 +216,12 @@ def test_checked_in_registry_is_valid_and_capability_routed() -> None:
     assert registry.server("fabric-game-client-runtime")["default_url"].endswith("8766/mcp")
 
 
-def test_editable_and_packaged_external_mcp_registries_are_identical() -> None:
+def test_external_mcp_registry_has_one_packaged_canonical_source() -> None:
     root = Path(__file__).resolve().parents[1]
-    editable = root / "config/external_mcp_registry.yaml"
-    packaged = root / "minecraft_mod_ai/config/external_mcp_registry.yaml"
-    assert editable.read_bytes() == packaged.read_bytes()
+    canonical = root / "minecraft_mod_ai" / "config" / "external_mcp_registry.yaml"
+    assert config_path("external_mcp_registry.yaml") == canonical.resolve()
+    assert canonical.is_file()
+    assert not (root / "config" / "external_mcp_registry.yaml").exists()
 
 
 def test_effective_skill_policy_is_target_dynamic() -> None:

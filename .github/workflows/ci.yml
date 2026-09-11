@@ -93,7 +93,7 @@ jobs:
       - name: Import package bootstrap
         run: python -c "import minecraft_mod_ai"
       - name: Validate Mineflayer bridge syntax
-        run: node --check integrations/mineflayer/bridge.mjs
+        run: node --check minecraft_mod_ai/integrations/mineflayer/bridge.mjs
       - name: Validate canonical Colab notebook
         run: python tools/validate_colab_notebook.py
       - name: Verify packaged Skill catalog
