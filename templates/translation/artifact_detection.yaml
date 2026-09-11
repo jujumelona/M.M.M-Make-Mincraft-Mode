@@ -1,3 +1,4 @@
+id: translation/artifact_detection
 input:
   artifact_obligations: []
   implementation_surfaces: []
