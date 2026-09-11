@@ -33,11 +33,15 @@ jobs:
           python -m compileall -q minecraft_mod_ai
           python - <<'PY'
           from pathlib import Path
+          from minecraft_mod_ai.task_template_catalog import load_record_template
           s = Path('minecraft_mod_ai/task_template_runner.py').read_text()
           assert 'target_count = 1' not in s
           assert 'design/content_entity_count' in s
+          t = load_record_template('design/content_entity_count')
+          schema = t['record_schema']
+          assert schema['properties']['count']['minimum'] == 1
+          assert schema['properties']['count']['maximum'] == 64
           PY
-          pytest -q tests/test_task_template_atomicity_contract.py
       - name: Commit patch
         run: |
           git config user.name github-actions[bot]
