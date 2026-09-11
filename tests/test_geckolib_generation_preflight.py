@@ -155,6 +155,8 @@ def test_generator_preflight_fails_before_first_write(
             mod_id="example",
             package_name="com.example",
             entity_id="test_entity",
+            spawn_group="monster",
+            texture_color="#5BA6D8",
         )
 
     assert writes["count"] == 0
