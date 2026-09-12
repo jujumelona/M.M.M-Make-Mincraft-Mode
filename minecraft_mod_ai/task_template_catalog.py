@@ -210,6 +210,43 @@ def load_record_template(identifier: str):
     return value
 
 
+def _required_leaf_fields(schema: dict, *, identifier: str) -> tuple[str, ...]:
+    """Flatten required nested record groups into the model-facing leaf field order."""
+
+    properties = schema.get("properties")
+    required = schema.get("required")
+    if not isinstance(properties, dict) or not isinstance(required, list):
+        raise ValueError(
+            f"TEMPLATE_RECORD_SCHEMA: {identifier} must declare object properties and required fields"
+        )
+
+    leaves: list[str] = []
+    seen: set[str] = set()
+    for field in required:
+        child = properties.get(field)
+        if not isinstance(field, str) or not isinstance(child, dict):
+            raise ValueError(
+                f"TEMPLATE_RECORD_SCHEMA: {identifier} required field {field!r} is undeclared"
+            )
+        if child.get("type") == "object":
+            nested = _required_leaf_fields(child, identifier=f"{identifier}.{field}")
+            for leaf in nested:
+                if leaf in seen:
+                    raise ValueError(
+                        f"TEMPLATE_RECORD_SCHEMA: {identifier} has duplicate leaf field {leaf!r}"
+                    )
+                seen.add(leaf)
+                leaves.append(leaf)
+            continue
+        if field in seen:
+            raise ValueError(
+                f"TEMPLATE_RECORD_SCHEMA: {identifier} has duplicate leaf field {field!r}"
+            )
+        seen.add(field)
+        leaves.append(field)
+    return tuple(leaves)
+
+
 def detail_records():
     records = {}
     for section in CRITERION_SECTIONS:
@@ -219,5 +256,6 @@ def detail_records():
         records[section] = {}
         for identifier in manifest["steps"]:
             schema = load_record_template(identifier)["record_schema"]
-            records[section][identifier.rsplit("/", 1)[1]] = " ".join(schema["required"])
+            fields = _required_leaf_fields(schema, identifier=identifier)
+            records[section][identifier.rsplit("/", 1)[1]] = " ".join(fields)
     return records
