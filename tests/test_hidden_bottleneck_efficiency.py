@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import threading
 import time
-from contextlib import contextmanager
 from contextvars import ContextVar
 from types import SimpleNamespace
 
