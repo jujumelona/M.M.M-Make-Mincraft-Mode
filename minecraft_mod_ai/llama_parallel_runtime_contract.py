@@ -191,7 +191,7 @@ def _install_dynamic_runtime_parallelism(runtime_tuning: Any, vram_policy: Any) 
         slots = max(1, int(slots))
         if slots == 1:
             return True
-        if not os.environ.get("MMM_LLAMA_VRAM_PARALLEL", "1").strip().lower() in {
+        if os.environ.get("MMM_LLAMA_VRAM_PARALLEL", "1").strip().lower() not in {
             "1",
             "true",
             "yes",
