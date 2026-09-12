@@ -13,7 +13,7 @@ from typing import Any
 from .project_write_lock import project_write_lock
 
 _ORCHESTRATOR_WORKER = "mmm-orchestrator"
-_CLAIM_CONTRACT_VERSION = 2
+_CLAIM_CONTRACT_VERSION = 3
 _INSTALLED_LANE_CLAIM: Callable[..., Any] | None = None
 _RESOURCE_CAPACITIES = {
     # llama_parallel_runtime_contract replaces the LLM value with the selected native
@@ -195,7 +195,11 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
     installed_version = int(
         getattr(current, "_mmm_parallel_lane_claim_version", 0) or 0
     )
-    if current is _INSTALLED_LANE_CLAIM and installed_version >= _CLAIM_CONTRACT_VERSION:
+    if (
+        current is _INSTALLED_LANE_CLAIM
+        and installed_version >= _CLAIM_CONTRACT_VERSION
+        and getattr(current, "_mmm_parallel_lane_claim_owner", None) is current
+    ):
         return
 
     @wraps(current)
@@ -418,6 +422,7 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
 
     claim_ready._mmm_parallel_lane_claim = True  # type: ignore[attr-defined]
     claim_ready._mmm_parallel_lane_claim_version = _CLAIM_CONTRACT_VERSION  # type: ignore[attr-defined]
+    claim_ready._mmm_parallel_lane_claim_owner = claim_ready  # type: ignore[attr-defined]
     claim_ready._mmm_exact_executor_fairness = True  # type: ignore[attr-defined]
     claim_ready._mmm_stage_lock_admission = True  # type: ignore[attr-defined]
     claim_ready._mmm_max_efficiency_claim = True  # type: ignore[attr-defined]
@@ -426,7 +431,12 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
 
 
 def _stage_write_lock(node: Any) -> threading.RLock | None:
-    if str(getattr(node, "resource_class", "")) != "cpu_io":
+    resource_class = str(getattr(node, "resource_class", "") or "")
+    if not resource_class:
+        payload = getattr(node, "payload", {})
+        if isinstance(payload, dict):
+            resource_class = str(payload.get("resource_class", "") or "")
+    if resource_class != "cpu_io":
         return None
     stage = str(getattr(node, "stage", ""))
     if not stage.startswith("generate:"):
