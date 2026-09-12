@@ -7,11 +7,13 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from minecraft_mod_ai import planning_state_implementation as planning
+from minecraft_mod_ai.model_output_atomicity_contract import is_atomic_model_schema
 from minecraft_mod_ai.planning_detail_template import (
     WORKSHEET_SECTIONS, validate_worksheet_section, worksheet_section_prompt,
     worksheet_section_schema,
 )
 from minecraft_mod_ai.planning_handoff_contract import project_detailed_plan_for_request_catalog
+from minecraft_mod_ai.worksheet_atomic_chunker import pack_section_concerns, worksheet_chunk_schema
 from worksheet_fixtures import row
 
 
@@ -52,15 +54,31 @@ def test_inapplicable_concern_needs_explicit_reason():
     assert validate_worksheet_section(payload, set(), "persistence") == payload
 
 
+def test_behavior_contract_oversized_records_are_field_paged_atomically():
+    chunks = pack_section_concerns("behavior_contract")
+    input_pages = [chunk for chunk in chunks if "inputs" in chunk]
+    assert len(input_pages) >= 2
+    projected_fields = []
+    for index, chunk in enumerate(chunks):
+        schema = worksheet_chunk_schema(
+            "behavior_contract", chunk, include_evidence=index == 0
+        )
+        assert is_atomic_model_schema(schema)
+        if "inputs" in chunk:
+            projected_fields.extend(chunk.field_projection["inputs"])
+    assert projected_fields == ["name", "type", "unit", "range", "default", "source"]
+
+
 def test_ten_section_dag_preserves_objects_through_handoff():
     calls = []
+
     class Router:
         def generate_text(self, role, messages, **kwargs):
             section = messages[-1]["content"].split("Section: ", 1)[1].splitlines()[0]
             schema = kwargs["response_schema"]
             full = row(section)
             payload: dict = {}
-            for prop in schema.get("properties", {}):
+            for prop, prop_schema in schema.get("properties", {}).items():
                 if prop == "constraint_evidence_refs":
                     payload[prop] = full.get(prop, [])
                 elif prop == "inapplicable_concerns":
@@ -69,12 +87,18 @@ def test_ten_section_dag_preserves_objects_through_handoff():
                         if item["concern"] in schema.get("properties", {})
                     ]
                 elif prop in full["specification"]:
-                    payload[prop] = full["specification"][prop]
-            # Adapters validate before the planning host sees the response.
+                    allowed_fields = set(
+                        prop_schema.get("items", {}).get("properties", {})
+                    )
+                    payload[prop] = [
+                        {key: value for key, value in item.items() if key in allowed_fields}
+                        for item in full["specification"][prop]
+                    ]
             Draft202012Validator(schema).validate(payload)
             assert kwargs["response_format"] == "json" and kwargs["enable_tools"] is False
             calls.append(section)
             return json.dumps(payload)
+
     requirement = {"requirement_id": "req_001", "statement": "Gather a resource."}
     state = {
         "research_queue": [{"research_id": "r", "requirement_ref": "req_001", "status": "complete"}],
