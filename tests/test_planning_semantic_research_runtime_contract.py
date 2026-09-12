@@ -133,7 +133,7 @@ def test_out_of_range_model_span_never_becomes_proof(monkeypatch, tmp_path):
 
 def test_valid_evidence_span_is_not_artificially_capped(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(semantic, "request_message_budget", lambda *_: 8192)
+    monkeypatch.setattr(semantic, "request_message_budget", lambda *_: 16384)
     body = "".join(
         f"Evidence section {index}: spacecraft trade upgrade behavior is documented. "
         + ("detail " * 80)
