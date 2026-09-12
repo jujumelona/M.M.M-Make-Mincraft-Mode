@@ -21,10 +21,8 @@ class ArtifactExpansionError(ValueError):
 
 
 def _executor_type_from_string(exec_type_str: str) -> ExecutorType:
-    """Convert string executor_type to ExecutorType enum.
-    
-    P0-2: Centralized conversion to ensure only valid ExecutorType enums reach ArtifactJob.
-    """
+    """Convert a catalog executor type string to the runtime enum."""
+
     exec_type_map = {
         "deterministic_renderer": ExecutorType.DETERMINISTIC,
         "deterministic": ExecutorType.DETERMINISTIC,
@@ -32,7 +30,6 @@ def _executor_type_from_string(exec_type_str: str) -> ExecutorType:
         "template": ExecutorType.TEMPLATE,
         "model": ExecutorType.MODEL,
     }
-    
     result = exec_type_map.get(exec_type_str)
     if result is None:
         raise ArtifactExpansionError(
@@ -42,9 +39,6 @@ def _executor_type_from_string(exec_type_str: str) -> ExecutorType:
 
 
 _REGISTRY_PATH = re.compile(r"^[a-z0-9_.-]+$")
-
-# P0-2: All facts now have ArtifactJob representations - no separate generator handoff
-# Entity, GUI, networking등은 canonical leaf를 통해 처리됨
 
 FACT_TO_CANONICAL_LEAVES: dict[FactType, tuple[str, ...]] = {
     FactType.ITEM_EXISTS: (
@@ -65,7 +59,6 @@ FACT_TO_CANONICAL_LEAVES: dict[FactType, tuple[str, ...]] = {
     FactType.SMELTING_RECIPE: ("minecraft/recipe/serializer",),
     FactType.REGISTRY_TAG: ("minecraft/tag/entries",),
     FactType.BLOCK_DROP: ("minecraft/block/drops",),
-    # P0-2: Former generator handoffs now use canonical leaves
     FactType.ENTITY_EXISTS: ("minecraft/entity/registry",),
     FactType.GUI_EXISTS: ("minecraft/screen/registration",),
     FactType.NETWORK_PACKET: ("minecraft/network_payload/registration",),
@@ -88,7 +81,10 @@ FACT_TO_CANONICAL_LEAVES: dict[FactType, tuple[str, ...]] = {
 CANONICAL_LEAF_DEFAULT_TEMPLATES: dict[str, tuple[str, ...]] = {
     "minecraft/item/registry": ("fabric/item/key", "fabric/item/register_basic"),
     "minecraft/item/properties": ("fabric/item/settings_max_stack",),
-    "minecraft/item/model": ("minecraft/resource/item/client_item", "minecraft/resource/item/model_generated"),
+    "minecraft/item/model": (
+        "minecraft/resource/item/client_item",
+        "minecraft/resource/item/model_generated",
+    ),
     "minecraft/item/language": ("fabric/item/lang_en",),
     "minecraft/item/integration": ("fabric/item/initializer",),
     "minecraft/block/registry": ("fabric/block/key", "fabric/block/register_basic"),
@@ -102,44 +98,19 @@ CANONICAL_LEAF_DEFAULT_TEMPLATES: dict[str, tuple[str, ...]] = {
     "minecraft/loot/entry": ("fabric/loot/block_drop",),
 }
 
-
-def _templates_for_canonical_leaf(leaf_id: str, version_context=None) -> tuple[str, ...]:
-    if version_context is not None:
-        binding = require_registered_leaf_binding(version_context, leaf_id)
-        impl = binding.get("implementation", {})
-        templates = []
-        if "prerequisite_templates" in impl:
-            templates.extend(impl["prerequisite_templates"])
-        if "template" in impl and impl["template"]:
-            templates.append(impl["template"])
-        if "extra_templates" in impl:
-            templates.extend(impl["extra_templates"])
-        return tuple(dict.fromkeys(templates))
-    return CANONICAL_LEAF_DEFAULT_TEMPLATES.get(leaf_id, ())
-
-
-# P0-2: REMOVED - No more separate generator handoff
-# All facts expand to canonical leaves which then have implementations
-
 _SUPPORTED_EXPANSIONS: dict[FactType, tuple[str, ...]] = {
     fact_type: (
         ("fabric/recipe/smelting",)
         if fact_type == FactType.SMELTING_RECIPE
         else tuple(
-            tid
+            template_id
             for leaf_id in leaf_ids
-            for tid in CANONICAL_LEAF_DEFAULT_TEMPLATES.get(leaf_id, ())
+            for template_id in CANONICAL_LEAF_DEFAULT_TEMPLATES.get(leaf_id, ())
         )
     )
     for fact_type, leaf_ids in FACT_TO_CANONICAL_LEAVES.items()
 }
-
-# Kept public for callers/tests, but every entry is verified before use.
 FACT_EXPANSIONS = dict(_SUPPORTED_EXPANSIONS)
-
-
-# P0-2: REMOVED generator_implementation_profile() - no separate generator path
-# All facts expand through canonical leaves with unified implementation registry
 
 
 def _constant_name(value: str) -> str:
@@ -160,7 +131,7 @@ def _java_package_path(package_name: str) -> str:
     return "/".join(parts)
 
 
-def _require_subject(fact: PromptFact) -> str:
+def _require_subject(fact: PromptFact | ImplementationFact) -> str:
     subject = str(fact.subject or "").strip()
     if not subject or not _REGISTRY_PATH.fullmatch(subject):
         raise ArtifactExpansionError(
@@ -169,7 +140,12 @@ def _require_subject(fact: PromptFact) -> str:
     return subject
 
 
-def _require_integer_value(fact: PromptFact, *, minimum: int, maximum: int) -> int:
+def _require_integer_value(
+    fact: PromptFact | ImplementationFact,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
     value = fact.value
     if type(value) is not int:
         raise ArtifactExpansionError(
@@ -183,17 +159,55 @@ def _require_integer_value(fact: PromptFact, *, minimum: int, maximum: int) -> i
     return value
 
 
+def _leaf_binding(version_context: Any, leaf_id: str, *, source_candidate: bool):
+    """Separate registration-level source candidates from production admission."""
+
+    if source_candidate:
+        return require_registered_leaf_binding(version_context, leaf_id)
+    return version_context.require_leaf_binding(leaf_id)
+
+
+def _templates_for_canonical_leaf(
+    leaf_id: str,
+    version_context: Any | None = None,
+    *,
+    source_candidate: bool = False,
+) -> tuple[str, ...]:
+    if version_context is None:
+        return CANONICAL_LEAF_DEFAULT_TEMPLATES.get(leaf_id, ())
+    binding = _leaf_binding(
+        version_context,
+        leaf_id,
+        source_candidate=source_candidate,
+    )
+    impl = binding.get("implementation", {})
+    templates: list[str] = []
+    if "prerequisite_templates" in impl:
+        templates.extend(impl["prerequisite_templates"])
+    if "template" in impl and impl["template"]:
+        templates.append(impl["template"])
+    if "extra_templates" in impl:
+        templates.extend(impl["extra_templates"])
+    return tuple(dict.fromkeys(templates))
+
+
+def _logical_step_name(template_id: str) -> str:
+    """Keep graph identities stable while the host selects version-specific templates."""
+
+    step_name = template_id.rsplit("/", 1)[-1]
+    if template_id.startswith(("fabric/item/key", "fabric/block/key")):
+        return "key"
+    if template_id.startswith(("fabric/item/register", "fabric/block/register")):
+        return "register_basic"
+    return step_name
+
+
 def validate_expansion_catalog() -> None:
-    """Fail before generation if an expansion references a non-executable leaf.
-    
-    P0-2: Empty expansions are now allowed - they will use PYTHON_GENERATOR
-    implementations from ImplementationRegistry instead of templates.
-    """
+    """Fail before generation if an expansion references a non-executable template."""
+
     for fact_type, identifiers in FACT_EXPANSIONS.items():
-        # P0-2: Empty is now valid - will use PYTHON_GENERATOR executor
         if not identifiers:
             continue
-            
         for identifier in identifiers:
             try:
                 template = load_template(identifier)
@@ -221,7 +235,8 @@ def validate_expansion_catalog() -> None:
                 raise ArtifactExpansionError(f"ARTIFACT_TARGET_REQUIRED: {identifier}")
             dependencies = template.get("dependencies")
             if not isinstance(dependencies, list) or any(
-                not isinstance(d, str) or not d for d in dependencies
+                not isinstance(dependency, str) or not dependency
+                for dependency in dependencies
             ):
                 raise ArtifactExpansionError(
                     f"ARTIFACT_DEPENDENCIES_REQUIRED: {identifier}"
@@ -254,14 +269,26 @@ def expand_facts_to_jobs(
     minecraft_version: str = "",
     version_context=None,
 ) -> list[ArtifactJob]:
-    """Lower only explicitly supported facts; never invent a fallback implementation."""
+    """Lower explicit facts without inventing a fallback implementation.
+
+    Raw ``PromptFact`` lowering is a production boundary and therefore requires an
+    admitted canonical leaf. ``ImplementationFact`` lowering is the planner's bounded
+    source-candidate boundary: a structurally registered deterministic template may be
+    materialized before execution evidence exists, but Python generators remain strict.
+    """
+
     validate_expansion_catalog()
     if version_context is not None:
         from .resolved_version_context import VersionContextError
 
         if minecraft_version and minecraft_version != version_context.minecraft:
-            raise VersionContextError("VERSION_CONTEXT_MISMATCH", expected=version_context.minecraft, actual=minecraft_version)
+            raise VersionContextError(
+                "VERSION_CONTEXT_MISMATCH",
+                expected=version_context.minecraft,
+                actual=minecraft_version,
+            )
         minecraft_version = version_context.minecraft
+
     mod_id = str(mod_id or "").strip()
     if not _REGISTRY_PATH.fullmatch(mod_id):
         raise ArtifactExpansionError(
@@ -276,31 +303,41 @@ def expand_facts_to_jobs(
     )
 
     for fact in facts:
-        # P0-2: No more generator handoff - all facts expand through canonical leaves
+        source_candidate = isinstance(fact, ImplementationFact)
         canonical_leaf_ids = FACT_TO_CANONICAL_LEAVES.get(fact.fact_type)
         if not canonical_leaf_ids:
             raise ArtifactExpansionError(
                 f"ARTIFACT_FACT_UNSUPPORTED: {fact.fact_type.value} not in FACT_TO_CANONICAL_LEAVES"
             )
-        
+
         if version_context is not None:
             for leaf_id in canonical_leaf_ids:
-                require_registered_leaf_binding(version_context, leaf_id)
+                _leaf_binding(
+                    version_context,
+                    leaf_id,
+                    source_candidate=source_candidate,
+                )
 
         leaf_template_pairs: list[tuple[str, str]] = []
         for leaf_id in canonical_leaf_ids:
-            templates = _templates_for_canonical_leaf(leaf_id, version_context)
+            templates = _templates_for_canonical_leaf(
+                leaf_id,
+                version_context,
+                source_candidate=source_candidate,
+            )
             if templates:
-                leaf_template_pairs.extend((leaf_id, tid) for tid in templates)
+                leaf_template_pairs.extend((leaf_id, template_id) for template_id in templates)
                 continue
             if version_context is None:
                 raise ArtifactExpansionError("EXACT_HOST_IMPLEMENTATION_REQUIRED")
-            binding = require_registered_leaf_binding(version_context, leaf_id)
+            binding = version_context.require_leaf_binding(leaf_id)
             if binding["implementation"]["executor_type"] != "python_generator":
-                raise ArtifactExpansionError(f"ARTIFACT_NO_TEMPLATE_NO_GENERATOR: {leaf_id}")
+                raise ArtifactExpansionError(
+                    f"ARTIFACT_NO_TEMPLATE_NO_GENERATOR: {leaf_id}"
+                )
             leaf_template_pairs.append((leaf_id, ""))
 
-        resource_values = {}
+        resource_values: dict[str, Any] = {}
         if fact.fact_type in {
             FactType.CRAFTING_RECIPE,
             FactType.SMELTING_RECIPE,
@@ -309,32 +346,30 @@ def expand_facts_to_jobs(
             from .resource_fact_inputs import resource_inputs
 
             identifier, resource_values = resource_inputs(fact, mod_id)
-            if version_context is not None and identifier not in {tid for _, tid in leaf_template_pairs}:
+            if version_context is not None and identifier not in {
+                template_id for _, template_id in leaf_template_pairs
+            }:
                 raise ArtifactExpansionError("HOST_RESOURCE_TEMPLATE_NOT_BOUND")
             leaf_template_pairs = [(canonical_leaf_ids[0], identifier)]
+
         subject = _require_subject(fact)
         constant = _constant_name(subject)
 
         for canonical_leaf, template_id in leaf_template_pairs:
-            # P0-2: Handle PYTHON_GENERATOR (empty template_id)
             if not template_id:
-                # PYTHON_GENERATOR: Get implementation from registry
                 if version_context is None:
                     raise ArtifactExpansionError(
                         f"ARTIFACT_PYTHON_GENERATOR_REQUIRES_CONTEXT: {canonical_leaf} needs version_context"
                     )
-                
-                binding = require_registered_leaf_binding(version_context, canonical_leaf)
+                binding = version_context.require_leaf_binding(canonical_leaf)
                 impl_dict = binding.get("implementation", {})
                 impl_id = impl_dict.get("implementation_id", "")
                 exec_type = impl_dict.get("executor_type", "")
-                
                 if exec_type != "python_generator":
                     raise ArtifactExpansionError(
                         f"ARTIFACT_NO_TEMPLATE_NO_GENERATOR: {canonical_leaf} has no template and executor is {exec_type}"
                     )
-                
-                # Create minimal ArtifactJob for PYTHON_GENERATOR
+
                 job_id = f"{subject}.{canonical_leaf.replace('/', '_')}"
                 deterministic_inputs = {
                     "mod_id": mod_id,
@@ -346,15 +381,11 @@ def expand_facts_to_jobs(
                     "main_class": main_class_val,
                     "minecraft_version": minecraft_version,
                 }
-                
-                # Convert executor_type string to enum
-                exec_type_enum = _executor_type_from_string(exec_type)
-                
                 candidate = ArtifactJob(
                     job_id=job_id,
-                    template_id="",  # No template for PYTHON_GENERATOR
+                    template_id="",
                     owner_module=subject,
-                    target_path="",  # Will be determined by generator
+                    target_path="",
                     anchor="",
                     operation="generate",
                     requires=(),
@@ -364,9 +395,8 @@ def expand_facts_to_jobs(
                     context_id=version_context.context_id,
                     canonical_leaf=canonical_leaf,
                     implementation_id=impl_id,
-                    executor_type=exec_type_enum,
+                    executor_type=_executor_type_from_string(exec_type),
                 )
-                
                 prior = seen_jobs.get(job_id)
                 if prior is not None:
                     if prior.to_dict() != candidate.to_dict():
@@ -375,11 +405,9 @@ def expand_facts_to_jobs(
                 seen_jobs[job_id] = candidate
                 jobs.append(candidate)
                 continue
-            
-            # Normal template-based job creation
-            step_name = template_id.rsplit("/", 1)[-1]
-            job_id = f"{subject}.{step_name}"
 
+            step_name = _logical_step_name(template_id)
+            job_id = f"{subject}.{step_name}"
             deterministic_inputs: dict[str, Any] = {
                 "mod_id": mod_id,
                 "package_name": package_name,
@@ -391,14 +419,17 @@ def expand_facts_to_jobs(
                 "minecraft_version": minecraft_version,
                 **resource_values,
             }
-            # Fact values remain host-validated; leaf topology belongs to the catalog.
             if fact.fact_type == FactType.ITEM_STACK_LIMIT:
                 deterministic_inputs["stack_limit"] = _require_integer_value(
-                    fact, minimum=1, maximum=64
+                    fact,
+                    minimum=1,
+                    maximum=64,
                 )
             if template_id.endswith("/lang_en"):
                 deterministic_inputs["display_name"] = getattr(
-                    fact, "display_name", ""
+                    fact,
+                    "display_name",
+                    "",
                 ) or " ".join(part.capitalize() for part in subject.split("_"))
             if fact.fact_type == FactType.BLOCK_DROP:
                 if not fact.object:
@@ -445,21 +476,21 @@ def expand_facts_to_jobs(
                         }[registry_suffix],
                     }
             produces = [
-                render_binding(port["binding"]) for port in template["produces"]
+                render_binding(port["binding"])
+                for port in template["produces"]
             ]
 
-            impl_id = ""
+            impl_id = f"template:{template_id}"
             exec_type = "deterministic_renderer"
             if version_context is not None:
-                binding = require_registered_leaf_binding(version_context, canonical_leaf)
+                binding = _leaf_binding(
+                    version_context,
+                    canonical_leaf,
+                    source_candidate=source_candidate,
+                )
                 impl_dict = binding.get("implementation", {})
-                impl_id = impl_dict.get("implementation_id", f"template:{template_id}")
-                exec_type = impl_dict.get("executor_type", "deterministic_renderer")
-            else:
-                impl_id = f"template:{template_id}"
-            
-            # Convert executor_type string to enum
-            exec_type_enum = _executor_type_from_string(exec_type)
+                impl_id = impl_dict.get("implementation_id", impl_id)
+                exec_type = impl_dict.get("executor_type", exec_type)
 
             candidate = ArtifactJob(
                 job_id=job_id,
@@ -470,14 +501,15 @@ def expand_facts_to_jobs(
                 operation=template["target"]["operation"],
                 requires=tuple(requires),
                 required_ports=tuple(
-                    {"name": name, **types} for name, types in required_types.items()
+                    {"name": name, **types}
+                    for name, types in required_types.items()
                 ),
                 produces=tuple(produces),
                 deterministic_inputs=deterministic_inputs,
                 context_id=version_context.context_id if version_context is not None else "",
                 canonical_leaf=canonical_leaf,
                 implementation_id=impl_id,
-                executor_type=exec_type_enum,
+                executor_type=_executor_type_from_string(exec_type),
             )
             prior = seen_jobs.get(job_id)
             if prior is not None:
