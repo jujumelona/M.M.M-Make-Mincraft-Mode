@@ -27,18 +27,27 @@ from .template_errors import TemplateBlocked
 _EMPTY_REASON = "No applicable records in the supplied context."
 
 
-def record_cardinality_response_schema(_template: dict[str, Any] | None = None) -> dict[str, Any]:
+def _cardinality_blocking_enabled(template: dict[str, Any] | None) -> bool:
+    """Default to the historical blocking contract unless the template opts out."""
+    return not (template and template.get("cardinality_blocking") is False)
+
+
+def record_cardinality_response_schema(template: dict[str, Any] | None = None) -> dict[str, Any]:
     """Small-model-safe schema with no arbitrary semantic cardinality ceiling."""
+    properties: dict[str, Any] = {
+        "count": {"type": "integer", "minimum": 0},
+    }
+    required = ["count"]
+    if _cardinality_blocking_enabled(template):
+        properties["blocked_reason"] = {
+            "type": "string",
+            "maxLength": MAX_MODEL_STRING_CHARS,
+        }
+        required.append("blocked_reason")
     return {
         "type": "object",
-        "properties": {
-            "count": {"type": "integer", "minimum": 0},
-            "blocked_reason": {
-                "type": "string",
-                "maxLength": MAX_MODEL_STRING_CHARS,
-            },
-        },
-        "required": ["count", "blocked_reason"],
+        "properties": properties,
+        "required": required,
         "additionalProperties": False,
     }
 
@@ -81,18 +90,29 @@ def _load_cardinality(
     checkpoint: Any,
 ) -> int:
     schema = record_cardinality_response_schema(template)
+    blocking_enabled = _cardinality_blocking_enabled(template)
     binding = "record-cardinality-v1:" + task_binding(template, context, allowed_refs)
     saved = (progress or {}).get(binding)
     if saved is None:
         rules = "\n".join(str(rule) for rule in template.get("rules", ()))
+        blocking_instruction = (
+            "Set blocked_reason only when a missing fact makes the cardinality impossible "
+            "to determine correctly."
+            if blocking_enabled
+            else (
+                "The supplied context is authoritative and sufficient to determine this "
+                "cardinality. Do not make a blocked/missing-fact decision; return count 0 "
+                "when no records apply."
+            )
+        )
         system_prompt = (
             str(template.get("task") or "Produce the requested records.")
             + ("\n" + rules if rules else "")
             + "\nDetermine only the exact number of distinct authored/applicable records "
             "supported by this narrowed context. Return count 0 when none apply. Do not "
             "clamp the count to an implementation limit and do not make a continuation, "
-            "done, retry, or loop-control decision. Set blocked_reason only when a missing "
-            "fact makes the cardinality impossible to determine correctly."
+            "done, retry, or loop-control decision. "
+            + blocking_instruction
         )
         value = generate_fixed_template_value(
             router,
@@ -114,7 +134,7 @@ def _load_cardinality(
         value = deepcopy(saved)
         Draft202012Validator(schema).validate(value)
 
-    blocked_reason = value["blocked_reason"].strip()
+    blocked_reason = str(value.get("blocked_reason", "")).strip()
     if blocked_reason:
         raise TemplateBlocked(f"TEMPLATE_BLOCKED: {identifier}: {blocked_reason}")
     return int(value["count"])
