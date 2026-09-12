@@ -118,10 +118,11 @@ def test_changed_template_contract_invalidates_saved_progress(monkeypatch):
     monkeypatch.setattr(runtime, "load_record_template", changed(original_runtime_loader))
     monkeypatch.setattr(bounded, "load_record_template", changed(original_bounded_loader))
     monkeypatch.setattr(single, "load_record_template", changed(original_single_loader))
-    _patch_generator(
-        monkeypatch,
-        lambda *args, **kwargs: (_ for _ in ()).throw(StopIteration("contract changed")),
-    )
+
+    def contract_changed(*args, **kwargs):
+        raise StopIteration("contract changed")
+
+    _patch_generator(monkeypatch, contract_changed)
     with pytest.raises(StopIteration, match="contract changed"):
         runtime.run_record_template(None, IDENTIFIER, **kwargs)
 
