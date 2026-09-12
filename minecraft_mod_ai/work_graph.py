@@ -237,6 +237,14 @@ class DurableWorkLedger:
             raise WorkGraphError('worker_id must not be empty.')
         if lease_seconds < 1:
             raise WorkGraphError('lease_seconds must be positive.')
+        if worker_id == 'mmm-orchestrator':
+            from .scheduler_parallel_safety_contract import claim_orchestrator_ready
+
+            return claim_orchestrator_ready(
+                self,
+                stages=stages,
+                lease_seconds=lease_seconds,
+            )
         now = time.time()
         with self._connect() as connection:
             connection.execute('BEGIN IMMEDIATE')
@@ -549,7 +557,7 @@ def run_checkpoint(ledger: DurableWorkLedger, node_id: str, action: Callable[[],
         ledger.fail(node_id, f'{type(exc).__name__}: {exc}')
         raise
 
-def run_named_checkpoint(ledger: DurableWorkLedger, checkpoint_id: str, *, stage: str, input_value: Any, action: Callable[[], T], encode: Callable[[T], dict[str, Any]], decode: Callable[[dict[str, Any]], T], validate_cached: Callable[[T], bool] | None=None) -> T:
+def run_named_checkpoint(ledger: DurableWorkLedger, checkpoint_id: str, *, stage: str, input_value: Any, action: Callable[[], T], *, encode: Callable[[T], dict[str, Any]], decode: Callable[[dict[str, Any]], T], validate_cached: Callable[[T], bool] | None=None) -> T:
     ledger.raise_if_cancelled()
     input_hash = _hash_json(input_value)
     cached = ledger.cached_checkpoint(checkpoint_id, input_hash=input_hash)
