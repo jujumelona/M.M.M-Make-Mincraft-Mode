@@ -7,8 +7,8 @@ from minecraft_mod_ai import task_template_runner as runner
 from minecraft_mod_ai.task_template_catalog import ROOT, load_template
 
 
-def count_reply(count=0, blocked_reason=""):
-    return {"count": count, "blocked_reason": blocked_reason}
+def count_reply(count=0):
+    return {"count": count}
 
 
 def drive(monkeypatch, replies):
@@ -36,6 +36,7 @@ def test_record_roundtrip_uses_cardinality_then_exact_record(monkeypatch):
     count_schema = calls[0]["response_schema"]
     assert count_schema["properties"]["count"] == {"type": "integer", "minimum": 0}
     assert "maximum" not in count_schema["properties"]["count"]
+    assert set(count_schema["properties"]) == {"count"}
     assert calls[1]["response_schema"] == load_template(
         "feature/behavior_contract/entry_conditions"
     )["record_schema"]
@@ -66,16 +67,18 @@ def test_repeated_record_fails_closed_without_model_continuation(monkeypatch):
         )
 
 
-def test_missing_information_blocks_before_record_loop(monkeypatch):
-    calls = drive(monkeypatch, iter([count_reply(blocked_reason="trigger not established")]))
-    with pytest.raises(runner.TemplateBlocked, match="trigger not established"):
-        runner.run_record_template(
-            None,
-            "feature/behavior_contract/entry_conditions",
-            context={},
-            allowed_refs=set(),
-        )
-    assert len(calls) == 1
+def test_nonblocking_cardinality_never_delegates_missing_fact_policy(monkeypatch):
+    calls = drive(monkeypatch, iter([count_reply(0)]))
+    result = runner.run_record_template(
+        None,
+        "feature/behavior_contract/entry_conditions",
+        context={},
+        allowed_refs=set(),
+    )
+    assert result["records"] == []
+    schema = calls[0]["response_schema"]
+    assert set(schema["properties"]) == {"count"}
+    assert schema["required"] == ["count"]
 
 
 def test_catalog_manifests_resolve_every_declared_task():
@@ -109,10 +112,10 @@ def test_host_context_can_admit_known_evidence(monkeypatch):
     assert result["evidence_refs"] == ["e1"]
 
 
-def test_legacy_status_and_record_array_protocol_are_absent():
+def test_entry_condition_cardinality_contract_is_host_owned():
     schema = runner.record_response_schema(
         load_template("feature/behavior_contract/entry_conditions")
     )
     assert "status" not in schema["properties"]
     assert "records" not in schema["properties"]
-    assert set(schema["properties"]) == {"count", "blocked_reason"}
+    assert set(schema["properties"]) == {"count"}
