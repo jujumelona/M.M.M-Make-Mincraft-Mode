@@ -610,10 +610,10 @@ def _benchmark(
     return AutotuneDecision(
         fingerprint=fingerprint,
         selected=decision.selected,
-        baseline_tps=baseline.predicted_tps,
-        selected_tps=selected.predicted_tps,
-        speedup=selected.predicted_tps / baseline.predicted_tps,
-        probes=values,
+        baseline_tps=decision.baseline_tps,
+        selected_tps=decision.selected_tps,
+        speedup=decision.speedup,
+        probes=decision.probes,
     )
 
 
@@ -710,15 +710,6 @@ def ensure_tuned_server(config: Any, request: Any) -> str:
     """Start one managed native server and never fall back to a second GGUF engine."""
     global _MANAGED_KEY
 
-    # Managed MMM servers are already process-owned and generation-tracked. Return the
-    # live URL before external-server discovery so every inference call does not issue a
-    # redundant /v1/models or /health HTTP probe against the same managed process.
-    with _AUTOTUNE_LOCK:
-        if _MANAGED_PROCESS is not None and _MANAGED_PROCESS.poll() is None:
-            if _MANAGED_URL:
-                return _MANAGED_URL
-            raise RuntimeError("managed llama-server process has no URL")
-
     if _external_server_is_ready():
         explicit = os.environ.get("LLAMA_SERVER_URL", "").strip()
         if explicit:
@@ -729,8 +720,6 @@ def ensure_tuned_server(config: Any, request: Any) -> str:
         raise RuntimeError("native llama-server binary is unavailable")
 
     with _AUTOTUNE_LOCK:
-        # Another caller may have launched the server while this thread was checking an
-        # explicitly configured external endpoint or resolving the binary.
         if _MANAGED_PROCESS is not None and _MANAGED_PROCESS.poll() is None:
             if _MANAGED_URL:
                 return _MANAGED_URL
