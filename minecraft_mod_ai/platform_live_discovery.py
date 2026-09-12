@@ -13,11 +13,13 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
+from .deadline_executor import iter_completed_with_deadlines
 from .target_contract import mappings_applicable
 
 
@@ -48,6 +50,17 @@ def _discovery_retries() -> int:
     except ValueError:
         value = _DEFAULT_DISCOVERY_RETRIES
     return max(1, min(_MAX_DISCOVERY_RETRIES, value))
+
+
+def _request_budget_seconds(*, timeout: int, retries: int) -> float:
+    """Return the transport's own worst-case wait budget, including configured backoff."""
+
+    attempts = max(1, int(retries))
+    retry_delays = sum(
+        _RETRY_DELAYS[min(attempt - 1, len(_RETRY_DELAYS) - 1)]
+        for attempt in range(1, attempts)
+    )
+    return float(max(1, int(timeout)) * attempts) + retry_delays
 
 
 def _retry_request_url(url: str, attempt: int, exc: BaseException) -> str:
@@ -254,7 +267,18 @@ def discover_game_versions() -> tuple[dict[str, Any], ...]:
     global _GAME_VERSION_FUTURE
     future = _start_game_version_prefetch()
     try:
-        return future.result()
+        return future.result(
+            timeout=_request_budget_seconds(
+                timeout=20,
+                retries=_discovery_retries(),
+            )
+        )
+    except FutureTimeoutError as exc:
+        # Keep the same in-flight future registered. Starting a second remote wave
+        # while the first worker is pathological would multiply the stall.
+        raise PlatformDiscoveryError(
+            "Fabric game-version prefetch exceeded its transport-derived deadline"
+        ) from exc
     except BaseException:
         with _GAME_VERSION_LOCK:
             if _GAME_VERSION_FUTURE is future:
@@ -420,8 +444,23 @@ def _stable_java_versions() -> tuple[tuple[str, str], ...]:
             return version, ""
 
     workers = min(8, len(versions))
-    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="mmm-mojang-java") as pool:
-        return tuple(pool.map(resolve, versions))
+    jobs = tuple(enumerate(versions))
+    resolved_by_index: dict[int, tuple[str, str]] = {}
+
+    def resolve_indexed(job: tuple[int, str]) -> tuple[int, tuple[str, str]]:
+        index, version = job
+        return index, resolve(version)
+
+    for _job, result in iter_completed_with_deadlines(
+        jobs,
+        resolve_indexed,
+        max_workers=workers,
+        stage="platform-stable-java-probes",
+        sort_key=lambda item: item[0],
+    ):
+        index, value = result
+        resolved_by_index[index] = value
+    return tuple(resolved_by_index[index] for index in range(len(jobs)))
 
 
 def _gradle_bundle() -> tuple[str, str]:
@@ -439,21 +478,37 @@ def _common_platform_metadata() -> tuple[
     tuple[tuple[str, str], ...],
 ]:
     """Fetch version-independent official metadata once, with independent I/O overlapped."""
-    with ThreadPoolExecutor(max_workers=5, thread_name_prefix="mmm-platform-meta") as pool:
-        loader_future = pool.submit(_stable_loader)
-        api_future = pool.submit(_maven_versions, _API_METADATA_PATH)
-        loom_future = pool.submit(_loom_version)
-        gradle_future = pool.submit(_gradle_bundle)
-        mojang_future = pool.submit(_mojang_version_index)
-        gradle, gradle_sha256 = gradle_future.result()
-        return (
-            loader_future.result(),
-            api_future.result(),
-            loom_future.result(),
-            gradle,
-            gradle_sha256,
-            mojang_future.result(),
-        )
+    jobs = (
+        ("loader", _stable_loader),
+        ("api", lambda: _maven_versions(_API_METADATA_PATH)),
+        ("loom", _loom_version),
+        ("gradle", _gradle_bundle),
+        ("mojang", _mojang_version_index),
+    )
+
+    def fetch_metadata(job: tuple[str, Any]) -> tuple[str, Any]:
+        name, function = job
+        return name, function()
+
+    results: dict[str, Any] = {}
+    for _job, result in iter_completed_with_deadlines(
+        jobs,
+        fetch_metadata,
+        max_workers=len(jobs),
+        stage="platform-common-metadata",
+        sort_key=lambda item: item[0],
+    ):
+        name, value = result
+        results[name] = value
+    gradle, gradle_sha256 = results["gradle"]
+    return (
+        results["loader"],
+        results["api"],
+        results["loom"],
+        gradle,
+        gradle_sha256,
+        results["mojang"],
+    )
 
 
 def _release_article_url(version: str) -> str:
@@ -683,18 +738,34 @@ def discover_fabric_target(version: str) -> LiveFabricTarget:
             f"Minecraft {version} is not advertised by the official Fabric Meta API"
         )
 
-    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="mmm-platform-target") as pool:
-        common_future = pool.submit(_common_platform_metadata)
-        pack_future = pool.submit(_official_pack_versions, version)
-        (
-            loader,
-            api_versions,
-            loom,
-            gradle,
-            gradle_sha256,
-            _mojang_index,
-        ) = common_future.result()
-        data_pack_version, resource_pack_version, release_metadata_url = pack_future.result()
+    jobs = (
+        ("common", _common_platform_metadata),
+        ("packs", lambda: _official_pack_versions(version)),
+    )
+
+    def discover_target_part(job: tuple[str, Any]) -> tuple[str, Any]:
+        name, function = job
+        return name, function()
+
+    target_parts: dict[str, Any] = {}
+    for _job, result in iter_completed_with_deadlines(
+        jobs,
+        discover_target_part,
+        max_workers=len(jobs),
+        stage="platform-fabric-target",
+        sort_key=lambda item: item[0],
+    ):
+        name, value = result
+        target_parts[name] = value
+    (
+        loader,
+        api_versions,
+        loom,
+        gradle,
+        gradle_sha256,
+        _mojang_index,
+    ) = target_parts["common"]
+    data_pack_version, resource_pack_version, release_metadata_url = target_parts["packs"]
 
     api = _api_from_versions(version, api_versions)
     prefetched_java = dict(_stable_java_versions()).get(version, "")
