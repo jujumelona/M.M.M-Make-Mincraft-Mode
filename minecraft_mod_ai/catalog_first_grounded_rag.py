@@ -33,19 +33,35 @@ def _providers(domain: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
-def _domain_specs(domain: Mapping[str, Any]) -> list[tuple[str, tuple[str, ...]]]:
+def _domain_spec_occurrences(
+    domain: Mapping[str, Any],
+) -> list[tuple[str, tuple[str, ...]]]:
+    """Return authored query occurrences without collapsing duplicate user intent."""
+
     providers = _providers(domain)
     catalog = domain.get("catalog_queries")
     groups = [(domain.get("queries", []), providers)]
     if isinstance(catalog, list):
         groups = [
             (catalog, tuple(p for p in providers if p in CATALOG_PROVIDERS)),
-            (domain.get("queries", []), tuple(p for p in providers if p not in CATALOG_PROVIDERS)),
+            (
+                domain.get("queries", []),
+                tuple(p for p in providers if p not in CATALOG_PROVIDERS),
+            ),
         ]
-    return list(dict.fromkeys(
-        (_text(query), allowed) for queries, allowed in groups if allowed
-        for query in (queries if isinstance(queries, list) else []) if _text(query)
-    ))
+    return [
+        (_text(query), allowed)
+        for queries, allowed in groups
+        if allowed
+        for query in (queries if isinstance(queries, list) else [])
+        if _text(query)
+    ]
+
+
+def _domain_specs(domain: Mapping[str, Any]) -> list[tuple[str, tuple[str, ...]]]:
+    """Return unique execution specs while preserving first-authored order."""
+
+    return list(dict.fromkeys(_domain_spec_occurrences(domain)))
 
 
 def _run_catalogs(
@@ -103,6 +119,24 @@ def _dedupe(records: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return output
 
 
+def _combined_github_receipt(
+    linked_receipt: Mapping[str, Any],
+    fallback_receipt: Mapping[str, Any],
+    *,
+    policy: str,
+) -> dict[str, Any]:
+    """Preserve request accounting across exact-link and fallback discovery stages."""
+
+    receipt = {**dict(linked_receipt), **dict(fallback_receipt), "policy": policy}
+    receipt["search_requests"] = int(linked_receipt.get("search_requests") or 0) + int(
+        fallback_receipt.get("search_requests") or 0
+    )
+    receipt["source_requests"] = int(linked_receipt.get("source_requests") or 0) + int(
+        fallback_receipt.get("source_requests") or 0
+    )
+    return receipt
+
+
 def _query_bundle(
     backend: Any,
     router: Any,
@@ -150,11 +184,26 @@ def _query_bundle(
                     "policy": "catalog_source_discovery_disabled",
                 }
             else:
-                receipts["github"] = {
-                    **dict(linked_receipt),
-                    "status": "skipped_catalog_without_linked_source",
-                    "policy": "no_broad_fallback_when_catalog_has_candidates",
-                }
+                try:
+                    found, fallback_receipt = backend._search_github(
+                        query,
+                        disabled=github_disabled,
+                        disable=disable_github,
+                    )
+                    records.extend(found)
+                    receipts["github"] = _combined_github_receipt(
+                        linked_receipt,
+                        fallback_receipt,
+                        policy="catalog_candidate_source_discovery_fallback",
+                    )
+                except Exception as exc:
+                    receipt = backend._error("github", exc)
+                    receipts["github"] = _combined_github_receipt(
+                        linked_receipt,
+                        receipt,
+                        policy="catalog_candidate_source_discovery_fallback",
+                    )
+                    errors.append(receipt)
         elif catalog_allowed:
             try:
                 found, receipt = backend._search_github(
@@ -345,7 +394,7 @@ def forced_rag_bundle(
     for domain in domains:
         providers = _providers(domain)
         rows: list[dict[str, Any]] = []
-        for query, query_providers in _domain_specs(domain):
+        for query, query_providers in _domain_spec_occurrences(domain):
             query_count += 1
             row = dict(by_spec[(query, query_providers)])
             rows.append(row)
