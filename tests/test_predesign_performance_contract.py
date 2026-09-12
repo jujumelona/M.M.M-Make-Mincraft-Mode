@@ -9,7 +9,7 @@ from minecraft_mod_ai import pre_design_grounded_rag as rag
 
 
 def test_linked_github_readmes_are_fetched_concurrently(monkeypatch):
-    monkeypatch.setattr(rag, "_MAX_SOURCE_WORKERS", 2)
+    monkeypatch.setenv("MMM_PREDESIGN_SOURCE_WORKERS", "2")
     barrier = threading.Barrier(2, timeout=2.0)
 
     def text(url: str, headers=None) -> str:
@@ -30,6 +30,12 @@ def test_linked_github_readmes_are_fetched_concurrently(monkeypatch):
         f"example/repo-{index}" for index in range(4)
     ]
     assert receipt["source_requests"] == 4
+
+
+def test_source_worker_count_respects_operator_override(monkeypatch):
+    monkeypatch.setenv("MMM_PREDESIGN_SOURCE_WORKERS", "3")
+    assert rag._source_worker_count(1) == 1
+    assert rag._source_worker_count(8) == 3
 
 
 def test_identical_evidence_write_skips_second_fsync(monkeypatch, tmp_path):
@@ -70,28 +76,27 @@ def test_predesign_code_rag_uses_lexical_hot_path(monkeypatch):
     assert calls == [
         {
             "query": "alien combat behavior",
-            "limit": 8,
+            "limit": 3,
             "semantic": False,
             "rerank": False,
         }
     ]
 
 
-def test_empty_catalog_github_fallback_uses_bounded_query_slots(monkeypatch):
+def test_empty_catalog_github_fallback_does_not_nest_query_executors(monkeypatch):
     monkeypatch.delenv("CURSEFORGE_API_KEY", raising=False)
-    monkeypatch.setattr(rag, "_MAX_QUERY_WORKERS", 2)
-    barrier = threading.Barrier(2, timeout=2.0)
     state_lock = threading.Lock()
     active = 0
     max_active = 0
+    seen_queries: list[str] = []
 
     def github(query: str, **kwargs):
         nonlocal active, max_active
         with state_lock:
             active += 1
             max_active = max(max_active, active)
+            seen_queries.append(query)
         try:
-            barrier.wait()
             return [], {
                 "provider": "github",
                 "status": "available",
@@ -135,7 +140,8 @@ def test_empty_catalog_github_fallback_uses_bounded_query_slots(monkeypatch):
     }
     bundle = catalog_rag.forced_rag_bundle(rag, object(), brief)
 
-    assert max_active == 2
+    assert max_active == 1
+    assert seen_queries == ["query one", "query two"]
     rows = bundle["domains"][0]["queries"]
     assert len(rows) == 2
     assert all(
@@ -145,6 +151,6 @@ def test_empty_catalog_github_fallback_uses_bounded_query_slots(monkeypatch):
     )
     assert all(
         row["external_rag"]["provider_policy"]["github_broad_search"]
-        == "fallback_only_after_empty_catalog"
+        == "fallback_after_missing_linked_source_or_empty_catalog"
         for row in rows
     )
