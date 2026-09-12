@@ -15,8 +15,9 @@ def test_completed_item_lowers_canonical_color_for_artifact_and_extended_paths()
             AssetRequest(
                 asset_id="texture_item_crystal",
                 kind="item",
-                prompt="Pixel Art, isolated, main_color: #A1B2C3, surface: glass",
-                target_path="assets/example/textures/item/crystal.png",
+                visual_description="main_color: #A1B2C3, surface: glass",
+                render_kind="item.generated",
+                subject_id="crystal",
             )
         ],
     }
