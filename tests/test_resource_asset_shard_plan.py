@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from minecraft_mod_ai.resource_asset_production import _select_plan_rows
+from minecraft_mod_ai.resource_asset_plan import select_plan_rows
 
 
 def test_select_plan_rows_preserves_requested_asset_order_and_subset():
@@ -16,7 +16,7 @@ def test_select_plan_rows_preserves_requested_asset_order_and_subset():
         SimpleNamespace(asset_id="texture_item_alpha"),
     )
 
-    selected = _select_plan_rows(plan, requests)
+    selected = select_plan_rows(plan, requests)
 
     assert [row["asset_id"] for row in selected] == [
         "texture_item_gamma",
@@ -29,7 +29,7 @@ def test_select_plan_rows_fails_closed_when_requested_asset_is_missing():
     requests = (SimpleNamespace(asset_id="texture_item_missing"),)
 
     try:
-        _select_plan_rows(plan, requests)
+        select_plan_rows(plan, requests)
     except RuntimeError as exc:
         assert "texture_item_missing" in str(exc)
     else:
