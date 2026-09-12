@@ -78,6 +78,7 @@ def _install_model_runtime_contracts() -> None:
     from .llama_generation_budget import install as install_llama_generation_budget
     from .llama_stream_efficiency_contract import install as install_llama_stream_efficiency
     from .llama_tuning_pipeline import install_native_llama_tuning_pipeline
+    from .managed_llama_reuse_contract import install as install_managed_llama_reuse
     from .model_adapters import llama_cpp_adapter, openai_compatible
     from .model_output_atomicity_contract import install as install_model_output_atomicity
     from .model_runtime_performance import install as install_model_runtime_performance
@@ -93,6 +94,7 @@ def _install_model_runtime_contracts() -> None:
         hardware_policy=llama_server_hardware_policy,
         runtime_tuning=llama_server_runtime_tuning,
     )
+    install_managed_llama_reuse()
     install_llama_generation_budget(llama_server_hardware_policy)
     install_llama_stream_efficiency(llama_server_hardware_policy)
     install_completion_liveness(llama_stream_efficiency_contract, llama_cpp_adapter)
