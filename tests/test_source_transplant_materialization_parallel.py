@@ -143,3 +143,43 @@ def test_materialization_hash_failure_writes_no_partial_donor_files(
 
     assert not [path for path in tmp_path.rglob("*") if path.is_file()]
     assert fake_client.closed is True
+
+
+def test_materialization_single_worker_uses_serial_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    payloads = {"f" * 40: b"one", "9" * 40: b"two"}
+    donor = _donor(
+        (
+            _file("src/One.java", "f" * 40, payloads["f" * 40]),
+            _file("src/Two.java", "9" * 40, payloads["9" * 40]),
+        )
+    )
+    fake_client = _FakeClient()
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def fake_fetch(_client: object, _repository: str, blob_sha: str) -> bytes:
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            time.sleep(0.01)
+            return payloads[blob_sha]
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setenv("MMM_SOURCE_TRANSPLANT_MATERIALIZE_DOWNLOAD_WORKERS", "1")
+    monkeypatch.setattr(st, "validated_reuse_donor", lambda _decision: donor)
+    monkeypatch.setattr(st, "_github_client", lambda _token: fake_client)
+    monkeypatch.setattr(st, "_fetch_blob_bytes", fake_fetch)
+
+    result = st.materialize_source_slices(tmp_path, _plan())
+
+    assert peak == 1
+    assert result["count"] == 1
+    assert fake_client.closed is True
