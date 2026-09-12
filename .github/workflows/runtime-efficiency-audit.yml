@@ -20,11 +20,35 @@ jobs:
     name: Repository-wide runtime efficiency scan
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
       - name: Scan production Python runtime paths
         run: python .github/scripts/audit_runtime_efficiency.py --output audit/runtime-efficiency.json
+      - name: Gate new runtime efficiency regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_REF="${{ github.event.before }}"
+          if [[ "${{ github.event_name }}" != "push" || -z "$BASE_REF" || "$BASE_REF" == "0000000000000000000000000000000000000000" ]]; then
+            BASE_REF="HEAD^"
+          fi
+          if ! git cat-file -e "${BASE_REF}^{commit}" 2>/dev/null; then
+            echo "No baseline commit is available; current scan remains authoritative."
+            exit 0
+          fi
+          BASE_DIR="$(mktemp -d)"
+          git worktree add --detach "$BASE_DIR" "$BASE_REF"
+          trap 'git worktree remove --force "$BASE_DIR" >/dev/null 2>&1 || true' EXIT
+          (
+            cd "$BASE_DIR"
+            python .github/scripts/audit_runtime_efficiency.py --output /tmp/runtime-efficiency-baseline.json
+          )
+          python .github/scripts/gate_runtime_efficiency.py \
+            --baseline /tmp/runtime-efficiency-baseline.json \
+            --current audit/runtime-efficiency.json
       - name: Upload runtime efficiency audit
         if: always()
         uses: actions/upload-artifact@v4
