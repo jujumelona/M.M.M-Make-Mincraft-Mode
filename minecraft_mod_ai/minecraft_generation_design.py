@@ -47,13 +47,13 @@ _SCALAR_GENERATION_FIELDS = frozenset(
 
 
 def _asset_main_color(graph: dict[str, Any], module_id: str) -> str | None:
-    """Recover an already-authored visual color from the exact asset prompt projection."""
+    """Recover an already-authored visual color from the semantic asset description."""
     suffix = "_" + module_id
     for asset in graph.get("assets", ()):
         if not str(getattr(asset, "asset_id", "")).endswith(suffix):
             continue
-        prompt = str(getattr(asset, "prompt", ""))
-        match = _HEX_IN_VISUAL.search(prompt)
+        visual_description = str(getattr(asset, "visual_description", ""))
+        match = _HEX_IN_VISUAL.search(visual_description)
         if match:
             return match.group(1)
     return None
