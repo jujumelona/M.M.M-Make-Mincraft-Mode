@@ -3,7 +3,7 @@ from __future__ import annotations
 """Registration-level canonical leaf checks for pre-admission source generation.
 
 A registered implementation may be rendered as a candidate before real execution
-evidence exists.  This helper deliberately does not turn ``not_reviewed`` into
+evidence exists. This helper deliberately does not turn ``not_reviewed`` into
 ``admitted``; production reuse remains owned by ``ResolvedVersionContext.require_leaf_binding``.
 """
 
@@ -30,6 +30,34 @@ _HASH_FIELDS = (
 )
 
 
+def _binding_from_context(resolved, leaf_id: str) -> Mapping:
+    """Read registration facts, preserving the legacy strict context protocol."""
+
+    bindings = getattr(resolved, "leaf_bindings", None)
+    if isinstance(bindings, Mapping):
+        if leaf_id not in bindings:
+            raise VersionContextError(
+                "HOST_FACT_UNAVAILABLE",
+                category="leaf_bindings",
+                name=leaf_id,
+                context_id=getattr(resolved, "context_id", ""),
+            )
+        return bindings[leaf_id]
+
+    # Compatibility with narrow/test contexts that expose only the established
+    # strict admission method. This path can never admit ``not_reviewed`` because
+    # require_leaf_binding() owns that fail-closed decision.
+    require_leaf_binding = getattr(resolved, "require_leaf_binding", None)
+    if callable(require_leaf_binding):
+        return require_leaf_binding(leaf_id)
+    raise VersionContextError(
+        "HOST_FACT_UNAVAILABLE",
+        category="leaf_bindings",
+        name=leaf_id,
+        context_id=getattr(resolved, "context_id", ""),
+    )
+
+
 def require_registered_leaf_binding(resolved, leaf_id: str) -> Mapping:
     """Return a structurally registered leaf without claiming execution admission.
 
@@ -37,15 +65,7 @@ def require_registered_leaf_binding(resolved, leaf_id: str) -> Mapping:
     registration/candidate-generation boundary; no evidence id is synthesized.
     """
 
-    bindings = resolved.leaf_bindings
-    if not isinstance(bindings, Mapping) or leaf_id not in bindings:
-        raise VersionContextError(
-            "HOST_FACT_UNAVAILABLE",
-            category="leaf_bindings",
-            name=leaf_id,
-            context_id=resolved.context_id,
-        )
-    binding = bindings[leaf_id]
+    binding = _binding_from_context(resolved, leaf_id)
     if not isinstance(binding, Mapping):
         raise VersionContextError("HOST_LEAF_BINDING_INVALID", leaf=leaf_id)
     state = binding.get("state")
@@ -54,7 +74,7 @@ def require_registered_leaf_binding(resolved, leaf_id: str) -> Mapping:
             "UNSUPPORTED_LEAF",
             leaf=leaf_id,
             state=state,
-            context_id=resolved.context_id,
+            context_id=getattr(resolved, "context_id", ""),
         )
     if state not in {"admitted", "not_reviewed"}:
         raise VersionContextError(
