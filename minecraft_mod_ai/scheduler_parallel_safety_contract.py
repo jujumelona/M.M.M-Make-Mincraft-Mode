@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import threading
 import time
 import uuid
 from collections.abc import Callable, Sequence
@@ -9,8 +8,6 @@ from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
 from typing import Any
-
-from .project_write_lock import project_write_lock
 
 _ORCHESTRATOR_WORKER = "mmm-orchestrator"
 _CLAIM_CONTRACT_VERSION = 4
@@ -24,14 +21,12 @@ _RESOURCE_CAPACITIES = {
 }
 _RESOURCE_PRIORITY = {"llm": 0, "image_gpu": 1, "cpu_io": 2, "commit": 3}
 # These stages mutate stage-global registries, so work within the same domain is
-# serialized. Different domains are independent and can execute concurrently.
-_STAGE_WRITE_LOCKS = {
-    "content": threading.RLock(),
-    "system": threading.RLock(),
-    "entity": threading.RLock(),
-}
-_SERIAL_CPU_STAGES = tuple(f"generate:{stage}" for stage in _STAGE_WRITE_LOCKS)
-_INDEX_COMMIT_LOCK = threading.RLock()
+# serialized by scheduler admission. Different domains remain independent.
+_SERIAL_CPU_STAGES = (
+    "generate:content",
+    "generate:system",
+    "generate:entity",
+)
 _SHARED_LOCAL_GPU_LANE: ContextVar[bool] = ContextVar(
     "mmm_shared_local_gpu_lane",
     default=False,
@@ -435,100 +430,6 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
     _INSTALLED_LANE_CLAIM = claim_ready
 
 
-def _stage_write_lock(node: Any) -> threading.RLock | None:
-    resource_class = str(getattr(node, "resource_class", "") or "")
-    if not resource_class:
-        payload = getattr(node, "payload", {})
-        if isinstance(payload, dict):
-            resource_class = str(payload.get("resource_class", "") or "")
-    if resource_class != "cpu_io":
-        return None
-    stage = str(getattr(node, "stage", ""))
-    if not stage.startswith("generate:"):
-        return None
-    return _STAGE_WRITE_LOCKS.get(stage.split(":", 1)[1])
-
-
-def _install_index_commit_order(
-    work_graph_module: Any,
-    orchestrator_module: Any,
-) -> None:
-    orchestrator_cls = orchestrator_module.CompleteProductionOrchestrator
-    current = orchestrator_cls._run_work_node
-    if getattr(current, "_mmm_index_before_success", False):
-        return
-
-    @wraps(current)
-    def run_work_node(
-        ledger: Any,
-        node: Any,
-        *,
-        action: Callable[[], dict[str, Any]],
-        validate_cached: Callable[[dict[str, Any]], bool],
-        shared_index: Any | None = None,
-    ) -> dict[str, Any]:
-        cached = ledger.cached_receipt(node.node_id, input_hash=node.input_hash)
-        if cached is not None and validate_cached(cached):
-            return cached
-        if cached is not None:
-            ledger.invalidate(node.node_id)
-
-        current_task = ledger.task(node.node_id)
-        if current_task["state"] in {"failed", "input_required", "cancelled"}:
-            ledger.retry(node.node_id)
-            current_task = ledger.task(node.node_id)
-
-        ledger.raise_if_cancelled()
-        if current_task["state"] != "running":
-            ledger.begin(node.node_id, worker_id="complete-orchestrator")
-
-        try:
-            stage_lock = _stage_write_lock(node)
-            if stage_lock is not None:
-                with stage_lock:
-                    receipt = action()
-            elif (
-                node.resource_class == "commit"
-                and shared_index is not None
-                and hasattr(shared_index, "root")
-            ):
-                with project_write_lock(shared_index.root):
-                    receipt = action()
-            else:
-                receipt = action()
-            if not isinstance(receipt, dict):
-                raise orchestrator_module.CompleteProductionError(
-                    f"Work node {node.node_id} returned a non-object receipt."
-                )
-            ledger.raise_if_cancelled()
-
-            if shared_index is not None:
-                touched = _receipt_touched_paths(receipt)
-                if touched:
-                    try:
-                        with _INDEX_COMMIT_LOCK:
-                            shared_index.update_files(touched)
-                            shared_index.write_manifest()
-                    except Exception as exc:
-                        raise orchestrator_module.CompleteProductionError(
-                            f"Shared ProjectIndex commit failed for {node.node_id}: "
-                            f"{type(exc).__name__}: {exc}"
-                        ) from exc
-
-            ledger.succeed(node.node_id, receipt)
-            return receipt
-        except BaseException as exc:
-            try:
-                if ledger.task(node.node_id)["state"] == "running":
-                    ledger.fail(node.node_id, f"{type(exc).__name__}: {exc}")
-            except work_graph_module.WorkGraphError:
-                pass
-            raise
-
-    run_work_node._mmm_index_before_success = True
-    orchestrator_cls._run_work_node = staticmethod(run_work_node)
-
-
 def install(
     *,
     work_graph_module: Any,
@@ -536,13 +437,11 @@ def install(
 ) -> None:
     _install_profile_gpu_lane(orchestrator_module)
     _install_lane_aware_claim(work_graph_module)
-    _install_index_commit_order(work_graph_module, orchestrator_module)
 
 
 __all__ = [
     "_profile_uses_shared_local_gpu",
     "_receipt_touched_paths",
-    "_stage_write_lock",
     "install",
     "recommended_cpu_io_workers",
 ]
