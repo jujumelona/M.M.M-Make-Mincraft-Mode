@@ -78,9 +78,9 @@ def test_validated_slots_require_matching_managed_receipt(monkeypatch):
     assert policy.validated_active_parallelism() == 4
 
 
-def test_fast_search_keeps_only_p1_and_highest_feasible_parallel_width():
-    assert policy._shortlist_parallel(range(1, 9), "fast") == (1, 8)
-    assert policy._shortlist_parallel((1, 2), "fast") == (1, 2)
+def test_fast_search_keeps_reference_width_only():
+    assert policy._shortlist_parallel(range(1, 9), "fast") == (1,)
+    assert policy._shortlist_parallel((1, 2), "fast") == (1,)
     assert policy._shortlist_parallel((1,), "fast") == (1,)
 
 
@@ -125,8 +125,8 @@ def test_fast_benchmark_defaults_are_short_and_operator_overrides_win(monkeypatc
 
     policy._configure_benchmark_defaults()
     assert policy._search_mode() == "fast"
-    assert policy.os.environ["MMM_LLAMA_AUTOTUNE_TOKENS"] == "16"
-    assert policy.os.environ["MMM_LLAMA_AUTOTUNE_MAX_SECONDS"] == "45"
+    assert policy.os.environ["MMM_LLAMA_AUTOTUNE_TOKENS"] == "8"
+    assert policy.os.environ["MMM_LLAMA_AUTOTUNE_MAX_SECONDS"] == "30"
     assert policy.os.environ["MMM_LLAMA_AUTOTUNE_STEP_TIMEOUT_SECONDS"] == "15"
 
     monkeypatch.setenv("MMM_LLAMA_AUTOTUNE_TOKENS", "24")
@@ -141,7 +141,7 @@ def test_selection_version_forces_reconsideration_and_install_is_idempotent():
     first_selection = runtime._selection_inputs
 
     selection = runtime._selection_inputs(SimpleNamespace(model_id="qwen"))
-    assert selection["vram_parallel_policy_version"] == 5
+    assert selection["vram_parallel_policy_version"] == 6
     assert selection["autotune_search"] in {"fast", "balanced", "full"}
 
     policy.install(runtime)

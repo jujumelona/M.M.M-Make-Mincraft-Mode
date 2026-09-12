@@ -29,7 +29,8 @@ def host_catalog(tmp_path, monkeypatch):
                                "auto_context_id": bundles[0]["context_id"], "bundles": bundles}))
     monkeypatch.setenv("MMM_VERSION_BUNDLE_CATALOG", str(path))
     monkeypatch.setitem(catalog._PROVIDERS, "fabric", catalog.PlatformProvider(
-        "fabric", "host-coherent-version-catalog-v1", catalog._fabric_versions, catalog._fabric_adapter))
+        "fabric", "host-coherent-version-catalog-v1", catalog._fabric_versions,
+        catalog._fabric_adapter, host_authoritative=True))
 
 
 def _fabric_1211():
