@@ -8,12 +8,15 @@ explicit source repository links, and fall back to GitHub repository discovery w
 catalog candidate has no linked source or the catalog stage is empty. GitHub remains an
 internal source-discovery mechanism, not a peer Minecraft catalog provider.
 Official/project sources remain separate from ecosystem discovery.
+
+Concurrency deliberately lives at the transport/source-fetch leaf. Query and catalog
+orchestration stay serial so provider-internal source pools cannot multiply into nested
+query x catalog x source executor trees.
 """
 
 import os
 import threading
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from .planning_mod_discovery import CATALOG_PROVIDERS
@@ -69,7 +72,8 @@ def _run_catalogs(
     query: str,
     allowed: set[str],
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
-    """Run mod catalogs concurrently but merge in deterministic authority order."""
+    """Run catalogs in authority order; leaf source retrieval owns parallelism."""
+
     calls: dict[str, Callable[[], tuple[list[dict[str, Any]], dict[str, Any]]]] = {}
     receipts: dict[str, Any] = {}
     errors: list[dict[str, Any]] = []
@@ -87,20 +91,16 @@ def _run_catalogs(
         calls["modrinth"] = lambda: backend._search_modrinth(query)
 
     results: dict[str, list[dict[str, Any]]] = {}
-    if calls:
-        with ThreadPoolExecutor(max_workers=len(calls)) as pool:
-            futures = {pool.submit(call): provider for provider, call in calls.items()}
-            for future in as_completed(futures):
-                provider = futures[future]
-                try:
-                    found, receipt = future.result()
-                    results[provider] = list(found)
-                    receipts[provider] = receipt
-                except Exception as exc:
-                    receipt = backend._error(provider, exc)
-                    receipts[provider] = receipt
-                    errors.append(receipt)
-                    results[provider] = []
+    for provider, call in calls.items():
+        try:
+            found, receipt = call()
+            results[provider] = list(found)
+            receipts[provider] = receipt
+        except Exception as exc:
+            receipt = backend._error(provider, exc)
+            receipts[provider] = receipt
+            errors.append(receipt)
+            results[provider] = []
 
     records = results.get("curseforge", []) + results.get("modrinth", [])
     return records, receipts, errors
@@ -309,12 +309,40 @@ def _query_bundle(
     }
 
 
+def _query_failure(backend: Any, query: str, exc: Exception) -> dict[str, Any]:
+    return {
+        "query": query,
+        "query_sha256": backend._sha256_text(query),
+        "project_rag": {"sources": [], "errors": []},
+        "code_rag": {"status": "error", "hits": []},
+        "external_rag": {
+            "schema_version": "mmm/external-pre-design-discovery-v4",
+            "sources": [],
+            "errors": [backend._error("query_worker", exc)],
+            "providers": {},
+            "provider_policy": {},
+            "github_retrieval": {
+                "provider_status": "not_requested",
+                "saturation_reason": "",
+                "search_requests": 0,
+                "source_requests": 0,
+            },
+        },
+    }
+
+
 def forced_rag_bundle(
     backend: Any,
     router: Any,
     research_brief: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Build the grounded-RAG wire shape under catalog-first provider policy."""
+    """Build the grounded-RAG wire shape under catalog-first provider policy.
+
+    Query orchestration is intentionally serial. Provider implementations own the only
+    executor layer for source/README expansion, preventing nested executor fan-out while
+    still using hardware parallelism where the expensive I/O actually occurs.
+    """
+
     domains = (
         [
             dict(item)
@@ -343,78 +371,18 @@ def forced_rag_bundle(
                 specs.append(key)
 
     by_spec: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
-    if specs:
-        worker_count = backend._query_worker_count(len(specs))
-        if worker_count <= 1:
-            for query, providers in specs:
-                try:
-                    by_spec[(query, providers)] = _query_bundle(
-                        backend,
-                        router,
-                        query,
-                        providers,
-                        github_disabled=github_disabled,
-                        disable_github=disable_github,
-                    )
-                except Exception as exc:
-                    by_spec[(query, providers)] = {
-                        "query": query,
-                        "query_sha256": backend._sha256_text(query),
-                        "project_rag": {"sources": [], "errors": []},
-                        "code_rag": {"status": "error", "hits": []},
-                        "external_rag": {
-                            "schema_version": "mmm/external-pre-design-discovery-v4",
-                            "sources": [],
-                            "errors": [backend._error("query_worker", exc)],
-                            "providers": {},
-                            "provider_policy": {},
-                            "github_retrieval": {
-                                "provider_status": "not_requested",
-                                "saturation_reason": "",
-                                "search_requests": 0,
-                                "source_requests": 0,
-                            },
-                        },
-                    }
-        else:
-            with ThreadPoolExecutor(max_workers=worker_count) as pool:
-                futures = {
-                    pool.submit(
-                        _query_bundle,
-                        backend,
-                        router,
-                        query,
-                        providers,
-                        github_disabled=github_disabled,
-                        disable_github=disable_github,
-                    ): (query, providers)
-                    for query, providers in specs
-                }
-                for future in as_completed(futures):
-                    spec = futures[future]
-                    try:
-                        by_spec[spec] = future.result()
-                    except Exception as exc:
-                        query, _providers_for_query = spec
-                        by_spec[spec] = {
-                            "query": query,
-                            "query_sha256": backend._sha256_text(query),
-                            "project_rag": {"sources": [], "errors": []},
-                            "code_rag": {"status": "error", "hits": []},
-                            "external_rag": {
-                                "schema_version": "mmm/external-pre-design-discovery-v4",
-                                "sources": [],
-                                "errors": [backend._error("query_worker", exc)],
-                                "providers": {},
-                                "provider_policy": {},
-                                "github_retrieval": {
-                                    "provider_status": "not_requested",
-                                    "saturation_reason": "",
-                                    "search_requests": 0,
-                                    "source_requests": 0,
-                                },
-                            },
-                        }
+    for query, providers in specs:
+        try:
+            by_spec[(query, providers)] = _query_bundle(
+                backend,
+                router,
+                query,
+                providers,
+                github_disabled=github_disabled,
+                disable_github=disable_github,
+            )
+        except Exception as exc:
+            by_spec[(query, providers)] = _query_failure(backend, query, exc)
 
     out_domains: list[dict[str, Any]] = []
     external_count = 0
