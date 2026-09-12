@@ -1,0 +1,35 @@
+name: Runtime Efficiency Audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-efficiency-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    name: Repository-wide runtime efficiency scan
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Scan production Python runtime paths
+        run: python .github/scripts/audit_runtime_efficiency.py --output audit/runtime-efficiency.json
+      - name: Upload runtime efficiency audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-efficiency-audit-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: audit/runtime-efficiency.json
