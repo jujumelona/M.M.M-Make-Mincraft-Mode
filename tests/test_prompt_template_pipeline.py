@@ -90,10 +90,37 @@ def test_live_prompt_boundary_executes_only_declared_small_tasks():
             identifier = 'prompt/' + name.removeprefix('submit_prompt_')
             assert schema == load_template(identifier)['output_schema']
         elif name.endswith('_count'):
-            expected = {'count'} if name == 'submit_prompt_parse_count' else {'count', 'blocked_reason'}
-            assert set(schema['properties']) == expected
+            assert set(schema['properties']) == {'count'}
         else:
             assert name.startswith('submit_one_')
+
+
+def test_generic_prompt_without_named_reference_is_zero_cardinality_not_blocked():
+    prompt = (
+        'Create a game mode with resource farming, trading, spaceship building, '
+        'and planetary colonization.'
+    )
+    router = PromptRouter(prompt, {
+        'submit_prompt_parse': [{'statement': prompt}],
+    })
+
+    result = extract_prompt_records(router, prompt)
+
+    assert result['references'] == []
+    assert result['unresolved'] == []
+    count_calls = {
+        name: schema
+        for name, _, schema in router.calls
+        if name.endswith('_count')
+    }
+    assert set(count_calls) == {
+        'submit_prompt_parse_count',
+        'submit_prompt_entity_resolution_count',
+        'submit_prompt_constraints_count',
+        'submit_prompt_ambiguities_count',
+        'submit_prompt_output_requirements_count',
+    }
+    assert all(set(schema['properties']) == {'count'} for schema in count_calls.values())
 
 
 def test_named_reference_retains_host_owned_research_routing():
