@@ -1,0 +1,90 @@
+name: hard liveness audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/mmm-hard-liveness-audit.yml
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Scan unbounded blocking primitives
+        shell: bash
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+          import ast
+          from pathlib import Path
+
+          roots = [Path('minecraft_mod_ai'), Path('tools')]
+          top = [Path('download_resources.py')]
+          paths = []
+          for root in roots:
+              if root.is_dir():
+                  paths.extend(root.rglob('*.py'))
+          paths.extend(p for p in top if p.is_file())
+
+          def name(node):
+              if isinstance(node, ast.Name):
+                  return node.id
+              if isinstance(node, ast.Attribute):
+                  prefix = name(node.value)
+                  return f'{prefix}.{node.attr}' if prefix else node.attr
+              return ''
+
+          def has_timeout(call):
+              if any(k.arg == 'timeout' for k in call.keywords):
+                  return True
+              # result(timeout), wait(fs, timeout), as_completed(fs, timeout), join(timeout)
+              return bool(call.args) and call.func and isinstance(call.func, ast.Attribute) and call.func.attr in {'result','join','wait'}
+
+          findings = []
+          for path in sorted(set(paths)):
+              try:
+                  tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+              except Exception as exc:
+                  findings.append(('PARSE', path.as_posix(), 0, str(exc)))
+                  continue
+              parents = {}
+              for parent in ast.walk(tree):
+                  for child in ast.iter_child_nodes(parent):
+                      parents[child] = parent
+              for node in ast.walk(tree):
+                  if not isinstance(node, ast.Call):
+                      continue
+                  n = name(node.func)
+                  tail = n.rsplit('.',1)[-1]
+                  if tail == 'result' and not node.args and not any(k.arg == 'timeout' for k in node.keywords):
+                      findings.append(('FUTURE_RESULT_NO_TIMEOUT', path.as_posix(), node.lineno, n))
+                  elif tail in {'as_completed'} and len(node.args) < 2 and not any(k.arg == 'timeout' for k in node.keywords):
+                      findings.append(('AS_COMPLETED_NO_TIMEOUT', path.as_posix(), node.lineno, n))
+                  elif tail == 'wait' and ('concurrent' in n or n == 'wait') and len(node.args) < 2 and not any(k.arg == 'timeout' for k in node.keywords):
+                      findings.append(('FUTURES_WAIT_NO_TIMEOUT', path.as_posix(), node.lineno, n))
+                  elif tail == 'shutdown':
+                      wait_kw = next((k.value for k in node.keywords if k.arg == 'wait'), None)
+                      if wait_kw is None or (isinstance(wait_kw, ast.Constant) and wait_kw.value is True):
+                          findings.append(('EXECUTOR_BLOCKING_SHUTDOWN', path.as_posix(), node.lineno, n))
+                  elif tail == 'map':
+                      base = name(node.func.value) if isinstance(node.func, ast.Attribute) else ''
+                      if 'executor' in base.casefold() or 'pool' in base.casefold():
+                          findings.append(('EXECUTOR_MAP_BLOCKING', path.as_posix(), node.lineno, n))
+                  elif tail == 'join' and not node.args and not any(k.arg == 'timeout' for k in node.keywords):
+                      findings.append(('JOIN_NO_TIMEOUT', path.as_posix(), node.lineno, n))
+
+          print(f'HARD_LIVENESS_FINDINGS={len(findings)}')
+          counts = {}
+          for kind, path, line, call in findings:
+              counts[kind] = counts.get(kind, 0) + 1
+              print(f'{kind} {path}:{line} {call}')
+          print('COUNTS', counts)
+          PY
