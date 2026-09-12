@@ -1,5 +1,6 @@
 id: prompt/constraints
 execution: records
+cardinality_blocking: false
 task: Extract every explicit user-stated limit, exclusion, target requirement or invariant. Keep independent constraints as independent records. Do not infer defaults or convert implementation choices into constraints.
 record_schema:
   type: object

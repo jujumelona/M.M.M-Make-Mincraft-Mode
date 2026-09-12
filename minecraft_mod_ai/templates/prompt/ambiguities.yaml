@@ -1,5 +1,6 @@
 id: prompt/ambiguities
 execution: records
+cardinality_blocking: false
 task: Identify every genuine contradiction or user preference whose answer is necessary to understand the authored request. Missing counts, prices, balance, mechanics, algorithms, platform APIs, source files and design choices are not ambiguities here. Ordinary explicit restrictions belong to parse. Do not choose blockers or research routes.
 record_schema:
   type: object

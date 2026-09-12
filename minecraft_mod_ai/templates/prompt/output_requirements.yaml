@@ -1,5 +1,6 @@
 id: prompt/output_requirements
 execution: records
+cardinality_blocking: false
 task: Extract every explicitly requested delivery, packaging, language or output-format requirement. Keep independent requirements as independent records. Do not invent a default deliverable or restate gameplay behavior handled by parse.
 record_schema:
   type: object
@@ -14,7 +15,7 @@ record_schema:
       maxLength: 256
   required:
   - statement
-  additionalProperties: false
+  additionalPproperties: false
 input_schema:
   type: object
   properties:

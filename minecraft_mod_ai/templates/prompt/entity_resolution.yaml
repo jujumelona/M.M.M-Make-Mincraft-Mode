@@ -1,5 +1,6 @@
 id: prompt/entity_resolution
 execution: records
+cardinality_blocking: false
 task: Identify all external games, mods, products, styles or named works explicitly referenced in the original prompt, plus what must be learned about each. Do not research them yet, infer unnamed references or mistake ordinary feature nouns for external references.
 record_schema:
   type: object
