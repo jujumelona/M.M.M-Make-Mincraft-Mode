@@ -1,0 +1,198 @@
+name: Semantic Termination Apply V6
+
+on:
+  push:
+    paths:
+      - .github/workflows/semantic-termination-apply-v6.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: semantic-termination-apply-v6
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Apply v5 transform and normalize generated semantic blocks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          import textwrap
+
+          v5 = Path('.github/workflows/semantic-termination-apply-v5.yml').read_text(encoding='utf-8')
+          match = re.search(
+              r"          python - <<'PY'\n(.*?)\n          PY\n",
+              v5,
+              flags=re.S,
+          )
+          if not match:
+              raise SystemExit('v5 migration python block not found')
+          exec(compile(textwrap.dedent(match.group(1)), '<v5-migration>', 'exec'), {})
+
+          path = Path('minecraft_mod_ai/progress_aware_tool_loop.py')
+          text = path.read_text(encoding='utf-8')
+
+          # 1) Host-forced RAG is a protocol invariant, not a retry counter.
+          prose_pos = text.index('        if not turn.tool_calls:\n')
+          start = text.index('            if forced_rag_tool is not None:\n', prose_pos)
+          end = text.index('            if require_rag and not state.has_fresh_evidence:\n', start)
+          forced_protocol = (
+              '            if forced_rag_tool is not None:\n'
+              '                raise ModelConfigurationError(\n'
+              '                    f"HOST_FORCED_TOOL_PROTOCOL_VIOLATION: expected {forced_rag_tool!r}, "\n'
+              '                    "but the model returned prose. A host-required action is a protocol "\n'
+              '                    "invariant, not a retry budget."\n'
+              '                )\n'
+          )
+          text = text[:start] + forced_protocol + text[end:]
+
+          # 2) Transitioning OBSERVE -> ACT is real semantic progress and resets recurrence.
+          transition_hint = text.index('proceed to the source-mutation action for the implementation now.')
+          start = text.index('                    state.observe_semantic_state(\n', transition_hint)
+          end = text.index('                    trace_entry = ExecutionStepTrace(\n', start)
+          transition = (
+              '                    state.observe_semantic_state(\n'
+              '                        {\n'
+              '                            "phase": LoopPhase.ACT.value,\n'
+              '                            "localization_stage": loc_stage_before,\n'
+              '                            "workspace_changed": state.workspace_changed,\n'
+              '                            "validation_status": state.validation_status,\n'
+              '                        },\n'
+              '                        made_progress=True,\n'
+              '                    )\n'
+          )
+          text = text[:start] + transition + text[end:]
+
+          # 3) Every completed tool wave is normalized into one semantic snapshot.
+          start = text.index('        semantic_snapshot = {\n')
+          end = text.index('        trace_entry = ExecutionStepTrace(\n', start)
+          adjudication = (
+              '        semantic_snapshot = {\n'
+              '            "phase": phase_after,\n'
+              '            "localization_stage": loc_stage_after,\n'
+              '            "mutation_context": ctx_after,\n'
+              '            "attempted_sources": tuple(sorted(state.attempted_sources)),\n'
+              '            "evidence_fingerprints": tuple(sorted(state.evidence_fingerprints)),\n'
+              '            "validation_status": state.validation_status,\n'
+              '            "workspace_changed": state.workspace_changed,\n'
+              '            "applied_mutations": tuple(state.applied_mutations),\n'
+              '            "available_tools": tuple(sorted(phase_tool_names)),\n'
+              '            "tool_results": _fixed_point_tool_results(executed),\n'
+              '        }\n'
+              '        decision = state.observe_semantic_state(\n'
+              '            semantic_snapshot,\n'
+              '            made_progress=turn_made_progress,\n'
+              '        )\n'
+              '        if turn_made_progress:\n'
+              '            state.clear_failure()\n\n'
+          )
+          text = text[:start] + adjudication + text[end:]
+
+          # 4) BLOCKED is handled at the exact trace boundary for this wave.
+          trace_pos = text.index('        state.trajectory.append(trace_entry)\n', start)
+          result_emit = text.index(
+              '        emit_root_cause(\n            "tool_loop_step_result",',
+              trace_pos,
+          )
+          boundary = (
+              '        state.trajectory.append(trace_entry)\n'
+              '        if decision.status == TerminationStatus.BLOCKED:\n'
+              '            reason = decision.reason.value if decision.reason is not None else "BLOCKED"\n'
+              '            state.termination_reason = reason\n'
+              '            trajectory = format_trajectory_summary(state.trajectory)\n'
+              '            emit_root_cause(\n'
+              '                "tool_loop_semantic_termination",\n'
+              '                stage=stage,\n'
+              '                operation="generate_with_tools",\n'
+              '                gate="semantic_state_recurrence",\n'
+              '                result="FAIL" if implementation_requires_mutation else "PASS",\n'
+              '                reason=reason,\n'
+              '                details={\n'
+              '                    "step_index": state.step_index,\n'
+              '                    "semantic_fingerprint": decision.semantic_fingerprint,\n'
+              '                    "required_state_change": decision.required_state_change,\n'
+              '                    "trajectory": trajectory,\n'
+              '                },\n'
+              '            )\n'
+              '            if require_rag and not state.has_fresh_evidence:\n'
+              '                raise ModelConfigurationError(\n'
+              '                    f"Required production evidence reached semantic {reason}; no novel "\n'
+              '                    "reviewed evidence frontier remains."\n'
+              '                )\n'
+              '            if implementation_requires_mutation and (\n'
+              '                not state.workspace_changed or state.validation_status != "PASS"\n'
+              '            ):\n'
+              '                raise ModelConfigurationError(\n'
+              '                    f"Writable coder reached semantic {reason} before verified completion; "\n'
+              '                    "refusing prose-only or unverified success."\n'
+              '                )\n'
+              '            return _finalize_without_tools(\n'
+              '                router,\n'
+              '                config,\n'
+              '                adapter,\n'
+              '                request,\n'
+              '                messages,\n'
+              '                instruction=(\n'
+              '                    f"Execution reached semantic {reason}. Do not call more tools. "\n'
+              '                    "Return only conclusions supported by existing observations."\n'
+              '                ),\n'
+              '                empty_error=(\n'
+              '                    "Agent returned an empty final response after semantic termination."\n'
+              '                ),\n'
+              '            )\n'
+          )
+          text = text[:trace_pos] + boundary + text[result_emit:]
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Compile
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q minecraft_mod_ai
+
+      - name: Run targeted regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          pytest -q \
+            tests/test_agent_tool_round_liveness.py \
+            tests/test_adaptive_production_agent.py \
+            tests/test_adaptive_execution_hardening.py
+
+      - name: Audit legacy semantic counters
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -n -E 'no_progress_streak|forced_rag_attempts|_agent_tool_round_limit|MMM_AGENT_TOOL_ROUNDS|MMM_AGENT_DEFAULT_TOOL_ROUNDS' -- minecraft_mod_ai tests; then
+            echo 'legacy semantic retry/counter contract remains' >&2
+            exit 1
+          fi
+
+      - name: Commit verified production migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'OpenAI semantic termination migration'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/model_router.py \
+            minecraft_mod_ai/progress_aware_tool_loop.py \
+            minecraft_mod_ai/termination_contract.py \
+            tests/test_agent_tool_round_liveness.py
+          git diff --cached --check
+          git commit -m 'Replace agent retry caps with semantic termination'
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
