@@ -40,7 +40,10 @@ class PromptRouter:
         records = self.records.get(base, [])
         if tool_name.endswith('_count'):
             assert set(context) <= {'original_prompt', 'allowed_evidence_refs'}
-            return {'count': len(records), 'blocked_reason': ''}
+            result = {'count': len(records)}
+            if 'blocked_reason' in parameters.get('properties', {}):
+                result['blocked_reason'] = ''
+            return result
         if tool_name.startswith('submit_one_'):
             assert set(context) <= {
                 'original_prompt',
@@ -87,7 +90,8 @@ def test_live_prompt_boundary_executes_only_declared_small_tasks():
             identifier = 'prompt/' + name.removeprefix('submit_prompt_')
             assert schema == load_template(identifier)['output_schema']
         elif name.endswith('_count'):
-            assert set(schema['properties']) == {'count', 'blocked_reason'}
+            expected = {'count'} if name == 'submit_prompt_parse_count' else {'count', 'blocked_reason'}
+            assert set(schema['properties']) == expected
         else:
             assert name.startswith('submit_one_')
 
