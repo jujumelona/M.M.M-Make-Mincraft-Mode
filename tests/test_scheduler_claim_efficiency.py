@@ -8,6 +8,8 @@ from minecraft_mod_ai.scheduler_parallel_safety_contract import install
 from minecraft_mod_ai.work_graph import DurableWorkLedger, WorkGraphPlan, WorkNode
 
 
+_BOOTSTRAPPED_RUN_WORK_NODE = orchestrator_module.CompleteProductionOrchestrator._run_work_node
+
 install(
     work_graph_module=work_graph_module,
     orchestrator_module=orchestrator_module,
@@ -39,6 +41,11 @@ def _ledger(tmp_path: Path, *nodes: WorkNode) -> DurableWorkLedger:
     )
     ledger.sync_plan(plan)
     return ledger
+
+
+def test_scheduler_reinstall_does_not_rebind_final_run_work_node() -> None:
+    assert getattr(_BOOTSTRAPPED_RUN_WORK_NODE, "_mmm_claim_fenced", False)
+    assert orchestrator_module.CompleteProductionOrchestrator._run_work_node is _BOOTSTRAPPED_RUN_WORK_NODE
 
 
 def test_successful_claim_scans_ready_queue_once_without_active_stage_prescan(
