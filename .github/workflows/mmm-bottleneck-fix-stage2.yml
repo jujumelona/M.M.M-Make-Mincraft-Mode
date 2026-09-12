@@ -1,5 +1,6 @@
 name: verified bottleneck fixes stage2
 
+# One-shot verified cleanup. The workflow removes itself after committing the validated fixes.
 on:
   push:
     branches: [main]
