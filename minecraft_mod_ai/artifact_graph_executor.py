@@ -191,8 +191,8 @@ def execute_artifact_graph(
         for producer_id in required_producers:
             dependents[producer_id].append(job.job_id)
     indegree = {job_id: len(required) for job_id, required in dependency_ids.items()}
-    for producer_id in dependents:
-        dependents[producer_id].sort(key=order.__getitem__)
+    for dependent_ids in dependents.values():
+        dependent_ids.sort(key=order.__getitem__)
 
     ready_heap: list[tuple[int, str]] = [
         (order[job.job_id], job.job_id)

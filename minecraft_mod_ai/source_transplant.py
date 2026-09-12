@@ -757,7 +757,7 @@ def materialize_source_slices(
             donor_root = target_root / donor_key
             donor_root.mkdir(parents=True, exist_ok=True)
 
-            prepared: list[tuple[Mapping[str, Any], str, str, str, int]] = []
+            prepared: list[tuple[Mapping[str, Any], str, str, str, int, str, str]] = []
             for item in files:
                 if not isinstance(item, Mapping):
                     raise SourceTransplantError("Malformed donor file manifest.")
@@ -771,25 +771,33 @@ def materialize_source_slices(
                     raise SourceTransplantError(
                         f"Pinned donor size is invalid for {repository}@{commit_sha}:{path}."
                     )
-                prepared.append((item, path, blob_sha, expected, expected_size))
+                prepared.append((item, path, blob_sha, expected, expected_size, repository, commit_sha))
 
             def fetch_and_verify(
-                spec: tuple[Mapping[str, Any], str, str, str, int],
+                spec: tuple[Mapping[str, Any], str, str, str, int, str, str],
             ) -> tuple[Mapping[str, Any], str, str, str, bytes]:
-                item, path, blob_sha, expected, expected_size = spec
-                raw = _fetch_blob_bytes(client, repository, blob_sha)
+                (
+                    item,
+                    path,
+                    blob_sha,
+                    expected,
+                    expected_size,
+                    repository_name,
+                    pinned_commit,
+                ) = spec
+                raw = _fetch_blob_bytes(client, repository_name, blob_sha)
                 if not raw:
                     raise SourceTransplantError(
-                        f"Pinned donor blob is empty for {repository}@{commit_sha}:{path}."
+                        f"Pinned donor blob is empty for {repository_name}@{pinned_commit}:{path}."
                     )
                 actual = "sha256:" + hashlib.sha256(raw).hexdigest()
                 if actual != expected:
                     raise SourceTransplantError(
-                        f"Pinned donor hash mismatch for {repository}@{commit_sha}:{path}."
+                        f"Pinned donor hash mismatch for {repository_name}@{pinned_commit}:{path}."
                     )
                 if len(raw) != expected_size:
                     raise SourceTransplantError(
-                        f"Pinned donor size mismatch for {repository}@{commit_sha}:{path}."
+                        f"Pinned donor size mismatch for {repository_name}@{pinned_commit}:{path}."
                     )
                 return item, path, blob_sha, actual, raw
 
@@ -801,7 +809,7 @@ def materialize_source_slices(
                 indexed_specs = tuple(enumerate(prepared))
 
                 def fetch_indexed(
-                    indexed: tuple[int, tuple[Mapping[str, Any], str, str, str, int]],
+                    indexed: tuple[int, tuple[Mapping[str, Any], str, str, str, int, str, str]],
                 ) -> tuple[int, tuple[Mapping[str, Any], str, str, str, bytes]]:
                     index, spec = indexed
                     return index, fetch_and_verify(spec)

@@ -101,7 +101,7 @@ def _start_daemon_prefetch(
     def run() -> None:
         try:
             result = _prefetch_model_worker(config, resolver)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - future boundary
             future.set_exception(exc)
         else:
             future.set_result(result)
@@ -632,7 +632,7 @@ def _parallel_retrieve_domain_evidence_factory(
             )
         try:
             domains = [central_module._research_domain(raw) for raw in raw_domains]
-        except Exception:
+        except Exception:  # noqa: BLE001 - compatibility fallback
             return original_retrieve_graph(
                 research_brief,
                 retrieve=selected_retrieve,

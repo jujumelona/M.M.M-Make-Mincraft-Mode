@@ -6,8 +6,8 @@ import os
 import shutil
 import traceback
 import xml.etree.ElementTree as ET
-from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -63,10 +63,12 @@ from .project_index_execution_reuse_contract import (
     execution_scoped,
     mark_post_generation,
     tune_gradle_resources,
-    update_from_receipt as update_execution_project_index_from_receipt,
 )
 from .project_index_execution_reuse_contract import (
     project_index as execution_project_index,
+)
+from .project_index_execution_reuse_contract import (
+    update_from_receipt as update_execution_project_index_from_receipt,
 )
 from .proposal_store import write_sharded_complete_proposal
 from .publisher import (
@@ -794,7 +796,7 @@ class CompleteProductionOrchestrator:
         """Execute durable generation nodes with capacity-owned, event-driven lanes."""
         import threading
         import time
-        from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+        from concurrent.futures import FIRST_COMPLETED, Future, wait
 
         from . import scheduler_parallel_safety_contract as scheduler_safety
         spec = approved.base_proposal.spec
@@ -1051,16 +1053,17 @@ class CompleteProductionOrchestrator:
                             raise CompleteProductionError(f'Entity generation node omitted its receipt: {module.module_id}')
                         if options.run_blockbench and (not options.source_only):
                             review_deadline = time.monotonic() + lease_seconds
-                            review_action = lambda receipt=entity_receipt, module_id=module.module_id: run_named_checkpoint(
-                                ledger,
-                                f'blockbench-review-{module_id}',
-                                stage='validate:blockbench',
-                                input_value={'graph_hash': work_plan.graph_hash, 'entity_receipt': receipt},
-                                action=lambda: self._blockbench_review(receipt, run_root),
-                                encode=lambda value: value,
-                                decode=lambda cached: cached,
-                                validate_cached=lambda cached: Path(str(cached.get('preview', ''))).is_file(),
-                            )
+                            def review_action(receipt=entity_receipt, module_id=module.module_id):
+                                return run_named_checkpoint(
+                                    ledger,
+                                    f'blockbench-review-{module_id}',
+                                    stage='validate:blockbench',
+                                    input_value={'graph_hash': work_plan.graph_hash, 'entity_receipt': receipt},
+                                    action=lambda: self._blockbench_review(receipt, run_root),
+                                    encode=lambda value: value,
+                                    decode=lambda cached: cached,
+                                    validate_cached=lambda cached: Path(str(cached.get('preview', ''))).is_file(),
+                                )
                             review_future = review_pool.submit(
                                 run_with_model_execution_deadline,
                                 review_deadline,
@@ -1316,10 +1319,10 @@ class CompleteProductionOrchestrator:
         extracted = Path(str(report.extracted_to)).resolve()
         try:
             return _locate_existing_fabric_root(extracted)
-        except CompleteProductionError as outer_error:
+        except CompleteProductionError:
             nested_members = sorted({path.split('!/', 1)[0] for path in report.source_files if '!/' in path} & {path.split('!/', 1)[0] for path in report.gradle_files if '!/' in path})
             if len(nested_members) != 1:
-                raise outer_error
+                raise
             nested_archive = (extracted / Path(*nested_members[0].split('/'))).resolve()
             try:
                 nested_archive.relative_to(extracted)
