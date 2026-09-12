@@ -50,8 +50,16 @@ def _run_properties(router, identifier, context, progress, checkpoint):
     if unknown:
         raise TemplateBlocked(f"TEMPLATE_REQUIRED_PROPERTY_UNKNOWN: {unknown}")
 
-    records: list[dict[str, Any]] = []
-    for index, requested_property in enumerate(required_properties):
+    # Required properties are host-selected independent slots. Feeding previously
+    # generated property records into later calls created an artificial dependency,
+    # grew every subsequent prompt, and forced otherwise independent model work into
+    # a serial chain. Keep one immutable base context for every slot and let the
+    # native model concurrency policy schedule only the model calls.
+    safe_checkpoint = serialized_callback(checkpoint)
+    jobs = tuple(enumerate(required_properties))
+
+    def run_property(job):
+        index, requested_property = job
         record = run_single_record_template(
             router,
             identifier,
@@ -61,17 +69,25 @@ def _run_properties(router, identifier, context, progress, checkpoint):
                 "requested_property": requested_property,
                 "record_index": index,
                 "record_count": len(required_properties),
-                "accepted_records": deepcopy(records),
+                "accepted_records": [],
             },
             progress=progress,
-            checkpoint=checkpoint,
+            checkpoint=safe_checkpoint,
         )
         if record.get("property") != requested_property:
             raise TemplateBlocked(
                 f"TEMPLATE_REQUIRED_PROPERTY_MISMATCH: expected {requested_property}, "
                 f"received {record.get('property')}"
             )
-        records.append(record)
+        return record
+
+    records = deterministic_model_map(
+        router,
+        jobs,
+        run_property,
+        role="planner",
+        thread_name_prefix="design-property",
+    )
     return records, normalized
 
 
