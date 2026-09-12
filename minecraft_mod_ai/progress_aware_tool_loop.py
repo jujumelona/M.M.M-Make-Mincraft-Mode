@@ -1652,6 +1652,41 @@ def _generate_with_tools_impl(
     )
 
     while True:
+        if (
+            implementation_requires_mutation
+            and state.workspace_changed
+            and state.validation_status == "PASS"
+            and (not require_rag or state.has_fresh_evidence)
+        ):
+            state.termination_reason = "VERIFICATION_PASSED"
+            emit_root_cause(
+                "tool_loop_complete",
+                stage=stage,
+                operation="generate_with_tools",
+                gate="verification_outcome",
+                result="PASS",
+                reason=state.termination_reason,
+                details={
+                    "step_index": state.step_index,
+                    "workspace_changed": state.workspace_changed,
+                    "validation_status": state.validation_status,
+                    "applied_mutations": tuple(state.applied_mutations),
+                },
+            )
+            return _finalize_without_tools(
+                router,
+                config,
+                adapter,
+                request,
+                messages,
+                instruction=(
+                    "Host verification passed after the applied source mutation. "
+                    "Do not call more tools. Return the final implementation summary "
+                    "using only the verified observations already present."
+                ),
+                empty_error="Agent returned an empty final response after verification passed.",
+            )
+
         state.step_index += 1
         emit_root_cause(
             "tool_loop_step_start",
