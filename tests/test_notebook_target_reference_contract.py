@@ -31,8 +31,8 @@ def test_notebook_exposes_target_and_reference_inputs_to_complete_session() -> N
     cells = _notebook_cells()
     configuration = cells["configuration"]
     plan = cells["plan"]
-    assert 'MINECRAFT_VERSION = "Auto" #@param [' in configuration
-    assert 'MINECRAFT_VERSION = "Auto" #@param {type:"string"}' not in configuration
+    assert 'MINECRAFT_VERSION = "26.2" #@param [' in configuration
+    assert 'MINECRAFT_VERSION = "Auto"' not in configuration
     for version in (
         "26.2",
         "26.1.1",
