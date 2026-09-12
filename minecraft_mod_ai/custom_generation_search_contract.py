@@ -41,6 +41,20 @@ def _active_native_slots() -> int:
         return 1
 
 
+def _submit_with_copied_context(
+    pool: Any,
+    function: Any,
+    /,
+    *args: Any,
+    **kwargs: Any,
+):
+    """Submit one compatibility task with an isolated copy of caller ContextVars."""
+    from contextvars import copy_context
+
+    context = copy_context()
+    return pool.submit(context.run, function, *args, **kwargs)
+
+
 def _width(module: Any) -> int:
     mode = _mode()
     if mode == 'off':
@@ -482,6 +496,7 @@ __all__ = [
     "_candidate_patch_capture",
     "_capture_candidate",
     "_fork_router_for_candidate",
+    "_submit_with_copied_context",
     "_target_values",
     "_verify_candidate",
     "_width",
