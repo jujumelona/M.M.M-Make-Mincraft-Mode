@@ -9,14 +9,12 @@ from minecraft_mod_ai.planning_state_resolution import (
     compile_researched_requirements,
 )
 from minecraft_mod_ai.pre_design_domain_research import (
-    _MAX_DOMAIN_EVIDENCE_CARDS,
-    _MAX_EXCERPT_CHARS,
     _exact_excerpt,
     _grounded_evidence_cards,
 )
 
 
-def test_exact_excerpt_bounds_length_and_guarantees_exact_substring() -> None:
+def test_exact_excerpt_preserves_best_exact_source_chunk() -> None:
     large_paragraph = (
         "Introduction to energy systems. "
         + ("Padding background information that does not match. " * 30)
@@ -27,7 +25,6 @@ def test_exact_excerpt_bounds_length_and_guarantees_exact_substring() -> None:
     excerpt, score = _exact_excerpt(large_paragraph, wanted)
 
     assert score > 0
-    assert len(excerpt) <= _MAX_EXCERPT_CHARS
     assert excerpt in large_paragraph
     assert "energy" in excerpt.casefold() or "storage" in excerpt.casefold()
 
@@ -44,7 +41,7 @@ def test_exact_excerpt_prefers_concise_term_dense_chunk_over_huge_blob() -> None
     assert excerpt == concise_chunk
 
 
-def test_grounded_evidence_cards_caps_top_k_distinct_salient_cards() -> None:
+def test_grounded_evidence_cards_preserves_all_distinct_relevant_cards() -> None:
     pages = []
     for i in range(12):
         source = {
@@ -75,11 +72,10 @@ def test_grounded_evidence_cards_caps_top_k_distinct_salient_cards() -> None:
 
     cards = _grounded_evidence_cards(_MockRag(), document, domain)
 
-    assert len(cards) <= _MAX_DOMAIN_EVIDENCE_CARDS
-    assert len(cards) == 4
+    assert len(cards) == len(pages) == 12
+    assert len({card["page_ref"] for card in cards}) == len(cards)
     for card in cards:
         assert card["domain_term_overlap"] > 0
-        assert len(card["exact_excerpt"]) <= _MAX_EXCERPT_CHARS
         assert card["verification"] == "host_exact_substring_from_materialized_source_page"
 
 
