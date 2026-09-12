@@ -289,6 +289,7 @@ def test_independent_custom_nodes_use_isolated_generators_in_parallel(
                     minecraft_version="1.20.1",
                     loader="fabric",
                     yarn_mappings="1.20.1+build.10",
+                    host_facts_json="",
                 ),
             )
         ),
