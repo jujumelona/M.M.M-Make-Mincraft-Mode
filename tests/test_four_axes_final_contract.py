@@ -7,24 +7,19 @@ from minecraft_mod_ai.task_template_catalog import load_template
 
 
 def test_graph_closure_is_host_owned_for_entity_property_relation():
-    source = Path("minecraft_mod_ai/task_template_runner.py").read_text(encoding="utf-8")
-    loop_anchor = source.index("    records: list[dict[str, Any]] = []\n    seen: set[str] = set()\n")
-    prop_start = source.index('if identifier == "design/content_property"', loop_anchor)
-    entity_start = source.index('if identifier == "design/content_entity"', prop_start)
-    relation_start = source.index('if identifier == "design/content_relation"', entity_start)
-    generic_start = source.index('# Research facts and design decisions', relation_start)
-    prop = source[prop_start:entity_start]
-    entity = source[entity_start:relation_start]
-    relation = source[relation_start:generic_start]
-    assert '"design/content_entity_count"' in entity
-    assert 'target_count = int(cardinality["count"])' in entity
-    assert '"design/continue_record"' not in entity + prop + relation
-    assert '"design/relation_set"' in relation
-    assert "requested_property" in prop
+    source = Path("minecraft_mod_ai/design_record_runtime.py").read_text(encoding="utf-8")
+    assert '"design/content_entity_count"' in source
+    assert 'target_count = int(cardinality["count"])' in source
+    assert '"design/content_relation_count"' in source
+    assert '"design/relation_set"' not in source
+    assert '"design/continue_record"' not in source
+    assert "requested_property" in source
+    assert "for source_id in entity_ids:" in source
+    assert "for target_id in entity_ids:" in source
 
 
 def test_relation_atomic_schemas_are_bounded():
-    for identifier in ("design/content_relation", "design/relation_set"):
+    for identifier in ("design/content_relation", "design/content_relation_count"):
         template = load_template(identifier)
         SlotDefinition(identifier, template["record_schema"]).validate_schema()
 
