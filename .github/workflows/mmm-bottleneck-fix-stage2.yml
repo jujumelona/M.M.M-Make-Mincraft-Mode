@@ -1,0 +1,160 @@
+name: verified bottleneck fixes stage2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/mmm-bottleneck-fix-stage2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Apply exact source fixes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_exact(path: str, old: str, new: str, *, count: int = 1) -> None:
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              found = text.count(old)
+              if found != count:
+                  raise SystemExit(f'{path}: expected {count} exact matches, found {found}: {old[:120]!r}')
+              p.write_text(text.replace(old, new, count), encoding='utf-8')
+
+          # 1) Remove the static-audit regressions in complete_orchestrator without
+          #    changing scheduling semantics.
+          path = 'minecraft_mod_ai/complete_orchestrator.py'
+          p = Path(path)
+          text = p.read_text(encoding='utf-8')
+          lines = text.splitlines(keepends=True)
+          future_imports = [i for i, line in enumerate(lines) if line.lstrip().startswith('from concurrent.futures import ')]
+          if len(future_imports) < 2:
+              raise SystemExit(f'{path}: expected duplicate concurrent.futures imports, found {future_imports}')
+          changed = 0
+          for i in future_imports[1:]:
+              line = lines[i]
+              if 'ThreadPoolExecutor' not in line:
+                  continue
+              line = line.replace('ThreadPoolExecutor, ', '').replace(', ThreadPoolExecutor', '').replace('ThreadPoolExecutor', '')
+              line = line.replace('import  ', 'import ')
+              lines[i] = line
+              changed += 1
+          if changed != 1:
+              raise SystemExit(f'{path}: expected exactly one duplicate ThreadPoolExecutor import to clean, changed={changed}')
+          p.write_text(''.join(lines), encoding='utf-8')
+
+          old_lambda = '''                            review_action = lambda receipt=entity_receipt, module_id=module.module_id: run_named_checkpoint(\n                                ledger,\n                                f'blockbench-review-{module_id}',\n                                stage='validate:blockbench',\n                                input_value={'graph_hash': work_plan.graph_hash, 'entity_receipt': receipt},\n                                action=lambda: self._blockbench_review(receipt, run_root),\n                                encode=lambda value: value,\n                                decode=lambda cached: cached,\n                                validate_cached=lambda cached: Path(str(cached.get('preview', ''))).is_file(),\n                            )\n'''
+          new_lambda = '''                            def review_action(\n                                receipt=entity_receipt, module_id=module.module_id\n                            ):\n                                return run_named_checkpoint(\n                                    ledger,\n                                    f'blockbench-review-{module_id}',\n                                    stage='validate:blockbench',\n                                    input_value={'graph_hash': work_plan.graph_hash, 'entity_receipt': receipt},\n                                    action=lambda: self._blockbench_review(receipt, run_root),\n                                    encode=lambda value: value,\n                                    decode=lambda cached: cached,\n                                    validate_cached=lambda cached: Path(str(cached.get('preview', ''))).is_file(),\n                                )\n'''
+          replace_exact(path, old_lambda, new_lambda)
+
+          # 2) Source transplant: no executor.map without a deadline and no wait=True
+          #    teardown. The shared deadline executor keeps deterministic input ordering.
+          path = 'minecraft_mod_ai/source_transplant.py'
+          p = Path(path)
+          text = p.read_text(encoding='utf-8')
+          if 'from .deadline_executor import iter_completed_with_deadlines\n' not in text:
+              marker = next((i for i, line in enumerate(text.splitlines(keepends=True)) if line.startswith('from .')), None)
+              if marker is None:
+                  raise SystemExit(f'{path}: no relative import anchor')
+              lines = text.splitlines(keepends=True)
+              lines.insert(marker, 'from .deadline_executor import iter_completed_with_deadlines\n')
+              p.write_text(''.join(lines), encoding='utf-8')
+
+          replace_exact(
+              path,
+              '''    download_workers = _materialization_download_workers()\n    executor = (\n        ThreadPoolExecutor(\n            max_workers=download_workers,\n            thread_name_prefix="source-transplant-download",\n        )\n        if download_workers > 1\n        else None\n    )\n    receipts: list[dict[str, Any]] = []\n''',
+              '''    download_workers = _materialization_download_workers()\n    receipts: list[dict[str, Any]] = []\n''',
+          )
+          replace_exact(
+              path,
+              '''            # Fetch and verify the whole immutable slice before the first write.\n            # executor.map preserves declared manifest order even when downloads finish out of order.\n            if executor is None:\n                fetched = [fetch_and_verify(spec) for spec in prepared]\n            else:\n                fetched = list(executor.map(fetch_and_verify, prepared))\n''',
+              '''            # Fetch and verify the whole immutable slice before the first write.\n            if download_workers <= 1 or len(prepared) <= 1:\n                fetched = [fetch_and_verify(spec) for spec in prepared]\n            else:\n                indexed = tuple(enumerate(prepared))\n\n                def fetch_indexed(item):\n                    index, spec = item\n                    return index, fetch_and_verify(spec)\n\n                fetched_by_index = {}\n                for _item, indexed_result in iter_completed_with_deadlines(\n                    indexed,\n                    fetch_indexed,\n                    max_workers=min(download_workers, len(indexed)),\n                    stage="source_transplant_download",\n                    sort_key=lambda item: item[0],\n                ):\n                    index, result = indexed_result\n                    fetched_by_index[index] = result\n                if len(fetched_by_index) != len(prepared):\n                    raise SourceTransplantError(\n                        "Source transplant download lost a donor result."\n                    )\n                fetched = [fetched_by_index[index] for index in range(len(prepared))]\n''',
+          )
+          replace_exact(
+              path,
+              '''    finally:\n        if executor is not None:\n            executor.shutdown(wait=True, cancel_futures=True)\n        client.close()\n''',
+              '''    finally:\n        client.close()\n''',
+          )
+          # Remove now-unused executor import only if this file has no remaining use.
+          p = Path(path)
+          text = p.read_text(encoding='utf-8')
+          if text.count('ThreadPoolExecutor') == 1:
+              text = text.replace('from concurrent.futures import ThreadPoolExecutor\n', '')
+              p.write_text(text, encoding='utf-8')
+
+          # 3) Asset generation: every non-failed candidate had the exact same score,
+          #    so candidate 0 was always selected. Generate the one candidate that can win.
+          path = 'minecraft_mod_ai/resource_asset_production.py'
+          replace_exact(
+              path,
+              '''                scored = []\n                failures = []\n                for index in range(profile.candidate_count):\n''',
+              '''                scored = []\n                failures = []\n                effective_candidate_count = 1\n                for index in range(effective_candidate_count):\n''',
+          )
+          replace_exact(
+              path,
+              '''                    "selected_candidate": index, "selected_score": score, "candidate_count": profile.candidate_count,\n''',
+              '''                    "selected_candidate": index, "selected_score": score, "candidate_count": effective_candidate_count,\n                    "configured_candidate_count": profile.candidate_count,\n''',
+          )
+          PY
+      - name: Compile touched Python
+        run: python -m compileall -q minecraft_mod_ai tests
+      - name: Ruff touched modules
+        run: |
+          python -m ruff check \
+            minecraft_mod_ai/complete_orchestrator.py \
+            minecraft_mod_ai/source_transplant.py \
+            minecraft_mod_ai/resource_asset_production.py \
+            minecraft_mod_ai/parallel_runtime_contract.py \
+            minecraft_mod_ai/planning_state_implementation.py \
+            minecraft_mod_ai/artifact_graph_executor.py \
+            minecraft_mod_ai/parallel_model_tasks.py \
+            tests/test_livepath_deadline_contract.py
+      - name: Targeted regressions
+        run: |
+          python -m pytest -q \
+            tests/test_artifact_graph_executor.py \
+            tests/test_livepath_deadline_contract.py \
+            tests/test_planning_pipeline_deadlines.py \
+            tests/test_pipeline_liveness_regressions.py \
+            tests/test_parallel_model_tasks.py
+      - name: High-confidence liveness assertions
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          transplant = Path('minecraft_mod_ai/source_transplant.py').read_text(encoding='utf-8')
+          assets = Path('minecraft_mod_ai/resource_asset_production.py').read_text(encoding='utf-8')
+          assert 'iter_completed_with_deadlines' in transplant
+          assert 'executor.map' not in transplant
+          assert 'shutdown(wait=True' not in transplant
+          assert 'for index in range(profile.candidate_count)' not in assets
+          assert 'effective_candidate_count = 1' in assets
+          assert 'configured_candidate_count' in assets
+          PY
+      - name: Commit verified changes
+        shell: bash
+        run: |
+          git config user.name 'mmm-hotfix-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git rm .github/workflows/mmm-bottleneck-fix-stage2.yml
+          git add minecraft_mod_ai tests
+          git commit -m 'fix: remove remaining source and asset bottlenecks'
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
