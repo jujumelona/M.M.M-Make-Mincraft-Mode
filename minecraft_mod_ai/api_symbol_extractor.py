@@ -6,6 +6,7 @@ P0-7: Research phase extracts actual symbols from target artifacts, not manual t
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -66,22 +67,46 @@ class MinecraftAPIExtractor:
         return self.extract_from_minecraft_jar(fabric_jar)
 
     def extract_from_maven(self, minecraft_version, fabric_version=None, *, artifacts=None):
-        """Download exact URL/hash pairs selected by the version authority."""
+        """Download exact URL/hash pairs in parallel, then extract in declared order."""
         del minecraft_version, fabric_version  # Coordinates alone cannot authorize artifacts.
         import tempfile
         from urllib.request import urlopen
         from .implementation_identity import compute_content_hash
         if not artifacts:
             raise APISymbolExtractionError("PINNED_ARTIFACT_URLS_AND_HASHES_REQUIRED")
+
+        declared = tuple(artifacts)
+        for artifact in declared:
+            if not artifact["url"].startswith("https://"):
+                raise APISymbolExtractionError("HTTPS_ARTIFACT_REQUIRED")
+
+        def download(index_artifact):
+            index, artifact = index_artifact
+            with urlopen(artifact["url"], timeout=60) as response:
+                data = response.read()
+            if compute_content_hash(data) != artifact["sha256"]:
+                raise APISymbolExtractionError("ARTIFACT_HASH_MISMATCH")
+            return index, data
+
+        indexed = tuple(enumerate(declared))
+        if len(indexed) == 1:
+            downloaded = [download(indexed[0])]
+        else:
+            with ThreadPoolExecutor(
+                max_workers=len(indexed),
+                thread_name_prefix="api-artifact-download",
+            ) as pool:
+                futures = [pool.submit(download, item) for item in indexed]
+                try:
+                    downloaded = [future.result() for future in futures]
+                except BaseException:
+                    for future in futures:
+                        future.cancel()
+                    raise
+
         combined = {}
         with tempfile.TemporaryDirectory(prefix="mmm-api-") as temp:
-            for index, artifact in enumerate(artifacts):
-                if not artifact["url"].startswith("https://"):
-                    raise APISymbolExtractionError("HTTPS_ARTIFACT_REQUIRED")
-                with urlopen(artifact["url"], timeout=60) as response:
-                    data = response.read()
-                if compute_content_hash(data) != artifact["sha256"]:
-                    raise APISymbolExtractionError("ARTIFACT_HASH_MISMATCH")
+            for index, data in downloaded:
                 path = Path(temp) / f"{index}.jar"
                 path.write_bytes(data)
                 for key, symbol in self.extract_from_minecraft_jar(path).items():
