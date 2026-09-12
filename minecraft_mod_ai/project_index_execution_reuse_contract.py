@@ -161,7 +161,11 @@ def _update_from_receipt(project_root: str | Path, receipt: Any) -> None:
 
 
 def update_from_receipt(project_root: str | Path, receipt: Any) -> None:
-    """Incrementally reconcile an execution-scoped index from a mutation receipt."""
+    """Reconcile the execution index from a canonical mutation receipt.
+
+    This is the public bridge for repair/edit receipts. Callers should feed the
+    committed receipt here instead of rebuilding or rescanning the project index.
+    """
     _update_from_receipt(project_root, receipt)
 
 
