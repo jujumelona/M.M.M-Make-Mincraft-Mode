@@ -310,7 +310,22 @@ def test_apply_source_edit_uses_discriminator_then_operation_detail_recovery(mon
         posts.append(dict(json))
         return _CompletionResponse(
             status_code=200,
-            payload={"choices": [{"message": {"content": replies[index]}}]},
+            payload={
+                "choices": [{
+                    "message": {
+                        "content": "",
+                        "tool_calls": [{
+                            "id": f"call_{index}",
+                            "type": "function",
+                            "function": {
+                                "name": "apply_source_edit",
+                                "arguments": replies[index],
+                            },
+                        }],
+                    },
+                    "finish_reason": "tool_calls",
+                }]
+            },
         )
 
     monkeypatch.setattr(httpx, "post", post)
