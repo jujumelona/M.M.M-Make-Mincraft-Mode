@@ -1,0 +1,195 @@
+name: verify and land livepath bottleneck fixes
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/mmm-livepath-patch-v3.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-land:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Apply structurally verified patch bundle
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/mmm-livepath-patch-v2.yml')
+          text = path.read_text(encoding='utf-8')
+          marker = "          python - <<'PY'\n"
+          start = text.index(marker) + len(marker)
+          end = text.index('\n          PY\n', start)
+          block = text[start:end]
+          script = '\n'.join(
+              line[10:] if line.startswith('          ') else line
+              for line in block.splitlines()
+          ) + '\n'
+          exec(compile(script, 'livepath_structural_patch.py', 'exec'), {'__name__': 'livepath_patch'})
+          PY
+      - name: Add liveness regression contract
+        shell: bash
+        run: |
+          cat > tests/test_livepath_liveness_contract.py <<'PY'
+          from __future__ import annotations
+
+          import inspect
+          import time
+
+          import pytest
+
+          from minecraft_mod_ai import artifact_graph_executor
+          from minecraft_mod_ai import model_router
+          from minecraft_mod_ai import parallel_model_tasks
+          from minecraft_mod_ai import planning_state_implementation
+          from minecraft_mod_ai import pre_design_rag_corrective
+          from minecraft_mod_ai import resource_asset_production
+          from minecraft_mod_ai import source_transplant
+          from minecraft_mod_ai.deadline_executor import (
+              ParallelExecutionTimeout,
+              iter_completed_with_deadlines,
+          )
+
+
+          def test_agent_tool_round_limit_is_only_explicit_circuit_breaker(monkeypatch):
+              monkeypatch.delenv('MMM_AGENT_TOOL_ROUNDS', raising=False)
+              assert model_router._agent_tool_round_limit() is None
+              monkeypatch.setenv('MMM_AGENT_TOOL_ROUNDS', '7')
+              assert model_router._agent_tool_round_limit() == 7
+
+
+          def test_corrective_round_limit_is_only_explicit_circuit_breaker(monkeypatch):
+              monkeypatch.delenv('MMM_PREDESIGN_CORRECTIVE_ROUNDS', raising=False)
+              assert pre_design_rag_corrective._corrective_round_limit() is None
+              monkeypatch.setenv('MMM_PREDESIGN_CORRECTIVE_ROUNDS', '3')
+              assert pre_design_rag_corrective._corrective_round_limit() == 3
+
+
+          def test_parallel_deadline_executor_returns_without_waiting_for_worker_cleanup(monkeypatch):
+              monkeypatch.setenv('MMM_PLANNING_WORK_UNIT_TIMEOUT_SECONDS', '0.05')
+
+              def slow_worker(_item):
+                  time.sleep(0.15)
+                  return 1
+
+              started = time.monotonic()
+              with pytest.raises(ParallelExecutionTimeout):
+                  list(
+                      iter_completed_with_deadlines(
+                          [1],
+                          slow_worker,
+                          max_workers=1,
+                          stage='deadline-regression',
+                      )
+                  )
+              assert time.monotonic() - started < 0.12
+
+
+          def test_detailed_planning_has_wall_clock_deadline_and_nonblocking_shutdown():
+              source = inspect.getsource(planning_state_implementation)
+              assert 'DETAILED_PLAN_SECTION_TIMEOUT' in source
+              assert 'wait(tuple(future_to_node), timeout=timeout' in source
+              assert 'pool.shutdown(wait=False, cancel_futures=True)' in source
+
+
+          def test_artifact_graph_has_wall_clock_deadline_and_nonblocking_shutdown():
+              source = inspect.getsource(artifact_graph_executor)
+              assert 'ARTIFACT_GRAPH_WORK_TIMEOUT' in source
+              assert 'wait(active, timeout=timeout' in source
+              assert 'generation_pool.shutdown(wait=False, cancel_futures=True)' in source
+              assert 'validation_pool.shutdown(wait=False, cancel_futures=True)' in source
+
+
+          def test_shared_parallel_model_map_uses_deadline_executor():
+              source = inspect.getsource(parallel_model_tasks.deterministic_model_map)
+              assert 'iter_completed_with_deadlines' in source
+              assert 'ThreadPoolExecutor' not in source
+
+
+          def test_source_transplant_parallel_fetch_is_bounded():
+              source = inspect.getsource(source_transplant.materialize_source_slices)
+              assert 'iter_completed_with_deadlines' in source
+              assert 'executor.map' not in source
+              assert 'shutdown(wait=True' not in source
+
+
+          def test_asset_candidates_do_not_repeat_unscored_generation():
+              source = inspect.getsource(resource_asset_production.generate_assets)
+              assert 'effective_candidate_count' in source
+              assert 'configured_candidate_count' in source
+              assert 'for index in range(profile.candidate_count)' not in source
+          PY
+      - name: Compile all Python
+        run: python -m compileall -q minecraft_mod_ai tests
+      - name: Run targeted existing and new regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          tests=(tests/test_livepath_liveness_contract.py)
+          for candidate in \
+            tests/test_planning_pipeline_deadlines.py \
+            tests/test_pipeline_liveness_regressions.py \
+            tests/test_parallel_model_tasks.py \
+            tests/test_artifact_graph_executor.py \
+            tests/test_resource_asset_production.py \
+            tests/test_progress_aware_tool_loop.py \
+            tests/test_planning_state_implementation.py; do
+            if [ -f "$candidate" ]; then tests+=("$candidate"); fi
+          done
+          while IFS= read -r candidate; do tests+=("$candidate"); done < <(find tests -maxdepth 1 -type f -name '*source*transplant*.py' -print | sort)
+          printf 'Running %s\n' "${tests[@]}"
+          python -m pytest -q "${tests[@]}"
+      - name: Run repository runtime audit on patched tree
+        run: python .github/scripts/audit_runtime_efficiency.py --output /tmp/runtime-efficiency-after.json
+      - name: Static livepath assertions
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          checks = {
+              'minecraft_mod_ai/planning_state_implementation.py': ['DETAILED_PLAN_SECTION_TIMEOUT', 'shutdown(wait=False, cancel_futures=True)'],
+              'minecraft_mod_ai/artifact_graph_executor.py': ['ARTIFACT_GRAPH_WORK_TIMEOUT', 'generation_pool.shutdown(wait=False, cancel_futures=True)', 'validation_pool.shutdown(wait=False, cancel_futures=True)'],
+              'minecraft_mod_ai/source_transplant.py': ['iter_completed_with_deadlines'],
+              'minecraft_mod_ai/parallel_model_tasks.py': ['iter_completed_with_deadlines'],
+              'minecraft_mod_ai/resource_asset_production.py': ['effective_candidate_count', 'configured_candidate_count'],
+          }
+          for path, needles in checks.items():
+              text = Path(path).read_text(encoding='utf-8')
+              for needle in needles:
+                  assert needle in text, (path, needle)
+          PY
+      - name: Commit verified source changes to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'mmm-hotfix-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          for f in \
+            .github/workflows/mmm-livepath-patch.yml \
+            .github/workflows/mmm-livepath-patch-v2.yml \
+            .github/workflows/mmm-livepath-patch-v3.yml \
+            .github/workflows/mmm-livepath-inspect.yml \
+            .github/workflows/mmm-runtime-concurrency-audit.yml; do
+            if [ -e "$f" ]; then git rm "$f"; fi
+          done
+          git add minecraft_mod_ai tests/test_livepath_liveness_contract.py
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m 'fix: bound live planning research and artifact bottlenecks'
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
