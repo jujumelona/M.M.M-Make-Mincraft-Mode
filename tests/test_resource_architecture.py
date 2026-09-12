@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from minecraft_mod_ai.complete_spec import AssetRequest, ProductionModule, _asset_from_dict
+from minecraft_mod_ai.complete_spec import (
+    AssetRequest,
+    ProductionModule,
+    _asset_from_dict,
+)
 from minecraft_mod_ai.resource_contracts import derive_module_asset_specs, resolve_asset
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,15 +58,16 @@ def test_module_assets_are_host_derived_and_owned() -> None:
     assert row["owner_module_id"] == "moon_blade"
 
 
-def test_item_serialization_switches_at_1_21_4() -> None:
-    asset = AssetRequest("texture_item_blade", "item", visual_description="dark steel blade", render_kind="item.handheld", subject_id="blade")
+def test_item_serialization_follows_host_client_item_binding() -> None:
+    asset = AssetRequest("texture_item_blade", "item", visual_description="dark steel blade", render_kind="item.generated", subject_id="blade")
     old = resolve_asset(asset, namespace="demo", minecraft_version="1.21.3")
-    new = resolve_asset(asset, namespace="demo", minecraft_version="1.21.4")
+    context = SimpleNamespace(facts={"leaf_bindings": {leaf: {"implementation": {"extra_templates": ["minecraft/resource/item/client_item"]}} for leaf in ("minecraft/item/model", "minecraft/block/model")}}, admit_template=lambda template: None)
+    new = resolve_asset(asset, namespace="demo", minecraft_version="1.21.4", version_context=context)
     assert "src/main/resources/assets/demo/items/blade.json" not in {d.target_path for d in old.documents}
     assert "src/main/resources/assets/demo/items/blade.json" in {d.target_path for d in new.documents}
 
 
-def test_render_kind_owns_default_texture_dimensions() -> None:
+def test_uv_and_gui_require_host_geometry_instead_of_generic_defaults() -> None:
     entity = AssetRequest(
         "texture_entity_guardian",
         "entity",
@@ -77,21 +83,9 @@ def test_render_kind_owns_default_texture_dimensions() -> None:
         subject_id="console",
     )
 
-    entity_texture = resolve_asset(
-        entity,
-        namespace="demo",
-        minecraft_version="1.21.4",
-    ).textures[0]
-    gui_texture = resolve_asset(
-        gui,
-        namespace="demo",
-        minecraft_version="1.21.4",
-    ).textures[0]
-
-    assert (entity_texture.width, entity_texture.height) == (64, 64)
-    assert entity_texture.size_policy == "render_kind_default"
-    assert (gui_texture.width, gui_texture.height) == (256, 256)
-    assert gui_texture.size_policy == "render_kind_default"
+    for asset in (entity, gui):
+        with pytest.raises(ValueError, match="HOST"):
+            resolve_asset(asset, namespace="demo", minecraft_version="1.21.4")
 
 
 def test_content_design_graph_only_emits_semantic_asset_requests() -> None:
@@ -126,12 +120,16 @@ def test_no_placeholder_texture_writer_in_active_paths() -> None:
     assert "make_texture_png" not in (ROOT / "minecraft_mod_ai/extended_content_generator.py").read_text(encoding="utf-8")
 
 
-def test_obsolete_backend_prompt_manifests_are_removed() -> None:
-    for relative in ("asset/block_tile.yaml", "asset/item_sprite.yaml", "asset/entity_texture.yaml", "asset/gui_panel.yaml"):
+def test_asset_prompt_fragment_consumes_resolved_authorities() -> None:
+    from minecraft_mod_ai.task_template_catalog import load_template
+    template = load_template("asset/item_sprite")
+    assert set(template["requires"]) == {"resolved_resource_contract", "resolved_generation_profile", "visual_spec"}
+    assert "PixArFK" not in template["render"]["body"]
+    for relative in ("asset/block_tile.yaml", "asset/entity_texture.yaml", "asset/gui_panel.yaml"):
         assert not (ROOT / "minecraft_mod_ai/templates" / relative).exists()
 
     validation = (ROOT / "minecraft_mod_ai/template_contract_validation.py").read_text(encoding="utf-8")
-    for identifier in ("asset/block_tile", "asset/item_sprite", "asset/entity_texture", "asset/gui_panel"):
+    for identifier in ("asset/block_tile", "asset/entity_texture", "asset/gui_panel"):
         assert identifier not in validation
 
 

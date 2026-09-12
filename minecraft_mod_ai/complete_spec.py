@@ -206,6 +206,7 @@ class AssetRequest:
     requested_width: int | None = None
     requested_height: int | None = None
     variant_count: int = 1
+    visual_spec: dict[str, Any] | None = None
 
     def validate(self, *, policy: ScalePolicy | None = None) -> None:
         from .resource_contracts import SUPPORTED_RENDER_KINDS
@@ -215,8 +216,13 @@ class AssetRequest:
             raise SpecValidationError(f"Invalid asset id: {self.asset_id!r}")
         if self.kind not in ASSET_KINDS:
             raise SpecValidationError(f"Unsupported asset kind: {self.kind!r}")
-        if not self.visual_description:
+        if not self.visual_description and self.visual_spec is None:
             raise SpecValidationError(f"Asset visual description is empty: {self.asset_id}")
+        from .resource_visual_spec import resolve_visual_spec
+        try:
+            resolve_visual_spec(self.visual_spec, self.visual_description)
+        except ValueError as exc:
+            raise SpecValidationError(str(exc)) from exc
         if self.render_kind not in SUPPORTED_RENDER_KINDS:
             raise SpecValidationError(f"Unsupported asset render kind {self.render_kind!r}: {self.asset_id}")
         if not self.subject_id:
@@ -568,8 +574,12 @@ def _module_from_dict(value: Any) -> ProductionModule:
 def _asset_from_dict(value: Any) -> AssetRequest:
     if not isinstance(value, dict):
         raise SpecValidationError("Every asset must be an object.")
+    if "visual_spec" in value and "visual_description" not in value:
+        from .resource_visual_spec import resolve_visual_spec
+        visual = resolve_visual_spec(value["visual_spec"])
+        value = {**value, "visual_description": visual.prompt_fragment()}
     semantic_required = {"asset_id", "kind", "visual_description"}
-    semantic_optional = {"render_kind", "subject_id", "owner_module_id", "container", "requested_width", "requested_height", "variant_count"}
+    semantic_optional = {"render_kind", "subject_id", "owner_module_id", "container", "requested_width", "requested_height", "variant_count", "visual_spec"}
     legacy_required = {"asset_id", "kind", "prompt", "target_path"}
     legacy_optional = {"width", "height"}
     keys = set(value)
@@ -593,6 +603,7 @@ def _asset_from_dict(value: Any) -> AssetRequest:
             requested_width=None if value.get("requested_width") is None else _strict_int(value["requested_width"], "asset.requested_width"),
             requested_height=None if value.get("requested_height") is None else _strict_int(value["requested_height"], "asset.requested_height"),
             variant_count=_strict_int(value.get("variant_count", 1), "asset.variant_count"),
+            visual_spec=value.get("visual_spec"),
         )
     if legacy_required <= keys and not (keys - legacy_required - legacy_optional):
         from .resource_contracts import infer_render_kind

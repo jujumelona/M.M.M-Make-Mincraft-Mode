@@ -3,8 +3,21 @@ execution: host
 input:
   generated_resource:
   resource_contract:
+  asset_manifest:
+  generation_profile:
+  generation_evidence:
 output:
   valid:
   failed_checks:
 proof:
-  predicate: valid is true only when every declared resource check passes
+  predicate: valid is true only when actual PNG pixels, metadata and exact model references satisfy every resolved resource contract
+checks:
+  - resource_path
+  - canonical_geometry_and_aspect_ratio
+  - uv_layout_and_coverage
+  - alpha_and_pixel_grid
+  - tile_edges
+  - animation_frames_and_mcmeta
+  - model_binding_and_texture_set_completeness
+  - gui_protected_regions
+  - registry_lora_layout_policy

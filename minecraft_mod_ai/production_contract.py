@@ -830,6 +830,7 @@ def _normalize_asset(value: Any) -> dict[str, Any]:
         'requested_width': data.get('requested_width'),
         'requested_height': data.get('requested_height'),
         'variant_count': data.get('variant_count', 1),
+        'visual_spec': _json_copy(data.get('visual_spec'), f'asset visual spec for {asset_id}'),
     }
 
 def _object_mapping(value: Any, label: str) -> dict[str, Any]:

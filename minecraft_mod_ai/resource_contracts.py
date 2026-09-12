@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import asdict, dataclass
-from pathlib import PurePosixPath
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import asdict, dataclass, field, replace
+from typing import Any
 
+from .resource_catalog import host_binding, resource_geometry, texture_contract
 from .task_template_catalog import load_template
 
 _RESOURCE_ID = re.compile(r"^[a-z0-9_.-]+$")
@@ -20,7 +21,6 @@ _DEFAULT_RENDER_KIND = {
     "block": "block.cube_all", "environment": "block.cube_all",
     "entity": "entity.fixed_uv", "gui": "gui.sprite",
 }
-_DEFAULT_TEXTURE_SIZE = {"entity.fixed_uv": (64, 64), "gui.sprite": (256, 256)}
 _MODULE_RENDER_KIND = {
     "item": "item.generated", "food": "item.generated", "armor": "item.generated",
     "tool": "item.handheld", "weapon": "item.handheld",
@@ -54,6 +54,7 @@ class TextureSpec:
     target_path: str
     width: int
     height: int
+    resource_contract: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -88,23 +89,23 @@ class ResolvedResourceAsset:
 
 
 def _normalize_subject(value: str, fallback: str) -> str:
-    raw = str(value or fallback).strip().casefold().replace(" ", "_")
-    raw = re.sub(r"[^a-z0-9_./-]", "_", raw).strip("_/")
-    if not raw or any(part in {"", ".", ".."} for part in PurePosixPath(raw).parts):
+    raw = str(value or fallback)
+    if not re.fullmatch(r"[a-z0-9_.-]+(?:/[a-z0-9_.-]+)*", raw) or any(part in {"", ".", ".."} for part in raw.split("/")):
         raise ValueError(f"Unsafe resource subject: {value!r}")
     return raw
 
 
-def _texture_size(asset: Any, render_kind: str) -> tuple[int, int, str]:
+def _texture_size(asset: Any, render_kind: str, binding: Mapping[str, Any]) -> tuple[int, int, str]:
+    canonical = resource_geometry(binding, render_kind)
     width = getattr(asset, "requested_width", None)
     height = getattr(asset, "requested_height", None)
     if width is None and height is None:
-        default = _DEFAULT_TEXTURE_SIZE.get(render_kind, (16, 16))
-        policy = "minecraft_native_default" if default == (16, 16) else "render_kind_default"
-        return default[0], default[1], policy
+        return *canonical, "host_catalog"
     if type(width) is not int or type(height) is not int or width < 1 or height < 1:
         raise ValueError("Explicit resource texture dimensions require two positive integers.")
-    return width, height, "explicit"
+    if (width, height) != canonical:
+        raise ValueError("Requested texture dimensions differ from HOST geometry.")
+    return width, height, "host_catalog"
 
 
 def _prefix(container: str) -> str:
@@ -178,7 +179,8 @@ def _slots(render_kind: str) -> tuple[tuple[str, str, str, str], ...]:
         raise ValueError(f"Unsupported render kind: {render_kind!r}") from exc
 
 
-def resolve_asset(asset: Any, *, namespace: str, minecraft_version: str, version_context: Any | None = None) -> ResolvedResourceAsset:
+def resolve_asset(asset: Any, *, namespace: str, minecraft_version: str, version_context: Any | None = None,
+                  owner_module: Any | None = None) -> ResolvedResourceAsset:
     namespace = str(namespace).strip()
     if not _RESOURCE_ID.fullmatch(namespace):
         raise ValueError(f"Invalid resource namespace: {namespace!r}")
@@ -188,10 +190,20 @@ def resolve_asset(asset: Any, *, namespace: str, minecraft_version: str, version
         raise ValueError(f"Unsupported resource render kind: {render_kind!r}")
     container = str(getattr(asset, "container", "mod") or "mod")
     prefix = _prefix(container)
-    width, height, size_policy = _texture_size(asset, render_kind)
-    variant_count = int(getattr(asset, "variant_count", 1) or 1)
-    if variant_count < 1:
-        raise ValueError("variant_count must be positive.")
+    binding = host_binding(version_context, subject)
+    if owner_module is not None and subject != owner_module.module_id:
+        raise ValueError("Asset subject differs from exact HOST owner module.")
+    module_render_kind = _MODULE_RENDER_KIND.get(str(owner_module.kind)) if owner_module else None
+    host_render_kind = binding.get("render_kind", module_render_kind or _DEFAULT_RENDER_KIND.get(str(asset.kind)))
+    if host_render_kind != render_kind:
+        raise ValueError("Asset render kind differs from HOST resource binding.")
+    width, height, size_policy = _texture_size(asset, render_kind, binding)
+    module_config = owner_module.config if owner_module else {}
+    variant_count = binding.get("variant_count", module_config.get("growth_stages", module_config.get("stage_count"))) if render_kind == "block.crop" else 1
+    if type(variant_count) is not int or variant_count < 1 or variant_count > 256:
+        raise ValueError("HOST crop stage cardinality is unresolved or invalid.")
+    if getattr(asset, "variant_count", 1) != variant_count:
+        raise ValueError("Requested texture cardinality differs from HOST content binding.")
 
     textures: list[TextureSpec] = []
     if render_kind == "block.crop":
@@ -236,7 +248,21 @@ def resolve_asset(asset: Any, *, namespace: str, minecraft_version: str, version
                 raise ValueError(f"Standalone resource document is not rooted under {source_prefix!r}: {document.target_path!r}")
             rebased.append(ResourceDocument(document.template_id, document.target_path[len(source_prefix):], document.payload))
         documents = rebased
-    return ResolvedResourceAsset(str(asset.asset_id), subject, render_kind, container, tuple(textures), tuple(documents))
+    contracted = []
+    for texture in textures:
+        contract = texture_contract(binding=binding, render_kind=render_kind, namespace=namespace,
+                                    minecraft_version=minecraft_version, target_path=texture.target_path,
+                                    role=texture.role, width=width, height=height,
+                                    topology=texture.topology, alpha=texture.alpha_policy)
+        animation = contract["animation"]
+        contracted.append(replace(texture, height=contract["geometry"]["canonical_height"],
+                                  animation_policy="vertical_frames" if animation["animated"] else "static",
+                                  resource_contract=contract))
+        if animation["mcmeta_required"]:
+            documents.append(ResourceDocument("asset/animation_plan", texture.target_path + ".mcmeta", {
+                "animation": {"width": width, "height": height, "frametime": animation["frametime"],
+                              "frames": list(range(animation["frame_count"]))}}))
+    return ResolvedResourceAsset(str(asset.asset_id), subject, render_kind, container, tuple(contracted), tuple(documents))
 
 
 def infer_render_kind(kind: str, *, target_path: str = "") -> str:
@@ -270,13 +296,14 @@ def derive_module_asset_specs(modules: Sequence[Any], *, existing_asset_ids: Seq
             parts.extend(str(item) for item in motifs if str(item).strip())
         variant_count = 1
         if module.kind == "crop":
-            try:
-                variant_count = max(1, int(config.get("growth_stages", config.get("stage_count", 8))))
-            except (TypeError, ValueError):
-                variant_count = 8
-        rows.append({"asset_id": asset_id, "kind": asset_kind, "visual_description": ", ".join(parts), "render_kind": render_kind, "subject_id": module.module_id, "owner_module_id": module.module_id, "container": "mod", "variant_count": variant_count})
+            variant_count = config.get("growth_stages", config.get("stage_count"))
+            if type(variant_count) is not int or not 1 <= variant_count <= 256:
+                raise ValueError("HOST crop stage cardinality must be explicit.")
+        from .resource_visual_spec import resolve_visual_spec
+        visual = resolve_visual_spec(config.get("visual_spec"), ", ".join(parts))
+        rows.append({"asset_id": asset_id, "kind": asset_kind, "visual_description": ", ".join(parts), "visual_spec": visual.to_dict(), "render_kind": render_kind, "subject_id": module.module_id, "owner_module_id": module.module_id, "container": "mod", "variant_count": variant_count})
         existing.add(asset_id)
     return tuple(rows)
 
 
-__all__ = ["ResolvedResourceAsset", "ResourceDocument", "SUPPORTED_RENDER_KINDS", "TextureSpec", "_host_requires_resource_template", "derive_module_asset_specs", "infer_render_kind", "resolve_asset"]
+__all__ = ["SUPPORTED_RENDER_KINDS", "ResolvedResourceAsset", "ResourceDocument", "TextureSpec", "_host_requires_resource_template", "derive_module_asset_specs", "infer_render_kind", "resolve_asset"]

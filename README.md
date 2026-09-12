@@ -109,3 +109,37 @@ and a real GameTest. Its result is scoped to that item fixture and target.
 Evidence retains raw source, actual Gradle classpath, compiled classes, logs and
 XML test reports under the selected output directory. CI uploads these records.
 Missing evidence or zero executed tests never authorizes production.
+
+### Resource image contracts
+
+The asset producer stores a `mmm/resource-asset-generation-plan-v3` manifest and
+re-resolves it against HOST facts, content owners, visual semantics and the image
+registry before generation. Older image plans must be rebuilt and approved.
+`VisualSpec` accepts only role, silhouette, materials, motifs and palette;
+`asset/item_sprite` contributes framing while the compiler consumes registry
+settings. Preferred and fallback generation resolutions belong to
+`config/model_registry.yaml`, independently of final Minecraft geometry.
+
+HOST snapshots may carry `resource_asset_bindings`, keyed by exact resource
+subject. These bindings provide `render_kind`, `geometry: {width, height}`,
+optional `animation: {frame_count, frametime}`, and explicit crop cardinality.
+Entity bindings require `uv_schema: {id, lora_compatible, regions}` with named
+`box: [x, y, width, height]` regions. GUI bindings require `gui.generated_regions`
+(background/frame/decorative_border/ornament) and `gui.protected_regions` with
+deterministic RGBA pixels. GUI controls, text and exact icons remain code/template
+responsibilities; the image compositor restores protected pixels after decoration.
+
+Entity and GUI `model_binding` must contain a consumer `path`, `sha256` and exact
+`texture_reference` such as `demo:textures/entity/guardian.png`. Production checks
+the existing consumer bytes and reference literal before inference. This is a
+resource binding check, not proof that a renderer or screen executes correctly.
+Missing layouts or consumers fail closed; no generic entity/GUI atlas is invented.
+Animated UV/GUI composition is currently rejected.
+
+PNG validation checks native geometry, palette, alpha, region coverage, tile edges,
+protected pixels, animation sidecars and the complete generated model reference
+set. Candidate sources are composed by region or animation frame using nearest-grid
+conversion. A registry fallback is attempted only after a memory allocation failure.
+Static assets reject stale animation sidecars. Pixel fixtures and stub image backends
+exercise these contracts in `tests/test_resource_contract_pipeline.py`; real model
+quality, Gradle, GameTest and Minecraft runtime validation remain separate gates.

@@ -228,8 +228,6 @@ def compile_content_graph(
             "accent",
             "surface",
             "silhouette",
-            "transparency",
-            "tileability",
         }
         allowed_properties = {
             FactType.ITEM_EXISTS: visual_properties | {"display_name", "stack_limit"},
@@ -538,6 +536,13 @@ def compile_content_graph(
                     subject_id=eid,
                     owner_module_id=eid,
                     container="mod",
+                    visual_spec={
+                        "role": str(props.get("display_name") or eid),
+                        "silhouette": str(visual.get("silhouette") or visual.get("shape") or ""),
+                        "materials": [visual["material"]] if visual.get("material") else [],
+                        "motifs": [visual["surface"]] if visual.get("surface") else [],
+                        "palette": {key: visual[source] for key, source in (("primary", "main_color"), ("accent", "accent")) if visual.get(source)},
+                    },
                 )
             )
 

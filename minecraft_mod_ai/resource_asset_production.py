@@ -7,7 +7,7 @@ import re
 import tempfile
 import zipfile
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -17,6 +17,17 @@ from .spec import SpecValidationError
 
 class AssetProductionError(RuntimeError):
     pass
+
+
+_CONTRACT_OWNED_PREFLIGHT = True
+
+
+def _preflight(proposal: CompleteProposal) -> None:
+    from .resource_asset_preflight_contract import validate_asset_generation_inputs
+    try:
+        validate_asset_generation_inputs(proposal)
+    except ValueError as exc:
+        raise AssetProductionError(f"Resource asset preflight failed: {exc}") from exc
 
 
 def bind_reuse_plan(proposal: CompleteProposal) -> CompleteProposal:
@@ -327,7 +338,10 @@ def _validate_evidence_module_binding(
     decisions: Mapping[str, Mapping[str, Any]],
     components: Mapping[str, Mapping[str, Any]],
 ) -> None:
-    from .evidence_task_receipt_contract import RECEIPT_EXTENSION_FIELDS, validate_task_receipt
+    from .evidence_task_receipt_contract import (
+        RECEIPT_EXTENSION_FIELDS,
+        validate_task_receipt,
+    )
 
     task_id = str(semantic_task.get('task_id') or '')
     if str(expected_receipt.get('task_id') or '') != task_id:
@@ -497,26 +511,38 @@ def _semantic_words(value: str) -> set[str]:
 
 def install_prebootstrap_asset_runtime() -> None:
     """Compatibility hook for old bootstrap callers. Runtime monkey-patching is gone."""
-    return None
+    return
 
 
 def _plan_row(router: Any, proposal: CompleteProposal, request: AssetRequest) -> dict[str, Any]:
     from .model_adapters.image_diffusion import ImageGenerationConfig
     from .resource_contracts import resolve_asset
     from .resource_prompt_compiler import compile_texture_prompt
+    from .resource_visual_spec import resolve_visual_spec
     image_config = router.registry.role(router.profile, "image_generator")
     profile = ImageGenerationConfig.from_adapter_config(image_config)
     spec = proposal.base_proposal.spec
     context = spec.platform.version_context if spec.platform.host_facts_json else None
-    resolved = resolve_asset(request, namespace=spec.mod_id, minecraft_version=spec.platform.minecraft_version, version_context=context)
+    owner = next((m for m in proposal.modules if m.module_id == request.owner_module_id), None)
+    if request.owner_module_id and owner is None:
+        raise AssetProductionError("Asset owner module is unresolved.")
+    resolved = resolve_asset(request, namespace=spec.mod_id, minecraft_version=spec.platform.minecraft_version,
+                             version_context=context, owner_module=owner)
+    visual = resolve_visual_spec(request.visual_spec, request.visual_description)
+    visual_bible = proposal.game_design.get("visual_identity", "")
+    if not isinstance(visual_bible, str):
+        raise AssetProductionError("Visual Bible must be semantic text.")
+    purpose = str(owner.config.get("purpose", "")) if owner else ""
     textures = []
     for texture in resolved.textures:
         textures.append({**texture.to_dict(), "prompt": compile_texture_prompt(
-            visual_description=request.visual_description, texture=texture, image_config=image_config)})
+            visual_spec=visual, visual_bible=visual_bible, feature_purpose=purpose,
+            texture=texture, image_config=image_config)})
     return {
         "asset_id": request.asset_id, "visual_description": request.visual_description,
         "render_kind": resolved.render_kind, "subject_id": resolved.subject_id,
         "container": resolved.container, "candidate_count": profile.candidate_count,
+        "visual_spec": visual.to_dict(), "generation_profile": asdict(profile),
         "textures": textures, "documents": [document.to_dict() for document in resolved.documents],
     }
 
@@ -526,12 +552,14 @@ def attach_generation_plan(router: Any, proposal: CompleteProposal) -> CompleteP
     from .resource_prompt_compiler import image_profile_fingerprint
     if not proposal.assets:
         return proposal
+    _preflight(proposal)
     image_config = router.registry.role(router.profile, "image_generator")
     plan = {
-        "schema_version": "mmm/resource-asset-generation-plan-v2",
+        "schema_version": "mmm/resource-asset-generation-plan-v3",
         "image_profile_sha256": image_profile_fingerprint(image_config),
         "assets": [_plan_row(router, proposal, request) for request in proposal.assets],
     }
+    _validate_manifest(plan["assets"])
     if proposal.game_design.get("_asset_generation_plan") == plan:
         return proposal
     updated = replace(proposal, game_design={**proposal.game_design, "_asset_generation_plan": plan}, approval_hash="").with_hash()
@@ -559,13 +587,6 @@ def _candidate_seed(asset_id: str, role: str, index: int) -> int:
     return int.from_bytes(digest[:8], "big") & ((1 << 63) - 1)
 
 
-def _model_size(width: int, height: int) -> tuple[int, int]:
-    def axis(value: int) -> int:
-        bounded = max(256, min(1024, int(value)))
-        return min(1024, ((bounded + 15) // 16) * 16)
-    return axis(width), axis(height)
-
-
 def _edge_error(image: Any) -> float:
     rgb = image.convert("RGB")
     try:
@@ -584,35 +605,41 @@ def _edge_error(image: Any) -> float:
 
 
 def _prepare(texture: Mapping[str, Any], source: Path, normalized: Path) -> float:
+    from .resource_image_pipeline import postprocess_region, validate_texture
     try:
         from PIL import Image
     except ImportError as exc:
         raise AssetProductionError("Pillow is required for resource post-processing.") from exc
     with Image.open(source) as raw:
         raw.load()
-        image = raw.convert("RGBA")
+        image = postprocess_region(raw, texture["resource_contract"], (int(texture["width"]), int(texture["height"])))
     try:
-        target_size = int(texture["width"]), int(texture["height"])
-        if image.size != target_size:
-            resized = image.resize(target_size, Image.Resampling.NEAREST)
-            image.close()
-            image = resized
-        if texture["alpha_policy"] == "opaque":
-            opaque = Image.new("RGBA", image.size, (0, 0, 0, 255))
-            opaque.alpha_composite(image)
-            image.close()
-            image = opaque
         normalized.parent.mkdir(parents=True, exist_ok=True)
         image.save(normalized, format="PNG", optimize=False)
+        validate_texture(normalized, texture)
         return 1000.0 - (_edge_error(image) if texture["topology"] == "seamless_tile" else 0.0)
     finally:
         image.close()
 
 
+def _validate_manifest(rows: Sequence[Mapping[str, Any]]) -> None:
+    paths: dict[tuple[str, str], Any] = {}
+    asset_ids = set()
+    for row in rows:
+        if row["asset_id"] in asset_ids:
+            raise AssetProductionError("Duplicate asset ID in manifest.")
+        asset_ids.add(row["asset_id"])
+        for entry in (*row["textures"], *row["documents"]):
+            key = row["container"], entry["target_path"]
+            if key in paths and ("payload" not in entry or paths[key] != entry):
+                raise AssetProductionError(f"Conflicting resource manifest path: {key}.")
+            paths[key] = entry
+
+
 def _validated_plan(router: Any, proposal: CompleteProposal) -> Mapping[str, Any]:
     from .resource_prompt_compiler import image_profile_fingerprint
     plan = proposal.game_design.get("_asset_generation_plan")
-    if not isinstance(plan, Mapping) or plan.get("schema_version") != "mmm/resource-asset-generation-plan-v2":
+    if not isinstance(plan, Mapping) or plan.get("schema_version") != "mmm/resource-asset-generation-plan-v3":
         raise AssetProductionError("Approved proposal has no canonical resource asset plan.")
     config = router.registry.role(router.profile, "image_generator")
     if plan.get("image_profile_sha256") != image_profile_fingerprint(config):
@@ -623,6 +650,10 @@ def _validated_plan(router: Any, proposal: CompleteProposal) -> Mapping[str, Any
     ids = [str(row.get("asset_id")) for row in rows if isinstance(row, Mapping)]
     if ids != [request.asset_id for request in proposal.assets]:
         raise AssetProductionError("Resource asset plan no longer matches semantic assets.")
+    expected = [_plan_row(router, proposal, request) for request in proposal.assets]
+    if json.dumps(rows, sort_keys=True) != json.dumps(expected, sort_keys=True):
+        raise AssetProductionError("Approved resource contract/manifest differs from current HOST/visual inputs.")
+    _validate_manifest(rows)
     return plan
 
 
@@ -835,6 +866,7 @@ def _atomic_write_bytes(target: Path, data: bytes) -> None:
 
 def generate_assets(router: Any, proposal: CompleteProposal, project_root: Path, run_root: Path) -> dict[str, Any]:
     from .model_adapters.image_diffusion import ImageGenerationConfig
+    from .resource_image_pipeline import generate_candidate, validate_texture
     if not proposal.assets:
         return {
             "schema_version": "mmm/resource-production-receipt-v2",
@@ -847,9 +879,19 @@ def generate_assets(router: Any, proposal: CompleteProposal, project_root: Path,
             },
             "resource_pack_zip": "",
         }
+    _preflight(proposal)
     plan = _validated_plan(router, proposal)
     profile = ImageGenerationConfig.from_adapter_config(router.registry.role(router.profile, "image_generator"))
     rows = [dict(row) for row in plan["assets"]]
+    from .resource_image_pipeline import validate_model_consumers
+    for row in rows:
+        validate_model_consumers(_container_root(project_root, run_root, row["container"]), row["textures"])
+        root = _container_root(project_root, run_root, row["container"])
+        for texture in row["textures"]:
+            if not texture["resource_contract"]["animation"]["mcmeta_required"]:
+                stale = _safe_target(root, texture["target_path"] + ".mcmeta")
+                if stale.exists():
+                    raise AssetProductionError(f"Static texture conflicts with existing animation metadata: {stale}")
     candidate_root = run_root / ".minecraft_ai" / "resource-candidates"
     receipts = []
     with router.image_generation_session("image_generator"):
@@ -860,17 +902,23 @@ def generate_assets(router: Any, proposal: CompleteProposal, project_root: Path,
                 if not isinstance(texture, Mapping):
                     raise AssetProductionError("Invalid texture contract.")
                 asset_id, role, prompt = str(row["asset_id"]), str(texture["role"]), str(texture["prompt"])
-                sw, sh = _model_size(int(texture["width"]), int(texture["height"]))
                 scored = []
+                failures = []
                 for index in range(profile.candidate_count):
-                    source = candidate_root / asset_id / role / f"source-{index:02d}.png"
                     normalized = candidate_root / asset_id / role / f"normalized-{index:02d}.png"
-                    router.generate_image("image_generator", prompt=prompt, output_path=source, width=sw, height=sh,
-                                          seed=_candidate_seed(asset_id, role, index))
-                    if not source.is_file() or source.is_symlink():
-                        raise AssetProductionError(f"Image backend produced no source for {asset_id}:{role}:{index}.")
-                    scored.append((_prepare(texture, source, normalized), index, normalized))
-                score, index, winner = sorted(scored, key=lambda item: (-item[0], item[1]))[0]
+                    try:
+                        evidence = generate_candidate(
+                            lambda **kwargs: router.generate_image("image_generator", **kwargs), texture,
+                            prompt=prompt, directory=candidate_root / asset_id / role / f"candidate-{index:02d}",
+                            output=normalized, resolution=profile.preferred_generation_resolution,
+                            fallback=profile.fallback_generation_resolution, seed=_candidate_seed(asset_id, role, index))
+                    except ValueError as exc:
+                        failures.append({"candidate": index, "reason": str(exc)})
+                        continue
+                    scored.append((1000.0, index, normalized, evidence))
+                if not scored:
+                    raise AssetProductionError(f"No candidate satisfies resource contract for {asset_id}:{role}: {failures}")
+                score, index, winner, evidence = min(scored, key=lambda item: (-item[0], item[1]))
                 target = _safe_target(container_root, str(texture["target_path"]))
                 _atomic_write_bytes(target, winner.read_bytes())
                 receipts.append({
@@ -879,10 +927,19 @@ def generate_assets(router: Any, proposal: CompleteProposal, project_root: Path,
                     "width": int(texture["width"]), "height": int(texture["height"]),
                     "topology": str(texture["topology"]), "alpha_policy": str(texture["alpha_policy"]),
                     "selected_candidate": index, "selected_score": score, "candidate_count": profile.candidate_count,
+                    "generation_evidence": evidence, "rejected_candidates": failures,
                     "prompt_sha256": "sha256:" + hashlib.sha256(prompt.encode()).hexdigest(),
                     "sha256": "sha256:" + hashlib.sha256(target.read_bytes()).hexdigest(), "placeholder": False,
                 })
     documents = _write_documents(project_root, run_root, rows)
+    resource_checks = []
+    for row in rows:
+        root = _container_root(project_root, run_root, row["container"])
+        for texture in row["textures"]:
+            try:
+                resource_checks.append(validate_texture(_safe_target(root, texture["target_path"]), texture, check_metadata=True))
+            except ValueError as exc:
+                raise AssetProductionError(f"Final resource validation failed: {exc}") from exc
     graph_validation = _validate_reference_closure(
         project_root, run_root, rows, namespace=proposal.base_proposal.spec.mod_id
     )
@@ -896,6 +953,7 @@ def generate_assets(router: Any, proposal: CompleteProposal, project_root: Path,
         "resource_graph_validation": graph_validation,
         "container_validation": container_validation,
         "resource_pack_zip": resource_pack_zip,
+        "resource_contract_validation": {"status": "PASS", "textures": resource_checks},
         "checks": {
             "semantic_contract_resolved": True,
             "deterministic_prompt_compiler": True,
@@ -906,5 +964,8 @@ def generate_assets(router: Any, proposal: CompleteProposal, project_root: Path,
         },
     }
 
+
+attach_generation_plan._mmm_resource_asset_preflight = True
+generate_assets._mmm_resource_asset_preflight = True
 
 __all__ = ["AssetProductionError", "attach_generation_plan", "bind_reuse_plan", "generate_assets", "install_prebootstrap_asset_runtime"]

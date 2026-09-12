@@ -28,10 +28,30 @@ class ImageGenerationConfig:
     num_inference_steps: int
     guidance_scale: float
     candidate_count: int
+    preferred_generation_resolution: tuple[int, int]
+    fallback_generation_resolution: tuple[int, int] | None
+    lora_allowed_layouts: tuple[str, ...]
+    prompt_requirements: tuple[str, ...]
 
     @classmethod
     def from_adapter_config(cls, config: Any) -> "ImageGenerationConfig":
         extra: Mapping[str, Any] = config.extra if isinstance(config.extra, Mapping) else {}
+        def resolution(name: str, optional: bool = False) -> tuple[int, int] | None:
+            value = extra.get(name)
+            if optional and value is None:
+                return None
+            if not isinstance(value, Mapping) or set(value) != {"width", "height"}:
+                raise ModelConfigurationError(f"Registry {name} requires width and height.")
+            axes = value["width"], value["height"]
+            if any(type(v) is not int or v % 16 or not 256 <= v <= 1024 for v in axes):
+                raise ModelConfigurationError(f"Registry {name} must be 256-1024 and divisible by 16.")
+            return axes
+
+        def strings(name: str) -> tuple[str, ...]:
+            value = extra.get(name, ())
+            if not isinstance(value, (tuple, list)) or any(not isinstance(v, str) or not v.strip() for v in value):
+                raise ModelConfigurationError(f"Registry {name} must contain strings.")
+            return tuple(value)
         result = cls(
             model_id=str(config.model_id or "").strip(),
             quantization=str(config.quantization).strip() if config.quantization else None,
@@ -45,6 +65,10 @@ class ImageGenerationConfig:
             num_inference_steps=int(extra.get("num_inference_steps", 4)),
             guidance_scale=float(extra.get("guidance_scale", 1.0)),
             candidate_count=int(extra.get("candidate_count", 4)),
+            preferred_generation_resolution=resolution("preferred_generation_resolution"),
+            fallback_generation_resolution=resolution("fallback_generation_resolution", optional=True),
+            lora_allowed_layouts=strings("lora_allowed_layouts"),
+            prompt_requirements=strings("prompt_requirements"),
         )
         result.validate()
         return result

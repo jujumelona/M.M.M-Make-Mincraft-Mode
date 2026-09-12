@@ -226,5 +226,6 @@ def runtime_consumer_roots():
         "design/content_relation_count", "design/content_property",
         "design/decision", "design/research_fact",
         "asset/item_sprite",
+        "asset/visual_spec",
     })
     return frozenset(roots)

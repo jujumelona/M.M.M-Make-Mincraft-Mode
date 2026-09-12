@@ -1,10 +1,30 @@
 id: asset/texture_plan
 execution: host
 input:
-  texture_requirement:
-  visual_evidence:
+  resolved_minecraft_target:
+  host_resource_catalog:
+  content_graph:
+  visual_spec:
 output:
-  texture_contract:
+  resource_contract:
+    fields:
+      - resource.namespace
+      - resource.path
+      - geometry.canonical_width
+      - geometry.canonical_height
+      - geometry.aspect_ratio
+      - geometry.layout
+      - rendering.alpha
+      - rendering.tileable
+      - rendering.uv_schema
+      - animation
+      - model.family
+      - model.binding
+      - gui.protected_regions
+      - gui.generated_regions
+      - generation_profile_ref
+      - postprocess
+  asset_manifest:
   unresolved_properties:
 proof:
-  predicate: every fixed texture property is evidence-backed or explicitly authored
+  predicate: HOST resolves all resource properties and expands the exact texture and metadata set; unresolved UV, model or GUI bindings block generation

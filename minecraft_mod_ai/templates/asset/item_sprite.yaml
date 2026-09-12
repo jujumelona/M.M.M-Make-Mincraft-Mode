@@ -1,14 +1,13 @@
 id: asset/item_sprite
-task: Render one Minecraft item sprite prompt from the supplied visual description.
-inputs:
-  visual_description:
-    type: string
-    minLength: 1
-    maxLength: 512
-    required: true
+task: Supply item framing to PromptCompiler using resolved contracts and visual semantics.
+requires:
+  - resolved_resource_contract
+  - resolved_generation_profile
+  - visual_spec
 rules:
-  - Use visual_description exactly as supplied; do not invent missing visual requirements.
-  - Preserve isolated-sprite framing and transparent-background intent.
+  - Consume HOST geometry and model binding without inferring replacements.
+  - PromptCompiler supplies registry settings and semantic VisualSpec.
+  - This fragment owns framing only; it must not own model IDs, LoRA triggers or dimensions.
 render:
   language: text
-  body: "isolated item sprite, transparent background, {{visual_description}}"
+  body: "isolated item sprite, single object, centered, transparent background, no environment, no inventory slot"

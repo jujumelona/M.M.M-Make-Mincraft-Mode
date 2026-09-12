@@ -82,8 +82,10 @@ class ResolvedVersionContext:
             raise VersionContextError("INVALID_VERSION_CONTEXT")
         target_contract_from_mapping(value["target"])
         facts = value["host_facts"]
-        if not isinstance(facts, dict) or not _FACT_FIELDS <= set(facts) or set(facts) - _FACT_FIELDS - {"api_inspection"}:
+        if not isinstance(facts, dict) or not _FACT_FIELDS <= set(facts) or set(facts) - _FACT_FIELDS - {"api_inspection", "resource_asset_bindings"}:
             raise VersionContextError("HOST_BUNDLE_INCOMPLETE", fields=sorted(_FACT_FIELDS))
+        if not isinstance(facts.get("resource_asset_bindings", {}), dict):
+            raise VersionContextError("HOST_FACT_TYPE", field="resource_asset_bindings")
         if not isinstance(facts["host_revision"], str) or not facts["host_revision"].strip():
             raise VersionContextError("HOST_REVISION_REQUIRED")
         for key in _FACT_FIELDS - {"host_revision", "repositories"}:

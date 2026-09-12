@@ -45,11 +45,17 @@ def validate_asset_generation_inputs(proposal: Any) -> dict[str, Any]:
     target = _target_receipt(getattr(proposal, "game_design", None))
     standalone = False
     for asset in assets:
-        pure = canonical_asset_target(str(getattr(asset, "target_path", "")))
-        standalone = standalone or bool(pure.parts and pure.parts[0] == "assets")
+        if hasattr(asset, "render_kind"):
+            asset.validate()
+            standalone = standalone or asset.container == "resource_pack"
+        else:
+            # Legacy boundary callers still receive strict PNG path validation.
+            pure = canonical_asset_target(str(getattr(asset, "target_path", "")))
+            standalone = standalone or bool(pure.parts and pure.parts[0] == "assets")
 
     if standalone:
-        pack_format = target.get("resource_pack_format")
+        platform = getattr(getattr(getattr(proposal, "base_proposal", None), "spec", None), "platform", None)
+        pack_format = getattr(platform, "resource_pack_format", target.get("resource_pack_format"))
         if type(pack_format) is not int or pack_format < 1:
             raise ResourceAssetPreflightError(
                 "Selected platform must supply a positive resource_pack_format before asset generation."

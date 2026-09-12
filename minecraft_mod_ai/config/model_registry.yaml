@@ -31,6 +31,21 @@ _shared_image_gen: &image_gen
   num_inference_steps: 4
   guidance_scale: 1.0
   candidate_count: 4
+  preferred_generation_resolution:
+    width: 1024
+    height: 1024
+  fallback_generation_resolution:
+    width: 512
+    height: 512
+  lora_allowed_layouts:
+    - isolated_sprite
+    - seamless_tile
+    - single_face
+    - cutout_sprite
+    - gui_decoration
+    - uv_region
+  prompt_requirements:
+    - readable silhouette at native pixel grid
 
 _fast_test_text: &fast_test_text
   model_id: mock/fast-test-engine
