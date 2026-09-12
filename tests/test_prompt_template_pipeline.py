@@ -17,24 +17,43 @@ class PromptRouter:
         self.calls = []
         self.interrupt_at = None
 
+    @staticmethod
+    def _base_record_tool(tool_name):
+        if tool_name.startswith('submit_one_'):
+            return 'submit_' + tool_name.removeprefix('submit_one_')
+        if tool_name.endswith('_count'):
+            return tool_name.removesuffix('_count')
+        return tool_name
+
     def generate_tool_decision(self, role, messages, *, tool_name, parameters, **kwargs):
-        context = json.loads(messages[1]['content'])
+        context = json.loads(messages[-1]['content'])
         self.calls.append((tool_name, deepcopy(context), deepcopy(parameters)))
         assert context['original_prompt'] == self.prompt
-        assert set(context) <= {'original_prompt', 'accepted_records', 'allowed_evidence_refs'}
         if len(self.calls) == self.interrupt_at:
             raise TimeoutError('interrupted during prompt extraction')
         if tool_name == 'submit_prompt_intent':
             return {'statement': self.prompt, 'source_quote': self.prompt}
         if tool_name == 'submit_prompt_scope':
             return {'scope_status': 'explicit'}
-        records = self.records.get(tool_name, [])
-        index = len(context['accepted_records'])
-        if index < len(records):
-            return {'status': 'record', 'record': records[index], 'reason': '', 'evidence_refs': []}
-        return {'status': 'done' if index else 'not_applicable', 'record': None,
-                'reason': '' if index else 'The original prompt states no requirement of this kind.',
-                'evidence_refs': []}
+
+        base = self._base_record_tool(tool_name)
+        records = self.records.get(base, [])
+        if tool_name.endswith('_count'):
+            assert set(context) <= {'original_prompt', 'allowed_evidence_refs'}
+            return {'count': len(records), 'blocked_reason': ''}
+        if tool_name.startswith('submit_one_'):
+            assert set(context) <= {
+                'original_prompt',
+                'allowed_evidence_refs',
+                'record_index',
+                'record_ordinal',
+                'record_count',
+            }
+            index = int(context['record_index'])
+            assert context['record_count'] == len(records)
+            assert context['record_ordinal'] == index + 1
+            return deepcopy(records[index])
+        raise AssertionError(f'unexpected prompt tool: {tool_name}')
 
 
 def test_live_prompt_boundary_executes_only_declared_small_tasks():
@@ -50,16 +69,27 @@ def test_live_prompt_boundary_executes_only_declared_small_tasks():
     assert state['references'] == []
     assert state['unresolved'] == []
     names = [call[0] for call in router.calls]
-    assert set(names) == {'submit_prompt_intent', 'submit_prompt_parse',
-        'submit_prompt_entity_resolution', 'submit_prompt_constraints',
-        'submit_prompt_output_requirements', 'submit_prompt_scope', 'submit_prompt_ambiguities'}
+    assert {'submit_prompt_intent', 'submit_prompt_scope'} <= set(names)
+    for identifier in (
+        'prompt/parse',
+        'prompt/entity_resolution',
+        'prompt/constraints',
+        'prompt/ambiguities',
+        'prompt/output_requirements',
+    ):
+        stem = identifier.replace('/', '_')
+        assert f'submit_{stem}_count' in names
+    assert 'submit_one_prompt_parse' in names
+    assert 'submit_one_prompt_output_requirements' in names
     assert 'submit_prompt_state' not in names
     for name, _, schema in router.calls:
         if name in {'submit_prompt_intent', 'submit_prompt_scope'}:
             identifier = 'prompt/' + name.removeprefix('submit_prompt_')
             assert schema == load_template(identifier)['output_schema']
+        elif name.endswith('_count'):
+            assert set(schema['properties']) == {'count', 'blocked_reason'}
         else:
-            assert set(schema['properties']) == {'status', 'record', 'reason', 'evidence_refs'}
+            assert name.startswith('submit_one_')
 
 
 def test_named_reference_retains_host_owned_research_routing():
@@ -77,15 +107,26 @@ def test_named_reference_retains_host_owned_research_routing():
 def test_prompt_tasks_resume_partial_and_completed_records_without_repeating_calls():
     prompt = 'Add a compass.'
     router = PromptRouter(prompt, {'submit_prompt_parse': [{'statement': prompt}]})
-    router.interrupt_at = 3  # intent, first fact, interrupted fact completion
+    # intent, parse cardinality, accepted parse record, then interrupt at the next concern.
+    router.interrupt_at = 4
     progress = {}
     kwargs = dict(progress=progress, checkpoint=lambda key, value: progress.update({key: value}))
     with pytest.raises(TimeoutError):
         extract_prompt_records(router, prompt, **kwargs)
-    assert len(progress) == 3  # exact capture, intent, first fact
+    assert progress
+    accepted_before_resume = deepcopy(progress)
+    calls_before_resume = len(router.calls)
+
+    router.interrupt_at = None
     result = extract_prompt_records(router, prompt, **kwargs)
     assert result['known'] == [{'statement': prompt}]
-    assert router.calls[2][:2] == router.calls[3][:2]
+    # Saved intent/cardinality/record checkpoints are reused rather than regenerated.
+    resumed_names = [name for name, _, _ in router.calls[calls_before_resume:]]
+    assert 'submit_prompt_intent' not in resumed_names
+    assert 'submit_prompt_parse_count' not in resumed_names
+    assert 'submit_one_prompt_parse' not in resumed_names
+    assert set(accepted_before_resume) <= set(progress)
+
     count = len(router.calls)
     assert extract_prompt_records(router, prompt, **kwargs) == result
     assert len(router.calls) == count
@@ -121,7 +162,7 @@ def test_pipeline_restores_prompt_checkpoint_before_research(monkeypatch):
     from minecraft_mod_ai import planning_state_pipeline as pipeline
     prompt = 'Add a compass.'
     router = PromptRouter(prompt, {'submit_prompt_parse': [{'statement': prompt}]})
-    router.interrupt_at = 3
+    router.interrupt_at = 4
     snapshots = []
     with pytest.raises(TimeoutError):
         build_initial_planning_state(router, prompt, checkpoint=snapshots.append)
@@ -139,11 +180,13 @@ def test_pipeline_restores_prompt_checkpoint_before_research(monkeypatch):
         assert 'checkpoint_kind' not in state
         raise ReachedResearch
 
+    router.interrupt_at = None
     monkeypatch.setattr(pipeline, 'collect_planning_state_research_convergent', research)
     with pytest.raises(ReachedResearch):
         pipeline.prepare_planning_state(router, prompt, existing_state=restored, checkpoint=snapshots.append)
     assert [c[0] for c in router.calls].count('submit_prompt_intent') == 1
-    assert router.calls[2][:2] == router.calls[3][:2]
+    assert [c[0] for c in router.calls].count('submit_prompt_parse_count') == 1
+    assert [c[0] for c in router.calls].count('submit_one_prompt_parse') == 1
 
 
 @pytest.mark.parametrize('change', ['prompt', 'tamper'])
