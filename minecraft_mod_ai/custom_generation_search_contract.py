@@ -7,8 +7,6 @@ import os
 import shutil
 import tempfile
 from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor
-from contextvars import copy_context
 from functools import wraps
 from pathlib import Path
 from typing import Any
@@ -21,12 +19,14 @@ from .custom_generation_research import (
     _StrategyRouter,
     _target_values,
 )
+from .deadline_executor import iter_completed_with_deadlines
 
 _STRATEGIES = (
     "minimal_surface_area",
     "api_contract_first",
     "runtime_and_persistence_first",
 )
+
 
 def _mode() -> str:
     value = os.environ.get('MMM_AGENTIC_SEARCH', 'auto').strip().lower()
@@ -39,17 +39,6 @@ def _active_native_slots() -> int:
         return max(1, min(8, int(raw)))
     except ValueError:
         return 1
-
-
-def _submit_with_copied_context(
-    pool: ThreadPoolExecutor,
-    function: Any,
-    /,
-    *args: Any,
-    **kwargs: Any,
-):
-    context = copy_context()
-    return pool.submit(context.run, function, *args, **kwargs)
 
 
 def _width(module: Any) -> int:
@@ -206,7 +195,7 @@ def _capture_candidate(
 
     ``coder_max_efficiency_contract`` owns the shared-base fan-out, while this
     module owns candidate research/strategy routing and the exact before/after
-    patch contract.  Keep an immutable, copy-on-write sibling snapshot until the
+    patch contract. Keep an immutable, copy-on-write sibling snapshot until the
     generated receipt has been checked so a later concurrent winner commit still
     has the base bytes required for a three-way rebase.
     """
@@ -350,23 +339,35 @@ def install(custom_module_generator_module: Any) -> None:
                 shutil.rmtree(candidate_root.parent, ignore_errors=True)
                 raise
 
+        def solve_job(
+            candidate_index: int,
+        ) -> tuple[int, Path | None, dict[str, Any] | None, BaseException | None]:
+            try:
+                index, candidate_root, result = solve(candidate_index)
+                return index, candidate_root, result, None
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException as exc:
+                return candidate_index, None, None, exc
+
         try:
             workers = min(count, _active_native_slots())
-            with ThreadPoolExecutor(
+            for _job, outcome in iter_completed_with_deadlines(
+                tuple(range(count)),
+                solve_job,
                 max_workers=workers,
-                thread_name_prefix='mmm_custom_generate',
-            ) as pool:
-                futures = [
-                    _submit_with_copied_context(pool, solve, index)
-                    for index in range(count)
-                ]
-                for candidate_index, future in enumerate(futures):
-                    try:
-                        candidates.append(future.result())
-                    except BaseException as exc:
-                        errors[candidate_index] = exc
-                        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-                            raise
+                stage='custom-generation-candidates',
+            ):
+                candidate_index, candidate_root, result, error = outcome
+                if error is not None:
+                    errors[candidate_index] = error
+                    continue
+                if candidate_root is None or result is None:
+                    errors[candidate_index] = RuntimeError(
+                        'Custom generation candidate returned no result.'
+                    )
+                    continue
+                candidates.append((candidate_index, candidate_root, result))
 
             candidates.sort(key=lambda item: item[0])
             if not candidates:
@@ -382,11 +383,16 @@ def install(custom_module_generator_module: Any) -> None:
             if len(candidates) == 1:
                 evaluations = [verify(candidates[0])]
             else:
-                with ThreadPoolExecutor(
-                    max_workers=min(2, len(candidates)),
-                    thread_name_prefix='mmm_custom_verify',
-                ) as pool:
-                    evaluations = list(pool.map(verify, candidates))
+                evaluations = [
+                    evaluation
+                    for _job, evaluation in iter_completed_with_deadlines(
+                        tuple(candidates),
+                        verify,
+                        max_workers=min(2, len(candidates)),
+                        stage='custom-generation-verification',
+                        sort_key=lambda item: item[0],
+                    )
+                ]
 
             evaluations.sort(
                 key=lambda item: (
@@ -432,9 +438,6 @@ def install(custom_module_generator_module: Any) -> None:
                 'research_aware': True,
                 'dependency_admission': 'exact',
             }
-            # The base generator's checkpoint is intentionally retained while this
-            # candidate is only staged.  Acknowledge its opaque cleanup token only
-            # after the winning patch has committed to the live project above.
             winner_checkpoint_acknowledged = bool(
                 self.acknowledge_generation_checkpoint(rewritten)
             )
