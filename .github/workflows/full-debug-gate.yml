@@ -2,6 +2,18 @@ name: Full Debug Gate
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "M.M.M_Make_Mincraft_Mode_Colab.ipynb"
+      - "minecraft_mod_ai/api.py"
+      - "minecraft_mod_ai/colab_run_modes.py"
+      - "minecraft_mod_ai/bounded_record_template.py"
+      - "minecraft_mod_ai/templates/prompt/parse.yaml"
+      - "tests/test_colab_debug_fixture_path.py"
+      - "tests/test_record_cardinality_blocking_contract.py"
+      - ".github/workflows/full-debug-gate.yml"
 
 permissions:
   contents: read
@@ -43,6 +55,12 @@ jobs:
 
       - name: Collect the entire pytest suite
         run: python -m pytest --collect-only -q
+
+      - name: Execute Colab Debug fixture and cardinality regressions
+        run: |
+          python -m pytest -q \
+            tests/test_colab_debug_fixture_path.py \
+            tests/test_record_cardinality_blocking_contract.py
 
       - name: Run exhaustive project Debug audit with compact root-cause output
         if: ${{ always() }}
