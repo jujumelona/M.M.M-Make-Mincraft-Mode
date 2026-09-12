@@ -291,7 +291,7 @@ def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
             if _limit_reached(len(records), result_limit):
                 break
 
-        gain = _coverage_gain(wanted, covered, coverage_values)
+        _coverage_gain(wanted, covered, coverage_values)
         try:
             server_offset = int(payload.get("offset", offset) or offset)
         except (TypeError, ValueError, OverflowError):
@@ -304,7 +304,7 @@ def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
             break
         if len(hits) < page_size and not provider_total:
             break
-        if wanted and gain == 0:
+        if wanted and wanted.issubset(covered):
             break
         offset = next_offset
 
@@ -449,7 +449,7 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
             if _limit_reached(len(records), result_limit):
                 break
 
-        gain = _coverage_gain(wanted, covered, coverage_values)
+        _coverage_gain(wanted, covered, coverage_values)
         pagination = payload.get("pagination") if isinstance(payload, Mapping) else None
         if not isinstance(pagination, Mapping):
             if len(rows) < page_size:
@@ -471,7 +471,7 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
         if next_index <= index:
             errors.append("nonadvancing_search_index")
             break
-        if wanted and gain == 0:
+        if wanted and wanted.issubset(covered):
             break
         index = next_index
 
@@ -640,13 +640,13 @@ def _search_github(
             if _limit_reached(len(records), result_limit):
                 break
 
-        gain = _coverage_gain(wanted, covered, coverage_values)
+        _coverage_gain(wanted, covered, coverage_values)
         consumed += len(rows)
         if provider_total and consumed >= provider_total:
             break
         if len(rows) < page_size:
             break
-        if wanted and gain == 0:
+        if wanted and wanted.issubset(covered):
             break
         page += 1
 
