@@ -98,9 +98,6 @@ def _install_project_index_parallel_scan(project_index_module: Any) -> None:
             if path.is_file() and not path.is_symlink()
         )
         configured = bool(os.environ.get("MMM_PROJECT_INDEX_WORKERS", "").strip())
-        # Thread startup dominates tiny source trees. An explicit host setting opts
-        # into parallel execution even for small projects, which also makes the
-        # concurrency boundary directly testable.
         if len(paths) < 16 and not configured:
             return current(self)
         workers = _project_index_scan_workers(len(paths))
@@ -115,8 +112,6 @@ def _install_project_index_parallel_scan(project_index_module: Any) -> None:
             max_workers=workers,
             thread_name_prefix="mmm-project-index",
         ) as pool:
-            # Executor.map preserves the deterministic lexical path order while file
-            # reads, hashes and tokenization happen concurrently.
             indexed = tuple(pool.map(index_one, paths))
         return tuple(item for item in indexed if item is not None)
 
@@ -278,14 +273,13 @@ def _install_cpu_capacity_policy(scheduler_safety: Any) -> None:
     scheduler_safety._cpu_capacity = cpu_capacity
 
 
-def _replace_stage_locks_with_anchor_fencing(work_graph_module: Any) -> None:
-    """Replace global stage critical sections with WorkGraph collision edges."""
+def _enable_anchor_fenced_parallelism(work_graph_module: Any) -> None:
+    """Drop coarse stage admission once WorkGraph collision edges own serialization."""
     from . import scheduler_parallel_safety_contract as scheduler_safety
 
     anchor_resolver = getattr(work_graph_module, "_exclusive_anchor_keys", None)
     if not callable(anchor_resolver) or not getattr(anchor_resolver, "_mmm_unscoped_fallback", False):
         return
-    scheduler_safety._STAGE_WRITE_LOCKS.clear()
     scheduler_safety._SERIAL_CPU_STAGES = ()
     _install_cpu_capacity_policy(scheduler_safety)
 
@@ -304,7 +298,7 @@ def install() -> None:
         _install_project_index_parallel_scan(project_index)
         _install_project_index_snapshot_lock(project_index)
         _install_exact_anchor_fallback(work_graph)
-        _replace_stage_locks_with_anchor_fencing(work_graph)
+        _enable_anchor_fenced_parallelism(work_graph)
         _INSTALLED = True
 
 
