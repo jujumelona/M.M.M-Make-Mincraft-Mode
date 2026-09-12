@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable, Iterable
-from concurrent.futures import ThreadPoolExecutor
-from contextvars import ContextVar, copy_context
+from contextvars import ContextVar
 from typing import Any, TypeVar
 
+from .deadline_executor import iter_completed_with_deadlines
 from .model_concurrency import router_native_model_parallelism
 
 _T = TypeVar("_T")
@@ -39,11 +39,9 @@ def deterministic_model_map(
 ) -> list[_R]:
     """Run independent calls on measured native slots and return input-order results.
 
-    Remote/unproven routers stay serial. ContextVars are copied into each worker, output
-    order is deterministic, and any failure cancels work that has not started yet.
-    Nested maps stay serial inside an already scheduled worker: the outer map already
-    owns the available parallel width, so another executor would only create threads
-    that wait behind the router's global native-model capacity gate.
+    Remote/unproven routers stay serial. Parallel work is scheduled through the shared
+    deadline executor so one blocked provider call cannot pin the caller indefinitely.
+    Nested maps stay serial because the outer map already owns the measured model width.
     """
 
     values = tuple(items)
@@ -62,28 +60,29 @@ def deterministic_model_map(
         finally:
             _MODEL_PARALLEL_DEPTH.reset(token)
 
-    def run_one(value: _T) -> _R:
+    def run_indexed(item: tuple[int, _T]) -> tuple[int, _R]:
+        index, value = item
         token = _MODEL_PARALLEL_DEPTH.set(_MODEL_PARALLEL_DEPTH.get() + 1)
         try:
-            return worker(value)
+            return index, worker(value)
         finally:
             _MODEL_PARALLEL_DEPTH.reset(token)
 
-    contexts = [copy_context() for _ in values]
-    with ThreadPoolExecutor(
+    indexed = tuple(enumerate(values))
+    results: dict[int, _R] = {}
+    for _item, indexed_result in iter_completed_with_deadlines(
+        indexed,
+        run_indexed,
         max_workers=workers,
-        thread_name_prefix=thread_name_prefix,
-    ) as pool:
-        futures = [
-            pool.submit(contexts[index].run, run_one, value)
-            for index, value in enumerate(values)
-        ]
-        try:
-            return [future.result() for future in futures]
-        except BaseException:
-            for future in futures:
-                future.cancel()
-            raise
+        stage=thread_name_prefix,
+        sort_key=lambda item: item[0],
+    ):
+        index, result = indexed_result
+        results[index] = result
+
+    if len(results) != len(values):
+        raise RuntimeError(f"{thread_name_prefix}: parallel map lost a completed result")
+    return [results[index] for index in range(len(values))]
 
 
 __all__ = ["deterministic_model_map", "serialized_callback"]
