@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 from minecraft_mod_ai import root_cause_trace
@@ -7,7 +8,7 @@ from minecraft_mod_ai import runner_parallel_validation_contract as gradle_contr
 from minecraft_mod_ai import task_template_runner
 
 
-class _BatchRouter:
+class _AtomicRouter:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
         self.registry = SimpleNamespace(role=lambda *_args, **_kwargs: SimpleNamespace(adapter="llama_cpp"))
@@ -21,21 +22,22 @@ class _BatchRouter:
         tool_name,
         parameters,
         description="",
+        **kwargs,
     ):
-        del role, messages, description
-        self.calls.append((tool_name, dict(parameters)))
-        if tool_name == "submit_content_property_batch":
-            return {
-                name: f"value_{name}"
-                for name in parameters["properties"]
-            }
-        if tool_name == "submit_content_relation_batch":
-            return {"target_ids": [], "relation_types": [], "overflow": False}
+        del role, parameters, description, kwargs
+        context = json.loads(messages[-1]["content"])
+        self.calls.append((tool_name, context))
+        if tool_name == "submit_one_design_content_property":
+            requested = str(context["requested_property"])
+            assert context["allowed_properties"] == [requested]
+            return {"property": requested, "value": f"value_{requested}"}
+        if tool_name == "submit_one_design_content_relation_count":
+            return {"count": 0}
         raise AssertionError(f"unexpected tool call: {tool_name}")
 
 
-def test_content_properties_use_three_field_atomic_batches():
-    router = _BatchRouter()
+def test_content_properties_are_one_property_atomic_calls():
+    router = _AtomicRouter()
     properties = [
         "display_name",
         "category",
@@ -57,13 +59,13 @@ def test_content_properties_use_three_field_atomic_batches():
     )
 
     assert [row["property"] for row in result["records"]] == properties
-    assert len(router.calls) == 3
-    assert all(name == "submit_content_property_batch" for name, _ in router.calls)
-    assert [len(schema["properties"]) for _, schema in router.calls] == [3, 3, 1]
+    assert len(router.calls) == len(properties)
+    assert all(name == "submit_one_design_content_property" for name, _ in router.calls)
+    assert [call[1]["requested_property"] for call in router.calls] == properties
 
 
-def test_relations_are_selected_per_source_not_every_ordered_pair():
-    router = _BatchRouter()
+def test_relations_use_host_owned_pair_cardinality_without_model_continuation():
+    router = _AtomicRouter()
     entity_ids = ["alpha", "beta", "gamma", "delta", "epsilon"]
 
     result = task_template_runner.run_record_template(
@@ -74,9 +76,10 @@ def test_relations_are_selected_per_source_not_every_ordered_pair():
     )
 
     assert result["records"] == []
-    assert len(router.calls) == len(entity_ids)
-    assert len(router.calls) < len(entity_ids) * (len(entity_ids) - 1)
-    assert all(name == "submit_content_relation_batch" for name, _ in router.calls)
+    expected_pairs = len(entity_ids) * (len(entity_ids) - 1)
+    assert len(router.calls) == expected_pairs
+    assert all(name == "submit_one_design_content_relation_count" for name, _ in router.calls)
+    assert all(call[1]["source_id"] != call[1]["target_id"] for call in router.calls)
 
 
 def test_gradle_hot_path_is_incremental_parallel_and_daemon_reused(monkeypatch):
