@@ -24,6 +24,7 @@ class _LedgerCursor:
     def fetchone(self):
         return self._row
 
+
 class _LedgerConnection:
 
     def __init__(self, ledger: _Ledger) -> None:
@@ -54,6 +55,7 @@ class _LedgerConnection:
 
     def rollback(self) -> None:
         pass
+
 
 class _Ledger:
 
@@ -94,6 +96,7 @@ class _Ledger:
     def _connect(self):
         return _LedgerConnection(self)
 
+
 class _Index:
 
     def __init__(self, root: Path) -> None:
@@ -105,7 +108,8 @@ class _Index:
     def write_manifest(self):
         pass
 
-def test_transactional_patchers_serialize_same_project_root(monkeypatch, tmp_path: Path) -> None:
+
+def test_transactional_patchers_serialize_overlapping_paths(monkeypatch, tmp_path: Path) -> None:
     root = tmp_path / 'project'
     root.mkdir()
     guard = threading.Lock()
@@ -121,10 +125,22 @@ def test_transactional_patchers_serialize_same_project_root(monkeypatch, tmp_pat
         with guard:
             active -= 1
         return {'status': 'APPLIED', 'operations': []}
+
     monkeypatch.setattr(TransactionalSourcePatcher, '_apply_locked', probe)
     patchers = [TransactionalSourcePatcher(root), TransactionalSourcePatcher(root)]
+    operations = [
+        {'operation': 'create', 'path': 'shared.txt', 'content': 'x'},
+        {'operation': 'create', 'path': 'shared.txt', 'content': 'y'},
+    ]
     results: list[dict] = []
-    threads = [threading.Thread(target=lambda patcher=patcher: results.append(patcher.apply([]))) for patcher in patchers]
+    threads = [
+        threading.Thread(
+            target=lambda patcher=patcher, operation=operation: results.append(
+                patcher.apply([operation])
+            )
+        )
+        for patcher, operation in zip(patchers, operations)
+    ]
     for thread in threads:
         thread.start()
     for thread in threads:
@@ -132,6 +148,43 @@ def test_transactional_patchers_serialize_same_project_root(monkeypatch, tmp_pat
     assert all(not thread.is_alive() for thread in threads)
     assert len(results) == 2
     assert max_active == 1
+
+
+def test_transactional_patchers_parallelize_disjoint_paths_in_same_project(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / 'project'
+    root.mkdir()
+    barrier = threading.Barrier(2)
+    guard = threading.Lock()
+    active = 0
+    max_active = 0
+
+    def probe(self, operations):
+        nonlocal active, max_active
+        with guard:
+            active += 1
+            max_active = max(max_active, active)
+        barrier.wait(timeout=2)
+        with guard:
+            active -= 1
+        return {'status': 'APPLIED', 'operations': []}
+
+    monkeypatch.setattr(TransactionalSourcePatcher, '_apply_locked', probe)
+    patchers = [TransactionalSourcePatcher(root), TransactionalSourcePatcher(root)]
+    operations = [
+        {'operation': 'create', 'path': 'a.txt', 'content': 'a'},
+        {'operation': 'create', 'path': 'b.txt', 'content': 'b'},
+    ]
+    threads = [
+        threading.Thread(target=patcher.apply, args=([operation],))
+        for patcher, operation in zip(patchers, operations)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+    assert all(not thread.is_alive() for thread in threads)
+    assert max_active == 2
+
 
 def test_transactional_patchers_do_not_block_independent_projects(monkeypatch, tmp_path: Path) -> None:
     left = tmp_path / 'left'
@@ -152,15 +205,18 @@ def test_transactional_patchers_do_not_block_independent_projects(monkeypatch, t
         with guard:
             active -= 1
         return {'status': 'APPLIED', 'operations': []}
+
     monkeypatch.setattr(TransactionalSourcePatcher, '_apply_locked', probe)
     patchers = [TransactionalSourcePatcher(left), TransactionalSourcePatcher(right)]
-    threads = [threading.Thread(target=patcher.apply, args=([],)) for patcher in patchers]
+    operation = {'operation': 'create', 'path': 'a.txt', 'content': 'a'}
+    threads = [threading.Thread(target=patcher.apply, args=([operation],)) for patcher in patchers]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join(timeout=2)
     assert all(not thread.is_alive() for thread in threads)
     assert max_active == 2
+
 
 def test_transactional_patch_commit_parallelizes_independent_paths(monkeypatch, tmp_path: Path) -> None:
     root = tmp_path / 'parallel-commit'
@@ -177,6 +233,7 @@ def test_transactional_patch_commit_parallelizes_independent_paths(monkeypatch, 
     assert receipt['status'] == 'APPLIED'
     assert (root / 'a.txt').read_text(encoding='utf-8') == 'a'
     assert (root / 'b.txt').read_text(encoding='utf-8') == 'b'
+
 
 def test_parallel_patch_failure_rolls_back_every_successful_path(monkeypatch, tmp_path: Path) -> None:
     root = tmp_path / 'parallel-rollback'
@@ -195,6 +252,7 @@ def test_parallel_patch_failure_rolls_back_every_successful_path(monkeypatch, tm
         TransactionalSourcePatcher(root).apply([{'operation': 'create', 'path': 'good.txt', 'content': 'good'}, {'operation': 'create', 'path': 'bad.txt', 'content': 'bad'}])
     assert not (root / 'good.txt').exists()
     assert not (root / 'bad.txt').exists()
+
 
 def test_shared_initializer_edits_merge_atomically_under_parallel_generation(tmp_path: Path) -> None:
     root = tmp_path / 'project'
