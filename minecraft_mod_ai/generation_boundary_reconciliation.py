@@ -43,10 +43,10 @@ def _install_resource_asset_preflight(
     """Own the final wrappers while delegating validation to the pure shared contract."""
 
     if getattr(resource_module, "_CONTRACT_OWNED_PREFLIGHT", False):
-        # The canonical producer validates directly and supports both PNG and JSON
-        # manifest entries. Do not replace its path resolver with the legacy PNG guard.
-        if orchestrator_module is not None:
-            orchestrator_module.generate_assets = resource_module.generate_assets
+        # The canonical producer already validates directly. The orchestrator reaches it
+        # through complete_orchestrator_services.generate_assets, which resolves the
+        # canonical callable at invocation time, so no cross-module attribute rebinding
+        # is required here.
         return
 
     from .resource_asset_preflight_contract import (
