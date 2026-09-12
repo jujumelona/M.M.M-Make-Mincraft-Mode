@@ -23,6 +23,9 @@ _SOURCE_EDIT_OPERATION_ALIASES = {
     "replace": "replace_exact",
     "delete": "delete_file",
 }
+_SOURCE_EDIT_LONG_TEXT_FIELDS = frozenset(
+    {"old", "new", "anchor", "content", "declaration", "member"}
+)
 _SOURCE_EDIT_OPERATION_FIELDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     # count is optional and semantically fixed to the default value 1 by the source-edit
     # contract. Keeping it out of recovery prevents the operation-detail page from exceeding
@@ -66,6 +69,16 @@ def _bounded_property(schema: Mapping[str, Any]) -> dict[str, Any]:
         if "items" in copy and isinstance(copy["items"], Mapping):
             copy["items"] = _bounded_property(copy["items"])
     return copy
+
+
+def _source_edit_detail_property(name: str, schema: Any) -> Any:
+    """Bound metadata while preserving authoritative source-text payload capacity."""
+
+    if not isinstance(schema, Mapping):
+        return schema
+    if name in _SOURCE_EDIT_LONG_TEXT_FIELDS:
+        return dict(schema)
+    return _bounded_property(schema)
 
 
 def _page_schema(
@@ -163,7 +176,7 @@ def _source_edit_detail_schema(
     page: dict[str, Any] = {
         "type": "object",
         "properties": {
-            name: dict(properties[name]) if isinstance(properties[name], Mapping) else properties[name]
+            name: _source_edit_detail_property(name, properties[name])
             for name in names
         },
         "required": list(required),
@@ -174,6 +187,41 @@ def _source_edit_detail_schema(
         if isinstance(definitions, Mapping):
             page[keyword] = dict(definitions)
     return page
+
+
+def _source_edit_atomicity_proxy_schema(
+    page_schema: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return the strict-atomicity view of a source-edit detail page.
+
+    Source text is a deliberate scalar transport exception: truncating it to 256 characters
+    changes the requested edit and recreates the long-source fixed-point failure. The proxy
+    is used only by the structural atomicity gate; the actual native tool keeps the original
+    unbounded source-text schema and is validated against that authoritative schema.
+    """
+
+    properties = page_schema.get("properties")
+    if not isinstance(properties, Mapping):
+        return dict(page_schema)
+    if not any(name in _SOURCE_EDIT_LONG_TEXT_FIELDS for name in properties):
+        return dict(page_schema)
+
+    proxy = dict(page_schema)
+    proxy_properties: dict[str, Any] = {}
+    for name, schema in properties.items():
+        if isinstance(schema, Mapping):
+            copy = dict(schema)
+            if (
+                name in _SOURCE_EDIT_LONG_TEXT_FIELDS
+                and copy.get("type") == "string"
+                and "enum" not in copy
+            ):
+                copy["maxLength"] = 256
+            proxy_properties[str(name)] = copy
+        else:
+            proxy_properties[str(name)] = schema
+    proxy["properties"] = proxy_properties
+    return proxy
 
 
 def _messages(
@@ -212,6 +260,7 @@ def _messages(
     messages.append({"role": "user", "content": instruction})
     return tuple(messages)
 
+
 def _request(
     request: Any,
     *,
@@ -222,12 +271,17 @@ def _request(
     repair_error: str = "",
 ) -> Any:
     # The atomic boundary is checked per native function-argument page, never against
-    # the host-owned original container. The model fills fields through ToolCall.arguments;
-    # message content is deliberately not a structured-output transport.
+    # the host-owned original container. Source-edit body strings are the sole deliberate
+    # scalar-length exception; all field-count/depth/container bounds remain strict.
     from .model_output_atomicity_contract import assert_atomic_model_schema
 
+    atomicity_schema = (
+        _source_edit_atomicity_proxy_schema(page_schema)
+        if action_name == _SOURCE_EDIT_TOOL
+        else page_schema
+    )
     assert_atomic_model_schema(
-        page_schema,
+        atomicity_schema,
         surface="host-selected forced-function argument page",
     )
     page_tool = {
@@ -258,6 +312,7 @@ def _request(
         response_format="text",
         response_schema=None,
     )
+
 
 def _fingerprint(value: Any) -> str:
     try:
@@ -346,6 +401,7 @@ def _page_result(
         return None, reason, _fingerprint(normalized)
     return normalized, "", _fingerprint(normalized)
 
+
 def _page_attempt(
     current: Any,
     adapter: Any,
@@ -368,6 +424,7 @@ def _page_attempt(
         reason = f"{type(cause).__name__}: {cause}"[:_MAX_REPAIR_ERROR_CHARS]
         return None, reason, _fingerprint({"exception": reason})
     return _page_result(turn, page_schema, parameters, action_name)
+
 
 def _recover_page(
     current: Any,
@@ -429,6 +486,7 @@ def _recover_page(
         f"Host-selected action {action_name!r} {suffix} on page "
         f"{page_index}/{page_count}; error={repair_error or error}."
     )
+
 
 def _recover_source_edit_arguments(
     current: Any,
