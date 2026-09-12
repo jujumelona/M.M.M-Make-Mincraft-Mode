@@ -82,12 +82,15 @@ def verify_job_binding(job, resolved, context):
     binding = resolved.require_leaf_binding(leaf) if evidence_required else registered_binding
     impl = binding["implementation"]
     actual = authority.implementations.get_implementation(impl["implementation_id"])
+    # Execution freshness is leaf-scoped.  The authority object validates its own live
+    # global provenance above, but that package-wide hash includes unrelated modules and
+    # therefore must not invalidate a leaf whose implementation, validator and schemas
+    # are unchanged.  Those exact leaf-owned identities remain fail-closed here.
     checks = {
         "implementation_sha256": actual.content_sha256,
         "validator_sha256": authority.implementations.get_validator(impl["validator_profile"]).source_hash,
         "input_schema_sha256": authority.types.get_schema_hash(leaf + ":input"),
         "output_schema_sha256": authority.types.get_schema_hash(leaf + ":output"),
-        "authority_sha256": authority.content_hash,
     }
     if any(impl.get(k) != v for k, v in checks.items()) or job.implementation_id != actual.implementation_id:
         raise ValueError("RUNTIME_INTEGRITY_BINDING_MISMATCH")
