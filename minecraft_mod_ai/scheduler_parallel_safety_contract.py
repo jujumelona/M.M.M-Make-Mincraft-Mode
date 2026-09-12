@@ -13,7 +13,7 @@ from typing import Any
 from .project_write_lock import project_write_lock
 
 _ORCHESTRATOR_WORKER = "mmm-orchestrator"
-_CLAIM_CONTRACT_VERSION = 2
+_CLAIM_CONTRACT_VERSION = 3
 _INSTALLED_LANE_CLAIM: Callable[..., Any] | None = None
 _RESOURCE_CAPACITIES = {
     # llama_parallel_runtime_contract replaces the LLM value with the selected native
@@ -221,7 +221,6 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
         owner = _orchestrator_owner(self)
         resource_expr = _resource_sql("")
         task_resource_expr = _resource_sql("task")
-        active_resource_expr = _resource_sql("active")
         stage_sql = ""
         stage_params: tuple[Any, ...] = ()
         if stages:
@@ -259,6 +258,37 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
             if not free_lanes:
                 return None
 
+            serial_stage_placeholders = ",".join("?" for _ in _SERIAL_CPU_STAGES)
+            active_serial_stages = tuple(
+                str(stage)
+                for (stage,) in connection.execute(
+                    f"""
+                    SELECT DISTINCT stage
+                    FROM tasks
+                    WHERE state = ?
+                      AND {resource_expr} = 'cpu_io'
+                      AND stage IN ({serial_stage_placeholders})
+                    ORDER BY stage
+                    """,
+                    (
+                        work_graph_module.WorkState.RUNNING.value,
+                        *_SERIAL_CPU_STAGES,
+                    ),
+                )
+            )
+            occupied_stage_sql = ""
+            occupied_stage_params: tuple[Any, ...] = ()
+            if active_serial_stages:
+                occupied_placeholders = ",".join("?" for _ in active_serial_stages)
+                occupied_stage_sql = (
+                    " AND NOT ("
+                    + task_resource_expr
+                    + " = 'cpu_io' AND task.stage IN ("
+                    + occupied_placeholders
+                    + "))"
+                )
+                occupied_stage_params = active_serial_stages
+
             ordered_lanes = tuple(
                 sorted(
                     free_lanes,
@@ -266,13 +296,11 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
                 )
             )
             lane_placeholders = ",".join("?" for _ in ordered_lanes)
-            serial_stage_placeholders = ",".join("?" for _ in _SERIAL_CPU_STAGES)
             params = (
                 work_graph_module.WorkState.PENDING.value,
                 work_graph_module.WorkState.SUCCEEDED.value,
-                *_SERIAL_CPU_STAGES,
-                work_graph_module.WorkState.RUNNING.value,
                 *stage_params,
+                *occupied_stage_params,
                 *ordered_lanes,
             )
             rows = connection.execute(
@@ -289,18 +317,8 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
                         WHERE edges.node_id = task.node_id
                           AND dependency.state != ?
                       )
-                      AND NOT (
-                        {task_resource_expr} = 'cpu_io'
-                        AND task.stage IN ({serial_stage_placeholders})
-                        AND EXISTS (
-                            SELECT 1
-                            FROM tasks AS active
-                            WHERE active.state = ?
-                              AND active.stage = task.stage
-                              AND {active_resource_expr} = 'cpu_io'
-                        )
-                      )
                       {stage_sql}
+                      {occupied_stage_sql}
                       AND {task_resource_expr} IN ({lane_placeholders})
                 ), ranked AS (
                     SELECT node_id, resource_class,
