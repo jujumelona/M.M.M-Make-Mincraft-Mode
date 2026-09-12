@@ -75,13 +75,26 @@ def _fragment(requirement_ref: str, criterion_index: int) -> dict[str, object]:
 
 def _real_fragment(*, evidence_ref=None):
     from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
+
     rows = []
     for section in WORKSHEET_SECTIONS:
-        specification = {concern: [{field: f"{section}.{concern}.{field}" for field in columns.split()}]
-                         for concern, columns in DETAIL_RECORDS[section].items()}
+        specification = {
+            concern: [
+                {
+                    field: f"{section}.{concern}.{field}"
+                    for field in columns.split()
+                }
+            ]
+            for concern, columns in DETAIL_RECORDS[section].items()
+        }
         specification["inapplicable_concerns"] = []
-        rows.append({"section": section, "specification": specification,
-                     "constraint_evidence_refs": [evidence_ref] if evidence_ref else []})
+        rows.append(
+            {
+                "section": section,
+                "specification": specification,
+                "constraint_evidence_refs": [evidence_ref] if evidence_ref else [],
+            }
+        )
     return {"section_updates": rows}
 
 
@@ -283,6 +296,7 @@ def test_atomic_criterion_failure_is_checkpointed_terminal_and_resume_makes_zero
 def test_each_concern_schema_is_closed():
     from minecraft_mod_ai.task_template_catalog import load_template
     from minecraft_mod_ai.task_template_runner import record_response_schema
+
     for section in WORKSHEET_SECTIONS:
         for identifier in load_template(f"feature/{section}")["steps"]:
             schema = record_response_schema(load_template(identifier))
@@ -382,27 +396,42 @@ def test_blocked_research_stays_terminal_on_reentry(monkeypatch):
 def test_missing_requirement_sections_are_generated_and_checkpointed(monkeypatch):
     requirements = _requirements()
     _patch_compile_boundaries(monkeypatch, requirements)
-    monkeypatch.setattr(adaptive, "assemble_worksheet_from_fragments",
-                        criterion_fragments.assemble_worksheet_from_fragments)
+    monkeypatch.setattr(
+        adaptive,
+        "assemble_worksheet_from_fragments",
+        criterion_fragments.assemble_worksheet_from_fragments,
+    )
     fragment = _real_fragment()
-    fragment["section_updates"] = [row for row in fragment["section_updates"]
-                                   if row["section"] not in {"reuse_assessment", "verification"}]
+    fragment["section_updates"] = [
+        row
+        for row in fragment["section_updates"]
+        if row["section"] not in {"reuse_assessment", "verification"}
+    ]
     monkeypatch.setattr(adaptive, "_compile_criterion", lambda *a, **kw: deepcopy(fragment))
     calls = []
-    evidence = [{"research_ref": "r_1", "claims": ["A donor exists but compatibility is unverified."]}]
+    evidence = [
+        {"research_ref": "r_1", "claims": ["A donor exists but compatibility is unverified."]}
+    ]
     monkeypatch.setattr(adaptive, "_requirement_grounding", lambda *a: (evidence, set()))
 
     def complete(_router, **kwargs):
         assert kwargs["evidence"] == evidence
         section = kwargs["target_section"]
         calls.append(section)
-        return {"section_updates": [row for row in _real_fragment()["section_updates"]
-                                    if row["section"] == section]}
+        return {
+            "section_updates": [
+                row
+                for row in _real_fragment()["section_updates"]
+                if row["section"] == section
+            ]
+        }
 
     monkeypatch.setattr(adaptive, "generate_targeted_section_fragment", complete)
     checkpoints = []
     result = adaptive.compile_progress_monotone_detailed_plans(
-        _Router(), "prompt", _base_state(),
+        _Router(),
+        "prompt",
+        _base_state(),
         required_sections_by_requirement={"req_1": WORKSHEET_SECTIONS},
         checkpoint=lambda state: checkpoints.append(deepcopy(state)),
     )
@@ -426,63 +455,85 @@ def test_resume_rejects_legacy_plan_with_vacuous_required_section():
 
 
 def test_transport_interruption_preserves_individual_records_and_resumes(monkeypatch):
-    import json
-    from minecraft_mod_ai import task_template_runner as runner
     requirements = _requirements()
     _patch_compile_boundaries(monkeypatch, requirements)
-    monkeypatch.setattr(adaptive, 'router_native_model_parallelism', lambda _: 1)
-    checkpoints, calls = [], []
+    monkeypatch.setattr(adaptive, "router_native_model_parallelism", lambda _: 1)
+    checkpoints: list[dict[str, object]] = []
+    authored: list[str] = []
     interrupted = False
 
-    def generate(*args, response_schema, tool_name, **kwargs):
+    def compile_criterion(
+        _router,
+        *,
+        requirement_ref,
+        criterion_index,
+        progress,
+        record_checkpoint,
+        **_kwargs,
+    ):
         nonlocal interrupted
-        context = json.loads(args[2][1]['content'])
-        calls.append((tool_name, len(context['accepted_records'])))
-        if len(calls) == 4 and not interrupted:
-            interrupted = True
-            raise TimeoutError('interrupted within a concern')
-        record = None if context['accepted_records'] else {
-            key: f'authored {key}'
-            for key in response_schema['properties']['record']['anyOf'][0]['required']
-        }
-        return {'status': 'done' if record is None else 'record', 'record': record,
-                'reason': '', 'evidence_refs': []}
+        del requirement_ref, criterion_index
+        progress = dict(progress or {})
+        for binding in ("concern:first", "concern:second", "concern:third"):
+            if binding in progress:
+                continue
+            authored.append(binding)
+            record_checkpoint(binding, {"status": "accepted", "binding": binding})
+            if binding == "concern:second" and not interrupted:
+                interrupted = True
+                raise TimeoutError("interrupted within a concern")
+        return _real_fragment()
 
-    monkeypatch.setattr(runner, 'generate_fixed_template_value', generate)
-    kwargs = dict(required_sections_by_requirement={'req_1': WORKSHEET_SECTIONS},
-                  checkpoint=lambda state: checkpoints.append(deepcopy(state)))
+    monkeypatch.setattr(adaptive, "_compile_criterion", compile_criterion)
+    kwargs = dict(
+        required_sections_by_requirement={"req_1": WORKSHEET_SECTIONS},
+        checkpoint=lambda state: checkpoints.append(deepcopy(state)),
+    )
+
     with pytest.raises(TimeoutError):
-        adaptive.compile_progress_monotone_detailed_plans(_Router(), 'request', _base_state(), **kwargs)
+        adaptive.compile_progress_monotone_detailed_plans(
+            _Router(), "request", _base_state(), **kwargs
+        )
+
     saved = checkpoints[-1]
-    assert not saved['blockers']
-    assert sorted(len(v) for v in saved['template_progress'].values()) == [1, 2]
-    initial_calls = len(calls)
-    result = adaptive.compile_progress_monotone_detailed_plans(_Router(), 'request', saved, **kwargs)
-    assert result['plan_ready']
-    assert calls[initial_calls] == calls[3]  # Resume the interrupted completion request.
-    assert calls.count(calls[0]) == 1  # The completed concern was not regenerated.
-    assert all(values[-1]['status'] == 'done' for values in result['template_progress'].values())
+    assert not saved["blockers"]
+    assert set(saved["template_progress"]) == {"concern:first", "concern:second"}
+    assert authored == ["concern:first", "concern:second"]
+
+    result = adaptive.compile_progress_monotone_detailed_plans(
+        _Router(), "request", saved, **kwargs
+    )
+    assert result["plan_ready"]
+    assert authored == ["concern:first", "concern:second", "concern:third"]
+    assert result["template_progress"]["concern:first"]["status"] == "accepted"
+    assert result["template_progress"]["concern:second"]["status"] == "accepted"
+    assert result["template_progress"]["concern:third"]["status"] == "accepted"
 
 
 def test_concurrent_record_checkpoints_do_not_overwrite_sibling_progress(monkeypatch):
     from threading import Barrier
+
     requirements = _requirements(2)
     _patch_compile_boundaries(monkeypatch, requirements)
     barrier = Barrier(2)
     checkpoints = []
 
     def compile_criterion(_router, *, requirement_ref, record_checkpoint, **kwargs):
-        record_checkpoint(requirement_ref, [{'accepted': requirement_ref}])
+        record_checkpoint(requirement_ref, [{"accepted": requirement_ref}])
         barrier.wait(timeout=5)
         return _fragment(requirement_ref, 0)
 
-    monkeypatch.setattr(adaptive, '_compile_criterion', compile_criterion)
+    monkeypatch.setattr(adaptive, "_compile_criterion", compile_criterion)
     result = adaptive.compile_progress_monotone_detailed_plans(
-        _Router(), 'request', _base_state(),
-        required_sections_by_requirement={r['requirement_id']: WORKSHEET_SECTIONS for r in requirements},
+        _Router(),
+        "request",
+        _base_state(),
+        required_sections_by_requirement={
+            r["requirement_id"]: WORKSHEET_SECTIONS for r in requirements
+        },
         checkpoint=lambda state: checkpoints.append(deepcopy(state)),
     )
-    assert set(result['template_progress']) == {'req_1', 'req_2'}
-    assert result['plan_ready']
-    sizes = [len(s.get('template_progress', {})) for s in checkpoints]
+    assert set(result["template_progress"]) == {"req_1", "req_2"}
+    assert result["plan_ready"]
+    sizes = [len(s.get("template_progress", {})) for s in checkpoints]
     assert sizes == sorted(sizes)
