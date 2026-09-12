@@ -5,6 +5,7 @@ import time
 from contextvars import ContextVar
 from types import SimpleNamespace
 
+from minecraft_mod_ai import design_record_runtime as design_runtime
 from minecraft_mod_ai import feature_template_pipeline as feature_pipeline
 from minecraft_mod_ai import prompt_template_pipeline as prompt_pipeline
 from minecraft_mod_ai.parallel_model_tasks import (
@@ -79,6 +80,58 @@ def test_serialized_callback_keeps_parallel_state_writes_single_threaded():
 
     assert maximum == 1
     assert sorted(calls) == list(range(6))
+
+
+def test_design_properties_use_native_parallel_slots_without_prompt_chaining(monkeypatch):
+    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
+    router = _Router()
+    lock = threading.Lock()
+    active = 0
+    maximum = 0
+    accepted_snapshots: list[list[dict[str, object]]] = []
+
+    context = {
+        "allowed_properties": ["health", "speed", "attack_damage"],
+        "required_properties": ["health", "speed", "attack_damage"],
+    }
+
+    monkeypatch.setattr(design_runtime, "load_record_template", lambda identifier: {"id": identifier})
+    monkeypatch.setattr(
+        design_runtime,
+        "task_context",
+        lambda template, supplied: dict(supplied),
+    )
+
+    def fake_single(router, identifier, *, context, **kwargs):
+        nonlocal active, maximum
+        del router, identifier, kwargs
+        with lock:
+            accepted_snapshots.append(list(context["accepted_records"]))
+            active += 1
+            maximum = max(maximum, active)
+        time.sleep(0.02)
+        with lock:
+            active -= 1
+        return {
+            "property": context["requested_property"],
+            "value": str(context["record_index"]),
+        }
+
+    monkeypatch.setattr(design_runtime, "run_single_record_template", fake_single)
+
+    records, normalized = design_runtime._run_properties(
+        router,
+        "design/content_property",
+        context,
+        progress=None,
+        checkpoint=None,
+    )
+
+    assert normalized == context
+    assert [record["property"] for record in records] == context["required_properties"]
+    assert [record["value"] for record in records] == ["0", "1", "2"]
+    assert maximum == 2
+    assert accepted_snapshots == [[], [], []]
 
 
 def test_prompt_templates_execute_independently_and_merge_in_workflow_order(monkeypatch):
