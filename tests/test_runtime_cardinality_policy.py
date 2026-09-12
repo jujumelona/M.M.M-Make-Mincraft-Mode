@@ -8,15 +8,15 @@ from minecraft_mod_ai.task_template_catalog import (
 EVIDENCE_BOUND_CARDINALITY_TASKS = frozenset(
     {
         "feature/integration/target_bindings",
-        "feature/reuse_assessment/candidates",
+        "feature/reuse_assessment/adaptations",
+        "feature/reuse_assessment/collisions",
         "feature/reuse_assessment/compatibility",
-        "feature/reuse_assessment/conflicts",
-        "feature/reuse_assessment/gaps",
-        "feature/reuse_assessment/license",
-        "feature/reuse_assessment/mapping",
-        "feature/reuse_assessment/selection",
+        "feature/reuse_assessment/dependencies",
+        "feature/reuse_assessment/evidence_gaps",
+        "feature/reuse_assessment/provenance",
         "feature/reuse_assessment/sources",
-        "feature/reuse_assessment/verification",
+        "feature/reuse_assessment/unchanged_parts",
+        "feature/reuse_assessment/verdicts",
     }
 )
 
