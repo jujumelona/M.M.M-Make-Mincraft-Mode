@@ -150,9 +150,11 @@ class ReentrantCapacityGate:
 
 
 def active_llama_parallelism() -> int:
+    """Return the validated active llama slot count without imposing a second cap."""
+
     raw = os.environ.get("MMM_LLAMA_ACTIVE_PARALLEL", "1").strip()
     try:
-        return max(1, min(8, int(raw)))
+        return max(1, int(raw))
     except ValueError:
         return 1
 
