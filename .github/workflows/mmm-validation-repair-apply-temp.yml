@@ -20,9 +20,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Apply tested patch
-        run: |
-          python .github/scripts/mmm_fix_validation_repair_logs_temp.py
-          python .github/scripts/mmm_fix_validation_repair_runtime_temp.py
+        run: python .github/scripts/mmm_validation_repair_apply_once.py
       - name: Compile
         run: python -m compileall -q minecraft_mod_ai tests/test_validation_repair_regressions.py
       - name: Install test dependencies
@@ -38,6 +36,7 @@ jobs:
           rm -f .github/workflows/mmm-validation-repair-apply-temp.yml
           rm -f .github/workflows/mmm-validation-repair-diagnose-temp.yml
           rm -f .github/workflows/mmm-fix-validation-repair-logs-temp.yml
+          rm -f .github/scripts/mmm_validation_repair_apply_once.py
           rm -f .github/scripts/mmm_fix_validation_repair_logs_temp.py
           rm -f .github/scripts/mmm_fix_validation_repair_runtime_temp.py
           git add minecraft_mod_ai/validation_checkpoint_policy.py minecraft_mod_ai/repair_engine.py minecraft_mod_ai/adaptive_retrieval_contract.py tests/test_validation_repair_regressions.py .github/workflows .github/scripts
