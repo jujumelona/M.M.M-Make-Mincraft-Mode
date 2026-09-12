@@ -14,8 +14,10 @@ def test_graph_closure_is_host_owned_for_entity_property_relation():
     assert '"design/relation_set"' not in source
     assert '"design/continue_record"' not in source
     assert "requested_property" in source
-    assert "for source_id in entity_ids:" in source
-    assert "for target_id in entity_ids:" in source
+    assert "pairs = tuple(" in source
+    assert "for source_id in entity_ids" in source
+    assert "for target_id in entity_ids" in source
+    assert "deterministic_model_map(" in source
 
 
 def test_relation_atomic_schemas_are_bounded():
