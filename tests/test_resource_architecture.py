@@ -31,6 +31,57 @@ def test_item_serialization_switches_at_1_21_4() -> None:
     assert "src/main/resources/assets/demo/items/blade.json" in {d.target_path for d in new.documents}
 
 
+def test_render_kind_owns_default_texture_dimensions() -> None:
+    entity = AssetRequest(
+        "texture_entity_guardian",
+        "entity",
+        visual_description="stone guardian",
+        render_kind="entity.fixed_uv",
+        subject_id="guardian",
+    )
+    gui = AssetRequest(
+        "texture_gui_console",
+        "gui",
+        visual_description="arcane console",
+        render_kind="gui.sprite",
+        subject_id="console",
+    )
+
+    entity_texture = resolve_asset(
+        entity,
+        namespace="demo",
+        minecraft_version="1.21.4",
+    ).textures[0]
+    gui_texture = resolve_asset(
+        gui,
+        namespace="demo",
+        minecraft_version="1.21.4",
+    ).textures[0]
+
+    assert (entity_texture.width, entity_texture.height) == (64, 64)
+    assert entity_texture.size_policy == "render_kind_default"
+    assert (gui_texture.width, gui_texture.height) == (256, 256)
+    assert gui_texture.size_policy == "render_kind_default"
+
+
+def test_content_design_graph_only_emits_semantic_asset_requests() -> None:
+    source = (ROOT / "minecraft_mod_ai/content_design_graph.py").read_text(encoding="utf-8")
+    for obsolete in (
+        "asset/item_sprite",
+        "asset/block_tile",
+        "asset/entity_texture",
+        "asset/gui_panel",
+        "target_path=f\"assets/{mod_id}/textures/",
+        "prompt=prompt_text",
+        "width=w",
+        "height=h",
+    ):
+        assert obsolete not in source
+    assert "visual_description=visual_desc" in source
+    assert "owner_module_id=eid" in source
+    assert "subject_id=eid" in source
+
+
 def test_backend_literals_are_not_owned_by_resource_orchestrator() -> None:
     production = (ROOT / "minecraft_mod_ai/resource_asset_production.py").read_text(encoding="utf-8")
     backend = (ROOT / "minecraft_mod_ai/model_adapters/image_diffusion.py").read_text(encoding="utf-8")
@@ -52,6 +103,7 @@ def test_obsolete_backend_prompt_manifests_are_removed() -> None:
     validation = (ROOT / "minecraft_mod_ai/template_contract_validation.py").read_text(encoding="utf-8")
     for identifier in ("asset/block_tile", "asset/item_sprite", "asset/entity_texture", "asset/gui_panel"):
         assert identifier not in validation
+
 
 def test_resume_cache_binds_only_to_canonical_asset_producer() -> None:
     from minecraft_mod_ai import (

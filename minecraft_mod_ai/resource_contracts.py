@@ -22,6 +22,10 @@ _DEFAULT_RENDER_KIND = {
     "block": "block.cube_all", "environment": "block.cube_all",
     "entity": "entity.fixed_uv", "gui": "gui.sprite",
 }
+_DEFAULT_TEXTURE_SIZE = {
+    "entity.fixed_uv": (64, 64),
+    "gui.sprite": (256, 256),
+}
 _MODULE_RENDER_KIND = {
     "item": "item.generated", "food": "item.generated", "armor": "item.generated",
     "tool": "item.handheld", "weapon": "item.handheld",
@@ -100,14 +104,16 @@ def _normalize_subject(value: str, fallback: str) -> str:
     return raw
 
 
-def _default_size(asset: Any) -> tuple[int, int]:
+def _texture_size(asset: Any, render_kind: str) -> tuple[int, int, str]:
     width = getattr(asset, "requested_width", None)
     height = getattr(asset, "requested_height", None)
     if width is None and height is None:
-        return 16, 16
+        default = _DEFAULT_TEXTURE_SIZE.get(render_kind, (16, 16))
+        policy = "minecraft_native_default" if default == (16, 16) else "render_kind_default"
+        return default[0], default[1], policy
     if type(width) is not int or type(height) is not int or width < 1 or height < 1:
         raise ValueError("Explicit resource texture dimensions require two positive integers.")
-    return width, height
+    return width, height, "explicit"
 
 
 def _prefix(container: str) -> str:
@@ -176,7 +182,7 @@ def resolve_asset(asset: Any, *, namespace: str, minecraft_version: str, version
         raise ValueError(f"Unsupported resource render kind: {render_kind!r}")
     container = str(getattr(asset, "container", "mod") or "mod")
     prefix = _prefix(container)
-    width, height = _default_size(asset)
+    width, height, size_policy = _texture_size(asset, render_kind)
     variant_count = int(getattr(asset, "variant_count", 1) or 1)
     if variant_count < 1:
         raise ValueError("variant_count must be positive.")
@@ -186,7 +192,7 @@ def resolve_asset(asset: Any, *, namespace: str, minecraft_version: str, version
         for index in range(variant_count):
             textures.append(TextureSpec(
                 role=f"stage{index}", topology="cutout_sprite", alpha_policy="cutout",
-                size_policy="minecraft_native_default" if (width, height) == (16, 16) else "explicit",
+                size_policy=size_policy,
                 uv_policy="cross", animation_policy="static",
                 target_path=f"{prefix}assets/{namespace}/textures/block/{subject}_stage{index}.png",
                 width=width, height=height,
@@ -197,7 +203,7 @@ def resolve_asset(asset: Any, *, namespace: str, minecraft_version: str, version
             suffix = "" if len(slots) == 1 else f"_{role}"
             textures.append(TextureSpec(
                 role=role, topology=topology, alpha_policy=alpha,
-                size_policy="minecraft_native_default" if (width, height) == (16, 16) else "explicit",
+                size_policy=size_policy,
                 uv_policy="fixed" if topology == "fixed_uv" else "model_slot",
                 animation_policy="static",
                 target_path=f"{prefix}assets/{namespace}/textures/{folder}/{subject}{suffix}.png",

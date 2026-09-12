@@ -7,8 +7,6 @@ import re
 from .atomic_slot_executor import SlotFillError
 from .complete_spec import AssetRequest, ProductionModule
 from .implementation_fact import FactProvenance, FactType, ImplementationFact
-from .implementation_template_renderer import render_template
-from .task_template_catalog import load_template
 from .task_template_runner import run_record_template
 
 
@@ -515,38 +513,31 @@ def compile_content_graph(
         if visual:
             visual_desc = ", ".join(f"{k}: {v}" for k, v in visual.items())
             if kind in {"item", "armor"}:
-                mold_template_id = "asset/item_sprite"
                 asset_kind = "item"
-                w, h = 16, 16
+                render_kind = "item.generated"
             elif kind == "block":
-                mold_template_id = "asset/block_tile"
                 asset_kind = "block"
-                w, h = 16, 16
+                render_kind = "block.cube_all"
             elif kind in {"entity", "boss", "npc"}:
-                mold_template_id = "asset/entity_texture"
                 asset_kind = "entity"
-                w, h = 64, 64
+                render_kind = "entity.fixed_uv"
             elif kind == "gui":
-                mold_template_id = "asset/gui_panel"
                 asset_kind = "gui"
-                w, h = 256, 256
+                render_kind = "gui.sprite"
             else:
                 raise ValueError(
-                    f"ASSET_KIND_UNSUPPORTED: no texture mold for module kind {kind!r} ({eid})"
+                    f"ASSET_KIND_UNSUPPORTED: no texture contract for module kind {kind!r} ({eid})"
                 )
 
-            mold_tmpl = load_template(mold_template_id)
-            prompt_text = render_template(
-                mold_tmpl, {"visual_description": visual_desc}
-            )
             assets.append(
                 AssetRequest(
                     asset_id=f"texture_{asset_kind}_{eid}",
                     kind=asset_kind,
-                    target_path=f"assets/{mod_id}/textures/{asset_kind}/{eid}.png",
-                    width=w,
-                    height=h,
-                    prompt=prompt_text,
+                    visual_description=visual_desc,
+                    render_kind=render_kind,
+                    subject_id=eid,
+                    owner_module_id=eid,
+                    container="mod",
                 )
             )
 
