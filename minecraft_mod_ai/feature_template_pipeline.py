@@ -139,7 +139,7 @@ def _run_feature_sections(router, base, *, allowed_refs, progress=None, checkpoi
     """Execute the declared feature dependency DAG in deterministic ready waves."""
 
     sections = {}
-    evidence_refs = []
+    evidence_refs_by_step = {}
     remaining = set(FEATURE_DETAIL_STEPS)
     safe_checkpoint = serialized_callback(checkpoint)
 
@@ -184,12 +184,16 @@ def _run_feature_sections(router, base, *, allowed_refs, progress=None, checkpoi
                 "records": result["records"],
                 "not_applicable_reason": result["reason"],
             }
-            for ref in result["evidence_refs"]:
-                if ref not in evidence_refs:
-                    evidence_refs.append(ref)
+            evidence_refs_by_step[step] = tuple(result["evidence_refs"])
             remaining.remove(step)
 
-    return sections, evidence_refs
+    ordered_sections = {step: sections[step] for step in FEATURE_DETAIL_STEPS}
+    evidence_refs = []
+    for step in FEATURE_DETAIL_STEPS:
+        for ref in evidence_refs_by_step[step]:
+            if ref not in evidence_refs:
+                evidence_refs.append(ref)
+    return ordered_sections, evidence_refs
 
 
 def complete_feature(
