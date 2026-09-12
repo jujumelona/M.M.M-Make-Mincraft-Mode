@@ -1,5 +1,6 @@
 id: feature/behavior_contract/entry_conditions
 task: Resolve exactly one host-requested entry conditions record for the supplied feature and acceptance criterion.
+cardinality_blocking: false
 input_fields:
 - requirement
 - criterion

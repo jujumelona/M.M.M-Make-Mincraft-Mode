@@ -1,6 +1,7 @@
 id: feature/behavior_contract/success_postconditions
 task: Resolve exactly one success postconditions record for the supplied feature and
   acceptance criterion.
+cardinality_blocking: false
 input_fields:
 - requirement
 - criterion
@@ -20,9 +21,7 @@ record_schema:
   - observation
   additionalProperties: false
 rules:
-- Return only the next record for this concern; do not plan neighboring concerns.
+- Return only the host-requested ordinal record for this concern; do not plan neighboring concerns.
 - Preserve supplied evidence identifiers. Never invent external APIs, paths or facts.
-- Return done only after all records for this concern are supplied.
-- Return not_applicable with a concrete reason only when this concern does not apply.
-- Return blocked with the missing information when it cannot be resolved.
-- Do not turn missing information into an inapplicability claim.
+- Do not emit continuation, completion, applicability, retry, or loop-control decisions; the host owns cardinality and iteration.
+- If the supplied facts cannot support the requested ordinal record, fail rather than inventing a fallback record.
