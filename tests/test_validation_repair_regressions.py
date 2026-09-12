@@ -113,3 +113,43 @@ def test_build_work_node_is_committed_before_final_validation() -> None:
     assert repair_refresh_at < final_manifest_at < build_done_at < final_validation_at < final_node_at
     assert source.count("self._project_manifest_hash(project_root)", 0, source.index("build_bundle =")) >= 2
     assert "self._project_manifest_hash(project_root)" not in source[source.index("build_bundle ="):]
+
+
+def test_repair_receipt_updates_execution_project_index_manifest(tmp_path: Path) -> None:
+    from minecraft_mod_ai import project_index_execution_reuse_contract as reuse
+    from minecraft_mod_ai.project_index import ProjectIndex
+
+    source = tmp_path / "src/main/java/example/Test.java"
+    source.parent.mkdir(parents=True)
+    source.write_text("class Test {}\n", encoding="utf-8")
+
+    @reuse.execution_scoped
+    def scenario() -> tuple[str, str]:
+        reuse.mark_post_generation()
+        index = reuse.project_index(ProjectIndex, tmp_path)
+        before = str(index.manifest_receipt()["sha256"])
+        source.write_text("class Test { int repaired = 1; }\n", encoding="utf-8")
+        reuse.update_from_receipt(
+            tmp_path,
+            {
+                "status": "PASS",
+                "patch_receipts": [
+                    {
+                        "schema_version": "mmm/source-patch-receipt-v1",
+                        "status": "APPLIED",
+                        "operations": [
+                            {
+                                "operation": "replace",
+                                "path": "src/main/java/example/Test.java",
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+        assert reuse.project_index(ProjectIndex, tmp_path) is index
+        after = str(index.manifest_receipt()["sha256"])
+        return before, after
+
+    before, after = scenario()
+    assert after != before
