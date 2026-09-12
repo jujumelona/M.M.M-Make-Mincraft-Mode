@@ -45,13 +45,18 @@ def test_runtime_assessment_contract_has_no_model_authored_prose():
     assert "reason" not in properties
 
 
-def test_structured_output_fixed_point_rejects_one_source_without_killing_planning(monkeypatch, tmp_path):
+def test_structured_output_fixed_point_rejects_one_source_without_killing_planning(
+    monkeypatch,
+    tmp_path,
+):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(semantic, "request_message_budget", lambda *_: 4096)
 
     class Router:
         profile = "runtime"
-        registry = SimpleNamespace(role=lambda *a: SimpleNamespace(adapter="llama_cpp", extra={}))
+        registry = SimpleNamespace(
+            role=lambda *a: SimpleNamespace(adapter="llama_cpp", extra={})
+        )
 
         def generate_tool_decision(self, *args, **kwargs):
             raise ModelConfigurationError(
@@ -61,7 +66,9 @@ def test_structured_output_fixed_point_rejects_one_source_without_killing_planni
             )
 
     req = requirement()
-    pool = pool_for("A spacecraft exists, but this page does not document the requested trade upgrade.")
+    pool = pool_for(
+        "A spacecraft exists, but this page does not document the requested trade upgrade."
+    )
     result = semantic.review_requirement_sources(
         Router(), req, pool, requirement_candidate_trace(req, pool)
     )
@@ -69,7 +76,10 @@ def test_structured_output_fixed_point_rejects_one_source_without_killing_planni
     assert not result["complete"]
     assert result["schema_version"] == "mmm/semantic-research-review-v2"
     assert result["observations"]
-    assert result["observations"][0]["assessment_error"] == "model_structured_output_invalid"
+    assert (
+        result["observations"][0]["assessment_error"]
+        == "model_structured_output_invalid"
+    )
     assert result["observations"][0]["verdict"] == "invalid_output"
 
 
@@ -100,13 +110,17 @@ def test_host_reconstructs_exact_evidence_and_proof_text(monkeypatch, tmp_path):
     assert "host-owned source span" in proof["reason"]
 
 
-def test_out_of_range_or_overwide_model_span_never_becomes_proof(monkeypatch, tmp_path):
+def test_out_of_range_model_span_never_becomes_proof(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(semantic, "request_message_budget", lambda *_: 4096)
     monkeypatch.setattr(
         semantic,
         "generate_fixed_template_value",
-        lambda *a, **k: {"verdict": "supported", "evidence_start": 0, "evidence_end": 99},
+        lambda *a, **k: {
+            "verdict": "supported",
+            "evidence_start": 0,
+            "evidence_end": 99,
+        },
     )
     req = requirement()
     pool = pool_for("Players can trade resources to upgrade spacecraft.")
@@ -115,3 +129,35 @@ def test_out_of_range_or_overwide_model_span_never_becomes_proof(monkeypatch, tm
     )
     assert not result["complete"]
     assert result["accepted_proofs"] == []
+
+
+def test_valid_evidence_span_is_not_artificially_capped(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(semantic, "request_message_budget", lambda *_: 8192)
+    body = "".join(
+        f"Evidence section {index}: spacecraft trade upgrade behavior is documented. "
+        + ("detail " * 80)
+        + "\n"
+        for index in range(6)
+    )
+    units = semantic._source_units(body)
+    assert len(units) > 4
+
+    def model(*args, **kwargs):
+        if kwargs["tool_name"] == "assess_requirement_source":
+            return {
+                "verdict": "supported",
+                "evidence_start": 0,
+                "evidence_end": len(units) - 1,
+            }
+        return {"verdict": "supported"}
+
+    monkeypatch.setattr(semantic, "generate_fixed_template_value", model)
+    req = requirement()
+    pool = pool_for(body)
+    result = semantic.review_requirement_sources(
+        SimpleNamespace(), req, pool, requirement_candidate_trace(req, pool)
+    )
+
+    assert result["complete"]
+    assert result["accepted_proofs"][0]["excerpt"] == body
