@@ -47,8 +47,10 @@ class ScalableFabricProjectGenerator:
                 module_id=content.content_id,
                 kind=content.kind.value,
                 config={
+                    "display_name": content.display_name_en,
                     "display_name_en": content.display_name_en,
                     "display_name_ko": content.display_name_ko,
+                    "main_color": content.color,
                     "color": content.color,
                 },
                 required_gates=("registry", "resource", "recipe" if content.recipe else "resource"),
