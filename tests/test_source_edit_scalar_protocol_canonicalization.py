@@ -65,6 +65,36 @@ def test_create_file_collapses_expanded_compatibility_payload(tmp_path: Path) ->
     }
 
 
+def test_create_file_accepts_genuinely_new_java_source(tmp_path: Path) -> None:
+    content = (
+        "package dev.mmm.debugfixture;\n\n"
+        "public final class DebugToken {\n"
+        "    private DebugToken() {}\n"
+        "}\n"
+    )
+
+    result = materialize_model_source_edit(
+        _Runtime,
+        tmp_path,
+        {
+            "operation": "create_file",
+            "path": "src/main/java/dev/mmm/debugfixture/DebugToken.java",
+            "content": content,
+        },
+    )
+
+    assert result == {
+        "project_root": ".",
+        "operations": [
+            {
+                "operation": "create",
+                "path": "src/main/java/dev/mmm/debugfixture/DebugToken.java",
+                "content": content,
+            }
+        ],
+    }
+
+
 def test_create_file_rejects_conflicting_content_aliases(tmp_path: Path) -> None:
     with pytest.raises(_Runtime.AgentToolRuntimeError, match="Conflicting.*content"):
         materialize_model_source_edit(
