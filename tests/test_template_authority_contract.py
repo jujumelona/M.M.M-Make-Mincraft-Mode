@@ -2,6 +2,36 @@ import pytest
 
 from minecraft_mod_ai import minecraft_template_steps
 from minecraft_mod_ai import task_template_catalog
+from minecraft_mod_ai.host_version_catalog import host_target, load_host_catalog
+from minecraft_mod_ai.product_support_matrix import SUPPORTED_MINECRAFT_VERSIONS
+from minecraft_mod_ai.version_template_context import resolved_template_facts
+
+
+_REQUIRED_TARGET_FIELDS = (
+    "minecraft_version",
+    "loader",
+    "java_version",
+    "fabric_loader",
+    "fabric_api",
+    "fabric_loom",
+    "gradle",
+    "gradle_sha256",
+    "data_pack_version",
+    "resource_pack_version",
+    "resource_pack_format",
+    "release_metadata_url",
+)
+_HOST_FACT_KEYS = (
+    "host_revision",
+    "capabilities",
+    "api_symbols",
+    "schemas",
+    "artifact_rules",
+    "dependency_coordinates",
+    "repositories",
+    "replacements",
+    "leaf_bindings",
+)
 
 
 def test_runtime_template_root_is_package_owned():
@@ -65,3 +95,45 @@ def test_minecraft_sequence_keeps_explicit_completion_chain():
     assert len(steps) > 1
     for previous, current in zip(steps, steps[1:]):
         assert previous.provides[0] in current.consumes
+
+
+def test_every_supported_version_is_complete_host_authority_before_template_projection():
+    _, bundles = load_host_catalog()
+    published = {bundle.minecraft: bundle for bundle in bundles}
+    missing = sorted(set(SUPPORTED_MINECRAFT_VERSIONS) - set(published))
+    assert not missing, f"product-supported versions missing HOST bundles: {missing}"
+
+    for version in SUPPORTED_MINECRAFT_VERSIONS:
+        target = host_target(version)
+        target.validate()
+        resolved = target.version_context
+        assert resolved.context_id == published[version].context_id
+
+        public_target = target.public_dict()
+        projected = resolved_template_facts(resolved)
+        snapshot = resolved.to_dict()
+
+        for field in _REQUIRED_TARGET_FIELDS:
+            value = public_target[field]
+            assert value is not None, f"{version}: missing HOST target field {field}"
+            if isinstance(value, str):
+                assert value.strip(), f"{version}: blank HOST target field {field}"
+                assert value.strip().casefold() not in {"auto", "latest", "unresolved", "*"}, (
+                    f"{version}: unresolved HOST target field {field}={value!r}"
+                )
+            assert projected[field] == value, f"{version}: template projection changed HOST field {field}"
+
+        naming = public_target["naming_regime"]
+        assert projected["naming_regime"] == naming["kind"]
+        assert projected["mappings_applicable"] is naming["mappings_applicable"]
+        assert projected["pack_versions"] == public_target["pack_versions"]
+        if naming["mappings_applicable"]:
+            assert projected["mappings"] == public_target["mappings"]
+        else:
+            assert "mappings" not in projected
+
+        for key in _HOST_FACT_KEYS:
+            assert key in snapshot["host_facts"], f"{version}: missing HOST fact domain {key}"
+            assert projected[key] == snapshot["host_facts"][key], (
+                f"{version}: template projection changed HOST fact domain {key}"
+            )
