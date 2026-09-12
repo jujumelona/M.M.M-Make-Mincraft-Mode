@@ -170,15 +170,8 @@ def _verification_messages(
 
 
 def _message_bytes(messages: tuple[dict[str, Any], ...]) -> int:
-    """Count the exact host-owned message payload instead of reserving a fixed fraction."""
-    return len(
-        json.dumps(
-            messages,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    )
+    """Count the same serialized message envelope enforced at the model boundary."""
+    return len(json.dumps(messages, ensure_ascii=False).encode("utf-8"))
 
 
 def _tool_surface(
@@ -258,8 +251,8 @@ def _semantic_window_fits(
         max_index,
     )
     return (
-        _message_bytes(assessment_messages) <= assessment_budget
-        and _message_bytes(verification_messages) <= verification_budget
+        _message_bytes(assessment_messages) < assessment_budget
+        and _message_bytes(verification_messages) < verification_budget
     )
 
 
