@@ -118,9 +118,13 @@ def _run_collection(monkeypatch, state, responses):
 
     def review(_router, _role, messages, **kwargs):
         payload = json.loads(messages[1]["content"])
+        units = payload.get("source_units") or []
+        window = (
+            "".join(str(unit.get("text") or "") for unit in units)
+            if units
+            else str(payload.get("source_window") or payload.get("source_quote") or "")
+        )
         if kwargs.get("tool_name") == "assess_requirement_source":
-            units = payload.get("source_units") or []
-            window = "".join(str(unit.get("text") or "") for unit in units)
             supported = "spacecraft" in window and "upgrade" in window
             if supported:
                 return {
@@ -133,7 +137,6 @@ def _run_collection(monkeypatch, state, responses):
                 "evidence_start": -1,
                 "evidence_end": -1,
             }
-        window = str(payload.get("source_window") or payload.get("source_quote") or "")
         return {"verdict": "supported" if "spacecraft" in window and "upgrade" in window else "insufficient"}
 
     monkeypatch.setattr(semantic, "generate_fixed_template_value", review)
