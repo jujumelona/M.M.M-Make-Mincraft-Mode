@@ -1,0 +1,39 @@
+name: inspect remaining live bottleneck paths
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/mmm-livepath-inspect.yml
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+      - name: Print targeted live-path ranges
+        shell: bash
+        run: |
+          for spec in \
+            'minecraft_mod_ai/progress_aware_tool_loop.py:1560:1750' \
+            'minecraft_mod_ai/pre_design_rag_corrective.py:60:110' \
+            'minecraft_mod_ai/pre_design_rag_corrective.py:350:470' \
+            'minecraft_mod_ai/resource_asset_production.py:600:640' \
+            'minecraft_mod_ai/resource_asset_production.py:885:945' \
+            'minecraft_mod_ai/planning_state_implementation.py:600:705' \
+            'minecraft_mod_ai/artifact_graph_executor.py:195:300' \
+            'minecraft_mod_ai/source_transplant.py:720:855' \
+            'minecraft_mod_ai/parallel_runtime_contract.py:1:125' \
+            'minecraft_mod_ai/parallel_runtime_contract.py:200:240' \
+            'minecraft_mod_ai/parallel_runtime_contract.py:295:330' \
+            'minecraft_mod_ai/parallel_runtime_contract.py:500:540' \
+            'minecraft_mod_ai/parallel_runtime_contract.py:615:650' \
+            'minecraft_mod_ai/source_patch.py:250:300'; do
+            IFS=: read -r file start end <<< "$spec"
+            echo "===== $file:$start-$end ====="
+            sed -n "${start},${end}p" "$file" | nl -ba -v "$start"
+          done
