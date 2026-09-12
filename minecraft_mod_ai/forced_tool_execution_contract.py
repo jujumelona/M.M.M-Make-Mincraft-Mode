@@ -439,7 +439,12 @@ def _install_adapter_class(
                 return deterministic
 
         if name in _SOURCE_MUTATION_TOOLS:
-            return host_selected_mutation_turn(current, self, request, name)
+            from .model_adapters import ModelBackendError
+
+            try:
+                return current(self, _single_tool_request(request, name))
+            except ModelBackendError:
+                return host_selected_mutation_turn(current, self, request, name)
         return host_selected_argument_turn(current, self, request, name)
 
     setattr(generate_turn, _MARKER, True)
