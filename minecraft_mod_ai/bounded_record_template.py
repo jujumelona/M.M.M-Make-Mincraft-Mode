@@ -11,6 +11,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from copy import deepcopy
+from threading import RLock
 from typing import Any
 
 from jsonschema import Draft202012Validator
@@ -132,6 +133,15 @@ def run_bounded_record_template(
     template = load_record_template(identifier)
     normalized_context = task_context(template, context)
     admitted_refs = {str(ref) for ref in allowed_refs}
+    checkpoint_lock = RLock()
+
+    def serialized_checkpoint(*args, **kwargs):
+        if checkpoint is None:
+            return None
+        with checkpoint_lock:
+            return checkpoint(*args, **kwargs)
+
+    effective_checkpoint = serialized_checkpoint if checkpoint is not None else None
     count = _load_cardinality(
         router,
         identifier,
@@ -139,7 +149,7 @@ def run_bounded_record_template(
         normalized_context,
         allowed_refs=admitted_refs,
         progress=progress,
-        checkpoint=checkpoint,
+        checkpoint=effective_checkpoint,
     )
 
     def generate_record(index: int) -> dict[str, Any]:
@@ -153,7 +163,7 @@ def run_bounded_record_template(
                 "record_count": count,
             },
             progress=progress,
-            checkpoint=checkpoint,
+            checkpoint=effective_checkpoint,
             generator=generate_fixed_template_value,
         )
 
