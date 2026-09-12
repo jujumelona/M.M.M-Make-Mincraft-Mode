@@ -7,10 +7,7 @@ on:
       - main
     paths:
       - "M.M.M_Make_Mincraft_Mode_Colab.ipynb"
-      - "minecraft_mod_ai/api.py"
-      - "minecraft_mod_ai/colab_run_modes.py"
-      - "minecraft_mod_ai/bounded_record_template.py"
-      - "minecraft_mod_ai/templates/prompt/parse.yaml"
+      - "minecraft_mod_ai/**"
       - "tests/test_colab_debug_fixture_path.py"
       - "tests/test_record_cardinality_blocking_contract.py"
       - ".github/workflows/**"
