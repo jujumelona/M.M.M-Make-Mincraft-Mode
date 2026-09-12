@@ -114,7 +114,7 @@ def _evidence_text(record: Mapping[str, Any]) -> str:
         metadata.get("description") if isinstance(metadata, Mapping) else None,
         record.get("content"),
     ]
-    return _text(" ".join(_text(part) for part in parts if _text(part)))[:_MAX_EVIDENCE_CHARS]
+    return _text(" ".join(_text(part) for part in parts if _text(part)))
 
 
 def _source_code_domain(domain: Mapping[str, Any]) -> bool:
@@ -203,7 +203,7 @@ def project_repository_candidates(
             ):
                 if value and value not in current[field]:
                     current[field].append(value)
-            merged_text = _text(f"{current['evidence_text']} {evidence_text}")[:_MAX_EVIDENCE_CHARS]
+            merged_text = _text(f"{current['evidence_text']} {evidence_text}")
             current["evidence_text"] = merged_text
             current["evidence_tokens"] = sorted(_tokens(merged_text))
 
@@ -251,7 +251,7 @@ def merge_repository_candidates(
             for value in values:
                 if value and value not in target:
                     target.append(value)
-        merged_text = _text(f"{current.get('evidence_text', '')} {candidate.get('evidence_text', '')}")[:_MAX_EVIDENCE_CHARS]
+        merged_text = _text(f"{current.get('evidence_text', '')} {candidate.get('evidence_text', '')}")
         current["evidence_text"] = merged_text
         current["evidence_tokens"] = sorted(_tokens(merged_text))
     ranked = sorted(

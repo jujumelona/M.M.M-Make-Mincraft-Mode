@@ -108,12 +108,11 @@ def _semantic_page_size(
     result_limit: int | None,
     current: int,
 ) -> int:
-    """Scale one provider page to query complexity rather than a fixed local breadth."""
+    """Use provider pagination capacity; query word count is not a recall budget."""
     remaining = None if result_limit is None else max(0, result_limit - current)
     if remaining == 0:
         return 0
-    query_width = max(1, len(_search_terms(query)))
-    page_size = min(provider_max, query_width)
+    page_size = provider_max
     return page_size if remaining is None else min(page_size, remaining)
 
 
@@ -197,7 +196,13 @@ def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
                 "facets": json.dumps([["project_type:mod"]]),
             }
         )
-        payload = _json(f"https://api.modrinth.com/v2/search?{params}")
+        try:
+            payload = _json(f"https://api.modrinth.com/v2/search?{params}")
+        except (OSError, ValueError) as exc:
+            if not records:
+                raise
+            errors.append(f"partial_search_page:{type(exc).__name__}:{exc}")
+            break
         search_requests += 1
         raw_hits = payload.get("hits", []) if isinstance(payload, Mapping) else []
         hits = (
@@ -304,8 +309,6 @@ def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
             break
         if len(hits) < page_size and not provider_total:
             break
-        if wanted and wanted.issubset(covered):
-            break
         offset = next_offset
 
     return records, {
@@ -316,7 +319,8 @@ def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         "search_requests": search_requests,
         "source_requests": source_requests,
         "detail_errors": errors,
-        "retrieval_stop": "provider_progress_or_semantic_coverage",
+        "retrieval_complete": not errors and (not provider_total or len(seen_search_keys) >= provider_total),
+        "retrieval_stop": "provider_exhaustion_or_explicit_budget",
     }
 
 
@@ -471,8 +475,6 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
         if next_index <= index:
             errors.append("nonadvancing_search_index")
             break
-        if wanted and wanted.issubset(covered):
-            break
         index = next_index
 
     return records, {
@@ -484,7 +486,7 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
         "source_requests": source_requests,
         "detail_errors": errors,
         "authenticated": True,
-        "retrieval_stop": "provider_progress_or_semantic_coverage",
+        "retrieval_stop": "provider_exhaustion_or_explicit_budget",
     }
 
 
@@ -644,9 +646,7 @@ def _search_github(
         consumed += len(rows)
         if provider_total and consumed >= provider_total:
             break
-        if len(rows) < page_size:
-            break
-        if wanted and wanted.issubset(covered):
+        if len(rows) < page_size and not provider_total:
             break
         page += 1
 
@@ -663,7 +663,7 @@ def _search_github(
         "readme_errors": readme_errors,
         "search_requests": search_requests,
         "source_requests": source_requests,
-        "retrieval_stop": "provider_progress_or_semantic_coverage",
+        "retrieval_stop": "provider_exhaustion_or_explicit_budget",
     }
 
 

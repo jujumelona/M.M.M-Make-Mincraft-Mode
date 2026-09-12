@@ -45,6 +45,11 @@ def _tokens(value: Any) -> set[str]:
 
 
 def _domain_terms(domain: Mapping[str, Any]) -> set[str]:
+    requirement = domain.get("requirement")
+    if isinstance(requirement, Mapping) and requirement:
+        from .planning_candidate_evidence import terms
+        return set(terms(str(requirement.get("semantic_capability") or "") + " "
+                         + str(requirement.get("statement") or "")))
     values = [str(domain.get("objective") or "")]
     for key in ("requirements", "queries"):
         raw = domain.get(key)
@@ -375,9 +380,9 @@ def _merge_page_notes(
 
 
 __all__ = [
-    "research_document_domain",
-    "_grounded_evidence_cards",
     "_claims_from_grounded_cards",
-    "_root_page_claims",
+    "_grounded_evidence_cards",
     "_merge_page_notes",
+    "_root_page_claims",
+    "research_document_domain",
 ]

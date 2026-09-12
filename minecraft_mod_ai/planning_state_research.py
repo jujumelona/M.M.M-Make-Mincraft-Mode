@@ -21,14 +21,22 @@ from .deadline_executor import (
     iter_completed_with_deadlines,
 )
 from .model_concurrency import router_native_model_parallelism
-from .planning_state_contract import validate_planning_state
+from .planning_candidate_evidence import (
+    expansion_queries,
+    fingerprint,
+    global_grounded_pool,
+    query_context,
+    requirement_candidate_trace,
+    requirement_for,
+)
 from .planning_mod_discovery import catalog_queries, discovery_receipt
-from .root_cause_trace import emit_root_cause
+from .planning_state_contract import validate_planning_state
 from .pre_design_domain_research import research_document_domain
 from .research_reuse_candidates import (
     merge_repository_candidates,
     project_repository_candidates,
 )
+from .root_cause_trace import emit_root_cause
 from .spec import canonical_json
 
 _DEFAULT_SCOPE_POLICY = (
@@ -236,7 +244,9 @@ def _research_brief(
                 "evidence_kinds": _evidence_kinds_for(source_kinds),
                 "queries": queries,
                 "providers": _providers_for(source_kinds),
-                **({"catalog_queries": catalog_queries(state, raw)}
+                **({"catalog_queries": catalog_queries(state, raw, prompt=prompt),
+                    "task_query_context": query_context(state, raw, prompt),
+                    "requirement": dict(requirement_for(state, raw))}
                    if kinds & {"repository", "existing_mods"} else {}),
                 "required_anchor_terms": required_anchor_terms,
                 "depends_on": [],
@@ -445,6 +455,45 @@ def collect_planning_state_research(
         if str(domain.get("domain_id") or "") not in unsupported_domains
     ]
 
+    grounded_by_domain = {
+        str(domain["domain_id"]): deepcopy(_grounded_domain_evidence(str(domain["domain_id"]), minecraft_bundle))
+        for domain in minecraft_domains
+    }
+    pool = global_grounded_pool(grounded_by_domain)
+    # A corrective pass must change the actual provider search space. No retry count,
+    # reworded error, or model assertion can revive an identical exhausted query set.
+    corrective_domains = []
+    for domain in minecraft_domains:
+        if "catalog_queries" not in domain:
+            continue
+        trace = requirement_candidate_trace(domain["requirement"], pool)
+        if trace["coverage_complete"]:
+            continue
+        executed = {project_rag._query_terms(q).casefold()
+                    for searched_domain in minecraft_domains
+                    for q in searched_domain.get("catalog_queries", [])}
+        fresh = [q for q in expansion_queries(domain["task_query_context"])
+                 if project_rag._query_terms(q).casefold() not in executed]
+        if fresh:
+            corrective_domains.append({**domain, "catalog_queries": fresh, "queries": []})
+            emit_root_cause(
+                "planning_research_state", stage="planning_state",
+                operation="collect_planning_state_research", result="RETRY",
+                reason="material_search_space_expansion",
+                details={"research_ref": domain["domain_id"], "new_queries": fresh,
+                         "previous_queries_sha256": fingerprint(sorted(executed)),
+                         "next_queries_sha256": fingerprint(sorted(executed | {q.casefold() for q in fresh}))},
+            )
+    if corrective_domains:
+        corrective_bundle = forced_rag_bundle(project_rag, router, {**brief, "domains": corrective_domains})
+        for domain in corrective_domains:
+            domain_id = str(domain["domain_id"])
+            correction = _grounded_domain_evidence(domain_id, corrective_bundle)
+            grounded_by_domain[domain_id]["queries"].extend(correction.get("queries", []))
+        pool = global_grounded_pool(grounded_by_domain)
+    value["task_candidate_pool"] = deepcopy(pool)
+    value["candidate_requirement_trace"] = []
+
     def research_domain(domain: Mapping[str, Any]) -> dict[str, Any]:
         domain_id = str(domain.get("domain_id") or "")
         discovery: dict[str, Any] | None = None
@@ -456,8 +505,21 @@ def collect_planning_state_research(
                 raise ValueError(
                     "PLANNING_RESEARCH_ROUTE: Minecraft RAG bundle is unexpectedly absent"
                 )
-            grounded = _grounded_domain_evidence(domain_id, minecraft_bundle)
+            grounded = deepcopy(grounded_by_domain[domain_id])
             repository_candidates = project_repository_candidates(domain, grounded)
+            if "catalog_queries" in domain:
+                # Reassess sibling candidates against this requirement before deciding
+                # completion. Preserve the domain's own API/document provider route.
+                own_source_ids = {(str(record.get("source_id") or ""), str(record.get("content") or ""))
+                                  for query in grounded.get("queries", [])
+                                  for record in query.get("evidence_records", [])}
+                for query in pool["queries"]:
+                    records = [record for record in query["evidence_records"]
+                               if (str(record.get("source_id") or ""), str(record.get("content") or "")) not in own_source_ids]
+                    if records:
+                        grounded["queries"].append({**query, "evidence_records": records})
+                        own_source_ids.update((str(record.get("source_id") or ""), str(record.get("content") or ""))
+                                              for record in records)
             if "catalog_queries" in domain:
                 discovery = discovery_receipt(domain_id, grounded)
         provider_diagnostics = _provider_diagnostics(grounded)
@@ -488,6 +550,8 @@ def collect_planning_state_research(
             "repository_candidates": repository_candidates,
             "discovery": discovery,
             "provider_diagnostics": provider_diagnostics,
+            "candidate_trace": requirement_candidate_trace(domain["requirement"], pool)
+                if "catalog_queries" in domain else None,
         }
 
     domain_results: dict[str, dict[str, Any]] = {}
@@ -601,9 +665,27 @@ def collect_planning_state_research(
         discovery = discovery_by_domain.get(research_id)
         if discovery is not None:
             research["mod_discovery"] = deepcopy(discovery)
-            sufficient = sufficient and discovery["complete"]
-            refs = list(dict.fromkeys([*refs, *(candidate["source_id"]
-                for candidate in discovery["candidates"])]))
+            trace = domain_results[research_id]["candidate_trace"]
+            value["candidate_requirement_trace"].append(deepcopy(trace))
+            # A generic API excerpt cannot fill a gameplay evidence gap. Match only
+            # requirement-local candidate evidence; never append every retrieved ID.
+            sufficient = sufficient and discovery["complete"] and trace["coverage_complete"]
+            matched_refs = [candidate["source_id"] for candidate in trace["candidates"]
+                            if candidate["evidence"]]
+            refs = list(dict.fromkeys([*refs, *matched_refs]))
+            research["research_state"] = "COMPLETE" if sufficient else "RESEARCH_BLOCKED"
+            research["search_space_sha256"] = fingerprint([
+                (q.get("query"), sorted((q.get("provider_receipts") or {}).keys()))
+                for q in grounded_by_domain[research_id].get("queries", [])])
+            research["candidate_trace"] = deepcopy(trace)
+            emit_root_cause(
+                "planning_research_state", stage="planning_state",
+                operation="collect_planning_state_research", result=research["research_state"],
+                reason="requirement_candidate_evidence" if sufficient else "candidate_evidence_missing",
+                details={"research_ref": research_id, "candidate_count": len(trace["candidates"]),
+                         "missing_facets": trace["missing_facets"],
+                         "pool_sha256": trace["pool_sha256"]},
+            )
         research["status"] = "complete" if sufficient else "blocked"
         provider_diagnostics = provider_diagnostics_by_domain.get(research_id, [])
         provider_statuses = _provider_statuses(provider_diagnostics)
@@ -615,6 +697,7 @@ def collect_planning_state_research(
                 "sufficient": sufficient,
                 "source": "grounded_materialized_pages",
                 **({"mod_discovery": deepcopy(discovery)} if discovery is not None else {}),
+                **({"candidate_trace": deepcopy(research["candidate_trace"])} if discovery is not None else {}),
                 "diagnostics": {
                     "source_body_count": int(note.get("source_body_count") or 0),
                     "evidence_card_count": int(
@@ -659,6 +742,8 @@ def collect_planning_state_research(
             else:
                 reason = (
                     (discovery["status"] if discovery is not None and not discovery["complete"] else "")
+                    or ("requirement_candidate_evidence_missing" if discovery is not None
+                        and not research["candidate_trace"]["coverage_complete"] else "")
                     or _text(note.get("evidence_extraction_status"))
                     or "insufficient_grounded_evidence"
                 )
@@ -684,6 +769,12 @@ def collect_planning_state_research(
         for row in value["blockers"]
         if row.get("unresolved_id") not in resolved_ids
     ]
+    for candidate in value["repository_candidates"]:
+        source_ids = set(candidate.get("source_ids") or [])
+        candidate["requirement_traces"] = [
+            deepcopy(row) for trace in value["candidate_requirement_trace"]
+            for row in trace["candidates"] if row["source_id"] in source_ids
+        ]
     return _rehash(value)
 
 

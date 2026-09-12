@@ -59,13 +59,20 @@ def catalog_queries(
         candidates.extend([" ".join(parts), *parts])
     for value in (
         requirement.get("statement"),
-        research.get("objective"),
-        research.get("information_needed"),
-        prompt,
+        state.get("original_prompt") or prompt,
     ):
         query = _query_text(value)
         if query:
             candidates.append(query)
+
+    # Other approved requirements expose ecosystem vocabulary lost by a narrow label.
+    # They expand retrieval only; requirement-local evidence still decides relevance.
+    for sibling in state.get("decisions", []):
+        if not isinstance(sibling, Mapping) or sibling.get("decision_type") != "requirement":
+            continue
+        sibling_parts = [" ".join(re.findall(r"[\w]+", part.replace("_", " ")))
+                         for part in str(sibling.get("semantic_capability") or "").split(".")]
+        candidates.extend(part for part in [" ".join(sibling_parts), *sibling_parts] if part)
 
     if candidates:
         return list(dict.fromkeys(candidates))
@@ -99,7 +106,7 @@ def discovery_receipt(domain_id: str, grounded: Mapping[str, Any]) -> dict[str, 
                 "versions": metadata.get("versions", []),
                 "loaders": metadata.get("loaders", []),
                 "license": metadata.get("license", None),
-                "description": str(record.get("content") or "")[:1200],
+                "description": str(record.get("content") or ""),
                 "queries": [], "compatibility": "not_verified",
                 "reuse_authority": "verification_required",
             })

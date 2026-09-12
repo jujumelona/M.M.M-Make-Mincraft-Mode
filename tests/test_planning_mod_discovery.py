@@ -1,3 +1,4 @@
+import json
 from copy import deepcopy
 
 import pytest
@@ -5,7 +6,6 @@ import pytest
 from minecraft_mod_ai.catalog_first_grounded_rag import _domain_specs
 from minecraft_mod_ai.planning_mod_discovery import catalog_queries, discovery_receipt
 from minecraft_mod_ai.planning_state_implementation import _requirement_grounding
-import json
 from minecraft_mod_ai.research_reuse_candidates import (
     merge_repository_candidates,
     project_repository_candidates,
@@ -46,8 +46,6 @@ def test_catalog_queries_preserve_task_context_and_do_not_send_api_instructions(
         "space",
         "travel",
         "Travel to space",
-        "Find useful implementation/reuse options for space travel",
-        "Concrete implementation patterns and support artifacts",
         prompt,
     ]
     specs = _domain_specs({"providers": ["modrinth", "official_docs"],
@@ -112,8 +110,8 @@ def test_repository_candidate_merge_has_no_hidden_global_top_n_cut():
 @pytest.mark.parametrize("available", [True, False])
 def test_research_to_criterion_preserves_catalog_or_blocks_unavailable_catalog(monkeypatch, available):
     from minecraft_mod_ai import planning_state_research as research
-    from minecraft_mod_ai import pre_design_research_pipeline as pipeline
     from minecraft_mod_ai import pre_design_grounded_rag as backend
+    from minecraft_mod_ai import pre_design_research_pipeline as pipeline
 
     monkeypatch.setattr(research, "validate_planning_state", lambda *a, **k: None)
     monkeypatch.setattr(research, "emit_root_cause", lambda *a, **k: None)

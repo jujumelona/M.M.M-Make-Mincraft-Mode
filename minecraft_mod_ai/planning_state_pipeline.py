@@ -22,8 +22,13 @@ from .planning_detail_applicability import (
     ensure_host_detail_section_applicability,
     required_sections_by_requirement,
 )
-from .planning_state_adaptive_implementation import compile_progress_monotone_detailed_plans
-from .planning_state_contract import build_initial_planning_state, validate_planning_state
+from .planning_state_adaptive_implementation import (
+    compile_progress_monotone_detailed_plans,
+)
+from .planning_state_contract import (
+    build_initial_planning_state,
+    validate_planning_state,
+)
 from .prompt_task_checkpoint import is_prompt_checkpoint
 from .root_cause_trace import emit_root_cause, traced_callable
 
@@ -363,6 +368,8 @@ def prepare_planning_state(
             ),
         )
 
+    from .planning_candidate_evidence import assert_candidate_research_complete
+    assert_candidate_research_complete(state)
     section_selection = _transition(
         "select_detail_sections",
         lambda: required_sections_by_requirement(state),
