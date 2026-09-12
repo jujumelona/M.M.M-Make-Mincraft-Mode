@@ -298,16 +298,34 @@ def test_pure_content_qwen_reasoning_is_split_before_host_tool_parse(monkeypatch
 def test_apply_source_edit_uses_discriminator_then_operation_detail_recovery(monkeypatch) -> None:
     from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
 
-    replies = [
-        '{"operation":"replace_exact"}',
-        '{"path":"src/main/java/Example.java","old":"before();","new":"after();"}',
-    ]
+    stream_values = {
+        "path": "src/main/java/Example.java",
+        "old": "before();",
+        "new": "after();",
+    }
     posts: list[dict[str, object]] = []
+    streamed_fields: list[str] = []
 
     def post(url, *, json, timeout):
         del url, timeout
         index = len(posts)
         posts.append(dict(json))
+        function = json["tools"][0]["function"]
+        properties = function["parameters"]["properties"]
+        if set(properties) == {"operation"}:
+            arguments = '{"operation":"replace_exact"}'
+        else:
+            assert set(properties) == {"chunk", "done"}
+            instruction = str(json["messages"][-1]["content"])
+            field_name = next(
+                name for name in stream_values if f"field {name!r}" in instruction
+            )
+            streamed_fields.append(field_name)
+            arguments = (
+                '{"chunk":'
+                + __import__("json").dumps(stream_values[field_name])
+                + ',"done":true}'
+            )
         return _CompletionResponse(
             status_code=200,
             payload={
@@ -319,7 +337,7 @@ def test_apply_source_edit_uses_discriminator_then_operation_detail_recovery(mon
                             "type": "function",
                             "function": {
                                 "name": "apply_source_edit",
-                                "arguments": replies[index],
+                                "arguments": arguments,
                             },
                         }],
                     },
@@ -347,7 +365,8 @@ def test_apply_source_edit_uses_discriminator_then_operation_detail_recovery(mon
             },
         )
     )
-    assert len(posts) == 2
+    assert len(posts) == 4
+    assert streamed_fields == ["path", "old", "new"]
     assert len(turn.tool_calls) == 1
     assert turn.tool_calls[0].arguments == {
         "operation": "replace_exact",
