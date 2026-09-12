@@ -1,9 +1,0 @@
-id: research/progression_extraction
-execution: host
-input:
-  evidence_items:
-output:
-  progression_records:
-  evidence_refs:
-proof:
-  predicate: every progression edge is supported by cited evidence

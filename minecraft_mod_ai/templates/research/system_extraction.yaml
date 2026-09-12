@@ -1,9 +1,0 @@
-id: research/system_extraction
-execution: host
-input:
-  evidence_items:
-output:
-  systems:
-  evidence_refs:
-proof:
-  predicate: every system statement is directly supported by cited evidence

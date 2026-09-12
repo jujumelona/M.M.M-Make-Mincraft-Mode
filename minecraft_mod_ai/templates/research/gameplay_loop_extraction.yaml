@@ -1,9 +1,0 @@
-id: research/gameplay_loop_extraction
-execution: host
-input:
-  evidence_items:
-output:
-  gameplay_loops:
-  evidence_refs:
-proof:
-  predicate: every populated loop stage has direct evidence

@@ -1,9 +1,0 @@
-id: research/audio_extraction
-execution: host
-input:
-  audio_evidence:
-output:
-  audio_records:
-  evidence_refs:
-proof:
-  predicate: every audio record is supported by cited evidence

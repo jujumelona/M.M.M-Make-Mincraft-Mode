@@ -1,9 +1,0 @@
-id: research/visual_extraction
-execution: host
-input:
-  visual_evidence:
-output:
-  visual_records:
-  evidence_refs:
-proof:
-  predicate: every visual record is observable in cited visual evidence

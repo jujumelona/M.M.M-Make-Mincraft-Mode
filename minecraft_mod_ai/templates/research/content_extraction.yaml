@@ -1,9 +1,0 @@
-id: research/content_extraction
-execution: host
-input:
-  evidence_items:
-output:
-  content_records:
-  evidence_refs:
-proof:
-  predicate: every content record has direct source evidence
