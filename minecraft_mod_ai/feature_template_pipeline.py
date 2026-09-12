@@ -6,6 +6,7 @@ import json
 from copy import deepcopy
 
 from .bounded_record_template import run_record_template
+from .parallel_model_tasks import deterministic_model_map, serialized_callback
 from .task_template_runner import TemplateBlocked
 
 
@@ -94,9 +95,10 @@ def evaluate_atomicity(check_records):
 
 
 def _run_atomic_checks(router, feature_record, *, allowed_refs, progress=None, checkpoint=None):
-    records = []
-    for check in ATOMIC_CHECKS:
-        sections = feature_record["sections"]
+    sections = feature_record["sections"]
+    safe_checkpoint = serialized_callback(checkpoint)
+
+    def run_check(check):
         context = {
             "feature_id": feature_record["feature_id"],
             "feature_description": feature_record["feature_description"],
@@ -112,7 +114,7 @@ def _run_atomic_checks(router, feature_record, *, allowed_refs, progress=None, c
             context=context,
             allowed_refs=allowed_refs,
             progress=progress,
-            checkpoint=checkpoint,
+            checkpoint=safe_checkpoint,
         )
         if result["reason"] or len(result["records"]) != 1:
             raise TemplateBlocked(
@@ -121,8 +123,73 @@ def _run_atomic_checks(router, feature_record, *, allowed_refs, progress=None, c
         record = result["records"][0]
         if record["check"] != check:
             raise ValueError(f"FEATURE_ATOMIC_CHECK: expected {check}, got {record['check']}")
-        records.append(record)
+        return record
+
+    records = deterministic_model_map(
+        router,
+        ATOMIC_CHECKS,
+        run_check,
+        role="planner",
+        thread_name_prefix="feature-atomic-check",
+    )
     return evaluate_atomicity(records)
+
+
+def _run_feature_sections(router, base, *, allowed_refs, progress=None, checkpoint=None):
+    """Execute the declared feature dependency DAG in deterministic ready waves."""
+
+    sections = {}
+    evidence_refs = []
+    remaining = set(FEATURE_DETAIL_STEPS)
+    safe_checkpoint = serialized_callback(checkpoint)
+
+    while remaining:
+        ready = tuple(
+            step
+            for step in FEATURE_DETAIL_STEPS
+            if step in remaining
+            and all(dependency in sections for dependency in FEATURE_CONTEXT_DEPENDENCIES[step])
+        )
+        if not ready:
+            raise ValueError(
+                "FEATURE_DETAIL_DAG: unresolved dependency cycle: "
+                + ", ".join(step for step in FEATURE_DETAIL_STEPS if step in remaining)
+            )
+
+        section_snapshot = deepcopy(sections)
+
+        def run_step(step):
+            relevant = {
+                name: deepcopy(section_snapshot[name])
+                for name in FEATURE_CONTEXT_DEPENDENCIES[step]
+            }
+            return run_record_template(
+                router,
+                f"feature/{step}",
+                context={"feature": base, "relevant_sections": relevant},
+                allowed_refs=allowed_refs,
+                progress=progress,
+                checkpoint=safe_checkpoint,
+            )
+
+        results = deterministic_model_map(
+            router,
+            ready,
+            run_step,
+            role="planner",
+            thread_name_prefix="feature-detail",
+        )
+        for step, result in zip(ready, results):
+            sections[step] = {
+                "records": result["records"],
+                "not_applicable_reason": result["reason"],
+            }
+            for ref in result["evidence_refs"]:
+                if ref not in evidence_refs:
+                    evidence_refs.append(ref)
+            remaining.remove(step)
+
+    return sections, evidence_refs
 
 
 def complete_feature(
@@ -154,27 +221,13 @@ def complete_feature(
         )
 
     base = {"feature_id": feature_id, "feature_description": description}
-    sections, evidence_refs = {}, []
-    for step in FEATURE_DETAIL_STEPS:
-        relevant = {
-            name: deepcopy(sections[name])
-            for name in FEATURE_CONTEXT_DEPENDENCIES[step]
-        }
-        result = run_record_template(
-            router,
-            f"feature/{step}",
-            context={"feature": base, "relevant_sections": relevant},
-            allowed_refs=allowed_refs,
-            progress=progress,
-            checkpoint=checkpoint,
-        )
-        sections[step] = {
-            "records": result["records"],
-            "not_applicable_reason": result["reason"],
-        }
-        for ref in result["evidence_refs"]:
-            if ref not in evidence_refs:
-                evidence_refs.append(ref)
+    sections, evidence_refs = _run_feature_sections(
+        router,
+        base,
+        allowed_refs=allowed_refs,
+        progress=progress,
+        checkpoint=checkpoint,
+    )
 
     completed = {**base, "sections": sections}
     atomicity = _run_atomic_checks(
