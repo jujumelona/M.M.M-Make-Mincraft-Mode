@@ -12,7 +12,6 @@ from minecraft_mod_ai import planning_state_adaptive_implementation as adaptive
 from minecraft_mod_ai import planning_state_research as research
 from minecraft_mod_ai.deadline_executor import (
     ParallelExecutionTimeout,
-    ParallelTaskError,
     iter_completed_with_deadlines,
 )
 from minecraft_mod_ai.model_concurrency import (
