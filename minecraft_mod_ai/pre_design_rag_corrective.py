@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Bounded corrective retrieval loop for pre-design research."""
+"""Corrective retrieval loop whose completion is owned by evidence semantics."""
 
 import json
 import os
@@ -19,8 +19,6 @@ from .pre_design_rag_support import (
     _verify_page_claims,
 )
 
-_DEFAULT_CORRECTIVE_ROUNDS = 2
-_MAX_CORRECTIVE_ROUNDS = 4
 _QUALITY_SCHEMA = "mmm/pre-design-rag-quality-v4"
 _VERIFIED_FIXED_POINT = "verified_claims_sufficient"
 _TRACE_VALUE_LIMIT = 12
@@ -54,8 +52,8 @@ def _round_has_verified_claims(summary: Mapping[str, Any]) -> bool:
     """Page-local uncertainties cannot invalidate independently verified evidence.
 
     The page reader is intentionally scoped to one evidence fragment, so its ``gaps``
-    describe what that *page* did not establish.  They are corrective-retrieval hints,
-    not proof that the complete authored request is unresolved.  The authored requirement
+    describe what that *page* did not establish. They are corrective-retrieval hints,
+    not proof that the complete authored request is unresolved. The authored requirement
     graph remains the authority for request completeness; pre-design RAG only contributes
     externally supported design knowledge.
     """
@@ -72,23 +70,24 @@ def _round_is_terminally_sufficient(
     """Verified evidence is sufficient for this advisory legacy reader.
 
     Page-local omissions and rejected sibling candidates are diagnostics, not authored
-    requirement obligations.  The canonical small-model owner no longer uses this state
+    requirement obligations. The canonical small-model owner no longer uses this state
     machine, but callers that still exercise it must preserve the same semantics.
     """
     del page_gaps, support_rejections
     return _round_has_verified_claims(summary)
 
-def _corrective_round_limit() -> int:
+
+def _corrective_round_limit() -> int | None:
+    """Return an explicit operator safety cap, never a semantic completion rule."""
+
+    raw = os.environ.get("MMM_PREDESIGN_CORRECTIVE_ROUNDS", "").strip()
+    if not raw:
+        return None
     try:
-        value = int(
-            os.environ.get(
-                "MMM_PREDESIGN_CORRECTIVE_ROUNDS",
-                str(_DEFAULT_CORRECTIVE_ROUNDS),
-            ).strip()
-        )
+        value = int(raw)
     except ValueError:
-        value = _DEFAULT_CORRECTIVE_ROUNDS
-    return max(0, min(value, _MAX_CORRECTIVE_ROUNDS))
+        return None
+    return value if value >= 0 else None
 
 
 def _correction_queries(
@@ -272,8 +271,7 @@ def _read_and_verify_document(
             )
 
         # A support rejection means this candidate was not proven by this exact page.
-        # It is *not* evidence that the whole request has an unresolved retrieval gap.
-        # Keep it as a corrective hint/diagnostic rather than poisoning domain sufficiency.
+        # It is not evidence that the whole request has an unresolved retrieval gap.
         support_rejections = list(dict.fromkeys(rejected))
         _emit_corrective_trace(
             "page_local_uncertainty",
@@ -372,18 +370,18 @@ def _quality_research_document_domain(
         history: list[dict[str, Any]] = []
         rejected_total = 0
         fixed_point = ""
-        max_rounds = _corrective_round_limit()
+        safety_round_limit = _corrective_round_limit()
         round_index = 0
         active_summary = _merge_verified_notes(domain_id, [])
         active_page_gaps: list[str] = []
         active_support_rejections: list[str] = []
 
-        while round_index <= max_rounds:
+        while True:
             _emit_corrective_trace(
                 "corrective_round_start",
                 domain_id=domain_id,
                 round=round_index,
-                max_rounds=max_rounds,
+                safety_round_limit=safety_round_limit,
                 document_sha256=str(documents[-1].get("document_sha256") or ""),
                 searched_query_count=len(searched),
                 recoverable_failure_count=len(failures),
@@ -428,9 +426,9 @@ def _quality_research_document_domain(
             )
 
             # The authored requirement graph is validated separately and remains the
-            # authority for request completeness.  This stage proves external design
-            # knowledge.  Once at least one exact-quote-supported claim exists, page-local
-            # omissions cannot turn that verified evidence back into an unresolved domain.
+            # authority for request completeness. Once at least one exact-quote-supported
+            # claim exists, page-local omissions cannot turn verified evidence back into
+            # an unresolved domain.
             if _round_is_terminally_sufficient(
                 accumulated_summary,
                 page_gaps=active_page_gaps,
@@ -438,9 +436,16 @@ def _quality_research_document_domain(
             ):
                 fixed_point = _VERIFIED_FIXED_POINT
                 break
-            if round_index >= max_rounds:
-                fixed_point = "corrective_round_limit_reached"
-                break
+
+            if (
+                safety_round_limit is not None
+                and round_index >= safety_round_limit
+            ):
+                raise RuntimeError(
+                    "PREDESIGN_CORRECTIVE_SAFETY_LIMIT: operator-configured corrective "
+                    f"round limit reached at {safety_round_limit}; semantic convergence "
+                    "was not reached"
+                )
 
             unseen = _correction_queries(
                 active_summary.get("next_queries"),
@@ -550,7 +555,7 @@ def _quality_research_document_domain(
         accumulated = _merge_verified_notes(domain_id, all_notes)
         summary = dict(accumulated)
         claims = list(summary["claims"])
-        # Preserve page-local uncertainty as diagnostics.  Do not expose it through the
+        # Preserve page-local uncertainty as diagnostics. Do not expose it through the
         # domain-level ``gaps`` field, because downstream fail-closed logic interprets that
         # field as a blocking requirement obligation.
         summary["page_local_gaps"] = list(active_page_gaps)
@@ -604,7 +609,8 @@ def _quality_research_document_domain(
                 "corrective_retrieval": True,
                 "claim_support": "model_entailment+host_exact_quote",
                 "gap_semantics": "page_local_diagnostic_not_domain_blocker",
-                "corrective_round_limit": max_rounds,
+                "corrective_round_limit": safety_round_limit,
+                "corrective_completion_policy": "semantic_fixed_point",
                 "corrective_rounds_executed": len(history),
                 "correction_history": history,
                 "rejected_claim_count": rejected_total,
