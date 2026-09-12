@@ -1,0 +1,132 @@
+name: MMM platform discovery liveness hardening
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/mmm-platform-liveness-fix.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mmm-platform-liveness-fix-main
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Sync latest main
+        run: git pull --ff-only origin main
+      - name: Patch platform discovery waits
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('minecraft_mod_ai/platform_live_discovery.py')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_once(old: str, new: str) -> None:
+              global text
+              if old not in text:
+                  raise SystemExit(f'anchor not found: {old[:180]!r}')
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              'from concurrent.futures import Future, ThreadPoolExecutor\n',
+              'from concurrent.futures import Future, TimeoutError as FutureTimeoutError\n',
+          )
+          replace_once(
+              'from typing import Any\n\nfrom .target_contract import mappings_applicable\n',
+              'from typing import Any\n\nfrom .deadline_executor import iter_completed_with_deadlines\nfrom .target_contract import mappings_applicable\n',
+          )
+
+          anchor = '''def _discovery_retries() -> int:\n    raw = os.environ.get(\n        "MMM_PLATFORM_DISCOVERY_RETRIES",\n        str(_DEFAULT_DISCOVERY_RETRIES),\n    ).strip()\n    try:\n        value = int(raw)\n    except ValueError:\n        value = _DEFAULT_DISCOVERY_RETRIES\n    return max(1, min(_MAX_DISCOVERY_RETRIES, value))\n\n\n'''
+          replacement = anchor + '''def _request_budget_seconds(*, timeout: int, retries: int) -> float:\n    """Return the transport's own worst-case wait budget, including configured backoff."""\n\n    attempts = max(1, int(retries))\n    retry_delays = sum(\n        _RETRY_DELAYS[min(attempt - 1, len(_RETRY_DELAYS) - 1)]\n        for attempt in range(1, attempts)\n    )\n    return float(max(1, int(timeout)) * attempts) + retry_delays\n\n\n'''
+          replace_once(anchor, replacement)
+
+          replace_once(
+              '''def discover_game_versions() -> tuple[dict[str, Any], ...]:\n    global _GAME_VERSION_FUTURE\n    future = _start_game_version_prefetch()\n    try:\n        return future.result()\n    except BaseException:\n        with _GAME_VERSION_LOCK:\n            if _GAME_VERSION_FUTURE is future:\n                _GAME_VERSION_FUTURE = None\n        raise\n''',
+              '''def discover_game_versions() -> tuple[dict[str, Any], ...]:\n    global _GAME_VERSION_FUTURE\n    future = _start_game_version_prefetch()\n    try:\n        return future.result(\n            timeout=_request_budget_seconds(\n                timeout=20,\n                retries=_discovery_retries(),\n            )\n        )\n    except FutureTimeoutError as exc:\n        # Keep the same in-flight future registered. Starting a second remote wave\n        # while the first worker is pathological would multiply the stall.\n        raise PlatformDiscoveryError(\n            "Fabric game-version prefetch exceeded its transport-derived deadline"\n        ) from exc\n    except BaseException:\n        with _GAME_VERSION_LOCK:\n            if _GAME_VERSION_FUTURE is future:\n                _GAME_VERSION_FUTURE = None\n        raise\n''',
+          )
+
+          replace_once(
+              '''    workers = min(8, len(versions))\n    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="mmm-mojang-java") as pool:\n        return tuple(pool.map(resolve, versions))\n''',
+              '''    workers = min(8, len(versions))\n    jobs = tuple(enumerate(versions))\n    resolved_by_index: dict[int, tuple[str, str]] = {}\n\n    def resolve_indexed(job: tuple[int, str]) -> tuple[int, tuple[str, str]]:\n        index, version = job\n        return index, resolve(version)\n\n    for _job, result in iter_completed_with_deadlines(\n        jobs,\n        resolve_indexed,\n        max_workers=workers,\n        stage="platform-stable-java-probes",\n        sort_key=lambda item: item[0],\n    ):\n        index, value = result\n        resolved_by_index[index] = value\n    return tuple(resolved_by_index[index] for index in range(len(jobs)))\n''',
+          )
+
+          replace_once(
+              '''    """Fetch version-independent official metadata once, with independent I/O overlapped."""\n    with ThreadPoolExecutor(max_workers=5, thread_name_prefix="mmm-platform-meta") as pool:\n        loader_future = pool.submit(_stable_loader)\n        api_future = pool.submit(_maven_versions, _API_METADATA_PATH)\n        loom_future = pool.submit(_loom_version)\n        gradle_future = pool.submit(_gradle_bundle)\n        mojang_future = pool.submit(_mojang_version_index)\n        gradle, gradle_sha256 = gradle_future.result()\n        return (\n            loader_future.result(),\n            api_future.result(),\n            loom_future.result(),\n            gradle,\n            gradle_sha256,\n            mojang_future.result(),\n        )\n''',
+              '''    """Fetch version-independent official metadata once, with independent I/O overlapped."""\n    jobs = (\n        ("loader", _stable_loader),\n        ("api", lambda: _maven_versions(_API_METADATA_PATH)),\n        ("loom", _loom_version),\n        ("gradle", _gradle_bundle),\n        ("mojang", _mojang_version_index),\n    )\n\n    def fetch_metadata(job: tuple[str, Any]) -> tuple[str, Any]:\n        name, function = job\n        return name, function()\n\n    results: dict[str, Any] = {}\n    for _job, result in iter_completed_with_deadlines(\n        jobs,\n        fetch_metadata,\n        max_workers=len(jobs),\n        stage="platform-common-metadata",\n        sort_key=lambda item: item[0],\n    ):\n        name, value = result\n        results[name] = value\n    gradle, gradle_sha256 = results["gradle"]\n    return (\n        results["loader"],\n        results["api"],\n        results["loom"],\n        gradle,\n        gradle_sha256,\n        results["mojang"],\n    )\n''',
+          )
+
+          replace_once(
+              '''    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="mmm-platform-target") as pool:\n        common_future = pool.submit(_common_platform_metadata)\n        pack_future = pool.submit(_official_pack_versions, version)\n        (\n            loader,\n            api_versions,\n            loom,\n            gradle,\n            gradle_sha256,\n            _mojang_index,\n        ) = common_future.result()\n        data_pack_version, resource_pack_version, release_metadata_url = pack_future.result()\n''',
+              '''    jobs = (\n        ("common", _common_platform_metadata),\n        ("packs", lambda: _official_pack_versions(version)),\n    )\n\n    def discover_target_part(job: tuple[str, Any]) -> tuple[str, Any]:\n        name, function = job\n        return name, function()\n\n    target_parts: dict[str, Any] = {}\n    for _job, result in iter_completed_with_deadlines(\n        jobs,\n        discover_target_part,\n        max_workers=len(jobs),\n        stage="platform-fabric-target",\n        sort_key=lambda item: item[0],\n    ):\n        name, value = result\n        target_parts[name] = value\n    (\n        loader,\n        api_versions,\n        loom,\n        gradle,\n        gradle_sha256,\n        _mojang_index,\n    ) = target_parts["common"]\n    data_pack_version, resource_pack_version, release_metadata_url = target_parts["packs"]\n''',
+          )
+
+          path.write_text(text, encoding='utf-8')
+
+          test = Path('tests/test_platform_live_discovery_deadline_contract.py')
+          test.write_text('''from __future__ import annotations\n\nimport inspect\n\nfrom minecraft_mod_ai import platform_live_discovery as platform\n\n\ndef test_platform_parallel_io_uses_shared_deadline_executor() -> None:\n    source = inspect.getsource(platform)\n    assert "ThreadPoolExecutor" not in source\n    assert "pool.map" not in source\n    assert "future.result()" not in source\n    assert "iter_completed_with_deadlines" in source\n    for stage in (\n        "platform-stable-java-probes",\n        "platform-common-metadata",\n        "platform-fabric-target",\n    ):\n        assert stage in source\n\n\ndef test_game_version_prefetch_wait_is_transport_derived_and_bounded() -> None:\n    source = inspect.getsource(platform.discover_game_versions)\n    assert "future.result(" in source\n    assert "timeout=_request_budget_seconds(" in source\n    assert "FutureTimeoutError" in source\n    assert "_GAME_VERSION_FUTURE = None" in source\n\n\ndef test_request_budget_is_exactly_transport_attempts_plus_backoff(monkeypatch) -> None:\n    monkeypatch.setattr(platform, "_RETRY_DELAYS", (0.25, 0.75, 1.5))\n    assert platform._request_budget_seconds(timeout=20, retries=1) == 20.0\n    assert platform._request_budget_seconds(timeout=20, retries=4) == 82.5\n\n\ndef test_transport_timeouts_remain_finite() -> None:\n    source = inspect.getsource(platform)\n    assert "timeout: int = 20" in source\n    assert "jar = _fetch(jar_url, timeout=90, retries=2)" in source\n''', encoding='utf-8')
+          PY
+      - name: Compile
+        run: |
+          python -m py_compile \
+            minecraft_mod_ai/platform_live_discovery.py \
+            tests/test_platform_live_discovery_deadline_contract.py
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Run platform regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_platform_live_discovery_deadline_contract.py \
+            tests/test_remaining_bottleneck_contract.py \
+            tests/test_retrieval_liveness_deadline_contract.py
+          mapfile -t platform_tests < <(find tests -maxdepth 1 -type f \( -name '*platform*' -o -name '*fabric*target*' -o -name '*live*discovery*' \) ! -name 'test_platform_live_discovery_deadline_contract.py' -print)
+          if ((${#platform_tests[@]})); then
+            python -m pytest -q "${platform_tests[@]}"
+          fi
+      - name: Check correctness/import regressions
+        run: |
+          ruff check --select F,I --fix \
+            minecraft_mod_ai/platform_live_discovery.py \
+            tests/test_platform_live_discovery_deadline_contract.py
+          ruff check --select F,I \
+            minecraft_mod_ai/platform_live_discovery.py \
+            tests/test_platform_live_discovery_deadline_contract.py
+          python -m py_compile minecraft_mod_ai/platform_live_discovery.py
+      - name: Commit verified fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -f .github/workflows/mmm-platform-liveness-fix.yml
+          git add \
+            minecraft_mod_ai/platform_live_discovery.py \
+            tests/test_platform_live_discovery_deadline_contract.py
+          git commit -m 'fix: bound platform discovery waits'
+          for attempt in 1 2 3 4; do
+            if git pull --rebase origin main && git push origin HEAD:main; then
+              exit 0
+            fi
+            git rebase --abort >/dev/null 2>&1 || true
+            git fetch origin main
+            sleep $((attempt * 2))
+          done
+          echo 'failed to push platform liveness fix after retries' >&2
+          exit 1
