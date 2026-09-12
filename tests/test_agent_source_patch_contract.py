@@ -268,7 +268,7 @@ def test_host_refuses_ambiguous_project_root_instead_of_asking_model(tmp_path) -
             workspace,
             {
                 "operation": "create_file",
-                "path": "src/main/java/example/Example.java",
-                "content": "final class Example {}\n",
+                "path": "src/main/resources/example.txt",
+                "content": "example\n",
             },
         )
