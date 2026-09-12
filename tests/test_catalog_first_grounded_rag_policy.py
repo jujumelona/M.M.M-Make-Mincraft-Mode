@@ -73,7 +73,7 @@ def _bundle(backend):
     )
 
 
-def test_catalog_candidate_never_triggers_broad_github_search(monkeypatch) -> None:
+def test_catalog_candidate_without_link_uses_source_discovery_fallback(monkeypatch) -> None:
     monkeypatch.setenv("CURSEFORGE_API_KEY", "configured-test-key")
     backend = _Backend(
         catalog_records=[
@@ -88,13 +88,13 @@ def test_catalog_candidate_never_triggers_broad_github_search(monkeypatch) -> No
     row = _bundle(backend)
 
     assert backend.linked_calls == 1
-    assert backend.broad_github_calls == 0
+    assert backend.broad_github_calls == 1
     assert row["external_rag"]["providers"]["github"]["policy"] == (
-        "no_broad_fallback_when_catalog_has_candidates"
+        "catalog_candidate_source_discovery_fallback"
     )
 
 
-def test_empty_catalog_is_the_only_catalog_domain_broad_github_fallback(monkeypatch) -> None:
+def test_empty_catalog_uses_broad_github_fallback(monkeypatch) -> None:
     monkeypatch.setenv("CURSEFORGE_API_KEY", "configured-test-key")
     backend = _Backend(catalog_records=[])
 
