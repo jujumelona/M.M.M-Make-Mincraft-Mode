@@ -22,6 +22,7 @@ from .minecraft_knowledge_contract import (
     compile_minecraft_knowledge_plan,
     evaluate_route_coverage,
 )
+from .parallel_model_tasks import deterministic_model_map
 from .pre_design_domain_research import research_document_domain
 from .pre_design_rag_quality_contract import _source_body
 from .research_coordinator import collect_technology_radar
@@ -586,7 +587,7 @@ def collect_design_research(
             knowledge_plan
         )
 
-    domain_notes: list[dict[str, Any]] = []
+    domain_jobs: list[tuple[str, Mapping[str, Any], Mapping[str, Any]]] = []
     for domain in research_brief.get("domains", []):
         if not isinstance(domain, Mapping):
             continue
@@ -596,6 +597,12 @@ def collect_design_research(
             domain_id,
             {"grounded_rag": grounded},
         )
+        domain_jobs.append((domain_id, domain, document))
+
+    def research_domain(
+        job: tuple[str, Mapping[str, Any], Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        domain_id, domain, document = job
         with target_neutral_research_scope():
             raw_note = research_document_domain(
                 None,
@@ -613,9 +620,15 @@ def collect_design_research(
             document,
             domain_id=domain_id,
         )
-        domain_notes.append(
-            _validate_domain_result(raw_note, domain_id=domain_id)
-        )
+        return _validate_domain_result(raw_note, domain_id=domain_id)
+
+    domain_notes = deterministic_model_map(
+        router,
+        domain_jobs,
+        research_domain,
+        role="researcher",
+        thread_name_prefix="predesign-domain",
+    )
 
     payload: dict[str, Any] = {
         "schema_version": "mmm/agentic-pre-design-research-v2",
