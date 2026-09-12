@@ -11,4 +11,4 @@ rules:
   - Preserve isolated-sprite framing and transparent-background intent.
 render:
   language: text
-  body: "Pixel Art, PixArFK, isolated item sprite, transparent background, {{visual_description}}"
+  body: "isolated item sprite, transparent background, {{visual_description}}"
