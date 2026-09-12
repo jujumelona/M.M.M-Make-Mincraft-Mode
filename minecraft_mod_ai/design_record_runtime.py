@@ -6,6 +6,7 @@ from copy import deepcopy
 from typing import Any
 
 from .bounded_record_template import run_bounded_record_template
+from .parallel_model_tasks import deterministic_model_map, serialized_callback
 from .single_record_template import run_single_record_template
 from .task_template_catalog import load_record_template
 from .task_template_input import task_context
@@ -146,82 +147,99 @@ def _run_relations(router, identifier, context, progress, checkpoint):
     relation_types = _relation_vocabulary()
     max_pair_relations = _max_pair_relation_count(relation_types)
     allowed_relation_types = list(relation_types)
+    pairs = tuple(
+        (source_id, target_id)
+        for source_id in entity_ids
+        for target_id in entity_ids
+        if source_id != target_id
+    )
+    safe_checkpoint = serialized_callback(checkpoint)
 
-    records: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for source_id in entity_ids:
-        for target_id in entity_ids:
-            if source_id == target_id:
-                continue
-
-            pair_context = {
-                **normalized,
-                "source_id": source_id,
-                "target_id": target_id,
-                "allowed_relation_types": allowed_relation_types,
-            }
-            cardinality = run_single_record_template(
-                router,
-                "design/content_relation_count",
-                context={**pair_context, "accepted_records": []},
-                progress=progress,
-                checkpoint=checkpoint,
+    def run_pair(pair):
+        source_id, target_id = pair
+        pair_context = {
+            **normalized,
+            "source_id": source_id,
+            "target_id": target_id,
+            "allowed_relation_types": allowed_relation_types,
+        }
+        cardinality = run_single_record_template(
+            router,
+            "design/content_relation_count",
+            context={**pair_context, "accepted_records": []},
+            progress=progress,
+            checkpoint=safe_checkpoint,
+        )
+        target_count = int(cardinality["count"])
+        if target_count < 0 or target_count > max_pair_relations:
+            raise TemplateBlocked(
+                "TEMPLATE_RELATION_CARDINALITY_INVALID: "
+                f"{source_id}->{target_id}: {target_count} exceeds semantic maximum "
+                f"{max_pair_relations}"
             )
-            target_count = int(cardinality["count"])
-            if target_count < 0 or target_count > max_pair_relations:
+
+        pair_records: list[dict[str, Any]] = []
+        pair_relation_types: set[str] = set()
+        key_relation_seen = False
+        result: list[dict[str, Any]] = []
+        for index in range(target_count):
+            decision = run_single_record_template(
+                router,
+                identifier,
+                context={
+                    **pair_context,
+                    "record_index": index,
+                    "record_count": target_count,
+                    "accepted_records": deepcopy(pair_records),
+                },
+                progress=progress,
+                checkpoint=safe_checkpoint,
+            )
+            relation_type = decision.get("relation_type")
+            if relation_type not in relation_types:
                 raise TemplateBlocked(
-                    "TEMPLATE_RELATION_CARDINALITY_INVALID: "
-                    f"{source_id}->{target_id}: {target_count} exceeds semantic maximum "
-                    f"{max_pair_relations}"
+                    f"TEMPLATE_RELATION_UNSUPPORTED: {source_id}->{target_id}: "
+                    f"{relation_type}"
                 )
-
-            pair_records: list[dict[str, Any]] = []
-            pair_relation_types: set[str] = set()
-            key_relation_seen = False
-            for index in range(target_count):
-                decision = run_single_record_template(
-                    router,
-                    identifier,
-                    context={
-                        **pair_context,
-                        "record_index": index,
-                        "record_count": target_count,
-                        "accepted_records": deepcopy(pair_records),
-                    },
-                    progress=progress,
-                    checkpoint=checkpoint,
+            if relation_type in pair_relation_types:
+                raise TemplateBlocked(
+                    f"TEMPLATE_RELATION_DUPLICATE: {source_id}->{target_id}: "
+                    f"{relation_type}"
                 )
-                relation_type = decision.get("relation_type")
-                if relation_type not in relation_types:
+            if relation_type.startswith("key_"):
+                if key_relation_seen:
                     raise TemplateBlocked(
-                        f"TEMPLATE_RELATION_UNSUPPORTED: {source_id}->{target_id}: "
-                        f"{relation_type}"
+                        f"TEMPLATE_RELATION_KEY_DUPLICATE: {source_id}->{target_id}"
                     )
-                if relation_type in pair_relation_types:
-                    raise TemplateBlocked(
-                        f"TEMPLATE_RELATION_DUPLICATE: {source_id}->{target_id}: "
-                        f"{relation_type}"
-                    )
-                if relation_type.startswith("key_"):
-                    if key_relation_seen:
-                        raise TemplateBlocked(
-                            f"TEMPLATE_RELATION_KEY_DUPLICATE: {source_id}->{target_id}"
-                        )
-                    key_relation_seen = True
+                key_relation_seen = True
 
-                pair_relation_types.add(relation_type)
-                pair_record = {"relation_type": relation_type}
-                pair_records.append(pair_record)
-                record = {
+            pair_relation_types.add(relation_type)
+            pair_records.append({"relation_type": relation_type})
+            result.append(
+                {
                     "relation_type": relation_type,
                     "source_id": str(source_id),
                     "target_id": str(target_id),
                 }
-                key = _record_key(record)
-                if key in seen:
-                    raise TemplateBlocked(f"TEMPLATE_RELATION_DUPLICATE: {key}")
-                seen.add(key)
-                records.append(record)
+            )
+        return result
+
+    pair_results = deterministic_model_map(
+        router,
+        pairs,
+        run_pair,
+        role="planner",
+        thread_name_prefix="design-relation-pair",
+    )
+    records: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for pair_records in pair_results:
+        for record in pair_records:
+            key = _record_key(record)
+            if key in seen:
+                raise TemplateBlocked(f"TEMPLATE_RELATION_DUPLICATE: {key}")
+            seen.add(key)
+            records.append(record)
     return records, normalized
 
 
