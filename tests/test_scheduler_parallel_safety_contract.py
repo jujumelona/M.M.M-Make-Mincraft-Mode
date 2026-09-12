@@ -1,10 +1,10 @@
 import sqlite3
 import threading
 import time
-from functools import wraps
 from pathlib import Path
 
 import minecraft_mod_ai.complete_orchestrator as orchestrator_module
+import minecraft_mod_ai.scheduler_parallel_safety_contract as scheduler_contract
 import minecraft_mod_ai.work_graph as work_graph_module
 from minecraft_mod_ai.scheduler_parallel_safety_contract import install
 from minecraft_mod_ai.work_graph import (
@@ -47,44 +47,27 @@ def _node(
     )
 
 
-def test_safety_layer_owns_fairness_without_legacy_wrapper() -> None:
+def test_work_graph_owns_claim_method_and_scheduler_owns_policy() -> None:
     claimant = work_graph_module.DurableWorkLedger.claim_ready
-    assert getattr(claimant, "_mmm_parallel_lane_claim", False)
-    assert getattr(claimant, "_mmm_exact_executor_fairness", False)
-    assert getattr(claimant, "_mmm_stage_lock_admission", False)
-    assert getattr(claimant, "_mmm_max_efficiency_claim", False)
-    assert getattr(claimant, "_mmm_parallel_lane_claim_owner", None) is claimant
+    assert claimant.__module__ == "minecraft_mod_ai.work_graph"
+    assert not hasattr(claimant, "__wrapped__")
+    assert not getattr(claimant, "_mmm_parallel_lane_claim", False)
+    assert callable(scheduler_contract.claim_orchestrator_ready)
 
 
-def test_install_recovers_from_wraps_copied_claim_markers() -> None:
+def test_install_is_idempotent_without_rebinding_claim_method() -> None:
     original = work_graph_module.DurableWorkLedger.claim_ready
 
-    @wraps(original)
-    def outer(self, worker_id, *, stages=(), lease_seconds=900):
-        return original(
-            self,
-            worker_id,
-            stages=stages,
-            lease_seconds=lease_seconds,
-        )
+    install(
+        work_graph_module=work_graph_module,
+        orchestrator_module=orchestrator_module,
+    )
+    install(
+        work_graph_module=work_graph_module,
+        orchestrator_module=orchestrator_module,
+    )
 
-    try:
-        work_graph_module.DurableWorkLedger.claim_ready = outer
-        assert getattr(outer, "_mmm_parallel_lane_claim_version", 0) >= 1
-        assert getattr(outer, "_mmm_parallel_lane_claim_owner", None) is original
-        install(
-            work_graph_module=work_graph_module,
-            orchestrator_module=orchestrator_module,
-        )
-        repaired = work_graph_module.DurableWorkLedger.claim_ready
-        assert repaired is not outer
-        assert getattr(repaired, "_mmm_parallel_lane_claim_owner", None) is repaired
-    finally:
-        work_graph_module.DurableWorkLedger.claim_ready = original
-        install(
-            work_graph_module=work_graph_module,
-            orchestrator_module=orchestrator_module,
-        )
+    assert work_graph_module.DurableWorkLedger.claim_ready is original
 
 
 def test_ledger_reuses_one_sqlite_connection_per_thread(
@@ -171,46 +154,8 @@ def test_orchestrator_claim_does_not_overqueue_a_saturated_lane(
     assert third["node_id"] == "b-image"
 
 
-def test_serial_cpu_stage_does_not_occupy_multiple_workers(
-    tmp_path: Path,
-) -> None:
-    plan = _plan(
-        _node("a-content", "generate:content", "cpu_io"),
-        _node("b-content", "generate:content", "cpu_io"),
-        _node("c-system", "generate:system", "cpu_io"),
-    )
-    ledger = DurableWorkLedger(
-        tmp_path / "serial-stage.sqlite",
-        proposal_hash=plan.proposal_hash,
-    )
-    ledger.sync_plan(plan)
-    stages = ("generate:content", "generate:system")
-
-    first = ledger.claim_ready(
-        "mmm-orchestrator",
-        stages=stages,
-        lease_seconds=60,
-    )
-    assert first is not None
-    assert first["node_id"] == "a-content"
-
-    second = ledger.claim_ready(
-        "mmm-orchestrator",
-        stages=stages,
-        lease_seconds=60,
-    )
-    assert second is not None
-    assert second["node_id"] == "c-system"
-    assert ledger.task("b-content")["state"] == "pending"
-
-    ledger.succeed("a-content", {"status": "PASS"})
-    third = ledger.claim_ready(
-        "mmm-orchestrator",
-        stages=stages,
-        lease_seconds=60,
-    )
-    assert third is not None
-    assert third["node_id"] == "b-content"
+def test_anchor_fenced_runtime_disables_coarse_stage_admission() -> None:
+    assert scheduler_contract._SERIAL_CPU_STAGES == ()
 
 
 def test_orchestrator_polling_heartbeats_live_leases_but_reclaims_expired(
