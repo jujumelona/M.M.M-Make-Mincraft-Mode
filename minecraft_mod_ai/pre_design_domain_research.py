@@ -149,7 +149,9 @@ def _exact_excerpt(content: str, wanted: set[str]) -> tuple[str, int]:
         for index, chunk in enumerate(candidates)
     ]
     score, _density, _neg_len, _order, selected = max(ranked)
-    return selected, max(0, int(score)) if selected else ("", 0)
+    if not selected:
+        return "", 0
+    return selected, max(0, int(score))
 
 
 def _source_unit(page: Mapping[str, Any]) -> dict[str, Any]:
