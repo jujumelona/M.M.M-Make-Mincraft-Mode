@@ -1,0 +1,217 @@
+name: verified livepath liveness fixes v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/mmm-livepath-patch-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Apply structural live-path fixes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_exact(path: str, old: str, new: str, count: int = 1) -> None:
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              found = text.count(old)
+              if found != count:
+                  raise SystemExit(f'{path}: expected {count} matches, found {found}: {old[:100]!r}')
+              p.write_text(text.replace(old, new, count), encoding='utf-8')
+
+          def replace_between(path: str, start: str, end: str, replacement: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              start_i = text.find(start)
+              if start_i < 0:
+                  raise SystemExit(f'{path}: start marker missing: {start[:100]!r}')
+              end_i = text.find(end, start_i)
+              if end_i < 0:
+                  raise SystemExit(f'{path}: end marker missing: {end[:100]!r}')
+              p.write_text(text[:start_i] + replacement + text[end_i:], encoding='utf-8')
+
+          # 1) Tool loop: convergence/verification owns completion; an explicit env cap is only a circuit breaker.
+          replace_between(
+              'minecraft_mod_ai/model_router.py',
+              '_DEFAULT_AGENT_TOOL_ROUNDS = 128\n',
+              '\ndef _parallel_read_workers() -> int:\n',
+              '''def _agent_tool_round_limit() -> int | None:\n    """Return an explicit operator safety cap, never a semantic completion rule."""\n\n    raw = os.environ.get("MMM_AGENT_TOOL_ROUNDS", "").strip()\n    if not raw:\n        return None\n    try:\n        value = int(raw)\n    except ValueError:\n        return None\n    return value if value > 0 else None\n\n\n''',
+          )
+          replace_exact(
+              'minecraft_mod_ai/progress_aware_tool_loop.py',
+              '        if state.step_index > round_limit:\n',
+              '        if round_limit is not None and state.step_index > round_limit:\n',
+          )
+          for old, new in (
+              ('Agent reached the host tool-round limit before required ', 'Agent reached the operator-configured safety tool-round limit before required '),
+              ('Writable coder reached the host tool-round limit before a ', 'Writable coder reached the operator-configured safety tool-round limit before a '),
+              ('The host tool-round limit was reached after {round_limit} rounds. ', 'The operator-configured safety tool-round limit was reached after {round_limit} rounds. '),
+          ):
+              replace_exact('minecraft_mod_ai/progress_aware_tool_loop.py', old, new)
+
+          # 2) Legacy corrective RAG: no default count-based semantic completion.
+          replace_between(
+              'minecraft_mod_ai/pre_design_rag_corrective.py',
+              '_DEFAULT_CORRECTIVE_ROUNDS = 2\n',
+              '_QUALITY_SCHEMA = "mmm/pre-design-rag-quality-v4"\n',
+              '',
+          )
+          replace_between(
+              'minecraft_mod_ai/pre_design_rag_corrective.py',
+              'def _corrective_round_limit() -> int:\n',
+              '\ndef _correction_queries(\n',
+              '''def _corrective_round_limit() -> int | None:\n    """Optional operator circuit breaker; semantic convergence owns completion."""\n\n    raw = os.environ.get("MMM_PREDESIGN_CORRECTIVE_ROUNDS", "").strip()\n    if not raw:\n        return None\n    try:\n        value = int(raw)\n    except ValueError:\n        return None\n    return value if value >= 0 else None\n\n\n''',
+          )
+          replace_exact('minecraft_mod_ai/pre_design_rag_corrective.py', '        max_rounds = _corrective_round_limit()\n', '        safety_round_limit = _corrective_round_limit()\n')
+          replace_exact('minecraft_mod_ai/pre_design_rag_corrective.py', '        while round_index <= max_rounds:\n', '        while True:\n')
+          replace_exact('minecraft_mod_ai/pre_design_rag_corrective.py', '                max_rounds=max_rounds,\n', '                safety_round_limit=safety_round_limit,\n')
+          replace_exact(
+              'minecraft_mod_ai/pre_design_rag_corrective.py',
+              '''            if round_index >= max_rounds:\n                fixed_point = "corrective_round_limit_reached"\n                break\n\n''',
+              '''            if safety_round_limit is not None and round_index >= safety_round_limit:\n                raise RuntimeError(\n                    "PREDESIGN_CORRECTIVE_SAFETY_LIMIT: operator-configured corrective "\n                    f"round limit reached at {safety_round_limit}; semantic convergence was not reached"\n                )\n\n''',
+          )
+
+          # 3) Canonical deterministic model map uses the deadline executor, preserving duplicates/order.
+          replace_exact('minecraft_mod_ai/parallel_model_tasks.py', 'from concurrent.futures import ThreadPoolExecutor\n', '')
+          replace_exact('minecraft_mod_ai/parallel_model_tasks.py', 'from contextvars import ContextVar, copy_context\n', 'from contextvars import ContextVar\n')
+          replace_exact('minecraft_mod_ai/parallel_model_tasks.py', 'from .model_concurrency import router_native_model_parallelism\n', 'from .deadline_executor import iter_completed_with_deadlines\nfrom .model_concurrency import router_native_model_parallelism\n')
+          replace_between(
+              'minecraft_mod_ai/parallel_model_tasks.py',
+              '    contexts = [copy_context() for _ in values]\n',
+              '\n\n__all__ = ["deterministic_model_map", "serialized_callback"]\n',
+              '''    indexed = tuple(enumerate(values))\n\n    def run_indexed(item: tuple[int, _T]) -> tuple[int, _R]:\n        index, value = item\n        return index, run_one(value)\n\n    results: dict[int, _R] = {}\n    for _item, indexed_result in iter_completed_with_deadlines(\n        indexed,\n        run_indexed,\n        max_workers=workers,\n        stage=thread_name_prefix,\n        sort_key=lambda item: item[0],\n    ):\n        index, result = indexed_result\n        results[index] = result\n    if len(results) != len(values):\n        raise RuntimeError(f"{thread_name_prefix}: parallel map lost a completed result")\n    return [results[index] for index in range(len(values))]\n''',
+          )
+
+          # 4) Detailed planning DAG: bounded active futures and non-blocking executor teardown.
+          replace_exact('minecraft_mod_ai/planning_state_implementation.py', 'import json\n', 'import json\nimport time\n')
+          replace_exact(
+              'minecraft_mod_ai/planning_state_implementation.py',
+              'from .model_concurrency import router_native_model_parallelism\n',
+              'from .model_concurrency import planning_work_unit_timeout_seconds, router_native_model_parallelism, run_with_model_execution_deadline\n',
+          )
+          replace_between(
+              'minecraft_mod_ai/planning_state_implementation.py',
+              '    max_workers = max(1, workers)\n',
+              '    compiled: list[dict[str, Any]] = []\n',
+              '''    max_workers = max(1, workers)\n    future_to_node: dict[Future[dict[str, Any]], tuple[int, str]] = {}\n    future_deadlines: dict[Future[dict[str, Any]], float] = {}\n    pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="planning-detail")\n    try:\n        while any(job["pending"] for job in jobs) or future_to_node:\n            for job_index, section in ready_nodes():\n                if len(future_to_node) >= max_workers:\n                    break\n                job = jobs[job_index]\n                dependencies = _section_dependencies(section, job["selected_sections"])\n                prerequisite_snapshot = {\n                    dependency: deepcopy(job["completed"][dependency])\n                    for dependency in dependencies\n                }\n                deadline = time.monotonic() + planning_work_unit_timeout_seconds()\n                context_copy = copy_context()\n                future = pool.submit(\n                    context_copy.run,\n                    run_with_model_execution_deadline,\n                    deadline,\n                    _compile_worksheet_section,\n                    router,\n                    requirement=job["requirement"],\n                    selected_sections=job["selected_sections"],\n                    section=section,\n                    evidence=job["evidence"],\n                    allowed=job["allowed"],\n                    completed=prerequisite_snapshot,\n                )\n                job["submitted"].add(section)\n                future_to_node[future] = (job_index, section)\n                future_deadlines[future] = deadline\n\n            if not future_to_node:\n                pending = {\n                    job["requirement_ref"]: sorted(job["pending"], key=section_rank.__getitem__)\n                    for job in jobs\n                    if job["pending"]\n                }\n                raise RuntimeError(\n                    "DETAILED_PLAN_DAG_DEADLOCK: no ready section nodes; " + repr(pending)\n                )\n\n            nearest_deadline = min(future_deadlines.values())\n            timeout = max(0.0, nearest_deadline - time.monotonic())\n            done, _ = wait(tuple(future_to_node), timeout=timeout, return_when=FIRST_COMPLETED)\n            if not done:\n                expired = [\n                    future for future in future_to_node\n                    if time.monotonic() >= future_deadlines[future]\n                ]\n                for future in expired:\n                    future.cancel()\n                nodes = [future_to_node[future] for future in expired]\n                raise TimeoutError(f"DETAILED_PLAN_SECTION_TIMEOUT: {nodes}")\n\n            completed_futures = sorted(\n                done,\n                key=lambda future: (\n                    section_rank[future_to_node[future][1]],\n                    future_to_node[future][0],\n                ),\n            )\n            for future in completed_futures:\n                job_index, section = future_to_node.pop(future)\n                future_deadlines.pop(future, None)\n                job = jobs[job_index]\n                result = future.result(timeout=0)\n                job["completed"][section] = result\n                job["pending"].remove(section)\n                job["submitted"].remove(section)\n    finally:\n        for future in future_to_node:\n            future.cancel()\n        pool.shutdown(wait=False, cancel_futures=True)\n\n''',
+          )
+
+          # 5) Artifact DAG: bind dynamic generation/validation futures to deadlines.
+          replace_exact('minecraft_mod_ai/artifact_graph_executor.py', 'import heapq\n', 'import heapq\nimport time\n')
+          replace_exact(
+              'minecraft_mod_ai/artifact_graph_executor.py',
+              'from .artifact_job import ArtifactJob\n',
+              'from .artifact_job import ArtifactJob\nfrom .model_concurrency import planning_work_unit_timeout_seconds, run_with_model_execution_deadline\n',
+          )
+          replace_between(
+              'minecraft_mod_ai/artifact_graph_executor.py',
+              '    pending_ids = set(by_id)\n',
+              '    completed_jobs = [job.job_id for job in ordered_jobs]\n',
+              '''    pending_ids = set(by_id)\n    generation_futures: dict[Future[dict[str, Any]], ArtifactJob] = {}\n    validation_futures: dict[Future[None], tuple[ArtifactJob, dict[str, Any]]] = {}\n    future_deadlines: dict[Future[Any], float] = {}\n    results: dict[str, dict[str, Any]] = {}\n    validated_jobs: set[str] = set()\n    generation_workers = _parallelism(len(ordered_jobs))\n    validation_workers = _validation_parallelism(len(ordered_jobs), generation_workers)\n\n    def submit_ready(pool: ThreadPoolExecutor) -> int:\n        submitted = 0\n        slots = generation_workers - len(generation_futures)\n        while slots > 0 and ready_heap:\n            _index, job_id = heapq.heappop(ready_heap)\n            if job_id not in pending_ids:\n                continue\n            pending_ids.remove(job_id)\n            job = by_id[job_id]\n            deadline = time.monotonic() + planning_work_unit_timeout_seconds()\n            future = pool.submit(\n                run_with_model_execution_deadline,\n                deadline,\n                _execute_one,\n                job,\n                context=context,\n                router=router,\n                registry=registry,\n                base_dir=base_dir,\n            )\n            generation_futures[future] = job\n            future_deadlines[future] = deadline\n            submitted += 1\n            slots -= 1\n        return submitted\n\n    generation_pool = ThreadPoolExecutor(\n        max_workers=generation_workers, thread_name_prefix="mmm-artifact-generate"\n    )\n    validation_pool = ThreadPoolExecutor(\n        max_workers=validation_workers, thread_name_prefix="mmm-artifact-validate"\n    )\n    try:\n        submit_ready(generation_pool)\n        while pending_ids or generation_futures or validation_futures:\n            if not generation_futures and not validation_futures:\n                blocked = {\n                    job_id: [\n                        name\n                        for name in by_id[job_id].requires\n                        if producers.get(name) not in validated_jobs\n                        and not (producers.get(name) is None and registry.has(name))\n                    ]\n                    for job_id in sorted(pending_ids, key=order.__getitem__)\n                }\n                raise ArtifactGraphError(f"ARTIFACT_GRAPH_DEADLOCK: {blocked}")\n\n            active = tuple(generation_futures) + tuple(validation_futures)\n            nearest_deadline = min(future_deadlines[future] for future in active)\n            timeout = max(0.0, nearest_deadline - time.monotonic())\n            done, _ = wait(active, timeout=timeout, return_when=FIRST_COMPLETED)\n            if not done:\n                expired = [future for future in active if time.monotonic() >= future_deadlines[future]]\n                for future in expired:\n                    future.cancel()\n                owners = [\n                    generation_futures[future].job_id\n                    if future in generation_futures else validation_futures[future][0].job_id\n                    for future in expired\n                ]\n                raise ArtifactGraphError(f"ARTIFACT_GRAPH_WORK_TIMEOUT: {owners}")\n\n            newly_validated: list[str] = []\n            for future in done:\n                future_deadlines.pop(future, None)\n                if future in generation_futures:\n                    job = generation_futures.pop(future)\n                    receipt = future.result(timeout=0)\n                    validation_deadline = time.monotonic() + planning_work_unit_timeout_seconds()\n                    validation_future = validation_pool.submit(\n                        run_with_model_execution_deadline,\n                        validation_deadline,\n                        _validate_completed_job,\n                        job,\n                        receipt,\n                        context=context,\n                        base_dir=base_dir,\n                    )\n                    validation_futures[validation_future] = (job, receipt)\n                    future_deadlines[validation_future] = validation_deadline\n                else:\n                    job, receipt = validation_futures.pop(future)\n                    future.result(timeout=0)\n                    validated_jobs.add(job.job_id)\n                    results[job.job_id] = receipt\n                    newly_validated.append(job.job_id)\n\n            for producer_id in sorted(newly_validated, key=order.__getitem__):\n                for dependent_id in dependents[producer_id]:\n                    indegree[dependent_id] -= 1\n                    if indegree[dependent_id] < 0:\n                        raise ArtifactGraphError(f"ARTIFACT_GRAPH_INDEGREE_CORRUPT: {dependent_id}")\n                    if indegree[dependent_id] == 0:\n                        heapq.heappush(ready_heap, (order[dependent_id], dependent_id))\n            submit_ready(generation_pool)\n    finally:\n        for future in generation_futures:\n            future.cancel()\n        for future in validation_futures:\n            future.cancel()\n        generation_pool.shutdown(wait=False, cancel_futures=True)\n        validation_pool.shutdown(wait=False, cancel_futures=True)\n\n''',
+          )
+
+          # 6) Source transplant: bounded parallel fetches and no wait=True teardown.
+          path = 'minecraft_mod_ai/source_transplant.py'
+          p = Path(path); text = p.read_text(encoding='utf-8')
+          if 'from .deadline_executor import iter_completed_with_deadlines\n' not in text:
+              relative = text.find('\nfrom .')
+              if relative < 0:
+                  raise SystemExit('source_transplant.py: relative import anchor missing')
+              text = text[:relative + 1] + 'from .deadline_executor import iter_completed_with_deadlines\n' + text[relative + 1:]
+          p.write_text(text, encoding='utf-8')
+          replace_between(
+              path,
+              '    download_workers = _materialization_download_workers()\n',
+              '    receipts: list[dict[str, Any]] = []\n',
+              '    download_workers = _materialization_download_workers()\n',
+          )
+          replace_exact(
+              path,
+              '''            # Fetch and verify the whole immutable slice before the first write.\n            # executor.map preserves declared manifest order even when downloads finish out of order.\n            if executor is None:\n                fetched = [fetch_and_verify(spec) for spec in prepared]\n            else:\n                fetched = list(executor.map(fetch_and_verify, prepared))\n''',
+              '''            # Fetch and verify the whole immutable slice before the first write.\n            if download_workers <= 1 or len(prepared) <= 1:\n                fetched = [fetch_and_verify(spec) for spec in prepared]\n            else:\n                indexed = tuple(enumerate(prepared))\n\n                def fetch_indexed(item):\n                    index, spec = item\n                    return index, fetch_and_verify(spec)\n\n                fetched_by_index = {}\n                for _item, indexed_result in iter_completed_with_deadlines(\n                    indexed,\n                    fetch_indexed,\n                    max_workers=min(download_workers, len(indexed)),\n                    stage="source_transplant_download",\n                    sort_key=lambda item: item[0],\n                ):\n                    index, result = indexed_result\n                    fetched_by_index[index] = result\n                if len(fetched_by_index) != len(prepared):\n                    raise SourceTransplantError("Source transplant download lost a donor result.")\n                fetched = [fetched_by_index[index] for index in range(len(prepared))]\n''',
+          )
+          replace_exact(
+              path,
+              '''    finally:\n        if executor is not None:\n            executor.shutdown(wait=True, cancel_futures=True)\n        client.close()\n''',
+              '''    finally:\n        client.close()\n''',
+          )
+
+          # 7) Image candidates: do not spend N generations where the score is identical.
+          replace_exact(
+              'minecraft_mod_ai/resource_asset_production.py',
+              '                scored = []\n                failures = []\n                for index in range(profile.candidate_count):\n',
+              '                scored = []\n                failures = []\n                effective_candidate_count = profile.candidate_count if texture["topology"] == "seamless_tile" else 1\n                for index in range(effective_candidate_count):\n',
+          )
+          replace_exact(
+              'minecraft_mod_ai/resource_asset_production.py',
+              '                    scored.append((1000.0, index, normalized, evidence))\n',
+              '''                    if texture["topology"] == "seamless_tile":\n                        from PIL import Image\n                        with Image.open(normalized) as candidate_image:\n                            candidate_image.load()\n                            score = 1000.0 - _edge_error(candidate_image)\n                    else:\n                        score = 1000.0\n                    scored.append((score, index, normalized, evidence))\n''',
+          )
+          replace_exact(
+              'minecraft_mod_ai/resource_asset_production.py',
+              '                    "selected_candidate": index, "selected_score": score, "candidate_count": profile.candidate_count,\n',
+              '                    "selected_candidate": index, "selected_score": score, "candidate_count": effective_candidate_count,\n                    "configured_candidate_count": profile.candidate_count,\n',
+          )
+          PY
+      - name: Compile all Python
+        run: python -m compileall -q minecraft_mod_ai tests
+      - name: Targeted regressions
+        shell: bash
+        run: |
+          python -m pytest -q \
+            tests/test_planning_pipeline_deadlines.py \
+            tests/test_pipeline_liveness_regressions.py \
+            tests/test_parallel_model_tasks.py \
+            tests/test_artifact_graph_executor.py \
+            tests/test_source_transplant.py \
+            tests/test_resource_asset_production.py \
+            tests/test_progress_aware_tool_loop.py \
+            tests/test_planning_state_implementation.py
+      - name: Static liveness assertions
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          checks = {
+              'minecraft_mod_ai/planning_state_implementation.py': ['DETAILED_PLAN_SECTION_TIMEOUT', 'shutdown(wait=False, cancel_futures=True)'],
+              'minecraft_mod_ai/artifact_graph_executor.py': ['ARTIFACT_GRAPH_WORK_TIMEOUT', 'generation_pool.shutdown(wait=False, cancel_futures=True)'],
+              'minecraft_mod_ai/source_transplant.py': ['iter_completed_with_deadlines'],
+              'minecraft_mod_ai/resource_asset_production.py': ['effective_candidate_count', 'configured_candidate_count'],
+          }
+          for path, needles in checks.items():
+              text = Path(path).read_text(encoding='utf-8')
+              for needle in needles:
+                  assert needle in text, (path, needle)
+          assert 'executor.shutdown(wait=True' not in Path('minecraft_mod_ai/source_transplant.py').read_text(encoding='utf-8')
+          assert 'scored.append((1000.0' not in Path('minecraft_mod_ai/resource_asset_production.py').read_text(encoding='utf-8')
+          assert '_DEFAULT_AGENT_TOOL_ROUNDS' not in Path('minecraft_mod_ai/model_router.py').read_text(encoding='utf-8')
+          PY
+      - name: Commit verified changes
+        shell: bash
+        run: |
+          git config user.name 'mmm-hotfix-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git rm .github/workflows/mmm-livepath-patch-v2.yml .github/workflows/mmm-livepath-patch.yml .github/workflows/mmm-livepath-inspect.yml .github/workflows/mmm-runtime-concurrency-audit.yml
+          git add minecraft_mod_ai
+          git commit -m 'fix: bound live planning artifact and retrieval workers'
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
