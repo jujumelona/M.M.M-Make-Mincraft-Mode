@@ -331,15 +331,34 @@ def _refresh_validation_after_build(
     validate_source: Callable[[], dict[str, Any]],
     validate_jdt: Callable[[], dict[str, Any]] | None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None, bool]:
-    """Bind validation evidence to the exact tree that produced the final build."""
+    """Bind final-tree validation to the same bounded executor as initial validation."""
     if final_manifest == prebuild_manifest:
         return source_report, jdt_receipt, False
-    refreshed_source = validate_source()
+
+    from .deadline_executor import iter_completed_with_deadlines
+
+    validation_jobs: list[tuple[str, Callable[[], dict[str, Any]]]] = [
+        ("source", validate_source),
+    ]
+    if validate_jdt is not None:
+        validation_jobs.append(("jdt", validate_jdt))
+
+    validation_results: dict[str, dict[str, Any]] = {}
+    for job, result in iter_completed_with_deadlines(
+        validation_jobs,
+        lambda item: item[1](),
+        max_workers=len(validation_jobs),
+        stage="complete_post_build_validation",
+        sort_key=lambda item: item[0],
+    ):
+        validation_results[job[0]] = result
+
+    refreshed_source = validation_results["source"]
     if refreshed_source.get("status") != "PASS":
         raise CompleteProductionError(
             "Final repaired project failed deterministic validation."
         )
-    refreshed_jdt = validate_jdt() if validate_jdt is not None else None
+    refreshed_jdt = validation_results.get("jdt")
     return refreshed_source, refreshed_jdt, True
 
 class CompleteProductionOrchestrator:
