@@ -7,11 +7,11 @@ from copy import deepcopy
 from typing import Any
 
 from .resolved_version_context import ResolvedVersionContext, VersionContextError
-from .target_contract import mappings_applicable
+from .target_contract import target_contract_from_mapping
 
 
 # Every deterministic HOST domain exposed by ResolvedVersionContext must cross the
-# template boundary unchanged.  Templates may consume these values, but callers/models
+# template boundary unchanged. Templates may consume these values, but callers/models
 # may not re-derive, default, or override them locally.
 _HOST_FACT_KEYS = (
     "host_revision",
@@ -27,7 +27,12 @@ _HOST_FACT_KEYS = (
 
 
 def resolved_template_facts(resolved: ResolvedVersionContext) -> dict[str, Any]:
-    """Return every immutable fact templates may consume from one resolved HOST snapshot."""
+    """Return every immutable fact templates may consume from one resolved HOST snapshot.
+
+    Target semantics are normalized only by ``TargetContract``. This projection layer is
+    deliberately policy-free: it does not parse Minecraft versions or infer mappings,
+    naming, Java, pack, or provider coordinates itself.
+    """
     payload = resolved.to_dict()
     target = dict(payload["target"])
     host_facts = payload.get("host_facts") or {}
@@ -46,23 +51,20 @@ def resolved_template_facts(resolved: ResolvedVersionContext) -> dict[str, Any]:
             context_id=resolved.context_id,
         )
 
-    mapping_is_applicable = mappings_applicable(target["minecraft_version"])
+    # Rehydrate through the canonical target authority instead of reconstructing
+    # deterministic version rules at the template boundary.
+    public_target = target_contract_from_mapping(target).public_dict()
+    public_target.pop("host_facts_json", None)
+    naming = public_target.pop("naming_regime")
+    pack_versions = public_target.pop("pack_versions")
+
     canonical: dict[str, Any] = {
-        **target,
+        **public_target,
         "version_context_id": resolved.context_id,
-        "mappings_applicable": mapping_is_applicable,
-        "naming_regime": "mapped_obfuscated" if mapping_is_applicable else "native_unobfuscated",
-        "pack_versions": {
-            "data": target["data_pack_version"],
-            "resource": target["resource_pack_version"],
-            "resource_major": target["resource_pack_format"],
-        },
+        "mappings_applicable": naming["mappings_applicable"],
+        "naming_regime": naming["kind"],
+        "pack_versions": pack_versions,
     }
-    if mapping_is_applicable:
-        canonical["mappings"] = {
-            "kind": target["mappings_kind"],
-            "version": target["mappings_version"],
-        }
 
     for key in _HOST_FACT_KEYS:
         canonical[key] = deepcopy(host_facts[key])
