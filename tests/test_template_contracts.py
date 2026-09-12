@@ -64,9 +64,16 @@ def test_asset_render_placeholders_have_explicit_required_input_contracts() -> N
         body = render.get("body")
         assert isinstance(body, str) and body, f"asset render body must be non-empty: {path}"
         inputs = data.get("inputs")
-        assert isinstance(inputs, dict), f"asset inputs must be declared: {path}"
         placeholders = set(PLACEHOLDER.findall(body))
-        assert placeholders, f"asset render has no declared substitution point: {path}"
+        if not placeholders:
+            # HOST-owned static prompt fragments consume resolved authorities rather than
+            # exposing model/backend knobs as string substitutions.
+            requires = data.get("requires")
+            assert isinstance(requires, list) and requires, f"static asset render must declare authorities: {path}"
+            assert all(isinstance(value, str) and value for value in requires), path
+            assert inputs in (None, {}), f"static asset render must not declare unused inputs: {path}"
+            continue
+        assert isinstance(inputs, dict), f"asset inputs must be declared: {path}"
         assert placeholders == set(inputs), f"asset placeholder/input mismatch: {path}"
         for name, contract in inputs.items():
             assert isinstance(contract, dict), f"asset input contract must be a mapping: {path}:{name}"
