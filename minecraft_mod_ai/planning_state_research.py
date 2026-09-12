@@ -140,7 +140,7 @@ def _compile_queries(
     )
     if not queries:
         raise ValueError("PLANNING_RESEARCH_QUERY: host information need produced no query")
-    return queries[:4]
+    return queries
 
 
 def _providers_for(source_kinds: Sequence[str]) -> list[str]:
@@ -187,7 +187,7 @@ def _compile_pending_queries(router: Any, state: dict[str, Any]) -> None:
         if isinstance(existing, list) and any(_text(item) for item in existing):
             research["queries"] = list(
                 dict.fromkeys(_text(item) for item in existing if _text(item))
-            )[:4]
+            )
             continue
         research["queries"] = _compile_queries(router, state, research)
 
