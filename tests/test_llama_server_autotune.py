@@ -117,6 +117,7 @@ def test_vram_fast_start_chooses_highest_safe_width(monkeypatch) -> None:
     monkeypatch.delenv("MMM_LLAMA_CONCURRENT_REQUESTS", raising=False)
     monkeypatch.delenv("MMM_PERFORMANCE_MODE", raising=False)
     monkeypatch.delenv("MMM_LLAMA_TUNING_OBJECTIVE", raising=False)
+    monkeypatch.delenv("MMM_LLAMA_MAXIMIZE_PARALLEL", raising=False)
     fake = SimpleNamespace(
         _explicit_parallel=lambda: None,
         _performance_mode=lambda: "auto",
