@@ -41,6 +41,23 @@ jobs:
           PY
       - name: Apply source migration
         run: python tools/_apply_planning_deadline_hardening.py
+      - name: Make capacity deadline regression scheduler-independent
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tests/test_planning_deadline_hardening.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace('import time\n', 'import time\nfrom threading import Thread\n', 1)
+          text = text.replace(
+              '    ModelExecutionDeadlineExceeded,\n    ReentrantCapacityGate,\n',
+              '    ModelExecutionDeadlineExceeded,\n    ReentrantCapacityGate,\n    bind_model_execution_deadline,\n',
+              1,
+          )
+          start = text.index('def test_model_capacity_wait_inherits_work_unit_deadline(')
+          end = text.index('\n\ndef test_detailed_planning_hung_work_unit_exits_with_bounded_timeout', start)
+          replacement = '''def test_model_capacity_wait_inherits_work_unit_deadline() -> None:\n    gate = ReentrantCapacityGate(lambda: 1)\n    gate.acquire()\n    errors: list[BaseException] = []\n\n    def contend() -> None:\n        try:\n            with bind_model_execution_deadline(time.monotonic() + 0.03):\n                gate.acquire()\n        except BaseException as exc:\n            errors.append(exc)\n\n    contender = Thread(target=contend)\n    started = time.monotonic()\n    try:\n        contender.start()\n        contender.join(timeout=0.20)\n        assert not contender.is_alive()\n        assert time.monotonic() - started < 0.20\n        assert len(errors) == 1\n        assert isinstance(errors[0], ModelExecutionDeadlineExceeded)\n    finally:\n        gate.release()\n        contender.join(timeout=0.20)\n'''
+          path.write_text(text[:start] + replacement + text[end:], encoding='utf-8')
+          PY
       - name: Compile hardened planner sources
         run: |
           python -m py_compile \
