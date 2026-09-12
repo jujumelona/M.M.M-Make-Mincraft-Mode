@@ -161,7 +161,9 @@ def iter_completed_with_deadlines(
                 meta = active.pop(future)
                 try:
                     result = future.result(timeout=0)
-                except BaseException as exc:
+                except (KeyboardInterrupt, SystemExit):
+                    raise
+                except Exception as exc:
                     raise ParallelTaskError(stage=stage, item=meta.item, cause=exc) from exc
                 yield meta.item, result
     finally:
