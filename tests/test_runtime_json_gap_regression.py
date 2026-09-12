@@ -87,7 +87,7 @@ def test_llama_tool_turn_host_parses_qwen_markup_without_server_peg(monkeypatch)
     monkeypatch.setattr(
         llama_exact_context,
         "capacity_safe_payload",
-        lambda _url, payload: dict(payload),
+        lambda _url, payload, **_kwargs: dict(payload),
     )
     monkeypatch.setattr(stream_contract, "_report_server_connection", lambda _url: None)
 
