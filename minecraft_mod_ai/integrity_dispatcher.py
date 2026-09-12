@@ -6,9 +6,13 @@ from dataclasses import replace
 from pathlib import Path
 
 from .implementation_identity import compute_content_hash
+from .registered_leaf_binding import require_registered_leaf_binding
 
 
 def canonical_contract(job, resolved, context, authority):
+    binding = require_registered_leaf_binding(resolved, job.canonical_leaf)
+    if binding.get("state") != "admitted":
+        return None, None
     from .task_template_catalog import load_template
     manifest = load_template(job.canonical_leaf)
     inputs = context.get("canonical_inputs", {}).get(job.job_id)
@@ -40,6 +44,8 @@ def validate_canonical_output(job, source, *, resolved, context, authority, targ
     from .implementation_identity import compute_json_schema_hash
     from .integrity_validators import validate_semantic_contract, validate_java_syntax, validate_side
     manifest, spec = canonical_contract(job, resolved, context, authority)
+    if manifest is None or spec is None:
+        return []
     verify_candidate_content(job, resolved, context, spec, source)
     if target_path != spec["target_path"] or anchor != spec.get("anchor", ""):
         raise ValueError("CANONICAL_OUTPUT_TARGET_MISMATCH")
@@ -66,7 +72,14 @@ def verify_job_binding(job, resolved, context):
     authority = get_integrity_authority()
     authority.verify_live()
     leaf = job.canonical_leaf
-    binding = resolved.require_leaf_binding(leaf)
+    registered_binding = require_registered_leaf_binding(resolved, leaf)
+    registered_impl = registered_binding["implementation"]
+    evidence_required = registered_impl.get("executor_type") not in {
+        "deterministic_renderer",
+        "deterministic",
+        "template",
+    }
+    binding = resolved.require_leaf_binding(leaf) if evidence_required else registered_binding
     impl = binding["implementation"]
     actual = authority.implementations.get_implementation(impl["implementation_id"])
     checks = {
@@ -85,6 +98,8 @@ def verify_job_binding(job, resolved, context):
         raise ValueError("RUNTIME_EXECUTOR_CHANGED")
     if not registry.verify_validator_hash(impl["validator_profile"], impl["validator_sha256"]):
         raise ValueError("RUNTIME_VALIDATOR_CHANGED")
+    if binding.get("state") != "admitted":
+        return authority
     store_path = context.get("evidence_store")
     if not store_path:
         raise ValueError("RUNTIME_EVIDENCE_STORE_REQUIRED")

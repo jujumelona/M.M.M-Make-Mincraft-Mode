@@ -14,6 +14,7 @@ from .project_write_lock import project_write_lock
 
 _ORCHESTRATOR_WORKER = "mmm-orchestrator"
 _CLAIM_CONTRACT_VERSION = 2
+_INSTALLED_LANE_CLAIM: Callable[..., Any] | None = None
 _RESOURCE_CAPACITIES = {
     # llama_parallel_runtime_contract replaces the LLM value with the selected native
     # slot capacity after this safety layer is installed.
@@ -188,12 +189,13 @@ def _install_profile_gpu_lane(orchestrator_module: Any) -> None:
 
 
 def _install_lane_aware_claim(work_graph_module: Any) -> None:
+    global _INSTALLED_LANE_CLAIM
     ledger_cls = work_graph_module.DurableWorkLedger
     current = ledger_cls.claim_ready
     installed_version = int(
         getattr(current, "_mmm_parallel_lane_claim_version", 0) or 0
     )
-    if installed_version >= _CLAIM_CONTRACT_VERSION:
+    if current is _INSTALLED_LANE_CLAIM and installed_version >= _CLAIM_CONTRACT_VERSION:
         return
 
     @wraps(current)
@@ -420,6 +422,7 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
     claim_ready._mmm_stage_lock_admission = True  # type: ignore[attr-defined]
     claim_ready._mmm_max_efficiency_claim = True  # type: ignore[attr-defined]
     ledger_cls.claim_ready = claim_ready
+    _INSTALLED_LANE_CLAIM = claim_ready
 
 
 def _stage_write_lock(node: Any) -> threading.RLock | None:

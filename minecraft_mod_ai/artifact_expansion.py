@@ -12,6 +12,7 @@ from .implementation_fact import ImplementationFact
 from .implementation_identity import ExecutorType
 from .implementation_template_renderer import render_template
 from .prompt_fact_types import FactType, PromptFact
+from .registered_leaf_binding import require_registered_leaf_binding
 from .task_template_catalog import load_template
 
 
@@ -104,7 +105,7 @@ CANONICAL_LEAF_DEFAULT_TEMPLATES: dict[str, tuple[str, ...]] = {
 
 def _templates_for_canonical_leaf(leaf_id: str, version_context=None) -> tuple[str, ...]:
     if version_context is not None:
-        binding = version_context.require_leaf_binding(leaf_id)
+        binding = require_registered_leaf_binding(version_context, leaf_id)
         impl = binding.get("implementation", {})
         templates = []
         if "prerequisite_templates" in impl:
@@ -284,7 +285,7 @@ def expand_facts_to_jobs(
         
         if version_context is not None:
             for leaf_id in canonical_leaf_ids:
-                version_context.require_leaf_binding(leaf_id)
+                require_registered_leaf_binding(version_context, leaf_id)
 
         leaf_template_pairs: list[tuple[str, str]] = []
         for leaf_id in canonical_leaf_ids:
@@ -294,7 +295,7 @@ def expand_facts_to_jobs(
                 continue
             if version_context is None:
                 raise ArtifactExpansionError("EXACT_HOST_IMPLEMENTATION_REQUIRED")
-            binding = version_context.require_leaf_binding(leaf_id)
+            binding = require_registered_leaf_binding(version_context, leaf_id)
             if binding["implementation"]["executor_type"] != "python_generator":
                 raise ArtifactExpansionError(f"ARTIFACT_NO_TEMPLATE_NO_GENERATOR: {leaf_id}")
             leaf_template_pairs.append((leaf_id, ""))
@@ -323,7 +324,7 @@ def expand_facts_to_jobs(
                         f"ARTIFACT_PYTHON_GENERATOR_REQUIRES_CONTEXT: {canonical_leaf} needs version_context"
                     )
                 
-                binding = version_context.require_leaf_binding(canonical_leaf)
+                binding = require_registered_leaf_binding(version_context, canonical_leaf)
                 impl_dict = binding.get("implementation", {})
                 impl_id = impl_dict.get("implementation_id", "")
                 exec_type = impl_dict.get("executor_type", "")
@@ -450,7 +451,7 @@ def expand_facts_to_jobs(
             impl_id = ""
             exec_type = "deterministic_renderer"
             if version_context is not None:
-                binding = version_context.require_leaf_binding(canonical_leaf)
+                binding = require_registered_leaf_binding(version_context, canonical_leaf)
                 impl_dict = binding.get("implementation", {})
                 impl_id = impl_dict.get("implementation_id", f"template:{template_id}")
                 exec_type = impl_dict.get("executor_type", "deterministic_renderer")
