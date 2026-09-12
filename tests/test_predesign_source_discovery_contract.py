@@ -150,10 +150,11 @@ def test_duplicate_queries_are_executed_once(monkeypatch):
     bundle = catalog_rag.forced_rag_bundle(rag, object(), brief)
     assert bundle["query_count"] == 3
     assert bundle["unique_query_count"] == 2
+    assert len(bundle["domains"][0]["queries"]) == 3
     assert sorted(calls) == ["other query", "same query"]
 
 
-def test_catalog_candidate_without_source_link_never_triggers_broad_github_search(monkeypatch):
+def test_catalog_candidate_without_source_link_falls_back_to_bounded_github_search(monkeypatch):
     body = "implementation body"
     monkeypatch.setattr(
         rag,
@@ -175,11 +176,31 @@ def test_catalog_candidate_without_source_link_never_triggers_broad_github_searc
             {"provider": "modrinth", "status": "available", "result_count": 1},
         ),
     )
+    github_calls: list[str] = []
 
-    def broad_search_must_not_run(*args, **kwargs):
-        raise AssertionError(f"broad GitHub search escaped catalog-first policy: {args!r} {kwargs!r}")
+    def github(query: str, **kwargs):
+        github_calls.append(query)
+        return (
+            [
+                {
+                    "source_id": "github:example/one",
+                    "source_type": "github_repository",
+                    "source_locator": "github:example/one",
+                    "url": "https://github.com/example/one",
+                    "title": "one source",
+                    "content": "source implementation",
+                }
+            ],
+            {
+                "provider": "github",
+                "status": "available",
+                "result_count": 1,
+                "search_requests": 1,
+                "source_requests": 1,
+            },
+        )
 
-    monkeypatch.setattr(rag, "_search_github", broad_search_must_not_run)
+    monkeypatch.setattr(rag, "_search_github", github)
     bundle = catalog_rag.forced_rag_bundle(
         rag,
         object(),
@@ -197,12 +218,14 @@ def test_catalog_candidate_without_source_link_never_triggers_broad_github_searc
     source_ids = {
         source["source_id"] for source in row["external_rag"]["sources"]
     }
-    assert source_ids == {"modrinth:one"}
-    assert row["external_rag"]["github_retrieval"]["provider_status"] == (
-        "skipped_catalog_without_linked_source"
+    assert github_calls == ["one query"]
+    assert source_ids == {"modrinth:one", "github:example/one"}
+    assert row["external_rag"]["providers"]["github"]["policy"] == (
+        "catalog_candidate_source_discovery_fallback"
     )
+    assert row["external_rag"]["github_retrieval"]["provider_status"] == "available"
     assert row["external_rag"]["provider_policy"]["github_broad_search"] == (
-        "fallback_only_after_empty_catalog"
+        "fallback_after_missing_linked_source_or_empty_catalog"
     )
 
 
