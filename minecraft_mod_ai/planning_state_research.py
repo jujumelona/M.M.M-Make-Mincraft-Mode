@@ -11,10 +11,13 @@ catalog-first mod discovery followed by exact source/API/project evidence.
 
 import hashlib
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from copy import deepcopy
 from typing import Any
 
 from .catalog_first_grounded_rag import forced_rag_bundle
+from .model_concurrency import router_native_model_parallelism
 from .planning_state_contract import validate_planning_state
 from .planning_mod_discovery import catalog_queries, discovery_receipt
 from .root_cause_trace import emit_root_cause
@@ -428,18 +431,21 @@ def collect_planning_state_research(
             {**brief, "domains": minecraft_domains},
         )
 
-    notes: list[dict[str, Any]] = []
-    discovery_by_domain: dict[str, dict[str, Any]] = {}
-    provider_diagnostics_by_domain: dict[str, list[dict[str, Any]]] = {}
-    for domain in brief.get("domains", []):
-        if not isinstance(domain, Mapping):
-            continue
+    domains = [
+        dict(domain)
+        for domain in brief.get("domains", [])
+        if isinstance(domain, Mapping)
+    ]
+    runnable_domains = [
+        domain
+        for domain in domains
+        if str(domain.get("domain_id") or "") not in unsupported_domains
+    ]
+
+    def research_domain(domain: Mapping[str, Any]) -> dict[str, Any]:
         domain_id = str(domain.get("domain_id") or "")
-        unsupported_reason = unsupported_domains.get(domain_id)
-        if unsupported_reason:
-            provider_diagnostics_by_domain[domain_id] = []
-            notes.append(_blocked_note(domain_id, unsupported_reason))
-            continue
+        discovery: dict[str, Any] | None = None
+        repository_candidates: list[dict[str, Any]] = []
         if domain_id in reference_domain_ids:
             grounded = _grounded_reference_domain(domain)
         else:
@@ -448,21 +454,10 @@ def collect_planning_state_research(
                     "PLANNING_RESEARCH_ROUTE: Minecraft RAG bundle is unexpectedly absent"
                 )
             grounded = _grounded_domain_evidence(domain_id, minecraft_bundle)
-            value["repository_candidates"] = merge_repository_candidates(
-                value.get("repository_candidates", []),
-                project_repository_candidates(domain, grounded),
-            )
+            repository_candidates = project_repository_candidates(domain, grounded)
             if "catalog_queries" in domain:
                 discovery = discovery_receipt(domain_id, grounded)
-                discovery_by_domain[domain_id] = discovery
-                # Emit this shallowly so the console does not hide provider outcomes
-                # behind the planning-state snapshot's depth limit.
-                emit_root_cause(
-                    "planning_mod_discovery", stage="planning_state",
-                    operation="collect_planning_state_research", result="OBSERVED",
-                    reason=discovery["status"], details=discovery,
-                )
-        provider_diagnostics_by_domain[domain_id] = _provider_diagnostics(grounded)
+        provider_diagnostics = _provider_diagnostics(grounded)
         document = project_rag._materialize_domain_evidence_document(
             domain_id,
             {"grounded_rag": grounded},
@@ -484,7 +479,76 @@ def collect_planning_state_research(
             document,
             domain_id=domain_id,
         )
-        notes.append(dict(note))
+        return {
+            "domain_id": domain_id,
+            "note": dict(note),
+            "repository_candidates": repository_candidates,
+            "discovery": discovery,
+            "provider_diagnostics": provider_diagnostics,
+        }
+
+    domain_results: dict[str, dict[str, Any]] = {}
+    if runnable_domains:
+        workers = max(
+            1,
+            min(len(runnable_domains), router_native_model_parallelism(router)),
+        )
+        if workers == 1:
+            for domain in runnable_domains:
+                result = research_domain(domain)
+                domain_results[result["domain_id"]] = result
+        else:
+            contexts = [copy_context() for _ in runnable_domains]
+            with ThreadPoolExecutor(
+                max_workers=workers,
+                thread_name_prefix="planning-research-domain",
+            ) as pool:
+                futures = [
+                    pool.submit(contexts[index].run, research_domain, domain)
+                    for index, domain in enumerate(runnable_domains)
+                ]
+                try:
+                    for domain, future in zip(runnable_domains, futures):
+                        result = future.result()
+                        domain_results[result["domain_id"]] = result
+                except BaseException:
+                    for future in futures:
+                        future.cancel()
+                    raise
+
+    notes: list[dict[str, Any]] = []
+    discovery_by_domain: dict[str, dict[str, Any]] = {}
+    provider_diagnostics_by_domain: dict[str, list[dict[str, Any]]] = {}
+    for domain in domains:
+        domain_id = str(domain.get("domain_id") or "")
+        unsupported_reason = unsupported_domains.get(domain_id)
+        if unsupported_reason:
+            provider_diagnostics_by_domain[domain_id] = []
+            notes.append(_blocked_note(domain_id, unsupported_reason))
+            continue
+        result = domain_results.get(domain_id)
+        if result is None:
+            raise ValueError(
+                f"PLANNING_RESEARCH_ROUTE: research domain {domain_id!r} produced no result"
+            )
+        provider_diagnostics_by_domain[domain_id] = list(
+            result["provider_diagnostics"]
+        )
+        notes.append(dict(result["note"]))
+        value["repository_candidates"] = merge_repository_candidates(
+            value.get("repository_candidates", []),
+            result["repository_candidates"],
+        )
+        discovery = result.get("discovery")
+        if isinstance(discovery, dict):
+            discovery_by_domain[domain_id] = discovery
+            # Emit this shallowly so the console does not hide provider outcomes
+            # behind the planning-state snapshot's depth limit.
+            emit_root_cause(
+                "planning_mod_discovery", stage="planning_state",
+                operation="collect_planning_state_research", result="OBSERVED",
+                reason=discovery["status"], details=discovery,
+            )
 
     for research in value.get("research_queue", []):
         if not isinstance(research, dict) or research.get("status") != "pending":
