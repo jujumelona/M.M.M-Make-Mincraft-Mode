@@ -163,7 +163,7 @@ def _query_bundle(
 
     # Catalog discovery is only the first stage. A catalog hit without source code must
     # not terminate reuse discovery: exact project source links are preferred, then a
-    # bounded GitHub repository search is allowed to recover a source donor candidate.
+    # progress-driven GitHub repository search may recover a source donor candidate.
     github_policy_active = catalog_allowed or "github" in allowed
     if github_policy_active:
         if catalog_records:
@@ -221,7 +221,6 @@ def _query_bundle(
                 receipts["github"] = receipt
                 errors.append(receipt)
         else:
-            # Explicit repository-only domains may still request direct GitHub lookup.
             try:
                 found, receipt = backend._search_github(
                     query,
@@ -345,30 +344,20 @@ def forced_rag_bundle(
 
     by_spec: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
     if specs:
-        max_workers = max(
-            1,
-            min(int(getattr(backend, "_MAX_QUERY_WORKERS", 4)), len(specs)),
-        )
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {
-                pool.submit(
-                    _query_bundle,
-                    backend,
-                    router,
-                    query,
-                    providers,
-                    github_disabled=github_disabled,
-                    disable_github=disable_github,
-                ): (query, providers)
-                for query, providers in specs
-            }
-            for future in as_completed(futures):
-                spec = futures[future]
+        worker_count = backend._query_worker_count(len(specs))
+        if worker_count <= 1:
+            for query, providers in specs:
                 try:
-                    by_spec[spec] = future.result()
+                    by_spec[(query, providers)] = _query_bundle(
+                        backend,
+                        router,
+                        query,
+                        providers,
+                        github_disabled=github_disabled,
+                        disable_github=disable_github,
+                    )
                 except Exception as exc:
-                    query, _providers_for_query = spec
-                    by_spec[spec] = {
+                    by_spec[(query, providers)] = {
                         "query": query,
                         "query_sha256": backend._sha256_text(query),
                         "project_rag": {"sources": [], "errors": []},
@@ -387,6 +376,45 @@ def forced_rag_bundle(
                             },
                         },
                     }
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count) as pool:
+                futures = {
+                    pool.submit(
+                        _query_bundle,
+                        backend,
+                        router,
+                        query,
+                        providers,
+                        github_disabled=github_disabled,
+                        disable_github=disable_github,
+                    ): (query, providers)
+                    for query, providers in specs
+                }
+                for future in as_completed(futures):
+                    spec = futures[future]
+                    try:
+                        by_spec[spec] = future.result()
+                    except Exception as exc:
+                        query, _providers_for_query = spec
+                        by_spec[spec] = {
+                            "query": query,
+                            "query_sha256": backend._sha256_text(query),
+                            "project_rag": {"sources": [], "errors": []},
+                            "code_rag": {"status": "error", "hits": []},
+                            "external_rag": {
+                                "schema_version": "mmm/external-pre-design-discovery-v4",
+                                "sources": [],
+                                "errors": [backend._error("query_worker", exc)],
+                                "providers": {},
+                                "provider_policy": {},
+                                "github_retrieval": {
+                                    "provider_status": "not_requested",
+                                    "saturation_reason": "",
+                                    "search_requests": 0,
+                                    "source_requests": 0,
+                                },
+                            },
+                        }
 
     out_domains: list[dict[str, Any]] = []
     external_count = 0
