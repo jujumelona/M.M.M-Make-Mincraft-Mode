@@ -63,6 +63,8 @@ def _plan(requirement_ref: str, selected_sections, worksheet) -> dict[str, objec
         "required_detail_sections": list(selected_sections),
         "engineering_worksheet": deepcopy(worksheet),
         "worksheet_contract": "authored_concern_records",
+        "acceptance_criteria_complete": True,
+        "acceptance_criteria_count": 1,
     }
 
 
