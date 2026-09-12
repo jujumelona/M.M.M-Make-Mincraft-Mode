@@ -4,8 +4,8 @@ from __future__ import annotations
 
 Retrieval and source materialization remain host-owned. Pre-design no longer asks the
 planner model to summarize those pages: exact source excerpts are sufficient provenance
-for later target and implementation work. A domain is sufficient only when at least one
-claim-bearing materialized source excerpt exists.
+for later target and implementation work. Durable evidence is preserved here; prompt
+packing and compaction belong to the model-context budget owner.
 """
 
 import json
@@ -51,9 +51,6 @@ def _domain_terms(domain: Mapping[str, Any]) -> set[str]:
         if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
             values.extend(str(item) for item in raw if str(item).strip())
 
-    # Reference identity is part of relevance. Preserve the ordinary token form and also
-    # add a compact form so provider spelling differences such as "Maple Story" vs
-    # "MapleStory" (or "메이플 스토리" vs "메이플스토리") do not zero out excerpt scoring.
     anchors = _required_identity_anchors(domain)
     values.extend(anchors)
 
@@ -79,12 +76,7 @@ def _identity_tokens(value: Any) -> tuple[str, ...]:
 
 
 def _identity_matches(anchor: Any, source_value: Any) -> bool:
-    """Match only boundary-preserving identity variants, including spacing drift.
-
-    The compact comparison is limited to complete contiguous token windows. It therefore
-    accepts the same named entity written with or without internal spaces/punctuation, but
-    does not degrade into arbitrary substring matching against unrelated source metadata.
-    """
+    """Match only boundary-preserving identity variants, including spacing drift."""
 
     anchor_tokens = _identity_tokens(anchor)
     source_tokens = _identity_tokens(source_value)
@@ -125,14 +117,7 @@ def _required_identity_anchors(domain: Mapping[str, Any]) -> list[str]:
 def _matched_source_identity_anchor(
     unit: Mapping[str, Any], anchors: Sequence[str]
 ) -> str:
-    """Require the named reference to identify the source, not merely occur as noise.
-
-    Provider snippets can share generic task words such as game/platform/system while being
-    about a completely different entity. Reference domains therefore require the reference
-    identity in source metadata (title/url/source id) before semantic overlap is considered.
-    Internal spacing/punctuation drift is tolerated only when complete token windows compact
-    to the same identity.
-    """
+    """Require the named reference to identify the source, not merely occur as noise."""
     source_values = tuple(unit.get(key) for key in ("title", "url", "source_id"))
     for anchor in anchors:
         if any(_identity_matches(anchor, source_value) for source_value in source_values):
@@ -140,11 +125,8 @@ def _matched_source_identity_anchor(
     return ""
 
 
-_MAX_EXCERPT_CHARS = 800
-_MAX_DOMAIN_EVIDENCE_CARDS = 4
-
-
 def _exact_excerpt(content: str, wanted: set[str]) -> tuple[str, int]:
+    """Return the best exact source chunk without destructively clipping durable evidence."""
     text = str(content or "")
     if not text.strip():
         return "", 0
@@ -167,48 +149,7 @@ def _exact_excerpt(content: str, wanted: set[str]) -> tuple[str, int]:
         for index, chunk in enumerate(candidates)
     ]
     score, _density, _neg_len, _order, selected = max(ranked)
-    if not selected:
-        return "", 0
-
-    if len(selected) > _MAX_EXCERPT_CHARS:
-        selected_cf = selected.casefold()
-        term_positions = [
-            selected_cf.find(t)
-            for t in wanted
-            if t and selected_cf.find(t) != -1
-        ]
-        if term_positions:
-            first_pos = min(term_positions)
-            start = max(0, first_pos - 40)
-        else:
-            start = 0
-
-        if start > 0:
-            space_idx = selected.find(" ", start, start + 30)
-            if space_idx != -1:
-                start = space_idx + 1
-
-        end = min(len(selected), start + _MAX_EXCERPT_CHARS)
-        if end < len(selected):
-            last_space = selected.rfind(" ", start + 20, end)
-            if last_space != -1:
-                end = last_space
-
-        slice_candidate = selected[start:end].strip()
-        sub_idx = selected.find(slice_candidate)
-        if sub_idx != -1 and slice_candidate:
-            exact_slice = selected[sub_idx : sub_idx + len(slice_candidate)]
-            slice_score = len(wanted & _tokens(exact_slice))
-            if slice_score > 0 or not wanted:
-                return exact_slice, max(0, int(slice_score if wanted else score))
-
-        fallback_slice = selected[:_MAX_EXCERPT_CHARS].strip()
-        sub_idx = selected.find(fallback_slice)
-        if sub_idx != -1 and fallback_slice:
-            exact_slice = selected[sub_idx : sub_idx + len(fallback_slice)]
-            return exact_slice, max(0, int(len(wanted & _tokens(exact_slice)) if wanted else score))
-
-    return selected, max(0, int(score))
+    return selected, max(0, int(score)) if selected else ("", 0)
 
 
 def _source_unit(page: Mapping[str, Any]) -> dict[str, Any]:
@@ -234,7 +175,7 @@ def _grounded_evidence_cards(
     document: Mapping[str, Any],
     domain: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
-    """Build deterministic exact-excerpt evidence cards from materialized pages."""
+    """Build deterministic exact-excerpt evidence cards from every relevant page."""
     reader = getattr(project_rag, "_read_evidence_pages", None)
     if not callable(reader):
         return []
@@ -255,16 +196,9 @@ def _grounded_evidence_cards(
         if not page_ref or page_ref in seen_refs or not source_content.strip():
             continue
         matched_anchor = _matched_source_identity_anchor(unit, required_anchors)
-        # Identity is a hard precondition for reference research. Generic semantic overlap
-        # must never let another product/game/article resolve the named reference.
         if required_anchors and not matched_anchor:
             continue
         excerpt, score = _exact_excerpt(source_content, wanted)
-        # A materialized body is not evidence merely because it contains text. When the
-        # research domain has semantic anchors, at least one anchor must occur in the
-        # selected exact excerpt. This prevents unrelated provider noise from becoming a
-        # sufficient research claim. A verified encyclopedia body is allowed to bridge
-        # morphology/language drift after identity has already passed the hard gate.
         identity_verified_reference_body = (
             bool(matched_anchor)
             and str(unit.get("source_type") or "") == "reference_encyclopedia_body"
@@ -296,7 +230,7 @@ def _grounded_evidence_cards(
         ),
         reverse=True,
     )
-    return cards[:_MAX_DOMAIN_EVIDENCE_CARDS]
+    return cards
 
 
 def _claims_from_grounded_cards(
