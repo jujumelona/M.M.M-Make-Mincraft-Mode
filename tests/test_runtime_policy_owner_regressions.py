@@ -31,32 +31,15 @@ def test_parallel_integration_preserves_canonical_runtime_policy_owners() -> Non
     ) == owners
 
 
-def test_scheduler_installer_replaces_pre_versioned_claimant() -> None:
-    original = work_graph_module.DurableWorkLedger.claim_ready
+def test_scheduler_installer_preserves_work_graph_claim_owner() -> None:
+    claimant = work_graph_module.DurableWorkLedger.claim_ready
 
-    def legacy_claim(self, worker_id, *, stages=(), lease_seconds=900):
-        return original(
-            self,
-            worker_id,
-            stages=stages,
-            lease_seconds=lease_seconds,
-        )
+    scheduler_contract.install(
+        work_graph_module=work_graph_module,
+        orchestrator_module=orchestrator_module,
+    )
 
-    legacy_claim._mmm_parallel_lane_claim = True
-    work_graph_module.DurableWorkLedger.claim_ready = legacy_claim
-    try:
-        scheduler_contract.install(
-            work_graph_module=work_graph_module,
-            orchestrator_module=orchestrator_module,
-        )
-        claimant = work_graph_module.DurableWorkLedger.claim_ready
-        assert claimant is not legacy_claim
-        assert getattr(claimant, "_mmm_parallel_lane_claim_version", 0) >= 2
-        assert getattr(claimant, "_mmm_stage_lock_admission", False)
-    finally:
-        # Reinstall the canonical claimant rather than restoring the intentionally stale
-        # fixture so this test cannot poison later tests in the same pytest process.
-        scheduler_contract.install(
-            work_graph_module=work_graph_module,
-            orchestrator_module=orchestrator_module,
-        )
+    assert work_graph_module.DurableWorkLedger.claim_ready is claimant
+    assert not hasattr(claimant, "__wrapped__")
+    assert not getattr(claimant, "_mmm_parallel_lane_claim", False)
+    assert callable(scheduler_contract.claim_orchestrator_ready)
