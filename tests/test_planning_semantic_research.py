@@ -335,8 +335,11 @@ def test_verifier_sees_negating_header_not_only_cherry_picked_quote(monkeypatch)
     def model(*args, **kwargs):
         context = json.loads(args[2][1]["content"])
         if kwargs["tool_name"] == "verify_requirement_entailment":
-            assert context["source_window"] == body
-            assert context["source_quote"] == body
+            assert "source_window" not in context
+            assert "source_quote" not in context
+            assert "".join(unit["text"] for unit in context["source_units"]) == body
+            assert context["evidence_start"] == 0
+            assert context["evidence_end"] == 0
             return {"verdict": "negated"}
         return {"verdict": "supported", "evidence_start": 0, "evidence_end": 0}
 
