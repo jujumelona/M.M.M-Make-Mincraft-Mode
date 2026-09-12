@@ -3,98 +3,105 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from PIL import Image
 
 from minecraft_mod_ai import resource_asset_production as assets
 from minecraft_mod_ai.complete_spec import AssetRequest, ProductionModule
 from minecraft_mod_ai.model_adapters.base import ModelConfigurationError
+from minecraft_mod_ai.model_adapters.image_diffusion import ImageGenerationConfig
 from minecraft_mod_ai.model_registry import ModelRegistry
+from minecraft_mod_ai.resource_prompt_compiler import image_profile_fingerprint
 
 
 def _asset() -> AssetRequest:
     return AssetRequest(
         asset_id="diamond_sword",
         kind="item",
-        prompt="blue lightsaber replacement",
-        target_path="assets/minecraft/textures/item/diamond_sword.png",
-        width=16,
-        height=16,
+        visual_description="blue lightsaber replacement",
+        render_kind="item.handheld",
+        subject_id="diamond_sword",
+        container="resource_pack",
+        requested_width=16,
+        requested_height=16,
     )
 
 
-def test_image_backend_is_fixed_to_klein9b_q4_pixelart_lora() -> None:
-    assert assets.FLUX_MODEL_ID == "black-forest-labs/FLUX.2-klein-9B"
-    assert assets.QUANTIZATION == "bnb_4bit_nf4"
-    assert assets.PIXEL_LORA_ID == "artificialguybr/PIXELART-REDMOND-FLUXKLEIN9B"
-    assert assets.PIXEL_LORA_WEIGHT == "[FLUX.2.Klein]PixelArt_Redmond.safetensors"
-
+def test_image_backend_is_registry_owned_klein9b_q4_pixelart_lora() -> None:
     config = ModelRegistry().role("t4_local", "image_generator")
-    assert config.model_id == assets.FLUX_MODEL_ID
-    assert config.quantization == assets.QUANTIZATION
-    assert config.extra["lora_model_id"] == assets.PIXEL_LORA_ID
-    assert config.extra["lora_weight_name"] == assets.PIXEL_LORA_WEIGHT
-    assert config.extra["lora_trigger"] == assets.PIXEL_LORA_TRIGGER
+    profile = ImageGenerationConfig.from_adapter_config(config)
+
+    assert config.adapter == "image_diffusion"
+    assert profile.model_id == "black-forest-labs/FLUX.2-klein-9B"
+    assert profile.quantization == "bnb_4bit_nf4"
+    assert profile.lora_model_id == "artificialguybr/PIXELART-REDMOND-FLUXKLEIN9B"
+    assert profile.lora_weight_name == "[FLUX.2.Klein]PixelArt_Redmond.safetensors"
+    assert profile.lora_trigger == "Pixel Art, PixArFK"
+    assert profile.candidate_count == 4
+    assert profile.preferred_generation_resolution == (1024, 1024)
+    assert profile.fallback_generation_resolution == (512, 512)
 
 
-def test_backend_config_refuses_lora_or_model_drift() -> None:
-    good = SimpleNamespace(
-        model_id=assets.FLUX_MODEL_ID,
-        quantization=assets.QUANTIZATION,
+def test_image_profile_rejects_partial_lora_or_invalid_generation_geometry() -> None:
+    base = SimpleNamespace(
+        model_id="black-forest-labs/FLUX.2-klein-9B",
+        quantization="bnb_4bit_nf4",
+        torch_dtype="float16",
+        cpu_offload=True,
         extra={
-            "lora_model_id": assets.PIXEL_LORA_ID,
-            "lora_weight_name": assets.PIXEL_LORA_WEIGHT,
-            "lora_trigger": assets.PIXEL_LORA_TRIGGER,
-            "lora_scale": 1.0,
+            "lora_model_id": "artificialguybr/PIXELART-REDMOND-FLUXKLEIN9B",
+            "lora_weight_name": "[FLUX.2.Klein]PixelArt_Redmond.safetensors",
+            "lora_trigger": "Pixel Art, PixArFK",
+            "candidate_count": 4,
+            "preferred_generation_resolution": {"width": 1024, "height": 1024},
+            "fallback_generation_resolution": {"width": 512, "height": 512},
+            "lora_allowed_layouts": ["isolated_sprite"],
+            "prompt_requirements": ["readable silhouette at native pixel grid"],
         },
     )
-    assets._require_fixed_backend_config(good)
-    bad = SimpleNamespace(
-        model_id=assets.FLUX_MODEL_ID,
-        quantization=assets.QUANTIZATION,
-        extra={**good.extra, "lora_model_id": "wrong/lora"},
+    ImageGenerationConfig.from_adapter_config(base)
+
+    missing_weight = SimpleNamespace(
+        **{
+            **base.__dict__,
+            "extra": {**base.extra, "lora_weight_name": ""},
+        }
     )
-    with pytest.raises(ModelConfigurationError):
-        assets._require_fixed_backend_config(bad)
+    with pytest.raises(ModelConfigurationError, match="configured together"):
+        ImageGenerationConfig.from_adapter_config(missing_weight)
+
+    invalid_geometry = SimpleNamespace(
+        **{
+            **base.__dict__,
+            "extra": {
+                **base.extra,
+                "preferred_generation_resolution": {"width": 1000, "height": 1024},
+            },
+        }
+    )
+    with pytest.raises(ModelConfigurationError, match="divisible by 16"):
+        ImageGenerationConfig.from_adapter_config(invalid_geometry)
 
 
-def test_persisted_plan_requires_four_real_prompts_and_exact_fixed_lora() -> None:
+def test_image_profile_fingerprint_is_stable_and_registry_bound() -> None:
+    config = ModelRegistry().role("t4_local", "image_generator")
+    first = image_profile_fingerprint(config)
+    second = image_profile_fingerprint(config)
+
+    assert first == second
+    assert first.startswith("sha256:")
+    assert len(first) == 71
+
+
+def test_asset_request_uses_semantic_resource_contract_not_legacy_target_path() -> None:
     request = _asset()
-    prompts = [
-        f"{assets.PIXEL_LORA_TRIGGER}. variant {index} blue lightsaber item, transparent background"
-        for index in range(4)
-    ]
-    plan = {
-        "schema_version": assets.PLAN_SCHEMA,
-        "model_id": assets.FLUX_MODEL_ID,
-        "quantization": assets.QUANTIZATION,
-        "lora_model_id": assets.PIXEL_LORA_ID,
-        "lora_weight_name": assets.PIXEL_LORA_WEIGHT,
-        "lora_trigger": assets.PIXEL_LORA_TRIGGER,
-        "prompt_candidates_per_asset": 4,
-        "assets": [
-            {
-                "asset_id": request.asset_id,
-                "kind": request.kind,
-                "target_path": request.target_path,
-                "width": 16,
-                "height": 16,
-                "prompts": prompts,
-            }
-        ],
-    }
-    assert assets._valid_plan(plan, (request,))
-    plan["assets"][0]["prompts"] = prompts[:3]
-    assert not assets._valid_plan(plan, (request,))
+    request.validate()
 
-
-def test_pixel_postprocess_uses_exact_rgba_size(tmp_path) -> None:
-    source = tmp_path / "candidate.png"
-    Image.new("RGBA", (256, 256), (10, 20, 30, 255)).save(source)
-    result = assets._prepare_candidate(_asset(), 0, "prompt", source)
-    with Image.open(result["normalized_path"]) as image:
-        image.load()
-        assert image.size == (16, 16)
-        assert image.mode == "RGBA"
+    assert request.visual_description == "blue lightsaber replacement"
+    assert request.render_kind == "item.handheld"
+    assert request.subject_id == "diamond_sword"
+    assert request.requested_width == 16
+    assert request.requested_height == 16
+    assert not hasattr(request, "prompt")
+    assert not hasattr(request, "target_path")
 
 
 def test_capabilities_are_assigned_once_to_matching_modules() -> None:
