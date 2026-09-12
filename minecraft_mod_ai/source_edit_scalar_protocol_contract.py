@@ -144,6 +144,17 @@ def _canonicalize_compat_payload(
     return normalized
 
 
+def _reject_whole_java_create(runtime_module: Any, payload: Mapping[str, Any]) -> None:
+    if payload.get("operation") != "create_file":
+        return
+    path = payload.get("path")
+    if isinstance(path, str) and path.strip().lower().endswith(".java"):
+        raise runtime_module.AgentToolRuntimeError(
+            "Whole Java source files cannot be authored with create_file; "
+            "use create_java_type followed by add_java_import / insert_java_member."
+        )
+
+
 def materialize_model_source_edit(
     runtime_module: Any,
     workspace_root: str | Path,
@@ -163,6 +174,7 @@ def materialize_model_source_edit(
         )
 
     normalized = _canonicalize_compat_payload(runtime_module, payload)
+    _reject_whole_java_create(runtime_module, normalized)
     return _core.materialize_model_source_edit(
         runtime_module,
         workspace_root,
