@@ -177,26 +177,6 @@ def execute_artifact_graph(
     if missing_external:
         raise ArtifactGraphError(f"ARTIFACT_GRAPH_MISSING_PRODUCER: {missing_external}")
 
-    if len(ordered_jobs) == 1:
-        job = ordered_jobs[0]
-        deadline = time.monotonic() + planning_work_unit_timeout_seconds()
-        receipt = run_with_model_execution_deadline(
-            deadline,
-            _execute_one,
-            job,
-            context=context,
-            router=router,
-            registry=registry,
-            base_dir=base_dir,
-        )
-        _validate_completed_job(job, receipt, context=context, base_dir=base_dir)
-        return {
-            "status": "PASS",
-            "completed_jobs": [job.job_id],
-            "receipts": [receipt],
-            "ports": {name: port.to_dict() for name, port in registry.all_ports().items()},
-        }
-
     order = {job.job_id: index for index, job in enumerate(ordered_jobs)}
     by_id = {job.job_id: job for job in ordered_jobs}
     dependency_ids: dict[str, set[str]] = {}
