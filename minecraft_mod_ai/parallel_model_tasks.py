@@ -5,13 +5,14 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
-from contextvars import copy_context
+from contextvars import ContextVar, copy_context
 from typing import Any, TypeVar
 
 from .model_concurrency import router_native_model_parallelism
 
 _T = TypeVar("_T")
 _R = TypeVar("_R")
+_MODEL_PARALLEL_DEPTH: ContextVar[int] = ContextVar("mmm_model_parallel_depth", default=0)
 
 
 def serialized_callback(callback: Callable[..., _R] | None) -> Callable[..., _R] | None:
@@ -40,17 +41,33 @@ def deterministic_model_map(
 
     Remote/unproven routers stay serial. ContextVars are copied into each worker, output
     order is deterministic, and any failure cancels work that has not started yet.
+    Nested maps stay serial inside an already scheduled worker: the outer map already
+    owns the available parallel width, so another executor would only create threads
+    that wait behind the router's global native-model capacity gate.
     """
 
     values = tuple(items)
     if not values:
         return []
-    workers = max(
+
+    nested = _MODEL_PARALLEL_DEPTH.get() > 0
+    workers = 1 if nested else max(
         1,
         min(len(values), router_native_model_parallelism(router, role=role)),
     )
     if workers == 1:
-        return [worker(item) for item in values]
+        token = _MODEL_PARALLEL_DEPTH.set(_MODEL_PARALLEL_DEPTH.get() + 1)
+        try:
+            return [worker(item) for item in values]
+        finally:
+            _MODEL_PARALLEL_DEPTH.reset(token)
+
+    def run_one(value: _T) -> _R:
+        token = _MODEL_PARALLEL_DEPTH.set(_MODEL_PARALLEL_DEPTH.get() + 1)
+        try:
+            return worker(value)
+        finally:
+            _MODEL_PARALLEL_DEPTH.reset(token)
 
     contexts = [copy_context() for _ in values]
     with ThreadPoolExecutor(
@@ -58,7 +75,7 @@ def deterministic_model_map(
         thread_name_prefix=thread_name_prefix,
     ) as pool:
         futures = [
-            pool.submit(contexts[index].run, worker, value)
+            pool.submit(contexts[index].run, run_one, value)
             for index, value in enumerate(values)
         ]
         try:
