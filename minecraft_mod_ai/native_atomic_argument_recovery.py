@@ -17,15 +17,24 @@ from typing import Any
 
 _MAX_PAGE_PROPERTIES = 3
 _MAX_REPAIR_ERROR_CHARS = 1200
+_MAX_ATOMIC_STRING_LENGTH = 256
 _SOURCE_EDIT_TOOL = "apply_source_edit"
+
+
+def _requires_stream_transport(schema: Mapping[str, Any]) -> bool:
+    """Return true when bounding one model page would narrow the original string contract."""
+
+    if schema.get("type") != "string" or "enum" in schema:
+        return False
+    max_length = schema.get("maxLength")
+    return not isinstance(max_length, int) or max_length > _MAX_ATOMIC_STRING_LENGTH
+
+
 _SOURCE_EDIT_OPERATION_ALIASES = {
     "create": "create_file",
     "replace": "replace_exact",
     "delete": "delete_file",
 }
-_SOURCE_EDIT_LONG_TEXT_FIELDS = frozenset(
-    {"old", "new", "anchor", "content", "declaration", "member"}
-)
 _SOURCE_EDIT_OPERATION_FIELDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     # count is optional and semantically fixed to the default value 1 by the source-edit
     # contract. Keeping it out of recovery prevents the operation-detail page from exceeding
@@ -62,23 +71,13 @@ def _required_names(schema: Mapping[str, Any]) -> tuple[str, ...]:
 def _bounded_property(schema: Mapping[str, Any]) -> dict[str, Any]:
     copy = dict(schema)
     if copy.get("type") == "string" and "enum" not in copy and "maxLength" not in copy:
-        copy["maxLength"] = 256
+        copy["maxLength"] = _MAX_ATOMIC_STRING_LENGTH
     elif copy.get("type") == "array":
         if "maxItems" not in copy:
             copy["maxItems"] = 4
         if "items" in copy and isinstance(copy["items"], Mapping):
             copy["items"] = _bounded_property(copy["items"])
     return copy
-
-
-def _source_edit_detail_property(name: str, schema: Any) -> Any:
-    """Bound metadata while preserving authoritative source-text payload capacity."""
-
-    if not isinstance(schema, Mapping):
-        return schema
-    if name in _SOURCE_EDIT_LONG_TEXT_FIELDS:
-        return dict(schema)
-    return _bounded_property(schema)
 
 
 def _page_schema(
@@ -90,7 +89,9 @@ def _page_schema(
         return dict(source)
     required = set(_required_names(source))
     page_properties = {
-        name: _bounded_property(properties[name]) if isinstance(properties[name], Mapping) else properties[name]
+        name: _bounded_property(properties[name])
+        if isinstance(properties[name], Mapping)
+        else properties[name]
         for name in names
     }
     page: dict[str, Any] = {
@@ -176,7 +177,9 @@ def _source_edit_detail_schema(
     page: dict[str, Any] = {
         "type": "object",
         "properties": {
-            name: _source_edit_detail_property(name, properties[name])
+            name: dict(properties[name])
+            if isinstance(properties[name], Mapping)
+            else properties[name]
             for name in names
         },
         "required": list(required),
@@ -189,39 +192,38 @@ def _source_edit_detail_schema(
     return page
 
 
-def _source_edit_atomicity_proxy_schema(
-    page_schema: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Return the strict-atomicity view of a source-edit detail page.
-
-    Source text is a deliberate scalar transport exception: truncating it to 256 characters
-    changes the requested edit and recreates the long-source fixed-point failure. The proxy
-    is used only by the structural atomicity gate; the actual native tool keeps the original
-    unbounded source-text schema and is validated against that authoritative schema.
-    """
-
-    properties = page_schema.get("properties")
+def _source_edit_scalar_schema(
+    detail_schema: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    properties = detail_schema.get("properties")
     if not isinstance(properties, Mapping):
-        return dict(page_schema)
-    if not any(name in _SOURCE_EDIT_LONG_TEXT_FIELDS for name in properties):
-        return dict(page_schema)
+        return None
+    names = tuple(
+        str(name)
+        for name, raw_schema in properties.items()
+        if not (
+            isinstance(raw_schema, Mapping)
+            and _requires_stream_transport(raw_schema)
+        )
+    )
+    if not names:
+        return None
+    return _page_schema(detail_schema, names)
 
-    proxy = dict(page_schema)
-    proxy_properties: dict[str, Any] = {}
-    for name, schema in properties.items():
-        if isinstance(schema, Mapping):
-            copy = dict(schema)
-            if (
-                name in _SOURCE_EDIT_LONG_TEXT_FIELDS
-                and copy.get("type") == "string"
-                and "enum" not in copy
-            ):
-                copy["maxLength"] = 256
-            proxy_properties[str(name)] = copy
-        else:
-            proxy_properties[str(name)] = schema
-    proxy["properties"] = proxy_properties
-    return proxy
+
+def _source_edit_stream_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "chunk": {
+                "type": "string",
+                "maxLength": _MAX_ATOMIC_STRING_LENGTH,
+            },
+            "done": {"type": "boolean"},
+        },
+        "required": ["chunk", "done"],
+        "additionalProperties": False,
+    }
 
 
 def _messages(
@@ -232,6 +234,7 @@ def _messages(
     page_schema: Mapping[str, Any],
     action_name: str,
     repair_error: str = "",
+    context_instruction: str = "",
 ) -> tuple[dict[str, Any], ...]:
     messages = [
         dict(raw)
@@ -252,6 +255,8 @@ def _messages(
         "The host owns action selection, merges bounded pages, validates the complete object, "
         "and constructs the final executable tool call."
     )
+    if context_instruction:
+        instruction += " " + context_instruction
     if repair_error:
         instruction += (
             " Repair the function arguments only. The previous forced-call arguments were invalid. "
@@ -269,19 +274,15 @@ def _request(
     page_schema: Mapping[str, Any],
     action_name: str,
     repair_error: str = "",
+    context_instruction: str = "",
 ) -> Any:
     # The atomic boundary is checked per native function-argument page, never against
-    # the host-owned original container. Source-edit body strings are the sole deliberate
-    # scalar-length exception; all field-count/depth/container bounds remain strict.
+    # the host-owned original container. The model fills fields through ToolCall.arguments;
+    # message content is deliberately not a structured-output transport.
     from .model_output_atomicity_contract import assert_atomic_model_schema
 
-    atomicity_schema = (
-        _source_edit_atomicity_proxy_schema(page_schema)
-        if action_name == _SOURCE_EDIT_TOOL
-        else page_schema
-    )
     assert_atomic_model_schema(
-        atomicity_schema,
+        page_schema,
         surface="host-selected forced-function argument page",
     )
     page_tool = {
@@ -304,6 +305,7 @@ def _request(
             page_schema=page_schema,
             action_name=action_name,
             repair_error=repair_error,
+            context_instruction=context_instruction,
         ),
         tools=(page_tool,),
         tool_validation_schemas=(page_tool,),
@@ -418,7 +420,9 @@ def _page_attempt(
 
         # Backend/context failures belong to the canonical recovery owner. Retrying
         # them as invalid arguments loses their type, cause and preserved partial receipt.
-        if completion_boundary_error(exc) is not None or isinstance(exc, GenerationOutputBudgetError):
+        if completion_boundary_error(exc) is not None or isinstance(
+            exc, GenerationOutputBudgetError
+        ):
             raise
         cause = getattr(exc, "cause", exc)
         reason = f"{type(cause).__name__}: {cause}"[:_MAX_REPAIR_ERROR_CHARS]
@@ -436,6 +440,7 @@ def _recover_page(
     page_schema: Mapping[str, Any],
     parameters: Mapping[str, Any],
     action_name: str,
+    context_instruction: str = "",
 ) -> dict[str, Any]:
     from .model_adapters import ModelConfigurationError
 
@@ -445,6 +450,7 @@ def _recover_page(
         page_count=page_count,
         page_schema=page_schema,
         action_name=action_name,
+        context_instruction=context_instruction,
     )
     arguments, error, first_fingerprint = _page_attempt(
         current,
@@ -464,6 +470,7 @@ def _recover_page(
         page_schema=page_schema,
         action_name=action_name,
         repair_error=error,
+        context_instruction=context_instruction,
     )
     arguments, repair_error, second_fingerprint = _page_attempt(
         current,
@@ -488,19 +495,84 @@ def _recover_page(
     )
 
 
+def _recover_source_edit_stream_field(
+    current: Any,
+    adapter: Any,
+    request: Any,
+    *,
+    operation: str,
+    field_name: str,
+    field_schema: Mapping[str, Any],
+) -> str:
+    """Recover one arbitrary-length source scalar through bounded native chunks."""
+
+    from .model_adapters import ModelConfigurationError
+
+    if field_schema.get("type") != "string":
+        raise ModelConfigurationError(
+            "HOST_ARGUMENT_DECOMPOSITION: streamed apply_source_edit field "
+            f"{field_name!r} must be a string schema"
+        )
+
+    chunk_schema = _source_edit_stream_schema()
+    accepted = ""
+    while True:
+        tail = accepted[-_MAX_ATOMIC_STRING_LENGTH:]
+        tail_text = json.dumps(tail, ensure_ascii=False)
+        instruction = (
+            f"Recover apply_source_edit operation {operation!r} field {field_name!r}. "
+            "Return the next exact source-text segment starting at character offset "
+            f"{len(accepted)}. "
+            f"The chunk must contain at most {_MAX_ATOMIC_STRING_LENGTH} characters. "
+            "Set done=true only when this chunk reaches the end of this field. "
+            "Continue from the stated offset; do not restart from the beginning of the field. "
+            f"Accepted trailing context is {tail_text}."
+        )
+        piece = _recover_page(
+            current,
+            adapter,
+            request,
+            page_index=1,
+            page_count=1,
+            page_schema=chunk_schema,
+            parameters=chunk_schema,
+            action_name=_SOURCE_EDIT_TOOL,
+            context_instruction=instruction,
+        )
+        chunk = piece.get("chunk")
+        done = piece.get("done")
+        if not isinstance(chunk, str) or not isinstance(done, bool):
+            raise ModelConfigurationError(
+                "HOST_ARGUMENT_DECOMPOSITION: source-edit stream page returned invalid chunk state"
+            )
+        if not done and not chunk:
+            raise ModelConfigurationError(
+                "HOST_ARGUMENT_DECOMPOSITION: source-edit stream made no progress "
+                f"for field {field_name!r} at offset {len(accepted)}"
+            )
+        accepted += chunk
+
+        max_length = field_schema.get("maxLength")
+        if isinstance(max_length, int) and len(accepted) > max_length:
+            raise ModelConfigurationError(
+                "HOST_ARGUMENT_DECOMPOSITION: source-edit stream exceeded the original "
+                f"maxLength for field {field_name!r}"
+            )
+        if done:
+            return accepted
+
+
 def _recover_source_edit_arguments(
     current: Any,
     adapter: Any,
     request: Any,
     parameters: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Recover the discriminator first, then only fields owned by that operation.
+    """Recover source-edit arguments without imposing a total source-text size limit.
 
-    SOURCE_EDIT_SCHEMA is deliberately a flat model-facing union. Treating that union as
-    independent transport pages lets irrelevant optional fields from other operations become
-    valid page output and leak into the merged call. The runtime semantic validator then has
-    to reject an object the host itself assembled. Resolve the operation first and narrow the
-    second page to its canonical semantic contract instead.
+    The discriminator and ordinary scalar metadata use the existing bounded page contract.
+    Source payload scalars are transported as repeated <=256-character chunks and are
+    reassembled by the host before the original apply_source_edit schema is validated.
     """
 
     from .model_adapters import ModelConfigurationError
@@ -524,18 +596,46 @@ def _recover_source_edit_arguments(
         detail_schema = _source_edit_detail_schema(parameters, operation)
     except ValueError as exc:
         raise ModelConfigurationError(str(exc)) from exc
-    details = _recover_page(
-        current,
-        adapter,
-        request,
-        page_index=2,
-        page_count=2,
-        page_schema=detail_schema,
-        parameters=parameters,
-        action_name=_SOURCE_EDIT_TOOL,
-    )
-    merged = {"operation": operation, **details}
 
+    details: dict[str, Any] = {}
+    scalar_schema = _source_edit_scalar_schema(detail_schema)
+    if scalar_schema is not None:
+        details.update(
+            _recover_page(
+                current,
+                adapter,
+                request,
+                page_index=2,
+                page_count=2,
+                page_schema=scalar_schema,
+                parameters=parameters,
+                action_name=_SOURCE_EDIT_TOOL,
+            )
+        )
+
+    detail_properties = detail_schema.get("properties")
+    if not isinstance(detail_properties, Mapping):
+        raise ModelConfigurationError(
+            "HOST_ARGUMENT_DECOMPOSITION: apply_source_edit detail schema must expose properties"
+        )
+    required = set(_required_names(detail_schema))
+    for field_name, raw_schema in detail_properties.items():
+        if not isinstance(raw_schema, Mapping) or not _requires_stream_transport(raw_schema):
+            continue
+        if field_name not in required:
+            # No current canonical operation has an optional streamed field. Keep optional
+            # fields host-owned rather than forcing the model to invent an unnecessary value.
+            continue
+        details[str(field_name)] = _recover_source_edit_stream_field(
+            current,
+            adapter,
+            request,
+            operation=operation,
+            field_name=str(field_name),
+            field_schema=raw_schema,
+        )
+
+    merged = {"operation": operation, **details}
     forced = _forced_module()
     if not forced._arguments_match_schema(merged, parameters):
         raise ModelConfigurationError(
@@ -553,22 +653,24 @@ def host_selected_argument_turn(
     *,
     prefix: str = "host_action",
 ) -> Any:
-    """Recover one already-selected action through bounded forced-function pages."""
-
-    from .model_adapters import ModelConfigurationError
-
     forced = _forced_module()
-    parameters = forced._parameters(forced._selected_schema(request, name))
-
+    schema = forced._selected_schema(request, name)
+    parameters = forced._parameters(schema)
     if name == _SOURCE_EDIT_TOOL:
-        merged = _recover_source_edit_arguments(current, adapter, request, parameters)
+        merged = _recover_source_edit_arguments(
+            current,
+            adapter,
+            request,
+            parameters,
+        )
         return forced._response_for_call(name, merged, prefix=prefix)
 
     try:
         pages = _argument_pages(parameters)
     except ValueError as exc:
-        raise ModelConfigurationError(str(exc)) from exc
+        from .model_adapters import ModelConfigurationError
 
+        raise ModelConfigurationError(str(exc)) from exc
     merged: dict[str, Any] = {}
     for page_index, page_schema in enumerate(pages, start=1):
         arguments = _recover_page(
@@ -583,6 +685,8 @@ def host_selected_argument_turn(
         )
         overlap = set(merged).intersection(arguments)
         if overlap:
+            from .model_adapters import ModelConfigurationError
+
             raise ModelConfigurationError(
                 "HOST_ARGUMENT_DECOMPOSITION: duplicate fields across pages: "
                 + ", ".join(sorted(overlap))
@@ -590,6 +694,8 @@ def host_selected_argument_turn(
         merged.update(arguments)
 
     if not forced._arguments_match_schema(merged, parameters):
+        from .model_adapters import ModelConfigurationError
+
         raise ModelConfigurationError(
             f"HOST_ARGUMENT_DECOMPOSITION: merged argument pages for {name!r} "
             "failed the original schema"
