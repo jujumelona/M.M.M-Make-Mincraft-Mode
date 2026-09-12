@@ -7,6 +7,7 @@ record_schema:
     question: &text
       type: string
       minLength: 1
+      maxLength: 256
     reason:
       type: string
       enum:

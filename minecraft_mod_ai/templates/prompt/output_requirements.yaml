@@ -7,9 +7,11 @@ record_schema:
     statement: &text
       type: string
       minLength: 1
+      maxLength: 256
     source_quote:
       type: string
       minLength: 0
+      maxLength: 256
   required:
   - statement
   additionalProperties: false

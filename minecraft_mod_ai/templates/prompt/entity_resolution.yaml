@@ -7,9 +7,11 @@ record_schema:
     name: &text
       type: string
       minLength: 1
+      maxLength: 256
     source_quote:
       type: string
       minLength: 0
+      maxLength: 256
     what_must_be_learned: *text
   required:
   - name
