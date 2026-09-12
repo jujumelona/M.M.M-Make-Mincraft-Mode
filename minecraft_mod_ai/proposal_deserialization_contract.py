@@ -113,6 +113,26 @@ def _status_value(value: Any) -> str:
     return str(value.value if isinstance(value, Enum) else value)
 
 
+def _install_json_native_serializer(proposal_cls: Any) -> None:
+    """Make every public proposal ``to_dict`` result valid strict JSON input."""
+
+    current_to_dict = proposal_cls.to_dict
+    if getattr(current_to_dict, '_mmm_json_native_serializer', False):
+        return
+
+    @wraps(current_to_dict)
+    def to_dict(self: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        value = current_to_dict(self, *args, **kwargs)
+        normalized = _json_native(value)
+        if not isinstance(normalized, dict):
+            raise TypeError('Proposal serializer must return a JSON object.')
+        return normalized
+
+    to_dict._mmm_json_native_serializer = True
+    to_dict.__wrapped__ = current_to_dict
+    proposal_cls.to_dict = to_dict
+
+
 def _install_approval_authority(
     proposal_cls: Any,
     *,
@@ -323,6 +343,8 @@ def install_proposal_deserialization_contracts(
 
     proposal_cls.from_dict = classmethod(proposal_from_dict)
     complete_proposal_cls.from_dict = classmethod(complete_from_dict)
+    _install_json_native_serializer(proposal_cls)
+    _install_json_native_serializer(complete_proposal_cls)
     _install_approval_authority(
         proposal_cls,
         approved_status=proposal_status_cls.APPROVED.value,
