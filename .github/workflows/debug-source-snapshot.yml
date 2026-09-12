@@ -1,0 +1,22 @@
+name: Debug source snapshot
+
+on:
+  push:
+    paths:
+      - '.github/workflows/debug-source-snapshot.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pack repository
+        run: tar --exclude=.git -czf /tmp/mmm-source.tgz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mmm-source-${{ github.sha }}
+          path: /tmp/mmm-source.tgz
+          retention-days: 1
