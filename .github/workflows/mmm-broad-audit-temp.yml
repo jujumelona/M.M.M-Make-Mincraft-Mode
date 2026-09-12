@@ -1,0 +1,37 @@
+name: MMM broad pipeline audit temp
+
+on:
+  push:
+    paths:
+      - '.github/workflows/mmm-broad-audit-temp.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Re-run previously failing contracts
+        shell: bash
+        run: |
+          python -m pytest -q \
+            tests/test_complete_orchestrator_artifact_jobs.py \
+            tests/test_complete_production.py::test_complete_orchestrator_source_only_connects_all_generators \
+            tests/test_gradle_runner_hot_path_efficiency.py::test_build_hot_path_is_incremental_and_skips_current_wrapper \
+            tests/test_local_ai_sidecar.py::test_complete_orchestrator_dispatches_reviewed_sidecar_without_model_router \
+            tests/test_project_manifest_hash_efficiency_contract.py::test_execution_manifest_reuse_stays_before_build_repair_mutation \
+            tests/test_repository_grounding.py::test_runtime_contract_installs_generation_and_repair_grounding \
+            tests/test_runner_parallel_validation_contract.py::test_different_projects_validate_in_parallel \
+            tests/test_runner_parallel_validation_contract.py::test_same_project_is_single_writer_and_exact_cache_reused
+      - name: Re-run broad pipeline slice
+        run: python -m pytest -q tests -k 'validation or repair or orchestrator or runner or adaptive_retrieval'
