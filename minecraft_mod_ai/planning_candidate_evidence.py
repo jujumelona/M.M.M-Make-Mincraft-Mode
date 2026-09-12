@@ -45,27 +45,41 @@ def query_context(state: Mapping[str, Any], research: Mapping[str, Any], prompt:
 
 
 def expansion_queries(context: Mapping[str, Any]) -> list[str]:
-    """Finite authored vocabulary expansion, not repeated retries or invented mod names."""
+    """Relax within authored topic anchors; never turn prose into singleton searches."""
     rows = [context.get("requirement", {}), *context.get("sibling_requirements", [])]
     queries = []
     for row in rows:
-        parts = [" ".join(terms(part)) for part in str(row.get("semantic_capability") or "").split(".")]
-        queries.extend([" ".join(parts), *parts, *terms(row.get("statement"))])
-    queries.extend(terms(context.get("original_task")))
+        parts = terms(row.get("semantic_capability"))
+        if not parts:
+            continue
+        anchor = parts[0]
+        queries.extend([" ".join(parts), anchor])
+        queries.extend(f"{anchor} {word}" for word in terms(row.get("statement"))
+                       if word != anchor)
     return list(dict.fromkeys(q for q in queries if q))
 
 
 def global_grounded_pool(grounded_domains: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
     """Union catalog/repository bodies across requirements without dropping provenance."""
-    queries: list[dict[str, Any]] = []
+    sources: dict[tuple[str, str], dict[str, Any]] = {}
     for domain_id, grounded in grounded_domains.items():
         for raw in grounded.get("queries", []):
-            records = [dict(record) for record in raw.get("evidence_records", [])
-                       if str(record.get("source_id") or "").split(":", 1)[0]
-                       in {"modrinth", "curseforge", "github"}]
-            if records:
-                queries.append({**raw, "origin_domain_id": domain_id, "evidence_records": records})
-    return {"queries": queries}
+            for record in raw.get("evidence_records", []):
+                source_id = str(record.get("source_id") or "")
+                if source_id.split(":", 1)[0] not in {"modrinth", "curseforge", "github"}:
+                    continue
+                body_sha = hashlib.sha256(str(record.get("content") or "").encode("utf-8")).hexdigest()
+                row = sources.setdefault((source_id, body_sha), {
+                    "query": raw.get("query", ""), "query_sha256": raw.get("query_sha256", ""),
+                    "origin_domain_ids": [], "retrieval_queries": [], "evidence_records": [dict(record)],
+                })
+                for origin in raw.get("origin_domain_ids") or [raw.get("origin_domain_id") or domain_id]:
+                    if origin not in row["origin_domain_ids"]:
+                        row["origin_domain_ids"].append(origin)
+                for query_text in raw.get("retrieval_queries") or [raw.get("query", "")]:
+                    if query_text not in row["retrieval_queries"]:
+                        row["retrieval_queries"].append(query_text)
+    return {"schema_version": "mmm/task-candidate-pool-v2", "queries": list(sources.values())}
 
 
 def requirement_candidate_trace(
@@ -90,32 +104,41 @@ def requirement_candidate_trace(
                 "query_sha256": [], "evidence": [], "matched_facets": [],
                 "source_reuse_authority": "verification_required",
             })
-            origin = query.get("origin_domain_id")
-            if origin and origin not in candidate["origin_domains"]:
-                candidate["origin_domains"].append(origin)
-            query_sha = query.get("query_sha256") or fingerprint(query.get("query", ""))
-            if query_sha not in candidate["query_sha256"]:
-                candidate["query_sha256"].append(query_sha)
+            for origin in query.get("origin_domain_ids") or [query.get("origin_domain_id")]:
+                if origin and origin not in candidate["origin_domains"]:
+                    candidate["origin_domains"].append(origin)
+            for query_text in query.get("retrieval_queries") or [query.get("query", "")]:
+                query_sha = fingerprint(query_text)
+                if query_sha not in candidate["query_sha256"]:
+                    candidate["query_sha256"].append(query_sha)
             content = str(record.get("content") or "")
+            body_sha = "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+            offset = 0
             # Preserve exact source chunks and hashes, including evidence beyond previews.
             for chunk in re.split(r"(?:\r?\n){2,}|(?<=[.!?])\s+", content):
+                start = content.find(chunk, offset)
+                offset = start + len(chunk)
                 words = set(terms(chunk))
                 matched = [index for index, facet in enumerate(facets) if words.intersection(facet)]
                 if not matched:
                     continue
-                evidence = {"exact_excerpt": chunk, "content_sha256": "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest(),
-                            "source_url": record.get("url", ""), "matched_facets": matched}
+                evidence = {"char_start": start, "char_end": offset, "content_sha256": body_sha,
+                            "matched_facets": matched}
                 if evidence not in candidate["evidence"]:
                     candidate["evidence"].append(evidence)
                 candidate["matched_facets"] = sorted(set(candidate["matched_facets"]) | set(matched))
     covered: set[int] = set()
     for candidate in candidates.values():
-        covered.update(candidate["matched_facets"])
-        candidate["status"] = "lexical_evidence" if candidate["evidence"] else "unresolved_relevance"
+        # Tokens spread over unrelated candidates cannot form a supported requirement.
+        coherent = bool(facets) and len(candidate["matched_facets"]) == len(facets)
+        if coherent:
+            covered.update(candidate["matched_facets"])
+        candidate["status"] = "lexical_evidence" if coherent else "unresolved_relevance"
     missing = [facet for index, facet in enumerate(facets) if index not in covered]
     return {"requirement_ref": requirement.get("requirement_id"), "facets": facets,
             "candidates": list(candidates.values()), "missing_facets": missing,
-            "coverage_complete": bool(candidates) and bool(facets) and not missing,
+            "lexical_coverage_complete": bool(candidates) and bool(facets) and not missing,
+            "coverage_complete": False,
             "semantic_implementation_proof": False, "pool_sha256": fingerprint(pool)}
 
 
@@ -130,6 +153,11 @@ def assert_candidate_research_complete(state: Mapping[str, Any]) -> None:
         pool = state.get("task_candidate_pool") or {}
         trace = requirement_candidate_trace(requirement_for(state, research), pool)
         saved_trace = research.get("candidate_trace") or {}
+        from .planning_semantic_research import validate_semantic_review
+        review = validate_semantic_review(requirement_for(state, research), pool,
+                                          saved_trace.get("semantic_review") or {})
+        trace["semantic_review"] = review
+        trace["coverage_complete"] = review["complete"]
         if (research.get("status") != "complete" or research.get("research_state") != "COMPLETE"
                 or not discovery.get("complete") or not discovery.get("candidates")
                 or not trace["coverage_complete"] or saved_trace != trace):

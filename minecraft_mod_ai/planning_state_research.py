@@ -247,7 +247,7 @@ def _research_brief(
                 **({"catalog_queries": catalog_queries(state, raw, prompt=prompt),
                     "task_query_context": query_context(state, raw, prompt),
                     "requirement": dict(requirement_for(state, raw))}
-                   if kinds & {"repository", "existing_mods"} else {}),
+                   if kinds & {"repository", "existing_mods"} and raw.get("requirement_ref") else {}),
                 "required_anchor_terms": required_anchor_terms,
                 "depends_on": [],
             }
@@ -459,15 +459,23 @@ def collect_planning_state_research(
         str(domain["domain_id"]): deepcopy(_grounded_domain_evidence(str(domain["domain_id"]), minecraft_bundle))
         for domain in minecraft_domains
     }
-    pool = global_grounded_pool(grounded_by_domain)
+    prior_pool = value.get("task_candidate_pool") or {"queries": []}
+    pool = global_grounded_pool({"prior": prior_pool, **grounded_by_domain})
+    from .planning_semantic_research import review_requirement_sources
+    semantic_traces = {}
+    for domain in minecraft_domains:
+        if "catalog_queries" in domain:
+            trace = requirement_candidate_trace(domain["requirement"], pool)
+            review = review_requirement_sources(router, domain["requirement"], pool, trace)
+            semantic_traces[domain["domain_id"]] = {**trace, "semantic_review": review,
+                                                  "coverage_complete": review["complete"]}
     # A corrective pass must change the actual provider search space. No retry count,
     # reworded error, or model assertion can revive an identical exhausted query set.
     corrective_domains = []
     for domain in minecraft_domains:
         if "catalog_queries" not in domain:
             continue
-        trace = requirement_candidate_trace(domain["requirement"], pool)
-        if trace["coverage_complete"]:
+        if semantic_traces[domain["domain_id"]]["coverage_complete"]:
             continue
         executed = {project_rag._query_terms(q).casefold()
                     for searched_domain in minecraft_domains
@@ -490,13 +498,40 @@ def collect_planning_state_research(
             domain_id = str(domain["domain_id"])
             correction = _grounded_domain_evidence(domain_id, corrective_bundle)
             grounded_by_domain[domain_id]["queries"].extend(correction.get("queries", []))
-        pool = global_grounded_pool(grounded_by_domain)
+        pool = global_grounded_pool({"prior": prior_pool, **grounded_by_domain})
+        for domain in minecraft_domains:
+            if "catalog_queries" in domain:
+                trace = requirement_candidate_trace(domain["requirement"], pool)
+                review = review_requirement_sources(router, domain["requirement"], pool, trace)
+                semantic_traces[domain["domain_id"]] = {**trace, "semantic_review": review,
+                                                      "coverage_complete": review["complete"]}
+    from .planning_semantic_research import validate_semantic_review
+    retained_traces = []
+    for research in value.get("research_queue", []):
+        if research.get("status") != "complete" or not research.get("candidate_trace"):
+            continue
+        requirement = requirement_for(value, research)
+        previous = validate_semantic_review(requirement, prior_pool,
+                                            research["candidate_trace"].get("semantic_review") or {})
+        if not previous["complete"]:
+            raise ValueError("RESEARCH_RESTORE_STALE: previous completed review is invalid")
+        rebound = validate_semantic_review(requirement, pool, {**previous, "pool_sha256": fingerprint(pool)})
+        if not rebound["complete"]:
+            raise ValueError("RESEARCH_RESTORE_STALE: accepted source bodies changed")
+        retained = {**requirement_candidate_trace(requirement, pool),
+                    "semantic_review": rebound, "coverage_complete": True}
+        research["candidate_trace"] = retained
+        retained_traces.append(deepcopy(retained))
+        for evidence in value.get("evidence", []):
+            if evidence.get("research_ref") == research.get("research_id"):
+                evidence["candidate_trace"] = deepcopy(retained)
     value["task_candidate_pool"] = deepcopy(pool)
-    value["candidate_requirement_trace"] = []
+    value["candidate_requirement_trace"] = retained_traces
 
     def research_domain(domain: Mapping[str, Any]) -> dict[str, Any]:
         domain_id = str(domain.get("domain_id") or "")
         discovery: dict[str, Any] | None = None
+        candidate_trace: dict[str, Any] | None = None
         repository_candidates: list[dict[str, Any]] = []
         if domain_id in reference_domain_ids:
             grounded = _grounded_reference_domain(domain)
@@ -522,6 +557,17 @@ def collect_planning_state_research(
                                               for record in records)
             if "catalog_queries" in domain:
                 discovery = discovery_receipt(domain_id, grounded)
+                # Raw bodies live once in task_candidate_pool, not in four discovery
+                # receipts and again in each mandatory planner prompt.
+                for candidate in discovery["candidates"]:
+                    candidate.pop("description", None)
+                candidate_trace = semantic_traces[domain_id]
+                review = candidate_trace["semantic_review"]
+                admitted = {proof["source_id"] for proof in review["accepted_proofs"]}
+                for query in grounded["queries"]:
+                    query["evidence_records"] = [record for record in query.get("evidence_records", [])
+                        if str(record.get("source_id") or "").split(":", 1)[0]
+                        not in {"modrinth", "curseforge", "github"} or record.get("source_id") in admitted]
         provider_diagnostics = _provider_diagnostics(grounded)
         document = project_rag._materialize_domain_evidence_document(
             domain_id,
@@ -550,8 +596,7 @@ def collect_planning_state_research(
             "repository_candidates": repository_candidates,
             "discovery": discovery,
             "provider_diagnostics": provider_diagnostics,
-            "candidate_trace": requirement_candidate_trace(domain["requirement"], pool)
-                if "catalog_queries" in domain else None,
+            "candidate_trace": candidate_trace,
         }
 
     domain_results: dict[str, dict[str, Any]] = {}
@@ -670,8 +715,7 @@ def collect_planning_state_research(
             # A generic API excerpt cannot fill a gameplay evidence gap. Match only
             # requirement-local candidate evidence; never append every retrieved ID.
             sufficient = sufficient and discovery["complete"] and trace["coverage_complete"]
-            matched_refs = [candidate["source_id"] for candidate in trace["candidates"]
-                            if candidate["evidence"]]
+            matched_refs = [proof["source_id"] for proof in trace["semantic_review"]["accepted_proofs"]]
             refs = list(dict.fromkeys([*refs, *matched_refs]))
             research["research_state"] = "COMPLETE" if sufficient else "RESEARCH_BLOCKED"
             research["search_space_sha256"] = fingerprint([
@@ -684,6 +728,7 @@ def collect_planning_state_research(
                 reason="requirement_candidate_evidence" if sufficient else "candidate_evidence_missing",
                 details={"research_ref": research_id, "candidate_count": len(trace["candidates"]),
                          "missing_facets": trace["missing_facets"],
+                         "missing_obligations": trace["semantic_review"]["missing_obligation_indices"],
                          "pool_sha256": trace["pool_sha256"]},
             )
         research["status"] = "complete" if sufficient else "blocked"

@@ -95,6 +95,11 @@ def generate_section_records(
     refs: list[str] = []
     reasons: list[dict[str, str]] = []
     identifiers = list(load_template(f"feature/{section}")["steps"])
+    if isinstance(evidence, list) and any(isinstance(row, Mapping)
+            and row.get("source") == "host_verified_semantic_research" for row in evidence):
+        from .planning_semantic_research import evidence_for_obligation
+        evidence = evidence_for_obligation(evidence, criterion)
+        allowed_refs = {ref for row in evidence for ref in row.get("evidence_refs", [])}
     context = {
         "requirement_id": requirement.get("requirement_id", ""),
         "requirement": requirement.get("statement", ""),

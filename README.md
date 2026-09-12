@@ -143,3 +143,42 @@ conversion. A registry fallback is attempted only after a memory allocation fail
 Static assets reject stale animation sidecars. Pixel fixtures and stub image backends
 exercise these contracts in `tests/test_resource_contract_pipeline.py`; real model
 quality, Gradle, GameTest and Minecraft runtime validation remain separate gates.
+
+### Research evidence and small-model validation
+
+Catalog queries retain authored topic anchors; the full original task and sibling
+requirements stay in the query context, rather than becoming long keyword searches
+or thousands of unrelated singleton hits. Retrieved bodies are deduplicated by source
+identity and content hash without a candidate top-N cutoff. Lexical matches rank review
+work and never authorize research completion.
+
+Each acceptance obligation is assessed against bounded source windows using the active
+model input budget. A separate entailment call checks a proposed exact quote; the host
+validates source, body hash, window, requirement and obligation bindings. These remain
+model-based semantic observations, not infallible proofs. Completed observations are
+stored under `.mmm/semantic-research-cache` and resumed only for matching policy,
+model configuration and source bindings. Corrective retrieval requires new topic-bound
+queries after semantic evidence fails. The detailed planner receives only admitted
+obligation proofs; full bodies and unsuccessful candidates remain in the research state.
+
+The design draws on [CRAG's retrieval evaluation](https://arxiv.org/abs/2401.15884),
+[ALCE's citation quality evaluation](https://arxiv.org/abs/2305.14627), and the input-position
+limitations studied in [Lost in the Middle](https://arxiv.org/abs/2307.03172). It is an
+adaptation for this pipeline, not a reproduction of those papers' benchmark results.
+
+Run host contract and context-size regressions with:
+
+```bash
+python -m pytest -q tests/test_planning_semantic_research.py tests/test_planning_candidate_evidence.py tests/test_planning_mod_discovery.py
+```
+
+On the actual Qwen/Colab runtime, evaluate positive, negative, partial, synonym and
+source-instruction cases using the configured model (this command loads that model):
+
+```bash
+python -m minecraft_mod_ai.research_semantic_eval --profile Qwen3.5-9B_6GB
+```
+
+The evaluator rejects mock adapters and writes `.mmm/research-semantic-eval.json`.
+Unit tests and bounded-input tests do not establish real-model accuracy or complete
+planner/Minecraft runtime readiness; those require the real evaluation and full run.

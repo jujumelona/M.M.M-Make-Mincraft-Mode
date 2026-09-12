@@ -11,6 +11,7 @@ from minecraft_mod_ai.planning_candidate_evidence import (
 
 def requirement(identifier="req_001", capability="spacecraft.upgrade"):
     return {"decision_type": "requirement", "requirement_id": identifier,
+            "acceptance": ["Players can upgrade their spacecraft through trading."],
             "semantic_capability": capability, "statement": "Trade weapons and crew for spacecraft upgrade"}
 
 
@@ -25,10 +26,12 @@ def test_sibling_candidate_reassessed_and_late_evidence_preserved():
     body = "Unrelated preface. " * 200 + "Build spacecraft. Purchase an upgrade."
     pool = global_grounded_pool({"r_002": grounded(body)})
     trace = requirement_candidate_trace(requirement(), pool)
-    assert trace["coverage_complete"]
+    assert trace["lexical_coverage_complete"]
+    assert not trace["coverage_complete"]
     assert trace["candidates"][0]["origin_domains"] == ["r_002"]
     assert trace["candidates"][0]["requirement_ref"] == "req_001"
-    assert any("upgrade" in item["exact_excerpt"] for item in trace["candidates"][0]["evidence"])
+    assert any("upgrade" in body[item["char_start"]:item["char_end"]]
+               for item in trace["candidates"][0]["evidence"])
     assert trace["semantic_implementation_proof"] is False
 
 
@@ -56,7 +59,7 @@ def test_task_and_sibling_queries_reach_actual_brief():
                                   "source_kinds": ["existing_mods"]}]}
     brief, _, _ = _research_brief(state["original_prompt"], state)
     domain = brief["domains"][0]
-    assert state["original_prompt"] in domain["catalog_queries"]
+    assert state["original_prompt"] == domain["task_query_context"]["original_task"]
     assert "space" in domain["catalog_queries"]
     assert domain["task_query_context"]["sibling_requirements"][0]["requirement_id"] == "req_002"
 
@@ -102,9 +105,17 @@ def test_later_provider_failure_preserves_already_retrieved_candidates(monkeypat
 
 
 def _run_collection(monkeypatch, state, responses):
+    import json
+
+    from minecraft_mod_ai import planning_semantic_research as semantic
     from minecraft_mod_ai import planning_state_research as research
     from minecraft_mod_ai import pre_design_grounded_rag as backend
     from minecraft_mod_ai import pre_design_research_pipeline as pipeline
+    def review(_router, _role, messages, **kwargs):
+        window = json.loads(messages[1]["content"]) .get("source_window", json.loads(messages[1]["content"]).get("source_quote", ""))
+        return {"supports": "spacecraft" in window and "upgrade" in window,
+                "excerpt": window[:256], "reason": "Fixture semantic assessment"}
+    monkeypatch.setattr(semantic, "generate_fixed_template_value", review)
     calls, events = [], []
     monkeypatch.setattr(research, "validate_planning_state", lambda *a, **k: None)
     monkeypatch.setattr(research, "emit_root_cause", lambda *a, **k: events.append(k))

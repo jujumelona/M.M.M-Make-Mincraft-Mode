@@ -8,7 +8,6 @@ path is retrieval evidence, never proof that no candidate exists.
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -49,30 +48,22 @@ def catalog_queries(
                         and row.get("decision_type") == "requirement"
                         and row.get("requirement_id") == research.get("requirement_ref")), {})
     capability = str(requirement.get("semantic_capability") or "")
-    parts = [" ".join(re.findall(r"[\w]+", part.replace("_", " ")))
-             for part in capability.split(".")]
-    parts = [part for part in parts if part]
+    from .planning_candidate_evidence import terms
+    parts = terms(capability)
 
     candidates: list[str] = []
     if parts:
         # Relax conjunctive feature names so a narrow phrase cannot hide the ecosystem.
-        candidates.extend([" ".join(parts), *parts])
-    for value in (
-        requirement.get("statement"),
-        state.get("original_prompt") or prompt,
-    ):
-        query = _query_text(value)
-        if query:
-            candidates.append(query)
+        candidates.extend([" ".join(parts), parts[0]])
 
     # Other approved requirements expose ecosystem vocabulary lost by a narrow label.
     # They expand retrieval only; requirement-local evidence still decides relevance.
     for sibling in state.get("decisions", []):
         if not isinstance(sibling, Mapping) or sibling.get("decision_type") != "requirement":
             continue
-        sibling_parts = [" ".join(re.findall(r"[\w]+", part.replace("_", " ")))
-                         for part in str(sibling.get("semantic_capability") or "").split(".")]
-        candidates.extend(part for part in [" ".join(sibling_parts), *sibling_parts] if part)
+        sibling_parts = terms(sibling.get("semantic_capability"))
+        if sibling_parts:
+            candidates.extend([" ".join(sibling_parts), sibling_parts[0]])
 
     if candidates:
         return list(dict.fromkeys(candidates))

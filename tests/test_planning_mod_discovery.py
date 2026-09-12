@@ -15,7 +15,8 @@ from minecraft_mod_ai.research_reuse_candidates import (
 def _state():
     return {
         "decisions": [{"decision_type": "requirement", "requirement_id": "req_001",
-                       "semantic_capability": "space.travel", "statement": "Travel to space"}],
+                       "semantic_capability": "space.travel", "statement": "Travel to space",
+                       "acceptance": ["Players can travel to space."]}],
         "research_queue": [{"research_id": "r_001", "requirement_ref": "req_001",
                             "objective": "Find useful implementation/reuse options for space travel",
                             "information_needed": "Concrete implementation patterns and support artifacts",
@@ -44,9 +45,6 @@ def test_catalog_queries_preserve_task_context_and_do_not_send_api_instructions(
     assert queries == [
         "space travel",
         "space",
-        "travel",
-        "Travel to space",
-        prompt,
     ]
     specs = _domain_specs({"providers": ["modrinth", "official_docs"],
                            "catalog_queries": queries, "queries": ["Minecraft API teleport"]})
@@ -109,10 +107,12 @@ def test_repository_candidate_merge_has_no_hidden_global_top_n_cut():
 
 @pytest.mark.parametrize("available", [True, False])
 def test_research_to_criterion_preserves_catalog_or_blocks_unavailable_catalog(monkeypatch, available):
+    from minecraft_mod_ai import planning_semantic_research as semantic
     from minecraft_mod_ai import planning_state_research as research
     from minecraft_mod_ai import pre_design_grounded_rag as backend
     from minecraft_mod_ai import pre_design_research_pipeline as pipeline
-
+    monkeypatch.setattr(semantic, "generate_fixed_template_value", lambda *a, **k: {
+        "supports": True, "excerpt": "Travel to space.", "reason": "Fixture travel support"})
     monkeypatch.setattr(research, "validate_planning_state", lambda *a, **k: None)
     monkeypatch.setattr(research, "emit_root_cause", lambda *a, **k: None)
     monkeypatch.setattr(research, "forced_rag_bundle", lambda *a: {})

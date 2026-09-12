@@ -11,16 +11,15 @@ shape, and detailed planning never depends on free-form section boundaries or
 reasoning-label parsing.
 """
 
+import json
 from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextvars import copy_context
 from copy import deepcopy
-import json
 from typing import Any
 
 from .model_concurrency import router_native_model_parallelism
 from .planner_operation import planner_operation
-from .root_cause_trace import emit_root_cause
 from .planning_detail_contract import validate_detailed_plan_grounding
 from .planning_detail_template import (
     WORKSHEET_SECTIONS,
@@ -28,14 +27,14 @@ from .planning_detail_template import (
     validate_worksheet,
     worksheet_section_prompt,
 )
+from .planning_state_contract import validate_planning_state
+from .root_cause_trace import emit_root_cause
 from .worksheet_atomic_chunker import (
     merge_worksheet_section_chunks,
     pack_section_concerns,
     worksheet_chunk_prompt,
     worksheet_chunk_schema,
 )
-from .planning_state_contract import validate_planning_state
-
 
 SECTION_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "behavior_contract": (),
@@ -90,6 +89,34 @@ def _implementation_evidence(
             and str(item.get("research_ref") or "") in research_ids
             and item.get("sufficient") is True
         ):
+            trace = item.get("candidate_trace")
+            if isinstance(trace, Mapping):
+                from .planning_candidate_evidence import requirement_for
+                from .planning_semantic_research import validate_semantic_review
+                review = validate_semantic_review(
+                    requirement_for(state, {"requirement_ref": requirement_ref}),
+                    state.get("task_candidate_pool") or {}, trace.get("semantic_review") or {},
+                )
+                if not review["complete"]:
+                    raise ValueError(f"DETAILED_PLAN_EVIDENCE: stale or incomplete semantic review for {requirement_ref}")
+                proofs = review["accepted_proofs"]
+                rows.append({
+                    "research_ref": _text(item.get("research_ref")),
+                    "claims": [{"claim": proof["excerpt"], "relevance": proof["reason"],
+                                "obligation": proof["obligation"], "evidence_refs": [proof["source_id"]],
+                                "content_sha256": proof["content_sha256"]} for proof in proofs],
+                    "evidence_refs": list(dict.fromkeys(proof["source_id"] for proof in proofs)),
+                    "sufficient": True, "source": "host_verified_semantic_research",
+                    "pool_sha256": review["pool_sha256"],
+                    "mod_discovery": {"status": "evidence_selected", "complete": True,
+                                      "candidates": [{"source_id": proof["source_id"],
+                                                      "name": proof["source_title"],
+                                                      "url": proof["source_url"],
+                                                      "compatibility": "not_verified",
+                                                      "reuse_authority": "verification_required"}
+                                                     for proof in proofs]},
+                })
+                continue
             rows.append(
                 {
                     "research_ref": _text(item.get("research_ref")),
