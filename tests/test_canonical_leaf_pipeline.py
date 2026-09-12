@@ -98,12 +98,36 @@ def test_missing_canonical_leaf_causes_audit_failure():
         assert "minecraft/item/registry" in str(exc_info.value)
 
 
-def test_canonical_pipeline_lowering_item_and_block():
-    """Metadata discovery must not authorize untested production execution."""
+def test_canonical_pipeline_lowering_does_not_claim_execution_admission():
+    """Registered leaves may lower to jobs, but non-admitted leaves still fail at execution admission."""
     ctx = host_target("auto").version_context
-    with pytest.raises(VersionContextError, match="UNSUPPORTED_LEAF"):
-        expand_facts_to_jobs([PromptFact(fact_id="f1", fact_type=FactType.ITEM_EXISTS, subject="ruby")],
-                            mod_id="gemmod", package_name="com.gemmod", version_context=ctx)
+    jobs = expand_facts_to_jobs(
+        [PromptFact(fact_id="f1", fact_type=FactType.ITEM_EXISTS, subject="ruby")],
+        mod_id="gemmod",
+        package_name="com.gemmod",
+        version_context=ctx,
+    )
+
+    expected_leaves = {
+        "minecraft/item/registry",
+        "minecraft/item/model",
+        "minecraft/item/language",
+        "minecraft/item/integration",
+    }
+    lowered_leaves = {job.canonical_leaf for job in jobs}
+    assert lowered_leaves == expected_leaves
+    assert all(job.context_id == ctx.context_id for job in jobs)
+    assert all(job.implementation_id for job in jobs)
+
+    non_admitted = [
+        leaf
+        for leaf in expected_leaves
+        if ctx.facts["leaf_bindings"][leaf]["state"] != "admitted"
+    ]
+    assert non_admitted, "fixture must exercise pre-admission candidate lowering"
+    for leaf in non_admitted:
+        with pytest.raises(VersionContextError, match="UNSUPPORTED_LEAF"):
+            ctx.require_leaf_binding(leaf)
 
 
 def test_unsupported_leaf_rejected_by_version_context():
