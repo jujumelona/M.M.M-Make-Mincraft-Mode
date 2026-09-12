@@ -1,0 +1,93 @@
+name: MMM retrieval liveness retry
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/mmm-retrieval-liveness-retry.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mmm-retrieval-liveness-fix-main
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Sync latest main
+        run: git pull --ff-only origin main
+      - name: Reuse tested patch program
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path('.github/workflows/mmm-retrieval-liveness-fix.yml').read_text(encoding='utf-8')
+          marker = "          python - <<'PY'\n"
+          start = workflow.index(marker) + len(marker)
+          end = workflow.index("\n          PY", start)
+          program = textwrap.dedent(workflow[start:end])
+          exec(compile(program, '<retrieval-liveness-patch>', 'exec'), {'__name__': '__main__'})
+          PY
+      - name: Verify focused regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            minecraft_mod_ai/agentic_research_fusion.py \
+            minecraft_mod_ai/reuse_discovery.py \
+            minecraft_mod_ai/minecraft_mcp_evidence_contract.py \
+            tests/test_retrieval_liveness_deadline_contract.py
+          python -m pip install --prefer-binary -e '.[dev]'
+          python -m pytest -q \
+            tests/test_retrieval_liveness_deadline_contract.py \
+            tests/test_remaining_bottleneck_contract.py \
+            tests/test_planning_deadline_hardening.py
+          ruff check --select E,F,I --fix \
+            minecraft_mod_ai/agentic_research_fusion.py \
+            minecraft_mod_ai/reuse_discovery.py \
+            minecraft_mod_ai/minecraft_mcp_evidence_contract.py \
+            tests/test_retrieval_liveness_deadline_contract.py
+          ruff check --select E,F,I \
+            minecraft_mod_ai/agentic_research_fusion.py \
+            minecraft_mod_ai/reuse_discovery.py \
+            minecraft_mod_ai/minecraft_mcp_evidence_contract.py \
+            tests/test_retrieval_liveness_deadline_contract.py
+      - name: Commit verified fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -f \
+            .github/workflows/mmm-retrieval-liveness-fix.yml \
+            .github/workflows/mmm-retrieval-liveness-retry.yml
+          git add \
+            minecraft_mod_ai/agentic_research_fusion.py \
+            minecraft_mod_ai/reuse_discovery.py \
+            minecraft_mod_ai/minecraft_mcp_evidence_contract.py \
+            tests/test_retrieval_liveness_deadline_contract.py
+          git commit -m 'fix: bound retrieval provider fanouts'
+          for attempt in 1 2 3 4; do
+            if git pull --rebase origin main && git push origin HEAD:main; then
+              exit 0
+            fi
+            git rebase --abort >/dev/null 2>&1 || true
+            git fetch origin main
+            sleep $((attempt * 2))
+          done
+          echo 'failed to push retrieval liveness fixes after retries' >&2
+          exit 1
