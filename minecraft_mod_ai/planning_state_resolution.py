@@ -28,7 +28,10 @@ def _text(value: Any) -> str:
 
 
 def _strings(value: Any) -> list[str]:
-    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+    if isinstance(value, str):
+        text = _text(value)
+        return [text] if text else []
+    if not isinstance(value, Sequence) or isinstance(value, (bytes, bytearray)):
         return []
     return list(dict.fromkeys(text for item in value if (text := _text(item))))
 
@@ -347,8 +350,10 @@ def compile_researched_requirements(
         "receipts, provenance keys, files, classes, registrations, or invented APIs. "
         "Use a short descriptive semantic capability label for bookkeeping only; "
         "it must not choose Minecraft artifacts or architecture. Missing balance values or detailed "
-        "mechanics are later design work. Return behavior statements and observable "
-        "acceptance conditions only."
+        "mechanics are later design work. Return at most four requirements. If the task contains "
+        "more behaviors, consolidate tightly related user-stated behaviors into the same requirement "
+        "and concise observable acceptance check rather than dropping them. Return behavior statements "
+        "and observable acceptance conditions only."
     )
     catalog = {}
     overhead_bytes = len(system_content.encode("utf-8")) + len(
