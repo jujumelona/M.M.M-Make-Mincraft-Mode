@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from minecraft_mod_ai.model_output_atomicity_contract import assert_atomic_model_schema
+from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
 from minecraft_mod_ai.planning_detail_template import WORKSHEET_SECTIONS, validate_worksheet_section
 from minecraft_mod_ai.worksheet_atomic_chunker import (
     merge_worksheet_section_chunks,
@@ -16,16 +17,25 @@ from worksheet_fixtures import row
 @pytest.mark.parametrize("section", WORKSHEET_SECTIONS)
 def test_all_packed_chunks_satisfy_atomicity_contract(section: str):
     chunks = pack_section_concerns(section)
-    assert len(chunks) == 1
+    assert chunks
+
+    projected_fields: dict[str, set[str]] = {}
     for index, concern_group in enumerate(chunks):
         is_first = index == 0
         schema = worksheet_chunk_schema(section, concern_group, include_evidence=is_first)
-        # Must pass atomicity assertion without raising ModelConfigurationError
+        # Every model-facing field page must satisfy the strict atomicity boundary.
         assert_atomic_model_schema(schema, surface=f"{section} chunk {index}")
         prompt = worksheet_chunk_prompt(section, index + 1, len(chunks), concern_group, include_evidence=is_first)
         assert f"Section: {section}" in prompt
-        for c in concern_group:
-            assert c in prompt
+        projection = getattr(concern_group, "field_projection", {})
+        for concern in concern_group:
+            assert concern in prompt
+            projected_fields.setdefault(concern, set()).update(projection.get(concern, ()))
+
+    assert projected_fields == {
+        concern: set(columns.split())
+        for concern, columns in DETAIL_RECORDS[section].items()
+    }
 
 
 @pytest.mark.parametrize("section", WORKSHEET_SECTIONS)
@@ -42,8 +52,8 @@ def test_deterministic_merge_reconstructs_canonical_section(section: str):
                 if item["concern"] in concern_group
             ]
         }
-        for c in concern_group:
-            payload[c] = canonical["specification"][c]
+        for concern in concern_group:
+            payload[concern] = canonical["specification"][concern]
         if index == 0:
             payload["constraint_evidence_refs"] = canonical["constraint_evidence_refs"]
         chunk_payloads.append(payload)
@@ -54,10 +64,16 @@ def test_deterministic_merge_reconstructs_canonical_section(section: str):
     assert validate_worksheet_section(merged, allowed_refs, section) == canonical
 
 
-def test_merge_rejects_missing_concerns():
-    chunks = [{"actors": [{"name": "P", "role": "User", "authority": "client"}], "inapplicable_concerns": []}]
-    with pytest.raises(ValueError, match="missing concerns in merged"):
-        merge_worksheet_section_chunks("behavior_contract", chunks, set())
+def test_merge_rejects_missing_chunk_page():
+    expected_chunks = pack_section_concerns("behavior_contract")
+    assert len(expected_chunks) > 1
+    supplied_chunks = [{} for _ in expected_chunks[:-1]]
+
+    with pytest.raises(
+        ValueError,
+        match=rf"expected {len(expected_chunks)} chunks, got {len(supplied_chunks)}",
+    ):
+        merge_worksheet_section_chunks("behavior_contract", supplied_chunks, set())
 
 
 def test_merge_rejects_undeclared_fields():
@@ -66,8 +82,8 @@ def test_merge_rejects_undeclared_fields():
     chunk_payloads = []
     for index, concern_group in enumerate(chunks):
         payload: dict = {"inapplicable_concerns": []}
-        for c in concern_group:
-            payload[c] = canonical["specification"][c]
+        for concern in concern_group:
+            payload[concern] = canonical["specification"][concern]
         if index == 0:
             payload["extra_hallucinated_field"] = "bad"
         chunk_payloads.append(payload)
@@ -82,31 +98,33 @@ def test_merge_auto_reconciles_empty_concerns_without_inapplicable_reasons():
     chunk_payloads = []
     for index, concern_group in enumerate(chunks):
         payload: dict = {"inapplicable_concerns": []}
-        for c in concern_group:
-            if c in ("preconditions", "boundaries"):
-                # Small model left these empty and forgot to put them in inapplicable_concerns
-                payload[c] = []
-            elif c == "rejection_postconditions":
-                # Small model put a dummy placeholder record
-                payload[c] = [{"condition": "", "preserved_state": "", "observation": ""}]
+        for concern in concern_group:
+            if concern in ("preconditions", "boundaries"):
+                # Small model left these empty and forgot to put them in inapplicable_concerns.
+                payload[concern] = []
+            elif concern == "rejection_postconditions":
+                # Small model put a dummy placeholder record.
+                payload[concern] = [{"condition": "", "preserved_state": "", "observation": ""}]
             else:
-                payload[c] = canonical["specification"][c]
+                payload[concern] = canonical["specification"][concern]
         if index == 0:
-            # Model hallucinated an evidence ref
+            # Model hallucinated an evidence ref.
             payload["constraint_evidence_refs"] = ["allowed_ref_1", "hallucinated_ref"]
         chunk_payloads.append(payload)
 
     allowed_refs = {"allowed_ref_1"}
     merged = merge_worksheet_section_chunks("behavior_contract", chunk_payloads, allowed_refs)
 
-    # Inapplicable concerns are automatically reconciled for empty concerns
-    reconciled_concerns = {item["concern"] for item in merged["specification"]["inapplicable_concerns"]}
+    # Inapplicable concerns are automatically reconciled for empty concerns.
+    reconciled_concerns = {
+        item["concern"] for item in merged["specification"]["inapplicable_concerns"]
+    }
     assert "preconditions" in reconciled_concerns
     assert "boundaries" in reconciled_concerns
     assert "rejection_postconditions" in reconciled_concerns
 
-    # Hallucinated evidence ref is filtered out to keep constraint_evidence_refs strictly bounded
+    # Hallucinated evidence refs are filtered out to keep refs strictly host-bounded.
     assert merged["constraint_evidence_refs"] == ["allowed_ref_1"]
 
-    # Merged section passes canonical validation without ValueError
+    # Merged section passes canonical validation without ValueError.
     assert validate_worksheet_section(merged, allowed_refs, "behavior_contract") == merged
