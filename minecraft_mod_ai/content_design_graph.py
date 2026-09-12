@@ -7,7 +7,46 @@ import re
 from .atomic_slot_executor import SlotFillError
 from .complete_spec import AssetRequest, ProductionModule
 from .implementation_fact import FactProvenance, FactType, ImplementationFact
+from .parallel_model_tasks import deterministic_model_map, serialized_callback
 from .task_template_runner import run_record_template
+
+
+def _resolve_content_capabilities(
+    router,
+    entity_contexts,
+    *,
+    progress,
+    checkpoint,
+):
+    """Resolve graph-stable entity capabilities concurrently in authored entity order."""
+    jobs = tuple(entity_contexts.items())
+    safe_checkpoint = serialized_callback(checkpoint)
+
+    def run_one(job):
+        eid, context = job
+        rows = run_record_template(
+            router,
+            "design/content_capability",
+            context=context,
+            allowed_refs=(),
+            progress=progress,
+            checkpoint=safe_checkpoint,
+        )["records"]
+        if len(rows) != 1:
+            raise SlotFillError(
+                f"CONTENT_CAPABILITY_UNRESOLVED: {eid} needs exactly one base capability"
+            )
+        return eid, rows[0]
+
+    return dict(
+        deterministic_model_map(
+            router,
+            jobs,
+            run_one,
+            role="planner",
+            thread_name_prefix="content-capability",
+        )
+    )
 
 
 def compile_content_graph(
@@ -159,12 +198,9 @@ def compile_content_graph(
                 {**decision, "parent_requirement": context["requirement_id"]}
             )
 
-    facts, modules, assets = [], [], []
-    mod_id = _sanitize_stem(prompt) + "_mod"
-    capabilities = {}
-    properties_by_id = {}
+    entity_contexts = {}
     for eid, node in entities.items():
-        context = {
+        entity_contexts[eid] = {
             "entity": node,
             "relations": [
                 edge
@@ -182,44 +218,56 @@ def compile_content_graph(
                 if fact["parent_requirement"] in node["requirement_refs"]
             ],
         }
-        capability = records("design/content_capability", context)
-        if len(capability) != 1:
-            raise SlotFillError(
-                f"CONTENT_CAPABILITY_UNRESOLVED: {eid} needs exactly one base capability"
-            )
+
+    capability_records = _resolve_content_capabilities(
+        router,
+        entity_contexts,
+        progress=progress,
+        checkpoint=save,
+    )
+    supported_capabilities = {
+        FactType.ITEM_EXISTS,
+        FactType.BLOCK_EXISTS,
+        FactType.ENTITY_EXISTS,
+        FactType.GUI_EXISTS,
+        FactType.NETWORK_PACKET,
+        FactType.BLOCK_ENTITY_EXISTS,
+        FactType.DATA_COMPONENT,
+        FactType.WORLDGEN_FEATURE,
+        FactType.DIMENSION,
+        FactType.BIOME,
+        FactType.STATUS_EFFECT,
+        FactType.SOUND_EVENT,
+        FactType.PARTICLE_TYPE,
+        FactType.ENTITY_LOOT,
+        FactType.ADVANCEMENT,
+        FactType.EQUIPMENT_ARMOR,
+        FactType.CUSTOM_ITEM_BEHAVIOR,
+        FactType.CUSTOM_BLOCK_BEHAVIOR,
+        FactType.CRAFTING_RECIPE,
+        FactType.SMELTING_RECIPE,
+        FactType.REGISTRY_TAG,
+    }
+    capabilities = {}
+    for eid, capability in capability_records.items():
         try:
-            fact_type = FactType(capability[0]["fact_type"])
-        except ValueError as exc:
+            fact_type = FactType(capability["fact_type"])
+        except (KeyError, ValueError) as exc:
             raise SlotFillError(
-                f"CONTENT_CAPABILITY_UNSUPPORTED: {eid}: {capability}"
+                f"CONTENT_CAPABILITY_UNSUPPORTED: {eid}: {[capability]}"
             ) from exc
-        if fact_type not in {
-            FactType.ITEM_EXISTS,
-            FactType.BLOCK_EXISTS,
-            FactType.ENTITY_EXISTS,
-            FactType.GUI_EXISTS,
-            FactType.NETWORK_PACKET,
-            FactType.BLOCK_ENTITY_EXISTS,
-            FactType.DATA_COMPONENT,
-            FactType.WORLDGEN_FEATURE,
-            FactType.DIMENSION,
-            FactType.BIOME,
-            FactType.STATUS_EFFECT,
-            FactType.SOUND_EVENT,
-            FactType.PARTICLE_TYPE,
-            FactType.ENTITY_LOOT,
-            FactType.ADVANCEMENT,
-            FactType.EQUIPMENT_ARMOR,
-            FactType.CUSTOM_ITEM_BEHAVIOR,
-            FactType.CUSTOM_BLOCK_BEHAVIOR,
-            FactType.CRAFTING_RECIPE,
-            FactType.SMELTING_RECIPE,
-            FactType.REGISTRY_TAG,
-        }:
+        if fact_type not in supported_capabilities:
             raise SlotFillError(
                 f"CONTENT_CAPABILITY_UNSUPPORTED: {eid}: {fact_type.value}"
             )
         capabilities[eid] = fact_type
+
+    facts, modules, assets = [], [], []
+    mod_id = _sanitize_stem(prompt) + "_mod"
+    properties_by_id = {}
+    for eid, node in entities.items():
+        context = entity_contexts[eid]
+        fact_type = capabilities[eid]
         props = {}
         visual_properties = {
             "shape",
