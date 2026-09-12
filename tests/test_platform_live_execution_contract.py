@@ -1,7 +1,5 @@
 from types import SimpleNamespace
 
-import pytest
-
 from minecraft_mod_ai import platform_live_execution_contract as contract
 
 
