@@ -16,6 +16,7 @@ import json
 import os
 import re
 from collections import OrderedDict, deque
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -121,6 +122,17 @@ def _blob_cache_byte_budget() -> int:
         maximum=2 * 1024 * 1024 * 1024,
     )
     return max(configured, _single_blob_byte_budget())
+
+
+def _materialization_download_workers() -> int:
+    """Bound concurrent immutable donor downloads by an explicit I/O resource budget."""
+
+    return _env_int(
+        "MMM_SOURCE_TRANSPLANT_MATERIALIZE_DOWNLOAD_WORKERS",
+        8,
+        minimum=1,
+        maximum=32,
+    )
 
 
 _SNAPSHOT_LOCK = Lock()
@@ -729,6 +741,15 @@ def materialize_source_slices(
 
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     client = _github_client(token)
+    download_workers = _materialization_download_workers()
+    executor = (
+        ThreadPoolExecutor(
+            max_workers=download_workers,
+            thread_name_prefix="source-transplant-download",
+        )
+        if download_workers > 1
+        else None
+    )
     receipts: list[dict[str, Any]] = []
     try:
         for decision, parsed_donor in validated:
@@ -739,15 +760,27 @@ def materialize_source_slices(
             donor_key = _donor_materialization_key(decision, donor, files)
             donor_root = target_root / donor_key
             donor_root.mkdir(parents=True, exist_ok=True)
-            written: list[dict[str, Any]] = []
+
+            prepared: list[tuple[Mapping[str, Any], str, str, str, int]] = []
             for item in files:
                 if not isinstance(item, Mapping):
                     raise SourceTransplantError("Malformed donor file manifest.")
                 path = str(item.get("path") or "").replace("\\", "/")
                 blob_sha = str(item.get("blob_sha") or "")
                 expected = str(item.get("sha256") or "")
+                expected_size = item.get("size_bytes")
                 if not path or path.startswith("/") or ".." in path.split("/"):
                     raise SourceTransplantError("Unsafe donor source path.")
+                if type(expected_size) is not int:
+                    raise SourceTransplantError(
+                        f"Pinned donor size is invalid for {repository}@{commit_sha}:{path}."
+                    )
+                prepared.append((item, path, blob_sha, expected, expected_size))
+
+            def fetch_and_verify(
+                spec: tuple[Mapping[str, Any], str, str, str, int],
+            ) -> tuple[Mapping[str, Any], str, str, str, bytes]:
+                item, path, blob_sha, expected, expected_size = spec
                 raw = _fetch_blob_bytes(client, repository, blob_sha)
                 if not raw:
                     raise SourceTransplantError(
@@ -758,11 +791,21 @@ def materialize_source_slices(
                     raise SourceTransplantError(
                         f"Pinned donor hash mismatch for {repository}@{commit_sha}:{path}."
                     )
-                expected_size = item.get("size_bytes")
-                if type(expected_size) is not int or len(raw) != expected_size:
+                if len(raw) != expected_size:
                     raise SourceTransplantError(
                         f"Pinned donor size mismatch for {repository}@{commit_sha}:{path}."
                     )
+                return item, path, blob_sha, actual, raw
+
+            # Fetch and verify the whole immutable slice before the first write.
+            # executor.map preserves declared manifest order even when downloads finish out of order.
+            if executor is None:
+                fetched = [fetch_and_verify(spec) for spec in prepared]
+            else:
+                fetched = list(executor.map(fetch_and_verify, prepared))
+
+            written: list[dict[str, Any]] = []
+            for item, path, blob_sha, actual, raw in fetched:
                 destination = (donor_root / path).resolve()
                 destination.relative_to(donor_root.resolve())
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -792,6 +835,8 @@ def materialize_source_slices(
             )
             receipts.append(manifest)
     finally:
+        if executor is not None:
+            executor.shutdown(wait=True, cancel_futures=True)
         client.close()
     return {
         "schema_version": "mmm/reuse-materialization-v1",
