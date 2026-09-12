@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .conversation import merge_design_brief
+from .model_concurrency import planning_work_unit_timeout_seconds
 from .pipeline import PipelineResult
 from .planner import OpenAICompatiblePlanner, Planner
 from .routed_planner import RoutedPlanner
@@ -188,7 +189,12 @@ def _verified_existing_input_sha256(
     future = getattr(owner, "_mmm_existing_project_inventory_future", None)
     if isinstance(future, Future) and (await_inventory or future.done()):
         try:
-            inventory = future.result()
+            inventory = future.result(timeout=planning_work_unit_timeout_seconds())
+        except TimeoutError as exc:
+            future.cancel()
+            raise SpecValidationError(
+                "Existing-project inventory exceeded the planning work-unit deadline."
+            ) from exc
         except BaseException as exc:
             raise SpecValidationError(
                 f"Existing-project inventory could not be bound to the observed ZIP: {exc}"

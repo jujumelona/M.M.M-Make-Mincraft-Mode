@@ -50,6 +50,7 @@ from .local_ai_sidecar_generator import (
     INTEGRATION_TYPE as LOCAL_AI_SIDECAR_INTEGRATION_TYPE,
 )
 from .local_ai_sidecar_generator import generate_local_ai_sidecar
+from .model_concurrency import run_with_model_execution_deadline
 from .model_router import ModelRouter
 from .production_contract import (
     evaluate_quality_contract,
@@ -412,11 +413,20 @@ class CompleteProductionOrchestrator:
 
         jdt_receipt = None
         if options.run_jdt and (not options.source_only):
-            with ThreadPoolExecutor(max_workers=2, thread_name_prefix='mmm-validate') as pool:
-                source_future = pool.submit(validate_source)
-                jdt_future = pool.submit(validate_jdt)
-                source_report = source_future.result()
-                jdt_receipt = jdt_future.result()
+            from .deadline_executor import iter_completed_with_deadlines
+
+            validation_jobs = (("source", validate_source), ("jdt", validate_jdt))
+            validation_results: dict[str, dict[str, Any]] = {}
+            for job, result in iter_completed_with_deadlines(
+                validation_jobs,
+                lambda item: item[1](),
+                max_workers=2,
+                stage="complete_validation",
+                sort_key=lambda item: item[0],
+            ):
+                validation_results[job[0]] = result
+            source_report = validation_results["source"]
+            jdt_receipt = validation_results["jdt"]
         else:
             source_report = validate_source()
 
@@ -822,7 +832,7 @@ class CompleteProductionOrchestrator:
         blockbench_receipts: list[dict[str, Any]] = []
         unresolved: list[str] = []
         asset_shards: list[dict[str, Any]] = []
-        review_futures: list[tuple[str, Future[dict[str, Any]]]] = []
+        review_futures: list[tuple[str, Future[dict[str, Any]], float]] = []
         review_futures_lock = threading.Lock()
         runtime_init_lock = threading.RLock()
 
@@ -1040,19 +1050,24 @@ class CompleteProductionOrchestrator:
                         if entity_receipt is None:
                             raise CompleteProductionError(f'Entity generation node omitted its receipt: {module.module_id}')
                         if options.run_blockbench and (not options.source_only):
-                            review_future = review_pool.submit(
-                                run_named_checkpoint,
+                            review_deadline = time.monotonic() + lease_seconds
+                            review_action = lambda receipt=entity_receipt, module_id=module.module_id: run_named_checkpoint(
                                 ledger,
-                                f'blockbench-review-{module.module_id}',
+                                f'blockbench-review-{module_id}',
                                 stage='validate:blockbench',
-                                input_value={'graph_hash': work_plan.graph_hash, 'entity_receipt': entity_receipt},
-                                action=lambda receipt=entity_receipt: self._blockbench_review(receipt, run_root),
+                                input_value={'graph_hash': work_plan.graph_hash, 'entity_receipt': receipt},
+                                action=lambda: self._blockbench_review(receipt, run_root),
                                 encode=lambda value: value,
                                 decode=lambda cached: cached,
                                 validate_cached=lambda cached: Path(str(cached.get('preview', ''))).is_file(),
                             )
+                            review_future = review_pool.submit(
+                                run_with_model_execution_deadline,
+                                review_deadline,
+                                review_action,
+                            )
                             with review_futures_lock:
-                                review_futures.append((module.module_id, review_future))
+                                review_futures.append((module.module_id, review_future, review_deadline))
                         elif options.run_blockbench:
                             unresolved.append(f'blockbench:{module.module_id}:not-run-in-source-only-mode')
             elif kind == 'asset-shard':
@@ -1075,27 +1090,30 @@ class CompleteProductionOrchestrator:
             review_workers = max(1, min(4, int(capacities['cpu_io'])))
         review_pool = ThreadPoolExecutor(max_workers=max(1, review_workers), thread_name_prefix='blockbench_review')
         node_futures: dict[str, Future[Any]] = {}
+        node_deadlines: dict[str, float] = {}
         idle_wait = threading.Event()
         lease_seconds = 900
         heartbeat_seconds = 60.0
 
-        def dispatch_node(node: WorkNode) -> Future[Any]:
+        def dispatch_node(node: WorkNode, *, deadline_monotonic: float) -> Future[Any]:
             resource_class = node.resource_class or str(node.payload.get('resource_class', 'cpu_io'))
+            args = (run_with_model_execution_deadline, deadline_monotonic, process_node, node)
             if resource_class == 'llm':
-                return llm_pool.submit(process_node, node)
+                return llm_pool.submit(*args)
             if resource_class == 'image_gpu':
-                return image_pool.submit(process_node, node)
+                return image_pool.submit(*args)
             if resource_class == 'commit':
-                return commit_pool.submit(process_node, node)
-            return cpu_pool.submit(process_node, node)
+                return commit_pool.submit(*args)
+            return cpu_pool.submit(*args)
         try:
             while True:
                 ledger.raise_if_cancelled()
                 done_ids = [node_id for node_id, future in node_futures.items() if future.done()]
                 for node_id in done_ids:
                     future = node_futures.pop(node_id)
+                    node_deadlines.pop(node_id, None)
                     try:
-                        future.result()
+                        future.result(timeout=0)
                     except BaseException as exc:
                         print(
                             f"\n[ORCHESTRATOR ERROR] Node {node_id} failed with "
@@ -1105,6 +1123,24 @@ class CompleteProductionOrchestrator:
                             flush=True,
                         )
                         raise CompleteProductionError(f'Pipeline generation node failed: {node_id}: {type(exc).__name__}: {exc}') from exc
+
+                now_monotonic = time.monotonic()
+                expired_ids = [
+                    node_id
+                    for node_id, future in node_futures.items()
+                    if not future.done() and now_monotonic >= node_deadlines[node_id]
+                ]
+                if expired_ids:
+                    for expired_id in expired_ids:
+                        node_futures[expired_id].cancel()
+                        try:
+                            if str(ledger.task(expired_id)['state']) == 'running':
+                                ledger.fail(expired_id, 'generation node lease deadline exceeded')
+                        except WorkGraphError:
+                            pass
+                    raise CompleteProductionError(
+                        f'Pipeline generation lease deadline exceeded: {sorted(expired_ids)}'
+                    )
                 while True:
                     claimed = ledger.claim_ready(worker_id='mmm-orchestrator', stages=generation_stages, lease_seconds=lease_seconds)
                     if claimed is None:
@@ -1115,9 +1151,22 @@ class CompleteProductionOrchestrator:
                         raise CompleteProductionError(f'Ledger claimed an unknown generation node: {node_id}')
                     if node_id in node_futures:
                         raise CompleteProductionError(f'Generation node was claimed twice: {node_id}')
-                    node_futures[node_id] = dispatch_node(node)
+                    lease_until = claimed.get('lease_until')
+                    remaining_lease = float(lease_seconds)
+                    if lease_until is not None:
+                        remaining_lease = max(0.05, float(lease_until) - time.time())
+                    deadline_monotonic = time.monotonic() + remaining_lease
+                    node_deadlines[node_id] = deadline_monotonic
+                    node_futures[node_id] = dispatch_node(
+                        node, deadline_monotonic=deadline_monotonic
+                    )
                 if node_futures:
-                    wait(tuple(node_futures.values()), timeout=heartbeat_seconds, return_when=FIRST_COMPLETED)
+                    nearest_deadline = min(node_deadlines.values())
+                    wait_timeout = min(
+                        heartbeat_seconds,
+                        max(0.0, nearest_deadline - time.monotonic()),
+                    )
+                    wait(tuple(node_futures.values()), timeout=wait_timeout, return_when=FIRST_COMPLETED)
                     continue
                 task_rows = {node.node_id: ledger.task(node.node_id) for node in generation_nodes}
                 states = {node_id: str(task['state']) for node_id, task in task_rows.items()}
@@ -1138,14 +1187,33 @@ class CompleteProductionOrchestrator:
                 if pending_ids:
                     raise CompleteProductionError(f'WorkGraph DAG deadlock: pending nodes remain but no ready nodes are available: {pending_ids}')
                 break
-            review_results = [(module_id, future.result()) for module_id, future in tuple(review_futures)]
+            review_results: list[tuple[str, dict[str, Any]]] = []
+            for module_id, future, deadline in tuple(review_futures):
+                remaining = max(0.0, deadline - time.monotonic())
+                if remaining <= 0.0 and not future.done():
+                    future.cancel()
+                    raise CompleteProductionError(
+                        f'Blockbench review deadline exceeded: {module_id}'
+                    )
+                try:
+                    receipt = future.result(timeout=0 if future.done() else remaining)
+                except TimeoutError as exc:
+                    future.cancel()
+                    raise CompleteProductionError(
+                        f'Blockbench review deadline exceeded: {module_id}'
+                    ) from exc
+                review_results.append((module_id, receipt))
             blockbench_receipts.extend(receipt for _, receipt in sorted(review_results, key=lambda item: item[0]))
         finally:
-            cpu_pool.shutdown(wait=True, cancel_futures=True)
-            llm_pool.shutdown(wait=True, cancel_futures=True)
-            image_pool.shutdown(wait=True, cancel_futures=True)
-            commit_pool.shutdown(wait=True, cancel_futures=True)
-            review_pool.shutdown(wait=True, cancel_futures=True)
+            for future in node_futures.values():
+                future.cancel()
+            for _, future, _ in review_futures:
+                future.cancel()
+            cpu_pool.shutdown(wait=False, cancel_futures=True)
+            llm_pool.shutdown(wait=False, cancel_futures=True)
+            image_pool.shutdown(wait=False, cancel_futures=True)
+            commit_pool.shutdown(wait=False, cancel_futures=True)
+            review_pool.shutdown(wait=False, cancel_futures=True)
         asset_receipt = {'schema_version': 'mmm/complete-assets-sharded-v1', 'status': 'GENERATED', 'shard_count': len(asset_shards), 'asset_count': sum(len(item.get('assets', [])) for item in asset_shards), 'shards': asset_shards} if asset_shards else None
         return {'module_receipts': module_receipts, 'blockbench_receipts': blockbench_receipts, 'asset_receipt': asset_receipt, 'unresolved': unresolved, 'router': router}
 
@@ -1388,7 +1456,7 @@ class CompleteProductionOrchestrator:
                 if value.get('schema_version') == 'mmm/research-ledger-write-receipt-v1':
                     research_outputs.append(value)
                 for key, nested in value.items():
-                    if key in {'files', 'generated_files'} and isinstance(nested, list):
+                    if key in {'files', 'generated_files', 'touched_paths', 'written_files'} and isinstance(nested, (list, tuple)):
                         raw_paths.extend(str(item) for item in nested if isinstance(item, str))
                     elif isinstance(nested, (dict, list)):
                         collect(nested)

@@ -3,12 +3,12 @@ from __future__ import annotations
 import os
 import threading
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from inspect import getattr_static
 from pathlib import Path
 from typing import Any
 
+from .deadline_executor import iter_completed_with_deadlines
 from .model_adapters import (
     EmbeddingAdapter,
     GenerationRequest,
@@ -644,11 +644,18 @@ def _execute_tool_waves(
         if workers <= 1:
             completed.extend(execute(call) for call in batch)
             return
-        with ThreadPoolExecutor(
+        positions = {id(call): index for index, call in enumerate(batch)}
+        ordered: list[tuple[Any, Mapping[str, Any]] | None] = [None] * len(batch)
+        for call, result in iter_completed_with_deadlines(
+            batch,
+            execute,
             max_workers=workers,
-            thread_name_prefix="mmm_agent_read_wave",
-        ) as executor:
-            completed.extend(executor.map(execute, batch))
+            stage="agent_read_wave",
+        ):
+            ordered[positions[id(call)]] = result
+        if any(item is None for item in ordered):
+            raise ModelConfigurationError("Parallel read wave lost a completed tool result.")
+        completed.extend(item for item in ordered if item is not None)
 
     for call in calls:
         if _parallel_read_call(call):
