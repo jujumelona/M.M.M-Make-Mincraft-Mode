@@ -579,40 +579,33 @@ ModelRouter.generate_text._mmm_parallel_router_contract_version = 3  # type: ign
 ModelRouter._generate_with_tools._mmm_progress_aware_tool_loop_owner = True  # type: ignore[attr-defined]
 
 
-_DEFAULT_AGENT_TOOL_ROUNDS = 128
-_MIN_AGENT_TOOL_ROUNDS = 16
-_MAX_AGENT_TOOL_ROUNDS = 512
+def _agent_tool_round_limit() -> int | float:
+    """Return only an explicit operator safety cap; default execution is unbounded.
 
+    Semantic completion is owned by verified success or no-progress convergence in the
+    progress-aware loop. ``inf`` preserves the loop's existing numeric comparison while
+    removing the old hidden 128-round completion rule.
+    """
 
-def _default_agent_tool_rounds() -> int:
-    raw = os.environ.get("MMM_AGENT_DEFAULT_TOOL_ROUNDS", "").strip()
-    if not raw:
-        return _DEFAULT_AGENT_TOOL_ROUNDS
-    try:
-        value = int(raw)
-    except ValueError:
-        return _DEFAULT_AGENT_TOOL_ROUNDS
-    return max(_MIN_AGENT_TOOL_ROUNDS, min(_MAX_AGENT_TOOL_ROUNDS, value))
-
-
-def _agent_tool_round_limit() -> int:
     raw = os.environ.get("MMM_AGENT_TOOL_ROUNDS", "").strip()
     if not raw:
-        return _default_agent_tool_rounds()
+        return float("inf")
     try:
         value = int(raw)
     except ValueError:
-        return _default_agent_tool_rounds()
-    return value if value > 0 else _default_agent_tool_rounds()
+        return float("inf")
+    return value if value > 0 else float("inf")
 
 
 def _parallel_read_workers() -> int:
-    raw = os.environ.get("MMM_AGENT_PARALLEL_READS", "4").strip()
+    raw = os.environ.get("MMM_AGENT_PARALLEL_READS", "").strip()
+    if not raw:
+        return max(1, min(32, os.cpu_count() or 4))
     try:
         value = int(raw)
     except ValueError:
-        value = 4
-    return max(1, min(value, 16))
+        return max(1, min(32, os.cpu_count() or 4))
+    return max(1, value)
 
 
 def _parallel_read_call(call: Any) -> bool:
@@ -644,15 +637,23 @@ def _execute_tool_waves(
         if workers <= 1:
             completed.extend(execute(call) for call in batch)
             return
-        positions = {id(call): index for index, call in enumerate(batch)}
+
+        indexed_batch = tuple(enumerate(batch))
+
+        def execute_indexed(item: tuple[int, Any]) -> tuple[int, tuple[Any, Mapping[str, Any]]]:
+            index, call = item
+            return index, execute(call)
+
         ordered: list[tuple[Any, Mapping[str, Any]] | None] = [None] * len(batch)
-        for call, result in iter_completed_with_deadlines(
-            batch,
-            execute,
+        for _item, indexed_result in iter_completed_with_deadlines(
+            indexed_batch,
+            execute_indexed,
             max_workers=workers,
             stage="agent_read_wave",
+            sort_key=lambda item: item[0],
         ):
-            ordered[positions[id(call)]] = result
+            index, result = indexed_result
+            ordered[index] = result
         if any(item is None for item in ordered):
             raise ModelConfigurationError("Parallel read wave lost a completed tool result.")
         completed.extend(item for item in ordered if item is not None)
