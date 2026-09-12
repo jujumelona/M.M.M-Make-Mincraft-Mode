@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import heapq
 import os
+import time
 from collections.abc import Callable, Iterable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
@@ -12,6 +13,10 @@ from typing import Any
 from .artifact_job import ArtifactJob
 from .artifact_job_checkpoint import execute_checkpointed_job
 from .artifact_ports import PortRegistry
+from .model_concurrency import (
+    planning_work_unit_timeout_seconds,
+    run_with_model_execution_deadline,
+)
 from .task_template_runner import execute_artifact_template
 
 
@@ -135,7 +140,9 @@ def execute_artifact_graph(
 
     Readiness is maintained with producer indegrees and a deterministic heap. No job
     list is rescanned after each completion, so scheduler work grows with graph edges
-    instead of degenerating toward quadratic work on large artifact sets.
+    instead of degenerating toward quadratic work on large artifact sets. Generation
+    and validation both carry wall-clock deadlines and executor teardown never waits
+    for an uncooperative worker.
     """
     ordered_jobs = list(jobs)
     from .resolved_version_context import execution_context
@@ -170,17 +177,6 @@ def execute_artifact_graph(
     if missing_external:
         raise ArtifactGraphError(f"ARTIFACT_GRAPH_MISSING_PRODUCER: {missing_external}")
 
-    if len(ordered_jobs) == 1:
-        job = ordered_jobs[0]
-        receipt = _execute_one(job, context=context, router=router, registry=registry, base_dir=base_dir)
-        _validate_completed_job(job, receipt, context=context, base_dir=base_dir)
-        return {
-            "status": "PASS",
-            "completed_jobs": [job.job_id],
-            "receipts": [receipt],
-            "ports": {name: port.to_dict() for name, port in registry.all_ports().items()},
-        }
-
     order = {job.job_id: index for index, job in enumerate(ordered_jobs)}
     by_id = {job.job_id: job for job in ordered_jobs}
     dependency_ids: dict[str, set[str]] = {}
@@ -207,6 +203,7 @@ def execute_artifact_graph(
     pending_ids = set(by_id)
     generation_futures: dict[Future[dict[str, Any]], ArtifactJob] = {}
     validation_futures: dict[Future[None], tuple[ArtifactJob, dict[str, Any]]] = {}
+    future_deadlines: dict[Future[Any], float] = {}
     results: dict[str, dict[str, Any]] = {}
     validated_jobs: set[str] = set()
     generation_workers = _parallelism(len(ordered_jobs))
@@ -221,90 +218,125 @@ def execute_artifact_graph(
                 continue
             pending_ids.remove(job_id)
             job = by_id[job_id]
-            generation_futures[
-                pool.submit(
-                    _execute_one,
-                    job,
-                    context=context,
-                    router=router,
-                    registry=registry,
-                    base_dir=base_dir,
-                )
-            ] = job
+            deadline = time.monotonic() + planning_work_unit_timeout_seconds()
+            future = pool.submit(
+                run_with_model_execution_deadline,
+                deadline,
+                _execute_one,
+                job,
+                context=context,
+                router=router,
+                registry=registry,
+                base_dir=base_dir,
+            )
+            generation_futures[future] = job
+            future_deadlines[future] = deadline
             submitted += 1
             slots -= 1
         return submitted
 
-    with ThreadPoolExecutor(
+    generation_pool = ThreadPoolExecutor(
         max_workers=generation_workers,
         thread_name_prefix="mmm-artifact-generate",
-    ) as generation_pool, ThreadPoolExecutor(
+    )
+    validation_pool = ThreadPoolExecutor(
         max_workers=validation_workers,
         thread_name_prefix="mmm-artifact-validate",
-    ) as validation_pool:
+    )
+    try:
         submit_ready(generation_pool)
-        try:
-            while pending_ids or generation_futures or validation_futures:
-                if not generation_futures and not validation_futures:
-                    blocked = {
-                        job_id: [
-                            name
-                            for name in by_id[job_id].requires
-                            if producers.get(name) not in validated_jobs
-                            and not (producers.get(name) is None and registry.has(name))
-                        ]
-                        for job_id in sorted(pending_ids, key=order.__getitem__)
-                    }
-                    raise ArtifactGraphError(f"ARTIFACT_GRAPH_DEADLOCK: {blocked}")
+        while pending_ids or generation_futures or validation_futures:
+            if not generation_futures and not validation_futures:
+                blocked = {
+                    job_id: [
+                        name
+                        for name in by_id[job_id].requires
+                        if producers.get(name) not in validated_jobs
+                        and not (producers.get(name) is None and registry.has(name))
+                    ]
+                    for job_id in sorted(pending_ids, key=order.__getitem__)
+                }
+                raise ArtifactGraphError(f"ARTIFACT_GRAPH_DEADLOCK: {blocked}")
 
-                active = tuple(generation_futures) + tuple(validation_futures)
-                done, _ = wait(active, return_when=FIRST_COMPLETED)
-                newly_validated: list[str] = []
-                for future in done:
-                    if future in generation_futures:
-                        job = generation_futures.pop(future)
-                        receipt = future.result()
-                        validation_future = validation_pool.submit(
-                            _validate_completed_job,
-                            job,
-                            receipt,
-                            context=context,
-                            base_dir=base_dir,
+            active = tuple(generation_futures) + tuple(validation_futures)
+            nearest_deadline = min(future_deadlines[future] for future in active)
+            timeout = max(0.0, nearest_deadline - time.monotonic())
+            done, _ = wait(
+                active,
+                timeout=timeout,
+                return_when=FIRST_COMPLETED,
+            )
+            if not done:
+                now = time.monotonic()
+                expired = [
+                    future
+                    for future in active
+                    if now >= future_deadlines[future]
+                ]
+                if not expired:
+                    continue
+                owners = [
+                    generation_futures[future].job_id
+                    if future in generation_futures
+                    else validation_futures[future][0].job_id
+                    for future in expired
+                ]
+                for future in expired:
+                    future.cancel()
+                raise ArtifactGraphError(f"ARTIFACT_GRAPH_WORK_TIMEOUT: {owners}")
+
+            newly_validated: list[str] = []
+            for future in done:
+                future_deadlines.pop(future, None)
+                if future in generation_futures:
+                    job = generation_futures.pop(future)
+                    receipt = future.result(timeout=0)
+                    validation_deadline = (
+                        time.monotonic() + planning_work_unit_timeout_seconds()
+                    )
+                    validation_future = validation_pool.submit(
+                        run_with_model_execution_deadline,
+                        validation_deadline,
+                        _validate_completed_job,
+                        job,
+                        receipt,
+                        context=context,
+                        base_dir=base_dir,
+                    )
+                    validation_futures[validation_future] = (job, receipt)
+                    future_deadlines[validation_future] = validation_deadline
+                else:
+                    job, receipt = validation_futures.pop(future)
+                    future.result(timeout=0)
+                    validated_jobs.add(job.job_id)
+                    results[job.job_id] = receipt
+                    newly_validated.append(job.job_id)
+
+            # Apply all completions as one deterministic readiness update. The heap
+            # restores original job order even when futures finish in a different order.
+            for producer_id in sorted(newly_validated, key=order.__getitem__):
+                for dependent_id in dependents[producer_id]:
+                    indegree[dependent_id] -= 1
+                    if indegree[dependent_id] < 0:
+                        raise ArtifactGraphError(
+                            f"ARTIFACT_GRAPH_INDEGREE_CORRUPT: {dependent_id}"
                         )
-                        validation_futures[validation_future] = (job, receipt)
-                    else:
-                        job, receipt = validation_futures.pop(future)
-                        future.result()
-                        validated_jobs.add(job.job_id)
-                        results[job.job_id] = receipt
-                        newly_validated.append(job.job_id)
+                    if indegree[dependent_id] == 0:
+                        heapq.heappush(
+                            ready_heap,
+                            (order[dependent_id], dependent_id),
+                        )
 
-                # Apply all completions as one deterministic readiness update. The
-                # heap restores original job order even when futures finish in a
-                # different order on every run.
-                for producer_id in sorted(newly_validated, key=order.__getitem__):
-                    for dependent_id in dependents[producer_id]:
-                        indegree[dependent_id] -= 1
-                        if indegree[dependent_id] < 0:
-                            raise ArtifactGraphError(
-                                f"ARTIFACT_GRAPH_INDEGREE_CORRUPT: {dependent_id}"
-                            )
-                        if indegree[dependent_id] == 0:
-                            heapq.heappush(
-                                ready_heap,
-                                (order[dependent_id], dependent_id),
-                            )
-
-                # Refill generation immediately after every generation or validation
-                # completion. A dependent becomes eligible only after its producer's
-                # validation succeeds, while unrelated work continues in parallel.
-                submit_ready(generation_pool)
-        except BaseException:
-            for future in generation_futures:
-                future.cancel()
-            for future in validation_futures:
-                future.cancel()
-            raise
+            # A dependent becomes eligible only after its producer validates, while
+            # unrelated generation keeps all available slots busy.
+            submit_ready(generation_pool)
+    finally:
+        for future in generation_futures:
+            future.cancel()
+        for future in validation_futures:
+            future.cancel()
+        generation_pool.shutdown(wait=False, cancel_futures=True)
+        validation_pool.shutdown(wait=False, cancel_futures=True)
 
     completed_jobs = [job.job_id for job in ordered_jobs]
     receipts = [results[job.job_id] for job in ordered_jobs]
