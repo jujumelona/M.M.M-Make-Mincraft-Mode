@@ -8,7 +8,6 @@ reassembles field fragments and validates the canonical worksheet section afterw
 """
 
 from collections.abc import Mapping, Sequence
-from copy import deepcopy
 import json
 from typing import Any
 
@@ -177,7 +176,6 @@ def worksheet_chunk_schema(
 ) -> dict[str, Any]:
     """Return one bounded partial-record schema for a host-selected field page."""
     key = _normalize_section_name(section)
-    records = DETAIL_RECORDS[key]
     active = tuple(concerns)
     if not active:
         raise ValueError(f"worksheet chunk for {key!r} cannot be empty")
