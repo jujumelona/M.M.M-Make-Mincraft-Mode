@@ -58,6 +58,16 @@ class ParallelExecutionTimeout(TimeoutError):
         )
 
 
+class ParallelTaskError(RuntimeError):
+    """Preserve the work-item identity when a completed future raises."""
+
+    def __init__(self, *, stage: str, item: object, cause: BaseException) -> None:
+        self.stage = str(stage)
+        self.item = item
+        self.cause = cause
+        super().__init__(f"{self.stage} worker failed for {self.item!r}: {cause}")
+
+
 def iter_completed_with_deadlines(
     items: Iterable[_Item],
     worker: Callable[[_Item], _Result],
@@ -149,11 +159,19 @@ def iter_completed_with_deadlines(
 
             for future in sorted(done, key=completion_order):
                 meta = active.pop(future)
-                yield meta.item, future.result(timeout=0)
+                try:
+                    result = future.result(timeout=0)
+                except BaseException as exc:
+                    raise ParallelTaskError(stage=stage, item=meta.item, cause=exc) from exc
+                yield meta.item, result
     finally:
         for future in active:
             future.cancel()
         pool.shutdown(wait=False, cancel_futures=True)
 
 
-__all__ = ["ParallelExecutionTimeout", "iter_completed_with_deadlines"]
+__all__ = [
+    "ParallelExecutionTimeout",
+    "ParallelTaskError",
+    "iter_completed_with_deadlines",
+]
