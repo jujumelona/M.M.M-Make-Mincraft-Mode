@@ -264,36 +264,6 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
                 return None
 
             serial_stage_placeholders = ",".join("?" for _ in _SERIAL_CPU_STAGES)
-            active_serial_stages = tuple(
-                str(stage)
-                for (stage,) in connection.execute(
-                    f"""
-                    SELECT DISTINCT stage
-                    FROM tasks
-                    WHERE state = ?
-                      AND {resource_expr} = 'cpu_io'
-                      AND stage IN ({serial_stage_placeholders})
-                    ORDER BY stage
-                    """,
-                    (
-                        work_graph_module.WorkState.RUNNING.value,
-                        *_SERIAL_CPU_STAGES,
-                    ),
-                )
-            )
-            occupied_stage_sql = ""
-            occupied_stage_params: tuple[Any, ...] = ()
-            if active_serial_stages:
-                occupied_placeholders = ",".join("?" for _ in active_serial_stages)
-                occupied_stage_sql = (
-                    " AND NOT ("
-                    + task_resource_expr
-                    + " = 'cpu_io' AND task.stage IN ("
-                    + occupied_placeholders
-                    + "))"
-                )
-                occupied_stage_params = active_serial_stages
-
             ordered_lanes = tuple(
                 sorted(
                     free_lanes,
@@ -307,7 +277,6 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
                 *_SERIAL_CPU_STAGES,
                 work_graph_module.WorkState.RUNNING.value,
                 *stage_params,
-                *occupied_stage_params,
                 *ordered_lanes,
             )
             rows = connection.execute(
@@ -336,7 +305,6 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
                         )
                       )
                       {stage_sql}
-                      {occupied_stage_sql}
                       AND {task_resource_expr} IN ({lane_placeholders})
                 ), ranked AS (
                     SELECT node_id, resource_class,
@@ -389,8 +357,13 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
                 renew_before,
             ),
         ).fetchone()
-        if maintenance_due is None and ready_node_id(connection) is None:
-            return None
+        if maintenance_due is None:
+            pending = connection.execute(
+                "SELECT 1 FROM tasks WHERE state = ? LIMIT 1",
+                (work_graph_module.WorkState.PENDING.value,),
+            ).fetchone()
+            if pending is None:
+                return None
 
         with connection:
             now = time.time()
