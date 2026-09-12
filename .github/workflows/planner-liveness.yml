@@ -7,11 +7,14 @@ on:
       - 'minecraft_mod_ai/planning_state_adaptive_implementation.py'
       - 'minecraft_mod_ai/planning_criterion_fragments.py'
       - 'minecraft_mod_ai/planning_state_research.py'
+      - 'minecraft_mod_ai/deadline_executor.py'
+      - 'minecraft_mod_ai/model_concurrency.py'
       - 'minecraft_mod_ai/planning_state_pipeline.py'
       - 'minecraft_mod_ai/planning_convergence_contract.py'
       - 'minecraft_mod_ai/planning_detail_template.py'
       - 'minecraft_mod_ai/planning_state_implementation.py'
       - 'tests/test_planning_progress_monotone.py'
+      - 'tests/test_planning_deadline_hardening.py'
       - 'tests/test_planning_convergence_contract.py'
       - '.github/workflows/planner-liveness.yml'
   push:
@@ -21,11 +24,14 @@ on:
       - 'minecraft_mod_ai/planning_state_adaptive_implementation.py'
       - 'minecraft_mod_ai/planning_criterion_fragments.py'
       - 'minecraft_mod_ai/planning_state_research.py'
+      - 'minecraft_mod_ai/deadline_executor.py'
+      - 'minecraft_mod_ai/model_concurrency.py'
       - 'minecraft_mod_ai/planning_state_pipeline.py'
       - 'minecraft_mod_ai/planning_convergence_contract.py'
       - 'minecraft_mod_ai/planning_detail_template.py'
       - 'minecraft_mod_ai/planning_state_implementation.py'
       - 'tests/test_planning_progress_monotone.py'
+      - 'tests/test_planning_deadline_hardening.py'
       - 'tests/test_planning_convergence_contract.py'
       - '.github/workflows/planner-liveness.yml'
 
@@ -55,9 +61,12 @@ jobs:
           minecraft_mod_ai/planning_state_adaptive_implementation.py
           minecraft_mod_ai/planning_criterion_fragments.py
           minecraft_mod_ai/planning_state_research.py
+          minecraft_mod_ai/deadline_executor.py
+          minecraft_mod_ai/model_concurrency.py
           minecraft_mod_ai/planning_state_pipeline.py
           minecraft_mod_ai/planning_convergence_contract.py
           tests/test_planning_progress_monotone.py
+          tests/test_planning_deadline_hardening.py
           tests/test_planning_convergence_contract.py
       - name: Run planner liveness regressions
         run: >-
@@ -67,6 +76,7 @@ jobs:
           --durations 20
           --maxfail 20
           tests/test_planning_progress_monotone.py
+          tests/test_planning_deadline_hardening.py
           tests/test_planning_convergence_contract.py
       - name: Upload planner liveness diagnostics
         if: ${{ always() }}
