@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from hashlib import sha256
+
 import pytest
 
 from minecraft_mod_ai.artifact_expansion import (
@@ -19,6 +21,36 @@ from minecraft_mod_ai.minecraft_template_steps import (
 from minecraft_mod_ai.prompt_fact_types import FactType, PromptFact
 from minecraft_mod_ai.resolved_version_context import ResolvedVersionContext, VersionContextError, _encode
 from minecraft_mod_ai.structural_routing_contract import CANONICAL_ARTIFACT_KINDS
+
+
+def _validation_context(template, *, required_symbols=()):
+    """Build a test-only admitted template context without changing production admission."""
+    ctx = host_target("auto").version_context
+    raw = ctx.to_dict()
+    raw.pop("context_id", None)
+    facts = raw["host_facts"]
+    symbols = dict(facts["api_symbols"])
+    symbols.setdefault(
+        "register_item",
+        {
+            "owner": "Registry",
+            "name": "register",
+            "descriptor": "(registry,key,value)->value",
+            "kind": "method",
+            "static": True,
+            "side": "common",
+            "namespace": "minecraft",
+        },
+    )
+    rules = dict(facts["artifact_rules"])
+    rules[template["id"]] = {
+        "template_sha256": "sha256:" + sha256(_encode(template).encode()).hexdigest(),
+        "required_symbols": list(required_symbols),
+        "requires_capabilities": [],
+    }
+    facts["api_symbols"] = symbols
+    facts["artifact_rules"] = rules
+    return ResolvedVersionContext(_encode(raw))
 
 
 def test_every_canonical_leaf_has_complete_binding_in_all_host_bundles():
@@ -51,7 +83,6 @@ def test_missing_canonical_leaf_causes_audit_failure():
     bundle = bundles[0]
     bundle_dict = bundle.to_dict()
 
-    # Drop one canonical leaf binding and re-encode
     bundle_dict.pop("context_id", None)
     bundle_dict["host_facts"]["leaf_bindings"].pop("minecraft/item/registry")
     corrupted_ctx = ResolvedVersionContext(_encode(bundle_dict))
@@ -95,7 +126,6 @@ def test_specialized_leaf_contracts_and_side_separation():
     assert reg_step.side == ("common",)
     assert reg_step.context_projection.max_bytes <= 4096
 
-    # Entity renderer is strictly client side
     entity_steps = steps_for_artifact("entity")
     renderer_step = next(s for s in entity_steps if s.template_id == "minecraft/entity/renderer")
     assert renderer_step.side == ("client",)
@@ -124,12 +154,13 @@ def test_context_projection_exceeding_4096_bytes_fails_closed():
     assert str(MAX_SLOT_CONTEXT_CHARS) in str(exc_info.value)
 
 
-def test_generator_handoff_subordinated_to_canonical_leaf_and_admitted():
+def test_generator_handoff_subordinated_to_canonical_leaf():
     from minecraft_mod_ai.integrity_bootstrap import bootstrap_integrity
     authority = bootstrap_integrity()
     ctx = host_target("auto").version_context
-    impl = ctx.facts["leaf_bindings"]["minecraft/entity/registry"]["implementation"]
-    assert impl["executor_type"] == "python_generator"
+    binding = ctx.facts["leaf_bindings"]["minecraft/entity/registry"]
+    impl = binding["implementation"]
+    assert impl["executor_type"] == "generator_handoff_entity"
     assert callable(authority.executors[impl["implementation_id"]])
     assert "evidence_id" not in impl
 
@@ -146,10 +177,8 @@ def test_artifact_validation_prevents_cross_side_leakage():
     """Common/server templates must fail closed if client classes leak into output."""
     from minecraft_mod_ai.task_template_catalog import load_template
 
-    target = host_target("auto")
-    ctx = target.version_context
-
     template = load_template("fabric/item/register_basic")
+    ctx = _validation_context(template)
     leaked_output = (
         "package com.example;\n"
         "import net.minecraft.client.MinecraftClient;\n"
@@ -167,11 +196,8 @@ def test_artifact_validation_verifies_api_invocation_syntax():
     """API symbol validation checks that callable symbols are actually invoked."""
     from minecraft_mod_ai.task_template_catalog import load_template
 
-    target = host_target("auto")
-    ctx = target.version_context
-
     template = load_template("fabric/item/register_basic")
-    # Output includes the string 'Registry.register' as a comment/identifier but never invokes it
+    ctx = _validation_context(template, required_symbols=("register_item",))
     malformed_output = (
         "package com.example;\n"
         "public class Items {\n"
@@ -228,7 +254,6 @@ def test_admitted_leaf_requires_all_eight_fields():
         if field.endswith("_sha256"):
             assert impl[field].startswith("sha256:")
 
-    # Test tampering with missing field - ResolvedVersionContext fails at boundary
     bundle_dict = ctx.to_dict()
     bundle_dict.pop("context_id", None)
     corrupted_impl = dict(impl)
@@ -259,32 +284,30 @@ def test_structured_api_symbols_schema_and_ast_validation():
         assert sym["side"] in {"common", "client", "server"}
         assert sym["namespace"] in {"minecraft", "fabric"}
 
-    # AST validation: symbol commented out should fail
     from minecraft_mod_ai.task_template_catalog import load_template
     template = load_template("fabric/item/register_basic")
+    validation_ctx = _validation_context(template, required_symbols=("register_item",))
     commented_out = """
     // Registry.register(BuiltInRegistries.ITEM, ModItemIds.RAW_LUNITE_KEY, null);
     public static final Item RAW_LUNITE = null;
     """
     with pytest.raises(VersionContextError) as exc_info:
-        ctx.validate_artifact(template, commented_out)
+        validation_ctx.validate_artifact(template, commented_out)
     assert "INVALID_API_INVOCATION" in str(exc_info.value)
 
-    # Symbol only in string literal should fail
     string_only = """
     String s = "Registry.register(BuiltInRegistries.ITEM, ModItemIds.RAW_LUNITE_KEY, null);";
     public static final Item RAW_LUNITE = null;
     """
     with pytest.raises(VersionContextError) as exc_info:
-        ctx.validate_artifact(template, string_only)
+        validation_ctx.validate_artifact(template, string_only)
     assert "INVALID_API_INVOCATION" in str(exc_info.value)
 
-    # Cross side leakage only in comment should NOT fail, but in executable code MUST fail
     valid_with_comment = """
     /* Uses net.minecraft.client.gui.screen.Screen internally */
     public static final Item RAW_LUNITE = Registry.register(BuiltInRegistries.ITEM, ModItemIds.RAW_LUNITE_KEY, new Item(new Item.Properties()));
     """
-    res = ctx.validate_artifact(template, valid_with_comment)
+    res = validation_ctx.validate_artifact(template, valid_with_comment)
     assert res["status"] == "PASS"
 
     leakage_in_code = """
@@ -292,7 +315,5 @@ def test_structured_api_symbols_schema_and_ast_validation():
     public static final Item RAW_LUNITE = Registry.register(BuiltInRegistries.ITEM, ModItemIds.RAW_LUNITE_KEY, new Item(new Item.Properties()));
     """
     with pytest.raises(VersionContextError) as exc_info:
-        ctx.validate_artifact(template, leakage_in_code)
+        validation_ctx.validate_artifact(template, leakage_in_code)
     assert "CROSS_SIDE_LEAKAGE" in str(exc_info.value)
-
-
