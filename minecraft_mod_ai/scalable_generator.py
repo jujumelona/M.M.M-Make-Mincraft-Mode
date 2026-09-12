@@ -52,6 +52,19 @@ class ScalableFabricProjectGenerator:
                     "display_name_ko": content.display_name_ko,
                     "main_color": content.color,
                     "color": content.color,
+                    **(
+                        {
+                            # FabricProjectGenerator has always compiled bootstrap
+                            # blocks with strength(3.0f, 6.0f).  Carry those existing
+                            # host-owned semantics forward explicitly so the extended
+                            # generator validates the same block instead of inventing a
+                            # hidden fallback at the final generation boundary.
+                            "hardness": 3.0,
+                            "resistance": 6.0,
+                        }
+                        if content.kind is ContentKind.BLOCK
+                        else {}
+                    ),
                 },
                 required_gates=("registry", "resource", "recipe" if content.recipe else "resource"),
             )
