@@ -215,7 +215,7 @@ def test_graph_emits_multiple_entities_instead_of_prompt_stem_module():
         module.validate()
     for asset in design["assets"]:
         asset.validate()
-        assert "faceted chunk" in asset.prompt
+        assert "faceted chunk" in asset.visual_description
 
 
 def test_graph_provenance_is_bound_to_exact_requirement():
