@@ -18,11 +18,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from .deadline_executor import iter_completed_with_deadlines
 from .knowledge import (
     AuthoritativeEvidenceRetriever,
     evidence_catalog_for_version,
@@ -398,11 +398,25 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
         descriptions: dict[int, str] = {}
         if new_ids:
             workers = _source_worker_count(len(new_ids))
-            if workers <= 1:
-                fetched = [description(mod_id) for mod_id in new_ids]
-            else:
-                with ThreadPoolExecutor(max_workers=workers) as pool:
-                    fetched = list(pool.map(description, new_ids))
+            description_jobs = tuple(enumerate(new_ids))
+            fetched_by_index: dict[int, tuple[int, str, str]] = {}
+
+            def fetch_description(
+                job: tuple[int, int],
+            ) -> tuple[int, tuple[int, str, str]]:
+                index, mod_id = job
+                return index, description(mod_id)
+
+            for _job, indexed_result in iter_completed_with_deadlines(
+                description_jobs,
+                fetch_description,
+                max_workers=max(1, workers),
+                stage="predesign-curseforge-descriptions",
+                sort_key=lambda item: item[0],
+            ):
+                index, value = indexed_result
+                fetched_by_index[index] = value
+            fetched = [fetched_by_index[index] for index in range(len(new_ids))]
             for mod_id, body, error in fetched:
                 if body:
                     descriptions[mod_id] = body
@@ -599,11 +613,25 @@ def _search_github(
         bodies: dict[str, str] = {}
         if candidates:
             workers = _source_worker_count(len(candidates))
-            if workers <= 1:
-                fetched = [repository_body(row) for row in candidates]
-            else:
-                with ThreadPoolExecutor(max_workers=workers) as pool:
-                    fetched = list(pool.map(repository_body, candidates))
+            repository_jobs = tuple(enumerate(candidates))
+            fetched_by_index: dict[int, tuple[str, str, str]] = {}
+
+            def fetch_repository_body(
+                job: tuple[int, Mapping[str, Any]],
+            ) -> tuple[int, tuple[str, str, str]]:
+                index, row = job
+                return index, repository_body(row)
+
+            for _job, indexed_result in iter_completed_with_deadlines(
+                repository_jobs,
+                fetch_repository_body,
+                max_workers=max(1, workers),
+                stage="predesign-github-repository-bodies",
+                sort_key=lambda item: item[0],
+            ):
+                index, value = indexed_result
+                fetched_by_index[index] = value
+            fetched = [fetched_by_index[index] for index in range(len(candidates))]
             for full_name, body, error in fetched:
                 if full_name and body:
                     bodies[full_name] = body
@@ -820,11 +848,25 @@ def _linked_github_sources(
             return full_name, "", f"{full_name}:{type(exc).__name__}:{exc}"
 
     workers = _source_worker_count(len(repositories))
-    if workers <= 1:
-        fetched = [fetch_readme(full_name) for full_name in repositories]
-    else:
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            fetched = list(pool.map(fetch_readme, repositories))
+    readme_jobs = tuple(enumerate(repositories))
+    fetched_by_index: dict[int, tuple[str, str, str]] = {}
+
+    def fetch_indexed_readme(
+        job: tuple[int, str],
+    ) -> tuple[int, tuple[str, str, str]]:
+        index, full_name = job
+        return index, fetch_readme(full_name)
+
+    for _job, indexed_result in iter_completed_with_deadlines(
+        readme_jobs,
+        fetch_indexed_readme,
+        max_workers=max(1, workers),
+        stage="predesign-linked-readmes",
+        sort_key=lambda item: item[0],
+    ):
+        index, value = indexed_result
+        fetched_by_index[index] = value
+    fetched = [fetched_by_index[index] for index in range(len(repositories))]
 
     found: list[dict[str, Any]] = []
     errors: list[str] = []

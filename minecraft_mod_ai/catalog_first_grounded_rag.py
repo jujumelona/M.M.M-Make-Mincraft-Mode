@@ -9,9 +9,9 @@ catalog candidate has no linked source or the catalog stage is empty. GitHub rem
 internal source-discovery mechanism, not a peer Minecraft catalog provider.
 Official/project sources remain separate from ecosystem discovery.
 
-Concurrency deliberately lives at the transport/source-fetch leaf. Query and catalog
-orchestration stay serial so provider-internal source pools cannot multiply into nested
-query x catalog x source executor trees.
+Query-level orchestration uses the backend-owned dynamic worker authority and the
+shared deadline executor. Provider/source retrieval remains independently bounded by its
+transport timeouts, while deterministic output order is reconstructed from authored specs.
 """
 
 import os
@@ -19,6 +19,7 @@ import threading
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
+from .deadline_executor import iter_completed_with_deadlines
 from .planning_mod_discovery import CATALOG_PROVIDERS
 
 
@@ -371,18 +372,35 @@ def forced_rag_bundle(
                 specs.append(key)
 
     by_spec: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
-    for query, providers in specs:
-        try:
-            by_spec[(query, providers)] = _query_bundle(
-                backend,
-                router,
-                query,
-                providers,
-                github_disabled=github_disabled,
-                disable_github=disable_github,
-            )
-        except Exception as exc:
-            by_spec[(query, providers)] = _query_failure(backend, query, exc)
+    if specs:
+        query_workers = backend._query_worker_count(len(specs))
+
+        def run_query_spec(
+            spec: tuple[str, tuple[str, ...]],
+        ) -> tuple[tuple[str, tuple[str, ...]], dict[str, Any]]:
+            query, providers = spec
+            try:
+                row = _query_bundle(
+                    backend,
+                    router,
+                    query,
+                    providers,
+                    github_disabled=github_disabled,
+                    disable_github=disable_github,
+                )
+            except Exception as exc:
+                row = _query_failure(backend, query, exc)
+            return spec, row
+
+        for _spec, result in iter_completed_with_deadlines(
+            tuple(specs),
+            run_query_spec,
+            max_workers=max(1, query_workers),
+            stage="predesign-query-bundles",
+            sort_key=lambda item: (item[0], item[1]),
+        ):
+            spec, row = result
+            by_spec[spec] = row
 
     out_domains: list[dict[str, Any]] = []
     external_count = 0
