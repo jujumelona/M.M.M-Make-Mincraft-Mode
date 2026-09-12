@@ -3,6 +3,7 @@ import pytest
 from minecraft_mod_ai import minecraft_template_steps
 from minecraft_mod_ai import task_template_catalog
 from minecraft_mod_ai.host_version_catalog import host_target, load_host_catalog
+from minecraft_mod_ai.model_registry import ModelRegistry
 from minecraft_mod_ai.product_support_matrix import SUPPORTED_MINECRAFT_VERSIONS
 from minecraft_mod_ai.version_template_context import resolved_template_facts
 
@@ -31,6 +32,13 @@ _HOST_FACT_KEYS = (
     "repositories",
     "replacements",
     "leaf_bindings",
+)
+_IMAGE_PROVIDER_IDENTITY_FIELDS = (
+    "model_id",
+    "lora_model_id",
+    "lora_weight_name",
+    "lora_adapter_name",
+    "lora_trigger",
 )
 
 
@@ -137,3 +145,23 @@ def test_every_supported_version_is_complete_host_authority_before_template_proj
             assert projected[key] == snapshot["host_facts"][key], (
                 f"{version}: template projection changed HOST fact domain {key}"
             )
+
+
+def test_task_templates_do_not_own_image_provider_identity():
+    public_registry = ModelRegistry().to_public_dict()
+    provider_literals = set()
+    for profile in public_registry["profiles"].values():
+        image_role = profile["roles"].get("image_generator", {})
+        for field in _IMAGE_PROVIDER_IDENTITY_FIELDS:
+            value = image_role.get(field)
+            if isinstance(value, str) and value.strip():
+                provider_literals.add(value.strip())
+
+    leaks = {}
+    for path in task_template_catalog.RUNTIME_TEMPLATE_ROOT.rglob("*.yaml"):
+        text = path.read_text(encoding="utf-8")
+        found = sorted(literal for literal in provider_literals if literal in text)
+        if found:
+            leaks[str(path.relative_to(task_template_catalog.RUNTIME_TEMPLATE_ROOT))] = found
+
+    assert not leaks, f"task templates must not own image provider identity: {leaks}"
