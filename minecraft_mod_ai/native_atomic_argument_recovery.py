@@ -215,37 +215,15 @@ def _source_edit_stream_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "chunk": {"type": "string"},
+            "chunk": {
+                "type": "string",
+                "maxLength": _MAX_ATOMIC_STRING_LENGTH,
+            },
             "done": {"type": "boolean"},
         },
         "required": ["chunk", "done"],
         "additionalProperties": False,
     }
-
-
-def _source_edit_atomicity_proxy_schema(
-    page_schema: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Bound model atomicity without turning the source stream limit into data loss.
-
-    Source-edit streaming still instructs the model to return at most 256 characters per
-    chunk. The transport schema deliberately leaves the chunk string unbounded so a model
-    that ignores that instruction can return a valid whole scalar instead of being rejected
-    before the host can preserve it. This proxy keeps the small-model atomicity gate strict
-    while the original source-edit schema remains the final semantic authority.
-    """
-
-    properties = page_schema.get("properties")
-    if not isinstance(properties, Mapping):
-        return dict(page_schema)
-    proxy = dict(page_schema)
-    proxy["properties"] = {
-        str(name): _bounded_property(raw_schema)
-        if isinstance(raw_schema, Mapping)
-        else raw_schema
-        for name, raw_schema in properties.items()
-    }
-    return proxy
 
 
 def _messages(
@@ -298,18 +276,13 @@ def _request(
     repair_error: str = "",
     context_instruction: str = "",
 ) -> Any:
-    # The model-facing source-edit stream may accept an overlong one-shot chunk so the
-    # adapter cannot discard valid source text. Atomicity remains enforced against the
-    # bounded proxy, while the live page schema and final source-edit schema validate data.
+    # The atomic boundary is checked per native function-argument page, never against
+    # the host-owned original container. The model fills fields through ToolCall.arguments;
+    # message content is deliberately not a structured-output transport.
     from .model_output_atomicity_contract import assert_atomic_model_schema
 
-    atomicity_schema = (
-        _source_edit_atomicity_proxy_schema(page_schema)
-        if action_name == _SOURCE_EDIT_TOOL
-        else page_schema
-    )
     assert_atomic_model_schema(
-        atomicity_schema,
+        page_schema,
         surface="host-selected forced-function argument page",
     )
     page_tool = {
@@ -381,6 +354,47 @@ def _page_owned_arguments(
     }
 
 
+def _source_edit_stream_length_overshoot_is_safe(
+    arguments: Mapping[str, Any],
+    page_schema: Mapping[str, Any],
+    action_name: str,
+    forced: Any,
+) -> bool:
+    """Accept only a source-edit stream whose sole violation is chunk maxLength.
+
+    The 256-character bound remains model-visible and is still the generation contract.
+    Some Qwen tool completions nevertheless return the entire exact scalar in one call.
+    Rejecting that already-complete source text loses information and creates a fixed point.
+    Preserve it only when removing maxLength alone makes the same strict page valid; the
+    fully reassembled edit is still validated against the original apply_source_edit schema.
+    """
+
+    if action_name != _SOURCE_EDIT_TOOL:
+        return False
+    properties = page_schema.get("properties")
+    if not isinstance(properties, Mapping) or set(properties) != {"chunk", "done"}:
+        return False
+    chunk_schema = properties.get("chunk")
+    if not isinstance(chunk_schema, Mapping) or chunk_schema.get("type") != "string":
+        return False
+    max_length = chunk_schema.get("maxLength")
+    chunk = arguments.get("chunk")
+    if (
+        not isinstance(max_length, int)
+        or not isinstance(chunk, str)
+        or len(chunk) <= max_length
+    ):
+        return False
+
+    relaxed = dict(page_schema)
+    relaxed_properties = dict(properties)
+    relaxed_chunk = dict(chunk_schema)
+    relaxed_chunk.pop("maxLength", None)
+    relaxed_properties["chunk"] = relaxed_chunk
+    relaxed["properties"] = relaxed_properties
+    return forced._arguments_match_schema(arguments, relaxed)
+
+
 def _page_result(
     turn: Any,
     page_schema: Mapping[str, Any],
@@ -418,7 +432,14 @@ def _page_result(
         return None, reason, _fingerprint({"arguments": raw_arguments})
 
     normalized = _page_owned_arguments(dict(raw_arguments), page_schema, parameters)
-    if not forced._arguments_match_schema(normalized, page_schema):
+    if not forced._arguments_match_schema(normalized, page_schema) and not (
+        _source_edit_stream_length_overshoot_is_safe(
+            normalized,
+            page_schema,
+            action_name,
+            forced,
+        )
+    ):
         diag = getattr(forced, "_schema_validation_diagnostics", lambda *args: "")(
             normalized, page_schema
         )

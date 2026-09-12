@@ -767,6 +767,33 @@ def _parse_native_tool_calls(
     return tuple(calls)
 
 
+def _source_edit_stream_length_overshoot_only(
+    call: ToolCall,
+    schema: Mapping[str, Any],
+    errors: Sequence[Any],
+) -> bool:
+    """Allow exactly one model-bound violation: an overlong source-edit stream chunk."""
+
+    if call.name != "apply_source_edit" or len(errors) != 1:
+        return False
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping) or set(properties) != {"chunk", "done"}:
+        return False
+    chunk_schema = properties.get("chunk")
+    if not isinstance(chunk_schema, Mapping) or chunk_schema.get("type") != "string":
+        return False
+    max_length = chunk_schema.get("maxLength")
+    chunk = call.arguments.get("chunk")
+    error = errors[0]
+    return bool(
+        isinstance(max_length, int)
+        and isinstance(chunk, str)
+        and len(chunk) > max_length
+        and getattr(error, "validator", None) == "maxLength"
+        and tuple(getattr(error, "absolute_path", ())) == ("chunk",)
+    )
+
+
 def _validate_tool_calls_against_host_schema(
     calls: Sequence[ToolCall],
     schemas: Mapping[str, Mapping[str, Any]],
@@ -801,7 +828,7 @@ def _validate_tool_calls_against_host_schema(
                     validator_type(schema).iter_errors(dict(call.arguments)),
                     key=lambda error: tuple(str(part) for part in error.absolute_path),
                 )
-        if not errors:
+        if not errors or _source_edit_stream_length_overshoot_only(call, schema, errors):
             continue
         error = errors[0]
         path = ".".join(str(part) for part in error.absolute_path)

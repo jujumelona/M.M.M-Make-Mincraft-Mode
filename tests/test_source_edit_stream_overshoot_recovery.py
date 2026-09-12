@@ -2,9 +2,27 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from minecraft_mod_ai.model_adapters.base import GenerationRequest, GenerationResponse
+import pytest
+
+from minecraft_mod_ai.model_adapters.base import GenerationRequest, GenerationResponse, ToolCall
+from minecraft_mod_ai.model_adapters.llama_cpp_adapter import (
+    _validate_tool_calls_against_host_schema,
+)
+from minecraft_mod_ai.model_adapters.qwen_tool_parser import ToolCallValidationError
 from minecraft_mod_ai.native_atomic_argument_recovery import host_selected_argument_turn
 from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
+
+
+def _stream_schema() -> dict[str, object]:
+    return {
+        "type": "object",
+        "properties": {
+            "chunk": {"type": "string", "maxLength": 256},
+            "done": {"type": "boolean"},
+        },
+        "required": ["chunk", "done"],
+        "additionalProperties": False,
+    }
 
 
 def test_source_edit_stream_accepts_oversized_one_shot_chunk_without_losing_source() -> None:
@@ -43,7 +61,7 @@ def test_source_edit_stream_accepts_oversized_one_shot_chunk_without_losing_sour
             arguments = {"operation": "create"}
         else:
             assert tuple(properties) == ("chunk", "done")
-            assert "maxLength" not in properties["chunk"]
+            assert properties["chunk"]["maxLength"] == 256
             instruction = str(page_request.messages[-1]["content"])
             assert "at most 256 characters" in instruction
             field_name = next(
@@ -75,3 +93,33 @@ def test_source_edit_stream_accepts_oversized_one_shot_chunk_without_losing_sour
         "path": stream_values["path"],
         "content": long_content,
     }
+
+
+def test_llama_host_validation_preserves_only_source_edit_chunk_length_overshoot() -> None:
+    schemas = {"apply_source_edit": _stream_schema()}
+    oversized = ToolCall(
+        id="oversized",
+        name="apply_source_edit",
+        arguments={"chunk": "x" * 400, "done": True},
+    )
+
+    _validate_tool_calls_against_host_schema((oversized,), schemas)
+
+    wrong_type = ToolCall(
+        id="wrong-type",
+        name="apply_source_edit",
+        arguments={"chunk": "x" * 400, "done": "true"},
+    )
+    with pytest.raises(ToolCallValidationError):
+        _validate_tool_calls_against_host_schema((wrong_type,), schemas)
+
+    other_tool = ToolCall(
+        id="other",
+        name="other_tool",
+        arguments={"chunk": "x" * 400, "done": True},
+    )
+    with pytest.raises(ToolCallValidationError):
+        _validate_tool_calls_against_host_schema(
+            (other_tool,),
+            {"other_tool": _stream_schema()},
+        )
