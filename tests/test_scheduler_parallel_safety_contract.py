@@ -1,6 +1,7 @@
 import sqlite3
 import threading
 import time
+from functools import wraps
 from pathlib import Path
 
 import minecraft_mod_ai.complete_orchestrator as orchestrator_module
@@ -52,6 +53,38 @@ def test_safety_layer_owns_fairness_without_legacy_wrapper() -> None:
     assert getattr(claimant, "_mmm_exact_executor_fairness", False)
     assert getattr(claimant, "_mmm_stage_lock_admission", False)
     assert getattr(claimant, "_mmm_max_efficiency_claim", False)
+    assert getattr(claimant, "_mmm_parallel_lane_claim_owner", None) is claimant
+
+
+def test_install_recovers_from_wraps_copied_claim_markers() -> None:
+    original = work_graph_module.DurableWorkLedger.claim_ready
+
+    @wraps(original)
+    def outer(self, worker_id, *, stages=(), lease_seconds=900):
+        return original(
+            self,
+            worker_id,
+            stages=stages,
+            lease_seconds=lease_seconds,
+        )
+
+    try:
+        work_graph_module.DurableWorkLedger.claim_ready = outer
+        assert getattr(outer, "_mmm_parallel_lane_claim_version", 0) >= 1
+        assert getattr(outer, "_mmm_parallel_lane_claim_owner", None) is original
+        install(
+            work_graph_module=work_graph_module,
+            orchestrator_module=orchestrator_module,
+        )
+        repaired = work_graph_module.DurableWorkLedger.claim_ready
+        assert repaired is not outer
+        assert getattr(repaired, "_mmm_parallel_lane_claim_owner", None) is repaired
+    finally:
+        work_graph_module.DurableWorkLedger.claim_ready = original
+        install(
+            work_graph_module=work_graph_module,
+            orchestrator_module=orchestrator_module,
+        )
 
 
 def test_ledger_reuses_one_sqlite_connection_per_thread(
