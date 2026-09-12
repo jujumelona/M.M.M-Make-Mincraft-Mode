@@ -1,91 +1,177 @@
 from copy import deepcopy
+import json
 
 import pytest
 
-from minecraft_mod_ai import task_template_runner as runner
+from minecraft_mod_ai import bounded_record_template as bounded
+from minecraft_mod_ai import design_record_runtime as runtime
+from minecraft_mod_ai import single_record_template as single
 
 
-IDENTIFIER = 'feature/behavior_contract/entry_conditions'
+IDENTIFIER = "feature/behavior_contract/entry_conditions"
 
 
-def response(status, record=None, refs=None):
-    return {'status': status, 'record': record, 'reason': '', 'evidence_refs': refs or []}
+def _record(index: int) -> dict[str, str]:
+    return {"trigger": f"trigger-{index}", "owner": "server"}
 
 
-def test_interruption_resumes_accepted_record_and_completed_concern_without_calls(monkeypatch):
-    progress, calls = {}, []
-    record = {'trigger': 'activate', 'owner': 'server'}
+def _generator_for(count: int, *, fail_record_index: int | None = None, calls=None):
+    calls = calls if calls is not None else []
 
-    def generate(*args, **kwargs):
-        calls.append(args[2])
-        if len(calls) == 1:
-            return response('record', record, ['source'])
-        assert progress  # The record was saved before the failed request.
-        raise TimeoutError('transport interrupted')
+    def generate(router, role, messages, *, response_schema, **kwargs):
+        del router, role, kwargs
+        context = json.loads(messages[-1]["content"])
+        if set(response_schema.get("properties", {})) == {"count", "blocked_reason"}:
+            calls.append(("count", None))
+            return {"count": count, "blocked_reason": ""}
+        index = int(context["record_index"])
+        calls.append(("record", index))
+        if fail_record_index is not None and index == fail_record_index:
+            raise TimeoutError("transport interrupted")
+        return _record(index)
 
-    monkeypatch.setattr(runner, 'generate_fixed_template_value', generate)
-    kwargs = dict(context={'criterion': 'A'}, allowed_refs={'source'}, progress=progress,
-                  checkpoint=lambda key, value: progress.update({key: deepcopy(value)}))
+    return generate
+
+
+def _patch_generator(monkeypatch, generate):
+    monkeypatch.setattr(bounded, "generate_fixed_template_value", generate)
+    monkeypatch.setattr(single, "generate_fixed_template_value", generate)
+
+
+def test_interruption_resumes_cardinality_and_completed_ordinals(monkeypatch):
+    progress: dict = {}
+    calls: list[tuple[str, int | None]] = []
+    _patch_generator(monkeypatch, _generator_for(2, fail_record_index=1, calls=calls))
+    kwargs = dict(
+        context={"criterion": "A"},
+        allowed_refs=set(),
+        progress=progress,
+        checkpoint=lambda key, value: progress.update({key: deepcopy(value)}),
+    )
+
     with pytest.raises(TimeoutError):
-        runner.run_record_template(None, IDENTIFIER, **kwargs)
+        runtime.run_record_template(None, IDENTIFIER, **kwargs)
+    assert calls == [("count", None), ("record", 0), ("record", 1)]
+    assert any(key.startswith("record-cardinality-v1:") for key in progress)
+    assert any(key.startswith("single:") for key in progress)
 
-    def complete(*args, **kw):
-        import json
-        assert json.loads(args[2][1]['content'])['accepted_records'] == [record]
-        return response('done', refs=['source'])
+    resumed_calls: list[tuple[str, int | None]] = []
+    _patch_generator(monkeypatch, _generator_for(2, calls=resumed_calls))
+    result = runtime.run_record_template(None, IDENTIFIER, **kwargs)
+    assert result["records"] == [_record(0), _record(1)]
+    assert resumed_calls == [("record", 1)]
 
-    monkeypatch.setattr(runner, 'generate_fixed_template_value', complete)
-    result = runner.run_record_template(None, IDENTIFIER, **kwargs)
-    assert result == {'records': [record], 'reason': '', 'evidence_refs': ['source']}
-    monkeypatch.setattr(runner, 'generate_fixed_template_value', lambda *a, **kw: pytest.fail('completed concern regenerated'))
-    assert runner.run_record_template(None, IDENTIFIER, **kwargs) == result
+    _patch_generator(
+        monkeypatch,
+        lambda *args, **kwargs: pytest.fail("completed host-owned record concern regenerated"),
+    )
+    assert runtime.run_record_template(None, IDENTIFIER, **kwargs) == result
 
 
-@pytest.mark.parametrize('changed', ['context', 'allowed_refs', 'template'])
-def test_changed_inputs_or_contract_do_not_reuse_prior_records(monkeypatch, changed):
-    progress = {}
-    replies = iter([response('record', {'trigger': 'x', 'owner': 'y'}), response('done')])
-    monkeypatch.setattr(runner, 'generate_fixed_template_value', lambda *a, **kw: next(replies))
-    kwargs = dict(context={'criterion': 'A'}, allowed_refs=set(), progress=progress,
-                  checkpoint=lambda key, value: progress.update({key: value}))
-    runner.run_record_template(None, IDENTIFIER, **kwargs)
-    if changed == 'context':
-        kwargs['context'] = {'criterion': 'B'}
-    elif changed == 'allowed_refs':
-        kwargs['allowed_refs'] = {'new_source'}
+@pytest.mark.parametrize("changed", ["context", "allowed_refs"])
+def test_changed_inputs_do_not_reuse_prior_cardinality_or_records(monkeypatch, changed):
+    progress: dict = {}
+    _patch_generator(monkeypatch, _generator_for(1))
+    kwargs = dict(
+        context={"criterion": "A"},
+        allowed_refs=set(),
+        progress=progress,
+        checkpoint=lambda key, value: progress.update({key: deepcopy(value)}),
+    )
+    runtime.run_record_template(None, IDENTIFIER, **kwargs)
+
+    if changed == "context":
+        kwargs["context"] = {"criterion": "B"}
     else:
-        template = runner.load_record_template(IDENTIFIER)
-        template['task'] += ' Clarified instruction.'
-        monkeypatch.setattr(runner, 'load_record_template', lambda _: template)
-    with pytest.raises(StopIteration):
-        runner.run_record_template(None, IDENTIFIER, **kwargs)
+        kwargs["allowed_refs"] = {"new_source"}
+
+    def must_regenerate(*args, **kwargs):
+        raise StopIteration("binding changed")
+
+    _patch_generator(monkeypatch, must_regenerate)
+    with pytest.raises(StopIteration, match="binding changed"):
+        runtime.run_record_template(None, IDENTIFIER, **kwargs)
 
 
-def test_saved_records_are_revalidated_before_any_model_call(monkeypatch):
-    progress = {}
-    replies = iter([response('record', {'trigger': 'x', 'owner': 'y'}), response('done')])
-    monkeypatch.setattr(runner, 'generate_fixed_template_value', lambda *a, **kw: next(replies))
-    kwargs = dict(context={}, allowed_refs=set(), progress=progress,
-                  checkpoint=lambda key, value: progress.update({key: value}))
-    runner.run_record_template(None, IDENTIFIER, **kwargs)
-    next(iter(progress.values()))[0]['evidence_refs'] = ['invented']
-    with pytest.raises(ValueError, match='TEMPLATE_EVIDENCE'):
-        runner.run_record_template(None, IDENTIFIER, **kwargs)
+def test_changed_template_contract_invalidates_saved_progress(monkeypatch):
+    progress: dict = {}
+    _patch_generator(monkeypatch, _generator_for(1))
+    kwargs = dict(
+        context={"criterion": "A"},
+        allowed_refs=set(),
+        progress=progress,
+        checkpoint=lambda key, value: progress.update({key: deepcopy(value)}),
+    )
+    runtime.run_record_template(None, IDENTIFIER, **kwargs)
+
+    original_runtime_loader = runtime.load_record_template
+    original_bounded_loader = bounded.load_record_template
+    original_single_loader = single.load_record_template
+
+    def changed(loader):
+        def load(identifier):
+            template = loader(identifier)
+            template["task"] += " Clarified instruction."
+            return template
+        return load
+
+    monkeypatch.setattr(runtime, "load_record_template", changed(original_runtime_loader))
+    monkeypatch.setattr(bounded, "load_record_template", changed(original_bounded_loader))
+    monkeypatch.setattr(single, "load_record_template", changed(original_single_loader))
+    _patch_generator(
+        monkeypatch,
+        lambda *args, **kwargs: (_ for _ in ()).throw(StopIteration("contract changed")),
+    )
+    with pytest.raises(StopIteration, match="contract changed"):
+        runtime.run_record_template(None, IDENTIFIER, **kwargs)
 
 
-def test_record_count_is_not_a_completion_limit(monkeypatch):
-    replies = iter([response('record', {'trigger': str(i), 'owner': 'server'})
-                    for i in range(129)] + [response('done')])
-    monkeypatch.setattr(runner, 'generate_fixed_template_value', lambda *a, **kw: next(replies))
-    result = runner.run_record_template(None, IDENTIFIER, context={}, allowed_refs=set())
-    assert len(result['records']) == 129
+def test_saved_record_is_revalidated_before_any_model_call(monkeypatch):
+    progress: dict = {}
+    _patch_generator(monkeypatch, _generator_for(1))
+    kwargs = dict(
+        context={},
+        allowed_refs=set(),
+        progress=progress,
+        checkpoint=lambda key, value: progress.update({key: deepcopy(value)}),
+    )
+    runtime.run_record_template(None, IDENTIFIER, **kwargs)
+    record_key = next(key for key in progress if key.startswith("single:"))
+    progress[record_key]["trigger"] = "   "
+    _patch_generator(
+        monkeypatch,
+        lambda *args, **kwargs: pytest.fail("invalid saved record must fail before model call"),
+    )
+    with pytest.raises(ValueError, match="SINGLE_TEMPLATE_RECORD"):
+        runtime.run_record_template(None, IDENTIFIER, **kwargs)
+
+
+def test_host_cardinality_has_no_legacy_128_record_completion_limit(monkeypatch):
+    calls: list[tuple[str, int | None]] = []
+    _patch_generator(monkeypatch, _generator_for(129, calls=calls))
+    result = runtime.run_record_template(None, IDENTIFIER, context={}, allowed_refs=set())
+    assert len(result["records"]) == 129
+    assert calls[0] == ("count", None)
+    assert calls[-1] == ("record", 128)
 
 
 def test_invalid_record_is_never_checkpointed(monkeypatch):
-    saved = []
-    monkeypatch.setattr(runner, 'generate_fixed_template_value',
-                            lambda *a, **kw: response('record', {'trigger': '   ', 'owner': 'server'}))
-    with pytest.raises(ValueError, match='TEMPLATE_RECORD'):
-        runner.run_record_template(None, IDENTIFIER, context={}, allowed_refs=set(),
-                                   checkpoint=lambda *args: saved.append(args))
-    assert not saved
+    saved: list[tuple[str, object]] = []
+
+    def generate(router, role, messages, *, response_schema, **kwargs):
+        del router, role, messages, kwargs
+        if set(response_schema.get("properties", {})) == {"count", "blocked_reason"}:
+            return {"count": 1, "blocked_reason": ""}
+        return {"trigger": "   ", "owner": "server"}
+
+    _patch_generator(monkeypatch, generate)
+    with pytest.raises(ValueError, match="SINGLE_TEMPLATE_RECORD"):
+        runtime.run_record_template(
+            None,
+            IDENTIFIER,
+            context={},
+            allowed_refs=set(),
+            checkpoint=lambda *args: saved.append(args),
+        )
+    assert any(key.startswith("record-cardinality-v1:") for key, _ in saved)
+    assert not any(key.startswith("single:") for key, _ in saved)
