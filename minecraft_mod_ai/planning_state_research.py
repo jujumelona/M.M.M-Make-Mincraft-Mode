@@ -11,12 +11,15 @@ catalog-first mod discovery followed by exact source/API/project evidence.
 
 import hashlib
 from collections.abc import Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
-from contextvars import copy_context
 from copy import deepcopy
 from typing import Any
 
 from .catalog_first_grounded_rag import forced_rag_bundle
+from .deadline_executor import (
+    ParallelExecutionTimeout,
+    ParallelTaskError,
+    iter_completed_with_deadlines,
+)
 from .model_concurrency import router_native_model_parallelism
 from .planning_state_contract import validate_planning_state
 from .planning_mod_discovery import catalog_queries, discovery_receipt
@@ -493,29 +496,60 @@ def collect_planning_state_research(
             1,
             min(len(runnable_domains), router_native_model_parallelism(router)),
         )
-        if workers == 1:
-            for domain in runnable_domains:
-                result = research_domain(domain)
-                domain_results[result["domain_id"]] = result
-        else:
-            contexts = [copy_context() for _ in runnable_domains]
-            with ThreadPoolExecutor(
+        try:
+            completed_domains = iter_completed_with_deadlines(
+                runnable_domains,
+                research_domain,
                 max_workers=workers,
-                thread_name_prefix="planning-research-domain",
-            ) as pool:
-                futures = [
-                    pool.submit(contexts[index].run, research_domain, domain)
-                    for index, domain in enumerate(runnable_domains)
-                ]
-                try:
-                    for domain, future in zip(runnable_domains, futures):
-                        result = future.result()
-                        domain_results[result["domain_id"]] = result
-                except BaseException:
-                    for future in futures:
-                        future.cancel()
-                    raise
-
+                stage="planning-research-domain",
+                sort_key=lambda domain: str(domain.get("domain_id") or ""),
+            )
+            for _domain, result in completed_domains:
+                domain_results[result["domain_id"]] = result
+        except ParallelExecutionTimeout as exc:
+            domain = exc.item if isinstance(exc.item, Mapping) else {}
+            domain_id = str(domain.get("domain_id") or "unknown")
+            reason = (
+                "PLANNING_RESEARCH_TIMEOUT: bounded research-domain deadline expired for "
+                f"{domain_id}: {exc}"
+            )
+            emit_root_cause(
+                "planning_research_timeout",
+                stage="planning_state",
+                operation="collect_planning_state_research",
+                result="FAIL",
+                reason=reason,
+                details={
+                    "domain_id": domain_id,
+                    "deadline_kind": exc.deadline_kind,
+                    "elapsed_seconds": exc.elapsed_seconds,
+                    "work_unit_timeout_seconds": exc.work_unit_timeout_seconds,
+                    "policy": "retryable_abort_current_stage",
+                },
+            )
+            raise TimeoutError(reason) from exc
+        except ParallelTaskError as exc:
+            domain = exc.item if isinstance(exc.item, Mapping) else {}
+            domain_id = str(domain.get("domain_id") or "unknown")
+            cause = exc.cause
+            if isinstance(cause, (TimeoutError, ConnectionError, InterruptedError)):
+                reason = (
+                    "PLANNING_RESEARCH_TRANSPORT_INTERRUPTED: retryable research-domain "
+                    f"interruption for {domain_id}: {type(cause).__name__}: {cause}"
+                )
+                emit_root_cause(
+                    "planning_research_transport_interrupted",
+                    stage="planning_state",
+                    operation="collect_planning_state_research",
+                    result="FAIL",
+                    reason=reason,
+                    details={
+                        "domain_id": domain_id,
+                        "policy": "retryable_abort_current_stage",
+                    },
+                )
+                raise TimeoutError(reason) from cause
+            raise cause
     notes: list[dict[str, Any]] = []
     discovery_by_domain: dict[str, dict[str, Any]] = {}
     provider_diagnostics_by_domain: dict[str, list[dict[str, Any]]] = {}
