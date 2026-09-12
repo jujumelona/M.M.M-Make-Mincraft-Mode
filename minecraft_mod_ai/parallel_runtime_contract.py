@@ -9,14 +9,13 @@ from functools import lru_cache, wraps
 from pathlib import Path
 from typing import Any, TypeVar
 
+from .deadline_executor import iter_completed_with_deadlines
+from .model_concurrency import planning_work_unit_timeout_seconds
+
 _T = TypeVar("_T")
 _R = TypeVar("_R")
 _PREFETCH_LOCK = threading.RLock()
 _PREFETCH_FUTURES: dict[tuple[str, str], Future[str]] = {}
-_PREFETCH_EXECUTOR = ThreadPoolExecutor(
-    max_workers=2,
-    thread_name_prefix="mmm_model_prefetch",
-)
 
 
 def _env_workers(name: str, default: int, *, maximum: int = 32) -> int:
@@ -36,16 +35,30 @@ def _ordered_parallel_map(
     *,
     workers: int,
 ) -> list[_R]:
-    """Run independent work concurrently while preserving deterministic order."""
-    items = list(values)
+    """Run independent work concurrently with deadlines and stable input order."""
+    items = tuple(values)
     if len(items) <= 1 or workers <= 1:
         return [function(item) for item in items]
-    with ThreadPoolExecutor(
-        max_workers=min(workers, len(items)),
-        thread_name_prefix="mmm_parallel_io",
-    ) as pool:
-        futures = [pool.submit(function, item) for item in items]
-        return [future.result() for future in futures]
+
+    indexed = tuple(enumerate(items))
+
+    def run_indexed(item: tuple[int, _T]) -> tuple[int, _R]:
+        index, value = item
+        return index, function(value)
+
+    results: dict[int, _R] = {}
+    for _item, indexed_result in iter_completed_with_deadlines(
+        indexed,
+        run_indexed,
+        max_workers=min(workers, len(indexed)),
+        stage="parallel_runtime_io",
+        sort_key=lambda item: item[0],
+    ):
+        index, result = indexed_result
+        results[index] = result
+    if len(results) != len(items):
+        raise RuntimeError("parallel runtime map lost a completed result")
+    return [results[index] for index in range(len(items))]
 
 
 def _colab_setup_active() -> bool:
@@ -78,6 +91,28 @@ def _prefetch_model_worker(config: Any, resolver: Callable[[Any], str]) -> str:
     return resolver(config)
 
 
+def _start_daemon_prefetch(
+    future: Future[str],
+    config: Any,
+    resolver: Callable[[Any], str],
+) -> None:
+    """Run model prefetch without creating a process-exit-blocking executor worker."""
+
+    def run() -> None:
+        try:
+            result = _prefetch_model_worker(config, resolver)
+        except BaseException as exc:
+            future.set_exception(exc)
+        else:
+            future.set_result(result)
+
+    threading.Thread(
+        target=run,
+        name="mmm-model-prefetch",
+        daemon=True,
+    ).start()
+
+
 def _ensure_model_prefetch(
     config: Any,
     resolver: Callable[[Any], str],
@@ -90,19 +125,20 @@ def _ensure_model_prefetch(
         future = _PREFETCH_FUTURES.get(key)
         if future is not None:
             return future
-        future = _PREFETCH_EXECUTOR.submit(_prefetch_model_worker, config, resolver)
+        future = Future()
         _PREFETCH_FUTURES[key] = future
+        _start_daemon_prefetch(future, config, resolver)
     label = key[1] or Path(key[0]).name or key[0]
     print("GGUF prefetch: started", label, flush=True)
     return future
 
 
 def resolve_model_path(config: Any, resolver: Callable[[Any], str]) -> str:
-    """Reuse an already-running model download, otherwise resolve synchronously."""
+    """Reuse an already-running model download without permitting an infinite wait."""
     future = _ensure_model_prefetch(config, resolver)
     if future is None:
         return resolver(config)
-    return future.result()
+    return future.result(timeout=planning_work_unit_timeout_seconds())
 
 
 def prefetch_profile(profile: Any) -> None:
@@ -221,7 +257,7 @@ class _PrefetchedDiscoveryClient:
         )
         future = self._futures.get(key)
         if future is not None:
-            return future.result()
+            return future.result(timeout=planning_work_unit_timeout_seconds())
         return self._base.search(
             provider,
             query,
@@ -310,11 +346,12 @@ def _parallel_discover_seed_bundle_factory(
                 route_limit=route_limit,
             )
 
-        with ThreadPoolExecutor(
+        pool = ThreadPoolExecutor(
             max_workers=min(workers, len(selected_routes)),
             thread_name_prefix="mmm_discovery",
-        ) as pool:
-            futures: dict[tuple[Any, ...], Future[dict[str, Any]]] = {}
+        )
+        futures: dict[tuple[Any, ...], Future[dict[str, Any]]] = {}
+        try:
             for route in selected_routes:
                 provider = route["provider"]
                 provider_query = route["query"]
@@ -352,6 +389,10 @@ def _parallel_discover_seed_bundle_factory(
                 route_cursor=route_cursor,
                 route_limit=route_limit,
             )
+        finally:
+            for future in futures.values():
+                future.cancel()
+            pool.shutdown(wait=False, cancel_futures=True)
 
     discover_seed_bundle_parallel._mmm_parallel_routes = True
     return discover_seed_bundle_parallel
@@ -525,7 +566,9 @@ class _PrefetchedRetriever:
         if any(kwargs.get(name) != value for name, value in expected.items()):
             receipt = self._retrieve(query, **kwargs)
         else:
-            receipt = self._submit(query, limit).result()
+            receipt = self._submit(query, limit).result(
+                timeout=planning_work_unit_timeout_seconds()
+            )
 
         # Baseline authored queries are useful evidence seeds, but they cannot trigger
         # speculative corrective searches or satisfy a criterion merely by returning a hit.
@@ -628,22 +671,27 @@ def _parallel_retrieve_domain_evidence_factory(
                 domain_criteria=domain_criteria,
             )
 
-        with ThreadPoolExecutor(
+        pool = ThreadPoolExecutor(
             max_workers=min(workers, max(1, len(primary_queries))),
             thread_name_prefix="mmm_official_rag",
-        ) as pool:
-            prefetched = _PrefetchedRetriever(
-                selected_retrieve,
-                pool,
-                minecraft_version=adapter.minecraft_version,
-                loader=adapter.loader,
-                mappings=adapter.yarn_mappings,
-                query_criteria=query_criteria,
-            )
+        )
+        prefetched = _PrefetchedRetriever(
+            selected_retrieve,
+            pool,
+            minecraft_version=adapter.minecraft_version,
+            loader=adapter.loader,
+            mappings=adapter.yarn_mappings,
+            query_criteria=query_criteria,
+        )
+        try:
             if workers > 1:
                 for query in primary_queries:
                     prefetched.prefetch_primary(query)
             graph = original_retrieve_graph(augmented_brief, retrieve=prefetched)
+        finally:
+            for future in tuple(prefetched._futures.values()):
+                future.cancel()
+            pool.shutdown(wait=False, cancel_futures=True)
 
         return _attach_coverage_status(
             graph,
