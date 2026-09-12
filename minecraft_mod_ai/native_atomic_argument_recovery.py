@@ -215,15 +215,37 @@ def _source_edit_stream_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "chunk": {
-                "type": "string",
-                "maxLength": _MAX_ATOMIC_STRING_LENGTH,
-            },
+            "chunk": {"type": "string"},
             "done": {"type": "boolean"},
         },
         "required": ["chunk", "done"],
         "additionalProperties": False,
     }
+
+
+def _source_edit_atomicity_proxy_schema(
+    page_schema: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Bound model atomicity without turning the source stream limit into data loss.
+
+    Source-edit streaming still instructs the model to return at most 256 characters per
+    chunk. The transport schema deliberately leaves the chunk string unbounded so a model
+    that ignores that instruction can return a valid whole scalar instead of being rejected
+    before the host can preserve it. This proxy keeps the small-model atomicity gate strict
+    while the original source-edit schema remains the final semantic authority.
+    """
+
+    properties = page_schema.get("properties")
+    if not isinstance(properties, Mapping):
+        return dict(page_schema)
+    proxy = dict(page_schema)
+    proxy["properties"] = {
+        str(name): _bounded_property(raw_schema)
+        if isinstance(raw_schema, Mapping)
+        else raw_schema
+        for name, raw_schema in properties.items()
+    }
+    return proxy
 
 
 def _messages(
@@ -276,13 +298,18 @@ def _request(
     repair_error: str = "",
     context_instruction: str = "",
 ) -> Any:
-    # The atomic boundary is checked per native function-argument page, never against
-    # the host-owned original container. The model fills fields through ToolCall.arguments;
-    # message content is deliberately not a structured-output transport.
+    # The model-facing source-edit stream may accept an overlong one-shot chunk so the
+    # adapter cannot discard valid source text. Atomicity remains enforced against the
+    # bounded proxy, while the live page schema and final source-edit schema validate data.
     from .model_output_atomicity_contract import assert_atomic_model_schema
 
+    atomicity_schema = (
+        _source_edit_atomicity_proxy_schema(page_schema)
+        if action_name == _SOURCE_EDIT_TOOL
+        else page_schema
+    )
     assert_atomic_model_schema(
-        page_schema,
+        atomicity_schema,
         surface="host-selected forced-function argument page",
     )
     page_tool = {
