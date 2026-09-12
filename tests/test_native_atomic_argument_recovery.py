@@ -182,6 +182,10 @@ def test_discriminated_source_edit_recovery_drops_union_pollution() -> None:
         tool_choice={"type": "function", "function": {"name": "apply_source_edit"}},
     )
     schemas_seen: list[tuple[str, ...]] = []
+    stream_values = {
+        "path": "src/main/java/dev/mmm/debugfixture/DebugToken.java",
+        "content": "package dev.mmm.debugfixture;\nfinal class DebugToken {}\n",
+    }
 
     def current(adapter, page_request):
         del adapter
@@ -204,23 +208,16 @@ def test_discriminated_source_edit_recovery_drops_union_pollution() -> None:
                     ),
                 )
             )
-        assert properties == ("path", "content")
+        assert properties == ("chunk", "done")
+        instruction = str(page_request.messages[-1]["content"])
+        field_name = next(
+            name for name in stream_values if f"field {name!r}" in instruction
+        )
         return GenerationResponse(
             tool_calls=(
                 SimpleNamespace(
                     name="apply_source_edit",
-                    arguments={
-                        "path": "src/main/java/dev/mmm/debugfixture/DebugToken.java",
-                        "content": "package dev.mmm.debugfixture;\nfinal class DebugToken {}\n",
-                        "old": "pollution",
-                        "new": "pollution",
-                        "anchor": "pollution",
-                        "count": 7,
-                        "declaration": "pollution",
-                        "import_name": "pollution",
-                        "member": "pollution",
-                        "package_name": "pollution",
-                    },
+                    arguments={"chunk": stream_values[field_name], "done": True},
                 ),
             )
         )
@@ -233,7 +230,11 @@ def test_discriminated_source_edit_recovery_drops_union_pollution() -> None:
         prefix="test",
     )
 
-    assert schemas_seen == [("operation",), ("path", "content")]
+    assert schemas_seen == [
+        ("operation",),
+        ("chunk", "done"),
+        ("chunk", "done"),
+    ]
     assert len(turn.tool_calls) == 1
     assert turn.tool_calls[0].arguments == {
         "operation": "create_file",
