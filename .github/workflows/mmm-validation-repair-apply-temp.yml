@@ -1,0 +1,58 @@
+name: MMM validation repair apply
+
+on:
+  push:
+    paths:
+      - '.github/workflows/mmm-validation-repair-apply-temp.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Apply tested patch
+        run: |
+          python .github/scripts/mmm_fix_validation_repair_logs_temp.py
+          python .github/scripts/mmm_fix_validation_repair_runtime_temp.py
+      - name: Compile
+        run: python -m compileall -q minecraft_mod_ai tests/test_validation_repair_regressions.py
+      - name: Install test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Run focused regressions
+        run: python -m pytest -q tests/test_validation_repair_regressions.py
+      - name: Commit production fix and clean temporary files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm -f .github/workflows/mmm-validation-repair-apply-temp.yml
+          rm -f .github/workflows/mmm-validation-repair-diagnose-temp.yml
+          rm -f .github/workflows/mmm-fix-validation-repair-logs-temp.yml
+          rm -f .github/scripts/mmm_fix_validation_repair_logs_temp.py
+          rm -f .github/scripts/mmm_fix_validation_repair_runtime_temp.py
+          git add minecraft_mod_ai/validation_checkpoint_policy.py minecraft_mod_ai/repair_engine.py minecraft_mod_ai/adaptive_retrieval_contract.py tests/test_validation_repair_regressions.py .github/workflows .github/scripts
+          git diff --cached --check
+          git commit -m 'fix: bind final validation and repair diagnostics'
+          for attempt in 1 2 3; do
+            git fetch origin main
+            if ! git rebase origin/main; then
+              git rebase --abort || true
+              echo 'Concurrent main change conflicted with tested patch; refusing force push.' >&2
+              exit 1
+            fi
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+          done
+          echo 'Unable to push tested patch after safe retries.' >&2
+          exit 1
