@@ -6,6 +6,12 @@ from pathlib import Path, PurePosixPath
 import yaml
 from jsonschema import Draft202012Validator
 
+from .model_output_atomicity_contract import (
+    MAX_MODEL_ARRAY_ITEMS,
+    MAX_MODEL_STRING_CHARS,
+    assert_atomic_model_schema,
+)
+
 RUNTIME_TEMPLATE_ROOT = Path(__file__).with_name("templates").resolve()
 ROOT = RUNTIME_TEMPLATE_ROOT
 
@@ -144,6 +150,44 @@ def _apply_record_host_policy(identifier: str, value: dict):
     return value
 
 
+def _materialize_atomic_record_schema(schema: dict) -> dict:
+    """Compile authoring shorthand into the global executable model contract.
+
+    Template YAML may omit primitive size bounds that are already owned by the global
+    model-output atomicity contract. The catalog materializes only missing bounds from
+    that SSOT. Explicit bounds are never reduced, and structural limits are never
+    rewritten, so an author cannot bypass fail-closed validation by loading a template.
+    """
+    value = deepcopy(schema)
+
+    def visit(node):
+        if isinstance(node, dict):
+            if node.get("type") == "string" and "enum" not in node:
+                node.setdefault("maxLength", MAX_MODEL_STRING_CHARS)
+            if node.get("type") == "array":
+                node.setdefault("maxItems", MAX_MODEL_ARRAY_ITEMS)
+            for child in node.values():
+                if isinstance(child, (dict, list)):
+                    visit(child)
+        elif isinstance(node, list):
+            for child in node:
+                if isinstance(child, (dict, list)):
+                    visit(child)
+
+    visit(value)
+    return value
+
+
+def _compile_record_schema(identifier: str, schema: dict) -> dict:
+    compiled = _materialize_atomic_record_schema(schema)
+    Draft202012Validator.check_schema(compiled)
+    assert_atomic_model_schema(
+        compiled,
+        surface=f"runtime record template {identifier!r}",
+    )
+    return compiled
+
+
 def load_template(identifier: str):
     requested = _canonical_identifier(identifier)
     canonical = _CRITERION_ALIASES.get(requested, requested)
@@ -159,7 +203,9 @@ def load_record_template(identifier: str):
         value = load_template(requested)
     if "record_schema" not in value:
         raise ValueError(f"TEMPLATE_RECORD_SCHEMA: missing record schema for {requested}")
-    return _apply_record_host_policy(requested, value)
+    value = _apply_record_host_policy(requested, value)
+    value["record_schema"] = _compile_record_schema(requested, value["record_schema"])
+    return value
 
 
 def detail_records():
