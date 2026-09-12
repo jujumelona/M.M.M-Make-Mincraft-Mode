@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-"""Compact, non-authoritative repository candidates projected from grounded RAG.
+"""Non-authoritative repository candidates projected from grounded RAG.
 
-This module is deliberately host-only.  It may discover that a materialized GitHub
-record is worth *checking* as a donor, but it can never authorize source reuse.  The
+This module is deliberately host-only. It may discover that a materialized GitHub
+record is worth *checking* as a donor, but it can never authorize source reuse. The
 existing grounded_source_reuse owner remains responsible for immutable revision,
 license, dependency/source closure, target compatibility, and compile proof.
+
+Candidate projection is a recall stage. It therefore does not impose semantic top-N
+limits: completion and candidate selection are decided later from evidence, not by an
+arbitrary cardinality cut in retrieval.
 """
 
 import hashlib
@@ -16,8 +20,6 @@ from typing import Any
 from urllib.parse import urlparse
 
 _SCHEMA = "mmm/repository-candidate-receipt-v1"
-_MAX_PER_DOMAIN = 3
-_MAX_GLOBAL = 8
 _MAX_EVIDENCE_CHARS = 640
 _REPOSITORY_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$")
 _TOKEN_RE = re.compile(r"[a-z0-9]+|[가-힣]{2,}", re.IGNORECASE)
@@ -122,13 +124,25 @@ def _source_code_domain(domain: Mapping[str, Any]) -> bool:
     )
 
 
+def _optional_limit(rows: list[dict[str, Any]], limit: int | None) -> list[dict[str, Any]]:
+    """Apply only an explicitly requested presentation/consumer limit.
+
+    Normal planning retrieval passes ``None`` and retains every deduplicated candidate.
+    This keeps backwards compatibility for callers that explicitly request a bounded
+    preview without allowing a hidden default cap to alter research semantics.
+    """
+    if limit is None:
+        return rows
+    return rows[:max(0, int(limit))]
+
+
 def project_repository_candidates(
     domain: Mapping[str, Any],
     grounded: Mapping[str, Any],
     *,
-    per_domain_limit: int = _MAX_PER_DOMAIN,
+    per_domain_limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Project bounded GitHub donor *candidates* from host-materialized source records."""
+    """Project all deduplicated GitHub donor *candidates* from grounded records."""
     if not _source_code_domain(domain):
         return []
     domain_id = _text(domain.get("domain_id"))
@@ -197,16 +211,16 @@ def project_repository_candidates(
         by_repo.values(),
         key=lambda row: (-float(row.get("candidate_score", 0.0)), str(row.get("repository", "")).casefold()),
     )
-    return ranked[: max(1, int(per_domain_limit))]
+    return _optional_limit(ranked, per_domain_limit)
 
 
 def merge_repository_candidates(
     existing: Sequence[Mapping[str, Any]] | None,
     new: Sequence[Mapping[str, Any]] | None,
     *,
-    global_limit: int = _MAX_GLOBAL,
+    global_limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Merge candidate receipts without ever upgrading their authority."""
+    """Merge every candidate receipt without ever upgrading its authority."""
     by_repo: dict[str, dict[str, Any]] = {}
     for raw in [*(existing or ()), *(new or ())]:
         if not isinstance(raw, Mapping):
@@ -244,11 +258,11 @@ def merge_repository_candidates(
         by_repo.values(),
         key=lambda row: (-float(row.get("candidate_score", 0.0) or 0.0), str(row.get("repository", "")).casefold()),
     )
-    return ranked[: max(1, int(global_limit))]
+    return _optional_limit(ranked, global_limit)
 
 
 def planning_state_repository_cards(design: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
-    """Read only host-stamped candidate receipts from the planning-state SSOT."""
+    """Read every host-stamped candidate receipt from the planning-state SSOT."""
     state = design.get("_planning_state")
     rows = state.get("repository_candidates") if isinstance(state, Mapping) else None
     cards: list[dict[str, Any]] = []
@@ -276,7 +290,7 @@ def planning_state_repository_cards(design: Mapping[str, Any]) -> tuple[dict[str
                 "source_reuse_authority": "verification_required",
             }
         )
-    return tuple(cards[:_MAX_GLOBAL])
+    return tuple(cards)
 
 
 __all__ = [

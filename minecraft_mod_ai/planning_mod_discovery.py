@@ -1,17 +1,23 @@
 """Host-owned catalog queries and receipts, separate from API/source evidence.
 
 Catalog search is keyword retrieval (Modrinth /search), not an instruction-following
-RAG endpoint. Decompose the approved capability into focused and broader queries;
-union their hits by catalog identity. No model call or hardcoded mod name is needed.
+RAG endpoint. Build a query bundle from the approved capability, requirement wording,
+research objective, and original task context; union hits by catalog identity. A zero-hit
+path is retrieval evidence, never proof that no candidate exists.
 """
 from __future__ import annotations
 
-import re
 import json
+import re
 from collections.abc import Mapping
 from typing import Any
 
 CATALOG_PROVIDERS = frozenset({"curseforge", "modrinth"})
+_CATALOG_QUERY_CHARS = 420
+
+
+def _query_text(value: Any) -> str:
+    return " ".join(str(value or "").split()).strip()[:_CATALOG_QUERY_CHARS]
 
 
 def discovery_context(discovery: Mapping[str, Any]) -> str:
@@ -25,7 +31,19 @@ def discovery_context(discovery: Mapping[str, Any]) -> str:
     }, ensure_ascii=False)
 
 
-def catalog_queries(state: Mapping[str, Any], research: Mapping[str, Any]) -> list[str]:
+def catalog_queries(
+    state: Mapping[str, Any],
+    research: Mapping[str, Any],
+    *,
+    prompt: str = "",
+) -> list[str]:
+    """Compile a recall-oriented catalog query bundle without replacing task context.
+
+    ``semantic_capability`` is useful as one retrieval facet, but it is not allowed to
+    become the entire search universe. Requirement wording, research intent and the
+    original user prompt remain independent query paths so a narrow compiled label can
+    fail without erasing the broader task.
+    """
     requirement = next((row for row in state.get("decisions", [])
                         if isinstance(row, Mapping)
                         and row.get("decision_type") == "requirement"
@@ -34,13 +52,28 @@ def catalog_queries(state: Mapping[str, Any], research: Mapping[str, Any]) -> li
     parts = [" ".join(re.findall(r"[\w]+", part.replace("_", " ")))
              for part in capability.split(".")]
     parts = [part for part in parts if part]
+
+    candidates: list[str] = []
     if parts:
         # Relax conjunctive feature names so a narrow phrase cannot hide the ecosystem.
-        return list(dict.fromkeys([" ".join(parts), *parts]))
+        candidates.extend([" ".join(parts), *parts])
+    for value in (
+        requirement.get("statement"),
+        research.get("objective"),
+        research.get("information_needed"),
+        prompt,
+    ):
+        query = _query_text(value)
+        if query:
+            candidates.append(query)
+
+    if candidates:
+        return list(dict.fromkeys(candidates))
+
     # Reference/repository questions without a compiled capability retain their own
     # queries; do not borrow another requirement's identity or invent a mod name.
-    return list(dict.fromkeys(str(q).strip() for q in research.get("queries", [])
-                              if str(q).strip()))
+    return list(dict.fromkeys(_query_text(q) for q in research.get("queries", [])
+                              if _query_text(q)))
 
 
 def discovery_receipt(domain_id: str, grounded: Mapping[str, Any]) -> dict[str, Any]:
@@ -79,6 +112,9 @@ def discovery_receipt(domain_id: str, grounded: Mapping[str, Any]) -> dict[str, 
     lost_hits = any(row["result_count"] > 0 for row in attempts) and not candidates
     status = ("candidates_found" if candidates else "candidate_projection_failed" if lost_hits
               else "no_results" if searched else "catalog_unavailable")
+    # Running a search to completion is not the same as satisfying candidate discovery.
+    # Zero hits are a failed retrieval path and must not authorize downstream planning.
+    complete = bool(candidates)
     return {"research_ref": domain_id, "status": status, "attempts": attempts,
-            "candidates": list(candidates.values()),
-            "complete": bool(candidates) or (searched and not lost_hits)}
+            "candidates": list(candidates.values()), "complete": complete,
+            "corrective_retrieval_required": bool(searched and not candidates and not lost_hits)}

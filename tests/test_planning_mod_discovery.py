@@ -6,7 +6,10 @@ from minecraft_mod_ai.catalog_first_grounded_rag import _domain_specs
 from minecraft_mod_ai.planning_mod_discovery import catalog_queries, discovery_receipt
 from minecraft_mod_ai.planning_state_implementation import _requirement_grounding
 import json
-from minecraft_mod_ai.research_reuse_candidates import project_repository_candidates
+from minecraft_mod_ai.research_reuse_candidates import (
+    merge_repository_candidates,
+    project_repository_candidates,
+)
 
 
 def _state():
@@ -33,10 +36,20 @@ def _grounded(*, status="available", hits=True, source_url=""):
                          "source_url": source_url}}] if hits else []}]}
 
 
-def test_catalog_queries_use_approved_capability_and_do_not_send_api_instructions():
+def test_catalog_queries_preserve_task_context_and_do_not_send_api_instructions():
     state = _state()
-    queries = catalog_queries(state, state["research_queue"][0])
-    assert queries == ["space travel", "space", "travel"]
+    research = state["research_queue"][0]
+    prompt = "Farm resources, trade for money, build and upgrade a spaceship, then explore planets"
+    queries = catalog_queries(state, research, prompt=prompt)
+    assert queries == [
+        "space travel",
+        "space",
+        "travel",
+        "Travel to space",
+        "Find useful implementation/reuse options for space travel",
+        "Concrete implementation patterns and support artifacts",
+        prompt,
+    ]
     specs = _domain_specs({"providers": ["modrinth", "official_docs"],
                            "catalog_queries": queries, "queries": ["Minecraft API teleport"]})
     assert ("space", ("modrinth",)) in specs
@@ -61,10 +74,11 @@ def test_catalog_mod_without_repository_survives_and_linked_repo_does_not_need_f
     ("available", "no_results"), ("error", "catalog_unavailable"),
     ("not_configured", "catalog_unavailable"),
 ])
-def test_empty_search_is_distinguished_from_transport_failure(status, expected):
+def test_empty_search_never_completes_candidate_discovery(status, expected):
     receipt = discovery_receipt("r_001", _grounded(status=status, hits=False))
     assert receipt["status"] == expected
-    assert receipt["complete"] == (status == "available")
+    assert not receipt["complete"]
+    assert receipt["corrective_retrieval_required"] == (status == "available")
 
 
 def test_catalog_hits_lost_during_projection_are_not_success():
@@ -73,6 +87,26 @@ def test_catalog_hits_lost_during_projection_are_not_success():
     receipt = discovery_receipt("r_001", grounded)
     assert receipt["status"] == "candidate_projection_failed"
     assert not receipt["complete"]
+
+
+def test_repository_candidate_merge_has_no_hidden_global_top_n_cut():
+    candidates = []
+    for index in range(12):
+        candidates.append({
+            "repository": f"example/repo-{index}",
+            "candidate_score": 1.0 / (index + 1),
+            "domain_ids": ["r_001"],
+            "source_ids": [f"github:example/repo-{index}"],
+            "source_urls": [f"https://github.com/example/repo-{index}"],
+            "query_sha256": [f"sha256:{index}"],
+            "evidence_text": "spacecraft gameplay",
+            "evidence_tokens": ["spacecraft", "gameplay"],
+            "origin": "host_grounded_retrieval",
+            "reference_only": True,
+            "source_reuse_authority": "verification_required",
+        })
+    merged = merge_repository_candidates([], candidates)
+    assert len(merged) == 12
 
 
 @pytest.mark.parametrize("available", [True, False])
@@ -88,7 +122,7 @@ def test_research_to_criterion_preserves_catalog_or_blocks_unavailable_catalog(m
         hits=available, status="available" if available else "error"))
     monkeypatch.setattr(backend, "_materialize_domain_evidence_document", lambda *a: {})
     monkeypatch.setattr(pipeline, "_validate_document_grounding", lambda *a, **k: None)
-    # API evidence alone used to pass even when the catalog search had failed.
+    # API evidence alone must not pass when candidate discovery did not produce a candidate.
     monkeypatch.setattr(research, "research_document_domain", lambda *a, **k: {
         "domain_id": "r_001", "sufficient": True,
         "claims": [{"claim": "Server owns dimension transfer", "evidence_refs": ["api:transfer"]}],
