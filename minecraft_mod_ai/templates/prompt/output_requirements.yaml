@@ -15,7 +15,7 @@ record_schema:
       maxLength: 256
   required:
   - statement
-  additionalPproperties: false
+  additionalProperties: false
 input_schema:
   type: object
   properties:
