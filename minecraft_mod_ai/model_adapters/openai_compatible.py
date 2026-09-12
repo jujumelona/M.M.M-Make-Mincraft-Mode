@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ..generation_output_budget import apply_payload_generation_budget
-from ..model_concurrency import ModelConcurrencyTimeout, remaining_model_execution_seconds
+from ..model_concurrency import ModelExecutionDeadlineExceeded, remaining_model_execution_seconds
 from .base import (
     GenerationRequest,
     GenerationResponse,
@@ -52,7 +52,7 @@ def _provider_timeout_seconds(*, default: float = _DEFAULT_REMOTE_TIMEOUT_SECOND
     if remaining is None:
         return float(default)
     if remaining <= 0.0:
-        raise ModelConcurrencyTimeout(
+        raise ModelExecutionDeadlineExceeded(
             "Model execution deadline expired before the remote provider request started."
         )
     return max(0.001, min(float(default), float(remaining)))
@@ -197,7 +197,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
                 tool_calls=tool_calls,
                 reasoning_content=reasoning.strip(),
             )
-        except ModelConcurrencyTimeout:
+        except ModelExecutionDeadlineExceeded:
             raise
         except ModelBackendError:
             raise
@@ -283,7 +283,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
                 if temporary.exists():
                     temporary.unlink()
             return target
-        except ModelConcurrencyTimeout:
+        except ModelExecutionDeadlineExceeded:
             raise
         except ModelBackendError:
             raise
