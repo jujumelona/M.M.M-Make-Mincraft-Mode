@@ -3,7 +3,6 @@ from __future__ import annotations
 from copy import deepcopy
 import pytest
 
-from minecraft_mod_ai.planning_detail_template import WORKSHEET_SECTIONS
 from minecraft_mod_ai import planning_state_adaptive_implementation as adaptive
 from minecraft_mod_ai.minecraft_template_steps import responsibility_ids_for_artifact
 
@@ -22,6 +21,36 @@ def _base_state(*, blockers=None, decisions=None) -> dict[str, object]:
     }
 
 
+def _fake_requirement_plan(requirement, requirement_ref, selected_sections, worksheet, allowed):
+    del requirement, worksheet, allowed
+    return {
+        "requirement_ref": requirement_ref,
+        "required_detail_sections": list(selected_sections),
+        "engineering_worksheet": {},
+        "worksheet_contract": "authored_concern_records",
+        "implementation_capabilities": [],
+        "implementation_obligations": [],
+        "artifact_obligations": [],
+        "grounded_bindings": [],
+        "reuse_candidates": [],
+        "verification_obligations": [],
+    }
+
+
+def _default_compile_criterion(
+    _router,
+    *,
+    requirement_ref,
+    criterion_index,
+    **_kwargs,
+):
+    return {
+        "requirement_ref": requirement_ref,
+        "criterion_index": criterion_index,
+        "section_updates": [],
+    }
+
+
 def _patch_compile_boundaries(monkeypatch, requirements):
     monkeypatch.setattr(adaptive, "validate_planning_state", lambda *args, **kwargs: None)
     monkeypatch.setattr(adaptive, "_requirement_decisions", lambda _state: requirements)
@@ -31,6 +60,12 @@ def _patch_compile_boundaries(monkeypatch, requirements):
         lambda _state, _requirement_ref: ([], set()),
     )
     monkeypatch.setattr(adaptive, "router_native_model_parallelism", lambda _router: 8)
+    # These tests exercise artifact decomposition/checkpointing rather than the record
+    # template transport. Acceptance work remains mandatory, so make that independent
+    # boundary deterministic instead of relying on an empty fixture router.
+    monkeypatch.setattr(adaptive, "_compile_criterion", _default_compile_criterion)
+    monkeypatch.setattr(adaptive, "assemble_worksheet_from_fragments", lambda *args, **kwargs: {})
+    monkeypatch.setattr(adaptive, "_assemble_requirement_plan", _fake_requirement_plan)
 
 
 def test_requirement_with_minecraft_artifacts_decomposes_to_canonical_responsibility_steps(monkeypatch):
@@ -90,6 +125,7 @@ def test_requirement_with_minecraft_artifacts_decomposes_to_canonical_responsibi
     assert "item" in plan["artifact_plans"]
     assert len(plan["artifact_plans"]["item"]["responsibility_steps"]) == len(expected_steps)
     assert plan["artifact_obligations"] == [{"kind": "item", "responsibility_steps": len(expected_steps)}]
+    assert plan["acceptance_criteria_complete"] is True
 
 
 def test_artifact_step_checkpointing_and_resumption_skips_completed_steps(monkeypatch):
@@ -141,7 +177,6 @@ def test_artifact_step_checkpointing_and_resumption_skips_completed_steps(monkey
 
     assert len(calls) == fail_on_index + 1
     last_checkpoint = checkpoints[-1]
-    # Verify blocker was recorded for the failed artifact step
     blockers = [
         b for b in last_checkpoint["blockers"]
         if b.get("stage") == "detailed_planning" and b.get("terminal") is True
@@ -150,7 +185,6 @@ def test_artifact_step_checkpointing_and_resumption_skips_completed_steps(monkey
     failed_step = expected_steps[fail_on_index]
     assert blockers[0]["section"] == f"artifact:item:{failed_step}"
 
-    # Now remove the blocker and resume execution
     last_checkpoint["blockers"] = []
     resume_calls: list[str] = []
 
@@ -181,7 +215,6 @@ def test_artifact_step_checkpointing_and_resumption_skips_completed_steps(monkey
     )
 
     assert resumed_state["plan_ready"] is True
-    # Verify that the first 3 steps were NOT re-executed during resumption
     assert resume_calls == expected_steps[fail_on_index:]
 
 
@@ -238,11 +271,6 @@ def test_heterogeneous_batch_artifacts_and_fallback_criteria(monkeypatch):
 
     monkeypatch.setattr(adaptive, "_compile_artifact_step", mock_compile_artifact_step)
     monkeypatch.setattr(adaptive, "_compile_criterion", mock_compile_criterion)
-    monkeypatch.setattr(
-        adaptive,
-        "assemble_worksheet_from_fragments",
-        lambda *args, **kwargs: adaptive._default_worksheet_for_requirement({}, WORKSHEET_SECTIONS),
-    )
 
     state = adaptive.compile_progress_monotone_detailed_plans(
         _Router(),
@@ -251,11 +279,14 @@ def test_heterogeneous_batch_artifacts_and_fallback_criteria(monkeypatch):
     )
 
     assert state["plan_ready"] is True
-    # req_block used artifact steps
     block_steps = responsibility_ids_for_artifact("block")
     assert len(artifact_calls) == len(block_steps)
     assert all(c[0] == "req_block" for c in artifact_calls)
 
-    # req_logic used criterion steps
-    assert len(criteria_calls) == 2
-    assert all(c[0] == "req_logic" for c in criteria_calls)
+    # Artifact planning and acceptance planning are independent obligations. The block
+    # requirement therefore contributes one criterion in addition to the two logic ones.
+    assert set(criteria_calls) == {
+        ("req_block", 0),
+        ("req_logic", 0),
+        ("req_logic", 1),
+    }
