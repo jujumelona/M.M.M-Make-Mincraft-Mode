@@ -77,6 +77,18 @@ def test_package_init_has_one_bootstrap_and_no_contract_patch_chain() -> None:
     assert 'integrated_contract_bootstrap' not in source
     assert 'platform_mcp_compatibility_contract' not in source
 
+
+def test_managed_llama_reuse_is_owned_by_model_runtime_stage() -> None:
+    init_source = _text('__init__.py')
+    assert 'managed_llama_reuse_contract' not in init_source
+
+    source = _BOOTSTRAP.read_text(encoding='utf-8')
+    model_start = source.index('def _install_model_runtime_contracts() -> None:')
+    validation_start = source.index('def _install_validation_contracts() -> None:')
+    model_runtime = source[model_start:validation_start]
+    assert 'from .managed_llama_reuse_contract import install as install_managed_llama_reuse' in model_runtime
+    assert 'install_managed_llama_reuse()' in model_runtime
+
 def test_llama_pipeline_is_the_only_approved_child_composer() -> None:
     assert _LLAMA_PIPELINE.is_file()
     installers, modules = _policy_imports(_LLAMA_PIPELINE)
