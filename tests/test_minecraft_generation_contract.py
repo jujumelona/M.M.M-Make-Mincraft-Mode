@@ -79,8 +79,9 @@ def test_asset_projection_recovers_existing_main_color_without_model_reinference
             AssetRequest(
                 asset_id="texture_item_crystal",
                 kind="item",
-                prompt="Pixel Art, isolated, shape: shard, main_color: #A1B2C3, surface: glass",
-                target_path="assets/example/textures/item/crystal.png",
+                visual_description="shape: shard, main_color: #A1B2C3, surface: glass",
+                render_kind="item.generated",
+                subject_id="crystal",
             )
         ]
     }
