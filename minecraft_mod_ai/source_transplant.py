@@ -16,7 +16,6 @@ import json
 import os
 import re
 from collections import OrderedDict, deque
-from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +33,11 @@ from .artifact_dependency_graph import (
     UnresolvedArtifactEdge,
 )
 from .capability_implementation_locator import CapabilityImplementationLocator
+from .deadline_executor import (
+    ParallelExecutionTimeout,
+    ParallelTaskError,
+    iter_completed_with_deadlines,
+)
 from .platform_catalog import PlatformAdapter
 from .repository_artifact_index import RepositoryArtifactIndex
 from .reuse_license import is_reusable_source_license
@@ -742,14 +746,6 @@ def materialize_source_slices(
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     client = _github_client(token)
     download_workers = _materialization_download_workers()
-    executor = (
-        ThreadPoolExecutor(
-            max_workers=download_workers,
-            thread_name_prefix="source-transplant-download",
-        )
-        if download_workers > 1
-        else None
-    )
     receipts: list[dict[str, Any]] = []
     try:
         for decision, parsed_donor in validated:
@@ -797,12 +793,48 @@ def materialize_source_slices(
                     )
                 return item, path, blob_sha, actual, raw
 
-            # Fetch and verify the whole immutable slice before the first write.
-            # executor.map preserves declared manifest order even when downloads finish out of order.
-            if executor is None:
+            # Fetch and verify the whole immutable slice before the first write. Completion
+            # order is allowed to vary, but the materialized manifest keeps donor order.
+            if download_workers <= 1 or len(prepared) <= 1:
                 fetched = [fetch_and_verify(spec) for spec in prepared]
             else:
-                fetched = list(executor.map(fetch_and_verify, prepared))
+                indexed_specs = tuple(enumerate(prepared))
+
+                def fetch_indexed(
+                    indexed: tuple[int, tuple[Mapping[str, Any], str, str, str, int]],
+                ) -> tuple[int, tuple[Mapping[str, Any], str, str, str, bytes]]:
+                    index, spec = indexed
+                    return index, fetch_and_verify(spec)
+
+                fetched_by_index: dict[
+                    int, tuple[Mapping[str, Any], str, str, str, bytes]
+                ] = {}
+                try:
+                    for _indexed, result in iter_completed_with_deadlines(
+                        indexed_specs,
+                        fetch_indexed,
+                        max_workers=min(download_workers, len(indexed_specs)),
+                        stage="source-transplant-download",
+                        sort_key=lambda item: item[0],
+                    ):
+                        index, payload = result
+                        fetched_by_index[index] = payload
+                except ParallelTaskError as exc:
+                    cause = exc.cause
+                    if isinstance(cause, SourceTransplantError):
+                        raise cause
+                    raise SourceTransplantError(
+                        f"Pinned donor download worker failed: {cause}"
+                    ) from cause
+                except ParallelExecutionTimeout as exc:
+                    raise SourceTransplantError(
+                        f"Pinned donor download exceeded its execution deadline: {exc}"
+                    ) from exc
+                if len(fetched_by_index) != len(prepared):
+                    raise SourceTransplantError(
+                        "Pinned donor download completed without every prepared artifact."
+                    )
+                fetched = [fetched_by_index[index] for index in range(len(prepared))]
 
             written: list[dict[str, Any]] = []
             for item, path, blob_sha, actual, raw in fetched:
@@ -835,8 +867,6 @@ def materialize_source_slices(
             )
             receipts.append(manifest)
     finally:
-        if executor is not None:
-            executor.shutdown(wait=True, cancel_futures=True)
         client.close()
     return {
         "schema_version": "mmm/reuse-materialization-v1",
