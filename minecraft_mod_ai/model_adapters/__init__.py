@@ -16,13 +16,6 @@ from .reranker import RerankerAdapter
 from .transformers_multimodal import TransformersMultimodalAdapter
 from .transformers_text import TransformersTextAdapter
 
-# llama_cpp_adapter already keys this cache by the managed server generation identity
-# plus the exact template-calibration payload. Keep the bounded cache on the adapter
-# class so request-local adapter instances share safe calibration results instead of
-# issuing the same /apply-template probe again. Tests or specialized callers can still
-# shadow it with an instance-local dictionary when isolation is required.
-LlamaCppAdapter._prefill_template_prefix_cache = {}
-
 install_llama_turn_retry(LlamaCppAdapter)
 
 __all__ = [
