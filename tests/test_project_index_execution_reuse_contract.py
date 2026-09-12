@@ -41,7 +41,7 @@ def test_receipt_updates_cached_post_generation_index(tmp_path) -> None:
     def run():
         contract.mark_post_generation()
         first = contract.project_index(_FakeIndex, tmp_path, policy=policy)
-        contract._update_from_receipt(tmp_path, _known_receipt())
+        contract.update_from_receipt(tmp_path, _known_receipt())
         second = contract.project_index(_FakeIndex, tmp_path, policy=policy)
         return first, second
 
@@ -65,7 +65,7 @@ def test_unknown_mutating_receipt_evicts_cached_index(tmp_path) -> None:
     def run():
         contract.mark_post_generation()
         first = contract.project_index(_FakeIndex, tmp_path, policy=policy)
-        contract._update_from_receipt(tmp_path, {"status": "TUNED"})
+        contract.update_from_receipt(tmp_path, {"status": "TUNED"})
         second = contract.project_index(_FakeIndex, tmp_path, policy=policy)
         return first, second
 

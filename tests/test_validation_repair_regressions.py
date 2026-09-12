@@ -101,3 +101,15 @@ def test_repair_log_reader_fails_safe_for_missing_file(tmp_path: Path) -> None:
     assert repair_module._failed_build_log_diagnostics(evidence) == [
         {"name": "build", "exit_code": 1, "timed_out": False}
     ]
+
+
+def test_build_work_node_is_committed_before_final_validation() -> None:
+    source = Path("minecraft_mod_ai/complete_orchestrator.py").read_text(encoding="utf-8")
+    final_manifest_at = source.index("final_manifest = str(")
+    repair_refresh_at = source.index("update_execution_project_index_from_receipt(project_root, repair)")
+    build_done_at = source.index("self._succeed_work_node(ledger, 'build-project'", final_manifest_at)
+    final_validation_at = source.index("def validate_final_source", final_manifest_at)
+    final_node_at = source.index("'validate-source-final'", final_validation_at)
+    assert repair_refresh_at < final_manifest_at < build_done_at < final_validation_at < final_node_at
+    assert source.count("self._project_manifest_hash(project_root)", 0, source.index("build_bundle =")) >= 2
+    assert "self._project_manifest_hash(project_root)" not in source[source.index("build_bundle ="):]

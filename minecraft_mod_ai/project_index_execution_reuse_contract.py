@@ -160,6 +160,11 @@ def _update_from_receipt(project_root: str | Path, receipt: Any) -> None:
         _evict_root(cache, project_root)
 
 
+def update_from_receipt(project_root: str | Path, receipt: Any) -> None:
+    """Incrementally reconcile an execution-scoped index from a mutation receipt."""
+    _update_from_receipt(project_root, receipt)
+
+
 def tune_gradle_resources(project_root: str | Path, *args: Any, **kwargs: Any):
     """Run canonical resource tuning and reconcile active indexes from its receipt."""
     from .resource_tuning import tune_gradle_resources as tune
@@ -184,4 +189,5 @@ __all__ = [
     "mark_post_generation",
     "project_index",
     "tune_gradle_resources",
+    "update_from_receipt",
 ]

@@ -62,6 +62,7 @@ from .project_index_execution_reuse_contract import (
     execution_scoped,
     mark_post_generation,
     tune_gradle_resources,
+    update_from_receipt as update_execution_project_index_from_receipt,
 )
 from .project_index_execution_reuse_contract import (
     project_index as execution_project_index,
@@ -450,73 +451,21 @@ class CompleteProductionOrchestrator:
                 repair_result = RepairEngine(router=router, gradle_cache=cache, policy=self.policy).repair(project_root, run_gametest=options.run_gametest, max_attempts=options.max_repair_attempts)
                 build_result = GradleRunner(cache).build(project_root, run_gametest=options.run_gametest).to_dict()
             return {'build': build_result, 'repair': repair_result}
-        build_bundle = run_named_checkpoint(ledger, 'gradle-build', stage='build', input_value={'graph_hash': work_plan.graph_hash, 'project_manifest': self._project_manifest_hash(project_root), 'run_gametest': options.run_gametest, 'auto_repair': options.auto_repair, 'max_repair_attempts': options.max_repair_attempts}, action=build_with_repair, encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: self._cached_build_exists(cached.get('build')))
+        build_bundle = run_named_checkpoint(ledger, 'gradle-build', stage='build', input_value={'graph_hash': work_plan.graph_hash, 'project_manifest': validation_manifest, 'run_gametest': options.run_gametest, 'auto_repair': options.auto_repair, 'max_repair_attempts': options.max_repair_attempts}, action=build_with_repair, encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: self._cached_build_exists(cached.get('build')))
         build = build_bundle['build']
         repair = build_bundle.get('repair')
         if isinstance(repair, dict):
             module_receipts.append({'schema_version': 'mmm/repair-receipt-v2', **repair})
+            if repair.get('patch_receipts'):
+                update_execution_project_index_from_receipt(project_root, repair)
         if build.get('status') != 'PASS':
             raise CompleteProductionError('Gradle/GameTest failed after the repair loop.')
 
-        final_manifest = self._project_manifest_hash(project_root)
-
-        def validate_final_source() -> dict[str, Any]:
-            return run_named_checkpoint(
-                ledger,
-                'validate-source-final',
-                stage='validate:source-final',
-                input_value=validation_checkpoint_input(
-                    'validate-source-final',
-                    {'graph_hash': work_plan.graph_hash, 'project_manifest': final_manifest},
-                ),
-                action=lambda: ScalableProjectValidator(policy=self.policy).validate(project_root, spec).to_dict(),
-                encode=lambda value: value,
-                decode=lambda cached: cached,
-                validate_cached=lambda cached: cached_validation_is_reusable('validate-source-final', cached),
-            )
-
-        def validate_final_jdt() -> dict[str, Any]:
-            return run_named_checkpoint(
-                ledger,
-                'validate-jdt-final',
-                stage='validate:jdt-final',
-                input_value=validation_checkpoint_input(
-                    'validate-jdt-final',
-                    {'graph_hash': work_plan.graph_hash, 'project_manifest': final_manifest},
-                ),
-                action=lambda: run_jdt_diagnostics(
-                    JavaLanguageService, project_root, timeout_seconds=90
-                ),
-                encode=lambda value: value,
-                decode=lambda cached: cached,
-                validate_cached=lambda cached: cached_validation_is_reusable('validate-jdt-final', cached),
-            )
-
-        source_report, final_jdt_receipt, validation_refreshed = _refresh_validation_after_build(
-            prebuild_manifest=validation_manifest,
-            final_manifest=final_manifest,
-            source_report=source_report,
-            jdt_receipt=jdt_receipt,
-            validate_source=validate_final_source,
-            validate_jdt=(validate_final_jdt if options.run_jdt else None),
+        final_manifest = str(
+            execution_project_index(ProjectIndex, project_root, policy=self.policy)
+            .manifest_receipt()['sha256']
         )
-        if validation_refreshed:
-            jdt_receipt = final_jdt_receipt
-            if jdt_receipt is not None:
-                module_receipts.append(
-                    {'schema_version': 'mmm/jdt-gate-v1', 'phase': 'final', **jdt_receipt}
-                )
-        self._succeed_work_node(
-            ledger,
-            'validate-source-final',
-            {
-                'schema_version': 'mmm/work-node-receipt-v1',
-                'status': 'PASS',
-                'checks_run': source_report.get('checks_run', 0),
-                'project_manifest': final_manifest,
-                'refreshed_after_build': validation_refreshed,
-            },
-        )
+
         reported_jar = _jar_path(build)
         try:
             artifact_receipt = verify_final_mod_artifact(
@@ -581,6 +530,64 @@ class CompleteProductionOrchestrator:
             encoding='utf-8',
         )
         self._succeed_work_node(ledger, 'build-project', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'PASS', 'build': build, 'final_build_receipt': build_receipt})
+
+        def validate_final_source() -> dict[str, Any]:
+            return run_named_checkpoint(
+                ledger,
+                'validate-source-final',
+                stage='validate:source-final',
+                input_value=validation_checkpoint_input(
+                    'validate-source-final',
+                    {'graph_hash': work_plan.graph_hash, 'project_manifest': final_manifest},
+                ),
+                action=lambda: ScalableProjectValidator(policy=self.policy).validate(project_root, spec).to_dict(),
+                encode=lambda value: value,
+                decode=lambda cached: cached,
+                validate_cached=lambda cached: cached_validation_is_reusable('validate-source-final', cached),
+            )
+
+        def validate_final_jdt() -> dict[str, Any]:
+            return run_named_checkpoint(
+                ledger,
+                'validate-jdt-final',
+                stage='validate:jdt-final',
+                input_value=validation_checkpoint_input(
+                    'validate-jdt-final',
+                    {'graph_hash': work_plan.graph_hash, 'project_manifest': final_manifest},
+                ),
+                action=lambda: run_jdt_diagnostics(
+                    JavaLanguageService, project_root, timeout_seconds=90
+                ),
+                encode=lambda value: value,
+                decode=lambda cached: cached,
+                validate_cached=lambda cached: cached_validation_is_reusable('validate-jdt-final', cached),
+            )
+
+        source_report, final_jdt_receipt, validation_refreshed = _refresh_validation_after_build(
+            prebuild_manifest=validation_manifest,
+            final_manifest=final_manifest,
+            source_report=source_report,
+            jdt_receipt=jdt_receipt,
+            validate_source=validate_final_source,
+            validate_jdt=(validate_final_jdt if options.run_jdt else None),
+        )
+        if validation_refreshed:
+            jdt_receipt = final_jdt_receipt
+            if jdt_receipt is not None:
+                module_receipts.append(
+                    {'schema_version': 'mmm/jdt-gate-v1', 'phase': 'final', **jdt_receipt}
+                )
+        self._succeed_work_node(
+            ledger,
+            'validate-source-final',
+            {
+                'schema_version': 'mmm/work-node-receipt-v1',
+                'status': 'PASS',
+                'checks_run': source_report.get('checks_run', 0),
+                'project_manifest': final_manifest,
+                'refreshed_after_build': validation_refreshed,
+            },
+        )
         jar_validation = run_named_checkpoint(ledger, 'validate-jar', stage='validate:jar', input_value={'graph_hash': work_plan.graph_hash, 'jar_sha256': self._file_hash(jar_path)}, action=lambda: validate_jar(jar_path, spec).to_dict(), encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda _cached: jar_path.is_file())
         if jar_validation.get('status') != 'PASS':
             raise CompleteProductionError('Built JAR failed independent validation.')
