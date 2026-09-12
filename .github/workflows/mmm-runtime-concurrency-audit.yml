@@ -1,0 +1,68 @@
+name: exhaustive runtime concurrency audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/mmm-runtime-concurrency-audit.yml
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Exhaustive Python runtime scan
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import ast, re
+
+          roots = [Path('minecraft_mod_ai')]
+          patterns = {
+              'executor': re.compile(r'\b(?:ThreadPoolExecutor|ProcessPoolExecutor)\b'),
+              'future_result': re.compile(r'\.result\s*\('),
+              'shutdown_wait_true': re.compile(r'\.shutdown\s*\(\s*wait\s*=\s*True'),
+              'executor_map': re.compile(r'\.(?:map)\s*\('),
+              'as_completed': re.compile(r'\bas_completed\s*\('),
+              'wait_call': re.compile(r'\bwait\s*\('),
+              'tool_round_cap': re.compile(r'(?:_agent_tool_round_limit|MMM_AGENT_TOOL_ROUNDS|DEFAULT_AGENT_TOOL_ROUNDS|round_limit)'),
+              'candidate_score_constant': re.compile(r'(?:1000\.0|candidate_count|scored\.append)'),
+          }
+          files = sorted(p for root in roots for p in root.rglob('*.py'))
+          print(f'PYTHON_FILES={len(files)}')
+          for label, rx in patterns.items():
+              print(f'=== {label} ===')
+              count = 0
+              for path in files:
+                  try:
+                      lines = path.read_text(encoding='utf-8').splitlines()
+                  except Exception as exc:
+                      print(f'READ_ERROR {path}: {exc}')
+                      continue
+                  for lineno, line in enumerate(lines, 1):
+                      if rx.search(line):
+                          count += 1
+                          print(f'{path}:{lineno}:{line.strip()}')
+              print(f'COUNT={count}')
+
+          print('=== syntax ===')
+          bad = 0
+          for path in files:
+              try:
+                  ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+              except SyntaxError as exc:
+                  bad += 1
+                  print(f'SYNTAX_ERROR {path}:{exc.lineno}:{exc.msg}')
+          print(f'SYNTAX_ERRORS={bad}')
+          PY
