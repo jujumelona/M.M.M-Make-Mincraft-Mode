@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from .fixed_template_generation import generate_fixed_template_text
-
-from .model_response_templates import response_schema, response_template_prompt
+from .model_response_templates import response_schema
 
 import json
 import os
@@ -16,6 +15,8 @@ from .complete_orchestrator_support import CompleteProductionError, _extract_jso
 from .complete_spec import CompleteProposal
 from .mineflayer_bridge import MineflayerBridge
 from .model_router import ModelRouter
+from .task_template_catalog import load_template
+
 
 def generate_assets(router: ModelRouter, proposal: CompleteProposal, project_root: Path, run_root: Path) -> dict[str, Any]:
     """Single canonical resource-asset entrypoint."""
@@ -160,6 +161,36 @@ def run_playtest(actions: Iterable[dict[str, Any]]) -> dict[str, Any]:
         bridge.close()
 
 
+def _visual_review_instruction() -> tuple[str, str]:
+    """Load the semantic visual-review policy from the runtime template authority."""
+    template = load_template("validation/visual_review")
+    declared_input = template.get("input")
+    expected_input = {"game_design", "acceptance_tests", "runtime_screenshots"}
+    if not isinstance(declared_input, dict) or set(declared_input) != expected_input:
+        raise CompleteProductionError(
+            "Visual-review template input contract does not match the production consumer."
+        )
+    task = str(template.get("task") or "").strip()
+    rules = template.get("rules")
+    if not task or not isinstance(rules, list) or not rules or any(
+        not str(rule).strip() for rule in rules
+    ):
+        raise CompleteProductionError(
+            "Visual-review template must provide one task and explicit non-empty rules."
+        )
+    response_contract = str(template.get("response_contract") or "").strip()
+    if not response_contract:
+        raise CompleteProductionError(
+            "Visual-review template must name its fixed response contract."
+        )
+    # Resolve now so an invalid contract fails before the multimodal model call.
+    response_schema(response_contract)
+    instruction = task + "\nRules:\n" + "\n".join(
+        f"- {str(rule).strip()}" for rule in rules
+    )
+    return instruction, response_contract
+
+
 def visual_review(
     router: ModelRouter,
     proposal: CompleteProposal,
@@ -174,19 +205,13 @@ def visual_review(
         raise CompleteProductionError(
             "Every visual-review screenshot must be a regular file."
         )
+    instruction, response_contract = _visual_review_instruction()
     text = generate_fixed_template_text(router,
         "visual_critic",
         [
             {
                 "role": "system",
-                "content": (
-                    "Return JSON {status: PASS|FAIL, findings: [...], acceptance_test_results: "
-                    "[{test: string, status: PASS|FAIL, evidence: string}]}. Return exactly one result "
-                    "for every supplied acceptance test. Reject missing textures, broken models, unreadable GUI, "
-                    "animation clipping and deviations from the approved design. Do not mark non-visual behavior "
-                    "as PASS unless the screenshot visibly proves it."
-                    + response_template_prompt("visual_review")
-                ),
+                "content": instruction,
             },
             {
                 "role": "user",
@@ -200,7 +225,7 @@ def visual_review(
             },
         ],
         media_paths=paths,
-        response_schema=response_schema("visual_review"),
+        response_schema=response_schema(response_contract),
     )
     value = _extract_json(text)
     if set(value) != {
