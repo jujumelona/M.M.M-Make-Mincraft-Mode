@@ -9,7 +9,7 @@ from jsonschema import Draft202012Validator
 from .model_output_atomicity_contract import (
     MAX_MODEL_ARRAY_ITEMS,
     MAX_MODEL_STRING_CHARS,
-    assert_atomic_model_schema,
+    _assert_closed_object_schemas,
 )
 
 RUNTIME_TEMPLATE_ROOT = Path(__file__).with_name("templates").resolve()
@@ -151,12 +151,13 @@ def _apply_record_host_policy(identifier: str, value: dict):
 
 
 def _materialize_atomic_record_schema(schema: dict) -> dict:
-    """Compile authoring shorthand into the global executable model contract.
+    """Compile logical record shorthand before host-owned atomic projection.
 
-    Template YAML may omit primitive size bounds that are already owned by the global
-    model-output atomicity contract. The catalog materializes only missing bounds from
-    that SSOT. Explicit bounds are never reduced, and structural limits are never
-    rewritten, so an author cannot bypass fail-closed validation by loading a template.
+    Record templates describe the canonical logical record and may contain more fields
+    than one small-model call can safely author. The worksheet atomic chunker owns field
+    paging and emits the actual model-facing schemas. Here we only materialize the
+    global primitive bounds so every later projection inherits bounded values.
+    Explicit bounds are never reduced.
     """
     value = deepcopy(schema)
 
@@ -179,11 +180,12 @@ def _materialize_atomic_record_schema(schema: dict) -> dict:
 
 
 def _compile_record_schema(identifier: str, schema: dict) -> dict:
+    """Validate the canonical logical record without misclassifying it as one model call."""
     compiled = _materialize_atomic_record_schema(schema)
     Draft202012Validator.check_schema(compiled)
-    assert_atomic_model_schema(
+    _assert_closed_object_schemas(
         compiled,
-        surface=f"runtime record template {identifier!r}",
+        path=f"runtime record template {identifier!r}",
     )
     return compiled
 
