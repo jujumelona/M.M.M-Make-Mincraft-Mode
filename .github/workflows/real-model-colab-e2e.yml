@@ -1,0 +1,150 @@
+name: Real Model Colab E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Real model registry profile
+        required: false
+        default: t4_quality
+        type: string
+  push:
+    paths:
+      - '.github/workflows/real-model-colab-e2e.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-model-colab-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  colab-real-model-e2e:
+    name: Normal planner and source-generation E2E
+    runs-on: [self-hosted, linux, x64, t4]
+    timeout-minutes: 45
+    env:
+      PYTHONUTF8: '1'
+      MMM_MODEL_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || 't4_quality' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Configure runner-local checkpoint directory
+        shell: bash
+        run: |
+          echo "MMM_CHECKPOINT_DIR=$RUNNER_TEMP/mmm-real-model-colab-e2e" >> "$GITHUB_ENV"
+          nvidia-smi
+
+      - name: Install native-model runtime
+        run: python -m pip install --prefer-binary -e '.[local-model]'
+
+      - name: Run normal Colab planner and source-generation path
+        timeout-minutes: 35
+        shell: bash
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+
+          from minecraft_mod_ai.api import CompleteModAISession
+          from minecraft_mod_ai.colab_run_modes import FULL_MODE, run_plan_dialog
+          from minecraft_mod_ai.complete_orchestrator import CompleteExecutionOptions
+
+          prompt = (
+              "M.M.M Debug Mode fixture: add one deterministic debug token item and "
+              "run the normal implementation/verification pipeline."
+          )
+          output_root = Path("audit/real-model-colab-e2e").resolve()
+          output_root.mkdir(parents=True, exist_ok=True)
+          plan_path = output_root / "proposal.json"
+          profile = os.environ["MMM_MODEL_PROFILE"]
+
+          session = CompleteModAISession(
+              output_root=output_root,
+              model_profile=profile,
+              fast_mode=False,
+              kv_cache_quant="q4_0",
+          )
+          dialog = run_plan_dialog(
+              session=session,
+              run_mode=FULL_MODE,
+              prompt=prompt,
+              plan_path=plan_path,
+              debug_mode=False,
+              minecraft_version="Auto",
+              loader="Auto",
+              print_fn=lambda *args, **kwargs: print(*args, **kwargs),
+          )
+          proposal = dialog.reply.complete_proposal
+          proposal.validate()
+          if proposal.requested_prompt != prompt:
+              raise AssertionError(
+                  "normal planner changed the authoritative requested_prompt: "
+                  f"{proposal.requested_prompt!r}"
+              )
+          if not plan_path.is_file():
+              raise AssertionError("normal Colab path did not persist proposal.json")
+
+          options = CompleteExecutionOptions(
+              source_only=True,
+              run_jdt=False,
+              run_gametest=False,
+              auto_repair=False,
+              run_blockbench=False,
+              run_runtime=False,
+              run_client=False,
+              run_mineflayer=False,
+              run_visual_review=False,
+              cleanup_runtime=True,
+              eula_accepted=False,
+          )
+          result = session.build(
+              dialog.reply,
+              run_name="real-model-colab-e2e",
+              options=options,
+          )
+          if result.status != "SOURCE_READY":
+              raise AssertionError(f"unexpected source-only status: {result.status!r}")
+          release_zip = Path(str(result.release_zip)).expanduser().resolve()
+          if not release_zip.is_file():
+              raise AssertionError(f"source-only release is missing: {release_zip}")
+
+          evidence = {
+              "schema_version": "mmm/real-model-colab-e2e-v1",
+              "status": "PASS",
+              "profile": profile,
+              "debug_mode": False,
+              "prompt": prompt,
+              "proposal_hash": proposal.calculate_hash(),
+              "module_count": len(proposal.modules),
+              "pipeline_status": result.status,
+              "release_zip": str(release_zip),
+              "work_graph_hash": result.work_graph_hash,
+          }
+          (output_root / "REAL_MODEL_COLAB_E2E.json").write_text(
+              json.dumps(evidence, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(evidence, ensure_ascii=False, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload E2E evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-model-colab-e2e-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            audit/real-model-colab-e2e/REAL_MODEL_COLAB_E2E.json
+            audit/real-model-colab-e2e/proposal.json
+            audit/real-model-colab-e2e/runs/**/*.zip
