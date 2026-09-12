@@ -2,9 +2,10 @@ from __future__ import annotations
 
 """Transport and evidence storage for host-owned Minecraft research.
 
-Retrieval policy intentionally lives in ``catalog_first_grounded_rag``. This module only
-implements provider I/O, exact linked-source retrieval, project/official lookup, and
-materialized evidence pages. It must not decide when broad GitHub fallback is allowed.
+Retrieval policy intentionally lives in ``catalog_first_grounded_rag``. This module owns
+provider I/O and exact evidence materialization only. Retrieval breadth is derived from
+the authored query and provider progress; optional environment values are operator
+ceilings, not hidden built-in caps.
 """
 
 import hashlib
@@ -16,8 +17,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Mapping
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -30,46 +31,52 @@ from .knowledge import (
 from .rag_index import ProjectRAGIndex
 
 _TIMEOUT = 8.0
-_MAX_QUERY_WORKERS = max(
-    1, min(8, int(os.environ.get("MMM_PREDESIGN_QUERY_WORKERS", "4") or 4))
-)
-_MAX_SOURCE_WORKERS = max(
-    1, min(16, int(os.environ.get("MMM_PREDESIGN_SOURCE_WORKERS", "8") or 8))
-)
-_MAX_PROVIDER_RESULTS_PER_QUERY = max(
-    1,
-    min(
-        24,
-        int(os.environ.get("MMM_PREDESIGN_PROVIDER_RESULTS_PER_QUERY", "6") or 6),
-    ),
-)
-_MAX_PROVIDER_SEARCH_PAGES = max(
-    1,
-    min(
-        4,
-        int(os.environ.get("MMM_PREDESIGN_PROVIDER_SEARCH_PAGES", "2") or 2),
-    ),
-)
 _UA = "MMM-PreDesignResearch/3.0 (+https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode)"
 
 
-def _sha256_text(value: str) -> str:
-    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+def _positive_env_int(name: str) -> int | None:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer") from exc
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
 
 
-def _sha256(value: Any) -> str:
-    return _sha256_text(
-        json.dumps(
-            value,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        )
-    )
+def _worker_count(task_count: int, env_name: str) -> int:
+    """Use all independent tasks unless the operator explicitly constrains fan-out."""
+    count = max(0, int(task_count))
+    if count <= 1:
+        return count
+    configured = _positive_env_int(env_name)
+    return min(count, configured) if configured is not None else count
 
 
-def _query_terms(value: str) -> str:
+def _query_worker_count(task_count: int) -> int:
+    return _worker_count(task_count, "MMM_PREDESIGN_QUERY_WORKERS")
+
+
+def _source_worker_count(task_count: int) -> int:
+    return _worker_count(task_count, "MMM_PREDESIGN_SOURCE_WORKERS")
+
+
+def _provider_result_limit() -> int | None:
+    return _positive_env_int("MMM_PREDESIGN_PROVIDER_RESULTS_PER_QUERY")
+
+
+def _provider_page_limit() -> int | None:
+    return _positive_env_int("MMM_PREDESIGN_PROVIDER_SEARCH_PAGES")
+
+
+def _limit_reached(value: int, limit: int | None) -> bool:
+    return limit is not None and value >= limit
+
+
+def _search_terms(value: str) -> tuple[str, ...]:
     stop = {
         "minecraft",
         "fabric",
@@ -87,7 +94,42 @@ def _query_terms(value: str) -> str:
         if len(key) < 3 or key in stop or key in words:
             continue
         words.append(key)
+    return tuple(words)
+
+
+def _query_terms(value: str) -> str:
+    words = _search_terms(value)
     return " ".join(words) or "minecraft fabric"
+
+
+def _semantic_page_size(
+    query: str,
+    provider_max: int,
+    result_limit: int | None,
+    current: int,
+) -> int:
+    """Scale one provider page to query complexity rather than a fixed local breadth."""
+    remaining = None if result_limit is None else max(0, result_limit - current)
+    if remaining == 0:
+        return 0
+    query_width = max(1, len(_search_terms(query)))
+    page_size = min(provider_max, query_width)
+    return page_size if remaining is None else min(page_size, remaining)
+
+
+def _coverage_gain(
+    wanted: set[str],
+    covered: set[str],
+    values: Sequence[Any],
+) -> int:
+    if not wanted:
+        return 1
+    observed: set[str] = set()
+    for value in values:
+        observed.update(_search_terms(str(value or "")))
+    before = len(covered)
+    covered.update(wanted & observed)
+    return len(covered) - before
 
 
 def _json(url: str, headers: Mapping[str, str] | None = None) -> Any:
@@ -129,17 +171,23 @@ def _error(provider: str, exc: BaseException) -> dict[str, Any]:
 def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     records: list[dict[str, Any]] = []
     errors: list[str] = []
-    seen: set[str] = set()
+    seen_records: set[str] = set()
+    seen_search_keys: set[str] = set()
+    covered: set[str] = set()
+    wanted = set(_search_terms(query))
     offset = 0
     search_requests = 0
     source_requests = 0
     provider_total = 0
+    result_limit = _provider_result_limit()
+    page_limit = _provider_page_limit()
 
-    while (
-        search_requests < _MAX_PROVIDER_SEARCH_PAGES
-        and len(records) < _MAX_PROVIDER_RESULTS_PER_QUERY
+    while not _limit_reached(search_requests, page_limit) and not _limit_reached(
+        len(records), result_limit
     ):
-        page_size = min(100, _MAX_PROVIDER_RESULTS_PER_QUERY - len(records))
+        page_size = _semantic_page_size(query, 100, result_limit, len(records))
+        if page_size <= 0:
+            break
         params = urllib.parse.urlencode(
             {
                 "query": _query_terms(query),
@@ -161,11 +209,19 @@ def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
             break
 
         try:
-            provider_total = max(
-                provider_total, int(payload.get("total_hits", 0) or 0)
-            )
+            provider_total = max(provider_total, int(payload.get("total_hits", 0) or 0))
         except (TypeError, ValueError, OverflowError):
             provider_total = max(provider_total, offset + len(hits))
+
+        search_keys = {
+            str(hit.get("project_id") or hit.get("slug") or "").strip()
+            for hit in hits
+            if str(hit.get("project_id") or hit.get("slug") or "").strip()
+        }
+        if search_keys and not (search_keys - seen_search_keys):
+            errors.append("duplicate_only_search_page")
+            break
+        seen_search_keys.update(search_keys)
 
         project_ids = list(
             dict.fromkeys(
@@ -181,28 +237,33 @@ def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
                 detail_params = urllib.parse.urlencode(
                     {"ids": json.dumps(project_ids, separators=(",", ":"))}
                 )
-                fetched = _json(
-                    f"https://api.modrinth.com/v2/projects?{detail_params}"
-                )
+                fetched = _json(f"https://api.modrinth.com/v2/projects?{detail_params}")
                 if isinstance(fetched, list):
                     details = {
                         str(item.get("id") or "").strip(): item
                         for item in fetched
-                        if isinstance(item, Mapping)
-                        and str(item.get("id") or "").strip()
+                        if isinstance(item, Mapping) and str(item.get("id") or "").strip()
                     }
             except Exception as exc:
                 errors.append(f"bulk-projects:{type(exc).__name__}:{exc}")
 
+        coverage_values: list[str] = []
         for hit in hits:
             project_id = str(hit.get("project_id") or "").strip()
             slug = str(hit.get("slug") or project_id).strip()
             detail = details.get(project_id, hit)
             body = str(detail.get("body") or hit.get("description") or "").strip()
+            coverage_values.extend(
+                [
+                    str(detail.get("title") or hit.get("title") or slug),
+                    str(hit.get("description") or ""),
+                    body,
+                ]
+            )
             source_key = project_id or slug
-            if not body or not source_key or source_key in seen:
+            if not body or not source_key or source_key in seen_records:
                 continue
-            seen.add(source_key)
+            seen_records.add(source_key)
             game_versions = detail.get("game_versions")
             if not isinstance(game_versions, list):
                 game_versions = hit.get("versions")
@@ -227,7 +288,10 @@ def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
                     },
                 }
             )
+            if _limit_reached(len(records), result_limit):
+                break
 
+        gain = _coverage_gain(wanted, covered, coverage_values)
         try:
             server_offset = int(payload.get("offset", offset) or offset)
         except (TypeError, ValueError, OverflowError):
@@ -240,6 +304,8 @@ def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
             break
         if len(hits) < page_size and not provider_total:
             break
+        if wanted and gain == 0:
+            break
         offset = next_offset
 
     return records, {
@@ -250,6 +316,7 @@ def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         "search_requests": search_requests,
         "source_requests": source_requests,
         "detail_errors": errors,
+        "retrieval_stop": "provider_progress_or_semantic_coverage",
     }
 
 
@@ -265,11 +332,16 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
     headers = {"x-api-key": key}
     records: list[dict[str, Any]] = []
     errors: list[str] = []
-    seen: set[int] = set()
+    seen_records: set[int] = set()
+    seen_search_ids: set[int] = set()
+    covered: set[str] = set()
+    wanted = set(_search_terms(query))
     index = 0
     search_requests = 0
     source_requests = 0
     provider_total = 0
+    result_limit = _provider_result_limit()
+    page_limit = _provider_page_limit()
 
     def description(mod_id: int) -> tuple[int, str, str]:
         try:
@@ -278,19 +350,18 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
                 headers,
             )
             if isinstance(desc, Mapping) and str(desc.get("data") or "").strip():
-                body = " ".join(
-                    re.sub(r"<[^>]+>", " ", str(desc["data"])).split()
-                )
+                body = " ".join(re.sub(r"<[^>]+>", " ", str(desc["data"])).split())
                 return mod_id, body, ""
         except Exception as exc:
             return mod_id, "", f"{mod_id}:{type(exc).__name__}:{exc}"
         return mod_id, "", ""
 
-    while (
-        search_requests < _MAX_PROVIDER_SEARCH_PAGES
-        and len(records) < _MAX_PROVIDER_RESULTS_PER_QUERY
+    while not _limit_reached(search_requests, page_limit) and not _limit_reached(
+        len(records), result_limit
     ):
-        page_size = min(50, _MAX_PROVIDER_RESULTS_PER_QUERY - len(records))
+        page_size = _semantic_page_size(query, 50, result_limit, len(records))
+        if page_size <= 0:
+            break
         params = urllib.parse.urlencode(
             {
                 "gameId": 432,
@@ -301,9 +372,7 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
                 "sortOrder": "desc",
             }
         )
-        payload = _json(
-            f"https://api.curseforge.com/v1/mods/search?{params}", headers
-        )
+        payload = _json(f"https://api.curseforge.com/v1/mods/search?{params}", headers)
         search_requests += 1
         raw_rows = payload.get("data", []) if isinstance(payload, Mapping) else []
         rows = (
@@ -314,37 +383,43 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
         if not rows:
             break
 
-        mod_ids = [
-            int(row["id"])
-            for row in rows
-            if isinstance(row.get("id"), int) and int(row["id"]) not in seen
-        ]
-        source_requests += len(mod_ids)
-        descriptions: dict[int, str] = {}
-        if mod_ids:
-            workers = min(_MAX_SOURCE_WORKERS, len(mod_ids))
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                futures = [pool.submit(description, mod_id) for mod_id in mod_ids]
-                for future in as_completed(futures):
-                    mod_id, body, error = future.result()
-                    if body:
-                        descriptions[mod_id] = body
-                    if error:
-                        errors.append(error)
+        page_ids = [int(row["id"]) for row in rows if isinstance(row.get("id"), int)]
+        new_ids = [mod_id for mod_id in page_ids if mod_id not in seen_search_ids]
+        if page_ids and not new_ids:
+            errors.append("duplicate_only_search_page")
+            break
+        seen_search_ids.update(page_ids)
 
+        source_requests += len(new_ids)
+        descriptions: dict[int, str] = {}
+        if new_ids:
+            workers = _source_worker_count(len(new_ids))
+            if workers <= 1:
+                fetched = [description(mod_id) for mod_id in new_ids]
+            else:
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    fetched = list(pool.map(description, new_ids))
+            for mod_id, body, error in fetched:
+                if body:
+                    descriptions[mod_id] = body
+                if error:
+                    errors.append(error)
+
+        coverage_values: list[str] = []
         for row in rows:
             if not isinstance(row.get("id"), int):
                 continue
             mod_id = int(row["id"])
-            if mod_id in seen:
-                continue
-            seen.add(mod_id)
             body = descriptions.get(mod_id) or str(row.get("summary") or "").strip()
+            coverage_values.extend(
+                [str(row.get("name") or ""), str(row.get("summary") or ""), body]
+            )
+            if mod_id in seen_records:
+                continue
+            seen_records.add(mod_id)
             if not body:
                 continue
-            links = (
-                row.get("links") if isinstance(row.get("links"), Mapping) else {}
-            )
+            links = row.get("links") if isinstance(row.get("links"), Mapping) else {}
             records.append(
                 {
                     "source_id": f"curseforge:{mod_id}",
@@ -360,13 +435,21 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
                         "mod_id": mod_id,
                         "slug": str(row.get("slug") or ""),
                         "source_url": str(links.get("sourceUrl") or ""),
-                        "versions": sorted({str(version)
-                            for file in row.get("latestFiles", [])
-                            for version in file.get("gameVersions", [])}),
+                        "versions": sorted(
+                            {
+                                str(version)
+                                for file in row.get("latestFiles", [])
+                                if isinstance(file, Mapping)
+                                for version in file.get("gameVersions", [])
+                            }
+                        ),
                     },
                 }
             )
+            if _limit_reached(len(records), result_limit):
+                break
 
+        gain = _coverage_gain(wanted, covered, coverage_values)
         pagination = payload.get("pagination") if isinstance(payload, Mapping) else None
         if not isinstance(pagination, Mapping):
             if len(rows) < page_size:
@@ -375,12 +458,9 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
         else:
             try:
                 server_index = int(pagination.get("index", index) or index)
-                result_count = int(
-                    pagination.get("resultCount", len(rows)) or len(rows)
-                )
+                result_count = int(pagination.get("resultCount", len(rows)) or len(rows))
                 provider_total = max(
-                    provider_total,
-                    int(pagination.get("totalCount", 0) or 0),
+                    provider_total, int(pagination.get("totalCount", 0) or 0)
                 )
             except (TypeError, ValueError, OverflowError):
                 server_index = index
@@ -390,6 +470,8 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
                 break
         if next_index <= index:
             errors.append("nonadvancing_search_index")
+            break
+        if wanted and gain == 0:
             break
         index = next_index
 
@@ -402,6 +484,7 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
         "source_requests": source_requests,
         "detail_errors": errors,
         "authenticated": True,
+        "retrieval_stop": "provider_progress_or_semantic_coverage",
     }
 
 
@@ -422,12 +505,17 @@ def _search_github(
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     records: list[dict[str, Any]] = []
     readme_errors: list[str] = []
-    seen: set[str] = set()
+    seen_records: set[str] = set()
+    seen_search_keys: set[str] = set()
+    covered: set[str] = set()
+    wanted = set(_search_terms(query))
     page = 1
     consumed = 0
     search_requests = 0
     source_requests = 0
     provider_total = 0
+    result_limit = _provider_result_limit()
+    page_limit = _provider_page_limit()
 
     def repository_body(row: Mapping[str, Any]) -> tuple[str, str, str]:
         full_name = str(row.get("full_name") or "").strip()
@@ -448,13 +536,14 @@ def _search_github(
             return full_name, body, f"{full_name}:{type(exc).__name__}:{exc}"
         return full_name, body, ""
 
-    while (
-        search_requests < _MAX_PROVIDER_SEARCH_PAGES
-        and len(records) < _MAX_PROVIDER_RESULTS_PER_QUERY
+    while not _limit_reached(search_requests, page_limit) and not _limit_reached(
+        len(records), result_limit
     ):
         if disabled is not None and disabled():
             break
-        page_size = min(100, _MAX_PROVIDER_RESULTS_PER_QUERY - len(records))
+        page_size = _semantic_page_size(query, 100, result_limit, len(records))
+        if page_size <= 0:
+            break
         params = urllib.parse.urlencode(
             {
                 "q": _query_terms(query) + " minecraft fabric mod",
@@ -470,9 +559,7 @@ def _search_github(
             if exc.code in {401, 403, 429} and disable is not None:
                 disable()
             if exc.code == 422 and records:
-                readme_errors.append(
-                    f"search_page_{page}:{type(exc).__name__}:{exc}"
-                )
+                readme_errors.append(f"search_page_{page}:{type(exc).__name__}:{exc}")
                 break
             raise
 
@@ -486,36 +573,51 @@ def _search_github(
         if not rows:
             break
         try:
-            provider_total = max(
-                provider_total, int(payload.get("total_count", 0) or 0)
-            )
+            provider_total = max(provider_total, int(payload.get("total_count", 0) or 0))
         except (TypeError, ValueError, OverflowError):
             provider_total = max(provider_total, consumed + len(rows))
+
+        search_keys = {
+            str(row.get("full_name") or "").strip()
+            for row in rows
+            if str(row.get("full_name") or "").strip()
+        }
+        new_search_keys = search_keys - seen_search_keys
+        if search_keys and not new_search_keys:
+            readme_errors.append("duplicate_only_search_page")
+            break
+        seen_search_keys.update(search_keys)
 
         candidates = [
             row
             for row in rows
-            if str(row.get("full_name") or "").strip() not in seen
+            if str(row.get("full_name") or "").strip() in new_search_keys
         ]
         source_requests += len(candidates)
         bodies: dict[str, str] = {}
         if candidates:
-            workers = min(_MAX_SOURCE_WORKERS, len(candidates))
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                futures = [pool.submit(repository_body, row) for row in candidates]
-                for future in as_completed(futures):
-                    full_name, body, error = future.result()
-                    if full_name and body:
-                        bodies[full_name] = body
-                    if error:
-                        readme_errors.append(error)
+            workers = _source_worker_count(len(candidates))
+            if workers <= 1:
+                fetched = [repository_body(row) for row in candidates]
+            else:
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    fetched = list(pool.map(repository_body, candidates))
+            for full_name, body, error in fetched:
+                if full_name and body:
+                    bodies[full_name] = body
+                if error:
+                    readme_errors.append(error)
 
+        coverage_values: list[str] = []
         for row in rows:
             full_name = str(row.get("full_name") or "").strip()
-            if not full_name or full_name in seen:
-                continue
-            seen.add(full_name)
             body = bodies.get(full_name) or str(row.get("description") or "").strip()
+            coverage_values.extend(
+                [str(row.get("name") or full_name), str(row.get("description") or ""), body]
+            )
+            if not full_name or full_name in seen_records:
+                continue
+            seen_records.add(full_name)
             if not body:
                 continue
             records.append(
@@ -523,9 +625,7 @@ def _search_github(
                     "source_id": f"github:{full_name}",
                     "source_type": "github_repository_body",
                     "source_locator": f"github:{full_name}",
-                    "url": str(
-                        row.get("html_url") or f"https://github.com/{full_name}"
-                    ),
+                    "url": str(row.get("html_url") or f"https://github.com/{full_name}"),
                     "title": str(row.get("name") or full_name),
                     "content": body,
                     "content_sha256": _sha256_text(body),
@@ -537,8 +637,16 @@ def _search_github(
                     },
                 }
             )
+            if _limit_reached(len(records), result_limit):
+                break
+
+        gain = _coverage_gain(wanted, covered, coverage_values)
         consumed += len(rows)
         if provider_total and consumed >= provider_total:
+            break
+        if len(rows) < page_size:
+            break
+        if wanted and gain == 0:
             break
         page += 1
 
@@ -555,6 +663,7 @@ def _search_github(
         "readme_errors": readme_errors,
         "search_requests": search_requests,
         "source_requests": source_requests,
+        "retrieval_stop": "provider_progress_or_semantic_coverage",
     }
 
 
@@ -603,9 +712,7 @@ def _search_authoritative_catalog(
 def _existing_code_index() -> Path | None:
     values = [os.environ.get("MMM_PROJECT_RAG_INDEX", ""), "rag/project-index.json"]
     if os.environ.get("MMM_WORKSPACE"):
-        values.append(
-            str(Path(os.environ["MMM_WORKSPACE"]) / "rag/project-index.json")
-        )
+        values.append(str(Path(os.environ["MMM_WORKSPACE"]) / "rag/project-index.json"))
     for raw in values:
         if not str(raw).strip():
             continue
@@ -624,7 +731,10 @@ def _search_code_index(index: Path | None, query: str) -> dict[str, Any]:
         }
     try:
         result = ProjectRAGIndex(index).search_with_receipt(
-            query, limit=8, semantic=False, rerank=False
+            query,
+            limit=max(1, len(_search_terms(query))),
+            semantic=False,
+            rerank=False,
         )
         return {
             "schema_version": "mmm/code-rag-query-v3",
@@ -662,6 +772,7 @@ def _linked_github_sources(
     disable: Callable[[], None],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     repositories: list[str] = []
+    result_limit = _provider_result_limit()
     for record in records:
         metadata = record.get("metadata")
         source_url = (
@@ -670,12 +781,10 @@ def _linked_github_sources(
             else ""
         )
         repo = _github_repo_from_url(source_url)
-        if (
-            repo
-            and repo not in repositories
-            and len(repositories) < _MAX_PROVIDER_RESULTS_PER_QUERY
-        ):
+        if repo and repo not in repositories:
             repositories.append(repo)
+            if _limit_reached(len(repositories), result_limit):
+                break
 
     if not repositories:
         return [], {
@@ -710,7 +819,7 @@ def _linked_github_sources(
         except Exception as exc:
             return full_name, "", f"{full_name}:{type(exc).__name__}:{exc}"
 
-    workers = min(_MAX_SOURCE_WORKERS, len(repositories))
+    workers = _source_worker_count(len(repositories))
     if workers <= 1:
         fetched = [fetch_readme(full_name) for full_name in repositories]
     else:
@@ -745,7 +854,7 @@ def _linked_github_sources(
         "result_count": len(found),
         "search_requests": 0,
         "source_requests": len(repositories),
-        "readme_errors": errors[:3],
+        "readme_errors": errors,
     }
 
 
@@ -781,9 +890,7 @@ def _units(evidence: Mapping[str, Any]) -> list[dict[str, Any]]:
             body = _body(record)
             if not body:
                 continue
-            body_key = str(record.get("content_sha256") or "").strip() or _sha256_text(
-                body
-            )
+            body_key = str(record.get("content_sha256") or "").strip() or _sha256_text(body)
             if body_key in seen_bodies:
                 continue
             seen_bodies.add(body_key)
@@ -896,9 +1003,6 @@ def _build_evidence_pages(
             sort_keys=True,
             separators=(",", ":"),
         )
-        # Escape Unicode line separators (\u2028, \u2029, \x85) so line-based readers
-        # and tools will never split a single JSONL record across lines.
-        # json.loads unescapes these sequences losslessly.
         clean_page = (
             rendered_page.replace("\u2028", "\\u2028")
             .replace("\u2029", "\\u2029")
@@ -921,7 +1025,6 @@ def _materialize_domain_evidence_document(
     pages_path = root / f"{safe}-{digest[7:19]}.pages.jsonl"
 
     pages, pages_text = _build_evidence_pages(domain_id, evidence, digest)
-
     _write(raw_path, raw)
     _write(pages_path, pages_text)
 
@@ -945,7 +1048,6 @@ def _read_evidence_pages(document: Mapping[str, Any]) -> list[dict[str, Any]]:
     if expected == 0:
         return []
 
-    # 1. In-memory cache fast path
     cached = document.get("_pages")
     if isinstance(cached, list) and len(cached) == expected:
         return [dict(page) for page in cached if isinstance(page, Mapping)]
@@ -955,7 +1057,6 @@ def _read_evidence_pages(document: Mapping[str, Any]) -> list[dict[str, Any]]:
     pages: list[dict[str, Any]] = []
     read_ok = False
 
-    # 2. Resilient streaming read from disk (using line iteration, never splitlines)
     if path.is_file():
         try:
             with path.open("r", encoding="utf-8", errors="replace") as handle:
@@ -972,17 +1073,13 @@ def _read_evidence_pages(document: Mapping[str, Any]) -> list[dict[str, Any]]:
             pages = []
             read_ok = False
 
-    # 3. Self-healing: if pages_path was corrupted, missing, or mismatched, re-materialize from raw_path
     if not read_ok and raw_path.is_file():
         try:
             raw_text = raw_path.read_text(encoding="utf-8", errors="replace")
             evidence_dict = json.loads(raw_text)
             if isinstance(evidence_dict, Mapping):
                 domain_id = str(document.get("domain_id") or "")
-                digest = (
-                    str(document.get("document_sha256") or "")
-                    or _sha256_text(raw_text)
-                )
+                digest = str(document.get("document_sha256") or "") or _sha256_text(raw_text)
                 reconstructed, pages_text = _build_evidence_pages(
                     domain_id, evidence_dict, digest
                 )
@@ -992,7 +1089,6 @@ def _read_evidence_pages(document: Mapping[str, Any]) -> list[dict[str, Any]]:
         except Exception:
             pass
 
-    # 4. Quarantine corrupted file if recovery is impossible
     if not read_ok and not pages:
         try:
             if path.is_file():
@@ -1018,13 +1114,29 @@ def _prompt_document_receipt(document: Mapping[str, Any]) -> dict[str, Any]:
     return {key: document[key] for key in keep if key in document}
 
 
+def _sha256_text(value: str) -> str:
+    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _sha256(value: Any) -> str:
+    return _sha256_text(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+    )
+
+
 __all__ = [
-    "_MAX_QUERY_WORKERS",
     "_error",
     "_existing_code_index",
     "_linked_github_sources",
     "_materialize_domain_evidence_document",
     "_prompt_document_receipt",
+    "_query_worker_count",
     "_read_evidence_pages",
     "_search_authoritative_catalog",
     "_search_code_index",
@@ -1033,5 +1145,6 @@ __all__ = [
     "_search_modrinth",
     "_sha256",
     "_sha256_text",
+    "_source_worker_count",
     "_versions",
 ]
