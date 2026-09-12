@@ -24,9 +24,12 @@ _SOURCE_EDIT_OPERATION_ALIASES = {
     "delete": "delete_file",
 }
 _SOURCE_EDIT_OPERATION_FIELDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
-    "replace_exact": (("path", "old", "new", "count"), ("path", "old", "new")),
-    "insert_before": (("path", "anchor", "content", "count"), ("path", "anchor", "content")),
-    "insert_after": (("path", "anchor", "content", "count"), ("path", "anchor", "content")),
+    # count is optional and semantically fixed to the default value 1 by the source-edit
+    # contract. Keeping it out of recovery prevents the operation-detail page from exceeding
+    # the three-field model atomicity boundary without losing executable semantics.
+    "replace_exact": (("path", "old", "new"), ("path", "old", "new")),
+    "insert_before": (("path", "anchor", "content"), ("path", "anchor", "content")),
+    "insert_after": (("path", "anchor", "content"), ("path", "anchor", "content")),
     "create_file": (("path", "content"), ("path", "content")),
     "delete_file": (("path",), ("path",)),
     "create_java_type": (
