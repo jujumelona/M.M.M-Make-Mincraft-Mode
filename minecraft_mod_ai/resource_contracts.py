@@ -6,8 +6,6 @@ from dataclasses import asdict, dataclass
 from pathlib import PurePosixPath
 from typing import Any, Mapping, Sequence
 
-from packaging.version import Version
-
 from .task_template_catalog import load_template
 
 _RESOURCE_ID = re.compile(r"^[a-z0-9_.-]+$")
@@ -22,10 +20,7 @@ _DEFAULT_RENDER_KIND = {
     "block": "block.cube_all", "environment": "block.cube_all",
     "entity": "entity.fixed_uv", "gui": "gui.sprite",
 }
-_DEFAULT_TEXTURE_SIZE = {
-    "entity.fixed_uv": (64, 64),
-    "gui.sprite": (256, 256),
-}
+_DEFAULT_TEXTURE_SIZE = {"entity.fixed_uv": (64, 64), "gui.sprite": (256, 256)}
 _MODULE_RENDER_KIND = {
     "item": "item.generated", "food": "item.generated", "armor": "item.generated",
     "tool": "item.handheld", "weapon": "item.handheld",
@@ -71,11 +66,7 @@ class ResourceDocument:
     payload: Mapping[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "template_id": self.template_id,
-            "target_path": self.target_path,
-            "payload": json.loads(json.dumps(self.payload, sort_keys=True)),
-        }
+        return {"template_id": self.template_id, "target_path": self.target_path, "payload": json.loads(json.dumps(self.payload, sort_keys=True))}
 
 
 @dataclass(frozen=True)
@@ -152,6 +143,21 @@ def _render_document(template_id: str, values: Mapping[str, str], version_contex
     return ResourceDocument(template_id, str(_substitute(file_name, values)), _substitute(body, values))
 
 
+def _host_requires_resource_template(version_context: Any, *, leaf: str, template_id: str) -> bool:
+    facts = getattr(version_context, "facts", None)
+    bindings = facts.get("leaf_bindings") if isinstance(facts, Mapping) else None
+    binding = bindings.get(leaf) if isinstance(bindings, Mapping) else None
+    implementation = binding.get("implementation") if isinstance(binding, Mapping) else None
+    if not isinstance(implementation, Mapping):
+        raise ValueError(f"HOST resource leaf binding unavailable: {leaf}")
+    extras = implementation.get("extra_templates", ())
+    if extras is None:
+        extras = ()
+    if not isinstance(extras, Sequence) or isinstance(extras, (str, bytes)):
+        raise ValueError(f"HOST resource leaf extra_templates invalid: {leaf}")
+    return template_id in {str(item) for item in extras}
+
+
 def _slots(render_kind: str) -> tuple[tuple[str, str, str, str], ...]:
     table = {
         "block.cube_all": (("all", "seamless_tile", "opaque", "block"),),
@@ -190,29 +196,20 @@ def resolve_asset(asset: Any, *, namespace: str, minecraft_version: str, version
     textures: list[TextureSpec] = []
     if render_kind == "block.crop":
         for index in range(variant_count):
-            textures.append(TextureSpec(
-                role=f"stage{index}", topology="cutout_sprite", alpha_policy="cutout",
-                size_policy=size_policy,
-                uv_policy="cross", animation_policy="static",
-                target_path=f"{prefix}assets/{namespace}/textures/block/{subject}_stage{index}.png",
-                width=width, height=height,
-            ))
+            textures.append(TextureSpec(role=f"stage{index}", topology="cutout_sprite", alpha_policy="cutout", size_policy=size_policy, uv_policy="cross", animation_policy="static", target_path=f"{prefix}assets/{namespace}/textures/block/{subject}_stage{index}.png", width=width, height=height))
     else:
         slots = _slots(render_kind)
         for role, topology, alpha, folder in slots:
             suffix = "" if len(slots) == 1 else f"_{role}"
-            textures.append(TextureSpec(
-                role=role, topology=topology, alpha_policy=alpha,
-                size_policy=size_policy,
-                uv_policy="fixed" if topology == "fixed_uv" else "model_slot",
-                animation_policy="static",
-                target_path=f"{prefix}assets/{namespace}/textures/{folder}/{subject}{suffix}.png",
-                width=width, height=height,
-            ))
+            textures.append(TextureSpec(role=role, topology=topology, alpha_policy=alpha, size_policy=size_policy, uv_policy="fixed" if topology == "fixed_uv" else "model_slot", animation_policy="static", target_path=f"{prefix}assets/{namespace}/textures/{folder}/{subject}{suffix}.png", width=width, height=height))
 
     values = {"mod_id": namespace, "registry_path": subject, "subject": subject}
     documents: list[ResourceDocument] = []
-    modern_item = Version(minecraft_version) >= Version("1.21.4")
+    client_item = False
+    client_block_item = False
+    if version_context is not None:
+        client_item = _host_requires_resource_template(version_context, leaf="minecraft/item/model", template_id=_RESOURCE_TEMPLATES["item.client_item"])
+        client_block_item = _host_requires_resource_template(version_context, leaf="minecraft/block/model", template_id=_RESOURCE_TEMPLATES["item.client_block_item"])
     if render_kind.startswith("block."):
         if render_kind == "block.crop":
             for index in range(variant_count):
@@ -220,32 +217,24 @@ def resolve_asset(asset: Any, *, namespace: str, minecraft_version: str, version
             crop_blockstate_template = load_template(_RESOURCE_TEMPLATES["block.blockstate_crop"])
             if version_context is not None:
                 version_context.admit_template(crop_blockstate_template)
-            documents.append(ResourceDocument(
-                _RESOURCE_TEMPLATES["block.blockstate_crop"],
-                f"{prefix}assets/{namespace}/blockstates/{subject}.json",
-                {"variants": {f"age={index}": {"model": f"{namespace}:block/{subject}_stage{index}"} for index in range(variant_count)}},
-            ))
+            documents.append(ResourceDocument(_RESOURCE_TEMPLATES["block.blockstate_crop"], f"{prefix}assets/{namespace}/blockstates/{subject}.json", {"variants": {f"age={index}": {"model": f"{namespace}:block/{subject}_stage{index}"} for index in range(variant_count)}}))
         else:
             documents.append(_render_document(_RESOURCE_TEMPLATES[render_kind], values, version_context))
             documents.append(_render_document(_RESOURCE_TEMPLATES["block.blockstate_simple"], values, version_context))
         documents.append(_render_document(_RESOURCE_TEMPLATES["item.block_model_reuse"], values, version_context))
-        if modern_item:
+        if client_block_item:
             documents.append(_render_document(_RESOURCE_TEMPLATES["item.client_block_item"], values, version_context))
     elif render_kind in {"item.generated", "item.handheld"}:
         documents.append(_render_document(_RESOURCE_TEMPLATES[render_kind], values, version_context))
-        if modern_item:
+        if client_item:
             documents.append(_render_document(_RESOURCE_TEMPLATES["item.client_item"], values, version_context))
     if container == "resource_pack":
         rebased: list[ResourceDocument] = []
         source_prefix = "src/main/resources/"
         for document in documents:
             if not document.target_path.startswith(source_prefix):
-                raise ValueError(
-                    f"Standalone resource document is not rooted under {source_prefix!r}: {document.target_path!r}"
-                )
-            rebased.append(ResourceDocument(
-                document.template_id, document.target_path[len(source_prefix):], document.payload
-            ))
+                raise ValueError(f"Standalone resource document is not rooted under {source_prefix!r}: {document.target_path!r}")
+            rebased.append(ResourceDocument(document.template_id, document.target_path[len(source_prefix):], document.payload))
         documents = rebased
     return ResolvedResourceAsset(str(asset.asset_id), subject, render_kind, container, tuple(textures), tuple(documents))
 
@@ -285,14 +274,9 @@ def derive_module_asset_specs(modules: Sequence[Any], *, existing_asset_ids: Seq
                 variant_count = max(1, int(config.get("growth_stages", config.get("stage_count", 8))))
             except (TypeError, ValueError):
                 variant_count = 8
-        rows.append({
-            "asset_id": asset_id, "kind": asset_kind,
-            "visual_description": ", ".join(parts), "render_kind": render_kind,
-            "subject_id": module.module_id, "owner_module_id": module.module_id,
-            "container": "mod", "variant_count": variant_count,
-        })
+        rows.append({"asset_id": asset_id, "kind": asset_kind, "visual_description": ", ".join(parts), "render_kind": render_kind, "subject_id": module.module_id, "owner_module_id": module.module_id, "container": "mod", "variant_count": variant_count})
         existing.add(asset_id)
     return tuple(rows)
 
 
-__all__ = ["ResolvedResourceAsset", "ResourceDocument", "SUPPORTED_RENDER_KINDS", "TextureSpec", "derive_module_asset_specs", "infer_render_kind", "resolve_asset"]
+__all__ = ["ResolvedResourceAsset", "ResourceDocument", "SUPPORTED_RENDER_KINDS", "TextureSpec", "_host_requires_resource_template", "derive_module_asset_specs", "infer_render_kind", "resolve_asset"]
