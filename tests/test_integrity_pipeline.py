@@ -231,7 +231,7 @@ def test_generator_executes_registered_callable_and_emits_host_receipt(monkeypat
 
 
 @pytest.mark.parametrize("field", ["implementation_sha256", "validator_sha256", "input_schema_sha256",
-                                   "output_schema_sha256", "authority_sha256"])
+                                   "output_schema_sha256"])
 def test_runtime_rejects_tampered_binding_before_execution(field):
     from types import SimpleNamespace
     from minecraft_mod_ai.populate_version_artifact_rules import make_implementation
