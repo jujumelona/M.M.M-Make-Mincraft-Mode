@@ -15,15 +15,27 @@ def _record(index: int) -> dict[str, str]:
     return {"trigger": f"trigger-{index}", "owner": "server"}
 
 
+def _is_cardinality_schema(response_schema: dict) -> bool:
+    properties = set(response_schema.get("properties", {}))
+    return "count" in properties and properties <= {"count", "blocked_reason"}
+
+
+def _cardinality_value(response_schema: dict, count: int) -> dict[str, object]:
+    value: dict[str, object] = {"count": count}
+    if "blocked_reason" in response_schema.get("properties", {}):
+        value["blocked_reason"] = ""
+    return value
+
+
 def _generator_for(count: int, *, fail_record_index: int | None = None, calls=None):
     calls = calls if calls is not None else []
 
     def generate(router, role, messages, *, response_schema, **kwargs):
         del router, role, kwargs
         context = json.loads(messages[-1]["content"])
-        if set(response_schema.get("properties", {})) == {"count", "blocked_reason"}:
+        if _is_cardinality_schema(response_schema):
             calls.append(("count", None))
-            return {"count": count, "blocked_reason": ""}
+            return _cardinality_value(response_schema, count)
         index = int(context["record_index"])
         calls.append(("record", index))
         if fail_record_index is not None and index == fail_record_index:
@@ -161,8 +173,8 @@ def test_invalid_record_is_never_checkpointed(monkeypatch):
 
     def generate(router, role, messages, *, response_schema, **kwargs):
         del router, role, messages, kwargs
-        if set(response_schema.get("properties", {})) == {"count", "blocked_reason"}:
-            return {"count": 1, "blocked_reason": ""}
+        if _is_cardinality_schema(response_schema):
+            return _cardinality_value(response_schema, 1)
         return {"trigger": "   ", "owner": "server"}
 
     _patch_generator(monkeypatch, generate)
