@@ -9,34 +9,53 @@ input_fields:
 record_schema:
   type: object
   properties:
-    name:
-      type: string
-      minLength: 1
-    type:
-      type: string
-      minLength: 1
-    unit:
-      type: string
-      minLength: 1
-    range:
-      type: string
-      minLength: 1
-    default:
-      type: string
-      minLength: 1
-    source:
-      type: string
-      minLength: 1
+    identity:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        type:
+          type: string
+          minLength: 1
+        unit:
+          type: string
+          minLength: 1
+      required:
+      - name
+      - type
+      - unit
+      additionalProperties: false
+    constraints:
+      type: object
+      properties:
+        range:
+          type: string
+          minLength: 1
+        default:
+          type: string
+          minLength: 1
+      required:
+      - range
+      - default
+      additionalProperties: false
+    evidence:
+      type: object
+      properties:
+        source:
+          type: string
+          minLength: 1
+      required:
+      - source
+      additionalProperties: false
   required:
-  - name
-  - type
-  - unit
-  - range
-  - default
-  - source
+  - identity
+  - constraints
+  - evidence
   additionalProperties: false
 rules:
 - Return only the host-requested ordinal record for this concern; do not plan neighboring concerns.
+- Populate identity with name, type, and unit; constraints with range and default; evidence with the exact supplied source identifier.
 - Preserve supplied evidence identifiers. Never invent external APIs, paths or facts.
 - Do not emit continuation, completion, applicability, retry, or loop-control decisions; the host owns cardinality and iteration.
 - If the supplied facts cannot support the requested ordinal record, fail rather than inventing a fallback record.
