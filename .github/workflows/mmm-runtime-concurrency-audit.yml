@@ -4,21 +4,29 @@ on:
   push:
     branches: [main]
     paths:
-      - .github/workflows/mmm-runtime-concurrency-audit.yml
+      - 'minecraft_mod_ai/**/*.py'
+      - 'tests/**/*.py'
+      - '.github/scripts/**/*.py'
+      - '.github/workflows/mmm-runtime-concurrency-audit.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: mmm-runtime-concurrency-audit-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   audit:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: main
           fetch-depth: 1
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
       - name: Exhaustive Python runtime scan
@@ -65,4 +73,5 @@ jobs:
                   bad += 1
                   print(f'SYNTAX_ERROR {path}:{exc.lineno}:{exc.msg}')
           print(f'SYNTAX_ERRORS={bad}')
+          raise SystemExit(1 if bad else 0)
           PY
