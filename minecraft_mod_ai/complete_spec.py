@@ -192,57 +192,24 @@ class ProductionModule(Mapping[str, Any]):
                 raise SpecValidationError(f"Invalid gate in module {self.module_id}")
 
 
-@dataclass(frozen=True, init=False)
+@dataclass(frozen=True)
 class AssetRequest:
-    """Semantic resource request; old prompt/path fields are accepted only as input aliases."""
+    """Canonical semantic resource request. Legacy payloads are migrated at deserialization."""
+
     asset_id: str
     kind: str
     visual_description: str
     render_kind: str
     subject_id: str
-    owner_module_id: str
-    container: str
-    requested_width: int | None
-    requested_height: int | None
-    variant_count: int
-
-    def __init__(self, asset_id: str, kind: str, prompt: str = "", target_path: str = "",
-                 width: int | None = None, height: int | None = None, *,
-                 visual_description: str | None = None, render_kind: str = "", subject_id: str = "",
-                 owner_module_id: str = "", container: str = "mod",
-                 requested_width: int | None = None, requested_height: int | None = None,
-                 variant_count: int = 1) -> None:
-        from .resource_contracts import infer_render_kind
-        description = str(visual_description if visual_description is not None else prompt).strip()
-        legacy_target = str(target_path or "").replace("\\", "/")
-        inferred_subject = str(subject_id or "").strip() or (PurePosixPath(legacy_target).stem if legacy_target else str(asset_id))
-        inferred_container = "resource_pack" if legacy_target.startswith("assets/") else container
-        inferred_kind = str(render_kind or infer_render_kind(kind, target_path=legacy_target)).strip()
-        object.__setattr__(self, "asset_id", str(asset_id))
-        object.__setattr__(self, "kind", str(kind))
-        object.__setattr__(self, "visual_description", description)
-        object.__setattr__(self, "render_kind", inferred_kind)
-        object.__setattr__(self, "subject_id", inferred_subject)
-        object.__setattr__(self, "owner_module_id", str(owner_module_id or ""))
-        object.__setattr__(self, "container", str(inferred_container or "mod"))
-        object.__setattr__(self, "requested_width", requested_width if requested_width is not None else width)
-        object.__setattr__(self, "requested_height", requested_height if requested_height is not None else height)
-        object.__setattr__(self, "variant_count", variant_count)
-
-    @property
-    def prompt(self) -> str:
-        return self.visual_description
-
-    @property
-    def width(self) -> int:
-        return self.requested_width or 16
-
-    @property
-    def height(self) -> int:
-        return self.requested_height or 16
+    owner_module_id: str = ""
+    container: str = "mod"
+    requested_width: int | None = None
+    requested_height: int | None = None
+    variant_count: int = 1
 
     def validate(self, *, policy: ScalePolicy | None = None) -> None:
         from .resource_contracts import SUPPORTED_RENDER_KINDS
+
         policy = policy or ScalePolicy.from_environment()
         if not _ID.fullmatch(self.asset_id):
             raise SpecValidationError(f"Invalid asset id: {self.asset_id!r}")
@@ -252,6 +219,8 @@ class AssetRequest:
             raise SpecValidationError(f"Asset visual description is empty: {self.asset_id}")
         if self.render_kind not in SUPPORTED_RENDER_KINDS:
             raise SpecValidationError(f"Unsupported asset render kind {self.render_kind!r}: {self.asset_id}")
+        if not self.subject_id:
+            raise SpecValidationError(f"Asset subject id is empty: {self.asset_id}")
         if self.container not in {"mod", "resource_pack"}:
             raise SpecValidationError(f"Unsupported asset container: {self.container!r}")
         if self.owner_module_id and not _ID.fullmatch(self.owner_module_id):
@@ -605,17 +574,44 @@ def _asset_from_dict(value: Any) -> AssetRequest:
     legacy_optional = {"width", "height"}
     keys = set(value)
     if semantic_required <= keys and not (keys - semantic_required - semantic_optional):
+        asset_id = str(value["asset_id"])
+        kind = str(value["kind"])
+        render_kind = str(value.get("render_kind", ""))
+        subject_id = str(value.get("subject_id", ""))
+        if not render_kind or not subject_id:
+            raise SpecValidationError(
+                "Semantic asset payload requires render_kind and subject_id."
+            )
         return AssetRequest(
-            asset_id=str(value["asset_id"]), kind=str(value["kind"]), visual_description=str(value["visual_description"]),
-            render_kind=str(value.get("render_kind", "")), subject_id=str(value.get("subject_id", "")),
-            owner_module_id=str(value.get("owner_module_id", "")), container=str(value.get("container", "mod")),
+            asset_id=asset_id,
+            kind=kind,
+            visual_description=str(value["visual_description"]),
+            render_kind=render_kind,
+            subject_id=subject_id,
+            owner_module_id=str(value.get("owner_module_id", "")),
+            container=str(value.get("container", "mod")),
             requested_width=None if value.get("requested_width") is None else _strict_int(value["requested_width"], "asset.requested_width"),
             requested_height=None if value.get("requested_height") is None else _strict_int(value["requested_height"], "asset.requested_height"),
             variant_count=_strict_int(value.get("variant_count", 1), "asset.variant_count"),
         )
     if legacy_required <= keys and not (keys - legacy_required - legacy_optional):
-        return AssetRequest(asset_id=str(value["asset_id"]), kind=str(value["kind"]), prompt=str(value["prompt"]),
-                            target_path=str(value["target_path"]), width=value.get("width"), height=value.get("height"))
+        from .resource_contracts import infer_render_kind
+
+        asset_id = str(value["asset_id"])
+        kind = str(value["kind"])
+        target_path = str(value["target_path"]).replace("\\", "/")
+        width = value.get("width")
+        height = value.get("height")
+        return AssetRequest(
+            asset_id=asset_id,
+            kind=kind,
+            visual_description=str(value["prompt"]).strip(),
+            render_kind=infer_render_kind(kind, target_path=target_path),
+            subject_id=PurePosixPath(target_path).stem or asset_id,
+            container="resource_pack" if target_path.startswith("assets/") else "mod",
+            requested_width=None if width is None else _strict_int(width, "asset.width"),
+            requested_height=None if height is None else _strict_int(height, "asset.height"),
+        )
     raise SpecValidationError(f"Invalid asset fields: {sorted(keys)}")
 
 
