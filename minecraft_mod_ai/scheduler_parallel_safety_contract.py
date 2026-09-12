@@ -13,6 +13,7 @@ from typing import Any
 from .project_write_lock import project_write_lock
 
 _ORCHESTRATOR_WORKER = "mmm-orchestrator"
+_CLAIM_CONTRACT_VERSION = 2
 _RESOURCE_CAPACITIES = {
     # llama_parallel_runtime_contract replaces the LLM value with the selected native
     # slot capacity after this safety layer is installed.
@@ -139,13 +140,7 @@ def _receipt_touched_paths(receipt: Any) -> tuple[str, ...]:
 
 
 def _profile_uses_shared_local_gpu(profile: str, registry: Any | None = None) -> bool:
-    """Return whether generation text and image roles contend for one local GPU.
-
-    Remote/API profiles intentionally remain independent. Local llama/vLLM plus local
-    diffusion profiles share one physical device. Text requests may share the resident
-    model up to native slot capacity, while diffusion remains mutually exclusive with
-    every text slot.
-    """
+    """Return whether generation text and image roles contend for one local GPU."""
 
     try:
         if registry is None:
@@ -195,7 +190,10 @@ def _install_profile_gpu_lane(orchestrator_module: Any) -> None:
 def _install_lane_aware_claim(work_graph_module: Any) -> None:
     ledger_cls = work_graph_module.DurableWorkLedger
     current = ledger_cls.claim_ready
-    if getattr(current, "_mmm_parallel_lane_claim", False):
+    installed_version = int(
+        getattr(current, "_mmm_parallel_lane_claim_version", 0) or 0
+    )
+    if installed_version >= _CLAIM_CONTRACT_VERSION:
         return
 
     @wraps(current)
@@ -252,8 +250,6 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
                 if running.get(lane, 0) < capacity
             }
             if _SHARED_LOCAL_GPU_LANE.get():
-                # Text slots are concurrent readers of one resident local model.
-                # Diffusion is the exclusive writer on that physical GPU.
                 if running.get("image_gpu", 0) > 0:
                     free_lanes.discard("llm")
                 if running.get("llm", 0) > 0:
@@ -419,10 +415,9 @@ def _install_lane_aware_claim(work_graph_module: Any) -> None:
         return self.task(node_id)
 
     claim_ready._mmm_parallel_lane_claim = True  # type: ignore[attr-defined]
+    claim_ready._mmm_parallel_lane_claim_version = _CLAIM_CONTRACT_VERSION  # type: ignore[attr-defined]
     claim_ready._mmm_exact_executor_fairness = True  # type: ignore[attr-defined]
     claim_ready._mmm_stage_lock_admission = True  # type: ignore[attr-defined]
-    # The consolidated safety claimant already owns the max-efficiency semantics.
-    # Any late compatibility installer must not wrap it with another transaction.
     claim_ready._mmm_max_efficiency_claim = True  # type: ignore[attr-defined]
     ledger_cls.claim_ready = claim_ready
 
