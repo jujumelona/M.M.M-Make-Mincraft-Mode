@@ -160,7 +160,7 @@ def test_replace_exact_detail_schema_excludes_other_operation_fields() -> None:
     from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
 
     detail = _source_edit_detail_schema(SOURCE_EDIT_SCHEMA, "replace_exact")
-    assert tuple(detail["properties"]) == ("path", "old", "new", "count")
+    assert tuple(detail["properties"]) == ("path", "old", "new")
 
 
 def test_discriminated_source_edit_recovery_drops_union_pollution() -> None:
