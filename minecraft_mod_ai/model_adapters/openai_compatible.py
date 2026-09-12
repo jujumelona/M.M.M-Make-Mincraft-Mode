@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ..generation_output_budget import apply_payload_generation_budget
+from ..model_concurrency import ModelConcurrencyTimeout, remaining_model_execution_seconds
 from .base import (
     GenerationRequest,
     GenerationResponse,
@@ -22,6 +23,7 @@ from .base import (
 
 _CLIENT_LOCK = threading.RLock()
 _CLIENTS: dict[tuple[str, str, Any], Any] = {}
+_DEFAULT_REMOTE_TIMEOUT_SECONDS = 120.0
 
 
 def _data_url(path: Path) -> str:
@@ -43,6 +45,19 @@ def _validated_remote(config: Any) -> tuple[str, str]:
     return base_url, api_key
 
 
+def _provider_timeout_seconds(*, default: float = _DEFAULT_REMOTE_TIMEOUT_SECONDS) -> float:
+    """Clamp physical provider I/O to the active model execution deadline."""
+
+    remaining = remaining_model_execution_seconds()
+    if remaining is None:
+        return float(default)
+    if remaining <= 0.0:
+        raise ModelConcurrencyTimeout(
+            "Model execution deadline expired before the remote provider request started."
+        )
+    return max(0.001, min(float(default), float(remaining)))
+
+
 def _http_client(base_url: str, *, purpose: str) -> Any:
     """Reuse one thread-safe HTTP connection pool per remote origin and call type."""
 
@@ -55,9 +70,16 @@ def _http_client(base_url: str, *, purpose: str) -> Any:
         if client is not None:
             return client
         if purpose == "completion":
-            client = factory(timeout=120.0, follow_redirects=False)
+            client = factory(
+                timeout=_DEFAULT_REMOTE_TIMEOUT_SECONDS,
+                follow_redirects=False,
+            )
         elif purpose == "image":
-            client = factory(follow_redirects=False, trust_env=False)
+            client = factory(
+                timeout=_DEFAULT_REMOTE_TIMEOUT_SECONDS,
+                follow_redirects=False,
+                trust_env=False,
+            )
         else:
             raise ValueError(f"Unsupported remote HTTP client purpose: {purpose!r}")
         _CLIENTS[key] = client
@@ -144,6 +166,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
                     "Content-Type": "application/json",
                 },
                 json=payload,
+                timeout=_provider_timeout_seconds(),
             )
             response.raise_for_status()
             data = response.json()
@@ -174,6 +197,8 @@ class OpenAICompatibleAdapter(ModelAdapter):
                 tool_calls=tool_calls,
                 reasoning_content=reasoning.strip(),
             )
+        except ModelConcurrencyTimeout:
+            raise
         except ModelBackendError:
             raise
         except Exception as exc:
@@ -215,6 +240,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
                     "response_format": "b64_json",
                     "n": 1,
                 },
+                timeout=_provider_timeout_seconds(),
             )
             response.raise_for_status()
             payload = response.json()
@@ -257,6 +283,8 @@ class OpenAICompatibleAdapter(ModelAdapter):
                 if temporary.exists():
                     temporary.unlink()
             return target
+        except ModelConcurrencyTimeout:
+            raise
         except ModelBackendError:
             raise
         except Exception as exc:
