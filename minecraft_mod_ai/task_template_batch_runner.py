@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
+from threading import RLock
 from typing import Any
 
 from .bounded_record_template import run_bounded_record_template
@@ -41,6 +42,16 @@ def run_record_template_batch(
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("TEMPLATE_RECORD_BATCH: duplicate identifiers")
 
+    checkpoint_lock = RLock()
+
+    def serialized_checkpoint(*args, **kwargs):
+        if checkpoint is None:
+            return None
+        with checkpoint_lock:
+            return checkpoint(*args, **kwargs)
+
+    effective_checkpoint = serialized_checkpoint if checkpoint is not None else None
+
     def run_one(identifier: str) -> dict[str, Any]:
         return run_bounded_record_template(
             model_router,
@@ -48,7 +59,7 @@ def run_record_template_batch(
             context=dict(context),
             allowed_refs=allowed_refs,
             progress=progress,
-            checkpoint=checkpoint,
+            checkpoint=effective_checkpoint,
         )
 
     workers = max(
