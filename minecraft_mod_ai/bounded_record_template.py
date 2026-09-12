@@ -1,18 +1,22 @@
 """Host-owned cardinality for record templates.
 
 The model never returns an arbitrarily capped record array and never controls
-continuation.  It first determines the authored cardinality as one integer; the
+continuation. It first determines the authored cardinality as one integer; the
 host then performs exactly that many single-record calls in stable ordinal order.
+Independent ordinals may occupy measured native llama slots concurrently.
 """
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from copy import deepcopy
 from typing import Any
 
 from jsonschema import Draft202012Validator
 
 from .fixed_template_generation import generate_fixed_template_value
+from .model_concurrency import router_native_model_parallelism
 from .model_output_atomicity_contract import MAX_MODEL_STRING_CHARS
 from .single_record_template import run_single_record_template
 from .task_template_catalog import load_record_template
@@ -124,7 +128,7 @@ def run_bounded_record_template(
     progress=None,
     checkpoint=None,
 ):
-    """Resolve one concern with host-owned exact cardinality and ordinal calls."""
+    """Resolve one concern with host-owned exact cardinality and stable ordinals."""
     template = load_record_template(identifier)
     normalized_context = task_context(template, context)
     admitted_refs = {str(ref) for ref in allowed_refs}
@@ -138,10 +142,8 @@ def run_bounded_record_template(
         checkpoint=checkpoint,
     )
 
-    records: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for index in range(count):
-        record = run_single_record_template(
+    def generate_record(index: int) -> dict[str, Any]:
+        return run_single_record_template(
             router,
             identifier,
             context={
@@ -154,6 +156,29 @@ def run_bounded_record_template(
             checkpoint=checkpoint,
             generator=generate_fixed_template_value,
         )
+
+    workers = max(1, min(count, router_native_model_parallelism(router))) if count else 1
+    if count <= 1 or workers == 1:
+        records = [generate_record(index) for index in range(count)]
+    else:
+        contexts = [copy_context() for _ in range(count)]
+        with ThreadPoolExecutor(
+            max_workers=workers,
+            thread_name_prefix="planning-template-record-ordinal",
+        ) as pool:
+            futures = [
+                pool.submit(contexts[index].run, generate_record, index)
+                for index in range(count)
+            ]
+            try:
+                records = [future.result() for future in futures]
+            except BaseException:
+                for future in futures:
+                    future.cancel()
+                raise
+
+    seen: set[str] = set()
+    for index, record in enumerate(records):
         key = json.dumps(
             record,
             sort_keys=True,
@@ -165,7 +190,6 @@ def run_bounded_record_template(
                 f"TEMPLATE_NO_PROGRESS: duplicate record in {identifier} at ordinal {index + 1}"
             )
         seen.add(key)
-        records.append(record)
 
     return {
         "records": records,
