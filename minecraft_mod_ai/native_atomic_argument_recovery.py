@@ -36,9 +36,6 @@ _SOURCE_EDIT_OPERATION_ALIASES = {
     "delete": "delete_file",
 }
 _SOURCE_EDIT_OPERATION_FIELDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
-    # count is optional and semantically fixed to the default value 1 by the source-edit
-    # contract. Keeping it out of recovery prevents the operation-detail page from exceeding
-    # the three-field model atomicity boundary without losing executable semantics.
     "replace_exact": (("path", "old", "new"), ("path", "old", "new")),
     "insert_before": (("path", "anchor", "content"), ("path", "anchor", "content")),
     "insert_after": (("path", "anchor", "content"), ("path", "anchor", "content")),
@@ -54,8 +51,6 @@ _SOURCE_EDIT_OPERATION_FIELDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]
 
 
 def _forced_module() -> Any:
-    # Import lazily to avoid a module cycle while forced_tool_execution_contract imports
-    # the public recovery entry points on demand.
     from . import forced_tool_execution_contract
 
     return forced_tool_execution_contract
@@ -80,10 +75,7 @@ def _bounded_property(schema: Mapping[str, Any]) -> dict[str, Any]:
     return copy
 
 
-def _page_schema(
-    source: Mapping[str, Any],
-    names: Sequence[str],
-) -> dict[str, Any]:
+def _page_schema(source: Mapping[str, Any], names: Sequence[str]) -> dict[str, Any]:
     properties = source.get("properties")
     if not isinstance(properties, Mapping):
         return dict(source)
@@ -192,9 +184,7 @@ def _source_edit_detail_schema(
     return page
 
 
-def _source_edit_scalar_schema(
-    detail_schema: Mapping[str, Any],
-) -> dict[str, Any] | None:
+def _source_edit_scalar_schema(detail_schema: Mapping[str, Any]) -> dict[str, Any] | None:
     properties = detail_schema.get("properties")
     if not isinstance(properties, Mapping):
         return None
@@ -215,15 +205,43 @@ def _source_edit_stream_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "chunk": {
-                "type": "string",
-                "maxLength": _MAX_ATOMIC_STRING_LENGTH,
-            },
+            "chunk": {"type": "string", "maxLength": _MAX_ATOMIC_STRING_LENGTH},
             "done": {"type": "boolean"},
         },
         "required": ["chunk", "done"],
         "additionalProperties": False,
     }
+
+
+def _base_messages(request: Any, *, isolated: bool) -> list[dict[str, Any]]:
+    source = [
+        dict(raw)
+        for raw in tuple(getattr(request, "messages", ()) or ())
+        if isinstance(raw, Mapping)
+    ]
+    if not isolated:
+        return source
+
+    # A repeated invalid fingerprint means the current conversation state has become a
+    # deterministic attractor. Crossing that boundary is a state transition, not another
+    # retry: retain policy plus the latest task-bearing user turn and discard assistant/tool
+    # residue that can keep reproducing the invalid prose/tool shape.
+    policy = [
+        message
+        for message in source
+        if str(message.get("role", "")).strip().casefold() in {"system", "developer"}
+    ]
+    latest_user = next(
+        (
+            message
+            for message in reversed(source)
+            if str(message.get("role", "")).strip().casefold() == "user"
+        ),
+        None,
+    )
+    if latest_user is not None:
+        policy.append(latest_user)
+    return policy
 
 
 def _messages(
@@ -235,12 +253,9 @@ def _messages(
     action_name: str,
     repair_error: str = "",
     context_instruction: str = "",
+    isolated: bool = False,
 ) -> tuple[dict[str, Any], ...]:
-    messages = [
-        dict(raw)
-        for raw in tuple(getattr(request, "messages", ()) or ())
-        if isinstance(raw, Mapping)
-    ]
+    messages = _base_messages(request, isolated=isolated)
     properties = page_schema.get("properties")
     fields = (
         ", ".join(str(name) for name in properties)
@@ -255,6 +270,11 @@ def _messages(
         "The host owns action selection, merges bounded pages, validates the complete object, "
         "and constructs the final executable tool call."
     )
+    if isolated:
+        instruction += (
+            " This is isolated fixed-point recovery. Ignore prior assistant/tool output; "
+            "derive arguments only from the retained task context and the forced schema."
+        )
     if context_instruction:
         instruction += " " + context_instruction
     if repair_error:
@@ -275,10 +295,8 @@ def _request(
     action_name: str,
     repair_error: str = "",
     context_instruction: str = "",
+    isolated: bool = False,
 ) -> Any:
-    # The atomic boundary is checked per native function-argument page, never against
-    # the host-owned original container. The model fills fields through ToolCall.arguments;
-    # message content is deliberately not a structured-output transport.
     from .model_output_atomicity_contract import assert_atomic_model_schema
 
     assert_atomic_model_schema(
@@ -306,6 +324,7 @@ def _request(
             action_name=action_name,
             repair_error=repair_error,
             context_instruction=context_instruction,
+            isolated=isolated,
         ),
         tools=(page_tool,),
         tool_validation_schemas=(page_tool,),
@@ -334,15 +353,6 @@ def _page_owned_arguments(
     page_schema: Mapping[str, Any],
     parameters: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Filter out only those fields that are legitimately owned by a different page.
-
-    Small models forced to output JSON will sometimes mirror schema fields declared in the
-    complete schema but owned by a later page. Such a field must not make the current page
-    fail `additionalProperties: false`; its owning page remains responsible for producing
-    and validating it. Fields absent from the complete schema are deliberately retained so
-    the strict page validator still rejects genuine out-of-contract output.
-    """
-
     page_properties = page_schema.get("properties")
     all_properties = parameters.get("properties")
     if not isinstance(page_properties, Mapping) or not isinstance(all_properties, Mapping):
@@ -360,15 +370,6 @@ def _source_edit_stream_length_overshoot_is_safe(
     action_name: str,
     forced: Any,
 ) -> bool:
-    """Accept only a source-edit stream whose sole violation is chunk maxLength.
-
-    The 256-character bound remains model-visible and is still the generation contract.
-    Some Qwen tool completions nevertheless return the entire exact scalar in one call.
-    Rejecting that already-complete source text loses information and creates a fixed point.
-    Preserve it only when removing maxLength alone makes the same strict page valid; the
-    fully reassembled edit is still validated against the original apply_source_edit schema.
-    """
-
     if action_name != _SOURCE_EDIT_TOOL:
         return False
     properties = page_schema.get("properties")
@@ -401,8 +402,6 @@ def _page_result(
     parameters: Mapping[str, Any],
     action_name: str = "submit_action",
 ) -> tuple[dict[str, Any] | None, str, str]:
-    """Consume only one native forced ToolCall; message content is never parsed as JSON."""
-
     forced = _forced_module()
     calls = tuple(getattr(turn, "tool_calls", ()) or ())
     matches = tuple(
@@ -466,8 +465,6 @@ def _page_attempt(
         from .llama_finish_reason_contract import completion_boundary_error
         from .generation_output_budget import GenerationOutputBudgetError
 
-        # Backend/context failures belong to the canonical recovery owner. Retrying
-        # them as invalid arguments loses their type, cause and preserved partial receipt.
         if completion_boundary_error(exc) is not None or isinstance(
             exc, GenerationOutputBudgetError
         ):
@@ -501,12 +498,7 @@ def _recover_page(
         context_instruction=context_instruction,
     )
     arguments, error, first_fingerprint = _page_attempt(
-        current,
-        adapter,
-        first_request,
-        page_schema,
-        parameters,
-        action_name,
+        current, adapter, first_request, page_schema, parameters, action_name
     )
     if arguments is not None:
         return arguments
@@ -521,25 +513,41 @@ def _recover_page(
         context_instruction=context_instruction,
     )
     arguments, repair_error, second_fingerprint = _page_attempt(
-        current,
-        adapter,
-        repair_request,
-        page_schema,
-        parameters,
-        action_name,
+        current, adapter, repair_request, page_schema, parameters, action_name
     )
     if arguments is not None:
         return arguments
 
-    fixed_point = first_fingerprint == second_fingerprint
-    suffix = (
-        "repeated-invalid forced argument-page fixed point"
-        if fixed_point
-        else "bounded forced argument-page repair exhausted"
-    )
+    if first_fingerprint == second_fingerprint:
+        isolated_request = _request(
+            request,
+            page_index=page_index,
+            page_count=page_count,
+            page_schema=page_schema,
+            action_name=action_name,
+            repair_error=repair_error or error,
+            context_instruction=context_instruction,
+            isolated=True,
+        )
+        arguments, isolated_error, _ = _page_attempt(
+            current,
+            adapter,
+            isolated_request,
+            page_schema,
+            parameters,
+            action_name,
+        )
+        if arguments is not None:
+            return arguments
+        raise ModelConfigurationError(
+            f"Host-selected action {action_name!r} isolated forced argument-page recovery "
+            f"failed after repeated-invalid fixed point on page {page_index}/{page_count}; "
+            f"error={isolated_error or repair_error or error}."
+        )
+
     raise ModelConfigurationError(
-        f"Host-selected action {action_name!r} {suffix} on page "
-        f"{page_index}/{page_count}; error={repair_error or error}."
+        f"Host-selected action {action_name!r} bounded forced argument-page repair exhausted "
+        f"on page {page_index}/{page_count}; error={repair_error or error}."
     )
 
 
@@ -552,8 +560,6 @@ def _recover_source_edit_stream_field(
     field_name: str,
     field_schema: Mapping[str, Any],
 ) -> str:
-    """Recover one arbitrary-length source scalar through bounded native chunks."""
-
     from .model_adapters import ModelConfigurationError
 
     if field_schema.get("type") != "string":
@@ -616,13 +622,6 @@ def _recover_source_edit_arguments(
     request: Any,
     parameters: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Recover source-edit arguments without imposing a total source-text size limit.
-
-    The discriminator and ordinary scalar metadata use the existing bounded page contract.
-    Source payload scalars are transported as repeated <=256-character chunks and are
-    reassembled by the host before the original apply_source_edit schema is validated.
-    """
-
     from .model_adapters import ModelConfigurationError
 
     try:
@@ -671,8 +670,6 @@ def _recover_source_edit_arguments(
         if not isinstance(raw_schema, Mapping) or not _requires_stream_transport(raw_schema):
             continue
         if field_name not in required:
-            # No current canonical operation has an optional streamed field. Keep optional
-            # fields host-owned rather than forcing the model to invent an unnecessary value.
             continue
         details[str(field_name)] = _recover_source_edit_stream_field(
             current,
@@ -705,12 +702,7 @@ def host_selected_argument_turn(
     schema = forced._selected_schema(request, name)
     parameters = forced._parameters(schema)
     if name == _SOURCE_EDIT_TOOL:
-        merged = _recover_source_edit_arguments(
-            current,
-            adapter,
-            request,
-            parameters,
-        )
+        merged = _recover_source_edit_arguments(current, adapter, request, parameters)
         return forced._response_for_call(name, merged, prefix=prefix)
 
     try:
