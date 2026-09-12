@@ -9,6 +9,7 @@ from minecraft_mod_ai.work_graph import DurableWorkLedger, WorkGraphPlan, WorkNo
 
 
 _BOOTSTRAPPED_RUN_WORK_NODE = orchestrator_module.CompleteProductionOrchestrator._run_work_node
+_CLAIM_READY_BEFORE_INSTALL = DurableWorkLedger.claim_ready
 
 install(
     work_graph_module=work_graph_module,
@@ -46,6 +47,12 @@ def _ledger(tmp_path: Path, *nodes: WorkNode) -> DurableWorkLedger:
 def test_scheduler_reinstall_does_not_rebind_final_run_work_node() -> None:
     assert getattr(_BOOTSTRAPPED_RUN_WORK_NODE, "_mmm_claim_fenced", False)
     assert orchestrator_module.CompleteProductionOrchestrator._run_work_node is _BOOTSTRAPPED_RUN_WORK_NODE
+
+
+def test_scheduler_install_does_not_rebind_claim_ready() -> None:
+    assert DurableWorkLedger.claim_ready is _CLAIM_READY_BEFORE_INSTALL
+    assert not hasattr(DurableWorkLedger.claim_ready, "__wrapped__")
+    assert not getattr(DurableWorkLedger.claim_ready, "_mmm_parallel_lane_claim", False)
 
 
 def test_successful_claim_scans_ready_queue_once_without_active_stage_prescan(
