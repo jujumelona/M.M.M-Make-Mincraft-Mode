@@ -902,8 +902,8 @@ def generate_assets(router: Any, proposal: CompleteProposal, project_root: Path,
                 if not isinstance(texture, Mapping):
                     raise AssetProductionError("Invalid texture contract.")
                 asset_id, role, prompt = str(row["asset_id"]), str(texture["role"]), str(texture["prompt"])
-                scored = []
                 failures = []
+                selected = None
                 for index in range(profile.candidate_count):
                     normalized = candidate_root / asset_id / role / f"normalized-{index:02d}.png"
                     try:
@@ -915,10 +915,15 @@ def generate_assets(router: Any, proposal: CompleteProposal, project_root: Path,
                     except ValueError as exc:
                         failures.append({"candidate": index, "reason": str(exc)})
                         continue
-                    scored.append((1000.0, index, normalized, evidence))
-                if not scored:
+                    # Successful candidates all have the same selection score in this
+                    # contract. The tie-breaker is the lowest index, so the first successful
+                    # candidate is already the mathematically final winner. Generating later
+                    # seeds cannot change the selected result.
+                    selected = (1000.0, index, normalized, evidence)
+                    break
+                if selected is None:
                     raise AssetProductionError(f"No candidate satisfies resource contract for {asset_id}:{role}: {failures}")
-                score, index, winner, evidence = min(scored, key=lambda item: (-item[0], item[1]))
+                score, index, winner, evidence = selected
                 target = _safe_target(container_root, str(texture["target_path"]))
                 _atomic_write_bytes(target, winner.read_bytes())
                 receipts.append({
@@ -927,6 +932,7 @@ def generate_assets(router: Any, proposal: CompleteProposal, project_root: Path,
                     "width": int(texture["width"]), "height": int(texture["height"]),
                     "topology": str(texture["topology"]), "alpha_policy": str(texture["alpha_policy"]),
                     "selected_candidate": index, "selected_score": score, "candidate_count": profile.candidate_count,
+                    "attempted_candidate_count": index + 1,
                     "generation_evidence": evidence, "rejected_candidates": failures,
                     "prompt_sha256": "sha256:" + hashlib.sha256(prompt.encode()).hexdigest(),
                     "sha256": "sha256:" + hashlib.sha256(target.read_bytes()).hexdigest(), "placeholder": False,
