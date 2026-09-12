@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from minecraft_mod_ai.model_output_atomicity_contract import assert_atomic_model_schema
 from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
 from minecraft_mod_ai.planning_detail_template import WORKSHEET_SECTIONS, validate_worksheet_section
+from minecraft_mod_ai.structured_output import (
+    StructuredOutputValidationError,
+    validate_structured_output,
+)
 from minecraft_mod_ai.worksheet_atomic_chunker import (
     merge_worksheet_section_chunks,
     pack_section_concerns,
@@ -76,20 +82,24 @@ def test_merge_rejects_missing_chunk_page():
         merge_worksheet_section_chunks("behavior_contract", supplied_chunks, set())
 
 
-def test_merge_rejects_undeclared_fields():
-    canonical = row("behavior_contract")
-    chunks = pack_section_concerns("behavior_contract")
-    chunk_payloads = []
-    for index, concern_group in enumerate(chunks):
-        payload: dict = {"inapplicable_concerns": []}
-        for concern in concern_group:
-            payload[concern] = canonical["specification"][concern]
-        if index == 0:
-            payload["extra_hallucinated_field"] = "bad"
-        chunk_payloads.append(payload)
+def test_chunk_schema_rejects_undeclared_fields_before_merge():
+    concern_group = pack_section_concerns("behavior_contract")[0]
+    schema = worksheet_chunk_schema(
+        "behavior_contract",
+        concern_group,
+        include_evidence=True,
+    )
+    output = json.dumps({"extra_hallucinated_field": "bad"})
 
-    with pytest.raises(ValueError, match="undeclared field"):
-        merge_worksheet_section_chunks("behavior_contract", chunk_payloads, set())
+    with pytest.raises(
+        StructuredOutputValidationError,
+        match="Additional properties are not allowed",
+    ):
+        validate_structured_output(
+            output,
+            response_format="json",
+            response_schema=schema,
+        )
 
 
 def test_merge_auto_reconciles_empty_concerns_without_inapplicable_reasons():
