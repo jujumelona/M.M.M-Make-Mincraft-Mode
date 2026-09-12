@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 from minecraft_mod_ai import planning_semantic_research as semantic
@@ -43,6 +44,58 @@ def test_runtime_assessment_contract_has_no_model_authored_prose():
     }
     assert "excerpt" not in properties
     assert "reason" not in properties
+
+
+def test_semantic_windows_use_actual_serialized_budget_not_half():
+    req = requirement()
+    budget = 4096
+    body = "Spacecraft trade upgrade behavior is documented in detail. " * 300
+    windows = list(semantic._semantic_windows(
+        body,
+        requirement_statement=req["statement"],
+        obligation=req["acceptance"][0],
+        source_id="modrinth:runtime",
+        assessment_budget=budget,
+        verification_budget=budget,
+    ))
+
+    assert "".join(window for _, _, window in windows) == body
+    assert len(windows[0][2].encode("utf-8")) > budget // 2
+    for _, _, window in windows:
+        units = semantic._source_units(window)
+        last = len(units) - 1
+        assert semantic._message_bytes(semantic._assessment_messages(
+            req["statement"], req["acceptance"][0], "modrinth:runtime", units
+        )) <= budget
+        assert semantic._message_bytes(semantic._verification_messages(
+            req["statement"],
+            req["acceptance"][0],
+            "modrinth:runtime",
+            units,
+            last,
+            last,
+        )) <= budget
+
+
+def test_verifier_context_sends_source_once_with_host_selected_range():
+    req = requirement()
+    body = "Unsupported features:\nPlayers can trade resources to upgrade spacecraft."
+    units = semantic._source_units(body)
+    messages = semantic._verification_messages(
+        req["statement"],
+        req["acceptance"][0],
+        "modrinth:runtime",
+        units,
+        0,
+        len(units) - 1,
+    )
+    payload = json.loads(messages[1]["content"])
+
+    assert "source_quote" not in payload
+    assert "source_window" not in payload
+    assert "".join(unit["text"] for unit in payload["source_units"]) == body
+    assert payload["evidence_start"] == 0
+    assert payload["evidence_end"] == len(units) - 1
 
 
 def test_structured_output_fixed_point_rejects_one_source_without_killing_planning(
@@ -92,6 +145,9 @@ def test_host_reconstructs_exact_evidence_and_proof_text(monkeypatch, tmp_path):
         calls.append(kwargs["tool_name"])
         if kwargs["tool_name"] == "assess_requirement_source":
             return {"verdict": "supported", "evidence_start": 0, "evidence_end": 0}
+        payload = json.loads(args[2][1]["content"])
+        assert "source_quote" not in payload
+        assert "source_window" not in payload
         return {"verdict": "supported"}
 
     monkeypatch.setattr(semantic, "generate_fixed_template_value", model)
