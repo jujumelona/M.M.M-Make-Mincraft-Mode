@@ -20,7 +20,7 @@ def _shards(monkeypatch, modules):
     return list(_module_shards(modules, policy=ScalePolicy()))
 
 
-def test_builtin_content_system_entity_are_singleton_dag_nodes_by_default(monkeypatch):
+def test_builtin_content_system_entity_use_bounded_stage_aggregation_by_default(monkeypatch):
     modules = (
         ProductionModule('ruby_sword', 'weapon'),
         ProductionModule('ruby_armor', 'armor'),
@@ -30,9 +30,21 @@ def test_builtin_content_system_entity_are_singleton_dag_nodes_by_default(monkey
         ProductionModule('wolf_beta', 'entity'),
     )
     shards = _shards(monkeypatch, modules)
-    relevant = [(stage, members) for stage, members in shards if stage in {'content', 'system', 'entity'}]
-    assert len(relevant) == len(modules)
-    assert all(len(members) == 1 for _, members in relevant)
+    relevant = [
+        (stage, tuple(module.module_id for module in members))
+        for stage, members in shards
+        if stage in {'content', 'system', 'entity'}
+    ]
+
+    # Deterministic content is bounded by ScalePolicy.java_shard_size, system keeps
+    # one module per shard by default, and entity generation uses bounded pairs.
+    assert relevant == [
+        ('content', ('ruby_sword', 'ruby_armor')),
+        ('system', ('quest_alpha',)),
+        ('system', ('shop_alpha',)),
+        ('entity', ('wolf_alpha', 'wolf_beta')),
+    ]
+    assert sum(len(members) for _, members in relevant) == len(modules)
 
 
 def test_builtin_anchor_scope_is_module_or_system_pack_not_stage_global():
@@ -50,7 +62,6 @@ def test_extended_content_no_long_function_wide_serialization_wrapper():
     source = inspect.getsource(generate_extended_content)
     assert '_serialized_extended_content' not in source
     assert 'with project_write_lock(info.root):' in source
-
 
 
 def test_blockbench_review_uses_dedicated_parallel_lane():
