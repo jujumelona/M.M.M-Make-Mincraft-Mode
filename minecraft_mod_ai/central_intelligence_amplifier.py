@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from .fixed_template_generation import generate_fixed_template_text
-
 import hashlib
 import json
 import os
 import re
 from collections.abc import Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import copy_context
 from functools import wraps
 from typing import Any
+
+from .deadline_executor import iter_completed_with_deadlines
+from .fixed_template_generation import generate_fixed_template_text
 
 _MARKER = "_mmm_central_intelligence_amplifier_v1"
 _PARALLEL_CORE_MARKER = "_mmm_parallel_research_design_core_v1"
@@ -308,18 +308,30 @@ def install_parallel_core(agentic_module: Any) -> None:
             )
             provider_results: dict[str, Any] = {}
             provider_errors: dict[str, dict[str, str]] = {}
-            with ThreadPoolExecutor(
-                max_workers=min(_worker_count(), len(provider_jobs)),
-                thread_name_prefix="mmm_research_provider",
-            ) as pool:
-                futures = {pool.submit(fn): key for key, fn in provider_jobs}
-                for future in as_completed(futures):
-                    key = futures[future]
-                    try:
-                        provider_results[key] = future.result()
-                    except Exception as exc:
-                        provider_results[key] = {"status": "unavailable"}
-                        provider_errors[key] = agentic_module._error(key, exc)
+
+            def run_provider(
+                job: tuple[str, Any, Any],
+            ) -> tuple[str, Any, dict[str, str] | None]:
+                key, fn, context = job
+                try:
+                    return key, context.run(fn), None
+                except Exception as exc:
+                    return key, {"status": "unavailable"}, agentic_module._error(key, exc)
+
+            provider_work = tuple(
+                (key, fn, copy_context()) for key, fn in provider_jobs
+            )
+            for _job, provider_result in iter_completed_with_deadlines(
+                provider_work,
+                run_provider,
+                max_workers=min(_worker_count(), len(provider_work)),
+                stage="central-research-providers",
+                sort_key=lambda item: item[0],
+            ):
+                key, value, error = provider_result
+                provider_results[key] = value
+                if error is not None:
+                    provider_errors[key] = error
 
             deterministic = {key: provider_results[key] for key, _fn in provider_jobs}
             errors = [
@@ -336,37 +348,59 @@ def install_parallel_core(agentic_module: Any) -> None:
             domain_waves = _dependency_waves(domains)
             indexed_notes: dict[int, dict[str, Any]] = {}
             domain_workers = 0
-            for wave in domain_waves:
+            for wave_index, wave in enumerate(domain_waves):
                 wave_workers = _research_domain_worker_count(router, len(wave))
                 domain_workers = max(domain_workers, wave_workers)
                 retry_domains: dict[int, Exception] = {}
 
-                if wave_workers <= 1:
-                    for index in wave:
+                def run_domain(
+                    job: tuple[int, Any],
+                ) -> tuple[int, dict[str, Any] | None, Exception | None]:
+                    index, context = job
+                    try:
+                        note = context.run(
+                            agentic_module._research_domain_with_agent,
+                            router,
+                            prompt=prompt,
+                            domain=domains[index],
+                            deterministic=deterministic,
+                            trace_metadata=trace_metadata,
+                        )
+                        return index, note, None
+                    except Exception as exc:
+                        return index, None, exc
+
+                wave_jobs = tuple((index, copy_context()) for index in wave)
+                for _job, domain_result in iter_completed_with_deadlines(
+                    wave_jobs,
+                    run_domain,
+                    max_workers=max(1, min(wave_workers, len(wave_jobs))),
+                    stage=f"central-research-domain-wave-{wave_index}",
+                    sort_key=lambda item: item[0],
+                ):
+                    index, note, error = domain_result
+                    if error is None and note is not None:
+                        indexed_notes[index] = note
+                    elif error is not None and _retryable_parallel_research_failure(error):
+                        retry_domains[index] = error
+                    elif error is not None:
+                        indexed_notes[index] = _failed_domain_note(
+                            domains[index],
+                            error,
+                            parallel=wave_workers > 1,
+                        )
+
+                if retry_domains:
+                    retry_jobs = tuple(
+                        (index, copy_context()) for index in sorted(retry_domains)
+                    )
+
+                    def retry_domain(
+                        job: tuple[int, Any],
+                    ) -> tuple[int, dict[str, Any] | None, Exception | None]:
+                        index, context = job
                         try:
-                            indexed_notes[index] = agentic_module._research_domain_with_agent(
-                                router,
-                                prompt=prompt,
-                                domain=domains[index],
-                                deterministic=deterministic,
-                                trace_metadata=trace_metadata,
-                            )
-                        except Exception as exc:
-                            indexed_notes[index] = _failed_domain_note(
-                                domains[index],
-                                exc,
-                                parallel=False,
-                            )
-                else:
-                    with ThreadPoolExecutor(
-                        max_workers=wave_workers,
-                        thread_name_prefix="mmm_research_domain",
-                    ) as pool:
-                        futures = {}
-                        for index in wave:
-                            context = copy_context()
-                            future = pool.submit(
-                                context.run,
+                            note = context.run(
                                 agentic_module._research_domain_with_agent,
                                 router,
                                 prompt=prompt,
@@ -374,39 +408,27 @@ def install_parallel_core(agentic_module: Any) -> None:
                                 deterministic=deterministic,
                                 trace_metadata=trace_metadata,
                             )
-                            futures[future] = index
-                        for future in as_completed(futures):
-                            index = futures[future]
-                            try:
-                                indexed_notes[index] = future.result()
-                            except Exception as exc:
-                                if _retryable_parallel_research_failure(exc):
-                                    retry_domains[index] = exc
-                                else:
-                                    indexed_notes[index] = _failed_domain_note(
-                                        domains[index],
-                                        exc,
-                                        parallel=True,
-                                    )
+                            return index, note, None
+                        except Exception as exc:
+                            return index, None, exc
 
-                for index in sorted(retry_domains):
-                    domain = domains[index]
-                    parallel_exc = retry_domains[index]
-                    try:
-                        indexed_notes[index] = agentic_module._research_domain_with_agent(
-                            router,
-                            prompt=prompt,
-                            domain=domain,
-                            deterministic=deterministic,
-                            trace_metadata=trace_metadata,
-                        )
-                    except Exception as retry_exc:
-                        indexed_notes[index] = _failed_domain_note(
-                            domain,
-                            parallel_exc,
-                            parallel=True,
-                            retry_exc=retry_exc,
-                        )
+                    for _job, retry_result in iter_completed_with_deadlines(
+                        retry_jobs,
+                        retry_domain,
+                        max_workers=1,
+                        stage=f"central-research-domain-retry-{wave_index}",
+                        sort_key=lambda item: item[0],
+                    ):
+                        index, note, retry_error = retry_result
+                        if retry_error is None and note is not None:
+                            indexed_notes[index] = note
+                        else:
+                            indexed_notes[index] = _failed_domain_note(
+                                domains[index],
+                                retry_domains[index],
+                                parallel=True,
+                                retry_exc=retry_error,
+                            )
             domain_notes = [indexed_notes[index] for index in range(len(domains))]
 
             payload = {
@@ -465,28 +487,37 @@ def install_parallel_core(agentic_module: Any) -> None:
         sections: dict[int, dict[str, Any]] = {}
         specs = tuple(agentic_module._SECTION_SPECS)
         design_workers = _research_domain_worker_count(router, len(specs))
-        with ThreadPoolExecutor(
-            max_workers=design_workers,
-            thread_name_prefix="mmm_design_section",
-        ) as pool:
-            futures = {}
-            for index, (section_id, fields, properties) in enumerate(specs):
-                context = copy_context()
-                future = pool.submit(
-                    context.run,
-                    agentic_module._generate_section,
-                    router,
-                    prompt=prompt,
-                    section_id=section_id,
-                    fields=fields,
-                    properties=properties,
-                    research=research,
-                    media_paths=media_paths if index == 0 else (),
-                    trace_metadata=trace_metadata,
-                )
-                futures[future] = index
-            for future in as_completed(futures):
-                sections[futures[future]] = future.result()
+        section_jobs = tuple(
+            (index, section_id, fields, properties, copy_context())
+            for index, (section_id, fields, properties) in enumerate(specs)
+        )
+
+        def generate_section_job(
+            job: tuple[int, str, Any, Any, Any],
+        ) -> tuple[int, dict[str, Any]]:
+            index, section_id, fields, properties, context = job
+            section = context.run(
+                agentic_module._generate_section,
+                router,
+                prompt=prompt,
+                section_id=section_id,
+                fields=fields,
+                properties=properties,
+                research=research,
+                media_paths=media_paths if index == 0 else (),
+                trace_metadata=trace_metadata,
+            )
+            return index, section
+
+        for _job, section_result in iter_completed_with_deadlines(
+            section_jobs,
+            generate_section_job,
+            max_workers=max(1, min(design_workers, len(section_jobs))),
+            stage="central-design-sections",
+            sort_key=lambda item: item[0],
+        ):
+            index, section = section_result
+            sections[index] = section
 
         merged: dict[str, Any] = {}
         for index in range(len(specs)):
@@ -512,19 +543,34 @@ def install(agentic_module: Any) -> None:
             if not _amplification_enabled(agentic_module, router):
                 return current_collect(router, prompt, trace_metadata=trace_metadata)
 
-            council_context = copy_context()
-            with ThreadPoolExecutor(
-                max_workers=1,
-                thread_name_prefix="mmm_central_research_overlap",
-            ) as pool:
-                council_future = pool.submit(
-                    council_context.run,
-                    build_central_committee,
+            overlap_jobs = (
+                ("research", copy_context()),
+                ("council", copy_context()),
+            )
+
+            def run_overlap(job: tuple[str, Any]) -> tuple[str, Any]:
+                kind, context = job
+                if kind == "council":
+                    return kind, context.run(build_central_committee, router, prompt)
+                return kind, context.run(
+                    current_collect,
                     router,
                     prompt,
+                    trace_metadata=trace_metadata,
                 )
-                result = current_collect(router, prompt, trace_metadata=trace_metadata)
-                council = council_future.result()
+
+            overlap_results: dict[str, Any] = {}
+            for _job, overlap_result in iter_completed_with_deadlines(
+                overlap_jobs,
+                run_overlap,
+                max_workers=2,
+                stage="central-intelligence-overlap",
+                sort_key=lambda item: item[0],
+            ):
+                kind, value = overlap_result
+                overlap_results[kind] = value
+            result = overlap_results["research"]
+            council = overlap_results["council"]
             reviews = review_research_bundle(router, prompt, result, council=council)
             result = dict(result)
             result["_central_intelligence"] = {
@@ -554,26 +600,40 @@ def install(agentic_module: Any) -> None:
                     "queries": gaps,
                     "depends_on": [],
                 }
-                try:
-                    correction = agentic_module._research_domain_with_agent(
-                        router,
-                        prompt=prompt,
-                        domain=correction_domain,
-                        deterministic=result.get("deterministic", {}),
-                        trace_metadata={
-                            **dict(trace_metadata or {}),
-                            "adaptive_branch": "central_critical_gaps",
-                        },
+                correction_context = copy_context()
+
+                def run_correction(_job: int) -> dict[str, Any]:
+                    try:
+                        return correction_context.run(
+                            agentic_module._research_domain_with_agent,
+                            router,
+                            prompt=prompt,
+                            domain=correction_domain,
+                            deterministic=result.get("deterministic", {}),
+                            trace_metadata={
+                                **dict(trace_metadata or {}),
+                                "adaptive_branch": "central_critical_gaps",
+                            },
+                        )
+                    except Exception as exc:
+                        return {
+                            "domain_id": "central_critical_gaps",
+                            "claims": [],
+                            "gaps": gaps,
+                            "next_queries": [],
+                            "sufficient": False,
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+
+                correction = next(
+                    result_value
+                    for _job, result_value in iter_completed_with_deadlines(
+                        (0,),
+                        run_correction,
+                        max_workers=1,
+                        stage="central-critical-gap-correction",
                     )
-                except Exception as exc:
-                    correction = {
-                        "domain_id": "central_critical_gaps",
-                        "claims": [],
-                        "gaps": gaps,
-                        "next_queries": [],
-                        "sufficient": False,
-                        "error": f"{type(exc).__name__}: {exc}",
-                    }
+                )
                 notes = list(result.get("domain_notes", []))
                 notes.append(correction)
                 result["domain_notes"] = notes
@@ -753,59 +813,77 @@ def build_central_committee(router: Any, prompt: str) -> dict[str, Any]:
         )
         return lens_id, _parse(raw, "analysis")
 
-    with ThreadPoolExecutor(
+    def run_specialist(
+        job: tuple[tuple[str, str], Any],
+    ) -> tuple[str, dict[str, Any]]:
+        lens, context = job
+        lens_id = lens[0]
+        try:
+            return context.run(run, lens)
+        except Exception as exc:
+            return lens_id, {
+                "must_preserve": [],
+                "must_not_invent": [],
+                "subproblems": [],
+                "risks": [f"specialist_error:{type(exc).__name__}"],
+                "research_questions": [],
+                "confidence": 0.0,
+            }
+
+    specialist_jobs = tuple((lens, copy_context()) for lens in _LENSES)
+    for _job, specialist_result in iter_completed_with_deadlines(
+        specialist_jobs,
+        run_specialist,
         max_workers=workers,
-        thread_name_prefix="mmm_central_council",
-    ) as pool:
-        futures = {pool.submit(run, lens): lens[0] for lens in _LENSES}
-        for future in as_completed(futures):
-            lens_id = futures[future]
-            try:
-                key, value = future.result()
-            except Exception as exc:
-                outputs[lens_id] = {
-                    "must_preserve": [],
-                    "must_not_invent": [],
-                    "subproblems": [],
-                    "risks": [f"specialist_error:{type(exc).__name__}"],
-                    "research_questions": [],
-                    "confidence": 0.0,
-                }
-            else:
-                outputs[key] = value
+        stage="central-council-specialists",
+        sort_key=lambda item: item[0][0],
+    ):
+        key, value = specialist_result
+        outputs[key] = value
 
     ordered = [{"lens": lens_id, **outputs[lens_id]} for lens_id, _ in _LENSES]
     disagreement = _disagreement(ordered)
     extra_needed = disagreement >= _disagreement_threshold()
     extra: dict[str, Any] | None = None
-    if extra_needed and _research_domain_worker_count(router, 2) > 1:
-        chair_context = copy_context()
-        extra_context = copy_context()
-        with ThreadPoolExecutor(
-            max_workers=2,
-            thread_name_prefix="mmm_central_consensus",
-        ) as pool:
-            chair_future = pool.submit(
-                chair_context.run,
+    synthesis_jobs: list[tuple[str, Any]] = [("chair", copy_context())]
+    if extra_needed:
+        synthesis_jobs.append(("extra", copy_context()))
+
+    def run_synthesis(job: tuple[str, Any]) -> tuple[str, dict[str, Any]]:
+        kind, context = job
+        if kind == "chair":
+            value = context.run(
                 _chair_synthesis,
                 router,
                 prompt,
                 ordered,
                 disagreement,
             )
-            extra_future = pool.submit(
-                extra_context.run,
+        else:
+            value = context.run(
                 _extra_disagreement_specialist,
                 router,
                 prompt,
                 ordered,
             )
-            chair = chair_future.result()
-            extra = extra_future.result()
-    else:
-        chair = _chair_synthesis(router, prompt, ordered, disagreement)
-        if extra_needed:
-            extra = _extra_disagreement_specialist(router, prompt, ordered)
+        return kind, value
+
+    synthesis_results: dict[str, dict[str, Any]] = {}
+    for _job, synthesis_result in iter_completed_with_deadlines(
+        tuple(synthesis_jobs),
+        run_synthesis,
+        max_workers=min(
+            _research_domain_worker_count(router, len(synthesis_jobs)),
+            len(synthesis_jobs),
+        ),
+        stage="central-council-synthesis",
+        sort_key=lambda item: item[0],
+    ):
+        kind, value = synthesis_result
+        synthesis_results[kind] = value
+    chair = synthesis_results["chair"]
+    if extra_needed:
+        extra = synthesis_results["extra"]
     payload = {
         "schema_version": "mmm/central-specialist-council-v1",
         "authority": "advisory_only_user_request_is_authoritative",
@@ -939,28 +1017,35 @@ def _parallel_reviews(
         )
         return reviewer_id, _parse(raw, "review")
 
-    with ThreadPoolExecutor(
+    def run_reviewer(
+        job: tuple[tuple[str, str], Any],
+    ) -> tuple[str, dict[str, Any]]:
+        spec, context = job
+        reviewer_id = spec[0]
+        try:
+            return context.run(run, spec)
+        except Exception as exc:
+            return reviewer_id, {
+                "missing_requirements": [],
+                "unsupported_additions": [],
+                "contradictions": [],
+                "research_gaps": [],
+                "affected_sections": [],
+                "severity": "low",
+                "confidence": 0.0,
+                "reviewer_error": f"{type(exc).__name__}: {exc}",
+            }
+
+    review_jobs = tuple((spec, copy_context()) for spec in reviewers)
+    for _job, review_result in iter_completed_with_deadlines(
+        review_jobs,
+        run_reviewer,
         max_workers=workers,
-        thread_name_prefix="mmm_central_review",
-    ) as pool:
-        futures = {pool.submit(run, spec): spec[0] for spec in reviewers}
-        for future in as_completed(futures):
-            reviewer_id = futures[future]
-            try:
-                key, value = future.result()
-            except Exception as exc:
-                results[reviewer_id] = {
-                    "missing_requirements": [],
-                    "unsupported_additions": [],
-                    "contradictions": [],
-                    "research_gaps": [],
-                    "affected_sections": [],
-                    "severity": "low",
-                    "confidence": 0.0,
-                    "reviewer_error": f"{type(exc).__name__}: {exc}",
-                }
-            else:
-                results[key] = value
+        stage="central-reviews",
+        sort_key=lambda item: item[0][0],
+    ):
+        key, value = review_result
+        results[key] = value
     return [{"reviewer": key, **results[key]} for key, _ in reviewers]
 
 
