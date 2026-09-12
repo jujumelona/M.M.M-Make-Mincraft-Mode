@@ -1,171 +1,76 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 from PIL import Image
 
-from minecraft_mod_ai.complete_orchestrator_services import (
-    blockbench_review,
-    generate_assets,
-)
+from minecraft_mod_ai.complete_orchestrator_services import blockbench_review
 from minecraft_mod_ai.complete_spec import AssetRequest
-from minecraft_mod_ai.source_patch import sha256_file
+from minecraft_mod_ai.resource_asset_production import _model_size, _prepare
+from minecraft_mod_ai.resource_contracts import resolve_asset
 
 
-class _DeterministicImageRouter:
-    def __init__(self) -> None:
-        self.calls: list[dict[str, Any]] = []
-
-    @contextmanager
-    def image_generation_session(self, role: str):
-        assert role == "image_generator"
-        yield
-
-    def generate_image(
-        self,
-        role: str,
-        *,
-        prompt: str,
-        output_path: str | Path,
-        width: int,
-        height: int,
-        seed: int,
-    ) -> Path:
-        assert role == "image_generator"
-        assert 256 <= width <= 1024
-        assert 256 <= height <= 1024
-        assert width % 16 == 0
-        assert height % 16 == 0
-        path = Path(output_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        color = (
-            seed & 0xFF,
-            (seed >> 8) & 0xFF,
-            (seed >> 16) & 0xFF,
-            255,
-        )
-        Image.new("RGBA", (width, height), color).save(path)
-        self.calls.append(
-            {
-                "prompt": prompt,
-                "path": str(path),
-                "width": width,
-                "height": height,
-                "seed": seed,
-            }
-        )
-        return path
-
-
-def _large_asset_proposal() -> SimpleNamespace:
-    return SimpleNamespace(
-        assets=(
-            AssetRequest(
-                asset_id="large_environment",
-                kind="environment",
-                prompt="A continuous frozen citadel panorama",
-                target_path=(
-                    "src/main/resources/assets/test/textures/"
-                    "environment/citadel.png"
-                ),
-                width=2305,
-                height=1301,
-            ),
-        )
+def _resolved_texture(width: int, height: int):
+    asset = AssetRequest(
+        asset_id="texture_gui_citadel",
+        kind="gui",
+        visual_description="A continuous frozen citadel panel",
+        render_kind="gui.sprite",
+        subject_id="citadel",
+        requested_width=width,
+        requested_height=height,
     )
+    return resolve_asset(
+        asset,
+        namespace="test",
+        minecraft_version="1.21.4",
+    ).textures[0]
 
 
-def test_large_asset_uses_deterministic_overlapping_source_tiles(
+def test_large_explicit_resource_preserves_final_dimensions_after_backend_normalization(
     tmp_path: Path,
 ) -> None:
-    first_router = _DeterministicImageRouter()
-    first_project = tmp_path / "first-project"
-    first_project.mkdir()
-    first = generate_assets(
-        first_router,
-        _large_asset_proposal(),
-        first_project,
-        tmp_path / "first-run",
-    )
-    first_asset = first["assets"][0]
-    target = Path(first_asset["target"])
+    texture = _resolved_texture(2305, 1301)
+    assert (texture.width, texture.height) == (2305, 1301)
+    assert texture.size_policy == "explicit"
+    assert _model_size(texture.width, texture.height) == (1024, 1024)
 
-    assert first["schema_version"] == "mmm/complete-assets-v3"
-    assert first_asset["source_mode"] == "multiscale_overlapping_tiles"
-    assert first_asset["width"] == 2305
-    assert first_asset["height"] == 1301
-    assert len(first_asset["source_tiles"]) > 1
-    assert any(
-        tile["left_overlap"] or tile["top_overlap"]
-        for tile in first_asset["source_tiles"]
-    )
-    assert all(
-        tile["source_width"] <= 1024
-        and tile["source_height"] <= 1024
-        for tile in first_asset["source_tiles"]
-    )
-    with Image.open(target) as image:
+    source = tmp_path / "source.png"
+    normalized = tmp_path / "normalized.png"
+    Image.new("RGBA", (1024, 1024), (12, 34, 56, 255)).save(source)
+
+    score = _prepare(texture.to_dict(), source, normalized)
+
+    assert score == 1000.0
+    with Image.open(normalized) as image:
         assert image.size == (2305, 1301)
-    assert first_asset["sha256"] == sha256_file(target)
-
-    second_router = _DeterministicImageRouter()
-    second_project = tmp_path / "second-project"
-    second_project.mkdir()
-    second = generate_assets(
-        second_router,
-        _large_asset_proposal(),
-        second_project,
-        tmp_path / "second-run",
-    )
-    second_asset = second["assets"][0]
-
-    assert second_asset["sha256"] == first_asset["sha256"]
-    assert [
-        (call["width"], call["height"], call["seed"], call["prompt"])
-        for call in second_router.calls
-    ] == [
-        (call["width"], call["height"], call["seed"], call["prompt"])
-        for call in first_router.calls
-    ]
-    assert len(first_router.calls) == 1 + len(first_asset["source_tiles"])
 
 
-def test_small_asset_keeps_exact_dimensions_without_high_resolution_tiling(
+def test_small_explicit_resource_uses_backend_minimum_but_exact_final_dimensions(
     tmp_path: Path,
 ) -> None:
-    router = _DeterministicImageRouter()
-    project = tmp_path / "project"
-    project.mkdir()
-    proposal = SimpleNamespace(
-        assets=(
-            AssetRequest(
-                asset_id="small_icon",
-                kind="icon",
-                prompt="A blue crystal icon",
-                target_path="src/main/resources/assets/test/icon.png",
-                width=17,
-                height=31,
-            ),
-        )
-    )
+    texture = _resolved_texture(17, 31)
+    assert (texture.width, texture.height) == (17, 31)
+    assert _model_size(texture.width, texture.height) == (256, 256)
 
-    receipt = generate_assets(
-        router,
-        proposal,
-        project,
-        tmp_path / "run",
-    )
-    asset = receipt["assets"][0]
+    source = tmp_path / "source.png"
+    normalized = tmp_path / "normalized.png"
+    Image.new("RGBA", (256, 256), (1, 2, 3, 255)).save(source)
 
-    assert asset["source_mode"] == "single_source"
-    assert len(router.calls) == 1
-    assert router.calls[0]["width"] == 256
-    assert router.calls[0]["height"] == 256
-    with Image.open(asset["target"]) as image:
+    _prepare(texture.to_dict(), source, normalized)
+
+    with Image.open(normalized) as image:
         assert image.size == (17, 31)
+
+
+def test_backend_source_size_is_bounded_and_aligned():
+    for width, height in ((1, 1), (17, 31), (257, 513), (2305, 1301)):
+        source_width, source_height = _model_size(width, height)
+        assert 256 <= source_width <= 1024
+        assert 256 <= source_height <= 1024
+        assert source_width % 16 == 0
+        assert source_height % 16 == 0
 
 
 def test_blockbench_review_scopes_client_to_the_run_root(
