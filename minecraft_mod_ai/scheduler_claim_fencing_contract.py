@@ -243,7 +243,11 @@ def install(*, work_graph_module: Any, orchestrator_module: Any) -> None:
             )
             raise
 
+    # This wrapper owns both claim fencing and index-before-success publication.  Mark
+    # both contracts so a later scheduler safety install is a true no-op instead of
+    # wrapping the final runtime owner again and changing behavior by import order.
     run_work_node._mmm_claim_fenced = True  # type: ignore[attr-defined]
+    run_work_node._mmm_index_before_success = True  # type: ignore[attr-defined]
     cls._run_work_node = staticmethod(run_work_node)
 
 
