@@ -518,7 +518,8 @@ def _recover_page(
     if arguments is not None:
         return arguments
 
-    if first_fingerprint == second_fingerprint:
+    fixed_point = first_fingerprint == second_fingerprint
+    if fixed_point and action_name != _SOURCE_EDIT_TOOL:
         isolated_request = _request(
             request,
             page_index=page_index,
@@ -543,6 +544,12 @@ def _recover_page(
             f"Host-selected action {action_name!r} isolated forced argument-page recovery "
             f"failed after repeated-invalid fixed point on page {page_index}/{page_count}; "
             f"error={isolated_error or repair_error or error}."
+        )
+
+    if fixed_point:
+        raise ModelConfigurationError(
+            f"Host-selected action {action_name!r} repeated-invalid forced argument-page "
+            f"fixed point on page {page_index}/{page_count}; error={repair_error or error}."
         )
 
     raise ModelConfigurationError(
