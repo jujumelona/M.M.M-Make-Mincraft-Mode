@@ -234,8 +234,11 @@ def test_hardener_adds_machine_model_and_registry_gametest(
                 module_id="processor",
                 kind="machine",
                 config={
+                    "display_name": "Processor",
+                    "main_color": "#74c7ec",
                     "input_item": "minecraft:iron_ingot",
                     "output_item": "minecraft:gold_ingot",
+                    "output_count": 1,
                     "processing_ticks": 20,
                 },
             ),
