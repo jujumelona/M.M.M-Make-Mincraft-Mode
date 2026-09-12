@@ -13,7 +13,10 @@ in the system so contradictory or open schemas can never be introduced.
 from collections.abc import Mapping
 from typing import Any
 
-from .model_output_atomicity_contract import _assert_closed_object_schemas
+from .model_output_atomicity_contract import (
+    _assert_closed_object_schemas,
+    assert_atomic_model_schema,
+)
 from .planning_detail_slots import DETAIL_RECORDS
 
 # The host assembly schema is derived from task files, never supplied as one model call.
@@ -41,15 +44,13 @@ SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA: dict[str, Any] = {
     "properties": {
         "requirements": {
             "type": "array",
+            "maxItems": 4,
             "items": {
                 "type": "object",
                 "properties": {
-                    "statement": {"type": "string"},
-                    "semantic_capability": {"type": "string"},
-                    "acceptance": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
+                    "statement": {"type": "string", "maxLength": 256},
+                    "semantic_capability": {"type": "string", "maxLength": 256},
+                    "acceptance": {"type": "string", "maxLength": 256},
                 },
                 "required": ["statement", "semantic_capability", "acceptance"],
                 "additionalProperties": False,
@@ -218,7 +219,7 @@ def is_schema_definition_echo(value: Any) -> bool:
 # 6. Cross-contract self-verification
 # ---------------------------------------------------------------------------
 def assert_all_planning_contracts_valid() -> None:
-    """Enforce that every planning schema passes atomicity and closed schema checks."""
+    """Enforce that every planning schema passes its applicable model-contract checks."""
     from .worksheet_atomic_chunker import pack_section_concerns, worksheet_chunk_schema
 
     fixed_schemas: list[tuple[str, Mapping[str, Any]]] = [
@@ -233,6 +234,13 @@ def assert_all_planning_contracts_valid() -> None:
 
     for name, schema in fixed_schemas:
         _assert_closed_object_schemas(schema, path=f"planning_contract:{name}")
+
+    # This schema is passed directly to generate_tool_decision, so validate the
+    # complete native-tool atomicity contract here rather than waiting for runtime.
+    assert_atomic_model_schema(
+        SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA,
+        surface="planner native tool submit_researched_requirements",
+    )
 
     # Validate all worksheet concern chunks across every section
     for section in DETAIL_RECORDS:
