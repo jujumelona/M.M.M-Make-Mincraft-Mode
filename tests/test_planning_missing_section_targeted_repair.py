@@ -187,7 +187,7 @@ def test_section_repair_resumes_an_interrupted_concern(monkeypatch):
         if len(calls) == 2:
             raise TimeoutError('repair interrupted')
         if 'count' in response_schema.get('properties', {}):
-            return {'count': 1, 'blocked_reason': ''}
+            return {'count': 1}
         return {
             field: f'authored {field}'
             for field in response_schema['required']
