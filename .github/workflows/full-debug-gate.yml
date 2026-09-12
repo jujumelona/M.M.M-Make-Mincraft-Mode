@@ -10,6 +10,7 @@ on:
       - "minecraft_mod_ai/**"
       - "tests/test_colab_debug_fixture_path.py"
       - "tests/test_record_cardinality_blocking_contract.py"
+      - "tests/test_worksheet_atomic_chunker.py"
       - ".github/workflows/**"
 
 permissions:
