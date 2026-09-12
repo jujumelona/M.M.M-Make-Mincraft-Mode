@@ -1,0 +1,104 @@
+name: MMM post-build validation deadline fix
+
+on:
+  push:
+    paths:
+      - '.github/workflows/mmm-postbuild-validation-deadline-fix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Patch post-build validation and add regression test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('minecraft_mod_ai/complete_orchestrator.py')
+          text = path.read_text(encoding='utf-8')
+          start = text.index('def _refresh_validation_after_build(')
+          end = text.index('\nclass CompleteProductionOrchestrator:', start)
+          replacement = '''def _refresh_validation_after_build(
+              *,
+              prebuild_manifest: str,
+              final_manifest: str,
+              source_report: dict[str, Any],
+              jdt_receipt: dict[str, Any] | None,
+              validate_source: Callable[[], dict[str, Any]],
+              validate_jdt: Callable[[], dict[str, Any]] | None,
+          ) -> tuple[dict[str, Any], dict[str, Any] | None, bool]:
+              """Bind final-tree validation to the same bounded executor as initial validation."""
+              if final_manifest == prebuild_manifest:
+                  return source_report, jdt_receipt, False
+
+              from .deadline_executor import iter_completed_with_deadlines
+
+              validation_jobs: list[tuple[str, Callable[[], dict[str, Any]]]] = [
+                  ("source", validate_source),
+              ]
+              if validate_jdt is not None:
+                  validation_jobs.append(("jdt", validate_jdt))
+
+              validation_results: dict[str, dict[str, Any]] = {}
+              for job, result in iter_completed_with_deadlines(
+                  validation_jobs,
+                  lambda item: item[1](),
+                  max_workers=len(validation_jobs),
+                  stage="complete_post_build_validation",
+                  sort_key=lambda item: item[0],
+              ):
+                  validation_results[job[0]] = result
+
+              refreshed_source = validation_results["source"]
+              if refreshed_source.get("status") != "PASS":
+                  raise CompleteProductionError(
+                      "Final repaired project failed deterministic validation."
+                  )
+              refreshed_jdt = validation_results.get("jdt")
+              return refreshed_source, refreshed_jdt, True
+          '''
+          path.write_text(text[:start] + replacement + text[end:], encoding='utf-8')
+
+          test_path = Path('tests/test_postbuild_validation_deadline_contract.py')
+          test_path.write_text('''from __future__ import annotations\n\n\ndef test_postbuild_validation_uses_shared_deadline_executor(monkeypatch):\n    from minecraft_mod_ai import complete_orchestrator as orchestrator\n    from minecraft_mod_ai import deadline_executor\n\n    seen: dict[str, object] = {}\n\n    def fake_iter(units, worker, *, max_workers, stage, sort_key=None, **_kwargs):\n        ordered = list(units)\n        seen["stage"] = stage\n        seen["max_workers"] = max_workers\n        seen["names"] = [item[0] for item in ordered]\n        for item in ordered:\n            yield item, worker(item)\n\n    monkeypatch.setattr(deadline_executor, "iter_completed_with_deadlines", fake_iter)\n\n    calls: list[str] = []\n\n    def validate_source():\n        calls.append("source")\n        return {"status": "PASS", "kind": "source"}\n\n    def validate_jdt():\n        calls.append("jdt")\n        return {"status": "PASS", "kind": "jdt"}\n\n    source, jdt, refreshed = orchestrator._refresh_validation_after_build(\n        prebuild_manifest="before",\n        final_manifest="after",\n        source_report={"status": "STALE"},\n        jdt_receipt=None,\n        validate_source=validate_source,\n        validate_jdt=validate_jdt,\n    )\n\n    assert refreshed is True\n    assert source == {"status": "PASS", "kind": "source"}\n    assert jdt == {"status": "PASS", "kind": "jdt"}\n    assert calls == ["source", "jdt"]\n    assert seen == {\n        "stage": "complete_post_build_validation",\n        "max_workers": 2,\n        "names": ["source", "jdt"],\n    }\n\n\ndef test_postbuild_validation_skips_executor_when_tree_is_unchanged(monkeypatch):\n    from minecraft_mod_ai import complete_orchestrator as orchestrator\n    from minecraft_mod_ai import deadline_executor\n\n    def forbidden(*_args, **_kwargs):\n        raise AssertionError("deadline executor must not run for an unchanged tree")\n\n    monkeypatch.setattr(deadline_executor, "iter_completed_with_deadlines", forbidden)\n    source_report = {"status": "PASS", "kind": "existing"}\n    jdt_receipt = {"status": "PASS", "kind": "existing-jdt"}\n\n    source, jdt, refreshed = orchestrator._refresh_validation_after_build(\n        prebuild_manifest="same",\n        final_manifest="same",\n        source_report=source_report,\n        jdt_receipt=jdt_receipt,\n        validate_source=lambda: (_ for _ in ()).throw(AssertionError("unexpected source validation")),\n        validate_jdt=lambda: (_ for _ in ()).throw(AssertionError("unexpected jdt validation")),\n    )\n\n    assert refreshed is False\n    assert source is source_report\n    assert jdt is jdt_receipt\n''', encoding='utf-8')
+          PY
+
+      - name: Verify focused regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q minecraft_mod_ai tests/test_postbuild_validation_deadline_contract.py
+          pytest -q tests/test_postbuild_validation_deadline_contract.py tests/test_remaining_bottleneck_contract.py tests/test_livepath_deadline_contract.py
+          if command -v ruff >/dev/null 2>&1; then
+            ruff check minecraft_mod_ai/complete_orchestrator.py tests/test_postbuild_validation_deadline_contract.py
+          fi
+
+      - name: Commit fix and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/mmm-postbuild-validation-deadline-fix.yml
+          git add minecraft_mod_ai/complete_orchestrator.py tests/test_postbuild_validation_deadline_contract.py
+          git commit -m "fix: bound post-build validation"
+          for attempt in 1 2 3 4; do
+            if git pull --rebase origin main && git push origin HEAD:main; then
+              exit 0
+            fi
+            git rebase --abort >/dev/null 2>&1 || true
+            sleep $((attempt * 2))
+          done
+          echo "failed to push post-build validation fix after retries" >&2
+          exit 1
