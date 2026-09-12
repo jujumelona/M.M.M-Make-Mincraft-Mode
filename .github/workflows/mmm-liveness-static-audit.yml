@@ -1,0 +1,133 @@
+name: MMM production liveness static audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/mmm-liveness-static-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Scan production Python liveness hazards
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import ast
+          import json
+          from pathlib import Path
+
+          ROOT = Path('minecraft_mod_ai')
+          findings: list[dict[str, object]] = []
+
+          def add(path: Path, node: ast.AST, kind: str, detail: str, severity: str = 'candidate') -> None:
+              findings.append({
+                  'path': path.as_posix(),
+                  'line': int(getattr(node, 'lineno', 0) or 0),
+                  'col': int(getattr(node, 'col_offset', 0) or 0),
+                  'kind': kind,
+                  'severity': severity,
+                  'detail': detail,
+              })
+
+          def kw(call: ast.Call, name: str):
+              for item in call.keywords:
+                  if item.arg == name:
+                      return item.value
+              return None
+
+          def has_timeout(call: ast.Call) -> bool:
+              return kw(call, 'timeout') is not None
+
+          for path in sorted(ROOT.rglob('*.py')):
+              try:
+                  source = path.read_text(encoding='utf-8')
+                  tree = ast.parse(source, filename=str(path))
+              except Exception as exc:
+                  findings.append({'path': path.as_posix(), 'line': 0, 'col': 0, 'kind': 'parse_error', 'severity': 'high', 'detail': repr(exc)})
+                  continue
+
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.While) and isinstance(node.test, ast.Constant) and node.test.value is True:
+                      add(path, node, 'while_true', 'manual review: prove semantic/progress termination')
+                  if not isinstance(node, ast.Call):
+                      continue
+
+                  func = node.func
+                  attr = func.attr if isinstance(func, ast.Attribute) else ''
+                  name = func.id if isinstance(func, ast.Name) else ''
+
+                  if attr == 'result' and not node.args and not has_timeout(node):
+                      add(path, node, 'future_result_no_timeout', '.result() has no local timeout')
+                  if attr == 'as_completed' or name == 'as_completed':
+                      if not has_timeout(node) and len(node.args) < 2:
+                          add(path, node, 'as_completed_no_timeout', 'as_completed() has no timeout')
+                  if (attr == 'wait' or name == 'wait') and not has_timeout(node):
+                      # Includes futures/Event/Condition/process waits; all deserve type-aware review.
+                      add(path, node, 'wait_no_timeout', 'wait() call has no explicit timeout')
+                  if attr == 'join' and not has_timeout(node) and len(node.args) < 1:
+                      add(path, node, 'join_no_timeout', 'join() has no explicit timeout')
+                  if attr == 'shutdown':
+                      wait_value = kw(node, 'wait')
+                      if wait_value is None:
+                          add(path, node, 'shutdown_default_wait', 'executor.shutdown() defaults to wait=True')
+                      elif isinstance(wait_value, ast.Constant) and wait_value.value is True:
+                          add(path, node, 'shutdown_wait_true', 'executor.shutdown(wait=True)')
+                  if name in {'run', 'check_call', 'check_output'} or attr in {'run', 'check_call', 'check_output'}:
+                      text = ast.get_source_segment(source, func) or ''
+                      if ('subprocess' in text or name in {'check_call', 'check_output'}) and not has_timeout(node):
+                          add(path, node, 'subprocess_no_timeout', f'{text or name} has no timeout')
+                  if attr in {'communicate'} and not has_timeout(node):
+                      add(path, node, 'process_communicate_no_timeout', 'process.communicate() has no timeout')
+                  if attr in {'get', 'post', 'put', 'patch', 'delete', 'head', 'request'} and not has_timeout(node):
+                      text = ast.get_source_segment(source, func) or ''
+                      if any(token in text for token in ('requests.', 'httpx.', 'session.', 'client.')):
+                          add(path, node, 'network_call_no_timeout', f'{text} has no explicit timeout')
+                  if attr == 'urlopen' or name == 'urlopen':
+                      if not has_timeout(node) and len(node.args) < 3:
+                          add(path, node, 'urlopen_no_timeout', 'urlopen() has no timeout')
+
+              # Raw executor imports are useful even when calls are safe; report once/file.
+              if 'ThreadPoolExecutor' in source or 'ProcessPoolExecutor' in source:
+                  findings.append({'path': path.as_posix(), 'line': 0, 'col': 0, 'kind': 'raw_executor_present', 'severity': 'inventory', 'detail': 'raw concurrent.futures executor present'})
+
+          findings.sort(key=lambda x: (str(x['path']), int(x['line']), str(x['kind'])))
+          summary: dict[str, int] = {}
+          for row in findings:
+              summary[str(row['kind'])] = summary.get(str(row['kind']), 0) + 1
+
+          payload = {'summary': summary, 'total': len(findings), 'findings': findings}
+          Path('mmm-liveness-audit.json').write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding='utf-8')
+
+          lines = ['# MMM production liveness static audit', '', f'Total candidates: {len(findings)}', '', '## Summary']
+          for key, value in sorted(summary.items()):
+              lines.append(f'- {key}: {value}')
+          lines += ['', '## Findings']
+          for row in findings:
+              lines.append(f"- `{row['path']}:{row['line']}` **{row['kind']}** — {row['detail']}")
+          Path('mmm-liveness-audit.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+          print(json.dumps(summary, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mmm-liveness-static-audit
+          path: |
+            mmm-liveness-audit.json
+            mmm-liveness-audit.md
+          if-no-files-found: error
