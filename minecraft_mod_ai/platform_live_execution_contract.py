@@ -9,11 +9,31 @@ from .fabric_official_template_provider import (
     FabricTemplateProviderError,
     bootstrap_fabric_project,
 )
-from .platform_catalog import adapter_for_lock_values, adapter_from_project
+from .platform_catalog import (
+    adapter_for_lock_values,
+    adapter_from_project,
+    provider_for_loader,
+)
+
+
+def _uses_official_scaffold(adapter: Any) -> bool:
+    """Use the provider-verified scaffold when deterministic content is not reviewed."""
+    if str(adapter.loader).strip().casefold() != "fabric":
+        return False
+    try:
+        provider = provider_for_loader(adapter.loader)
+    except ValueError:
+        return False
+    deterministic_kinds = tuple(
+        getattr(adapter, "deterministic_module_kinds", ()) or ()
+    )
+    return bool(provider.host_authoritative) and (
+        adapter.source_api_family == "fabric_live_ai" or not deterministic_kinds
+    )
 
 
 def install(orchestrator_module: Any) -> None:
-    """Install only live-target project preparation and migration behavior."""
+    """Install official-scaffold project preparation and live migration behavior."""
     cls = orchestrator_module.CompleteProductionOrchestrator
     original = cls._prepare_project
     if getattr(original, "_mmm_live_official_bootstrap", False):
@@ -51,7 +71,7 @@ def install(orchestrator_module: Any) -> None:
                 selection=selection,
             )
 
-        if existing_input is not None or adapter.source_api_family != "fabric_live_ai":
+        if existing_input is not None or not _uses_official_scaffold(adapter):
             return original(
                 self,
                 approved,
