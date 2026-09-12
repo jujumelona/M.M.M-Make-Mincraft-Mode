@@ -1,4 +1,4 @@
-name: MMM validation repair apply
+name: MMM build ledger apply
 
 on:
   push:
@@ -19,17 +19,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Apply tested patches
-        run: |
-          python .github/scripts/mmm_fix_validation_repair_logs_temp.py
-          python .github/scripts/mmm_fix_validation_repair_runtime_temp.py
-          python .github/scripts/mmm_fix_build_ledger_order_temp.py
+      - name: Apply build ledger ordering patch
+        run: python .github/scripts/mmm_fix_build_ledger_order_temp.py
       - name: Compile
         run: python -m compileall -q minecraft_mod_ai tests/test_validation_repair_regressions.py
       - name: Install test dependencies
         run: python -m pip install -e '.[dev]'
       - name: Run focused regressions
-        run: python -m pytest -q tests/test_validation_repair_regressions.py
+        run: python -m pytest -q tests/test_validation_repair_regressions.py tests/test_project_manifest_hash_efficiency_contract.py
       - name: Commit production fix and clean temporary files
         shell: bash
         run: |
@@ -37,14 +34,10 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           rm -f .github/workflows/mmm-validation-repair-apply-temp.yml
-          rm -f .github/workflows/mmm-validation-repair-diagnose-temp.yml
-          rm -f .github/workflows/mmm-fix-validation-repair-logs-temp.yml
-          rm -f .github/scripts/mmm_fix_validation_repair_logs_temp.py
-          rm -f .github/scripts/mmm_fix_validation_repair_runtime_temp.py
           rm -f .github/scripts/mmm_fix_build_ledger_order_temp.py
-          git add minecraft_mod_ai/validation_checkpoint_policy.py minecraft_mod_ai/repair_engine.py minecraft_mod_ai/adaptive_retrieval_contract.py minecraft_mod_ai/complete_orchestrator.py tests/test_validation_repair_regressions.py .github/workflows .github/scripts
+          git add minecraft_mod_ai/complete_orchestrator.py tests/test_validation_repair_regressions.py .github/workflows .github/scripts
           git diff --cached --check
-          git commit -m 'fix: bind validation repair and build ledger ordering'
+          git commit -m 'fix: order build ledger before final validation'
           for attempt in 1 2 3; do
             git fetch origin main
             if ! git rebase origin/main; then
