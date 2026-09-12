@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
