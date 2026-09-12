@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from minecraft_mod_ai import design_record_runtime as design_runtime
 from minecraft_mod_ai import feature_template_pipeline as feature_pipeline
 from minecraft_mod_ai import prompt_template_pipeline as prompt_pipeline
+from minecraft_mod_ai.model_concurrency import active_llama_parallelism
 from minecraft_mod_ai.parallel_model_tasks import (
     deterministic_model_map,
     serialized_callback,
@@ -28,6 +29,11 @@ class _Registry:
 class _Router:
     profile = "test"
     registry = _Registry()
+
+
+def test_active_llama_parallelism_preserves_validated_capacity(monkeypatch):
+    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "16")
+    assert active_llama_parallelism() == 16
 
 
 def test_deterministic_model_map_uses_measured_slots_and_preserves_context(monkeypatch):
