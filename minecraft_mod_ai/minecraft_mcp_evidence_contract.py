@@ -18,10 +18,11 @@ import json
 import os
 import threading
 from collections.abc import Collection, Mapping
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from functools import wraps
 from typing import Any
+
+from .deadline_executor import iter_completed_with_deadlines
 
 _MARKER = "_mmm_minecraft_mcp_evidence_v3"
 _MAX_RESULT_CHARS = 6000
@@ -412,29 +413,31 @@ def _install_router_parallel_cache() -> None:
             raise ValueError("max_workers must be a positive integer.")
         workers = min(16, workers, len(rows))
 
-        def run(index: int, request: Mapping[str, Any]) -> tuple[int, dict[str, Any]]:
+        def run(
+            job: tuple[int, Mapping[str, Any]],
+        ) -> tuple[int, dict[str, Any]]:
+            index, request = job
             payload = dict(request)
             capability = str(payload.pop("capability", "")).strip()
             if not capability:
                 raise ValueError("Each MCP batch request requires capability.")
             return index, self.invoke(capability, **payload)
 
-        if len(rows) == 1:
-            _, bundle = run(0, rows[0])
+        jobs = list(enumerate(rows))
+        if len(jobs) == 1:
+            _, bundle = run(jobs[0])
             return (bundle,)
 
         ordered: list[dict[str, Any] | None] = [None] * len(rows)
-        with ThreadPoolExecutor(
+        for _job, result in iter_completed_with_deadlines(
+            jobs,
+            run,
             max_workers=workers,
-            thread_name_prefix="mmm_external_mcp",
-        ) as pool:
-            futures = {
-                pool.submit(run, index, row): index
-                for index, row in enumerate(rows)
-            }
-            for future in as_completed(futures):
-                index, bundle = future.result()
-                ordered[index] = bundle
+            stage="external-mcp-batch",
+            sort_key=lambda item: item[0],
+        ):
+            index, bundle = result
+            ordered[index] = bundle
         return tuple(item for item in ordered if item is not None)
 
     invoke_many._mmm_minecraft_mcp_evidence_v3 = True  # type: ignore[attr-defined]

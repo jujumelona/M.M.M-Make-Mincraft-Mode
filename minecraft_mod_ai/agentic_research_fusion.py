@@ -11,8 +11,9 @@ context. The output remains evidence-only; it never authorizes code or assets.
 
 import os
 from collections.abc import Callable, Mapping
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from typing import Any
+
+from .deadline_executor import iter_completed_with_deadlines
 
 
 def _env_workers(name: str = "MMM_RESEARCH_WORKERS", default: int = 8) -> int:
@@ -225,41 +226,51 @@ def retrieve_target_agentic_evidence(
         return domain_index, query_index, receipt
 
     if jobs:
-        with ThreadPoolExecutor(
+        for _job, primary_result in iter_completed_with_deadlines(
+            jobs,
+            fetch_primary,
             max_workers=workers,
-            thread_name_prefix="mmm_agentic_rag",
-        ) as pool:
-            primary_futures = [pool.submit(fetch_primary, job) for job in jobs]
-            for future in as_completed(primary_futures):
-                domain_index, query_index, primary = future.result()
-                primary_results[(domain_index, query_index)] = primary
+            stage="agentic-rag-primary",
+            sort_key=lambda item: (item[0], item[1]),
+        ):
+            domain_index, query_index, primary = primary_result
+            primary_results[(domain_index, query_index)] = primary
 
-            correction_futures: dict[Future[Any], tuple[int, int, int]] = {}
-            for domain_index, query_index, _query in jobs:
-                primary = primary_results[(domain_index, query_index)]
-                queries = tuple(getattr(primary, "correction_queries", ()) or ())
-                correction_results[(domain_index, query_index)] = [None] * len(queries)
-                for correction_index, correction_query in enumerate(queries):
-                    future = pool.submit(
-                        retrieve,
-                        correction_query,
-                        minecraft_version=minecraft_version,
-                        loader=loader,
-                        mappings=mappings,
-                        limit=4,
-                    )
-                    correction_futures[future] = (
-                        domain_index,
-                        query_index,
-                        correction_index,
-                    )
-                    correction_job_count += 1
+        correction_jobs: list[tuple[int, int, int, str]] = []
+        for domain_index, query_index, _query in jobs:
+            primary = primary_results[(domain_index, query_index)]
+            queries = tuple(getattr(primary, "correction_queries", ()) or ())
+            correction_results[(domain_index, query_index)] = [None] * len(queries)
+            for correction_index, correction_query in enumerate(queries):
+                correction_jobs.append(
+                    (domain_index, query_index, correction_index, correction_query)
+                )
 
-            for future in as_completed(correction_futures):
-                domain_index, query_index, correction_index = correction_futures[future]
-                correction_results[(domain_index, query_index)][
-                    correction_index
-                ] = future.result()
+        correction_job_count = len(correction_jobs)
+
+        def fetch_correction(
+            job: tuple[int, int, int, str],
+        ) -> tuple[int, int, int, Any]:
+            domain_index, query_index, correction_index, correction_query = job
+            receipt = retrieve(
+                correction_query,
+                minecraft_version=minecraft_version,
+                loader=loader,
+                mappings=mappings,
+                limit=4,
+            )
+            return domain_index, query_index, correction_index, receipt
+
+        if correction_jobs:
+            for _job, correction_result in iter_completed_with_deadlines(
+                correction_jobs,
+                fetch_correction,
+                max_workers=min(workers, len(correction_jobs)),
+                stage="agentic-rag-correction",
+                sort_key=lambda item: (item[0], item[1], item[2]),
+            ):
+                domain_index, query_index, correction_index, receipt = correction_result
+                correction_results[(domain_index, query_index)][correction_index] = receipt
 
     results: list[dict[str, Any]] = []
     unresolved: list[str] = []

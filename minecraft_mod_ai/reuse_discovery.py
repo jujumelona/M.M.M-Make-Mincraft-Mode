@@ -13,7 +13,6 @@ import os
 import re
 import unicodedata
 from collections.abc import Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any
@@ -26,6 +25,7 @@ from .canonical_capability_ontology import (
     resolve_capabilities_from_phrase_structured,
     search_queries_for_capability,
 )
+from .deadline_executor import iter_completed_with_deadlines
 
 _TOKEN = re.compile(r"[\w]+", re.UNICODE)
 _MINECRAFT_GAME_ID = 432
@@ -324,12 +324,16 @@ def _resolve_modrinth_candidates(candidates: Sequence[Mapping[str, Any]]) -> lis
         except Exception:
             return "", 0.0
 
-    with ThreadPoolExecutor(max_workers=min(_workers(), len(jobs))) as pool:
-        futures = [pool.submit(resolve, job) for job in jobs]
-        for future in as_completed(futures):
-            repository, score = future.result()
-            if repository:
-                direct.append((repository, score))
+    for _job, result in iter_completed_with_deadlines(
+        jobs,
+        resolve,
+        max_workers=min(_workers(), len(jobs)),
+        stage="reuse-modrinth-source-resolution",
+        sort_key=lambda item: item[0],
+    ):
+        repository, score = result
+        if repository:
+            direct.append((repository, score))
     return direct
 
 
@@ -451,14 +455,24 @@ def discover_repositories_for_graph(
                 jobs.append((capability, provider, query_list[variant_index]))
         if not jobs:
             return
-        with ThreadPoolExecutor(max_workers=min(_workers(), len(jobs)), thread_name_prefix="mmm-reuse-catalog") as pool:
-            futures = [pool.submit(provider_search, *job) for job in jobs]
-            for future in as_completed(futures):
-                try:
-                    capability, provider, values = future.result()
-                except Exception:
-                    continue
-                register(capability, provider, values)
+        def safe_provider_search(
+            job: tuple[str, str, str],
+        ) -> tuple[str, str, list[tuple[str, float]]]:
+            capability, provider, query = job
+            try:
+                return provider_search(capability, provider, query)
+            except Exception:
+                return capability, provider, []
+
+        for _job, result_row in iter_completed_with_deadlines(
+            jobs,
+            safe_provider_search,
+            max_workers=min(_workers(), len(jobs)),
+            stage=f"reuse-catalog-wave-{variant_index}",
+            sort_key=lambda item: (item[0], item[1], item[2]),
+        ):
+            capability, provider, values = result_row
+            register(capability, provider, values)
 
     run_wave(ordered, 0)
     for variant_index in range(1, _query_variant_limit()):
