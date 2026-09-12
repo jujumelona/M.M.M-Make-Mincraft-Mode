@@ -67,6 +67,7 @@ def test_task_and_sibling_queries_reach_actual_brief():
 def test_modrinth_paginates_past_keyword_saturation(monkeypatch):
     from minecraft_mod_ai import pre_design_grounded_rag as backend
     offsets = []
+
     def fetch(url):
         params = parse_qs(urlparse(url).query)
         if "/projects?" in url:
@@ -77,6 +78,7 @@ def test_modrinth_paginates_past_keyword_saturation(monkeypatch):
         return {"hits": [{"project_id": str(offset + index), "slug": str(offset + index),
                           "description": "spacecraft upgrade"} for index in range(100 if offset == 0 else 1)],
                 "total_hits": 101, "offset": offset}
+
     monkeypatch.setattr(backend, "_json", fetch)
     monkeypatch.setattr(backend, "_provider_result_limit", lambda: None)
     monkeypatch.setattr(backend, "_provider_page_limit", lambda: None)
@@ -88,6 +90,7 @@ def test_modrinth_paginates_past_keyword_saturation(monkeypatch):
 
 def test_later_provider_failure_preserves_already_retrieved_candidates(monkeypatch):
     from minecraft_mod_ai import pre_design_grounded_rag as backend
+
     def fetch(url):
         if "/projects?" in url:
             return []
@@ -95,6 +98,7 @@ def test_later_provider_failure_preserves_already_retrieved_candidates(monkeypat
             raise OSError("provider temporarily unavailable")
         return {"hits": [{"project_id": "first", "slug": "first", "description": "spacecraft"}],
                 "total_hits": 2, "offset": 0}
+
     monkeypatch.setattr(backend, "_json", fetch)
     monkeypatch.setattr(backend, "_provider_result_limit", lambda: None)
     monkeypatch.setattr(backend, "_provider_page_limit", lambda: None)
@@ -111,17 +115,36 @@ def _run_collection(monkeypatch, state, responses):
     from minecraft_mod_ai import planning_state_research as research
     from minecraft_mod_ai import pre_design_grounded_rag as backend
     from minecraft_mod_ai import pre_design_research_pipeline as pipeline
+
     def review(_router, _role, messages, **kwargs):
-        window = json.loads(messages[1]["content"]) .get("source_window", json.loads(messages[1]["content"]).get("source_quote", ""))
-        return {"supports": "spacecraft" in window and "upgrade" in window,
-                "excerpt": window[:256], "reason": "Fixture semantic assessment"}
+        payload = json.loads(messages[1]["content"])
+        if kwargs.get("tool_name") == "assess_requirement_source":
+            units = payload.get("source_units") or []
+            window = "".join(str(unit.get("text") or "") for unit in units)
+            supported = "spacecraft" in window and "upgrade" in window
+            if supported:
+                return {
+                    "verdict": "supported",
+                    "evidence_start": 0,
+                    "evidence_end": max(0, len(units) - 1),
+                }
+            return {
+                "verdict": "insufficient",
+                "evidence_start": -1,
+                "evidence_end": -1,
+            }
+        window = str(payload.get("source_window") or payload.get("source_quote") or "")
+        return {"verdict": "supported" if "spacecraft" in window and "upgrade" in window else "insufficient"}
+
     monkeypatch.setattr(semantic, "generate_fixed_template_value", review)
     calls, events = [], []
     monkeypatch.setattr(research, "validate_planning_state", lambda *a, **k: None)
     monkeypatch.setattr(research, "emit_root_cause", lambda *a, **k: events.append(k))
+
     def retrieve(_backend, _router, brief):
         calls.append(deepcopy(brief))
         return responses[min(len(calls) - 1, len(responses) - 1)]
+
     monkeypatch.setattr(research, "forced_rag_bundle", retrieve)
     monkeypatch.setattr(pipeline, "_grounded_domain_evidence", lambda domain, bundle: deepcopy(bundle[domain]))
     monkeypatch.setattr(backend, "_materialize_domain_evidence_document", lambda *a: {})
