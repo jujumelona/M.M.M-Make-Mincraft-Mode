@@ -8,7 +8,19 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-_VALIDATION_CHECKPOINTS = frozenset({"validate-source", "validate-jdt"})
+_VALIDATION_CHECKPOINT_FAMILIES = {
+    "validate-source": "validate-source",
+    "validate-source-final": "validate-source",
+    "validate-jdt": "validate-jdt",
+    "validate-jdt-final": "validate-jdt",
+}
+
+
+def _canonical_validation_checkpoint(checkpoint_id: str) -> str:
+    family = _VALIDATION_CHECKPOINT_FAMILIES.get(checkpoint_id)
+    if family is None:
+        raise ValueError(f"Unsupported validation checkpoint: {checkpoint_id}")
+    return family
 
 
 def _file_digest(module: Any) -> str:
@@ -76,11 +88,10 @@ def validation_implementation_fingerprint(checkpoint_id: str) -> str:
     composition, and host policy all match the original successful run.
     """
 
-    if checkpoint_id not in _VALIDATION_CHECKPOINTS:
-        raise ValueError(f"Unsupported validation checkpoint: {checkpoint_id}")
+    checkpoint_family = _canonical_validation_checkpoint(checkpoint_id)
 
     digest = hashlib.sha256()
-    for module in _validation_modules(checkpoint_id):
+    for module in _validation_modules(checkpoint_family):
         digest.update(str(getattr(module, "__name__", "")).encode("utf-8"))
         digest.update(b"\0")
         digest.update(_file_digest(module).encode("ascii"))
@@ -237,9 +248,10 @@ def _complete_jdt_receipt(value: Mapping[str, Any]) -> bool:
 def cached_validation_is_reusable(checkpoint_id: str, value: Any) -> bool:
     if not isinstance(value, dict):
         return False
-    if checkpoint_id == "validate-source":
+    checkpoint_family = _VALIDATION_CHECKPOINT_FAMILIES.get(checkpoint_id)
+    if checkpoint_family == "validate-source":
         return _complete_source_receipt(value)
-    if checkpoint_id == "validate-jdt":
+    if checkpoint_family == "validate-jdt":
         return _complete_jdt_receipt(value)
     return False
 

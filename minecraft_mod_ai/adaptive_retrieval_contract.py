@@ -122,12 +122,11 @@ def _install_repository_grounding() -> None:
         build = evidence.get("build", {})
         if isinstance(build.get("error"), str) and build["error"].strip():
             query_parts.append(build["error"])
-        for command in build.get("commands", []):
-            if not isinstance(command, dict) or not isinstance(command.get("log_path"), str):
-                continue
-            log = Path(command["log_path"])
-            if log.is_file() and not log.is_symlink():
-                query_parts.append(log.read_text(encoding="utf-8", errors="replace")[-32_000:])
+        build_logs = repair_engine._failed_build_log_diagnostics(evidence)
+        for command in build_logs:
+            output = command.get("output")
+            if isinstance(output, str) and output:
+                query_parts.append(output)
 
         query = "\n".join(query_parts).strip()
         if not query:
@@ -139,7 +138,7 @@ def _install_repository_grounding() -> None:
                 sort_keys=True,
             )
         index = repair_engine.active_repair_project_index(root, self.policy)
-        return build_repair_repository_context(
+        context = build_repair_repository_context(
             self.router,
             index,
             query=query,
@@ -150,6 +149,8 @@ def _install_repository_grounding() -> None:
                 role="coder_safe",
             ),
         )
+        context["build_logs"] = build_logs
+        return context
 
     setattr(_context, _GROUNDING_MARKER, True)
     repair_engine.RepairEngine._context = _context

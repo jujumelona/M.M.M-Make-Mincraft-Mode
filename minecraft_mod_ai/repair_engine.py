@@ -4,6 +4,7 @@ from .fixed_template_generation import generate_fixed_template_text
 
 from .model_response_templates import response_schema, response_template_prompt
 
+import hashlib
 import json
 import os
 import re
@@ -46,6 +47,10 @@ _ALLOWED_SUFFIXES = {
     ".yml",
 }
 _HARD_REPAIR_ATTEMPTS = 2
+_REPAIR_LOG_SNIPPET_CHARS = 3000
+_REPAIR_LOG_READ_BYTES = 16384
+_REPAIR_BUILD_LOG_LIMIT = 4
+_REPAIR_QUERY_PART_LIMIT = 12
 
 
 _ACTIVE_REPAIR_PROJECT_INDEX: ContextVar[tuple[Path, ProjectIndex] | None] = ContextVar(
@@ -67,6 +72,59 @@ def active_repair_project_index(root: Path, policy: ScalePolicy) -> ProjectIndex
     if active is not None and active[0] == normalized_root:
         return active[1]
     return ProjectIndex(normalized_root, policy=policy)
+
+
+
+def _read_bounded_build_log(log_path: Any) -> str:
+    raw_path = str(log_path or "").strip()
+    if not raw_path:
+        return ""
+    path = Path(raw_path).expanduser()
+    try:
+        if not path.is_file() or path.is_symlink():
+            return ""
+        with path.open("rb") as handle:
+            handle.seek(0, 2)
+            size = handle.tell()
+            handle.seek(max(0, size - _REPAIR_LOG_READ_BYTES))
+            payload = handle.read(_REPAIR_LOG_READ_BYTES)
+    except (OSError, ValueError):
+        return ""
+    text = payload.decode("utf-8", errors="replace")
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    return normalized[-_REPAIR_LOG_SNIPPET_CHARS:]
+
+
+def _failed_build_log_diagnostics(evidence: dict[str, Any]) -> list[dict[str, Any]]:
+    build = evidence.get("build")
+    if not isinstance(build, dict):
+        return []
+    commands = [item for item in build.get("commands", []) if isinstance(item, dict)]
+    failed = [
+        item
+        for item in commands
+        if bool(item.get("timed_out"))
+        or (
+            isinstance(item.get("exit_code"), int)
+            and not isinstance(item.get("exit_code"), bool)
+            and item.get("exit_code") != 0
+        )
+    ]
+    if not failed and build.get("status") == "FAIL" and commands:
+        failed = [commands[-1]]
+
+    diagnostics: list[dict[str, Any]] = []
+    for command in failed[-_REPAIR_BUILD_LOG_LIMIT:]:
+        output = _read_bounded_build_log(command.get("log_path"))
+        item: dict[str, Any] = {
+            "name": command.get("name"),
+            "exit_code": command.get("exit_code"),
+            "timed_out": bool(command.get("timed_out")),
+        }
+        if output:
+            item["output"] = output
+        diagnostics.append(item)
+    return diagnostics
 
 
 class RepairEngine:
@@ -241,11 +299,27 @@ class RepairEngine:
                 }
             )
         build = evidence.get("build", {})
+        build_logs = []
+        for item in _failed_build_log_diagnostics(evidence):
+            output = str(item.get("output") or "")
+            build_logs.append(
+                {
+                    "name": item.get("name"),
+                    "exit_code": item.get("exit_code"),
+                    "timed_out": item.get("timed_out"),
+                    "output_sha256": (
+                        hashlib.sha256(output.encode("utf-8")).hexdigest()
+                        if output
+                        else ""
+                    ),
+                }
+            )
         return json.dumps(
             {
                 "diagnostics": diagnostics,
                 "build_status": build.get("status"),
                 "build_error": build.get("error"),
+                "build_logs": build_logs,
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -263,17 +337,17 @@ class RepairEngine:
             message = item.get("message")
             if isinstance(message, str):
                 query_parts.append(message)
-        for command in evidence.get("build", {}).get("commands", []):
-            if not isinstance(command, dict):
-                continue
+        build_logs = _failed_build_log_diagnostics(evidence)
+        for command in build_logs:
             output = command.get("output")
-            if isinstance(output, str):
+            if isinstance(output, str) and output:
                 query_parts.append(output)
         from .production_tools import ProjectRAGIndex
         rag_hits = []
         try:
             rag = ProjectRAGIndex(root / ".minecraft_ai" / "rag_index")
-            query = " ".join(query_parts) if query_parts else "Minecraft Fabric mod build repair"
+            bounded_query_parts = query_parts[-_REPAIR_QUERY_PART_LIMIT:]
+            query = " ".join(bounded_query_parts) if bounded_query_parts else "Minecraft Fabric mod build repair"
             manifest = active_repair_project_index(root, self.policy).manifest_receipt()
             search = rag.search(
                 query,
@@ -296,6 +370,7 @@ class RepairEngine:
             rag_hits = []
         return {
             "diagnostics_files": tuple(sorted(set(diagnostic_paths))),
+            "build_logs": build_logs,
             "rag": {"hits": rag_hits},
         }
 
