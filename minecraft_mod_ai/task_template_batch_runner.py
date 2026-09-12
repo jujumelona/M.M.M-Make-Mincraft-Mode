@@ -7,12 +7,11 @@ llama slots concurrently. Model-side multi-concern output is intentionally not u
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
-from contextvars import copy_context
 from threading import RLock
 from typing import Any
 
 from .bounded_record_template import run_bounded_record_template
+from .deadline_executor import iter_completed_with_deadlines
 from .model_concurrency import router_native_model_parallelism
 
 
@@ -69,24 +68,17 @@ def run_record_template_batch(
     if workers == 1:
         return {identifier: run_one(identifier) for identifier in identifiers}
 
-    contexts = [copy_context() for _ in identifiers]
-    with ThreadPoolExecutor(
+    completed: dict[str, dict[str, Any]] = {}
+    for identifier, result in iter_completed_with_deadlines(
+        identifiers,
+        run_one,
         max_workers=workers,
-        thread_name_prefix="planning-template-record",
-    ) as pool:
-        futures = [
-            pool.submit(contexts[index].run, run_one, identifier)
-            for index, identifier in enumerate(identifiers)
-        ]
-        try:
-            return {
-                identifier: future.result()
-                for identifier, future in zip(identifiers, futures)
-            }
-        except BaseException:
-            for future in futures:
-                future.cancel()
-            raise
+        stage="planning-template-record",
+    ):
+        completed[identifier] = result
+
+    # Completion order is intentionally decoupled from semantic result order.
+    return {identifier: completed[identifier] for identifier in identifiers}
 
 
 __all__ = [
