@@ -160,7 +160,7 @@ def _source_edit_detail_schema(
     page: dict[str, Any] = {
         "type": "object",
         "properties": {
-            name: _bounded_property(properties[name]) if isinstance(properties[name], Mapping) else properties[name]
+            name: dict(properties[name]) if isinstance(properties[name], Mapping) else properties[name]
             for name in names
         },
         "required": list(required),
