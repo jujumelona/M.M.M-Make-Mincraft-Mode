@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from . import central_research
+from .model_concurrency import planning_work_unit_timeout_seconds
 from .model_router import ModelRouter
 from .planner import _proposal_from_model_data
 from .platform_resolver import retarget_proposal
@@ -62,8 +63,29 @@ class PlanningArtifacts:
 
 def _host_operation(operation: str, callback: Callable[[], _T]) -> _T:
     """Route every major planning host boundary through one trace implementation."""
-
     return traced_callable(callback, stage="planning", operation=operation)()
+
+
+def _bounded_future_result(future: Any, *, operation: str) -> Any:
+    """Resolve a host future without permitting an unbounded planning stall."""
+    timeout = planning_work_unit_timeout_seconds()
+    try:
+        return future.result(timeout=timeout)
+    except TypeError as exc:
+        raise PlanningStageError(
+            PlanningStage.DESIGN,
+            f"{operation} future does not support bounded result(timeout=...)",
+            cause=exc,
+        ) from exc
+    except TimeoutError as exc:
+        cancel = getattr(future, "cancel", None)
+        if callable(cancel):
+            cancel()
+        raise PlanningStageError(
+            PlanningStage.DESIGN,
+            f"{operation} exceeded the {timeout:.3f}s planning work-unit deadline",
+            cause=exc,
+        ) from exc
 
 
 class PlanningPipeline:
@@ -105,9 +127,7 @@ class PlanningPipeline:
                     prompt,
                     existing_state=existing_state,
                     checkpoint=save_state,
-                    detail_section_applicability_resolver=(
-                        detail_section_applicability_resolver
-                    ),
+                    detail_section_applicability_resolver=detail_section_applicability_resolver,
                 ),
             )
         except Exception as exc:
@@ -263,7 +283,6 @@ class PlanningPipeline:
             lambda: host_design.deterministic_bootstrap(prompt, design),
         )
         if design.get("_content_entities"):
-            # All content is owned by the graph; bootstrap must not invent another item/block.
             build_slice["contents"] = []
             build_slice["deferred_capabilities"] = []
         proposal = _host_operation(
@@ -271,13 +290,21 @@ class PlanningPipeline:
             lambda: _proposal_from_model_data(prompt, build_slice),
         )
         if design.get("_content_entities"):
-            proposal = replace(proposal, spec=replace(proposal.spec, boss=None),
-                               deferred_requests=(), approval_hash="").with_hash()
+            proposal = replace(
+                proposal,
+                spec=replace(proposal.spec, boss=None),
+                deferred_requests=(),
+                approval_hash="",
+            ).with_hash()
             from .complete_spec import AssetRequest
+
             assets = []
             for asset in design.get("_atomic_assets", ()):
                 if not isinstance(asset, AssetRequest):
-                    raise PlanningStageError(PlanningStage.DESIGN, "atomic asset must be typed")
+                    raise PlanningStageError(
+                        PlanningStage.DESIGN,
+                        "atomic asset must be typed",
+                    )
                 assets.append(asset)
             design = {**design, "assets": assets, "_atomic_assets": assets}
         if proposal.requested_prompt != prompt:
@@ -300,7 +327,10 @@ class PlanningPipeline:
             None,
         )
         if existing_inventory is None and hasattr(inventory_future, "result"):
-            inventory = inventory_future.result()
+            inventory = _bounded_future_result(
+                inventory_future,
+                operation="existing project inventory",
+            )
             validate = getattr(inventory, "validate", None)
             to_dict = getattr(inventory, "to_dict", None)
             if callable(validate) and callable(to_dict):
