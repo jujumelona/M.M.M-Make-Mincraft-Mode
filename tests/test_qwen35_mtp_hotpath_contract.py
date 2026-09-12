@@ -54,7 +54,7 @@ def _base_args(*_):
     ]
 
 
-def test_qwen35_mtp_detection_is_profile_specific() -> None:
+def test_qwen35_mtp_detection_is_registry_metadata_specific() -> None:
     assert _is_qwen35_mtp(_qwen_config()) is True
     assert _is_qwen35_mtp(
         SimpleNamespace(
@@ -77,7 +77,8 @@ def test_measured_fast_args_preserve_kv_tuner_controls(monkeypatch) -> None:
     assert args[args.index("--batch-size") + 1] == "2048"
     assert args[args.index("--ubatch-size") + 1] == "512"
     assert args[args.index("--parallel") + 1] == "1"
-    assert args[args.index("--ctx-size") + 1] == "0"
+    # No context override means the measured hotpath preserves the base launch policy.
+    assert args[args.index("--ctx-size") + 1] == "16384"
     assert args[args.index("--cache-type-k") + 1] == "q8_0"
     assert args[args.index("--cache-type-v") + 1] == "q8_0"
     assert "--load-mode" not in args
@@ -85,10 +86,10 @@ def test_measured_fast_args_preserve_kv_tuner_controls(monkeypatch) -> None:
     assert "--metrics" in args
 
 
-def test_qwen_context_defaults_to_model_native_and_is_explicitly_overridable(monkeypatch) -> None:
+def test_qwen_context_is_only_overridden_when_explicitly_configured(monkeypatch) -> None:
     config = _qwen_config()
     monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)
-    assert _context_size(config) == 0
+    assert _context_size(config) is None
     monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "16384")
     assert _context_size(config) == 16384
     monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "999999")
