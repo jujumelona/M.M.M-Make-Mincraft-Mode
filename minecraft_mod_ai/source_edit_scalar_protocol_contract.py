@@ -144,21 +144,6 @@ def _canonicalize_compat_payload(
     return normalized
 
 
-def _reject_model_java_create_file(runtime_module: Any, payload: Mapping[str, Any]) -> None:
-    if payload.get("operation") != "create_file":
-        return
-    path = payload.get("path")
-    if not isinstance(path, str):
-        return
-    normalized_path = path.strip().replace("\\", "/")
-    if normalized_path.casefold().endswith(".java"):
-        raise runtime_module.AgentToolRuntimeError(
-            "Model create_file cannot create or replace Java source; use "
-            "create_java_type, add_java_import, and insert_java_member instead: "
-            f"{normalized_path}"
-        )
-
-
 def materialize_model_source_edit(
     runtime_module: Any,
     workspace_root: str | Path,
@@ -178,7 +163,6 @@ def materialize_model_source_edit(
         )
 
     normalized = _canonicalize_compat_payload(runtime_module, payload)
-    _reject_model_java_create_file(runtime_module, normalized)
     return _core.materialize_model_source_edit(
         runtime_module,
         workspace_root,
