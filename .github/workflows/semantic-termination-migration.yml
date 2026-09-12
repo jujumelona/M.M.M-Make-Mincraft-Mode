@@ -1,0 +1,706 @@
+name: Semantic Termination Migration
+
+on:
+  push:
+    paths:
+      - .github/workflows/semantic-termination-migration.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: semantic-termination-migration
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Apply semantic termination refactor
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > minecraft_mod_ai/termination_contract.py <<'PYMODULE'
+          from __future__ import annotations
+
+          """Host-owned semantic termination contracts for iterative agent workflows.
+
+          Termination is derived from task state, evidence and admissible actions.  Numeric
+          attempt/round/patience counters are intentionally absent: operational resource
+          exhaustion is represented separately as INCONCLUSIVE rather than task success.
+          """
+
+          import hashlib
+          import json
+          from dataclasses import dataclass, field
+          from enum import Enum
+          from typing import Any, Mapping, Sequence
+
+
+          class TerminationStatus(str, Enum):
+              CONTINUE = "CONTINUE"
+              SUCCESS = "SUCCESS"
+              BLOCKED = "BLOCKED"
+              FAILED = "FAILED"
+              INCONCLUSIVE = "INCONCLUSIVE"
+              CANCELLED = "CANCELLED"
+
+
+          class TerminationReason(str, Enum):
+              ACCEPTANCE_SATISFIED = "ACCEPTANCE_SATISFIED"
+              FIXED_POINT = "FIXED_POINT"
+              SEMANTIC_CYCLE = "SEMANTIC_CYCLE"
+              EXTERNAL_DEPENDENCY = "EXTERNAL_DEPENDENCY"
+              NO_ADMISSIBLE_ACTION = "NO_ADMISSIBLE_ACTION"
+              VALIDATION_FAILED = "VALIDATION_FAILED"
+              RESOURCE_GUARD = "RESOURCE_GUARD"
+              CANCELLED = "CANCELLED"
+
+
+          @dataclass(frozen=True)
+          class TerminationDecision:
+              status: TerminationStatus
+              reason: TerminationReason | None = None
+              semantic_fingerprint: str | None = None
+              unresolved_criteria: tuple[str, ...] = ()
+              evidence: tuple[str, ...] = ()
+              required_state_change: str | None = None
+
+              @classmethod
+              def continuing(cls, *, semantic_fingerprint: str | None = None) -> "TerminationDecision":
+                  return cls(TerminationStatus.CONTINUE, semantic_fingerprint=semantic_fingerprint)
+
+
+          def _stable(value: Any) -> Any:
+              if isinstance(value, Mapping):
+                  return {
+                      str(key): _stable(item)
+                      for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+                  }
+              if isinstance(value, (set, frozenset)):
+                  return sorted((_stable(item) for item in value), key=repr)
+              if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+                  return [_stable(item) for item in value]
+              if isinstance(value, Enum):
+                  return value.value
+              return value
+
+
+          def semantic_fingerprint(value: Any) -> str:
+              canonical = json.dumps(
+                  _stable(value),
+                  ensure_ascii=False,
+                  sort_keys=True,
+                  separators=(",", ":"),
+                  default=str,
+              )
+              return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+          @dataclass
+          class SemanticTerminationLedger:
+              """Detect fixed points and cycles in the no-progress semantic state graph.
+
+              A genuine state/evidence/artifact transition resets the active path.  A state
+              revisited after such progress is therefore legal; a repeat within the current
+              no-progress path is a semantic fixed point or cycle.
+              """
+
+              _active_path: list[str] = field(default_factory=list)
+
+              def observe(self, snapshot: Any, *, made_progress: bool) -> TerminationDecision:
+                  fingerprint = semantic_fingerprint(snapshot)
+                  if made_progress:
+                      self._active_path[:] = [fingerprint]
+                      return TerminationDecision.continuing(
+                          semantic_fingerprint=fingerprint
+                      )
+                  if not self._active_path:
+                      self._active_path.append(fingerprint)
+                      return TerminationDecision.continuing(
+                          semantic_fingerprint=fingerprint
+                      )
+                  if fingerprint == self._active_path[-1]:
+                      return TerminationDecision(
+                          TerminationStatus.BLOCKED,
+                          TerminationReason.FIXED_POINT,
+                          semantic_fingerprint=fingerprint,
+                          required_state_change=(
+                              "A new verified observation, artifact change, precondition change, "
+                              "or admissible action is required before retrying."
+                          ),
+                      )
+                  if fingerprint in self._active_path:
+                      return TerminationDecision(
+                          TerminationStatus.BLOCKED,
+                          TerminationReason.SEMANTIC_CYCLE,
+                          semantic_fingerprint=fingerprint,
+                          required_state_change=(
+                              "The cycle must be broken by novel evidence or a real state transition."
+                          ),
+                      )
+                  self._active_path.append(fingerprint)
+                  return TerminationDecision.continuing(
+                      semantic_fingerprint=fingerprint
+                  )
+
+
+          def decide_terminal_state(
+              *,
+              unresolved_criteria: Sequence[str] = (),
+              evidence: Sequence[str] = (),
+              admissible_actions: Sequence[str] = (),
+              blockers: Sequence[str] = (),
+              verifier_status: str = "UNKNOWN",
+              resource_guard: str | None = None,
+              cancelled: bool = False,
+          ) -> TerminationDecision:
+              """Evaluate explicit terminal facts without interpreting a retry count."""
+
+              unresolved = tuple(str(item) for item in unresolved_criteria if str(item))
+              evidence_items = tuple(str(item) for item in evidence if str(item))
+              actions = tuple(str(item) for item in admissible_actions if str(item))
+              blockers_items = tuple(str(item) for item in blockers if str(item))
+              verifier = str(verifier_status or "UNKNOWN").strip().upper()
+
+              if cancelled:
+                  return TerminationDecision(
+                      TerminationStatus.CANCELLED,
+                      TerminationReason.CANCELLED,
+                      unresolved_criteria=unresolved,
+                      evidence=evidence_items,
+                  )
+              if resource_guard:
+                  return TerminationDecision(
+                      TerminationStatus.INCONCLUSIVE,
+                      TerminationReason.RESOURCE_GUARD,
+                      unresolved_criteria=unresolved,
+                      evidence=evidence_items,
+                      required_state_change=str(resource_guard),
+                  )
+              if not unresolved and verifier == "PASS":
+                  return TerminationDecision(
+                      TerminationStatus.SUCCESS,
+                      TerminationReason.ACCEPTANCE_SATISFIED,
+                      evidence=evidence_items,
+                  )
+              if not actions and blockers_items:
+                  return TerminationDecision(
+                      TerminationStatus.BLOCKED,
+                      TerminationReason.EXTERNAL_DEPENDENCY,
+                      unresolved_criteria=unresolved,
+                      evidence=evidence_items,
+                      required_state_change="; ".join(blockers_items),
+                  )
+              if unresolved and not actions:
+                  return TerminationDecision(
+                      TerminationStatus.BLOCKED,
+                      TerminationReason.NO_ADMISSIBLE_ACTION,
+                      unresolved_criteria=unresolved,
+                      evidence=evidence_items,
+                      required_state_change="An admissible action or new external evidence is required.",
+                  )
+              return TerminationDecision(
+                  TerminationStatus.CONTINUE,
+                  unresolved_criteria=unresolved,
+                  evidence=evidence_items,
+              )
+
+
+          __all__ = [
+              "SemanticTerminationLedger",
+              "TerminationDecision",
+              "TerminationReason",
+              "TerminationStatus",
+              "decide_terminal_state",
+              "semantic_fingerprint",
+          ]
+          PYMODULE
+
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('minecraft_mod_ai/progress_aware_tool_loop.py')
+          text = path.read_text(encoding='utf-8')
+
+          def once(old: str, new: str) -> None:
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one anchor, found {count}: {old[:100]!r}')
+              text = text.replace(old, new, 1)
+
+          once(
+              'from .source_mutation_contract import (\n    mutation_history_applied,\n    mutation_payload_applied,\n)\n',
+              'from .source_mutation_contract import (\n    mutation_history_applied,\n    mutation_payload_applied,\n)\nfrom .termination_contract import (\n    SemanticTerminationLedger,\n    TerminationDecision,\n    TerminationReason,\n    TerminationStatus,\n)\n',
+          )
+
+          once('    no_progress_streak_after: int\n', '    termination_status_after: str\n    termination_reason_after: str | None\n')
+          once(
+              '            "no_progress_streak_after": self.no_progress_streak_after,\n',
+              '            "termination_status_after": self.termination_status_after,\n            "termination_reason_after": self.termination_reason_after,\n',
+          )
+          once(
+              '            f"exposed={t.exposed_tools} | model={tool_call_desc} | res={results_desc} | progress={t.turn_made_progress} streak={t.no_progress_streak_after}"\n',
+              '            f"exposed={t.exposed_tools} | model={tool_call_desc} | res={results_desc} | "\n            f"progress={t.turn_made_progress} termination={t.termination_status_after}/{t.termination_reason_after}"\n',
+          )
+
+          once(
+              '    no_progress_streak: int = 0\n',
+              '    termination_ledger: SemanticTerminationLedger = field(default_factory=SemanticTerminationLedger)\n    last_termination_decision: TerminationDecision = field(default_factory=TerminationDecision.continuing)\n',
+          )
+          once('    last_result_digest: str | None = None\n', '')
+
+          pattern = re.compile(
+              r'    def record_no_progress_result\(self, value: Any\) -> int:\n.*?\n    def next_untried_internal_tool\(',
+              re.S,
+          )
+          replacement = '''    @property
+              def termination_status(self) -> str:
+                  return self.last_termination_decision.status.value
+
+              @property
+              def semantic_termination_reason(self) -> str | None:
+                  reason = self.last_termination_decision.reason
+                  return reason.value if reason is not None else None
+
+              def observe_semantic_state(
+                  self,
+                  snapshot: Any,
+                  *,
+                  made_progress: bool,
+              ) -> TerminationDecision:
+                  with self._lock:
+                      decision = self.termination_ledger.observe(
+                          snapshot,
+                          made_progress=made_progress,
+                      )
+                      self.last_termination_decision = decision
+                      return decision
+
+              def next_untried_internal_tool('''
+          text, n = pattern.subn(replacement, text, count=1)
+          if n != 1:
+              raise SystemExit(f'HostRunState no-progress method block replacement count={n}')
+
+          pattern = re.compile(
+              r'class RetrievalProgress:\n.*?\n\n_CODE_MARKERS =',
+              re.S,
+          )
+          replacement = '''class RetrievalProgress:
+              """Retrieval frontier tracker using semantic fixed-point detection."""
+
+              def __init__(self, state: HostRunState | None = None) -> None:
+                  self._state = state or HostRunState()
+                  self.attempted_queries = self._state.attempted_queries
+                  self.attempted_sources = self._state.attempted_sources
+                  self.evidence_fingerprints = self._state.evidence_fingerprints
+                  self._lock = self._state._lock
+                  self._termination = SemanticTerminationLedger()
+
+              def begin(self, tool_name: str, arguments: Mapping[str, Any]) -> RetrievalDecision:
+                  if self._state.record_query(tool_name, arguments):
+                      return RetrievalDecision.EXECUTE
+                  return RetrievalDecision.DUPLICATE_QUERY
+
+              def _frontier(self) -> dict[str, Any]:
+                  return {
+                      "attempted_sources": tuple(sorted(self.attempted_sources)),
+                      "evidence_fingerprints": tuple(sorted(self.evidence_fingerprints)),
+                  }
+
+              def observe(
+                  self,
+                  *args: Any,
+                  usable: bool = True,
+                  **kwargs: Any,
+              ) -> RetrievalObservation:
+                  if len(args) >= 3:
+                      value = args[2]
+                  elif len(args) >= 1:
+                      value = args[0]
+                  else:
+                      value = kwargs.get("value")
+
+                  if not usable:
+                      decision = self._termination.observe(self._frontier(), made_progress=False)
+                      if decision.status == TerminationStatus.BLOCKED:
+                          raise RetrievalNoProgressError(
+                              f"retrieval semantic termination: {decision.reason.value}"
+                          )
+                      return RetrievalObservation.WEAK
+                  if self._state.record_evidence(value, usable=True):
+                      self._termination.observe(self._frontier(), made_progress=True)
+                      return RetrievalObservation.FRESH
+                  decision = self._termination.observe(self._frontier(), made_progress=False)
+                  if decision.status == TerminationStatus.BLOCKED:
+                      raise RetrievalNoProgressError(
+                          f"retrieval semantic termination: {decision.reason.value}"
+                      )
+                  return RetrievalObservation.DUPLICATE_EVIDENCE
+
+              @property
+              def has_fresh_evidence(self) -> bool:
+                  return self._state.has_fresh_evidence
+
+              def next_untried_internal_tool(
+                  self,
+                  exposed_tools: Sequence[str] | set[str] | frozenset[str],
+                  *,
+                  preferred: Sequence[str],
+              ) -> str | None:
+                  return self._state.next_untried_internal_tool(exposed_tools, preferred=preferred)
+
+
+          _CODE_MARKERS ='''
+          text, n = pattern.subn(replacement, text, count=1)
+          if n != 1:
+              raise SystemExit(f'RetrievalProgress replacement count={n}')
+
+          once('        _agent_tool_round_limit,\n', '')
+          once('    forced_rag_attempts = 0\n', '')
+          once('    round_limit = _agent_tool_round_limit()\n', '')
+          once('            "round_limit": round_limit,\n', '')
+          once(
+              '                "no_progress_streak": state.no_progress_streak,\n',
+              '                "termination_status": state.termination_status,\n                "termination_reason": state.semantic_termination_reason,\n',
+          )
+
+          pattern = re.compile(
+              r'\n        if state\.step_index > round_limit:\n.*?\n        phase_before = state\.phase\.value\n',
+              re.S,
+          )
+          text, n = pattern.subn('\n        phase_before = state.phase.value\n', text, count=1)
+          if n != 1:
+              raise SystemExit(f'round/no-progress top-boundary replacement count={n}')
+
+          forced_block = '''            if forced_rag_tool is not None:
+                  forced_rag_attempts += 1
+                  if forced_rag_attempts >= 1:
+                      raise ModelConfigurationError(
+                          f"Production coder did not honor host-forced RAG tool choice {forced_rag_tool!r} "
+                          "after one bounded forced attempt."
+                      )
+                  messages.extend(['''
+          replacement = '''            if forced_rag_tool is not None:
+                  decision = state.observe_semantic_state(
+                      {
+                          "phase": state.phase.value,
+                          "localization_stage": loc_stage_before,
+                          "forced_tool": forced_rag_tool,
+                          "attempted_sources": tuple(sorted(state.attempted_sources)),
+                          "evidence_fingerprints": tuple(sorted(state.evidence_fingerprints)),
+                          "workspace_changed": state.workspace_changed,
+                          "validation_status": state.validation_status,
+                      },
+                      made_progress=False,
+                  )
+                  if decision.status == TerminationStatus.BLOCKED:
+                      state.termination_reason = decision.reason.value if decision.reason else "BLOCKED"
+                      raise ModelConfigurationError(
+                          f"Host-forced retrieval reached semantic {state.termination_reason}; "
+                          "the same semantic state cannot be retried without new evidence or a state change."
+                      )
+                  messages.extend(['''
+          once(forced_block, replacement)
+
+          text = text.replace('                    forced_rag_attempts = 0\n', '')
+          text = text.replace('                        forced_rag_attempts = 0\n', '')
+          text = text.replace('            forced_rag_attempts = 0\n', '')
+          if 'forced_rag_attempts' in text:
+              raise SystemExit('forced_rag_attempts remains after semantic migration')
+
+          once('                    state.no_progress_streak = 0\n', '                    state.observe_semantic_state({"phase": LoopPhase.ACT.value, "localization_stage": loc_stage_before}, made_progress=True)\n')
+
+          text = text.replace(
+              '                    no_progress_streak_after=state.no_progress_streak,\n',
+              '                    termination_status_after=state.termination_status,\n                    termination_reason_after=state.semantic_termination_reason,\n',
+          )
+          text = text.replace(
+              '                        no_progress_streak_after=state.no_progress_streak,\n',
+              '                        termination_status_after=state.termination_status,\n                        termination_reason_after=state.semantic_termination_reason,\n',
+          )
+          text = text.replace(
+              '                        no_progress_streak_after=0,\n',
+              '                        termination_status_after=state.termination_status,\n                        termination_reason_after=state.semantic_termination_reason,\n',
+          )
+
+          old_end = '''        if turn_made_progress:
+              state.clear_failure()
+              state.clear_no_progress_result()
+          else:
+              state.record_no_progress_result(
+                  {
+                      "phase_before": phase_before,
+                      "phase_after": phase_after,
+                      "localization_stage_before": loc_stage_before,
+                      "localization_stage_after": loc_stage_after,
+                      "mutation_context_after": ctx_after,
+                      "model_tool_calls": model_calls_info,
+                      "validation_status": state.validation_status,
+                      "workspace_changed": state.workspace_changed,
+                      "applied_mutations": tuple(state.applied_mutations),
+                      "tool_results": _fixed_point_tool_results(executed),
+                  }
+              )
+
+          trace_entry = ExecutionStepTrace('''
+          new_end = '''        semantic_snapshot = {
+              "phase": phase_after,
+              "localization_stage": loc_stage_after,
+              "mutation_context": ctx_after,
+              "attempted_sources": tuple(sorted(state.attempted_sources)),
+              "evidence_fingerprints": tuple(sorted(state.evidence_fingerprints)),
+              "validation_status": state.validation_status,
+              "workspace_changed": state.workspace_changed,
+              "applied_mutations": tuple(state.applied_mutations),
+              "available_tools": tuple(sorted(phase_tool_names)),
+              "tool_outcomes": tuple(
+                  sorted(
+                      (
+                          item.get("name"),
+                          bool(item.get("ok")),
+                          item.get("failure_code"),
+                      )
+                      for item in results_info
+                  )
+              ),
+          }
+          decision = state.observe_semantic_state(
+              semantic_snapshot,
+              made_progress=turn_made_progress,
+          )
+          if turn_made_progress:
+              state.clear_failure()
+
+          trace_entry = ExecutionStepTrace('''
+          once(old_end, new_end)
+
+          text = text.replace(
+              '            no_progress_streak_after=state.no_progress_streak,\n',
+              '            termination_status_after=state.termination_status,\n            termination_reason_after=state.semantic_termination_reason,\n',
+          )
+          once(
+              '                "no_progress_streak": state.no_progress_streak,\n',
+              '                "termination_status": state.termination_status,\n                "termination_reason": state.semantic_termination_reason,\n',
+          )
+          once(
+              '            f"phase={phase_before}->{phase_after} progress={turn_made_progress} streak={state.no_progress_streak}\\n",\n',
+              '            f"phase={phase_before}->{phase_after} progress={turn_made_progress} "\n            f"termination={state.termination_status}/{state.semantic_termination_reason}\\n",\n',
+          )
+
+          marker = '''        print(
+              f"  step {state.step_index} finished: stage={loc_stage_before}->{loc_stage_after} "
+              f"phase={phase_before}->{phase_after} progress={turn_made_progress} "
+              f"termination={state.termination_status}/{state.semantic_termination_reason}\\n",
+              flush=True,
+          )
+          '''
+          blocked = '''        print(
+              f"  step {state.step_index} finished: stage={loc_stage_before}->{loc_stage_after} "
+              f"phase={phase_before}->{phase_after} progress={turn_made_progress} "
+              f"termination={state.termination_status}/{state.semantic_termination_reason}\\n",
+              flush=True,
+          )
+
+          if decision.status == TerminationStatus.BLOCKED:
+              reason = decision.reason.value if decision.reason is not None else "BLOCKED"
+              state.termination_reason = reason
+              traj_summary = format_trajectory_summary(state.trajectory)
+              emit_root_cause(
+                  "tool_loop_semantic_termination",
+                  stage=stage,
+                  operation="generate_with_tools",
+                  gate="semantic_fixed_point",
+                  result="FAIL" if implementation_requires_mutation else "PASS",
+                  reason=reason,
+                  details={
+                      "step_index": state.step_index,
+                      "semantic_fingerprint": decision.semantic_fingerprint,
+                      "required_state_change": decision.required_state_change,
+                      "trajectory": traj_summary,
+                  },
+              )
+              if require_rag and not state.has_fresh_evidence:
+                  raise ModelConfigurationError(
+                      f"Required production evidence is blocked by semantic {reason}; "
+                      "no novel reviewed evidence frontier remains."
+                  )
+              if implementation_requires_mutation and (
+                  not state.workspace_changed or state.validation_status != "PASS"
+              ):
+                  raise ModelConfigurationError(
+                      f"Writable coder reached semantic {reason} before verified completion; "
+                      "refusing prose-only or unverified success."
+                  )
+              return _finalize_without_tools(
+                  router,
+                  config,
+                  adapter,
+                  request,
+                  messages,
+                  instruction=(
+                      f"Execution reached semantic {reason}. Do not call more tools. "
+                      "Return only conclusions supported by the observations already present."
+                  ),
+                  empty_error="Agent returned an empty final response after semantic termination.",
+              )
+          '''
+          once(marker, blocked)
+
+          leftovers = [
+              'no_progress_streak',
+              'record_no_progress_result',
+              'clear_no_progress_result',
+              'round_limit',
+              '_agent_tool_round_limit',
+              'forced_rag_attempts',
+          ]
+          for token in leftovers:
+              if token in text:
+                  raise SystemExit(f'legacy semantic termination token remains: {token}')
+
+          path.write_text(text, encoding='utf-8')
+
+          router = Path('minecraft_mod_ai/model_router.py')
+          router_text = router.read_text(encoding='utf-8')
+          router_pattern = re.compile(
+              r'\n_DEFAULT_AGENT_TOOL_ROUNDS = 128\n_MIN_AGENT_TOOL_ROUNDS = 16\n_MAX_AGENT_TOOL_ROUNDS = 512\n\n\ndef _default_agent_tool_rounds\(\) -> int:\n.*?\n\ndef _agent_tool_round_limit\(\) -> int:\n.*?\n    return max\(_MIN_AGENT_TOOL_ROUNDS, min\(_MAX_AGENT_TOOL_ROUNDS, value\)\)\n',
+              re.S,
+          )
+          router_text, n = router_pattern.subn('\n', router_text, count=1)
+          if n != 1:
+              raise SystemExit(f'model_router round-limit block replacement count={n}')
+          if '_agent_tool_round_limit' in router_text or 'MMM_AGENT_TOOL_ROUNDS' in router_text:
+              raise SystemExit('legacy agent round-limit contract remains in model_router.py')
+          router.write_text(router_text, encoding='utf-8')
+          PY
+
+          cat > tests/test_agent_tool_round_liveness.py <<'PYTEST'
+          from __future__ import annotations
+
+          from pathlib import Path
+
+          from minecraft_mod_ai.termination_contract import (
+              SemanticTerminationLedger,
+              TerminationReason,
+              TerminationStatus,
+              decide_terminal_state,
+          )
+
+
+          def test_identical_semantic_state_reaches_fixed_point_without_attempt_counter() -> None:
+              ledger = SemanticTerminationLedger()
+              state = {"phase": "OBSERVE", "evidence": (), "actions": ("search",)}
+              assert ledger.observe(state, made_progress=False).status == TerminationStatus.CONTINUE
+              decision = ledger.observe(state, made_progress=False)
+              assert decision.status == TerminationStatus.BLOCKED
+              assert decision.reason == TerminationReason.FIXED_POINT
+
+
+          def test_semantic_cycle_is_detected_without_patience_window() -> None:
+              ledger = SemanticTerminationLedger()
+              a = {"phase": "OBSERVE", "frontier": "A"}
+              b = {"phase": "ACT", "frontier": "B"}
+              assert ledger.observe(a, made_progress=False).status == TerminationStatus.CONTINUE
+              assert ledger.observe(b, made_progress=False).status == TerminationStatus.CONTINUE
+              decision = ledger.observe(a, made_progress=False)
+              assert decision.status == TerminationStatus.BLOCKED
+              assert decision.reason == TerminationReason.SEMANTIC_CYCLE
+
+
+          def test_real_progress_allows_revisit_of_prior_state() -> None:
+              ledger = SemanticTerminationLedger()
+              state = {"phase": "OBSERVE", "frontier": "same"}
+              ledger.observe(state, made_progress=False)
+              progressed = ledger.observe(state, made_progress=True)
+              assert progressed.status == TerminationStatus.CONTINUE
+              revisit = ledger.observe({"phase": "ACT", "frontier": "new"}, made_progress=False)
+              assert revisit.status == TerminationStatus.CONTINUE
+
+
+          def test_unknown_verifier_never_counts_as_success() -> None:
+              decision = decide_terminal_state(
+                  unresolved_criteria=(),
+                  verifier_status="UNKNOWN",
+                  admissible_actions=("verify",),
+              )
+              assert decision.status == TerminationStatus.CONTINUE
+
+
+          def test_acceptance_and_verifier_pass_are_required_for_success() -> None:
+              decision = decide_terminal_state(
+                  unresolved_criteria=(),
+                  verifier_status="PASS",
+                  evidence=("build receipt",),
+              )
+              assert decision.status == TerminationStatus.SUCCESS
+              assert decision.reason == TerminationReason.ACCEPTANCE_SATISFIED
+
+
+          def test_external_dependency_and_resource_guard_are_not_success() -> None:
+              blocked = decide_terminal_state(
+                  unresolved_criteria=("download dependency",),
+                  blockers=("registry unavailable",),
+                  admissible_actions=(),
+              )
+              assert blocked.status == TerminationStatus.BLOCKED
+              assert blocked.reason == TerminationReason.EXTERNAL_DEPENDENCY
+
+              guarded = decide_terminal_state(
+                  unresolved_criteria=("verify build",),
+                  admissible_actions=("verify",),
+                  resource_guard="context budget exhausted",
+              )
+              assert guarded.status == TerminationStatus.INCONCLUSIVE
+              assert guarded.reason == TerminationReason.RESOURCE_GUARD
+
+
+          def test_production_loop_contains_no_numeric_semantic_round_or_streak_guard() -> None:
+              source = Path('minecraft_mod_ai/progress_aware_tool_loop.py').read_text(encoding='utf-8')
+              router = Path('minecraft_mod_ai/model_router.py').read_text(encoding='utf-8')
+              for token in (
+                  'no_progress_streak',
+                  'forced_rag_attempts',
+                  '_agent_tool_round_limit',
+                  'MMM_AGENT_TOOL_ROUNDS',
+                  'round_limit',
+              ):
+                  assert token not in source
+                  assert token not in router
+              assert 'SemanticTerminationLedger' in source
+              assert 'TerminationStatus.BLOCKED' in source
+          PYTEST
+
+          python -m compileall -q minecraft_mod_ai
+          pytest -q tests/test_agent_tool_round_liveness.py
+
+          echo '=== remaining semantic retry/counter candidates ==='
+          if git grep -n -E 'no_progress_streak|forced_rag_attempts|_agent_tool_round_limit|MMM_AGENT_TOOL_ROUNDS|MMM_AGENT_DEFAULT_TOOL_ROUNDS' -- minecraft_mod_ai tests; then
+            echo 'legacy semantic counter contract remains' >&2
+            exit 1
+          fi
+
+      - name: Commit verified migration and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/semantic-termination-migration.yml
+          git config user.name 'OpenAI semantic termination migration'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo 'No migration changes to commit.'
+            exit 0
+          fi
+          git commit -m 'Replace agent retry caps with semantic termination'
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
