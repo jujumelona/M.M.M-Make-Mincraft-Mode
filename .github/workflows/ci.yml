@@ -173,6 +173,8 @@ jobs:
           tests/test_planning_detail_applicability.py
           tests/test_planning_detail_grounding.py
           tests/test_planning_handoff_contract.py
+          tests/test_planning_semantic_research.py
+          tests/test_planning_semantic_research_runtime_contract.py
 
   coder-contract:
     runs-on: ubuntu-latest
@@ -274,6 +276,8 @@ jobs:
               "test_planning_detail_applicability.py",
               "test_planning_detail_grounding.py",
               "test_planning_handoff_contract.py",
+              "test_planning_semantic_research.py",
+              "test_planning_semantic_research_runtime_contract.py",
               "test_evidence_execution_contract.py",
               "test_coder_execution_contract.py",
               "test_task_local_small_model_architecture.py",
