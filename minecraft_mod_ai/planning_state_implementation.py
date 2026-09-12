@@ -12,13 +12,18 @@ reasoning-label parsing.
 """
 
 import json
+import time
 from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextvars import copy_context
 from copy import deepcopy
 from typing import Any
 
-from .model_concurrency import router_native_model_parallelism
+from .model_concurrency import (
+    planning_work_unit_timeout_seconds,
+    router_native_model_parallelism,
+    run_with_model_execution_deadline,
+)
 from .planner_operation import planner_operation
 from .planning_detail_contract import validate_detailed_plan_grounding
 from .planning_detail_template import (
@@ -623,9 +628,12 @@ def _compile_requirement_plans_dag(
 
     max_workers = max(1, workers)
     future_to_node: dict[Future[dict[str, Any]], tuple[int, str]] = {}
-    with ThreadPoolExecutor(
-        max_workers=max_workers, thread_name_prefix="planning-detail"
-    ) as pool:
+    future_deadlines: dict[Future[dict[str, Any]], float] = {}
+    pool = ThreadPoolExecutor(
+        max_workers=max_workers,
+        thread_name_prefix="planning-detail",
+    )
+    try:
         while any(job["pending"] for job in jobs) or future_to_node:
             for job_index, section in ready_nodes():
                 if len(future_to_node) >= max_workers:
@@ -638,8 +646,12 @@ def _compile_requirement_plans_dag(
                     dependency: deepcopy(job["completed"][dependency])
                     for dependency in dependencies
                 }
+                deadline = time.monotonic() + planning_work_unit_timeout_seconds()
+                context_copy = copy_context()
                 future = pool.submit(
-                    copy_context().run,
+                    context_copy.run,
+                    run_with_model_execution_deadline,
+                    deadline,
                     _compile_worksheet_section,
                     router,
                     requirement=job["requirement"],
@@ -651,6 +663,7 @@ def _compile_requirement_plans_dag(
                 )
                 job["submitted"].add(section)
                 future_to_node[future] = (job_index, section)
+                future_deadlines[future] = deadline
 
             if not future_to_node:
                 pending = {
@@ -665,7 +678,27 @@ def _compile_requirement_plans_dag(
                     + repr(pending)
                 )
 
-            done, _ = wait(tuple(future_to_node), return_when=FIRST_COMPLETED)
+            nearest_deadline = min(future_deadlines.values())
+            timeout = max(0.0, nearest_deadline - time.monotonic())
+            done, _ = wait(
+                tuple(future_to_node),
+                timeout=timeout,
+                return_when=FIRST_COMPLETED,
+            )
+            if not done:
+                now = time.monotonic()
+                expired = [
+                    future
+                    for future, deadline in future_deadlines.items()
+                    if now >= deadline
+                ]
+                if not expired:
+                    continue
+                nodes = [future_to_node[future] for future in expired]
+                for future in expired:
+                    future.cancel()
+                raise TimeoutError(f"DETAILED_PLAN_SECTION_TIMEOUT: {nodes}")
+
             completed_futures = sorted(
                 done,
                 key=lambda future: (
@@ -675,11 +708,16 @@ def _compile_requirement_plans_dag(
             )
             for future in completed_futures:
                 job_index, section = future_to_node.pop(future)
+                future_deadlines.pop(future, None)
                 job = jobs[job_index]
-                result = future.result()
+                result = future.result(timeout=0)
                 job["completed"][section] = result
                 job["pending"].remove(section)
                 job["submitted"].remove(section)
+    finally:
+        for future in future_to_node:
+            future.cancel()
+        pool.shutdown(wait=False, cancel_futures=True)
 
     compiled: list[dict[str, Any]] = []
     for job in jobs:
