@@ -10,20 +10,59 @@ from minecraft_mod_ai.task_template_catalog import load_template
 from minecraft_mod_ai.template_contract_validation import validate_catalog, validate_template_contract
 
 
-@pytest.mark.parametrize("values", [{}, {"visual_description": ""}, {"visual_description": None},
-                                    {"visual_description": "ice", "invented": "extra"}])
-def test_asset_renderer_rejects_missing_blank_null_and_extra_fields(values):
+def _renderer_contract_fixture():
+    return {
+        "id": "test/renderer_contract",
+        "inputs": {
+            "visual_description": {
+                "type": "string",
+                "minLength": 1,
+                "required": True,
+            }
+        },
+        "render": {
+            "language": "text",
+            "body": "{{ visual_description }}",
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {},
+        {"visual_description": ""},
+        {"visual_description": None},
+        {"visual_description": "ice", "invented": "extra"},
+    ],
+)
+def test_renderer_rejects_missing_blank_null_and_extra_declared_inputs(values):
     with pytest.raises(TemplateRenderError, match="RENDER_INPUT_CONTRACT"):
-        render_template(load_template("asset/item_sprite"), values)
+        render_template(_renderer_contract_fixture(), values)
 
 
 def test_spaced_placeholders_use_the_same_contract_as_renderer():
-    template = load_template("asset/item_sprite")
+    template = _renderer_contract_fixture()
     template["render"]["body"] = "{{ visual_description }}"
     assert render_template(template, {"visual_description": "ice"}) == "ice"
     template["inputs"]["unused"] = {"type": "string", "required": True}
     with pytest.raises(ValueError, match="TEMPLATE_PLACEHOLDERS"):
         render_template(template, {"visual_description": "ice", "unused": "extra"})
+
+
+def test_item_sprite_is_static_framing_not_a_semantic_prompt_slot():
+    template = load_template("asset/item_sprite")
+    assert "inputs" not in template
+    assert tuple(template["requires"]) == (
+        "resolved_resource_contract",
+        "resolved_generation_profile",
+        "visual_spec",
+    )
+    body = template["render"]["body"]
+    assert "{{" not in body
+    assert "visual_description" not in body
+    assert "model" not in body.casefold()
+    assert "lora" not in body.casefold()
 
 
 @pytest.mark.parametrize("mutation", ["missing_schema", "open_schema", "slot_default"])
