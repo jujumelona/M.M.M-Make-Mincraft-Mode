@@ -367,6 +367,18 @@ def _install_fast_start_profile(runtime_tuning: Any, autotune: Any) -> None:
         if _search_mode() != "fast":
             return current(config, request)
 
+        # Reuse an already-running managed server before touching model metadata or
+        # recomputing launch width.  The base owner validates the process/URL pair and
+        # returns it without any model-path or health-HTTP work.
+        managed_process = getattr(autotune, "_MANAGED_PROCESS", None)
+        managed_url = str(getattr(autotune, "_MANAGED_URL", "") or "")
+        if managed_process is not None and managed_url:
+            try:
+                if managed_process.poll() is None:
+                    return current(config, request)
+            except Exception:
+                pass
+
         # An operator-set value is authoritative.  Otherwise persist the auto-selected
         # width in-process so fingerprints, stale-runtime checks and the launch receipt all
         # observe the same selection on every subsequent request.
