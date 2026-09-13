@@ -244,3 +244,36 @@ def test_collection_uses_candidate_discovered_by_other_requirement(monkeypatch):
     assert len(calls) == 1
     assert result["research_queue"][0]["research_state"] == "COMPLETE"
     assert result["research_queue"][0]["candidate_trace"]["candidates"][0]["origin_domains"] == ["r_002"]
+
+
+def test_corrective_growth_rebinds_completed_requirement_without_model_rereview(monkeypatch):
+    from minecraft_mod_ai import planning_semantic_research as semantic
+
+    state = _state()
+    state["decisions"].append(requirement("req_002", "alien.combat"))
+    state["research_queue"].append({
+        **deepcopy(state["research_queue"][0]),
+        "research_id": "r_002",
+        "requirement_ref": "req_002",
+        "resolves": [],
+    })
+    review_calls = []
+    original = semantic.review_requirement_sources
+
+    def counted(router, req, pool, trace):
+        review_calls.append(req["requirement_id"])
+        return original(router, req, pool, trace)
+
+    monkeypatch.setattr(semantic, "review_requirement_sources", counted)
+    _run_collection(monkeypatch, state, [
+        {
+            "r_001": grounded("spacecraft upgrade", "modrinth:spacecraft"),
+            "r_002": grounded("alien signal", "modrinth:alien-partial"),
+        },
+        {
+            "r_002": grounded("alien combat mechanics", "modrinth:alien-full"),
+        },
+    ])
+
+    assert review_calls.count("req_001") == 1
+    assert review_calls.count("req_002") == 2

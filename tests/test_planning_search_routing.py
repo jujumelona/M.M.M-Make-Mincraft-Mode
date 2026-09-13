@@ -182,3 +182,58 @@ def test_adaptive_evidence_skill_uses_fixed_point_not_attempt_cap():
     assert "max_attempts: null" in skill
     assert "no fresh admissible" in skill
     assert "Merge every requirement's candidates" in skill
+
+
+def test_downstream_candidate_projection_uses_exact_accepted_body_identity():
+    import hashlib
+
+    from minecraft_mod_ai.planning_state_research import _project_candidate_evidence
+
+    own = _grounded([
+        ("modrinth:own-noise", "Furniture decoration chairs and tables."),
+        ("official_docs:api", "Dimension transfer API documentation."),
+    ])
+    pool = global_grounded_pool({
+        "r_001": own,
+        "r_002": _grounded([
+            ("modrinth:shared", "Spacecraft upgrade through a trading terminal."),
+            ("modrinth:shared", "Stale body with the same provider id."),
+            ("modrinth:unrelated", "Alien furniture decoration."),
+        ], query="space exploration"),
+    })
+    accepted_body = "Spacecraft upgrade through a trading terminal."
+    proof = {
+        "source_id": "modrinth:shared",
+        "content_sha256": "sha256:" + hashlib.sha256(accepted_body.encode("utf-8")).hexdigest(),
+    }
+
+    semantic = _project_candidate_evidence(
+        own, pool, [proof], preserve_existing_candidates=False
+    )
+    semantic_records = [
+        record
+        for query in semantic["queries"]
+        for record in query.get("evidence_records", [])
+    ]
+    assert {(row["source_id"], row["content"]) for row in semantic_records} == {
+        ("official_docs:api", "Dimension transfer API documentation."),
+        ("modrinth:shared", accepted_body),
+    }
+
+    discovery = _project_candidate_evidence(
+        own, pool, [proof], preserve_existing_candidates=True
+    )
+    discovery_records = [
+        record
+        for query in discovery["queries"]
+        for record in query.get("evidence_records", [])
+    ]
+    assert ("modrinth:own-noise", "Furniture decoration chairs and tables.") in {
+        (row["source_id"], row["content"]) for row in discovery_records
+    }
+    assert ("modrinth:unrelated", "Alien furniture decoration.") not in {
+        (row["source_id"], row["content"]) for row in discovery_records
+    }
+    assert ("modrinth:shared", "Stale body with the same provider id.") not in {
+        (row["source_id"], row["content"]) for row in discovery_records
+    }

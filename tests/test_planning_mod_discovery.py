@@ -42,13 +42,10 @@ def test_catalog_queries_preserve_task_context_and_do_not_send_api_instructions(
     research = state["research_queue"][0]
     prompt = "Farm resources, trade for money, build and upgrade a spaceship, then explore planets"
     queries = catalog_queries(state, research, prompt=prompt)
-    assert queries == [
-        "space travel",
-        "space",
-    ]
+    assert queries == ["space travel"]
     specs = _domain_specs({"providers": ["modrinth", "official_docs"],
                            "catalog_queries": queries, "queries": ["Minecraft API teleport"]})
-    assert ("space", ("modrinth",)) in specs
+    assert ("space travel", ("modrinth",)) in specs
     assert ("Minecraft API teleport", ("official_docs",)) in specs
     assert not any("API" in query and "modrinth" in providers for query, providers in specs)
 

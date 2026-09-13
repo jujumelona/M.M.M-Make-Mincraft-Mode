@@ -86,7 +86,17 @@ class _PagedRequirementRouter:
         **kwargs: object,
     ) -> dict[str, object]:
         self.calls.append({"role": role, "messages": messages, **kwargs})
-        return self._pages[len(self.calls) - 1]
+        if kwargs.get("tool_name") == "review_requirement_coverage":
+            return {
+                "complete": False,
+                "remaining_source_quote": "우주로 나갈수있고",
+                "remaining_behavior": "Launch the spacecraft and cover the remaining planetary behaviors.",
+            }
+        page_index = sum(
+            1 for call in self.calls
+            if call.get("tool_name") == "submit_researched_requirements"
+        ) - 1
+        return self._pages[page_index]
 
 
 class _RepeatedFrontierRouter:
@@ -121,7 +131,27 @@ class _RepeatedFrontierRouter:
         **kwargs: object,
     ) -> dict[str, object]:
         self.calls.append({"role": role, "messages": messages, **kwargs})
-        return self._pages[len(self.calls) - 1]
+        if kwargs.get("tool_name") == "review_requirement_coverage":
+            page_count = sum(
+                1 for call in self.calls
+                if call.get("tool_name") == "submit_researched_requirements"
+            )
+            if page_count >= 3:
+                return {
+                    "complete": True,
+                    "remaining_source_quote": "",
+                    "remaining_behavior": "",
+                }
+            return {
+                "complete": False,
+                "remaining_source_quote": "우주모드",
+                "remaining_behavior": "Additional explicitly authored behavior remains.",
+            }
+        page_index = sum(
+            1 for call in self.calls
+            if call.get("tool_name") == "submit_researched_requirements"
+        ) - 1
+        return self._pages[page_index]
 
 
 def _requirement_messages() -> list[dict[str, str]]:
@@ -153,7 +183,7 @@ def test_full_requirement_page_never_closes_semantic_frontier() -> None:
     router = _PagedRequirementRouter()
     result = _generate_requirement_pages(router, _requirement_messages(), 100_000)
 
-    assert len(router.calls) == 2
+    assert len(router.calls) == 3
     assert len(result["requirements"]) == 7
     statements = " ".join(row["statement"] for row in result["requirements"])
     assert "spacecraft" in statements
@@ -161,17 +191,17 @@ def test_full_requirement_page_never_closes_semantic_frontier() -> None:
     assert "aliens" in statements
     assert "colonies" in statements
 
-    second_messages = router.calls[1]["messages"]
+    second_messages = router.calls[2]["messages"]
     assert isinstance(second_messages, list)
     second_payload = json.loads(second_messages[1]["content"])
     assert len(second_payload["already_compiled_requirements"]) == 4
 
 
-def test_repeated_continuation_page_closes_frontier_without_committing_partial_page() -> None:
+def test_explicit_coverage_review_closes_frontier_without_requesting_partial_page() -> None:
     router = _RepeatedFrontierRouter()
     result = _generate_requirement_pages(router, _requirement_messages(), 100_000)
 
-    assert len(router.calls) == 4
+    assert len(router.calls) == 6
     assert len(result["requirements"]) == 12
     statements = [row["statement"] for row in result["requirements"]]
     assert "Paraphrased economy requirement" not in statements

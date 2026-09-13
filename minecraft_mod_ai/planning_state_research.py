@@ -28,6 +28,7 @@ from .planning_candidate_evidence import (
     query_context,
     requirement_candidate_trace,
     requirement_for,
+    semantic_frontier_pool,
 )
 from .planning_mod_discovery import catalog_queries, discovery_receipt
 from .planning_state_contract import validate_planning_state
@@ -384,6 +385,112 @@ def _blocked_note(domain_id: str, reason: str) -> dict[str, Any]:
     }
 
 
+def _candidate_record_identity(record: Mapping[str, Any]) -> tuple[str, str]:
+    source_id = _text(record.get("source_id"))
+    content = str(record.get("content") or "")
+    return source_id, "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _semantic_frontier_fingerprint(
+    requirement: Mapping[str, Any],
+    pool: Mapping[str, Any],
+    trace: Mapping[str, Any],
+) -> str:
+    """Fingerprint only the requirement-local semantic work frontier, not the task cache."""
+    frontier = semantic_frontier_pool(requirement, pool, trace)
+    identities = sorted(
+        _candidate_record_identity(record)
+        for query in frontier.get("queries", [])
+        for record in query.get("evidence_records", [])
+        if isinstance(record, Mapping)
+    )
+    return fingerprint(identities)
+
+
+def _rebind_semantic_review(
+    requirement: Mapping[str, Any],
+    previous_pool: Mapping[str, Any],
+    next_pool: Mapping[str, Any],
+    review: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Rebind already-observed exact source bodies when only the task cache grew."""
+    from .planning_semantic_research import validate_semantic_review
+
+    validated = validate_semantic_review(requirement, previous_pool, review)
+    return validate_semantic_review(
+        requirement,
+        next_pool,
+        {**validated, "pool_sha256": fingerprint(next_pool)},
+    )
+
+
+def _project_candidate_evidence(
+    grounded: Mapping[str, Any],
+    pool: Mapping[str, Any],
+    accepted_proofs: Sequence[Mapping[str, Any]],
+    *,
+    preserve_existing_candidates: bool,
+) -> dict[str, Any]:
+    """Project exact accepted candidate bodies without reinjecting the task-wide cache.
+
+    Non-catalog/API evidence always stays on the requirement's original provider route.
+    Catalog/repository bodies are keyed by ``(source_id, content_sha256)``. For semantic
+    materialization only accepted identities survive; discovery may additionally retain
+    candidates returned by this requirement's own search. Accepted bodies discovered by a
+    sibling requirement are copied in exactly once so cross-requirement reuse remains valid.
+    """
+    admitted = {
+        (_text(proof.get("source_id")), _text(proof.get("content_sha256")))
+        for proof in accepted_proofs
+        if _text(proof.get("source_id")) and _text(proof.get("content_sha256"))
+    }
+    projected = deepcopy(dict(grounded))
+    projected_queries = projected.get("queries")
+    if not isinstance(projected_queries, list):
+        projected_queries = []
+        projected["queries"] = projected_queries
+
+    present: set[tuple[str, str]] = set()
+    for query in projected_queries:
+        if not isinstance(query, dict):
+            continue
+        records = query.get("evidence_records")
+        kept: list[dict[str, Any]] = []
+        for raw in records if isinstance(records, list) else []:
+            if not isinstance(raw, Mapping):
+                continue
+            record = dict(raw)
+            identity = _candidate_record_identity(record)
+            candidate_provider = identity[0].split(":", 1)[0] in {
+                "modrinth", "curseforge", "github"
+            }
+            if not candidate_provider or preserve_existing_candidates or identity in admitted:
+                kept.append(record)
+            if identity in admitted:
+                present.add(identity)
+        query["evidence_records"] = kept
+
+    missing = admitted - present
+    if missing:
+        for raw_query in pool.get("queries", []):
+            if not isinstance(raw_query, Mapping):
+                continue
+            records = [
+                deepcopy(dict(record))
+                for record in raw_query.get("evidence_records", [])
+                if isinstance(record, Mapping)
+                and _candidate_record_identity(record) in missing
+            ]
+            if not records:
+                continue
+            projected_queries.append({**deepcopy(dict(raw_query)), "evidence_records": records})
+            present.update(_candidate_record_identity(record) for record in records)
+            missing = admitted - present
+            if not missing:
+                break
+    return projected
+
+
 def collect_planning_state_research(
     router: Any,
     prompt: str,
@@ -469,17 +576,19 @@ def collect_planning_state_research(
             review = review_requirement_sources(router, domain["requirement"], pool, trace)
             semantic_traces[domain["domain_id"]] = {**trace, "semantic_review": review,
                                                   "coverage_complete": review["complete"]}
-    # A corrective pass must change the actual provider search space. No retry count,
-    # reworded error, or model assertion can revive an identical exhausted query set.
+    # A corrective pass must change this requirement's provider search space. Sibling
+    # queries neither suppress nor authorize its expansion. No retry count, reworded error,
+    # or model assertion can revive an identical exhausted query set.
     corrective_domains = []
     for domain in minecraft_domains:
         if "catalog_queries" not in domain:
             continue
         if semantic_traces[domain["domain_id"]]["coverage_complete"]:
             continue
-        executed = {project_rag._query_terms(q).casefold()
-                    for searched_domain in minecraft_domains
-                    for q in searched_domain.get("catalog_queries", [])}
+        executed = {
+            project_rag._query_terms(q).casefold()
+            for q in domain.get("catalog_queries", [])
+        }
         fresh = [q for q in expansion_queries(domain["task_query_context"])
                  if project_rag._query_terms(q).casefold() not in executed]
         if fresh:
@@ -490,9 +599,12 @@ def collect_planning_state_research(
                 reason="material_search_space_expansion",
                 details={"research_ref": domain["domain_id"], "new_queries": fresh,
                          "previous_queries_sha256": fingerprint(sorted(executed)),
-                         "next_queries_sha256": fingerprint(sorted(executed | {q.casefold() for q in fresh}))},
+                         "next_queries_sha256": fingerprint(sorted(executed | {
+                             project_rag._query_terms(q).casefold() for q in fresh
+                         }))},
             )
     if corrective_domains:
+        previous_pool = pool
         corrective_bundle = forced_rag_bundle(project_rag, router, {**brief, "domains": corrective_domains})
         for domain in corrective_domains:
             domain_id = str(domain["domain_id"])
@@ -500,11 +612,44 @@ def collect_planning_state_research(
             grounded_by_domain[domain_id]["queries"].extend(correction.get("queries", []))
         pool = global_grounded_pool({"prior": prior_pool, **grounded_by_domain})
         for domain in minecraft_domains:
-            if "catalog_queries" in domain:
-                trace = requirement_candidate_trace(domain["requirement"], pool)
-                review = review_requirement_sources(router, domain["requirement"], pool, trace)
-                semantic_traces[domain["domain_id"]] = {**trace, "semantic_review": review,
-                                                      "coverage_complete": review["complete"]}
+            if "catalog_queries" not in domain:
+                continue
+            domain_id = str(domain["domain_id"])
+            requirement = domain["requirement"]
+            previous_trace = semantic_traces[domain_id]
+            next_trace = requirement_candidate_trace(requirement, pool)
+            previous_review = previous_trace["semantic_review"]
+            if previous_trace["coverage_complete"]:
+                # Completed requirements never re-enter model inference merely because a
+                # sibling expanded the shared retrieval cache. Exact source bodies are
+                # revalidated and rebound to the new cache fingerprint instead.
+                review = _rebind_semantic_review(
+                    requirement, previous_pool, pool, previous_review
+                )
+                if not review["complete"]:
+                    raise ValueError(
+                        "RESEARCH_REBIND_STALE: completed semantic proof changed during corrective retrieval"
+                    )
+            else:
+                previous_frontier = _semantic_frontier_fingerprint(
+                    requirement, previous_pool, previous_trace
+                )
+                next_frontier = _semantic_frontier_fingerprint(
+                    requirement, pool, next_trace
+                )
+                if next_frontier == previous_frontier:
+                    # The eligible semantic work frontier is unchanged. Rebind existing
+                    # observations without another model pass and stop at this fixed point.
+                    review = _rebind_semantic_review(
+                        requirement, previous_pool, pool, previous_review
+                    )
+                else:
+                    review = review_requirement_sources(router, requirement, pool, next_trace)
+            semantic_traces[domain_id] = {
+                **next_trace,
+                "semantic_review": review,
+                "coverage_complete": review["complete"],
+            }
     from .planning_semantic_research import validate_semantic_review
     retained_traces = []
     for research in value.get("research_queue", []):
@@ -543,31 +688,32 @@ def collect_planning_state_research(
             grounded = deepcopy(grounded_by_domain[domain_id])
             repository_candidates = project_repository_candidates(domain, grounded)
             if "catalog_queries" in domain:
-                # Reassess sibling candidates against this requirement before deciding
-                # completion. Preserve the domain's own API/document provider route.
-                own_source_ids = {(str(record.get("source_id") or ""), str(record.get("content") or ""))
-                                  for query in grounded.get("queries", [])
-                                  for record in query.get("evidence_records", [])}
-                for query in pool["queries"]:
-                    records = [record for record in query["evidence_records"]
-                               if (str(record.get("source_id") or ""), str(record.get("content") or "")) not in own_source_ids]
-                    if records:
-                        grounded["queries"].append({**query, "evidence_records": records})
-                        own_source_ids.update((str(record.get("source_id") or ""), str(record.get("content") or ""))
-                                              for record in records)
-            if "catalog_queries" in domain:
-                discovery = discovery_receipt(domain_id, grounded)
+                candidate_trace = semantic_traces[domain_id]
+                review = candidate_trace["semantic_review"]
+                accepted_proofs = review["accepted_proofs"]
+                # Discovery keeps this requirement's own catalog hits and adds only exact
+                # accepted bodies borrowed from the task cache. It never receives every
+                # sibling candidate.
+                discovery_grounded = _project_candidate_evidence(
+                    grounded,
+                    pool,
+                    accepted_proofs,
+                    preserve_existing_candidates=True,
+                )
+                discovery = discovery_receipt(domain_id, discovery_grounded)
+                # Raw candidate bodies supplied to downstream research are stricter: only
+                # exact semantically accepted identities survive, while API/docs records
+                # stay on the requirement's original provider route.
+                grounded = _project_candidate_evidence(
+                    grounded,
+                    pool,
+                    accepted_proofs,
+                    preserve_existing_candidates=False,
+                )
                 # Raw bodies live once in task_candidate_pool, not in four discovery
                 # receipts and again in each mandatory planner prompt.
                 for candidate in discovery["candidates"]:
                     candidate.pop("description", None)
-                candidate_trace = semantic_traces[domain_id]
-                review = candidate_trace["semantic_review"]
-                admitted = {proof["source_id"] for proof in review["accepted_proofs"]}
-                for query in grounded["queries"]:
-                    query["evidence_records"] = [record for record in query.get("evidence_records", [])
-                        if str(record.get("source_id") or "").split(":", 1)[0]
-                        not in {"modrinth", "curseforge", "github"} or record.get("source_id") in admitted]
         provider_diagnostics = _provider_diagnostics(grounded)
         document = project_rag._materialize_domain_evidence_document(
             domain_id,
