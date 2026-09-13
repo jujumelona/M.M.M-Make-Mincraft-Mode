@@ -7,6 +7,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCAN_ROOTS = (ROOT / "minecraft_mod_ai",)
+CANONICAL_EXECUTOR_OWNERS = {
+    Path("minecraft_mod_ai/deadline_executor.py"),
+}
+EXECUTOR_TYPES = {"ThreadPoolExecutor", "ProcessPoolExecutor"}
 
 PATTERNS = {
     "executor": re.compile(r"\b(?:ThreadPoolExecutor|ProcessPoolExecutor)\b"),
@@ -26,6 +30,57 @@ PATTERNS = {
 
 def source_files() -> list[Path]:
     return sorted(path for root in SCAN_ROOTS for path in root.rglob("*.py"))
+
+
+def _qualified_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _qualified_name(node.value)
+        return f"{prefix}.{node.attr}" if prefix else node.attr
+    return ""
+
+
+def executor_ownership_violations(path: Path, tree: ast.AST) -> list[tuple[int, str]]:
+    """Return direct executor ownership outside the single scheduler module.
+
+    The canonical scheduler is the only module allowed to construct concurrent-futures
+    pools. Planning, research, repair, and asset callers must use its bounded API so
+    deadlines, cancellation, and shutdown cannot diverge between call paths.
+    """
+
+    relative = path.relative_to(ROOT)
+    if relative in CANONICAL_EXECUTOR_OWNERS:
+        return []
+
+    findings: set[tuple[int, str]] = set()
+    imported_aliases: set[str] = set()
+    module_aliases: set[str] = set()
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "concurrent.futures":
+            for alias in node.names:
+                if alias.name in EXECUTOR_TYPES:
+                    local_name = alias.asname or alias.name
+                    imported_aliases.add(local_name)
+                    findings.add((node.lineno, f"imports {alias.name} as {local_name}"))
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "concurrent.futures":
+                    module_aliases.add(alias.asname or "concurrent.futures")
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = _qualified_name(node.func)
+        tail = name.rsplit(".", 1)[-1]
+        if name in imported_aliases or tail in EXECUTOR_TYPES:
+            findings.add((node.lineno, f"constructs {name or tail}"))
+            continue
+        if any(name.startswith(f"{alias}.") and tail in EXECUTOR_TYPES for alias in module_aliases):
+            findings.add((node.lineno, f"constructs {name}"))
+
+    return sorted(findings)
 
 
 def main() -> int:
@@ -49,15 +104,26 @@ def main() -> int:
 
     print("=== syntax ===")
     bad = 0
+    executor_violations = 0
     for path in files:
         try:
-            ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         except (OSError, SyntaxError, UnicodeError) as exc:
             bad += 1
             lineno = int(getattr(exc, "lineno", 0) or 0)
             print(f"SYNTAX_ERROR {path.relative_to(ROOT)}:{lineno}:{exc}")
+            continue
+        for lineno, detail in executor_ownership_violations(path, tree):
+            executor_violations += 1
+            print(
+                "DIRECT_EXECUTOR_OWNERSHIP "
+                f"{path.relative_to(ROOT)}:{lineno}:{detail}; "
+                "use minecraft_mod_ai.deadline_executor"
+            )
+
     print(f"SYNTAX_ERRORS={bad}")
-    return 1 if bad else 0
+    print(f"DIRECT_EXECUTOR_OWNERSHIP_ERRORS={executor_violations}")
+    return 1 if bad or executor_violations else 0
 
 
 if __name__ == "__main__":
