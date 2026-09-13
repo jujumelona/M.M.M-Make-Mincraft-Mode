@@ -87,23 +87,26 @@ def global_grounded_pool(grounded_domains: Mapping[str, Mapping[str, Any]]) -> d
 def requirement_candidate_trace(
     requirement: Mapping[str, Any], pool: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Evaluate every cached candidate against this requirement's own authored facets.
+    """Evaluate every cached source body against this requirement's authored facets.
 
-    No sibling intent or generic research instructions enter the relevance vocabulary.
-    Missing vocabulary is unresolved, rather than evidence that a candidate is irrelevant.
-    The trace retains unresolved candidates for audit/recall; semantic admission is decided
-    separately from whether the whole capability phrase is already lexically coherent.
+    Candidate identity is ``(source_id, content_sha256)``. A provider may return the same
+    source ID with changed content across retrievals; those bodies must never donate lexical
+    facets to each other. Missing vocabulary is unresolved, rather than evidence that a
+    candidate is irrelevant. Semantic admission remains separate from lexical coherence.
     """
     capability = str(requirement.get("semantic_capability") or "")
     facets = [[word] for word in terms(capability)]
     if not facets:
         facets = [[word] for word in terms(requirement.get("statement"))]
-    candidates: dict[str, dict[str, Any]] = {}
+    candidates: dict[tuple[str, str], dict[str, Any]] = {}
     for query in pool.get("queries", []):
         for record in query.get("evidence_records", []):
             source_id = str(record.get("source_id") or "")
-            candidate = candidates.setdefault(source_id, {
-                "source_id": source_id, "requirement_ref": requirement.get("requirement_id"),
+            content = str(record.get("content") or "")
+            body_sha = "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+            candidate = candidates.setdefault((source_id, body_sha), {
+                "source_id": source_id, "content_sha256": body_sha,
+                "requirement_ref": requirement.get("requirement_id"),
                 "requirement_sha256": fingerprint(requirement), "origin_domains": [],
                 "query_sha256": [], "evidence": [], "matched_facets": [],
                 "source_reuse_authority": "verification_required",
@@ -115,8 +118,6 @@ def requirement_candidate_trace(
                 query_sha = fingerprint(query_text)
                 if query_sha not in candidate["query_sha256"]:
                     candidate["query_sha256"].append(query_sha)
-            content = str(record.get("content") or "")
-            body_sha = "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
             offset = 0
             # Preserve exact source chunks and hashes, including evidence beyond previews.
             for chunk in re.split(r"(?:\r?\n){2,}|(?<=[.!?])\s+", content):
@@ -133,7 +134,7 @@ def requirement_candidate_trace(
                 candidate["matched_facets"] = sorted(set(candidate["matched_facets"]) | set(matched))
     covered: set[int] = set()
     for candidate in candidates.values():
-        # Tokens spread over unrelated candidates cannot form a supported requirement.
+        # Facets spread over different candidates or body versions cannot form support.
         coherent = bool(facets) and len(candidate["matched_facets"]) == len(facets)
         if coherent:
             covered.update(candidate["matched_facets"])
@@ -159,6 +160,13 @@ def _origin_matches_requirement(origin_domain_id: Any, requirement_ref: Any) -> 
     return False
 
 
+def _record_identity(record: Mapping[str, Any]) -> tuple[str, str]:
+    source_id = str(record.get("source_id") or "")
+    content = str(record.get("content") or "")
+    body_sha = "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+    return source_id, body_sha
+
+
 def semantic_frontier_pool(
     requirement: Mapping[str, Any],
     pool: Mapping[str, Any],
@@ -166,17 +174,16 @@ def semantic_frontier_pool(
 ) -> dict[str, Any]:
     """Project the task cache into the finite evidence frontier for one requirement.
 
-    A candidate returned by this requirement's own retrieval route enters the semantic
+    A source body returned by this requirement's own retrieval route enters the semantic
     verifier when it carries at least one authored facet: retrieval already supplied the
-    requirement-local provenance, while the model still decides entailment. A candidate
-    borrowed from the task cache must contain every authored capability facet before it may
-    cross requirements. Zero-facet records never become semantic jobs. This preserves recall
-    for direct search, prevents sibling-cache brute-force scans, and uses no numeric top-k or
-    attempt cap.
+    requirement-local provenance, while the model still decides entailment. A body borrowed
+    from the task cache must contain every authored capability facet before it may cross
+    requirements. Admission is body-specific, so a matching version of a source cannot pull
+    a stale or unrelated version with the same source ID into semantic review.
     """
     candidate_trace = trace or requirement_candidate_trace(requirement, pool)
     requirement_ref = requirement.get("requirement_id")
-    admitted = set()
+    admitted: set[tuple[str, str]] = set()
     for row in candidate_trace.get("candidates", []):
         if not row.get("matched_facets"):
             continue
@@ -185,13 +192,16 @@ def semantic_frontier_pool(
             for origin in row.get("origin_domains", [])
         )
         if direct or row.get("status") == "lexical_evidence":
-            admitted.add(str(row.get("source_id") or ""))
+            source_id = str(row.get("source_id") or "")
+            body_sha = str(row.get("content_sha256") or "")
+            if source_id and body_sha:
+                admitted.add((source_id, body_sha))
     queries = []
     for raw in pool.get("queries", []):
         records = [
             dict(record)
             for record in raw.get("evidence_records", [])
-            if str(record.get("source_id") or "") in admitted
+            if _record_identity(record) in admitted
         ]
         if not records:
             continue
