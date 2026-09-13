@@ -91,8 +91,8 @@ def requirement_candidate_trace(
 
     No sibling intent or generic research instructions enter the relevance vocabulary.
     Missing vocabulary is unresolved, rather than evidence that a candidate is irrelevant.
-    The trace may retain unresolved candidates for audit/recall, but only coherent candidates
-    enter semantic review.
+    The trace retains unresolved candidates for audit/recall; semantic admission is decided
+    separately from whether the whole capability phrase is already lexically coherent.
     """
     capability = str(requirement.get("semantic_capability") or "")
     facets = [[word] for word in terms(capability)]
@@ -146,6 +146,19 @@ def requirement_candidate_trace(
             "semantic_implementation_proof": False, "pool_sha256": fingerprint(pool)}
 
 
+def _origin_matches_requirement(origin_domain_id: Any, requirement_ref: Any) -> bool:
+    """Match the host-owned research-id convention without borrowing sibling intent."""
+    origin = str(origin_domain_id or "").strip()
+    requirement = str(requirement_ref or "").strip()
+    if not origin or not requirement:
+        return False
+    if origin == requirement:
+        return True
+    if origin.startswith("r_") and requirement.startswith("req_"):
+        return origin[2:] == requirement[4:]
+    return False
+
+
 def semantic_frontier_pool(
     requirement: Mapping[str, Any],
     pool: Mapping[str, Any],
@@ -153,18 +166,26 @@ def semantic_frontier_pool(
 ) -> dict[str, Any]:
     """Project the task cache into the finite evidence frontier for one requirement.
 
-    Admission is host-owned and deterministic: a source must contain all authored capability
-    facets in one candidate body before the expensive semantic verifier may inspect it.
-    Unresolved candidates remain in the task cache and trace, so corrective retrieval can
-    discover better evidence without converting the LLM verifier into a search engine.
-    There is deliberately no numeric top-k or attempt cap here.
+    A candidate returned by this requirement's own retrieval route enters the semantic
+    verifier when it carries at least one authored facet: retrieval already supplied the
+    requirement-local provenance, while the model still decides entailment. A candidate
+    borrowed from the task cache must contain every authored capability facet before it may
+    cross requirements. Zero-facet records never become semantic jobs. This preserves recall
+    for direct search, prevents sibling-cache brute-force scans, and uses no numeric top-k or
+    attempt cap.
     """
     candidate_trace = trace or requirement_candidate_trace(requirement, pool)
-    admitted = {
-        str(row.get("source_id") or "")
-        for row in candidate_trace.get("candidates", [])
-        if row.get("status") == "lexical_evidence"
-    }
+    requirement_ref = requirement.get("requirement_id")
+    admitted = set()
+    for row in candidate_trace.get("candidates", []):
+        if not row.get("matched_facets"):
+            continue
+        direct = any(
+            _origin_matches_requirement(origin, requirement_ref)
+            for origin in row.get("origin_domains", [])
+        )
+        if direct or row.get("status") == "lexical_evidence":
+            admitted.add(str(row.get("source_id") or ""))
     queries = []
     for raw in pool.get("queries", []):
         records = [
@@ -177,7 +198,7 @@ def semantic_frontier_pool(
         queries.append({**dict(raw), "evidence_records": records})
     return {
         "schema_version": "mmm/requirement-semantic-frontier-v1",
-        "requirement_ref": requirement.get("requirement_id"),
+        "requirement_ref": requirement_ref,
         "requirement_sha256": fingerprint(requirement),
         "task_pool_sha256": fingerprint(pool),
         "queries": queries,
