@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from minecraft_mod_ai import evidence_first_planning as planning
+from minecraft_mod_ai import structural_minecraft_runtime_contract as structural
 from minecraft_mod_ai import java_lsp_trace
 from minecraft_mod_ai.agent_tool_runtime import AgentToolRuntime
 from minecraft_mod_ai.generation_verifier_resilience import host_jdt_idle_timeout_seconds
@@ -265,25 +266,6 @@ def test_space_progression_semantics_dependencies_and_obligations_are_complete()
 
     branches = planning._branch_predicates(catalog["requirements"], (), {"project_topology": {}})
     assert branches["needs_mixin"]["status"] == "NOT_APPLICABLE"
-    steps = planning._semantic_steps("spacecraft.performance_upgrade", branches)
-    assert [step.name for step in steps] == [
-        "semantic_contract",
-        "upgrade_stat_schema",
-        "upgrade_transaction_service",
-        "state_codec",
-        "persistence_binding",
-        "payload_contract",
-        "server_handler_sync",
-        "data_resource_binding",
-        "client_contract",
-        "client_surface",
-        "failure_contract",
-        "runtime_scenario",
-    ]
-    assert not any("build_config" in step.anchor_kinds for step in steps)
-    assert "behavior_equivalence" not in planning._required_gates(
-        "spacecraft.performance_upgrade", branches
-    )
     ownership = {
         "module_id": ":",
         "source_set": "main",
@@ -296,15 +278,6 @@ def test_space_progression_semantics_dependencies_and_obligations_are_complete()
         "topology_module_ids": [],
         "topology_source_sets": [],
     }
-    anchor_probe = planning._anchors(
-        "spacecraft.performance_upgrade", steps[-1], "task_probe", ownership
-    )
-    assert {
-        anchor["source_set"]
-        for anchor in anchor_probe
-        if anchor["kind"] == "test"
-    } == {"test"}
-
     gap = {
         "gap_id": "gap_ship_performance",
         "requirement_ref": performance["requirement_id"],
@@ -317,6 +290,30 @@ def test_space_progression_semantics_dependencies_and_obligations_are_complete()
         "semantic_type": performance["semantic_type"],
         "unlock_policy": performance["unlock_policy"],
     }
+
+    steps = structural.structural_steps_for_requirement(gap)
+    assert [step.name for step in steps[:6]] == [
+        "trigger",
+        "input",
+        "state",
+        "transition",
+        "output",
+        "failure",
+    ]
+    assert steps[-2].name == "integration"
+    assert steps[-1].name == "runtime_scenario"
+    assert steps[-1].template_id == "validation/runtime_test"
+    assert not any("build_config" in step.anchor_kinds for step in steps)
+
+    anchor_probe = planning._anchors(
+        "spacecraft.performance_upgrade", steps[-1], "task_probe", ownership
+    )
+    assert {
+        anchor["source_set"]
+        for anchor in anchor_probe
+        if anchor["kind"] == "test"
+    } == {"test"}
+
     tasks = planning._compile_tasks(
         (gap,),
         (
@@ -331,15 +328,22 @@ def test_space_progression_semantics_dependencies_and_obligations_are_complete()
         ownership,
     )
     final_task = tasks[-1]
-    assert "runtime_gameplay_validation" in final_task["required_gates"]
-    assert "public_acceptance_observed" in final_task["done_predicate"]["checks"]
-    assert final_task["runtime_acceptance"]
-    assert {item["kind"] for item in final_task["artifact_obligations"]} >= {
-        "item_model",
-        "recipe",
-        "tag",
-        "lang",
+    assert final_task["template_id"] == "structural_artifact_pipeline"
+    assert final_task["template_catalog_schema"] == "mmm/structural-minecraft-tasks"
+    assert final_task["required_gates"] == ["source_static_validation", "target_compile", "runtime_gameplay_validation"]
+    assert final_task["done_predicate"] == {
+        "operator": "all",
+        "checks": [
+            "owned_anchor_hashes_recorded",
+            "declared_provides_observed",
+            "required_gates_passed",
+            "public_acceptance_observed",
+            "runtime_scenario_receipt_recorded",
+            "persistence_network_ui_state_observed_where_applicable",
+        ],
     }
+    assert any(anchor["source_set"] == "test" for anchor in final_task["owned_anchors"])
+    assert "spacecraft.performance_upgrade" in final_task["semantic_outcome"]
 
     dimensions, _reasons = _infer_dimensions(
         requested_prompt="우주선 성능을 거래 구매로 업그레이드한다",
@@ -350,7 +354,6 @@ def test_space_progression_semantics_dependencies_and_obligations_are_complete()
     )
     assert "performance" not in dimensions
     assert "state_save_migration" not in dimensions
-
 
 def _module():
     java_path = "src/main/java/generated/mod/ShipPerformance.java"

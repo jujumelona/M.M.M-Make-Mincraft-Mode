@@ -13,9 +13,17 @@ from minecraft_mod_ai.java_lsp import JDTLanguageServerError, JavaLanguageServic
 class _FakeJsonRpcProcess:
     instances: list[_FakeJsonRpcProcess] = []
 
-    def __init__(self, command: list[str], cwd: Path) -> None:
+    def __init__(
+        self,
+        command: list[str],
+        cwd: Path,
+        configuration: dict[str, Any] | None = None,
+        environment: dict[str, str] | None = None,
+    ) -> None:
         self.command = command
         self.cwd = cwd
+        self.configuration = configuration
+        self.environment = environment
         self.messages: queue.Queue[dict[str, Any]] = queue.Queue()
         self.stderr = ["stable fake stderr"]
         self.request_timeouts: list[float] = []
@@ -35,6 +43,17 @@ class _FakeJsonRpcProcess:
         self.request_methods.append(method)
         if method == "initialize":
             return {}
+        if method == "textDocument/hover":
+            uri = str(params.get("textDocument", {}).get("uri", ""))
+            if Path(uri).stem == "__MmmJdtReadinessProbe":
+                line = int(params.get("position", {}).get("line", 0))
+                symbol = "Object" if line == 1 else "String"
+                return {
+                    "contents": {
+                        "kind": "plaintext",
+                        "value": f"java.lang.{symbol}",
+                    }
+                }
         if method == "workspace/symbol":
             return {"query": params.get("query", "")}
         raise AssertionError(f"unexpected fake JDT request: {method}")
@@ -42,8 +61,17 @@ class _FakeJsonRpcProcess:
     def notify(self, method: str, params: dict[str, Any]) -> None:
         if method == "textDocument/didOpen":
             uri = str(params["textDocument"]["uri"])
+            stem = Path(uri).stem
+            if stem == "__MmmJdtReadinessProbe":
+                self.messages.put(
+                    {
+                        "method": "textDocument/publishDiagnostics",
+                        "params": {"uri": uri, "diagnostics": []},
+                    }
+                )
+                return
             self.opened_uris.append(uri)
-            number = int(Path(uri).stem.removeprefix("Generated"))
+            number = int(stem.removeprefix("Generated"))
             severity = 1 if number % 2 == 0 else 2
             self.messages.put(
                 {
@@ -111,7 +139,8 @@ def test_diagnostics_pages_every_java_file_without_a_total_count_cap(
     assert len(_FakeJsonRpcProcess.instances) == 1
     rpc = _FakeJsonRpcProcess.instances[0]
     assert len(rpc.opened_uris) == 300
-    assert rpc.request_timeouts == [3]
+    assert rpc.request_methods[:3] == ["initialize", "textDocument/hover", "textDocument/hover"]
+    assert all(0 < value <= 3 for value in rpc.request_timeouts)
     assert rpc.closed is False
     service.close()
     assert rpc.closed is True
@@ -219,6 +248,7 @@ def test_workspace_symbol_calls_reuse_one_initialized_jdt_process(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _write_java_files(tmp_path, 1)
     _FakeJsonRpcProcess.instances.clear()
     monkeypatch.setattr(java_lsp, "_JsonRpcProcess", _FakeJsonRpcProcess)
     service = JavaLanguageService("fake-jdtls")
@@ -230,7 +260,7 @@ def test_workspace_symbol_calls_reuse_one_initialized_jdt_process(
     assert second["symbols"] == {"query": "Beta"}
     assert len(_FakeJsonRpcProcess.instances) == 1
     rpc = _FakeJsonRpcProcess.instances[0]
-    assert rpc.request_methods == ["initialize", "workspace/symbol", "workspace/symbol"]
+    assert rpc.request_methods == ["initialize", "textDocument/hover", "textDocument/hover", "workspace/symbol", "workspace/symbol"]
     assert rpc.closed is False
     service.close()
     assert rpc.closed is True
@@ -244,6 +274,8 @@ def test_switching_project_root_restarts_the_jdt_session(
     second_root = tmp_path / "second"
     first_root.mkdir()
     second_root.mkdir()
+    _write_java_files(first_root, 1)
+    _write_java_files(second_root, 1)
     _FakeJsonRpcProcess.instances.clear()
     monkeypatch.setattr(java_lsp, "_JsonRpcProcess", _FakeJsonRpcProcess)
     service = JavaLanguageService("fake-jdtls")

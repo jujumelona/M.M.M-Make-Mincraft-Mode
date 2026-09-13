@@ -71,10 +71,10 @@ def test_host_run_state_mutation_tracking() -> None:
     applied_payload = _applied_patch_payload()
     failed_payload = {"ok": False, "error": "Patch rejected"}
 
-    assert state.record_mutation("apply_source_patch", failed_payload) is False
+    assert state.record_mutation("apply_source_patch", {}, failed_payload) is False
     assert state.workspace_changed is False
 
-    assert state.record_mutation("apply_source_patch", applied_payload) is True
+    assert state.record_mutation("apply_source_patch", {}, applied_payload) is True
     assert state.workspace_changed is True
     assert "apply_source_patch" in state.applied_mutations
 
@@ -90,7 +90,7 @@ def test_unchanged_mutation_receipt_is_not_progress() -> None:
         },
     }
 
-    assert state.record_mutation("apply_source_edit", unchanged) is False
+    assert state.record_mutation("apply_source_edit", {}, unchanged) is False
     assert state.workspace_changed is False
 
 
@@ -424,8 +424,8 @@ def test_mutation_failure_transitions_to_observe_for_recovery() -> None:
     assert "search_code_rag" in seen_phases[1]
 
 
-def test_wrong_source_edit_path_retries_pinned_act_without_rag() -> None:
-    """Authority drift stays in ACT because retrieval cannot authorize a new path."""
+def test_wrong_source_edit_path_fails_closed_for_outer_replan_without_rag() -> None:
+    """Executed target drift is an outer-replan boundary, not an in-loop retry."""
     router = MagicMock()
     router._generation_scope.return_value = nullcontext()
     router._agent_require_fresh_evidence = False
@@ -437,7 +437,8 @@ def test_wrong_source_edit_path_retries_pinned_act_without_rag() -> None:
     config.max_new_tokens = 4096
     config.extra = {"runtime_contract": "qwen", "qwen_family": "qwen3.5"}
 
-    turns = [
+    adapter = MagicMock()
+    adapter.generate_turn.side_effect = [
         GenerationResponse(
             tool_calls=(
                 ToolCall(
@@ -464,10 +465,7 @@ def test_wrong_source_edit_path_retries_pinned_act_without_rag() -> None:
                 ),
             )
         ),
-        GenerationResponse(content="Created the exact task-owned source file."),
     ]
-    adapter = MagicMock()
-    adapter.generate_turn.side_effect = turns
     runtime = MagicMock()
     runtime.call.return_value = _applied_patch_payload("src/Right.java")
     request = GenerationRequest(
@@ -488,28 +486,30 @@ def test_wrong_source_edit_path_retries_pinned_act_without_rag() -> None:
         parallel_tool_calls=False,
     )
 
-    result = generate_with_tools(
-        router,
-        config=config,
-        adapter=adapter,
-        request=request,
-        runtime=runtime,
-        stage="generation",
-        role="coder",
-    )
+    with pytest.raises(
+        ModelConfigurationError,
+        match="POST_ARGUMENT_SEMANTIC_FAILURE: MUTATION_TARGET_DRIFT",
+    ):
+        generate_with_tools(
+            router,
+            config=config,
+            adapter=adapter,
+            request=request,
+            runtime=runtime,
+            stage="generation",
+            role="coder",
+        )
 
-    assert result == "Created the exact task-owned source file."
+    assert adapter.generate_turn.call_count == 1
+    assert runtime.call.call_count == 0
     exposed = [
         [schema["function"]["name"] for schema in call.args[0].tools]
         for call in adapter.generate_turn.call_args_list
     ]
-    assert exposed[:2] == [["apply_source_edit"], ["apply_source_edit"]]
-    assert runtime.call.call_count == 1
-    assert runtime.call.call_args.args[1] == "apply_source_edit"
+    assert exposed == [["apply_source_edit"]]
 
-
-def test_distinct_contract_failures_do_not_fake_a_no_progress_fixed_point() -> None:
-    """A phase error and a target error need separate correction opportunities."""
+def test_distinct_contract_failures_escalate_target_drift_after_phase_correction() -> None:
+    """A phase violation may be corrected in-loop; executed target drift must escalate."""
     router = MagicMock()
     router._generation_scope.return_value = nullcontext()
     router._agent_require_fresh_evidence = False
@@ -541,20 +541,6 @@ def test_distinct_contract_failures_do_not_fake_a_no_progress_fixed_point() -> N
                 ),
             )
         ),
-        GenerationResponse(
-            tool_calls=(
-                ToolCall(
-                    id="corrected",
-                    name="apply_source_edit",
-                    arguments={
-                        "operation": "replace",
-                        "path": "src/Right.java",
-                        "content": "public class Right { void fixed() {} }",
-                    },
-                ),
-            )
-        ),
-        GenerationResponse(content="Applied the corrected edit."),
     ]
     runtime = MagicMock()
     runtime.call.return_value = _applied_patch_payload("src/Right.java")
@@ -576,19 +562,22 @@ def test_distinct_contract_failures_do_not_fake_a_no_progress_fixed_point() -> N
         parallel_tool_calls=False,
     )
 
-    result = generate_with_tools(
-        router,
-        config=config,
-        adapter=adapter,
-        request=request,
-        runtime=runtime,
-        stage="generation",
-        role="coder",
-    )
+    with pytest.raises(
+        ModelConfigurationError,
+        match="POST_ARGUMENT_SEMANTIC_FAILURE: MUTATION_TARGET_DRIFT",
+    ):
+        generate_with_tools(
+            router,
+            config=config,
+            adapter=adapter,
+            request=request,
+            runtime=runtime,
+            stage="generation",
+            role="coder",
+        )
 
-    assert result == "Applied the corrected edit."
-    assert runtime.call.call_count == 1
-
+    assert adapter.generate_turn.call_count == 2
+    assert runtime.call.call_count == 0
 
 def test_filter_tools_for_phase_hierarchical_localization_stages() -> None:
     """The host controller dynamically filters read tools per hierarchical localization stage."""
