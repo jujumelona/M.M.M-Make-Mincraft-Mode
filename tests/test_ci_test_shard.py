@@ -64,7 +64,7 @@ def test_invalid_shard_parameters_fail_closed() -> None:
 
 
 def test_ci_workflow_uses_stable_shard_helper() -> None:
-    workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+    workflow = Path(".github/workflows/main-ci.yml").read_text(encoding="utf-8")
     assert "from tools.ci_test_shard import select_shard" in workflow
     assert "select_shard(" in workflow
     assert "enumerate(all_tests)" not in workflow
