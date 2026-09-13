@@ -1,0 +1,42 @@
+name: One Shot Fix Finalizer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-fix-finalizer.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Correct finalizer and remove this helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/one-shot-finalize-regressions.yml')
+          text = p.read_text(encoding='utf-8')
+          old = '              assert final_task["required_gates"] == ["source_static_validation", "target_compile"]\n'
+          new = '              assert final_task["required_gates"] == ["source_static_validation", "target_compile", "runtime_gameplay_validation"]\n'
+          if old not in text:
+              raise SystemExit('finalizer gate assertion anchor missing')
+          p.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          git rm .github/workflows/one-shot-fix-finalizer.yml
+          git diff --check
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$(git rev-parse HEAD)"
+          git config user.name 'jujumelona'
+          git config user.email 'qasdaa025@gmail.com'
+          git add .github/workflows/one-shot-finalize-regressions.yml
+          git commit -m 'ci: correct finalizer gameplay gate expectation'
+          git push origin HEAD:main
