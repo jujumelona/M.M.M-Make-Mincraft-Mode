@@ -150,12 +150,7 @@ def _requirement_grounding(
     state: Mapping[str, Any], requirement_ref: str
 ) -> tuple[list[Mapping[str, Any]], set[str]]:
     evidence = _implementation_evidence(state, requirement_ref)
-    allowed = _allowed_refs(evidence)
-    if not evidence or not allowed:
-        raise ValueError(
-            f"DETAILED_PLAN_EVIDENCE: {requirement_ref} has no sufficient grounded implementation evidence"
-        )
-    return evidence, allowed
+    return evidence, _allowed_refs(evidence)
 
 
 def _preflight_detailed_planning(
