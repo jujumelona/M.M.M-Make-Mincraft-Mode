@@ -1,0 +1,67 @@
+name: Model-realistic replay
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'minecraft_mod_ai/model_adapters/**'
+      - 'minecraft_mod_ai/fixed_template_generation.py'
+      - 'tests/model_realistic_replay/**'
+      - 'tools/model_realistic_replay_matrix.py'
+      - '.github/workflows/model-realistic-replay.yml'
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: model-realistic-replay-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: Discover Qwen replay behaviors
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          MATRIX="$(python -m tools.model_realistic_replay_matrix)"
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          python -m tools.model_realistic_replay_matrix
+
+  replay:
+    name: Qwen3.5-9B-Q4 / ${{ matrix.id }}
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      max-parallel: 256
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.11', cache: pip}
+      - run: python -m pip install --prefer-binary -e '.[dev,ui]'
+      - name: Replay one model behavior through production boundary
+        run: python -m pytest -q "${{ matrix.test }}"
+
+  gate:
+    name: Model-realistic replay gate
+    if: ${{ always() }}
+    needs: [plan, replay]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          PLAN: ${{ needs.plan.result }}
+          REPLAY: ${{ needs.replay.result }}
+        run: |
+          test "$PLAN" = success
+          test "$REPLAY" = success
