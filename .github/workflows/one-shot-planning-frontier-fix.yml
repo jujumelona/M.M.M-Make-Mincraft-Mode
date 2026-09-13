@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - '.github/workflows/one-shot-planning-frontier-fix.yml'
       - '.github/repair/planner_frontier_fix.patch.gz.b64'
 
 permissions:
@@ -29,7 +30,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git pull --ff-only origin main
+          git fetch origin main
+          git reset --hard origin/main
           base64 -d .github/repair/planner_frontier_fix.patch.gz.b64 | gunzip > /tmp/planner_frontier_fix.patch
           git apply --check /tmp/planner_frontier_fix.patch
           git apply /tmp/planner_frontier_fix.patch
@@ -51,4 +53,7 @@ jobs:
             tests/test_planning_search_routing.py
           git diff --cached --check
           git commit -m 'fix: converge planning research on local frontier'
-          git push origin HEAD:main
+          while ! git push origin HEAD:main; do
+            git fetch origin main
+            git rebase origin/main
+          done
