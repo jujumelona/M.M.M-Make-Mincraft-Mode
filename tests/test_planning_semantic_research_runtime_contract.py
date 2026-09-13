@@ -64,10 +64,10 @@ def test_semantic_windows_use_actual_serialized_budget_not_half():
     for _, _, window in windows:
         units = semantic._source_units(window)
         last = len(units) - 1
-        assert semantic._message_bytes(semantic._assessment_messages(
+        assert semantic._canonical_size(semantic._assessment_messages(
             req["statement"], req["acceptance"][0], "modrinth:runtime", units
         )) <= budget
-        assert semantic._message_bytes(semantic._verification_messages(
+        assert semantic._canonical_size(semantic._verification_messages(
             req["statement"],
             req["acceptance"][0],
             "modrinth:runtime",
