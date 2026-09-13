@@ -6,7 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from minecraft_mod_ai import evidence_first_planning as planning
+from minecraft_mod_ai import java_lsp_trace
 from minecraft_mod_ai.agent_tool_runtime import AgentToolRuntime
+from minecraft_mod_ai.generation_verifier_resilience import host_jdt_idle_timeout_seconds
 from minecraft_mod_ai.model_adapters import (
     GenerationRequest,
     GenerationResponse,
@@ -479,9 +481,8 @@ def test_logged_malformed_diagnostics_path_is_rebound_and_verification_completes
                 }
             assert name == "java_diagnostics"
             assert arguments == {
-                "project_root": ".",
                 "relative_files": [capsule.primary_path],
-                "timeout_seconds": 60,
+                "timeout_seconds": host_jdt_idle_timeout_seconds(),
             }
             return {"status": "PASS", "diagnostics": {}}
 
@@ -537,7 +538,10 @@ def test_logged_malformed_diagnostics_path_is_rebound_and_verification_completes
     assert "VERIFIER_UNAVAILABLE" not in stderr
 
 
-def test_agent_runtime_binds_diagnostics_to_the_actual_project_root(tmp_path: Path) -> None:
+def test_agent_runtime_binds_diagnostics_to_the_actual_project_root(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     project = tmp_path / "project"
     (project / "src/main/java/generated/mod").mkdir(parents=True)
     (project / "build.gradle").write_text("plugins {}\n", encoding="utf-8")
@@ -547,13 +551,29 @@ def test_agent_runtime_binds_diagnostics_to_the_actual_project_root(tmp_path: Pa
         encoding="utf-8",
     )
     runtime = AgentToolRuntime(profile="test", workspace_root=tmp_path)
-    dispatched = []
+    observed = []
 
-    def fake_run_async(function, *args):
-        dispatched.append((function.__name__, args))
-        return {"status": "PASS", "diagnostics": {}}
+    class FakeJavaService:
+        def diagnostics(
+            self,
+            project_root,
+            *,
+            relative_files=None,
+            timeout_seconds=60,
+        ):
+            observed.append(
+                (
+                    Path(project_root).resolve(),
+                    list(relative_files) if relative_files is not None else None,
+                    timeout_seconds,
+                )
+            )
+            return {"status": "PASS", "diagnostics": {}}
 
-    runtime._run_async = fake_run_async  # type: ignore[method-assign]
+        def close(self):
+            return None
+
+    monkeypatch.setattr(java_lsp_trace, "TracedJavaLanguageService", FakeJavaService)
     runtime.call(
         "generation",
         "java_diagnostics",
@@ -564,9 +584,10 @@ def test_agent_runtime_binds_diagnostics_to_the_actual_project_root(tmp_path: Pa
         },
     )
 
-    assert len(dispatched) == 1
-    _function, (_stage, _name, arguments) = dispatched[0]
-    assert arguments == {
-        "project_root": str(project.resolve()),
-        "relative_files": [target],
-    }
+    assert observed == [
+        (
+            project.resolve(),
+            [target],
+            host_jdt_idle_timeout_seconds(),
+        )
+    ]
