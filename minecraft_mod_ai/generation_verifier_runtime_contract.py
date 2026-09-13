@@ -11,7 +11,7 @@ from typing import Any, Mapping, Sequence
 _TARGET_MARKER = "_mmm_generation_verifier_targeted_turn"
 _CLOSE_MARKER = "_mmm_generation_verifier_close"
 _MUTATION_TOOLS = frozenset({"apply_source_edit", "apply_source_patch"})
-_SOURCE_SUFFIXES = (".java", ".kt")
+_JAVA_SUFFIX = ".java"
 
 
 def _safe_source_path(raw: Any) -> str:
@@ -23,7 +23,7 @@ def _safe_source_path(raw: Any) -> str:
         not value
         or candidate.is_absolute()
         or ".." in candidate.parts
-        or not value.endswith(_SOURCE_SUFFIXES)
+        or not value.endswith(_JAVA_SUFFIX)
     ):
         return ""
     return value
@@ -64,7 +64,7 @@ def _paths_from_arguments(name: str, arguments: Mapping[str, Any]) -> tuple[str,
 
 
 def latest_mutated_source_files(messages: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
-    """Return source files from the most recent assistant mutation turn only."""
+    """Return Java files from the most recent assistant mutation turn only."""
 
     for message in reversed(tuple(messages)):
         if str(message.get("role") or "") != "assistant":
@@ -92,7 +92,7 @@ def latest_mutated_source_files(messages: Sequence[Mapping[str, Any]]) -> tuple[
 
 
 def install(*, agent_tool_runtime_module: Any, verifier_module: Any) -> None:
-    """Target verifier work to changed source files and own JDT service cleanup."""
+    """Target verifier work to changed Java files and own JDT service cleanup."""
 
     current_synth = verifier_module.synthesized_verifier_turn
     if not getattr(current_synth, _TARGET_MARKER, False):
