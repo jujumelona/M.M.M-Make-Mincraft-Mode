@@ -5,7 +5,9 @@ from __future__ import annotations
 Generation verification is execution authority, not a semantic decision for the coder.
 This contract therefore removes the redundant model turn used only to spell a verifier
 call, keeps verifier time budgets host-owned, treats JDT protocol progress as liveness,
-and falls back to the pinned Gradle build when JDT itself is unavailable.
+and falls back to the pinned Gradle build when JDT itself is unavailable. A JDT
+infrastructure failure opens a run-local circuit breaker so repair iterations do not
+repeat the same expensive unavailable verifier path.
 """
 
 import hashlib
@@ -23,6 +25,8 @@ from .root_cause_trace import emit_root_cause
 _MARKER = "_mmm_host_owned_generation_verifier"
 _JDT_COLLECTOR_MARKER = "_mmm_progress_aware_jdt_collector"
 _VERIFIER_NAME = "java_diagnostics"
+_JDT_SERVICE_ATTR = "_mmm_generation_java_service"
+_JDT_DISABLED_ATTR = "_mmm_generation_jdt_disabled_reason"
 
 
 def _bounded_int_env(name: str, *, default: int, minimum: int, maximum: int) -> int:
@@ -170,6 +174,89 @@ def gradle_fallback_receipt(report: Any, jdt_error: BaseException) -> dict[str, 
     }
 
 
+def _disable_jdt_for_run(runtime: Any, exc: BaseException) -> str:
+    """Open the run-local JDT circuit breaker and release the failed service."""
+
+    reason = f"{type(exc).__name__}: {exc}"
+    service = getattr(runtime, _JDT_SERVICE_ATTR, None)
+    if service is not None:
+        try:
+            close = getattr(service, "close", None)
+            if callable(close):
+                close()
+        except Exception as close_exc:  # noqa: BLE001 - preserve primary verifier failure
+            emit_root_cause(
+                "generation_verifier_jdt_close_failure",
+                stage="generation",
+                operation=_VERIFIER_NAME,
+                gate="jdt_circuit_breaker",
+                result="FAIL",
+                reason=f"{type(close_exc).__name__}: {close_exc}",
+                exc=close_exc,
+            )
+        finally:
+            try:
+                delattr(runtime, _JDT_SERVICE_ATTR)
+            except AttributeError:
+                pass
+    setattr(runtime, _JDT_DISABLED_ATTR, reason)
+    emit_root_cause(
+        "generation_verifier_jdt_circuit_open",
+        stage="generation",
+        operation=_VERIFIER_NAME,
+        gate="jdt_circuit_breaker",
+        result="PASS",
+        reason=reason,
+    )
+    return reason
+
+
+def _run_gradle_fallback(
+    runtime: Any,
+    project_root: Path,
+    jdt_error: BaseException,
+    *,
+    runtime_module: Any,
+    gradle_runner_factory: Any | None,
+) -> dict[str, Any]:
+    from .runner import BuildRunnerError, GradleRunner
+
+    factory = gradle_runner_factory or (
+        lambda cache: GradleRunner(cache, command_timeout_seconds=1200)
+    )
+    cache = Path(runtime.workspace_root).expanduser().resolve() / ".cache" / "gradle"
+    try:
+        report = factory(cache).build(project_root, run_gametest=False)
+    except (OSError, TimeoutError, BuildRunnerError) as gradle_exc:
+        combined = runtime_module.AgentToolRuntimeError(
+            "Generation verification infrastructure failed: "
+            f"JDT={type(jdt_error).__name__}: {jdt_error}; "
+            f"Gradle={type(gradle_exc).__name__}: {gradle_exc}"
+        )
+        emit_root_cause(
+            "generation_verifier_all_backends_unavailable",
+            stage="generation",
+            operation=_VERIFIER_NAME,
+            gate="verifier_fallback",
+            result="FAIL",
+            reason=str(combined),
+            exc=gradle_exc,
+        )
+        raise combined from gradle_exc
+
+    fallback = gradle_fallback_receipt(report, jdt_error)
+    emit_root_cause(
+        "generation_verifier_gradle_fallback",
+        stage="generation",
+        operation=_VERIFIER_NAME,
+        gate="verifier_fallback",
+        result="PASS",
+        reason=str(fallback["verification_outcome"]),
+        details={"result": fallback},
+    )
+    return runtime_module._bounded_result(fallback)
+
+
 def run_generation_verifier(
     runtime: Any,
     arguments: Mapping[str, Any] | None,
@@ -182,7 +269,6 @@ def run_generation_verifier(
 
     from .java_lsp import JDTLanguageServerError
     from .java_lsp_trace import TracedJavaLanguageService
-    from .runner import BuildRunnerError, GradleRunner
 
     payload = dict(arguments or {})
     raw_payload = dict(payload)
@@ -217,13 +303,33 @@ def run_generation_verifier(
         },
     )
 
-    service = getattr(runtime, "_mmm_generation_java_service", None)
-    if service is None:
-        factory = java_service_factory or TracedJavaLanguageService
-        service = factory()
-        runtime._mmm_generation_java_service = service
+    disabled_reason = str(getattr(runtime, _JDT_DISABLED_ATTR, "") or "").strip()
+    if disabled_reason:
+        jdt_exc = JDTLanguageServerError(
+            "run-local JDT circuit breaker already open: " + disabled_reason
+        )
+        emit_root_cause(
+            "generation_verifier_jdt_circuit_skip",
+            stage="generation",
+            operation=_VERIFIER_NAME,
+            gate="jdt_circuit_breaker",
+            result="SKIP",
+            reason=disabled_reason,
+        )
+        return _run_gradle_fallback(
+            runtime,
+            project_root,
+            jdt_exc,
+            runtime_module=runtime_module,
+            gradle_runner_factory=gradle_runner_factory,
+        )
 
     try:
+        service = getattr(runtime, _JDT_SERVICE_ATTR, None)
+        if service is None:
+            factory = java_service_factory or TracedJavaLanguageService
+            service = factory()
+            setattr(runtime, _JDT_SERVICE_ATTR, service)
         result = service.diagnostics(
             project_root,
             relative_files=relative_files,
@@ -250,41 +356,14 @@ def run_generation_verifier(
             reason=f"{type(jdt_exc).__name__}: {jdt_exc}",
             exc=jdt_exc,
         )
-
-        factory = gradle_runner_factory or (
-            lambda cache: GradleRunner(cache, command_timeout_seconds=1200)
+        _disable_jdt_for_run(runtime, jdt_exc)
+        return _run_gradle_fallback(
+            runtime,
+            project_root,
+            jdt_exc,
+            runtime_module=runtime_module,
+            gradle_runner_factory=gradle_runner_factory,
         )
-        cache = Path(runtime.workspace_root).expanduser().resolve() / ".cache" / "gradle"
-        try:
-            report = factory(cache).build(project_root, run_gametest=False)
-        except (OSError, TimeoutError, BuildRunnerError) as gradle_exc:
-            combined = runtime_module.AgentToolRuntimeError(
-                "Generation verification infrastructure failed: "
-                f"JDT={type(jdt_exc).__name__}: {jdt_exc}; "
-                f"Gradle={type(gradle_exc).__name__}: {gradle_exc}"
-            )
-            emit_root_cause(
-                "generation_verifier_all_backends_unavailable",
-                stage="generation",
-                operation=_VERIFIER_NAME,
-                gate="verifier_fallback",
-                result="FAIL",
-                reason=str(combined),
-                exc=gradle_exc,
-            )
-            raise combined from gradle_exc
-
-        fallback = gradle_fallback_receipt(report, jdt_exc)
-        emit_root_cause(
-            "generation_verifier_gradle_fallback",
-            stage="generation",
-            operation=_VERIFIER_NAME,
-            gate="verifier_fallback",
-            result="PASS",
-            reason=str(fallback["verification_outcome"]),
-            details={"result": fallback},
-        )
-        return runtime_module._bounded_result(fallback)
 
 
 def _collect_diagnostics_progress_aware(
