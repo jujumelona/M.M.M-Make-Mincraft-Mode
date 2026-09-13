@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   patch:
-    if: github.event.head_commit.message == 'Install one-shot llama probe pool patcher'
+    if: github.event.head_commit.message == 'Fix one-shot llama probe pool patcher'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -26,48 +26,48 @@ jobs:
 
           path = Path('minecraft_mod_ai/llama_server_runtime_tuning.py')
           source = path.read_text(encoding='utf-8')
-          old = '''    try:
-              rounds: list[list[Any]] = []
-              for probe_request in (request, _medium_prefill_request(request)):
-                  with ThreadPoolExecutor(
-                      max_workers=concurrency, thread_name_prefix="mmm_llama_slot_probe"
-                  ) as pool:
-                      values = [
-                          future.result()
-                          for future in [
-                              pool.submit(
-                                  autotune_module._probe_server,
-                                  base_url,
-                                  probe_request,
-                                  max_tokens=max_tokens,
-                                  variant=variant,
-                              )
-                              for _ in range(concurrency)
-                          ]
-                      ]
-                  rounds.append(values)
-          '''
-          new = '''    try:
-              rounds: list[list[Any]] = []
-              with ThreadPoolExecutor(
-                  max_workers=concurrency, thread_name_prefix="mmm_llama_slot_probe"
-              ) as pool:
-                  for probe_request in (request, _medium_prefill_request(request)):
-                      values = [
-                          future.result()
-                          for future in [
-                              pool.submit(
-                                  autotune_module._probe_server,
-                                  base_url,
-                                  probe_request,
-                                  max_tokens=max_tokens,
-                                  variant=variant,
-                              )
-                              for _ in range(concurrency)
-                          ]
-                      ]
-                      rounds.append(values)
-          '''
+          old = "\n".join([
+              "        rounds: list[list[Any]] = []",
+              "        for probe_request in (request, _medium_prefill_request(request)):",
+              "            with ThreadPoolExecutor(",
+              "                max_workers=concurrency, thread_name_prefix=\"mmm_llama_slot_probe\"",
+              "            ) as pool:",
+              "                values = [",
+              "                    future.result()",
+              "                    for future in [",
+              "                        pool.submit(",
+              "                            autotune_module._probe_server,",
+              "                            base_url,",
+              "                            probe_request,",
+              "                            max_tokens=max_tokens,",
+              "                            variant=variant,",
+              "                        )",
+              "                        for _ in range(concurrency)",
+              "                    ]",
+              "                ]",
+              "            rounds.append(values)",
+          ])
+          new = "\n".join([
+              "        rounds: list[list[Any]] = []",
+              "        with ThreadPoolExecutor(",
+              "            max_workers=concurrency, thread_name_prefix=\"mmm_llama_slot_probe\"",
+              "        ) as pool:",
+              "            for probe_request in (request, _medium_prefill_request(request)):",
+              "                values = [",
+              "                    future.result()",
+              "                    for future in [",
+              "                        pool.submit(",
+              "                            autotune_module._probe_server,",
+              "                            base_url,",
+              "                            probe_request,",
+              "                            max_tokens=max_tokens,",
+              "                            variant=variant,",
+              "                        )",
+              "                        for _ in range(concurrency)",
+              "                    ]",
+              "                ]",
+              "                rounds.append(values)",
+          ])
           if source.count(old) != 1:
               raise SystemExit(f'expected exactly one parallel probe block, found {source.count(old)}')
           path.write_text(source.replace(old, new, 1), encoding='utf-8')
