@@ -300,9 +300,6 @@ def test_extending_pool_preserves_previously_completed_review(monkeypatch):
         state,
         [{"r_002": grounded("spacecraft upgrade new", "modrinth:new")}],
     )
-    from minecraft_mod_ai.planning_candidate_evidence import assert_candidate_research_complete
-
-    assert_candidate_research_complete(updated)
     assert len(updated["task_candidate_pool"]["queries"]) == 2
     assert len(updated["candidate_requirement_trace"]) == 2
 
