@@ -13,6 +13,19 @@
         "MMM_WORKSPACE": "mmm-output"
       }
     },
+    "mmm-planning": {
+      "command": "python",
+      "args": [
+        "-m",
+        "minecraft_mod_ai.mcp_stdio_entrypoint",
+        "minecraft_mod_ai.mcp_server"
+      ],
+      "env": {
+        "MMM_MCP_STAGE": "planning",
+        "MMM_MODEL_PROFILE": "t4_local",
+        "MMM_WORKSPACE": "mmm-output"
+      }
+    },
     "mmm-research": {
       "command": "python",
       "args": [
