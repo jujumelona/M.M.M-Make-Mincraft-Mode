@@ -97,22 +97,9 @@ class _Adapter:
                 )
             )
         if index == 2:
-            assert names == ["java_diagnostics"]
-            assert request.tool_choice == {
-                "type": "function",
-                "function": {"name": "java_diagnostics"},
-            }
-            return GenerationResponse(
-                tool_calls=(
-                    ToolCall(
-                        id="verify_1",
-                        name="java_diagnostics",
-                        arguments={"path": "src/main/java/Example.java"},
-                        raw_arguments='{"path":"src/main/java/Example.java"}',
-                    ),
-                )
-            )
-        if index == 3:
+            # Generation verification is now host-owned. The coder does not spend a
+            # redundant inference turn merely selecting java_diagnostics; after the
+            # host verifier passes, the next model turn is the terminal no-tool turn.
             assert request.tools == ()
             assert request.tool_choice is None
             return GenerationResponse(content="verified implementation complete")
@@ -149,6 +136,6 @@ def test_verifier_pass_finalizes_without_repeating_verifier(monkeypatch) -> None
         "apply_source_edit",
         "java_diagnostics",
     ]
-    assert len(adapter.requests) == 3
+    assert len(adapter.requests) == 2
     final_instruction = str(adapter.requests[-1].messages[-1]["content"])
     assert "verification passed" in final_instruction.casefold()
