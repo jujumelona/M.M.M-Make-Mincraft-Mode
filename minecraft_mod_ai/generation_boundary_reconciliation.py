@@ -149,13 +149,12 @@ def _resume_failed_generation_nodes(ledger: Any, work_plan: Any) -> tuple[str, .
     stay terminal so resume cannot bypass user input or cancellation semantics.
     """
 
-    states = ledger.state_map()
     resumed: list[str] = []
     for node in work_plan.nodes:
         node_id = str(node.node_id)
         if not str(node.stage).startswith("generate:"):
             continue
-        if states.get(node_id) != "failed":
+        if str(ledger.task(node_id)["state"]) != "failed":
             continue
         ledger.retry(node_id)
         resumed.append(node_id)
