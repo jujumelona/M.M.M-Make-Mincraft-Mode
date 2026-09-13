@@ -19,6 +19,9 @@ from .source_observation_budget_installation import install as install_source_ob
 from .source_set_boundary_installation import install as install_source_set_boundary
 from .task_template_catalog import RUNTIME_TEMPLATE_ROOT
 from .template_contract_validation import runtime_consumer_roots, validate_catalog
+from .verifier_fail_closed_completion_installation import (
+    install as install_verifier_fail_closed_completion,
+)
 from .versioned_reference_context_installation import install as install_versioned_reference_context
 
 
@@ -39,6 +42,7 @@ from . import custom_module_generator as _custom_module_generator
 from . import execution_feedback_replan_contract as _execution_feedback_replan_contract
 from . import java_lsp as _java_lsp
 from . import model_router as _model_router
+from . import progress_aware_tool_loop as _progress_aware_tool_loop
 
 install_checkpoint_performance(_custom_module_generator)
 install_source_set_boundary(_java_lsp)
@@ -50,6 +54,9 @@ assert_generation_accuracy_inner(_model_router)
 # termination rule before runtime_finalization installs the durable feedback wrapper.
 install_execution_feedback_semantic_convergence(_execution_feedback_replan_contract)
 finalize_runtime()
+# Final runtime composition is now known; make completion fail closed without altering
+# the mutation/verifier dispatch wrappers composed by runtime_finalization.
+install_verifier_fail_closed_completion(_progress_aware_tool_loop)
 # The outer normalizer runs after atomic aggregation so multi-obligation text summaries
 # retain the fixed {"summary": ...} contract consumed by CustomModuleGenerator.
 install_generation_accuracy_outer(_model_router)
