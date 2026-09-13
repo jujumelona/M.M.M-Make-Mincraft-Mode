@@ -89,9 +89,43 @@ class _PagedRequirementRouter:
         return self._pages[len(self.calls) - 1]
 
 
-def test_full_requirement_page_never_closes_semantic_frontier() -> None:
-    router = _PagedRequirementRouter()
-    messages = [
+class _RepeatedFrontierRouter:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+        self._pages = [
+            {"requirements": [self._row(f"Requirement {index}", f"cap_{index}") for index in range(1, 5)]},
+            {"requirements": [self._row(f"Requirement {index}", f"cap_{index}") for index in range(5, 9)]},
+            {"requirements": [self._row(f"Requirement {index}", f"cap_{index}") for index in range(9, 13)]},
+            {
+                "requirements": [
+                    self._row("Paraphrased economy requirement", "economy_again"),
+                    self._row("Paraphrased trading requirement", "trading_again"),
+                    self._row("Requirement 5", "cap_5"),
+                    self._row("Requirement 6", "cap_6"),
+                ]
+            },
+        ]
+
+    @staticmethod
+    def _row(statement: str, capability: str) -> dict[str, object]:
+        return {
+            "statement": statement,
+            "semantic_capability": capability,
+            "acceptance": [f"Observe {statement}."],
+        }
+
+    def generate_tool_decision(
+        self,
+        role: str,
+        messages: list[dict[str, str]],
+        **kwargs: object,
+    ) -> dict[str, object]:
+        self.calls.append({"role": role, "messages": messages, **kwargs})
+        return self._pages[len(self.calls) - 1]
+
+
+def _requirement_messages() -> list[dict[str, str]]:
+    return [
         {
             "role": "system",
             "content": "Compile independently testable player-visible requirements.",
@@ -114,7 +148,10 @@ def test_full_requirement_page_never_closes_semantic_frontier() -> None:
         },
     ]
 
-    result = _generate_requirement_pages(router, messages, 100_000)
+
+def test_full_requirement_page_never_closes_semantic_frontier() -> None:
+    router = _PagedRequirementRouter()
+    result = _generate_requirement_pages(router, _requirement_messages(), 100_000)
 
     assert len(router.calls) == 2
     assert len(result["requirements"]) == 7
@@ -128,6 +165,18 @@ def test_full_requirement_page_never_closes_semantic_frontier() -> None:
     assert isinstance(second_messages, list)
     second_payload = json.loads(second_messages[1]["content"])
     assert len(second_payload["already_compiled_requirements"]) == 4
+
+
+def test_repeated_continuation_page_closes_frontier_without_committing_partial_page() -> None:
+    router = _RepeatedFrontierRouter()
+    result = _generate_requirement_pages(router, _requirement_messages(), 100_000)
+
+    assert len(router.calls) == 4
+    assert len(result["requirements"]) == 12
+    statements = [row["statement"] for row in result["requirements"]]
+    assert "Paraphrased economy requirement" not in statements
+    assert "Paraphrased trading requirement" not in statements
+    assert statements[-1] == "Requirement 12"
 
 
 def test_success_postcondition_primary_schema_matches_atomic_recovery_bound() -> None:
