@@ -25,6 +25,15 @@ jobs:
         run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Apply semantic convergence refactor
         run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('.github/scripts/refactor_semantic_convergence.py')
+          s = p.read_text(encoding='utf-8')
+          old = "text = text.replace('    forced_rag_attempts = 0\\n', '')"
+          new = "text, _ = re.subn(r'(?m)^\\s*forced_rag_attempts = 0\\n', '', text)"
+          assert s.count(old) == 1, s.count(old)
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+          PY
           python -m py_compile .github/scripts/refactor_semantic_convergence.py
           python .github/scripts/refactor_semantic_convergence.py
       - name: Verify semantic convergence contracts
