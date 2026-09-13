@@ -1,0 +1,55 @@
+name: One Shot Repair Workflow Fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-repair-workflow-fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Harden verifier-test replacement matcher
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/one-shot-current-head-regression-repair.yml')
+          text = path.read_text(encoding='utf-8')
+
+          old_start = text.index("          old = '''def test_agent_runtime_binds_diagnostics_to_the_actual_project_root")
+          new_start = text.index("          new = '''def test_agent_runtime_binds_diagnostics_to_the_actual_project_root", old_start)
+          text = (
+              text[:old_start]
+              + "          start = text.index('def test_agent_runtime_binds_diagnostics_to_the_actual_project_root(')\n"
+              + text[new_start:]
+          )
+
+          stale = """          if old not in text:\n              raise SystemExit('old project-root verifier test block not found')\n          text = text.replace(old, new, 1)\n"""
+          if stale not in text:
+              raise SystemExit('stale verifier replacement tail not found')
+          text = text.replace(stale, "          text = text[:start] + new\n", 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          git diff --check
+      - name: Commit workflow fix and self-delete
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm -f .github/workflows/one-shot-repair-workflow-fix.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/one-shot-current-head-regression-repair.yml
+          git diff --cached --check
+          git commit -m 'chore: harden one-shot repair matcher'
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
