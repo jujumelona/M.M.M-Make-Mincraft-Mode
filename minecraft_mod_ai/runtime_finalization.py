@@ -108,6 +108,8 @@ def finalize_runtime() -> None:
         from .production_boundary_contract import install_production_boundary_contract
         from .quality_public_acceptance_view_contract import install as install_quality_public_acceptance_view
         from .reference_query_parallelism_contract import install as install_reference_query_parallelism
+        from .repair_mutation_recovery_contract import assert_installed as assert_repair_mutation_recovery
+        from .repair_mutation_recovery_contract import install as install_repair_mutation_recovery
         from .requirement_branch_scope_contract import install_requirement_branch_scope_contract
         from .retrieval_model_residency import install as install_retrieval_residency
         from .runtime_hot_path_contract import assert_installed as assert_runtime_hot_paths
@@ -203,13 +205,16 @@ def finalize_runtime() -> None:
         install_model_output_atomicity(model_router_module=model_router)
         assert_model_output_atomicity(model_router_module=model_router)
 
-        # These two contracts are intentionally finalized last. The direct-task bridge
-        # carries the task capsule authority out-of-band, and the final guard freezes
-        # that exact target before any retrieval evidence can merge into run state.
+        # These contracts are intentionally finalized last. The direct-task bridge
+        # carries the task capsule authority out-of-band, repair recovery narrows only
+        # the already-existing target repair frontier, and the final guard then freezes
+        # the exact authority boundary around those inner wrappers.
         install_direct_task_mutation_authority(
             custom_module_generator_module=custom_module_generator,
             loop_module=progress_aware_tool_loop,
         )
+        install_repair_mutation_recovery(progress_aware_tool_loop)
+        assert_repair_mutation_recovery(progress_aware_tool_loop)
         install_mutation_authority_final_guard(progress_aware_tool_loop)
         assert_mutation_authority_final_guard(progress_aware_tool_loop)
 
