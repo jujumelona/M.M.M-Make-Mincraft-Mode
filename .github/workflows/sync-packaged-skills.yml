@@ -1,0 +1,48 @@
+name: Sync packaged skills
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "skills/**/SKILL.md"
+      - "tools/package_skills.py"
+      - ".github/workflows/sync-packaged-skills.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-packaged-skills-main
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package
+        run: python -m pip install --prefer-binary -e .
+
+      - name: Regenerate packaged and plugin Skills
+        run: python tools/package_skills.py
+
+      - name: Commit synchronized Skill artifacts
+        shell: bash
+        run: |
+          git add minecraft_mod_ai/packaged_skills.json plugins/mmm-minecraft-mod-ai/skills/*/SKILL.md
+          if git diff --cached --quiet; then
+            echo "Skill artifacts are already synchronized."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: synchronize packaged skill catalog"
+          git push origin HEAD:main
