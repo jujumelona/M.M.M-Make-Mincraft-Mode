@@ -85,7 +85,7 @@ def test_massive_graph_policy_denies_tools_stages_and_missing_approval() -> None
 
 def test_adaptive_evidence_policy_is_read_only_and_fail_closed() -> None:
     contract = compile_skill_contract("gather-adaptive-minecraft-evidence")
-    assert contract.stages == ("research",)
+    assert contract.stages == ("planning", "research")
     assert contract.authorize_tool("search_code_rag", "research").allowed
     assert not contract.authorize_tool(
         "apply_source_patch",
@@ -192,7 +192,7 @@ def test_unknown_tool_or_validator_cannot_compile(tmp_path: Path) -> None:
     skill_dir = tmp_path / "gather-adaptive-minecraft-evidence"
     skill_dir.mkdir()
 
-    tool_anchor = "- retrieve_source_excerpt\n"
+    tool_anchor = "- search_code_rag\n"
     assert tool_anchor in text
     (skill_dir / "SKILL.md").write_text(
         text.replace(tool_anchor, tool_anchor + "- arbitrary_shell\n", 1),
@@ -201,7 +201,7 @@ def test_unknown_tool_or_validator_cannot_compile(tmp_path: Path) -> None:
     with pytest.raises(SkillPolicyError, match="unreviewed tools"):
         compile_skill_contract("gather-adaptive-minecraft-evidence", tmp_path)
 
-    validator_anchor = "- grounded_generation\n"
+    validator_anchor = "- exact_version_evidence\n"
     assert validator_anchor in text
     (skill_dir / "SKILL.md").write_text(
         text.replace(validator_anchor, validator_anchor + "- trust_the_model\n", 1),

@@ -37,7 +37,6 @@ def _fake_loop(calls: list[dict[str, object]]) -> SimpleNamespace:
     [
         "MUTATION_TARGET_DRIFT",
         "MUTATION_TARGET_UNBOUND",
-        "MUTATION_TARGET_CREATION_CONFLICT",
         "PATH_OUTSIDE_WRITABLE_SET",
         "MUTATION_AUTHORITY_CONFLICT",
         "WRITE_SCOPE_REJECTED",

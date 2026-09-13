@@ -456,6 +456,10 @@ def emit_root_cause(
     trace_seq = next(_TRACE_SEQUENCE)
     trace_id = current_trace_id()
     failure = _is_failure(result, exc)
+    failure_sync = failure and event not in {
+        "detailed_planning_timeout",
+        "planning_research_timeout",
+    }
     try:
         payload: dict[str, Any] = {
             "schema_version": "mmm/root-cause-trace-v4",
@@ -489,7 +493,7 @@ def emit_root_cause(
                 payload["details_artifact"] = save_trace_artifact(
                     details,
                     durable_trace_path().parent / "artifacts",
-                    sync=failure,
+                    sync=failure_sync,
                 )
             except Exception as artifact_error:
                 payload["details_artifact_error"] = type(artifact_error).__name__
@@ -522,7 +526,7 @@ def emit_root_cause(
         )
         _append_durable_line(
             (serialized + "\n").encode("utf-8", "backslashreplace"),
-            sync=failure,
+            sync=failure_sync,
         )
         _stderr_line(
             serialized,

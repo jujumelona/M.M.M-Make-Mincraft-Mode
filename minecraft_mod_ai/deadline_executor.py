@@ -77,6 +77,7 @@ def collect_completed_with_deadlines(
     max_workers: int,
     stage: str,
     sort_key: Callable[[_Item], object] | None = None,
+    on_result: Callable[[_Item, _Result], None] | None = None,
 ) -> list[tuple[_Item, _Result]]:
     """Run bounded parallel work and return results after executor shutdown.
 
@@ -173,6 +174,8 @@ def collect_completed_with_deadlines(
                     raise
                 except Exception as exc:
                     raise ParallelTaskError(stage=stage, item=meta.item, cause=exc) from exc
+                if on_result is not None:
+                    on_result(meta.item, result)
                 completed.append((meta.item, result))
     finally:
         for future in active:
@@ -189,6 +192,7 @@ def iter_completed_with_deadlines(
     max_workers: int,
     stage: str,
     sort_key: Callable[[_Item], object] | None = None,
+    on_result: Callable[[_Item, _Result], None] | None = None,
 ) -> Iterator[tuple[_Item, _Result]]:
     """Compatibility iterator over already-collected, executor-detached results."""
 
@@ -199,6 +203,7 @@ def iter_completed_with_deadlines(
             max_workers=max_workers,
             stage=stage,
             sort_key=sort_key,
+            on_result=on_result,
         )
     )
 

@@ -271,6 +271,7 @@ def test_atomic_summary_aggregation_preserves_response_template():
 
     custom = SimpleNamespace(
         _coder_project_context_budget=lambda *a, **k: 4096,
+        _collect_initial_observations=lambda *a, **k: {},
         _materialize_owned_reuse_context=lambda *a, **k: {},
     )
     install(

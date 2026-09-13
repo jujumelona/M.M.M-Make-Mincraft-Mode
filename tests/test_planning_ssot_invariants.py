@@ -108,48 +108,9 @@ def test_pipeline_stops_at_original_user_only_blocker_before_detail_planning():
         )
 
 
-def test_implementation_only_unknown_does_not_block_requirement_selection():
+def test_requirement_selection_does_not_create_implementation_research_obligations():
     prompt = "Keep the weather compass."
     state = _host_state(_Router([_payload()]), prompt)
-    state["unresolved"].append(
-        {
-            "unresolved_id": "u_001",
-            "question": "How is the compass implemented?",
-            "reason": "implementation_method",
-            "blocks": ["implementation_plan"],
-            "information_needed": "Concrete Minecraft implementation evidence.",
-            "resolution_route": "implementation_research",
-            "source_kinds": [
-                "repository",
-                "existing_mods",
-                "minecraft_docs",
-                "minecraft_source",
-                "project_rag",
-            ],
-            "status": "open",
-            "research_ref": "r_001",
-            "requirement_ref": "legacy_runtime_requirement",
-        }
-    )
-    state["research_queue"].append(
-        {
-            "research_id": "r_001",
-            "resolves": ["u_001"],
-            "requirement_ref": "legacy_runtime_requirement",
-            "objective": "Find compass implementation evidence",
-            "information_needed": "Concrete Minecraft implementation evidence.",
-            "source_kinds": [
-                "repository",
-                "existing_mods",
-                "minecraft_docs",
-                "minecraft_source",
-                "project_rag",
-            ],
-            "queries": [],
-            "status": "pending",
-        }
-    )
-    _rehash(state)
     router = _Router(
         [
             {
@@ -172,11 +133,15 @@ def test_implementation_only_unknown_does_not_block_requirement_selection():
         item.get("decision_type") == "requirement"
         for item in resolved["decisions"]
     )
-    assert not any(
-        item.get("stage") == "requirement_selection"
-        for item in resolved["blockers"]
+    assert all(
+        item.get("reason") != "implementation_method"
+        and item.get("resolution_route") != "implementation_research"
+        for item in resolved["unresolved"]
     )
-
+    assert all(
+        item.get("objective") != "Find compass implementation evidence"
+        for item in resolved["research_queue"]
+    )
 
 def test_state_integrity_rejects_unhashed_restored_state_mutation():
     state = _user_only_state()

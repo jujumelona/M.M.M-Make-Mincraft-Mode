@@ -197,7 +197,6 @@ def claim_orchestrator_ready(
     owner = _orchestrator_owner(ledger)
     resource_expr = _resource_sql("")
     task_resource_expr = _resource_sql("task")
-    active_resource_expr = _resource_sql("active")
     stage_sql = ""
     stage_params: tuple[Any, ...] = ()
     if stages:
@@ -266,14 +265,12 @@ def claim_orchestrator_ready(
                       AND dependency.state != ?
                   )
                   AND NOT (
-                    {task_resource_expr} = 'cpu_io'
-                    AND task.stage IN ({serial_stage_placeholders})
+                    task.stage IN ({serial_stage_placeholders})
                     AND EXISTS (
                         SELECT 1
                         FROM tasks AS active
                         WHERE active.state = ?
                           AND active.stage = task.stage
-                          AND {active_resource_expr} = 'cpu_io'
                     )
                   )
                   {stage_sql}

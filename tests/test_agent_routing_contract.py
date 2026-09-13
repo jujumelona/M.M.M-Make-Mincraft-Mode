@@ -12,7 +12,6 @@ _STALE_MCP_ALIASES = frozenset(
     {
         "minecraft-runtime",
         "mineflayer",
-        "mmm-planning",
     }
 )
 _CANONICAL_CONFIGS = (

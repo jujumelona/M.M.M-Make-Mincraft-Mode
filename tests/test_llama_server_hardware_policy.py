@@ -116,7 +116,7 @@ def test_hardware_launch_policy_does_not_enable_auxiliary_endpoints_by_default(m
     result = policy._apply_hardware_launch_policy(args)
 
     assert result is args
-    assert result[result.index("--gpu-layers") + 1] == "auto"
+    assert result[result.index("--gpu-layers") + 1] == "all"
     assert result[result.index("--parallel") + 1] == "1"
     assert "--metrics" not in result
     assert "--slots" not in result

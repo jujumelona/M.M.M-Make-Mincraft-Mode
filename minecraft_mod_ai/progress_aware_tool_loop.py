@@ -2083,7 +2083,7 @@ def _generate_with_tools_impl(
                 )
             if forced_rag_tool is not None:
                 raise ModelConfigurationError(
-                    f"Production coder violated host-forced RAG tool choice {forced_rag_tool!r} "
+                    f"Production coder did not honor host-forced RAG tool choice {forced_rag_tool!r} "
                     "by returning prose instead of the required tool call."
                 )
             if require_rag and not state.has_fresh_evidence:
@@ -2288,7 +2288,7 @@ def _generate_with_tools_impl(
             if len(turn.tool_calls) != 1 or turn.tool_calls[0].name != forced_rag_tool:
                 called = ", ".join(call.name for call in turn.tool_calls) or "<none>"
                 raise ModelConfigurationError(
-                    f"Production coder violated host-forced RAG tool choice {forced_rag_tool!r}; received {called}."
+                    f"Production coder did not honor host-forced RAG tool choice {forced_rag_tool!r}; received {called}."
                 )
             forced_rag_tool = None
 

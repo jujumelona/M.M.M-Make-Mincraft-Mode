@@ -48,6 +48,10 @@ _PREFILL_TEMPLATE_CACHE_LOCK = threading.RLock()
 class LlamaCppAdapter(ModelAdapter):
     """OpenAI-compatible client for the managed native llama-server."""
 
+    # Cache is process/server-generation keyed, so request-local adapter instances can
+    # reuse the same calibrated Jinja suffix without stale cross-restart reuse.
+    _prefill_template_prefix_cache: dict[str, str] = {}
+
     def _server_url(self, request: GenerationRequest) -> str:
         try:
             from .. import llama_server_autotune

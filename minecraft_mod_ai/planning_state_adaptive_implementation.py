@@ -742,6 +742,34 @@ def compile_progress_monotone_detailed_plans(
                 record_checkpoint=save_record,
             )
 
+        def checkpoint_completed_work(
+            work_item: tuple[str, int, str, int, str],
+            result_receipt: dict[str, Any],
+        ) -> None:
+            nonlocal working_state
+            kind_tag, job_index, artifact_kind, idx, step_id = work_item
+            job = jobs[job_index]
+            with state_lock:
+                if kind_tag == "artifact":
+                    normalized = _planning_only_artifact_receipt(result_receipt)
+                    working_state = _store_artifact_progress(
+                        working_state,
+                        requirement_ref=job["requirement_ref"],
+                        artifact_kind=artifact_kind,
+                        step_id=step_id,
+                        receipt=normalized,
+                    )
+                else:
+                    working_state = store_criterion_progress(
+                        working_state,
+                        requirement_ref=job["requirement_ref"],
+                        selected_sections=job["selected_sections"],
+                        criterion_index=idx,
+                        criterion=job["criteria"][idx],
+                        fragment=result_receipt,
+                    )
+                working_state = _checkpoint_state(working_state, checkpoint)
+
         try:
             completed_work = iter_completed_with_deadlines(
                 pending_items,
@@ -749,6 +777,7 @@ def compile_progress_monotone_detailed_plans(
                 max_workers=workers,
                 stage="planning-artifact-monotone",
                 sort_key=lambda item: item[1:],
+                on_result=checkpoint_completed_work,
             )
             for work_item, result_receipt in completed_work:
                 kind_tag, job_index, artifact_kind, idx, step_id = work_item

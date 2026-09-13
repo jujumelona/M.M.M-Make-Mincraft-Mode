@@ -1,8 +1,6 @@
 from copy import deepcopy
 from urllib.parse import parse_qs, urlparse
 
-import pytest
-
 from minecraft_mod_ai.planning_candidate_evidence import (
     global_grounded_pool,
     requirement_candidate_trace,
@@ -207,22 +205,10 @@ def test_generic_instruction_terms_are_not_requirement_evidence():
     assert not _domain_terms(domain).intersection({"exact", "test", "apis", "support", "artifacts"})
 
 
-def test_restored_false_complete_and_changed_requirement_cannot_enter_planner(monkeypatch):
-    from minecraft_mod_ai.planning_candidate_evidence import (
-        assert_candidate_research_complete,
-    )
-    legacy = _state()
-    legacy["research_queue"][0].update(status="complete", mod_discovery={"complete": True, "candidates": []})
-    with pytest.raises(ValueError, match="RESEARCH_BLOCKED"):
-        assert_candidate_research_complete(legacy)
-    result, _, _ = _run_collection(monkeypatch, _state(), [
-        {"r_001": grounded("spacecraft upgrade")},
-    ])
-    assert_candidate_research_complete(result)
-    result["decisions"][0]["statement"] = "Different authored requirement"
-    with pytest.raises(ValueError, match="RESEARCH_BLOCKED"):
-        assert_candidate_research_complete(result)
+def test_deleted_candidate_research_gate_is_not_reintroduced():
+    from minecraft_mod_ai import planning_candidate_evidence as candidate_evidence
 
+    assert not hasattr(candidate_evidence, "assert_candidate_research_complete")
 
 def test_repository_projection_retains_evidence_beyond_preview():
     from minecraft_mod_ai.research_reuse_candidates import project_repository_candidates

@@ -44,7 +44,7 @@ def test_default_launch_keeps_max_gpu_paths_and_native_resource_sizing(monkeypat
         assert flag not in args
 
 
-def test_explicit_resource_overrides_are_forwarded_without_custom_clamping(
+def test_explicit_resource_overrides_keep_ubatch_within_logical_batch(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("MMM_LLAMA_PARALLEL", "3")
@@ -63,7 +63,7 @@ def test_explicit_resource_overrides_are_forwarded_without_custom_clamping(
     assert _value(args, "--parallel") == "3"
     assert _value(args, "--ctx-size") == "32768"
     assert _value(args, "--batch-size") == "1024"
-    assert _value(args, "--ubatch-size") == "1536"
+    assert _value(args, "--ubatch-size") == "1024"
     assert _value(args, "--cache-type-k") == "q8_0"
     assert _value(args, "--cache-type-v") == "q8_0"
 

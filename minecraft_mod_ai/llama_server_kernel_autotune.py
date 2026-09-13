@@ -460,6 +460,18 @@ def install(autotune: Any, runtime_tuning: Any) -> None:
             elif active_batch:
                 _replace_option(args, ("--batch-size", "-b"), str(_int(active_batch, 2048)))
 
+            # A selected logical batch is also a hard upper bound for ubatch. Keeping
+            # an inherited larger ubatch produces an invalid/overcommitted launch.
+            batch_flags = ("--batch-size", "-b")
+            ubatch_flags = ("--ubatch-size", "-ub")
+            batch_index = next((args.index(flag) for flag in batch_flags if flag in args), None)
+            ubatch_index = next((args.index(flag) for flag in ubatch_flags if flag in args), None)
+            if batch_index is not None and ubatch_index is not None:
+                effective_batch = _int(str(args[batch_index + 1]), 2048)
+                effective_ubatch = _int(str(args[ubatch_index + 1]), effective_batch)
+                if effective_ubatch > effective_batch:
+                    args[ubatch_index + 1] = str(effective_batch)
+
             generic_kv = os.environ.get("MMM_KV_CACHE_QUANT", "").strip().lower()
             explicit_k = os.environ.get("MMM_LLAMA_CACHE_TYPE_K", "").strip().lower()
             explicit_v = os.environ.get("MMM_LLAMA_CACHE_TYPE_V", "").strip().lower()

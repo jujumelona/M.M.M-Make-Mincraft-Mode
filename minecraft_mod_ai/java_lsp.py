@@ -10,6 +10,7 @@ import subprocess
 import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -172,10 +173,18 @@ def _candidate_java_homes(required_major: int) -> list[Path]:
     return candidates
 
 
+def _java_major_versions(java_homes: list[Path]) -> list[int | None]:
+    if not java_homes:
+        return []
+    workers = max(1, min(len(java_homes), os.cpu_count() or 1))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="jdt-jdk-probe") as pool:
+        return list(pool.map(_java_major_version, java_homes))
+
+
 def _resolve_project_java_home(required_major: int | None = None) -> Path:
     required = required_major if required_major is not None else _requested_project_java_major()
     seen: set[Path] = set()
-    observed: list[str] = []
+    homes: list[Path] = []
     for candidate in _candidate_java_homes(required):
         try:
             home = candidate.resolve(strict=True)
@@ -184,7 +193,10 @@ def _resolve_project_java_home(required_major: int | None = None) -> Path:
         if home in seen or not home.is_dir():
             continue
         seen.add(home)
-        major = _java_major_version(home)
+        homes.append(home)
+
+    observed: list[str] = []
+    for home, major in zip(homes, _java_major_versions(homes), strict=True):
         if major is None:
             continue
         observed.append(f"{home}=>{major}")
