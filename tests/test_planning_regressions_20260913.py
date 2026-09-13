@@ -17,7 +17,9 @@ class _PagedRequirementRouter:
                     {
                         "statement": "Gather resources and earn money.",
                         "semantic_capability": "economy",
-                        "acceptance": ["Resources can be gathered and converted into money."],
+                        "acceptance": [
+                            "Resources can be gathered and converted into money."
+                        ],
                     },
                     {
                         "statement": "Trade resources and equipment.",
@@ -27,37 +29,62 @@ class _PagedRequirementRouter:
                     {
                         "statement": "Build a spacecraft from separate parts.",
                         "semantic_capability": "spacecraft_construction",
-                        "acceptance": ["Separate spacecraft parts assemble into a usable craft."],
+                        "acceptance": [
+                            "Separate spacecraft parts assemble into a usable craft."
+                        ],
                     },
                     {
-                        "statement": "Upgrade weapons, crew, and spacecraft performance through purchases or trades.",
+                        "statement": (
+                            "Upgrade weapons, crew, and spacecraft performance through "
+                            "purchases or trades."
+                        ),
                         "semantic_capability": "spacecraft_upgrade",
-                        "acceptance": ["Purchased or traded upgrades change the relevant capability."],
+                        "acceptance": [
+                            "Purchased or traded upgrades change the relevant capability."
+                        ],
                     },
                 ]
             },
             {
                 "requirements": [
                     {
-                        "statement": "Launch the completed spacecraft into space and travel to other planets.",
+                        "statement": (
+                            "Launch the completed spacecraft into space and travel to "
+                            "other planets."
+                        ),
                         "semantic_capability": "space_travel",
-                        "acceptance": ["The player can leave the starting world and reach another planet."],
+                        "acceptance": [
+                            "The player can leave the starting world and reach another "
+                            "planet."
+                        ],
                     },
                     {
-                        "statement": "Gather special minerals on other planets and fight aliens.",
+                        "statement": (
+                            "Gather special minerals on other planets and fight aliens."
+                        ),
                         "semantic_capability": "planet_exploration",
-                        "acceptance": ["Planetary minerals and hostile aliens are both encountered in play."],
+                        "acceptance": [
+                            "Planetary minerals and hostile aliens are both encountered "
+                            "in play."
+                        ],
                     },
                     {
                         "statement": "Establish colonies on other planets.",
                         "semantic_capability": "colonization",
-                        "acceptance": ["The player can create a persistent colony on another planet."],
+                        "acceptance": [
+                            "The player can create a persistent colony on another planet."
+                        ],
                     },
                 ]
             },
         ]
 
-    def generate_tool_decision(self, role: str, messages: list[dict[str, str]], **kwargs: object) -> dict[str, object]:
+    def generate_tool_decision(
+        self,
+        role: str,
+        messages: list[dict[str, str]],
+        **kwargs: object,
+    ) -> dict[str, object]:
         self.calls.append({"role": role, "messages": messages, **kwargs})
         return self._pages[len(self.calls) - 1]
 
@@ -97,7 +124,9 @@ def test_full_requirement_page_never_closes_semantic_frontier() -> None:
     assert "aliens" in statements
     assert "colonies" in statements
 
-    second_payload = json.loads(router.calls[1]["messages"][1]["content"])
+    second_messages = router.calls[1]["messages"]
+    assert isinstance(second_messages, list)
+    second_payload = json.loads(second_messages[1]["content"])
     assert len(second_payload["already_compiled_requirements"]) == 4
 
 
