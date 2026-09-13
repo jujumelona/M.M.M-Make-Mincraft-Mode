@@ -188,6 +188,91 @@ jobs:
       - uses: actions/checkout@v6
       - run: test ! -e minecraft_mod_ai/agentic_pre_design_rag.py
 
+  audit-families:
+    name: Full audit family / ${{ matrix.family }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        family:
+          - syntax
+          - versions
+          - subsystems
+          - model_registry
+          - runtime_contracts
+          - environment
+          - filesystem
+          - structured_output
+          - timeout_retry
+          - concurrency_queue
+          - pipeline
+          - smtp
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.11', cache: pip}
+      - run: python -m pip install --prefer-binary 'build>=1,<2' -e '.[dev,ui]'
+      - run: python -m tools.full_project_audit_family "${{ matrix.family }}" --output "audit/family-${{ matrix.family }}.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: audit-family-${{ matrix.family }}-${{ github.sha }}
+          path: |
+            audit/family-${{ matrix.family }}.json
+            audit/FULL_PROJECT_AUDIT.log
+          if-no-files-found: warn
+
+  dependency-check:
+    name: Dependency consistency
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.11', cache: pip}
+      - run: python -m pip install --prefer-binary -e '.[dev,ui]'
+      - run: python -m pip check
+
+  package-build:
+    name: Build sdist and wheel
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.11', cache: pip}
+      - run: python -m pip install --prefer-binary 'build>=1,<2'
+      - run: python -m build --sdist --wheel --outdir audit/dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-build-${{ github.sha }}
+          path: audit/dist/
+          if-no-files-found: error
+
+  wheel-clean-import:
+    name: Wheel clean environment import
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.11', cache: pip}
+      - run: python -m pip install --prefer-binary 'build>=1,<2' -e '.[dev,ui]'
+      - run: |
+          mkdir -p audit/dist
+          python -m build --wheel --outdir audit/dist
+          python - <<'PY'
+          from tools import full_project_audit as audit
+          audit.AUDIT_DIR.mkdir(parents=True, exist_ok=True)
+          audit.LOG_PATH.write_text('', encoding='utf-8')
+          audit.CHECKS.clear()
+          audit.audit_wheel_import()
+          failed = [check.name for check in audit.CHECKS if check.status == audit.FAIL]
+          if failed:
+              raise SystemExit('wheel import failures: ' + ', '.join(failed))
+          PY
+
   minecraft-integrity:
     name: Real Fabric integrity
     runs-on: ubuntu-latest
@@ -207,34 +292,40 @@ jobs:
           path: .mmm/integrity-validation
           if-no-files-found: warn
 
-  root-cause-audit:
-    name: Exhaustive root-cause audit
+  test-plan:
+    name: Build maximum-parallel test matrix
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with: {python-version: '3.11', cache: pip}
-      - uses: actions/setup-java@v5
-        with: {distribution: temurin, java-version: '17'}
-      - run: python -m pip install --prefer-binary 'build>=1,<2' -e '.[dev,ui]'
-      - run: python tools/root_cause_audit_wrapper.py
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: root-cause-audit-${{ github.sha }}
-          path: .mmm/
-          if-no-files-found: warn
+      - id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          MATRIX="$(python -m tools.ci_test_matrix --max-jobs 256)"
+          test "$MATRIX" != '{"include":[]}'
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          python - <<'PY'
+          import json
+          import subprocess
+          payload = json.loads(subprocess.check_output(['python', '-m', 'tools.ci_test_matrix', '--max-jobs', '256'], text=True))
+          jobs = payload['include']
+          files = [item for job in jobs for item in job['files']]
+          assert files
+          assert len(files) == len(set(files))
+          print(f"test_files={len(files)} matrix_jobs={len(jobs)}")
+          PY
 
   tests:
-    name: Python 3.11 tests shard ${{ matrix.shard }}/16
+    name: Python 3.11 test group ${{ matrix.id }}
+    needs: test-plan
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
       fail-fast: false
-      max-parallel: 16
-      matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+      matrix: ${{ fromJSON(needs.test-plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -242,45 +333,55 @@ jobs:
       - uses: actions/setup-java@v5
         with: {distribution: temurin, java-version: '17'}
       - run: python -m pip install --prefer-binary -e '.[dev,ui]'
-      - name: Select deterministic test shard
+      - name: Materialize test group
         shell: bash
         env:
-          SHARD: ${{ matrix.shard }}
+          TEST_FILES_JSON: ${{ toJSON(matrix.files) }}
         run: |
           python - <<'PY' > /tmp/tests.txt
+          import json
           import os
-          from pathlib import Path
-          from tools.ci_test_shard import select_shard
-          paths = sorted(str(path) for path in Path('tests').glob('test_*.py'))
-          print('\n'.join(select_shard(paths, shard_number=int(os.environ['SHARD']), shard_count=16)))
+          for path in json.loads(os.environ['TEST_FILES_JSON']):
+              print(path)
           PY
           test -s /tmp/tests.txt
-      - name: Run test shard
+          cat /tmp/tests.txt
+      - name: Run test group
         shell: bash
         env:
-          SHARD: ${{ matrix.shard }}
+          GROUP: ${{ matrix.id }}
         run: |
           mapfile -t TEST_FILES < /tmp/tests.txt
-          python tools/pytest_diagnostics.py --log "audit/tests-${SHARD}.log" --junit "audit/tests-${SHARD}.xml" --durations 50 --maxfail 100 "${TEST_FILES[@]}"
+          python tools/pytest_diagnostics.py --log "audit/tests-${GROUP}.log" --junit "audit/tests-${GROUP}.xml" --durations 50 --maxfail 100 "${TEST_FILES[@]}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: tests-shard-${{ matrix.shard }}-${{ github.sha }}
+          name: tests-group-${{ matrix.id }}-${{ github.sha }}
           path: |
-            audit/tests-${{ matrix.shard }}.log
-            audit/tests-${{ matrix.shard }}.xml
+            audit/tests-${{ matrix.id }}.log
+            audit/tests-${{ matrix.id }}.xml
           if-no-files-found: warn
 
   python313:
-    name: Python 3.13 planning/RAG compatibility
+    name: Python 3.13 / ${{ matrix.test }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        test:
+          - tests/test_planning_state_contract.py
+          - tests/test_planning_mod_discovery.py
+          - tests/test_planning_ssot_invariants.py
+          - tests/test_planning_research_relevance_guards.py
+          - tests/test_research_evidence_handoff_contract.py
+          - tests/test_public_acceptance_runtime_boundary.py
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with: {python-version: '3.13'}
       - run: python -m pip install --prefer-binary -e . pytest
-      - run: python -m pytest -q tests/test_planning_state_contract.py tests/test_planning_mod_discovery.py tests/test_planning_ssot_invariants.py tests/test_planning_research_relevance_guards.py tests/test_research_evidence_handoff_contract.py tests/test_public_acceptance_runtime_boundary.py
+      - run: python -m pytest -q "${{ matrix.test }}"
 
   ci-gate:
     name: CI Gate
@@ -299,8 +400,12 @@ jobs:
       - colab-validation
       - skill-packaging
       - removed-surface
+      - audit-families
+      - dependency-check
+      - package-build
+      - wheel-clean-import
       - minecraft-integrity
-      - root-cause-audit
+      - test-plan
       - tests
       - python313
     runs-on: ubuntu-latest
