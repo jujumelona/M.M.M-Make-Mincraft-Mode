@@ -16,7 +16,7 @@ def _node(node_id: str, resource_class: str) -> WorkNode:
     )
 
 
-def test_durable_claims_do_not_preclaim_one_scarce_lane(tmp_path: Path) -> None:
+def test_canonical_orchestrator_claims_do_not_preclaim_one_scarce_lane(tmp_path: Path) -> None:
     nodes = (
         _node("asset-00", "image_gpu"),
         _node("asset-01", "image_gpu"),
@@ -38,9 +38,9 @@ def test_durable_claims_do_not_preclaim_one_scarce_lane(tmp_path: Path) -> None:
     )
     ledger.sync_plan(plan)
 
-    first = ledger.claim_ready("test", stages=("generate:test",))
-    second = ledger.claim_ready("test", stages=("generate:test",))
-    third = ledger.claim_ready("test", stages=("generate:test",))
+    first = ledger.claim_ready("mmm-orchestrator", stages=("generate:test",))
+    second = ledger.claim_ready("mmm-orchestrator", stages=("generate:test",))
+    third = ledger.claim_ready("mmm-orchestrator", stages=("generate:test",))
 
     assert first is not None and second is not None and third is not None
     resources = {
