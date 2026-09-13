@@ -154,8 +154,12 @@ def test_orchestrator_claim_does_not_overqueue_a_saturated_lane(
     assert third["node_id"] == "b-image"
 
 
-def test_anchor_fenced_runtime_disables_coarse_stage_admission() -> None:
-    assert scheduler_contract._SERIAL_CPU_STAGES == ()
+def test_anchor_fenced_runtime_keeps_fail_closed_stage_admission() -> None:
+    assert scheduler_contract._SERIAL_CPU_STAGES == (
+        "generate:content",
+        "generate:system",
+        "generate:entity",
+    )
 
 
 def test_orchestrator_polling_heartbeats_live_leases_but_reclaims_expired(

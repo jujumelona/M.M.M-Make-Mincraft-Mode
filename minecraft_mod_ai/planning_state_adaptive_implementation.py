@@ -784,28 +784,15 @@ def compile_progress_monotone_detailed_plans(
                 job = jobs[job_index]
                 with state_lock:
                     before = remaining
+                    # checkpoint_completed_work already persisted this result.
+                    # Only update the in-memory mirrors used for assembly here.
                     if kind_tag == "artifact":
                         result_receipt = _planning_only_artifact_receipt(result_receipt)
                         job["artifact_fragments"].setdefault(artifact_kind, {})[
                             step_id
                         ] = result_receipt
-                        working_state = _store_artifact_progress(
-                            working_state,
-                            requirement_ref=job["requirement_ref"],
-                            artifact_kind=artifact_kind,
-                            step_id=step_id,
-                            receipt=result_receipt,
-                        )
                     else:
                         job["fragments"][idx] = result_receipt
-                        working_state = store_criterion_progress(
-                            working_state,
-                            requirement_ref=job["requirement_ref"],
-                            selected_sections=job["selected_sections"],
-                            criterion_index=idx,
-                            criterion=job["criteria"][idx],
-                            fragment=result_receipt,
-                        )
 
                     remaining -= 1
                     if remaining >= before:
@@ -813,7 +800,6 @@ def compile_progress_monotone_detailed_plans(
                             "DETAILED_PLAN_NO_PROGRESS: unfinished work items did not strictly decrease"
                         )
 
-                    working_state = _checkpoint_state(working_state, checkpoint)
                     emit_root_cause(
                         "detailed_artifact_work_unit_checkpoint",
                         stage="planning_state",
