@@ -195,10 +195,9 @@ def assert_candidate_research_complete(state: Mapping[str, Any]) -> None:
         pool = state.get("task_candidate_pool") or {}
         requirement = requirement_for(state, research)
         trace = requirement_candidate_trace(requirement, pool)
-        frontier = semantic_frontier_pool(requirement, pool, trace)
         saved_trace = research.get("candidate_trace") or {}
         from .planning_semantic_research import validate_semantic_review
-        review = validate_semantic_review(requirement, frontier,
+        review = validate_semantic_review(requirement, pool,
                                           saved_trace.get("semantic_review") or {})
         trace["semantic_review"] = review
         trace["coverage_complete"] = review["complete"]
