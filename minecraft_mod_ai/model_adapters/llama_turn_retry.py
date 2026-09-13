@@ -15,6 +15,10 @@ from typing import Any, Callable
 
 import httpx
 
+from ..model_concurrency import (
+    ModelExecutionDeadlineExceeded,
+    remaining_model_execution_seconds,
+)
 from .base import ModelBackendError
 
 _DEFAULT_RETRY_ATTEMPTS = 3
@@ -75,9 +79,12 @@ def _exception_chain(exc: BaseException) -> tuple[BaseException, ...]:
 
 
 def _is_retriable_turn_failure(exc: BaseException) -> bool:
-    """Retry transport/liveness failures, never semantic/schema/request failures."""
+    """Retry transport/liveness failures, never semantic/schema/deadline failures."""
 
-    for item in _exception_chain(exc):
+    chain = _exception_chain(exc)
+    if any(isinstance(item, ModelExecutionDeadlineExceeded) for item in chain):
+        return False
+    for item in chain:
         if isinstance(item, (httpx.TransportError, TimeoutError)):
             return True
         message = str(item).strip().lower()
@@ -98,6 +105,25 @@ def _discarded_partial_hint(exc: BaseException) -> bool:
 
 def _install_marker(owner: type[Any]) -> str:
     return f"{owner.__module__}.{owner.__qualname__}"
+
+
+def _sleep_before_retry(*, backoff: float, attempt: int, cause: BaseException) -> None:
+    """Back off only while the caller's absolute model deadline still has budget."""
+
+    delay = max(0.0, float(backoff) * max(1, int(attempt)))
+    remaining = remaining_model_execution_seconds()
+    if remaining is not None:
+        if remaining <= 0.0 or delay >= remaining:
+            raise ModelExecutionDeadlineExceeded(
+                "model execution deadline exhausted before llama turn retry"
+            ) from cause
+    if delay:
+        time.sleep(delay)
+    remaining_after_sleep = remaining_model_execution_seconds()
+    if remaining_after_sleep is not None and remaining_after_sleep <= 0.0:
+        raise ModelExecutionDeadlineExceeded(
+            "model execution deadline exhausted during llama turn retry backoff"
+        ) from cause
 
 
 def install_llama_turn_retry(adapter_type: type[Any]) -> None:
@@ -133,8 +159,7 @@ def install_llama_turn_retry(adapter_type: type[Any]) -> None:
                 )
                 if not will_retry:
                     raise
-                if backoff:
-                    time.sleep(backoff * attempt)
+                _sleep_before_retry(backoff=backoff, attempt=attempt, cause=exc)
         raise AssertionError("unreachable llama turn retry state")
 
     generate_turn_with_retry._mmm_transactional_turn_retry = True  # type: ignore[attr-defined]
