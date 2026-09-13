@@ -12,9 +12,11 @@ unproductive repair cycles:
 * recreating a path that the retained mutation history proves was already created;
 * repair turns that omit the verifier diagnostics that must drive the next edit.
 
-A later verifier PASS supersedes the earlier failure. No retry-count heuristic is used.
+A later verifier PASS supersedes the earlier failure. Invalid repair actions are retried
+by semantic conflict identity, never by an arbitrary attempt count.
 """
 
+import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from functools import wraps
@@ -35,6 +37,7 @@ _CREATE_OPERATIONS = frozenset(
     }
 )
 _REPAIR_GUIDANCE_MARKER = "MMM_VERIFIER_REPAIR_CONTEXT_V1"
+_REPAIR_REJECTION_MARKER = "MMM_VERIFIER_REPAIR_ACTION_REJECTED_V1"
 
 
 def _message_payload(message: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -176,21 +179,32 @@ def _compact_diagnostic(item: Mapping[str, Any]) -> dict[str, Any]:
     return compact
 
 
-def _repair_guidance(
+def _repair_evidence(
     verifier_name: str | None,
     verifier_payload: Mapping[str, Any] | None,
     applied_created_paths: frozenset[str],
-) -> str:
+) -> tuple[dict[str, Any], str]:
     receipt = _diagnostic_receipt(verifier_payload)
     errors = diagnostic_errors(receipt) if receipt is not None else []
-    diagnostics = [_compact_diagnostic(item) for item in errors]
     evidence = {
         "verifier": verifier_name,
-        "diagnostics": diagnostics,
+        "diagnostics": [_compact_diagnostic(item) for item in errors],
         "paths_already_created_in_this_run": sorted(applied_created_paths),
     }
+    canonical = json.dumps(
+        evidence,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    fingerprint = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return evidence, fingerprint
+
+
+def _repair_guidance(evidence: Mapping[str, Any], fingerprint: str) -> str:
     return (
-        f"{_REPAIR_GUIDANCE_MARKER}\n"
+        f"{_REPAIR_GUIDANCE_MARKER} {fingerprint}\n"
         "The latest trustworthy verifier result is FAIL. This is a repair turn, not a fresh-generation turn. "
         "Use the verifier diagnostics below as the direct repair target. Any path listed under "
         "paths_already_created_in_this_run has an APPLIED byte-diff receipt and therefore exists now: "
@@ -201,16 +215,20 @@ def _repair_guidance(
     )
 
 
-def _guidance_already_present(messages: Sequence[Mapping[str, Any]]) -> bool:
+def _guidance_fingerprint_present(
+    messages: Sequence[Mapping[str, Any]],
+    fingerprint: str,
+) -> bool:
+    expected = f"{_REPAIR_GUIDANCE_MARKER} {fingerprint}"
     return any(
         str(message.get("role") or "").strip().casefold() == "system"
         and isinstance(message.get("content"), str)
-        and str(message.get("content")).startswith(_REPAIR_GUIDANCE_MARKER)
+        and str(message.get("content")).startswith(expected)
         for message in reversed(tuple(messages))
     )
 
 
-def _turn_create_conflict(turn: Any, applied_created_paths: frozenset[str]) -> str | None:
+def _turn_create_conflict(turn: Any, applied_created_paths: frozenset[str]) -> tuple[str, str] | None:
     if not applied_created_paths:
         return None
     for call in tuple(getattr(turn, "tool_calls", ()) or ()):
@@ -237,8 +255,37 @@ def _turn_create_conflict(turn: Any, applied_created_paths: frozenset[str]) -> s
             or arguments.get("target_file")
         )
         if path and path in applied_created_paths:
-            return path
+            return path, operation
     return None
+
+
+def _conflict_fingerprint(repair_fingerprint: str, path: str, operation: str) -> str:
+    canonical = json.dumps(
+        {
+            "repair_fingerprint": repair_fingerprint,
+            "path": path,
+            "operation": operation,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _repair_rejection_guidance(
+    *,
+    conflict_fingerprint: str,
+    path: str,
+    operation: str,
+) -> str:
+    return (
+        f"{_REPAIR_REJECTION_MARKER} {conflict_fingerprint}\n"
+        f"The proposed verifier-repair action was rejected because {operation!r} attempted to recreate "
+        f"the already APPLIED path {path!r}. The workspace already contains that file. Do not repeat, "
+        "rephrase, or regenerate that create action. Call apply_source_edit once with an existing-file "
+        "operation such as replace_exact or insert_before/insert_after that materially changes the current "
+        "source to resolve the supplied verifier diagnostics."
+    )
 
 
 def install(loop_module: Any) -> None:
@@ -275,48 +322,73 @@ def install(loop_module: Any) -> None:
             )
 
         applied_created_paths = _applied_created_paths(messages)
+        repair_evidence, repair_fingerprint = _repair_evidence(
+            verifier_name,
+            verifier_payload,
+            applied_created_paths,
+        )
         if (
             unresolved_before == "FAIL"
             and tool_names & frozenset(loop_module._MUTATION_ACT_TOOLS)
-            and not _guidance_already_present(messages)
+            and not _guidance_fingerprint_present(messages, repair_fingerprint)
         ):
             messages.append(
                 {
                     "role": "system",
-                    "content": _repair_guidance(
-                        verifier_name,
-                        verifier_payload,
-                        applied_created_paths,
-                    ),
+                    "content": _repair_guidance(repair_evidence, repair_fingerprint),
                 }
             )
 
-        turn = current(
-            router,
-            config=config,
-            adapter=adapter,
-            request=request,
-            messages=messages,
-            media_paths=media_paths,
-            tool_choice=tool_choice,
-            parallel_tool_calls=parallel_tool_calls,
-        )
+        rejected_conflicts: set[str] = set()
+        while True:
+            turn = current(
+                router,
+                config=config,
+                adapter=adapter,
+                request=request,
+                messages=messages,
+                media_paths=media_paths,
+                tool_choice=tool_choice,
+                parallel_tool_calls=parallel_tool_calls,
+            )
 
-        unresolved_after = latest_verifier_outcome(loop_module, messages) or unresolved_before
-        if unresolved_after == "FAIL":
-            recreate_path = _turn_create_conflict(turn, applied_created_paths)
-            if recreate_path is not None:
-                raise loop_module.ModelConfigurationError(
-                    "VERIFICATION_REPAIR_CREATE_CONFLICT: verifier-driven repair attempted to recreate "
-                    f"the already APPLIED path {recreate_path!r}; repair must edit the existing file and "
-                    "materially change bytes before verification can run again."
+            unresolved_after = latest_verifier_outcome(loop_module, messages) or unresolved_before
+            if unresolved_after != "FAIL":
+                return turn
+
+            recreate = _turn_create_conflict(turn, applied_created_paths)
+            if recreate is not None:
+                recreate_path, recreate_operation = recreate
+                conflict_fingerprint = _conflict_fingerprint(
+                    repair_fingerprint,
+                    recreate_path,
+                    recreate_operation,
                 )
+                if conflict_fingerprint in rejected_conflicts:
+                    raise loop_module.ModelConfigurationError(
+                        "VERIFICATION_REPAIR_CREATE_CONFLICT_FIXED_POINT: the coder repeated the same "
+                        "semantically invalid create action after host correction while verifier evidence "
+                        f"was unchanged. path={recreate_path!r} operation={recreate_operation!r}"
+                    )
+                rejected_conflicts.add(conflict_fingerprint)
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": _repair_rejection_guidance(
+                            conflict_fingerprint=conflict_fingerprint,
+                            path=recreate_path,
+                            operation=recreate_operation,
+                        ),
+                    }
+                )
+                continue
+
             if not getattr(turn, "tool_calls", ()):
                 raise loop_module.ModelConfigurationError(
                     "VERIFICATION_FAILED_PROSE_REJECTED: source verification is still FAIL; "
                     "a prose/final-summary response is not execution progress and cannot complete the coder loop."
                 )
-        return turn
+            return turn
 
     guarded_generate_turn._mmm_verifier_fail_closed_completion = True  # type: ignore[attr-defined]
     guarded_generate_turn.__wrapped__ = current
