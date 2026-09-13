@@ -1,4 +1,5 @@
 name: CI
+# Full pipeline gate: every required job must pass on main before the repair is considered complete.
 
 on:
   workflow_dispatch:
