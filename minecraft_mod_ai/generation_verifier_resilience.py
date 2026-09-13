@@ -23,15 +23,6 @@ from .root_cause_trace import emit_root_cause
 _MARKER = "_mmm_host_owned_generation_verifier"
 _JDT_COLLECTOR_MARKER = "_mmm_progress_aware_jdt_collector"
 _VERIFIER_NAME = "java_diagnostics"
-_PROGRESS_METHODS = frozenset(
-    {
-        "language/status",
-        "language/eventNotification",
-        "$/progress",
-        "window/logMessage",
-        "window/showMessage",
-    }
-)
 
 
 def _bounded_int_env(name: str, *, default: int, minimum: int, maximum: int) -> int:
@@ -395,9 +386,9 @@ def _collect_diagnostics_progress_aware(
         if method != "textDocument/publishDiagnostics":
             trace_module._record_server_progress(rpc, message)
             ignored_methods[method] += 1
-            # Any valid JSON-RPC traffic proves the server is alive. Recognized progress
-            # methods are the common path; responses/events also count, while the hard
-            # cap prevents noisy servers from keeping verification alive forever.
+            # Any valid JSON-RPC traffic proves the server is alive. Responses and
+            # events both count, while the independent hard cap prevents a noisy server
+            # from keeping verification alive forever.
             last_progress = now
             continue
 
