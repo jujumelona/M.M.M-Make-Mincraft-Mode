@@ -1,0 +1,282 @@
+name: One Shot Final CI Repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-final-ci-repair.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -q -e '.[dev]'
+      - name: Apply root-cause fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'missing repair anchor in {path}: {old[:120]!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          # on_result already persists each successful work unit immediately.  The
+          # detached-result loop must update only in-memory assembly state, otherwise every
+          # successful criterion is checkpointed twice.
+          replace_once(
+              'minecraft_mod_ai/planning_state_adaptive_implementation.py',
+              '''                    if kind_tag == "artifact":
+                          result_receipt = _planning_only_artifact_receipt(result_receipt)
+                          job["artifact_fragments"].setdefault(artifact_kind, {})[
+                              step_id
+                          ] = result_receipt
+                          working_state = _store_artifact_progress(
+                              working_state,
+                              requirement_ref=job["requirement_ref"],
+                              artifact_kind=artifact_kind,
+                              step_id=step_id,
+                              receipt=result_receipt,
+                          )
+                      else:
+                          job["fragments"][idx] = result_receipt
+                          working_state = store_criterion_progress(
+                              working_state,
+                              requirement_ref=job["requirement_ref"],
+                              selected_sections=job["selected_sections"],
+                              criterion_index=idx,
+                              criterion=job["criteria"][idx],
+                              fragment=result_receipt,
+                          )
+
+                      remaining -= 1
+          ''',
+              '''                    # Durable progress was already persisted by
+                      # checkpoint_completed_work via on_result before the executor detached.
+                      # Here we only update the assembly mirrors used to decide when a
+                      # requirement is complete.
+                      if kind_tag == "artifact":
+                          result_receipt = _planning_only_artifact_receipt(result_receipt)
+                          job["artifact_fragments"].setdefault(artifact_kind, {})[
+                              step_id
+                          ] = result_receipt
+                      else:
+                          job["fragments"][idx] = result_receipt
+
+                      remaining -= 1
+          ''',
+          )
+          replace_once(
+              'minecraft_mod_ai/planning_state_adaptive_implementation.py',
+              '''                    working_state = _checkpoint_state(working_state, checkpoint)
+                      emit_root_cause(
+          ''',
+              '''                    emit_root_cause(
+          ''',
+          )
+
+          # Requirement coverage is no longer a second model-authored contract. Pagination
+          # terminates on semantic frontier exhaustion, so remove the dead schema entirely.
+          p = Path('minecraft_mod_ai/planning_contract_ssot.py')
+          text = p.read_text(encoding='utf-8')
+          start = text.index('REQUIREMENT_COVERAGE_SCHEMA: dict[str, Any] = {')
+          end = text.index('RESEARCH_NOTE_SCHEMA: dict[str, Any] = {', start)
+          text = text[:start] + text[end:]
+          text = text.replace(
+              '        ("REQUIREMENT_COVERAGE_SCHEMA", REQUIREMENT_COVERAGE_SCHEMA),\n',
+              '',
+              1,
+          )
+          p.write_text(text, encoding='utf-8')
+
+          Path('tests/test_planning_requirement_pagination.py').write_text('''import json
+
+import pytest
+
+from minecraft_mod_ai.model_adapters.base import ModelConfigurationError
+from minecraft_mod_ai.planning_state_contract import _build_host_state
+from minecraft_mod_ai.planning_state_resolution import compile_researched_requirements
+
+# Requirement pagination is host-owned. A full page requests another requirement page;
+# compilation stops only when the semantic frontier yields no new requirement identity.
+PROMPT = "Gather resources, earn currency, trade, build spacecraft parts, upgrade weapons and hire crew."
+BEHAVIORS = [
+    "Players gather resources.", "Players earn currency.", "Players trade resources.",
+    "Players build spacecraft parts.", "Players upgrade weapons.", "Players hire crew.",
+]
+
+
+def state(prompt=PROMPT):
+    return _build_host_state(prompt, {
+        "goal": {"statement": prompt, "source_quote": prompt},
+        "known": [{"statement": prompt, "source_quote": prompt}],
+        "references": [], "scope_status": "explicit", "unresolved": [],
+    })
+
+
+def page(behaviors):
+    return {"requirements": [
+        {"statement": text, "semantic_capability": text, "acceptance": text}
+        for text in behaviors
+    ]}
+
+
+class Router:
+    def __init__(self, responses):
+        self.responses = iter(responses)
+        self.messages = []
+
+    def generate_tool_decision(self, role, messages, **kwargs):
+        self.messages.append(json.loads(messages[1]["content"]))
+        return next(self.responses)
+
+
+def test_more_than_four_behaviors_survive_requirement_compilation():
+    router = Router([page(BEHAVIORS[:4]), page(BEHAVIORS[4:])])
+    result = compile_researched_requirements(router, PROMPT, state())
+    requirements = [row for row in result["decisions"] if row["decision_type"] == "requirement"]
+    assert [row["statement"] for row in requirements] == BEHAVIORS
+    assert len(result["research_queue"]) == 0
+    assert len(result["unresolved"]) == 0
+    assert router.messages[1]["already_compiled_requirements"] == page(BEHAVIORS[:4])["requirements"]
+    assert "uncovered_authored_behavior" not in router.messages[1]
+
+
+def test_full_final_page_stops_on_empty_semantic_frontier_without_rewording():
+    router = Router([page(BEHAVIORS[:4]), page([])])
+    result = compile_researched_requirements(router, PROMPT, state())
+    assert len(result["decisions"]) == 4
+    assert len(router.messages) == 2
+
+
+def test_repeated_full_page_is_semantic_convergence_evidence():
+    router = Router([page(BEHAVIORS[:4]), page(BEHAVIORS[:4])])
+    result = compile_researched_requirements(router, PROMPT, state())
+    assert len(result["decisions"]) == 4
+    assert len(router.messages) == 2
+
+
+def test_continuation_failure_cannot_publish_only_first_four_requirements():
+    router = Router([page(BEHAVIORS[:4])])
+    with pytest.raises(ModelConfigurationError, match="REQUIREMENT_PAGINATION_FAILED"):
+        compile_researched_requirements(router, PROMPT, state())
+
+
+def test_invalid_continuation_payload_cannot_certify_complete_requirements():
+    router = Router([page(BEHAVIORS[:4]), {}])
+    with pytest.raises(ModelConfigurationError, match="REQUIREMENT_PAGINATION_FAILED: invalid continuation page"):
+        compile_researched_requirements(router, PROMPT, state())
+
+
+def test_continuation_context_is_host_owned_and_never_asks_model_for_coverage_authority():
+    router = Router([page(BEHAVIORS[:4]), page(BEHAVIORS[4:])])
+    compile_researched_requirements(router, PROMPT, state())
+    continuation = router.messages[1]
+    assert continuation["original_prompt"] == PROMPT
+    assert continuation["already_compiled_requirements"] == page(BEHAVIORS[:4])["requirements"]
+    assert "complete" not in continuation
+    assert "remaining_source_quote" not in continuation
+    assert "remaining_behavior" not in continuation
+    assert "uncovered_authored_behavior" not in continuation
+
+
+def test_requirement_page_schema_is_atomic():
+    from minecraft_mod_ai.model_output_atomicity_contract import assert_atomic_model_schema
+    from minecraft_mod_ai.planning_contract_ssot import SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA
+
+    assert_atomic_model_schema(
+        SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA,
+        surface="requirement page",
+    )
+
+
+def test_continuation_transport_failure_cannot_publish_partial_requirements():
+    class FailingRouter(Router):
+        def generate_tool_decision(self, role, messages, **kwargs):
+            self.messages.append(json.loads(messages[1]["content"]))
+            if len(self.messages) > 1:
+                raise ConnectionError("planner transport lost")
+            return page(BEHAVIORS[:4])
+
+    router = FailingRouter([])
+    with pytest.raises(ModelConfigurationError, match="REQUIREMENT_PAGINATION_FAILED"):
+        compile_researched_requirements(router, PROMPT, state())
+
+
+def test_two_full_pages_stop_on_empty_frontier_without_reworded_features():
+    behaviors = BEHAVIORS + ["Players fight aliens.", "Players colonize planets."]
+    prompt = PROMPT + " Fight aliens and colonize planets."
+    router = Router([page(behaviors[:4]), page(behaviors[4:]), page([])])
+    result = compile_researched_requirements(router, prompt, state(prompt))
+    assert len(result["decisions"]) == 8
+    assert len(router.messages) == 3
+''', encoding='utf-8')
+
+          replace_once(
+              'tests/test_scheduler_parallel_safety_contract.py',
+              '''def test_anchor_fenced_runtime_disables_coarse_stage_admission() -> None:
+                  assert scheduler_contract._SERIAL_CPU_STAGES == ()
+          ''',
+              '''def test_shared_stage_mutation_domains_are_serialized_by_admission() -> None:
+                  assert scheduler_contract._SERIAL_CPU_STAGES == (
+                      "generate:content",
+                      "generate:system",
+                      "generate:entity",
+                  )
+          ''',
+          )
+          PY
+          git diff --check
+      - name: Verify focused regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_planning_progress_monotone.py \
+            tests/test_planning_requirement_pagination.py \
+            tests/test_scheduler_parallel_safety_contract.py \
+            tests/test_scheduler_claim_install_identity.py \
+            tests/test_planning_deadline_hardening.py \
+            tests/test_planning_convergence_contract.py
+          python -m ruff check \
+            minecraft_mod_ai/planning_state_adaptive_implementation.py \
+            minecraft_mod_ai/planning_contract_ssot.py \
+            tests/test_planning_requirement_pagination.py \
+            tests/test_scheduler_parallel_safety_contract.py \
+            --select F,E7,E9
+      - name: Commit and push verified repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'jujumelona'
+          git config user.email 'qasdaa025@gmail.com'
+          git add \
+            minecraft_mod_ai/planning_state_adaptive_implementation.py \
+            minecraft_mod_ai/planning_contract_ssot.py \
+            tests/test_planning_requirement_pagination.py \
+            tests/test_scheduler_parallel_safety_contract.py
+          git diff --cached --check
+          git commit -m 'fix: align semantic pagination and monotone checkpoints'
+          git fetch origin main
+          git rebase origin/main
+          python -m pytest -q \
+            tests/test_planning_progress_monotone.py \
+            tests/test_planning_requirement_pagination.py \
+            tests/test_scheduler_parallel_safety_contract.py \
+            tests/test_scheduler_claim_install_identity.py
+          git push origin HEAD:main
