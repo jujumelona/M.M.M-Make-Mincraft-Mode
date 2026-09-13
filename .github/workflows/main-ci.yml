@@ -1,5 +1,5 @@
 name: CI
-# Full pipeline gate: every required job must pass on main before the repair is considered complete.
+# Fail-closed pipeline gate: CI is green only when every required contract and production-path regression passes.
 
 on:
   workflow_dispatch:
@@ -10,10 +10,9 @@ on:
 
 permissions:
   contents: read
-  statuses: write
 
 concurrency:
-  group: ci-audit-v10-${{ github.event_name }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  group: ci-audit-v11-${{ github.event_name }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -41,22 +40,12 @@ jobs:
           path: .mmm/integrity-validation
           include-hidden-files: true
           retention-days: 14
+
   audit:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     name: Static and packaging audit
     steps:
-      - name: Publish diagnostic run locator
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: >-
-          gh api --method POST
-          "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}"
-          -f state=success
-          -f context='ci/run-locator'
-          -f description='Diagnostic CI run locator published'
-          -f target_url="$RUN_URL"
       - uses: actions/checkout@v6
         with:
           fetch-depth: 2
@@ -232,6 +221,28 @@ jobs:
           tests/test_artifact_graph_executor.py
           tests/test_generation_collision_anchors.py
 
+  production-path:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    name: Production path regression
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Exercise planner, host loop, repair, and verifier path
+        run: >-
+          python -m pytest -q
+          tests/test_unified_host_execution_loop.py
+          tests/test_space_progression_planner_and_verifier_regression.py
+
   remaining-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -294,6 +305,8 @@ jobs:
               "test_source_patch_path_concurrency.py",
               "test_artifact_graph_executor.py",
               "test_generation_collision_anchors.py",
+              "test_unified_host_execution_loop.py",
+              "test_space_progression_planner_and_verifier_regression.py",
           }
           shard_number = int(os.environ["SHARD"])
           eligible = [
@@ -338,3 +351,41 @@ jobs:
           path: |
             audit/pytest-shard-${{ matrix.shard }}.log
             audit/pytest-shard-${{ matrix.shard }}.xml
+
+  ci-gate:
+    name: CI Gate
+    if: ${{ always() }}
+    needs:
+      - integrity
+      - audit
+      - runtime-clean
+      - mcp-evidence
+      - planner-contract
+      - coder-contract
+      - ui-contract
+      - parallel-repair
+      - production-path
+      - remaining-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fail unless every required CI job succeeded
+        env:
+          REQUIRED_JOBS: ${{ toJSON(needs) }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+
+          jobs = json.loads(os.environ["REQUIRED_JOBS"])
+          failed = {
+              name: details.get("result", "missing")
+              for name, details in jobs.items()
+              if details.get("result") != "success"
+          }
+          if failed:
+              for name, result in sorted(failed.items()):
+                  print(f"::error title=Required CI job did not succeed::{name}: {result}")
+              raise SystemExit(1)
+          print("All required CI jobs succeeded; CI Gate is authoritative.")
+          PY
