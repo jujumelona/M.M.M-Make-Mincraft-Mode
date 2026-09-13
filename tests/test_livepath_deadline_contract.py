@@ -39,9 +39,14 @@ def test_artifact_generation_and_validation_are_deadline_bounded() -> None:
     assert "with ThreadPoolExecutor" not in source
 
 
-def test_artifact_single_job_has_no_unbounded_fast_path() -> None:
+def test_artifact_single_job_fast_path_keeps_model_deadline() -> None:
     source = inspect.getsource(artifact_graph_executor.execute_artifact_graph)
-    assert "if len(ordered_jobs) == 1" not in source
+    branch = source.index("if len(ordered_jobs) == 1")
+    parallel = source.index("order = {job.job_id: index", branch)
+    single_job_source = source[branch:parallel]
+    assert "planning_work_unit_timeout_seconds()" in single_job_source
+    assert "run_with_model_execution_deadline" in single_job_source
+    assert "_validate_completed_job" in single_job_source
 
 
 def test_agent_tool_round_limit_is_not_a_default_completion_rule(monkeypatch) -> None:
