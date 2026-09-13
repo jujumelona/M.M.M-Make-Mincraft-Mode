@@ -84,6 +84,71 @@ def test_feedback_path_selects_only_observed_generation_owner():
     assert [item["node_id"] for item in matches] == ["generate-custom-00000000"]
 
 
+def test_unowned_base_project_diagnostics_route_to_prepare_project():
+    ledger = _FakeLedger(
+        [
+            _generation_task(
+                "generate-custom-00000000",
+                "debug_token",
+                "src/main/java/dev/mmm/debugfixture/DebugToken.java",
+                "REQ-DEBUG",
+            )
+        ]
+    )
+    diagnostics = [
+        {"path": "src/main/resources/fabric.mod.json", "code": "BAD_FABRIC_DEPENDS"},
+        {"path": "src/main/resources/pack.mcmeta", "code": "BAD_RESOURCE_PACK_FORMAT"},
+        {
+            "path": "src/main/resources/assets/mmm_debug_fixture/lang/en_us.json",
+            "code": "MISSING_JSON",
+        },
+        {
+            "path": "src/main/resources/assets/mmm_debug_fixture/lang/ko_kr.json",
+            "code": "MISSING_JSON",
+        },
+    ]
+
+    seeds, owners, _requirements, matches = feedback._derive_impacted_seeds(
+        ledger,
+        {"checkpoint_id": "validate-source", "diagnostics": diagnostics},
+    )
+
+    assert seeds == {"prepare-project"}
+    assert owners == {"prepare-project"}
+    prepare_match = next(item for item in matches if item["node_id"] == "prepare-project")
+    assert set(prepare_match["diagnostic_paths"]) == {item["path"] for item in diagnostics}
+    assert prepare_match["match"]["host_base_project"] is True
+
+
+def test_generation_owner_wins_before_base_project_fallback():
+    ledger = _FakeLedger(
+        [
+            _generation_task(
+                "generate-content-00000000",
+                "metadata_owner",
+                "src/main/resources/fabric.mod.json",
+                "REQ-META",
+            )
+        ]
+    )
+
+    seeds, owners, requirements, matches = feedback._derive_impacted_seeds(
+        ledger,
+        {
+            "checkpoint_id": "validate-source",
+            "diagnostics": [
+                {"path": "src/main/resources/fabric.mod.json", "code": "BAD_ENTRYPOINTS"}
+            ],
+        },
+    )
+
+    assert seeds == {"generate-content-00000000"}
+    assert "prepare-project" not in seeds
+    assert owners == {"metadata_owner"}
+    assert requirements == {"REQ-META"}
+    assert [item["node_id"] for item in matches] == ["generate-content-00000000"]
+
+
 def test_path_binding_does_not_use_basename_only():
     assert feedback._path_equivalent(
         "/workspace/mod/src/main/java/a/Widget.java",
@@ -148,7 +213,6 @@ def test_diagnostics_extract_path_from_gradle_message():
     )
 
 
-
 class _FeedbackLoopError(RuntimeError):
     pass
 
@@ -206,24 +270,34 @@ def _install_feedback_loop(monkeypatch, *, failures_before_success: int | None):
     return module.CompleteProductionOrchestrator(), feedback_rows
 
 
-def test_execution_feedback_repair_allows_two_distinct_reentries(monkeypatch):
+def test_execution_feedback_repair_allows_more_than_two_distinct_reentries(monkeypatch):
     orchestrator, feedback_rows = _install_feedback_loop(
-        monkeypatch, failures_before_success=2
+        monkeypatch, failures_before_success=4
     )
 
     assert orchestrator.execute() == "done"
-    assert orchestrator.calls == 3
-    assert orchestrator._mmm_feedback_ledger.invalidations == 2
-    assert len(feedback_rows) == 2
+    assert orchestrator.calls == 5
+    assert orchestrator._mmm_feedback_ledger.invalidations == 4
+    assert len(feedback_rows) == 4
 
 
-def test_execution_feedback_repair_stops_before_third_reentry(monkeypatch):
+def test_execution_feedback_repair_stops_on_repeated_fingerprint(monkeypatch):
     orchestrator, feedback_rows = _install_feedback_loop(
         monkeypatch, failures_before_success=None
     )
 
-    with pytest.raises(_FeedbackLoopError, match="failure-3"):
+    def repeated_feedback(_feedback):
+        orchestrator._mmm_feedback_ledger.invalidations += 1
+        return {
+            "feedback_fingerprint": "same-feedback",
+            "global_replan_required": False,
+            "impacted_generation_node_ids": ["generate-same"],
+        }
+
+    orchestrator._mmm_feedback_ledger.invalidate_execution_feedback = repeated_feedback
+
+    with pytest.raises(_FeedbackLoopError, match="failure-2"):
         orchestrator.execute()
-    assert orchestrator.calls == 3
+    assert orchestrator.calls == 2
     assert orchestrator._mmm_feedback_ledger.invalidations == 2
     assert len(feedback_rows) == 2
