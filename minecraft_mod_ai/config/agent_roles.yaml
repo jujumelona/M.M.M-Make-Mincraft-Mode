@@ -5,12 +5,15 @@ agents:
     skills:
     - intake-mod-brief
     - plan-game-design
+    - route-generic-game-research
+    - gather-adaptive-minecraft-evidence
     - freeze-approved-spec
     - compile-massive-work-graph
     purpose: gameplay loop, progression, combat, quest, vanilla integration, acceptance-test
       design and scalable production graph planning
     mcp_servers:
     - mmm-frontdoor
+    - mmm-planning
     - mmm-research
     - minecraft-dev
     - mcmodding-docs
@@ -105,7 +108,6 @@ agents:
     - minecraft-player-agent
     - minecraft-rcon
 routing_policy:
-  max_tools_per_skill: 10
   silent_fallback: forbidden
   cross_version_code: forbidden
   writes_require_approval_hash: true
