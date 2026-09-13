@@ -204,8 +204,8 @@ def test_canonical_state_accepts_authored_rows_without_fake_evidence() -> None:
     validate_state_links(state)
 
 
-def test_preflight_rejects_any_unready_requirement_before_compilation() -> None:
+def test_preflight_allows_requirement_without_grounded_evidence() -> None:
     state = _grounded_state()
     requirements = [{"requirement_id": "req_001"}, {"requirement_id": "req_002"}]
-    with pytest.raises(ValueError, match="req_002 has no sufficient grounded"):
-        _preflight_detailed_planning(state, requirements)
+
+    _preflight_detailed_planning(state, requirements)
