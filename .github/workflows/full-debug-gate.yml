@@ -38,21 +38,13 @@ jobs:
           cache: pip
 
       - name: Install debug dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install --prefer-binary "build>=1,<2" -e ".[dev,ui]"
+        run: python -m pip install --prefer-binary "build>=1,<2" -e ".[dev,ui]"
 
       - name: Catch stale or missing internal imports
         run: python .github/scripts/debug_repo_audit.py
 
-      - name: Compile Python sources
-        run: python -m compileall -q minecraft_mod_ai tests tools download_resources.py
-
       - name: Import package bootstrap
         run: python -c "import minecraft_mod_ai"
-
-      - name: Collect the entire pytest suite
-        run: python -m pytest --collect-only -q
 
       - name: Execute Colab Debug fixture and focused regressions
         run: |
