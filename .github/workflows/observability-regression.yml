@@ -2,16 +2,12 @@ name: Observability Regression
 
 on:
   workflow_dispatch:
-  pull_request:
-  push:
-    branches:
-      - main
 
 permissions:
   contents: read
 
 concurrency:
-  group: observability-${{ github.event_name }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  group: observability-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -29,42 +25,7 @@ jobs:
         run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Compile and lint observability-owned surfaces
         run: |
-          python -m compileall -q \
-            minecraft_mod_ai/diagnostics.py \
-            tools/audit_stream_redactor.py \
-            tools/full_project_audit.py \
-            tools/root_cause_audit_wrapper.py \
-            tools/pytest_diagnostics.py \
-            tools/ci_test_shard.py \
-            tests/test_diagnostics.py \
-            tests/test_audit_stream_redactor_context.py \
-            tests/test_root_cause_audit_wrapper.py \
-            tests/test_pytest_diagnostics.py \
-            tests/test_diagnostic_filesystem_failures.py \
-            tests/test_full_project_audit_observability.py \
-            tests/test_ci_test_shard.py
-          python -m ruff check \
-            minecraft_mod_ai/diagnostics.py \
-            tools/audit_stream_redactor.py \
-            tools/full_project_audit.py \
-            tools/root_cause_audit_wrapper.py \
-            tools/pytest_diagnostics.py \
-            tools/ci_test_shard.py \
-            tests/test_diagnostics.py \
-            tests/test_audit_stream_redactor_context.py \
-            tests/test_root_cause_audit_wrapper.py \
-            tests/test_pytest_diagnostics.py \
-            tests/test_diagnostic_filesystem_failures.py \
-            tests/test_full_project_audit_observability.py \
-            tests/test_ci_test_shard.py \
-            --select F,E7,E9
+          python -m compileall -q minecraft_mod_ai/diagnostics.py tools/audit_stream_redactor.py tools/full_project_audit.py tools/root_cause_audit_wrapper.py tools/pytest_diagnostics.py tools/ci_test_shard.py tools/ci_test_matrix.py tests/test_diagnostics.py tests/test_audit_stream_redactor_context.py tests/test_root_cause_audit_wrapper.py tests/test_pytest_diagnostics.py tests/test_diagnostic_filesystem_failures.py tests/test_full_project_audit_observability.py tests/test_ci_test_shard.py tests/test_ci_test_matrix.py
+          python -m ruff check minecraft_mod_ai/diagnostics.py tools/audit_stream_redactor.py tools/full_project_audit.py tools/root_cause_audit_wrapper.py tools/pytest_diagnostics.py tools/ci_test_shard.py tools/ci_test_matrix.py tests/test_diagnostics.py tests/test_audit_stream_redactor_context.py tests/test_root_cause_audit_wrapper.py tests/test_pytest_diagnostics.py tests/test_diagnostic_filesystem_failures.py tests/test_full_project_audit_observability.py tests/test_ci_test_shard.py tests/test_ci_test_matrix.py --select F,E7,E9
       - name: Inject repeated, stale, filesystem, streaming, and pytest failures
-        run: >-
-          python -m pytest -q
-          tests/test_diagnostics.py
-          tests/test_audit_stream_redactor_context.py
-          tests/test_root_cause_audit_wrapper.py
-          tests/test_pytest_diagnostics.py
-          tests/test_diagnostic_filesystem_failures.py
-          tests/test_full_project_audit_observability.py
-          tests/test_ci_test_shard.py
+        run: python -m pytest -q tests/test_diagnostics.py tests/test_audit_stream_redactor_context.py tests/test_root_cause_audit_wrapper.py tests/test_pytest_diagnostics.py tests/test_diagnostic_filesystem_failures.py tests/test_full_project_audit_observability.py tests/test_ci_test_shard.py tests/test_ci_test_matrix.py
