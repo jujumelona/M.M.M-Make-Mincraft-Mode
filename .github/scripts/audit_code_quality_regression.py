@@ -9,6 +9,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from ci_duplicate_pairs import introduced_duplicate_pairs
+
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PREFIXES = ("minecraft_mod_ai/", "tools/", ".github/scripts/")
 TOP_LEVEL = {"download_resources.py"}
@@ -350,10 +352,12 @@ def compare_snapshots(base: dict[str, Any], head: dict[str, Any]) -> list[dict[s
     for cycle in {tuple(row) for row in head.get("import_cycles", [])} - base_cycles:
         violations.append({"category": "new_import_cycle", "subject": list(cycle)})
 
-    base_duplicates = {tuple(row) for row in base.get("duplicate_function_groups", [])}
-    for group in {tuple(row) for row in head.get("duplicate_function_groups", [])} - base_duplicates:
+    for pair in introduced_duplicate_pairs(
+        head.get("duplicate_function_groups", []),
+        base.get("duplicate_function_groups", []),
+    ):
         violations.append(
-            {"category": "new_duplicate_function_body", "subject": list(group)}
+            {"category": "new_duplicate_function_body", "subject": list(pair)}
         )
 
     base_serial = {tuple(row) for row in base.get("serial_expensive_loops", [])}

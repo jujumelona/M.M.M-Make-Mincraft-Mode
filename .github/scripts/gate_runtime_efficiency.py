@@ -6,6 +6,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from ci_duplicate_pairs import introduced_duplicate_pairs
+
 
 def _load(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -22,7 +24,7 @@ def _finding_identity(row: dict[str, Any]) -> tuple[str, str, str, str]:
     )
 
 
-def _duplicate_identity(group: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+def _duplicate_members(group: dict[str, Any]) -> tuple[tuple[str, str], ...]:
     return tuple(
         sorted(
             (str(copy.get("path", "")), str(copy.get("name", "")))
@@ -60,17 +62,16 @@ def main() -> int:
         list(baseline.get("findings", ())),
         _finding_identity,
     )
-    introduced_duplicates = _introduced(
-        list(current.get("exact_duplicate_function_bodies", ())),
-        list(baseline.get("exact_duplicate_function_bodies", ())),
-        _duplicate_identity,
+    introduced_duplicates = introduced_duplicate_pairs(
+        (_duplicate_members(group) for group in current.get("exact_duplicate_function_bodies", ())),
+        (_duplicate_members(group) for group in baseline.get("exact_duplicate_function_bodies", ())),
     )
 
     print(
         "runtime efficiency delta: "
         f"findings {baseline.get('finding_count', 0)} -> {current.get('finding_count', 0)}, "
         f"new_findings={len(introduced_findings)}, "
-        f"new_duplicate_groups={len(introduced_duplicates)}"
+        f"new_duplicate_pairs={len(introduced_duplicates)}"
     )
     for row in introduced_findings:
         print(
@@ -78,12 +79,9 @@ def main() -> int:
             f"{row.get('category')} {row.get('path')}:{row.get('line')} "
             f"{row.get('function')} {row.get('call', '')}"
         )
-    for group in introduced_duplicates:
-        copies = ", ".join(
-            f"{copy.get('path')}:{copy.get('name')}"
-            for copy in group.get("copies", ())
-        )
-        print(f"  NEW exact duplicate function body: {copies}")
+    for pair in introduced_duplicates:
+        copies = ", ".join(f"{path}:{name}" for path, name in pair)
+        print(f"  NEW exact duplicate function body pair: {copies}")
 
     return 1 if introduced_findings or introduced_duplicates else 0
 
