@@ -13,13 +13,7 @@ from minecraft_mod_ai.planning_state_contract import (
 
 def _state_with_atomic_evidence() -> dict:
     prompt = "Build an economy-backed modular spaceship progression system."
-    source_kinds = [
-        "repository",
-        "existing_mods",
-        "minecraft_docs",
-        "minecraft_source",
-        "project_rag",
-    ]
+    source_kinds = ["minecraft_docs", "minecraft_source"]
     state = {
         "schema_version": SCHEMA,
         "original_prompt": prompt,
@@ -36,11 +30,11 @@ def _state_with_atomic_evidence() -> dict:
         "unresolved": [
             {
                 "unresolved_id": "u_001",
-                "question": "How is the requirement implemented?",
-                "reason": "implementation_method",
+                "question": "Which Minecraft API contract is required by this behavior?",
+                "reason": "minecraft_api",
                 "blocks": ["implementation_plan"],
-                "information_needed": "Verified implementation evidence.",
-                "resolution_route": "implementation_research",
+                "information_needed": "Verified Minecraft API behavior.",
+                "resolution_route": "minecraft_research",
                 "source_kinds": source_kinds,
                 "status": "resolved",
                 "research_ref": "r_001",
@@ -50,10 +44,10 @@ def _state_with_atomic_evidence() -> dict:
             {
                 "research_id": "r_001",
                 "resolves": ["u_001"],
-                "objective": "Find a grounded implementation pattern.",
-                "information_needed": "Verified implementation evidence.",
+                "objective": "Verify the concrete Minecraft API contract.",
+                "information_needed": "Verified Minecraft API behavior.",
                 "source_kinds": source_kinds,
-                "queries": ["Minecraft implementation pattern"],
+                "queries": ["Minecraft API contract"],
                 "status": "complete",
             }
         ],
