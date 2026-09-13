@@ -1,0 +1,96 @@
+name: One Shot Runtime Regression Commit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-runtime-regression-commit.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  commit-repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: python -m pip install --prefer-binary -q -e '.[dev]'
+      - name: Apply verified repair exactly
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path('.github/workflows/one-shot-runtime-regression-final.yml').read_text(encoding='utf-8')
+          lines = workflow.splitlines()
+          start = next(i for i, line in enumerate(lines) if line.strip() == "python - <<'PY'")
+          end = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == 'PY')
+          script = textwrap.dedent('\n'.join(lines[start + 1:end]))
+          exec(compile(script, '<verified-runtime-repair>', 'exec'), {'__name__': '__main__'})
+
+          candidate_test = Path('tests/test_planning_candidate_evidence.py')
+          text = candidate_test.read_text(encoding='utf-8')
+          text = text.replace('import pytest\n\n', '', 1)
+          candidate_test.write_text(text, encoding='utf-8')
+          PY
+          git diff --check
+      - name: Verify repaired regressions and efficiency
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_hidden_bottleneck_efficiency.py \
+            tests/test_java_lsp_scaling.py \
+            tests/test_llama_server_kernel_autotune.py \
+            tests/test_model_router_forced_rag_recovery.py \
+            tests/test_mutation_semantic_boundary.py \
+            tests/test_planning_candidate_evidence.py \
+            tests/test_planning_ssot_invariants.py \
+            tests/test_scheduler_claim_install_identity.py \
+            tests/test_skill_policy.py \
+            tests/test_small_model_atomic_coder_execution.py \
+            tests/test_agent_routing_contract.py \
+            tests/test_artifact_decomposition_planning.py \
+            tests/test_llama_server_native_resource_fit.py \
+            tests/test_llama_server_hardware_policy.py \
+            tests/test_planning_regressions_20260913.py \
+            tests/test_tool_chatter_finite_bounds.py \
+            tests/test_unified_host_execution_loop.py \
+            tests/test_space_progression_planner_and_verifier_regression.py \
+            tests/test_planning_convergence_contract.py \
+            tests/test_planning_deadline_hardening.py
+          python -m ruff check minecraft_mod_ai tests --select F,E7,E9
+          python .github/scripts/audit_runtime_efficiency.py --output /tmp/runtime-efficiency-final.json
+      - name: Commit and push
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'jujumelona'
+          git config user.email 'qasdaa025@gmail.com'
+          git add minecraft_mod_ai tests
+          git diff --cached --check
+          git commit -m 'fix: reconcile runtime scheduling and planning regressions'
+          git fetch origin main
+          git rebase origin/main
+          python -m pytest -q \
+            tests/test_scheduler_claim_install_identity.py \
+            tests/test_planning_deadline_hardening.py \
+            tests/test_mutation_semantic_boundary.py \
+            tests/test_planning_candidate_evidence.py \
+            tests/test_planning_ssot_invariants.py \
+            tests/test_llama_server_native_resource_fit.py \
+            tests/test_java_lsp_scaling.py
+          python .github/scripts/audit_runtime_efficiency.py --output /tmp/runtime-efficiency-final.json
+          git push origin HEAD:main
