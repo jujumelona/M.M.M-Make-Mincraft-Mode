@@ -20,6 +20,8 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Apply exact regression repairs
         shell: bash
         run: |
@@ -33,8 +35,6 @@ jobs:
                   raise SystemExit(f'expected text not found in {path}: {old[:120]!r}')
               p.write_text(text.replace(old, new, 1), encoding='utf-8')
 
-          # 1) Restore requirement coverage review pagination, while keeping the
-          # forced implementation-research machinery deleted.
           p = Path('minecraft_mod_ai/planning_state_resolution.py')
           text = p.read_text(encoding='utf-8')
           text = text.replace(
@@ -203,19 +203,16 @@ jobs:
                           "REQUIREMENT_COVERAGE_INVALID: remaining behavior lacks an exact task quote"
                       )
           '''
-          # Dedent the function produced above to module scope.
           import textwrap
           text = text[:start] + textwrap.dedent(replacement) + text[end:]
           p.write_text(text, encoding='utf-8')
 
-          # The removed implementation-research obligation must stay removed.
           replace_once(
               'tests/test_planning_requirement_pagination.py',
               '    assert len(result["research_queue"]) == 6\n    assert len(result["unresolved"]) == 6\n',
               '    assert len(result["research_queue"]) == 0\n    assert len(result["unresolved"]) == 0\n',
           )
 
-          # 2) Restore managed GPU-layer normalization accidentally deleted earlier.
           replace_once(
               'minecraft_mod_ai/llama_server_hardware_policy.py',
               '    if "--parallel" not in args and "-np" not in args:\n',
@@ -228,9 +225,6 @@ jobs:
               '    if "--parallel" not in args and "-np" not in args:\n',
           )
 
-          # 3) A verifier FAIL with real diagnostics is a source failure, not an
-          # unavailable JDT service. Only fail closed when the failure receipt has no
-          # usable diagnostics (or has an explicit infrastructure error).
           replace_once(
               'minecraft_mod_ai/validation_diagnostic_contract.py',
               '    failed_status = bool(status and status not in _DIAGNOSTIC_SUCCESS_STATUSES)\n',
@@ -245,7 +239,6 @@ jobs:
               '    )\n',
           )
 
-          # Remove this one-shot workflow from the resulting repository state.
           Path('.github/workflows/one-shot-fix-ci.yml').unlink()
           PY
 
