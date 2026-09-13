@@ -119,7 +119,6 @@ def requirement_candidate_trace(
                 if query_sha not in candidate["query_sha256"]:
                     candidate["query_sha256"].append(query_sha)
             offset = 0
-            # Preserve exact source chunks and hashes, including evidence beyond previews.
             for chunk in re.split(r"(?:\r?\n){2,}|(?<=[.!?])\s+", content):
                 start = content.find(chunk, offset)
                 offset = start + len(chunk)
@@ -134,7 +133,6 @@ def requirement_candidate_trace(
                 candidate["matched_facets"] = sorted(set(candidate["matched_facets"]) | set(matched))
     covered: set[int] = set()
     for candidate in candidates.values():
-        # Facets spread over different candidates or body versions cannot form support.
         coherent = bool(facets) and len(candidate["matched_facets"]) == len(facets)
         if coherent:
             covered.update(candidate["matched_facets"])
@@ -213,29 +211,3 @@ def semantic_frontier_pool(
         "task_pool_sha256": fingerprint(pool),
         "queries": queries,
     }
-
-
-def assert_candidate_research_complete(state: Mapping[str, Any]) -> None:
-    """Recompute admission at the detailed-planner boundary, including restored states."""
-    for research in state.get("research_queue", []):
-        if not isinstance(research, Mapping) or not research.get("requirement_ref"):
-            continue
-        if not set(research.get("source_kinds") or []).intersection({"repository", "existing_mods"}):
-            continue
-        discovery = research.get("mod_discovery") or {}
-        pool = state.get("task_candidate_pool") or {}
-        requirement = requirement_for(state, research)
-        trace = requirement_candidate_trace(requirement, pool)
-        saved_trace = research.get("candidate_trace") or {}
-        from .planning_semantic_research import validate_semantic_review
-        review = validate_semantic_review(requirement, pool,
-                                          saved_trace.get("semantic_review") or {})
-        trace["semantic_review"] = review
-        trace["coverage_complete"] = review["complete"]
-        if (research.get("status") != "complete" or research.get("research_state") != "COMPLETE"
-                or not discovery.get("complete") or not discovery.get("candidates")
-                or not trace["coverage_complete"] or saved_trace != trace):
-            raise ValueError(
-                "PLANNING_IMPLEMENTATION_RESEARCH_BLOCKED: candidate evidence is missing or stale for "
-                + str(research.get("requirement_ref"))
-            )
