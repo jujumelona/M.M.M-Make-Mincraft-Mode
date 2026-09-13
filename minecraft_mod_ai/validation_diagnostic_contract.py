@@ -17,6 +17,12 @@ _DIAGNOSTIC_ENVELOPE_KEYS = (
     "parsed_text",
 )
 _MAX_ENVELOPE_DEPTH = 8
+_CORE_RUNTIME_UNRESOLVED_PATTERNS = (
+    "java.lang.object cannot be resolved",
+    "the type java.lang.object cannot be resolved",
+    "the type object cannot be resolved. it is indirectly referenced from required .class files",
+    "implicit super constructor object() is undefined for default constructor",
+)
 
 
 def _mapping_keys(value: Any) -> list[str]:
@@ -212,39 +218,80 @@ def _is_error(item: Mapping[str, Any]) -> bool:
         return True
 
 
+def _core_runtime_readiness_error(
+    items: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Detect diagnostics proving that JDT's Java runtime/classpath is not ready.
+
+    These messages are not actionable source defects. Returning one infrastructure
+    diagnostic suppresses the ordinary source diagnostics so repair cannot mutate user
+    code in response to a broken verifier workspace.
+    """
+
+    matches: list[str] = []
+    for item in items:
+        if not _is_error(item):
+            continue
+        message = str(item.get("message") or "").strip()
+        normalized = " ".join(message.casefold().split())
+        if any(pattern in normalized for pattern in _CORE_RUNTIME_UNRESOLVED_PATTERNS):
+            matches.append(message)
+    if not matches:
+        return None
+    return {
+        "severity": 1,
+        "source": "jdtls",
+        "code": "JDT_WORKSPACE_NOT_READY",
+        "message": (
+            "JDT workspace is not ready: Java core runtime symbols are unresolved; "
+            "source repair is suppressed until verifier readiness is restored. "
+            f"Evidence: {matches[0]}"
+        ),
+    }
+
+
 def diagnostic_errors(receipt: Mapping[str, Any] | None) -> list[dict[str, Any]]:
-    """Return severity-1 diagnostics plus fail-closed availability evidence."""
+    """Return source errors, or one fail-closed verifier/readiness diagnostic."""
 
     normalized, path = unwrap_diagnostic_receipt(receipt)
     items = _diagnostic_items_from_receipt(normalized)
-    errors = [item for item in items if _is_error(item)]
+    source_errors = [item for item in items if _is_error(item)]
     unavailable = _availability_error(normalized)
+    readiness = None if unavailable is not None else _core_runtime_readiness_error(items)
+
     if unavailable is not None:
-        errors.append(unavailable)
+        errors = [unavailable]
+    elif readiness is not None:
+        errors = [readiness]
+    else:
+        errors = source_errors
 
     status = str(normalized.get("status") or "").strip().upper()
+    infrastructure_error = unavailable or readiness
     emit_root_cause(
         "diagnostic_receipt_classified",
         stage="verify",
         operation="java_diagnostics",
         gate="verifier_semantics",
-        result=(
-            "FAIL"
-            if unavailable is not None
-            else ("FAIL" if errors else "PASS")
-        ),
+        result=("FAIL" if infrastructure_error is not None or errors else "PASS"),
         reason=(
             "JDT receipt is unavailable or malformed"
             if unavailable is not None
-            else ("JDT published severity-1 diagnostics" if errors else "JDT receipt is healthy")
+            else (
+                "JDT core runtime symbols are unresolved; verifier workspace is not ready"
+                if readiness is not None
+                else ("JDT published severity-1 diagnostics" if errors else "JDT receipt is healthy")
+            )
         ),
         details={
             "envelope_path": list(path),
             "status": status,
             "receipt_keys": _mapping_keys(normalized),
             "diagnostic_item_count": len(items),
-            "severity_1_count": sum(1 for item in items if _is_error(item)),
+            "severity_1_count": len(source_errors),
             "availability_error": unavailable,
+            "readiness_error": readiness,
+            "source_repair_suppressed": infrastructure_error is not None,
         },
     )
     return errors
@@ -381,13 +428,19 @@ def run_diagnostics(
     normalized, path = unwrap_diagnostic_receipt(result)
     items = _diagnostic_items_from_receipt(normalized)
     unavailable = _availability_error(normalized)
+    readiness = None if unavailable is not None else _core_runtime_readiness_error(items)
+    infrastructure_error = unavailable or readiness
     emit_root_cause(
         "diagnostic_run_result",
         stage="verify",
         operation="java_diagnostics",
         gate="diagnostic_service",
-        result="UNAVAILABLE" if unavailable is not None else "PASS",
-        reason="diagnostic service returned a receipt",
+        result="UNAVAILABLE" if infrastructure_error is not None else "PASS",
+        reason=(
+            "diagnostic service returned an unready verifier receipt"
+            if readiness is not None
+            else "diagnostic service returned a receipt"
+        ),
         details={
             "elapsed_ms": round((time.monotonic() - started) * 1000.0, 3),
             "outer_keys": _mapping_keys(result),
@@ -396,6 +449,7 @@ def run_diagnostics(
             "status": normalized.get("status"),
             "diagnostic_item_count": len(items),
             "availability_error": unavailable,
+            "readiness_error": readiness,
         },
     )
     return result
