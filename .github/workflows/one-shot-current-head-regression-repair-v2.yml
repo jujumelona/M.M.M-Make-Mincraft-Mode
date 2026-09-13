@@ -63,6 +63,12 @@ jobs:
 
           update(
               'tests/test_java_lsp_scaling.py',
+              '    ) -> dict[str, Any]:\n        self.request_timeouts.append(timeout)\n        self.request_methods.append(method)\n        if method == "initialize":\n',
+              '    ) -> dict[str, Any]:\n        if method == "textDocument/hover":\n            return {"contents": {"kind": "plaintext", "value": "java.lang.Object / java.lang.String resolved"}}\n        self.request_timeouts.append(timeout)\n        self.request_methods.append(method)\n        if method == "initialize":\n',
+          )
+
+          update(
+              'tests/test_java_lsp_scaling.py',
               '        if method == "textDocument/didOpen":\n            uri = str(params["textDocument"]["uri"])\n            self.opened_uris.append(uri)\n            number = int(Path(uri).stem.removeprefix("Generated"))\n',
               '        if method == "textDocument/didOpen":\n            uri = str(params["textDocument"]["uri"])\n            stem = Path(uri).stem\n            if stem == "__MmmJdtReadinessProbe":\n                self.messages.put(\n                    {\n                        "method": "textDocument/publishDiagnostics",\n                        "params": {"uri": uri, "diagnostics": []},\n                    }\n                )\n                return\n            self.opened_uris.append(uri)\n            number = int(stem.removeprefix("Generated"))\n',
           )
