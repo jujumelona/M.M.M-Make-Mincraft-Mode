@@ -166,7 +166,15 @@ def _availability_error(receipt: Mapping[str, Any]) -> dict[str, Any] | None:
         if "diagnostics" not in receipt
         else _diagnostics_shape_error(receipt.get("diagnostics"))
     )
-    failed_status = bool(status and status not in _DIAGNOSTIC_SUCCESS_STATUSES)
+    source_failure_status = status in {"FAIL", "FAILED", "ERROR", "INVALID"}
+    failure_has_diagnostics = source_failure_status and bool(
+        _diagnostic_items_from_receipt(receipt)
+    )
+    failed_status = bool(
+        status
+        and status not in _DIAGNOSTIC_SUCCESS_STATUSES
+        and not failure_has_diagnostics
+    )
     if not (failed_status or error or malformed):
         return None
 

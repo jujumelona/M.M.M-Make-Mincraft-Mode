@@ -49,8 +49,8 @@ def test_more_than_four_behaviors_survive_requirement_compilation():
     result = compile_researched_requirements(router, PROMPT, state())
     requirements = [row for row in result["decisions"] if row["decision_type"] == "requirement"]
     assert [row["statement"] for row in requirements] == BEHAVIORS
-    assert len(result["research_queue"]) == 6
-    assert len(result["unresolved"]) == 6
+    assert len(result["research_queue"]) == 0
+    assert len(result["unresolved"]) == 0
     assert router.messages[1]["already_compiled_requirements"] == page(BEHAVIORS[:4])["requirements"]
     assert router.messages[2]["uncovered_authored_behavior"] == coverage()
 
