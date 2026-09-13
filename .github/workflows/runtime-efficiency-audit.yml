@@ -2,9 +2,6 @@ name: Runtime Efficiency Audit
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 permissions:
   contents: read
@@ -31,32 +28,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          BASE_REF="${{ github.event.before }}"
-          if [[ "${{ github.event_name }}" != "push" || -z "$BASE_REF" || "$BASE_REF" == "0000000000000000000000000000000000000000" ]]; then
-            BASE_REF="HEAD^"
-          fi
+          BASE_REF="HEAD^"
           if ! git cat-file -e "${BASE_REF}^{commit}" 2>/dev/null; then
             echo "No baseline commit is available; current scan remains authoritative."
             exit 0
           fi
           BASE_DIR="$(mktemp -d)"
           trap 'rm -rf "$BASE_DIR"' EXIT
-          AUDIT_PATHS=(
-            .github/scripts/audit_runtime_efficiency.py
-            minecraft_mod_ai
-            tools
-          )
+          AUDIT_PATHS=(.github/scripts/audit_runtime_efficiency.py minecraft_mod_ai tools)
           if git cat-file -e "${BASE_REF}:download_resources.py" 2>/dev/null; then
             AUDIT_PATHS+=(download_resources.py)
           fi
           git archive --format=tar "$BASE_REF" -- "${AUDIT_PATHS[@]}" | tar -xf - -C "$BASE_DIR"
-          (
-            cd "$BASE_DIR"
-            python .github/scripts/audit_runtime_efficiency.py --output /tmp/runtime-efficiency-baseline.json
-          )
-          python .github/scripts/gate_runtime_efficiency.py \
-            --baseline /tmp/runtime-efficiency-baseline.json \
-            --current audit/runtime-efficiency.json
+          (cd "$BASE_DIR" && python .github/scripts/audit_runtime_efficiency.py --output /tmp/runtime-efficiency-baseline.json)
+          python .github/scripts/gate_runtime_efficiency.py --baseline /tmp/runtime-efficiency-baseline.json --current audit/runtime-efficiency.json
       - name: Upload runtime efficiency audit
         if: always()
         uses: actions/upload-artifact@v4
