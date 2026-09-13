@@ -1,0 +1,266 @@
+name: One-shot CI regression repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-shot-fix-ci.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Apply exact regression repairs
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'expected text not found in {path}: {old[:120]!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          # 1) Restore requirement coverage review pagination, while keeping the
+          # forced implementation-research machinery deleted.
+          p = Path('minecraft_mod_ai/planning_state_resolution.py')
+          text = p.read_text(encoding='utf-8')
+          text = text.replace(
+              'from .planning_contract_ssot import SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA\n',
+              'from .planning_contract_ssot import (\n'
+              '    REQUIREMENT_COVERAGE_SCHEMA,\n'
+              '    SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA,\n'
+              ')\n',
+              1,
+          )
+          start = text.index('def _generate_requirement_pages(')
+          end = text.index('\ndef compile_researched_requirements(', start)
+          replacement = '''def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], budget: int) -> Any:
+              """Bound each model response while proving authored-behavior coverage."""
+              from .model_adapters import ModelConfigurationError
+
+              page_size = int(_REQUIREMENT_PARAMETERS["properties"]["requirements"]["maxItems"])
+              collected: list[dict[str, Any]] = []
+              seen: set[str] = set()
+              payload = json.loads(messages[1]["content"])
+              page_index = 0
+              remaining: dict[str, Any] | None = None
+              while True:
+                  current_messages = deepcopy(messages)
+                  if collected:
+                      current_messages[1]["content"] = json.dumps(
+                          {
+                              **payload,
+                              "already_compiled_requirements": collected,
+                              "uncovered_authored_behavior": remaining,
+                          },
+                          ensure_ascii=False,
+                          separators=(",", ":"),
+                      )
+                      if sum(len(row["content"].encode("utf-8")) for row in current_messages) > budget:
+                          raise ModelConfigurationError(
+                              "REQUIREMENT_PAGINATION_CONTEXT_EXHAUSTED: continuation cannot fit "
+                              "without losing authored task or prior requirement coverage"
+                          )
+                  try:
+                      with planner_operation("researched_requirement_compile", output_tokens=2048):
+                          raw = router.generate_tool_decision(
+                              "planner",
+                              current_messages,
+                              tool_name=_REQUIREMENT_TOOL,
+                              parameters=_REQUIREMENT_PARAMETERS,
+                              description="Submit the next page of independently testable player-visible requirements.",
+                          )
+                  except Exception as exc:
+                      if not collected:
+                          raise
+                      raise ModelConfigurationError(
+                          "REQUIREMENT_PAGINATION_FAILED: continuation failed; partial requirements are not complete"
+                      ) from exc
+                  rows = raw.get("requirements") if isinstance(raw, Mapping) else None
+                  if not isinstance(rows, list):
+                      if not collected:
+                          return raw
+                      raise ModelConfigurationError(
+                          "REQUIREMENT_PAGINATION_FAILED: invalid continuation page"
+                      )
+                  emit_root_cause(
+                      "planner_requirement_page_received",
+                      stage="planning_state",
+                      operation="researched_requirement_compile",
+                      result="INFO",
+                      details={"page_index": page_index + 1, "requirements": rows},
+                  )
+                  for row in rows:
+                      if not isinstance(row, Mapping) or not _text(row.get("statement")):
+                          raise ModelConfigurationError(
+                              "REQUIREMENT_PAGINATION_FAILED: invalid requirement row"
+                          )
+                      identity = json.dumps(
+                          [
+                              _text(row.get("statement")).casefold(),
+                              _text(row.get("semantic_capability")).casefold(),
+                              [value.casefold() for value in _strings(row.get("acceptance"))],
+                          ],
+                          ensure_ascii=False,
+                      )
+                      if identity in seen:
+                          raise ModelConfigurationError(
+                              "REQUIREMENT_PAGINATION_NO_PROGRESS: repeated requirement cannot certify remaining coverage"
+                          )
+                      seen.add(identity)
+                      collected.append(dict(row))
+                  page_index += 1
+                  emit_root_cause(
+                      "planner_requirement_page",
+                      stage="planning_state",
+                      operation="researched_requirement_compile",
+                      result="CONTINUE" if len(rows) >= page_size else "COMPLETE",
+                      details={
+                          "page_index": page_index,
+                          "page_requirement_count": len(rows),
+                          "total_requirement_count": len(collected),
+                          "requirements": rows,
+                      },
+                  )
+                  if len(rows) < page_size:
+                      return {"requirements": collected}
+
+                  coverage_messages = [
+                      {
+                          "role": "system",
+                          "content": (
+                              "Compare the original authored task with the collected requirements. Decide whether "
+                              "any explicitly requested player-visible behavior is still missing. A full page does "
+                              "not mean more requirements exist. Do not invent features to fill pages, expand vague "
+                              "'etc' into features, or repeat covered behavior with extra implementation details. "
+                              "If all requested behaviors are represented, return complete=true and both remaining "
+                              "fields empty. Otherwise return complete=false, an exact verbatim quote from the task "
+                              "that requests the missing behavior, and a description of that behavior."
+                          ),
+                      },
+                      {
+                          "role": "user",
+                          "content": json.dumps(
+                              {**payload, "already_compiled_requirements": collected},
+                              ensure_ascii=False,
+                              separators=(",", ":"),
+                          ),
+                      },
+                  ]
+                  if sum(len(row["content"].encode("utf-8")) for row in coverage_messages) > budget:
+                      raise ModelConfigurationError(
+                          "REQUIREMENT_PAGINATION_CONTEXT_EXHAUSTED: coverage review cannot fit"
+                      )
+                  try:
+                      with planner_operation("requirement_coverage_review", output_tokens=512):
+                          remaining = router.generate_tool_decision(
+                              "planner",
+                              coverage_messages,
+                              tool_name="review_requirement_coverage",
+                              parameters=REQUIREMENT_COVERAGE_SCHEMA,
+                              description="Decide whether an explicitly authored behavior remains uncovered.",
+                          )
+                  except Exception as exc:
+                      raise ModelConfigurationError(
+                          "REQUIREMENT_COVERAGE_FAILED: cannot certify partial requirement coverage"
+                      ) from exc
+                  emit_root_cause(
+                      "planner_requirement_coverage",
+                      stage="planning_state",
+                      operation="requirement_coverage_review",
+                      result="INFO",
+                      details={"review": remaining},
+                  )
+                  if not isinstance(remaining, Mapping) or type(remaining.get("complete")) is not bool:
+                      raise ModelConfigurationError(
+                          "REQUIREMENT_COVERAGE_INVALID: missing explicit completion decision"
+                      )
+                  quote = remaining.get("remaining_source_quote")
+                  behavior = _text(remaining.get("remaining_behavior"))
+                  if remaining["complete"]:
+                      if quote != "" or behavior:
+                          raise ModelConfigurationError(
+                              "REQUIREMENT_COVERAGE_INVALID: completion contradicts remaining behavior"
+                          )
+                      return {"requirements": collected}
+                  task = payload.get("task", {})
+                  source = str(task.get("original_prompt") or task.get("prompt") or "")
+                  if not isinstance(quote, str) or not quote.strip() or quote not in source or not behavior:
+                      raise ModelConfigurationError(
+                          "REQUIREMENT_COVERAGE_INVALID: remaining behavior lacks an exact task quote"
+                      )
+          '''
+          # Dedent the function produced above to module scope.
+          import textwrap
+          text = text[:start] + textwrap.dedent(replacement) + text[end:]
+          p.write_text(text, encoding='utf-8')
+
+          # The removed implementation-research obligation must stay removed.
+          replace_once(
+              'tests/test_planning_requirement_pagination.py',
+              '    assert len(result["research_queue"]) == 6\n    assert len(result["unresolved"]) == 6\n',
+              '    assert len(result["research_queue"]) == 0\n    assert len(result["unresolved"]) == 0\n',
+          )
+
+          # 2) Restore managed GPU-layer normalization accidentally deleted earlier.
+          replace_once(
+              'minecraft_mod_ai/llama_server_hardware_policy.py',
+              '    if "--parallel" not in args and "-np" not in args:\n',
+              '    for option in ("--gpu-layers", "-ngl"):\n'
+              '        if option in args:\n'
+              '            index = args.index(option)\n'
+              '            if index + 1 < len(args) and str(args[index + 1]).strip().casefold() == "all":\n'
+              '                args[index + 1] = "auto"\n'
+              '            break\n'
+              '    if "--parallel" not in args and "-np" not in args:\n',
+          )
+
+          # 3) A verifier FAIL with real diagnostics is a source failure, not an
+          # unavailable JDT service. Only fail closed when the failure receipt has no
+          # usable diagnostics (or has an explicit infrastructure error).
+          replace_once(
+              'minecraft_mod_ai/validation_diagnostic_contract.py',
+              '    failed_status = bool(status and status not in _DIAGNOSTIC_SUCCESS_STATUSES)\n',
+              '    source_failure_status = status in {"FAIL", "FAILED", "ERROR", "INVALID"}\n'
+              '    failure_has_diagnostics = source_failure_status and bool(\n'
+              '        _diagnostic_items_from_receipt(receipt)\n'
+              '    )\n'
+              '    failed_status = bool(\n'
+              '        status\n'
+              '        and status not in _DIAGNOSTIC_SUCCESS_STATUSES\n'
+              '        and not failure_has_diagnostics\n'
+              '    )\n',
+          )
+
+          # Remove this one-shot workflow from the resulting repository state.
+          Path('.github/workflows/one-shot-fix-ci.yml').unlink()
+          PY
+
+          python -m compileall -q minecraft_mod_ai
+          python -m pytest -q \
+            tests/test_planning_requirement_pagination.py \
+            tests/test_llama_server_hardware_policy.py \
+            tests/test_progress_aware_verifier_repair_state.py
+
+      - name: Commit repaired state to main
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix: close remaining CI regression failures'
+          git push origin HEAD:main
