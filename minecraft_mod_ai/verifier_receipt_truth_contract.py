@@ -61,7 +61,7 @@ def _validation_evidence(stage: str, node_id: str, receipt: Mapping[str, Any]) -
         raise VerifierReceiptTruthError(
             f"VERIFIER_RECEIPT_STATUS_INVALID: {node_id} cannot succeed with status {status!r}."
         )
-    if stage == "validate:source":
+    if stage in {"validate:source", "validate:source-final"}:
         checks = receipt.get("checks_run")
         manifest = str(receipt.get("project_manifest") or "")
         if type(checks) is not int or checks <= 0 or not manifest:
