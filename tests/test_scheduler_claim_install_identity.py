@@ -1,4 +1,3 @@
-from functools import wraps
 from pathlib import Path
 
 import minecraft_mod_ai.complete_orchestrator as orchestrator_module
@@ -18,32 +17,14 @@ def _node(node_id: str, stage: str) -> WorkNode:
     )
 
 
-def test_install_reclaims_outermost_claim_after_wraps_copies_marker(
+def test_install_keeps_direct_orchestrator_delegation_and_stage_serialization(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
     install(work_graph_module=work_graph_module, orchestrator_module=orchestrator_module)
-    installed = DurableWorkLedger.claim_ready
-    bypass_target = getattr(installed, "__wrapped__", installed)
 
-    @wraps(installed)
-    def late_overlay(self, worker_id, *, stages=(), lease_seconds=900):
-        return bypass_target(
-            self,
-            worker_id,
-            stages=stages,
-            lease_seconds=lease_seconds,
-        )
-
-    # functools.wraps copies the old marker. Marker-only idempotence therefore
-    # cannot distinguish this bypassing overlay from the installed safety owner.
-    assert getattr(late_overlay, "_mmm_parallel_lane_claim_version", 0) >= 2
-    monkeypatch.setattr(DurableWorkLedger, "claim_ready", late_overlay)
-
-    install(work_graph_module=work_graph_module, orchestrator_module=orchestrator_module)
-    repaired = DurableWorkLedger.claim_ready
-    assert repaired is not late_overlay
-    assert getattr(repaired, "_mmm_parallel_lane_claim", False)
+    # Lane-aware orchestration is owned by DurableWorkLedger.claim_ready itself.  The
+    # safety installer must not replace the method dynamically or rely on wrapper markers.
+    assert "claim_orchestrator_ready" in DurableWorkLedger.claim_ready.__code__.co_names
 
     plan = WorkGraphPlan(
         schema_version="mmm/production-work-graph-v1",
@@ -62,6 +43,9 @@ def test_install_reclaims_outermost_claim_after_wraps_copies_marker(
 
     first = ledger.claim_ready("mmm-orchestrator", stages=stages, lease_seconds=60)
     second = ledger.claim_ready("mmm-orchestrator", stages=stages, lease_seconds=60)
+
     assert first is not None and first["node_id"] == "a-content"
+    # CPU generation stages mutate shared stage state, so another content node must not
+    # be admitted while a-content is running. A different serial stage remains eligible.
     assert second is not None and second["node_id"] == "c-system"
     assert ledger.task("b-content")["state"] == "pending"
