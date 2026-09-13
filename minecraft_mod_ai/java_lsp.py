@@ -10,11 +10,11 @@ import subprocess
 import threading
 import time
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from .deadline_executor import collect_completed_with_deadlines
 from .source_set_boundary_contract import (
     SourceSetBoundaryError,
     assert_server_safe_source_sets,
@@ -177,8 +177,17 @@ def _java_major_versions(java_homes: list[Path]) -> list[int | None]:
     if not java_homes:
         return []
     workers = max(1, min(len(java_homes), os.cpu_count() or 1))
-    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="jdt-jdk-probe") as pool:
-        return list(pool.map(_java_major_version, java_homes))
+    if workers == 1:
+        return [_java_major_version(java_homes[0])]
+    completed = collect_completed_with_deadlines(
+        java_homes,
+        _java_major_version,
+        max_workers=workers,
+        stage="jdt-jdk-probe",
+        sort_key=lambda home: home.as_posix(),
+    )
+    versions_by_home = {home: major for home, major in completed}
+    return [versions_by_home[home] for home in java_homes]
 
 
 def _resolve_project_java_home(required_major: int | None = None) -> Path:
