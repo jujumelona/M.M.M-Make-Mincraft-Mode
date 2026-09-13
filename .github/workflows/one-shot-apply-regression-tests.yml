@@ -39,11 +39,34 @@ jobs:
           start = next(i for i, line in enumerate(lines) if line.strip() == "python - <<'PY'")
           end = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == 'PY')
           script = textwrap.dedent('\n'.join(lines[start + 1:end]))
-          old = 'assert final_task["required_gates"] == ["source_static_validation", "target_compile"]'
-          new = 'assert final_task["required_gates"] == ["source_static_validation", "target_compile", "runtime_gameplay_validation"]'
-          if old not in script:
-              raise SystemExit('planner gate assertion anchor missing from finalizer patch')
-          script = script.replace(old, new, 1)
+
+          replacements = {
+              'assert final_task["required_gates"] == ["source_static_validation", "target_compile"]':
+                  'assert final_task["required_gates"] == ["source_static_validation", "target_compile", "runtime_gameplay_validation"]',
+              '''assert final_task["done_predicate"] == {
+                  "operator": "all",
+                  "checks": [
+                      "owned_anchor_hashes_recorded",
+                      "declared_provides_observed",
+                      "required_gates_passed",
+                  ],
+              }''': '''assert final_task["done_predicate"] == {
+                  "operator": "all",
+                  "checks": [
+                      "owned_anchor_hashes_recorded",
+                      "declared_provides_observed",
+                      "required_gates_passed",
+                      "public_acceptance_observed",
+                      "runtime_scenario_receipt_recorded",
+                      "persistence_network_ui_state_observed_where_applicable",
+                  ],
+              }''',
+          }
+          for old, new in replacements.items():
+              if old not in script:
+                  raise SystemExit(f'planner expectation anchor missing from finalizer patch: {old[:80]}')
+              script = script.replace(old, new, 1)
+
           exec(compile(script, '<regression-finalizer-patch>', 'exec'), {'__name__': '__main__'})
           PY
           git diff --check
