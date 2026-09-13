@@ -75,27 +75,9 @@ def test_builtin_sidecar_integration_is_deterministic_cpu_work() -> None:
     assert node.resource_class == "cpu_io"
 
 
-def test_stage_write_locks_are_domain_local_not_global() -> None:
-    content = _module_node(
-        "content",
-        [{"module_id": "ore", "kind": "block", "config": {}}],
-    )
-    system = _module_node(
-        "system",
-        [{"module_id": "quests", "kind": "quest", "config": {}}],
-    )
-    entity = _module_node(
-        "entity",
-        [{"module_id": "warden", "kind": "entity", "config": {}}],
-    )
-
-    content_lock = safety._stage_write_lock(content)
-    system_lock = safety._stage_write_lock(system)
-    entity_lock = safety._stage_write_lock(entity)
-    assert content_lock is not None
-    assert system_lock is not None
-    assert entity_lock is not None
-    assert len({id(content_lock), id(system_lock), id(entity_lock)}) == 3
+def test_anchor_fencing_replaces_retired_stage_write_locks() -> None:
+    assert not hasattr(safety, "_stage_write_lock")
+    assert safety._SERIAL_CPU_STAGES == ()
 
 
 def test_custom_modules_keep_dependency_aware_bounded_shards(monkeypatch) -> None:
