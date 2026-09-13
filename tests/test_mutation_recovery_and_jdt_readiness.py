@@ -7,6 +7,10 @@ from minecraft_mod_ai.mutation_authority_final_guard import (
 from minecraft_mod_ai.mutation_failure_classification import (
     is_recoverable_mutation_failure,
 )
+from minecraft_mod_ai.progress_aware_tool_loop import (
+    TargetMutationContext,
+    _mutation_target_error,
+)
 from minecraft_mod_ai.validation_diagnostic_contract import diagnostic_errors
 
 
@@ -37,6 +41,28 @@ def test_recoverable_mutation_failures_have_one_shared_classification() -> None:
 
     assert not is_recoverable_mutation_failure("MUTATION_TARGET_DRIFT")
     assert not is_recoverable_mutation_failure("PATH_OUTSIDE_WRITABLE_SET")
+
+
+def test_existing_repair_target_rejects_create_operation() -> None:
+    context = TargetMutationContext(
+        target_path="src/main/java/example/DebugToken.java",
+        target_symbol="DebugToken",
+        source_body="public final class DebugToken {}",
+        is_new_file=False,
+        evidence_source="workspace_source",
+    )
+    error = _mutation_target_error(
+        "apply_source_edit",
+        {
+            "path": "src/main/java/example/DebugToken.java",
+            "operation": "create_file",
+        },
+        context,
+    )
+
+    assert error is not None
+    assert error.startswith("MUTATION_TARGET_CREATION_CONFLICT:")
+    assert is_recoverable_mutation_failure(error.split(":", 1)[0])
 
 
 def test_creation_conflict_remains_available_to_corrective_tool_loop() -> None:
