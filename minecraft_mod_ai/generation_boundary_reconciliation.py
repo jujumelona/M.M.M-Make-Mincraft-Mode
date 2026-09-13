@@ -43,10 +43,17 @@ def _install_resource_asset_preflight(
     """Own the final wrappers while delegating validation to the pure shared contract."""
 
     if getattr(resource_module, "_CONTRACT_OWNED_PREFLIGHT", False):
-        # The canonical producer already validates directly. The orchestrator reaches it
-        # through complete_orchestrator_services.generate_assets, which resolves the
-        # canonical callable at invocation time, so no cross-module attribute rebinding
-        # is required here.
+        # The canonical producer validates directly. Preserve that ownership instead of
+        # wrapping it a second time, but explicitly attest every live alias that delegates
+        # to the canonical producer so the orchestrator boundary cannot silently diverge.
+        for name in ("attach_generation_plan", "generate_assets"):
+            function = getattr(resource_module, name, None)
+            if callable(function):
+                setattr(function, "_mmm_resource_asset_preflight", True)
+        if orchestrator_module is not None:
+            orchestrator_generate = getattr(orchestrator_module, "generate_assets", None)
+            if callable(orchestrator_generate):
+                setattr(orchestrator_generate, "_mmm_resource_asset_preflight", True)
         return
 
     from .resource_asset_preflight_contract import (
