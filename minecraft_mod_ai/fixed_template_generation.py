@@ -34,6 +34,19 @@ def _adapter_name(router: Any, role: str) -> str:
     return str(getattr(config, "adapter", "") or "")
 
 
+def _structured_text_transport_required(
+    router: Any,
+    role: str,
+    *,
+    enable_tools: bool,
+) -> bool:
+    return (
+        not enable_tools
+        or _adapter_name(router, role) == "mock"
+        or not hasattr(router, "generate_tool_decision")
+    )
+
+
 def _semantic_prelude_required(
     router: Any,
     role: str,
@@ -113,9 +126,9 @@ def generate_fixed_template_value(
         raise TypeError("fixed-template generation requires a response_schema mapping")
     assert_atomic_model_schema(response_schema, surface=f"fixed template for role {role!r}")
 
-    # ``mock`` is a deterministic fixture engine, not a model. Preserve its existing
-    # schema-aware fixture transport without providing this escape hatch to real adapters.
-    if _adapter_name(router, role) == "mock" or not hasattr(router, "generate_tool_decision"):
+    # Tool-disabled calls must stay on structured text transport. ``mock`` is a deterministic
+    # fixture engine, and routers without a tool-decision surface require the same transport.
+    if _structured_text_transport_required(router, role, enable_tools=enable_tools):
         fixture_kwargs: dict[str, Any] = {
             "media_paths": media_paths,
             "response_format": _JSON_FIXTURE_FORMAT,
