@@ -24,7 +24,6 @@ from functools import wraps
 from typing import Any
 
 from .mutation_failure_classification import is_recoverable_mutation_failure
-from .repair_mutation_recovery_contract import install as install_repair_mutation_recovery
 
 _MARKER = "_mmm_mutation_authority_final_guard_v1"
 _SEMANTIC_BOUNDARY_MARKER = "_mmm_post_argument_semantic_boundary_v1"
@@ -339,10 +338,6 @@ def install(loop_module: Any | None = None) -> None:
         loop_module.is_mutation_ready = is_mutation_ready
         setattr(loop_module, _MARKER, True)
 
-    # Repair recovery must sit inside this final guard: it narrows the model-visible
-    # frontier and verifier semantics, while the semantic failure boundary remains the
-    # outermost authority decision point.
-    install_repair_mutation_recovery(loop_module)
     _install_semantic_generation_boundary(loop_module)
 
 
