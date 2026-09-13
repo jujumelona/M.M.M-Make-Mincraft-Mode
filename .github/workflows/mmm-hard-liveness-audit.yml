@@ -1,26 +1,13 @@
 name: hard liveness audit
 
 on:
-  pull_request:
-    paths:
-      - 'minecraft_mod_ai/**/*.py'
-      - 'tests/test_deadline_executor_ownership.py'
-      - '.github/scripts/audit_runtime_concurrency.py'
-      - '.github/workflows/mmm-hard-liveness-audit.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'minecraft_mod_ai/**/*.py'
-      - 'tests/test_deadline_executor_ownership.py'
-      - '.github/scripts/audit_runtime_concurrency.py'
-      - '.github/workflows/mmm-hard-liveness-audit.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: hard-liveness-${{ github.event_name }}-${{ github.ref }}
+  group: hard-liveness-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

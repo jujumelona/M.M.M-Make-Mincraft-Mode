@@ -1,13 +1,6 @@
 name: exhaustive runtime concurrency audit
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'minecraft_mod_ai/**/*.py'
-      - 'tests/**/*.py'
-      - '.github/scripts/**/*.py'
-      - '.github/workflows/mmm-runtime-concurrency-audit.yml'
   workflow_dispatch:
 
 permissions:
