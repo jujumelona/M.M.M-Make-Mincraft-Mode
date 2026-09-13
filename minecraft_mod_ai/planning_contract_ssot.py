@@ -64,6 +64,17 @@ SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 # 3. research note contract
 # ---------------------------------------------------------------------------
+REQUIREMENT_COVERAGE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "complete": {"type": "boolean"},
+        "remaining_source_quote": {"type": "string", "maxLength": 256},
+        "remaining_behavior": {"type": "string", "maxLength": 256},
+    },
+    "required": ["complete", "remaining_source_quote", "remaining_behavior"],
+    "additionalProperties": False,
+}
+
 RESEARCH_NOTE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -229,6 +240,7 @@ def assert_all_planning_contracts_valid() -> None:
             SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA,
         ),
         ("RESEARCH_NOTE_SCHEMA", RESEARCH_NOTE_SCHEMA),
+        ("REQUIREMENT_COVERAGE_SCHEMA", REQUIREMENT_COVERAGE_SCHEMA),
         ("pre_design_support_schema(2)", pre_design_support_schema(2)),
     ]
 

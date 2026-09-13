@@ -15,7 +15,10 @@ from typing import Any
 CUSTOM_CAPABILITY_SENTINEL = "custom"
 
 from .planner_operation import planner_operation
-from .planning_contract_ssot import SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA
+from .planning_contract_ssot import (
+    REQUIREMENT_COVERAGE_SCHEMA,
+    SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA,
+)
 from .planning_state_contract import ROUTE_SOURCES, validate_planning_state
 from .root_cause_trace import emit_root_cause
 
@@ -341,11 +344,13 @@ def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], bud
     seen: set[str] = set()
     payload = json.loads(messages[1]["content"])
     page_index = 0
+    remaining: dict[str, Any] | None = None
     while True:
         current_messages = deepcopy(messages)
         if collected:
             current_messages[1]["content"] = json.dumps(
-                {**payload, "already_compiled_requirements": collected},
+                {**payload, "already_compiled_requirements": collected,
+                 "uncovered_authored_behavior": remaining},
                 ensure_ascii=False, separators=(",", ":"),
             )
             if sum(len(row["content"].encode("utf-8")) for row in current_messages) > budget:
@@ -371,6 +376,11 @@ def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], bud
             if not collected:
                 return raw
             raise ModelConfigurationError("REQUIREMENT_PAGINATION_FAILED: invalid continuation page")
+        emit_root_cause(
+            "planner_requirement_page_received", stage="planning_state",
+            operation="researched_requirement_compile", result="INFO",
+            details={"page_index": page_index + 1, "requirements": rows},
+        )
         for row in rows:
             if not isinstance(row, Mapping) or not _text(row.get("statement")):
                 raise ModelConfigurationError("REQUIREMENT_PAGINATION_FAILED: invalid requirement row")
@@ -396,6 +406,50 @@ def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], bud
         )
         if len(rows) < page_size:
             return {"requirements": collected}
+        coverage_messages = [
+            {"role": "system", "content": (
+                "Compare the original authored task with the collected requirements. Decide whether "
+                "any explicitly requested player-visible behavior is still missing. A full page does "
+                "not mean more requirements exist. Do not invent features to fill pages, expand vague "
+                "'etc' into features, or repeat covered behavior with extra implementation details. "
+                "If all requested behaviors are represented, return complete=true and both remaining "
+                "fields empty. Otherwise return complete=false, an exact verbatim quote from the task "
+                "that requests the missing behavior, and a description of that behavior."
+            )},
+            {"role": "user", "content": json.dumps(
+                {**payload, "already_compiled_requirements": collected}, ensure_ascii=False,
+                separators=(",", ":"),
+            )},
+        ]
+        if sum(len(row["content"].encode("utf-8")) for row in coverage_messages) > budget:
+            raise ModelConfigurationError("REQUIREMENT_PAGINATION_CONTEXT_EXHAUSTED: coverage review cannot fit")
+        try:
+            with planner_operation("requirement_coverage_review", output_tokens=512):
+                remaining = router.generate_tool_decision(
+                    "planner", coverage_messages, tool_name="review_requirement_coverage",
+                    parameters=REQUIREMENT_COVERAGE_SCHEMA,
+                    description="Decide whether an explicitly authored behavior remains uncovered.",
+                )
+        except Exception as exc:
+            raise ModelConfigurationError(
+                "REQUIREMENT_COVERAGE_FAILED: cannot certify partial requirement coverage"
+            ) from exc
+        emit_root_cause(
+            "planner_requirement_coverage", stage="planning_state",
+            operation="requirement_coverage_review", result="INFO", details={"review": remaining},
+        )
+        if not isinstance(remaining, Mapping) or type(remaining.get("complete")) is not bool:
+            raise ModelConfigurationError("REQUIREMENT_COVERAGE_INVALID: missing explicit completion decision")
+        quote = remaining.get("remaining_source_quote")
+        behavior = _text(remaining.get("remaining_behavior"))
+        if remaining["complete"]:
+            if quote != "" or behavior:
+                raise ModelConfigurationError("REQUIREMENT_COVERAGE_INVALID: completion contradicts remaining behavior")
+            return {"requirements": collected}
+        task = payload.get("task", {})
+        source = str(task.get("original_prompt") or task.get("prompt") or "")
+        if not isinstance(quote, str) or not quote.strip() or quote not in source or not behavior:
+            raise ModelConfigurationError("REQUIREMENT_COVERAGE_INVALID: remaining behavior lacks an exact task quote")
 
 
 def compile_researched_requirements(
@@ -420,6 +474,7 @@ def compile_researched_requirements(
         "Each requirement must express one independently testable behavior. Never combine separate "
         "behaviors to fit the page: the host will request further pages. Exclude behaviors in "
         "already_compiled_requirements. Return four new requirements while at least four remain; "
+        "When uncovered_authored_behavior is supplied, address that specific missing behavior first. "
         "return fewer only when every remaining user-stated behavior is covered, or an empty array "
         "when none remain. Preserve dependencies and qualifiers in each behavior. Return behavior "
         "statements and observable acceptance conditions only."

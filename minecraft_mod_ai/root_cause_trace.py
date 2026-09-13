@@ -411,6 +411,8 @@ def emit_root_cause(
                 "gradle_cache_lock_acquired",
                 "planning_semantic_research_summary",
                 "planner_requirement_page",
+                "planner_requirement_page_received",
+                "planner_requirement_coverage",
             },
         )
     except BaseException as logger_exc:
