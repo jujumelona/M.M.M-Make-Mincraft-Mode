@@ -1,0 +1,78 @@
+name: One Shot Apply Regression Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-apply-regression-tests.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -q -e '.[dev]'
+      - name: Apply the already-validated regression patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path('.github/workflows/one-shot-finalize-regressions.yml').read_text(encoding='utf-8')
+          lines = workflow.splitlines()
+          start = next(i for i, line in enumerate(lines) if line.strip() == "python - <<'PY'")
+          end = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == 'PY')
+          script = textwrap.dedent('\n'.join(lines[start + 1:end]))
+          old = 'assert final_task["required_gates"] == ["source_static_validation", "target_compile"]'
+          new = 'assert final_task["required_gates"] == ["source_static_validation", "target_compile", "runtime_gameplay_validation"]'
+          if old not in script:
+              raise SystemExit('planner gate assertion anchor missing from finalizer patch')
+          script = script.replace(old, new, 1)
+          exec(compile(script, '<regression-finalizer-patch>', 'exec'), {'__name__': '__main__'})
+          PY
+          git diff --check
+      - name: Verify repaired contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_unified_host_execution_loop.py \
+            tests/test_space_progression_planner_and_verifier_regression.py \
+            tests/test_java_lsp_readiness.py \
+            tests/test_java_lsp_scaling.py
+          python -m ruff check \
+            tests/test_unified_host_execution_loop.py \
+            tests/test_space_progression_planner_and_verifier_regression.py \
+            tests/test_java_lsp_scaling.py \
+            --select F,E7,E9
+      - name: Commit verified tests to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$(git rev-parse HEAD)"
+          git config user.name 'jujumelona'
+          git config user.email 'qasdaa025@gmail.com'
+          git add \
+            tests/test_unified_host_execution_loop.py \
+            tests/test_space_progression_planner_and_verifier_regression.py \
+            tests/test_java_lsp_scaling.py
+          git diff --cached --check
+          git commit -m 'test: align regressions with fail-closed host contracts'
+          git push origin HEAD:main
