@@ -16,7 +16,6 @@ HOST_WORKFLOWS = (
     "asset/workflow",
     "integration/workflow",
     "validation/workflow",
-    "research/workflow",
     "reuse/workflow",
 )
 
@@ -99,15 +98,18 @@ def test_feature_convergence_is_semantic_not_depth_limited() -> None:
 
 
 def test_workflow_sequences_have_one_authority() -> None:
-    research = (PKG / "research_template_pipeline.py").read_text(encoding="utf-8")
+    # Research's old host-template sequence was deliberately removed. Reference and
+    # grounded research are now owned by their dedicated runtime pipelines, so reviving
+    # research_template_pipeline.py or templates/research/workflow.yaml would create a
+    # second execution authority.
+    assert not (PKG / "research_template_pipeline.py").exists()
+    assert not (TEMPLATES / "research" / "workflow.yaml").exists()
+
     reuse = (PKG / "reuse_template_pipeline.py").read_text(encoding="utf-8")
-    assert "RESEARCH_SEQUENCE" not in research
     assert "REUSE_SEQUENCE" not in reuse
-    assert 'load_template("research/workflow")' in research
     assert 'load_template("reuse/workflow")' in reuse
-    for identifier in ("research/workflow", "reuse/workflow"):
-        workflow = yaml.safe_load((TEMPLATES / f"{identifier}.yaml").read_text(encoding="utf-8"))
-        assert "standalone" not in workflow
+    workflow = yaml.safe_load((TEMPLATES / "reuse" / "workflow.yaml").read_text(encoding="utf-8"))
+    assert "standalone" not in workflow
 
 
 def test_host_workflow_children_are_manifests_not_dead_prompts() -> None:
@@ -124,10 +126,16 @@ def test_host_workflow_children_are_manifests_not_dead_prompts() -> None:
             assert str(child.get("proof", {}).get("predicate") or "").strip()
 
 
-def test_prompt_policy_is_shared_and_capture_is_removed() -> None:
-    assert not (TEMPLATES / "prompt" / "capture.yaml").exists()
+def test_prompt_policy_is_shared_and_capture_is_host_owned_identity_step() -> None:
+    capture_path = TEMPLATES / "prompt" / "capture.yaml"
+    assert capture_path.is_file()
+    capture = yaml.safe_load(capture_path.read_text(encoding="utf-8"))
+    assert capture["id"] == "prompt/capture"
+    assert capture["execution"] == "host"
+    assert capture["operation"] == "identity"
+
     workflow = yaml.safe_load((TEMPLATES / "prompt" / "workflow.yaml").read_text(encoding="utf-8"))
-    assert "prompt/capture" not in workflow["steps"]
+    assert workflow["steps"][0] == "prompt/capture"
     policy = yaml.safe_load((TEMPLATES / "prompt" / "policy.yaml").read_text(encoding="utf-8"))
     common = set(policy["rules"])
     for identifier in workflow["steps"]:
