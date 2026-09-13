@@ -110,7 +110,6 @@ jobs:
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git rm -f .github/workflows/one-shot-execute-current-head-repair.yml
           git add minecraft_mod_ai tests
           git diff --cached --check
           git commit -m 'fix: reconcile current runtime and regression contracts'
