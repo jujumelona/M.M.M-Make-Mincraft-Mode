@@ -93,11 +93,23 @@ class _FakeRepairEngine:
     def __init__(self, *args: object, **kwargs: object) -> None:
         pass
 
-    def repair(self, *args: object, **kwargs: object) -> dict[str, object]:
+    def repair(
+        self,
+        project_root: Path,
+        *,
+        run_gametest: bool = True,
+        max_attempts: int | None = None,
+    ) -> dict[str, object]:
+        del max_attempts
         type(self).calls += 1
+        validation = _FakeGradleRunner(Path('.')).build(
+            project_root, run_gametest=run_gametest
+        ).to_dict()
+        assert validation.get("status") == "PASS"
         return {
             "status": "PASS",
             "attempts": 1,
+            "evidence": {"passed": True, "build": validation},
             "patch_receipts": [],
         }
 

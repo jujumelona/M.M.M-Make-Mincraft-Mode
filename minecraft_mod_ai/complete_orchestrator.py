@@ -480,7 +480,23 @@ class CompleteProductionOrchestrator:
             if build_result.get('status') != 'PASS' and options.auto_repair:
                 router = router or self.router_factory()
                 repair_result = RepairEngine(router=router, gradle_cache=cache, policy=self.policy).repair(project_root, run_gametest=options.run_gametest, max_attempts=options.max_repair_attempts)
-                build_result = GradleRunner(cache).build(project_root, run_gametest=options.run_gametest).to_dict()
+                repair_evidence = repair_result.get('evidence') if isinstance(repair_result, dict) else None
+                repaired_build = repair_evidence.get('build') if isinstance(repair_evidence, dict) else None
+                if (
+                    repair_result.get('status') == 'PASS'
+                    and isinstance(repair_evidence, dict)
+                    and repair_evidence.get('passed') is True
+                    and isinstance(repaired_build, dict)
+                    and repaired_build.get('status') == 'PASS'
+                ):
+                    # RepairEngine already ran the final Gradle/GameTest validation on
+                    # the repaired tree. Reuse that attested receipt instead of running
+                    # the identical expensive build a third time.
+                    build_result = dict(repaired_build)
+                else:
+                    # Preserve fail-closed compatibility for alternate repair engines
+                    # that do not provide a validated build receipt.
+                    build_result = GradleRunner(cache).build(project_root, run_gametest=options.run_gametest).to_dict()
             return {'build': build_result, 'repair': repair_result}
         build_bundle = run_named_checkpoint(ledger, 'gradle-build', stage='build', input_value={'graph_hash': work_plan.graph_hash, 'project_manifest': validation_manifest, 'run_gametest': options.run_gametest, 'auto_repair': options.auto_repair, 'max_repair_attempts': options.max_repair_attempts}, action=build_with_repair, encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: self._cached_build_exists(cached.get('build')))
         build = build_bundle['build']
