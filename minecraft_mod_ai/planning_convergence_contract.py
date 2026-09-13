@@ -4,8 +4,8 @@ from __future__ import annotations
 
 Normal termination is semantic, never an arbitrary round budget: research works over a
 host-owned finite obligation universe; terminal states never reopen; and fixed-point or
-frontier exhaustion is terminal. Only requirement compilation may add the finite set of
-implementation obligations.
+frontier exhaustion is terminal. Requirement compilation freezes behavior requirements
+without creating an additional research universe.
 """
 
 import hashlib
@@ -29,7 +29,6 @@ _UNRESOLVED_TRANSITIONS = {
     "resolved": frozenset({"resolved"}),
     "blocked": frozenset({"blocked"}),
 }
-_IMPLEMENTATION_STAGE = "implementation_plan"
 
 
 class PlanningConvergenceError(RuntimeError):
@@ -82,7 +81,6 @@ def _requirements(state: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
 
 
 def _evidence_key(row: Mapping[str, Any]) -> str:
-    # Claim prose is deliberately excluded: wording churn is not semantic progress.
     return _canonical(
         {
             "research_ref": str(row.get("research_ref") or ""),
@@ -177,22 +175,6 @@ def _dedupe(state: dict[str, Any]) -> None:
                 seen_ids.add(uid)
             kept_resolved.append(row)
         state["resolved"] = kept_resolved
-
-
-def _ensure_implementation_blocks(state: dict[str, Any]) -> bool:
-    """Migrate old checkpoints and make implementation evidence a real plan gate."""
-    rows = state.get("unresolved")
-    if not isinstance(rows, list):
-        return False
-    changed = False
-    for row in rows:
-        if not isinstance(row, dict) or row.get("reason") != "implementation_method":
-            continue
-        blocks = [str(x) for x in (row.get("blocks") or []) if str(x)]
-        if _IMPLEMENTATION_STAGE not in blocks:
-            row["blocks"] = [*blocks, _IMPLEMENTATION_STAGE]
-            changed = True
-    return changed
 
 
 def _terminalize_research_frontier(state: dict[str, Any]) -> bool:
@@ -328,9 +310,6 @@ def collect_planning_state_research_convergent(
     """Process one finite research delta and make exhaustion/fixed-point terminal."""
     validate_planning_state(state, prompt=prompt)
     before = deepcopy(dict(state))
-    if _ensure_implementation_blocks(before):
-        _rehash(before)
-        validate_planning_state(before, prompt=prompt)
     before_fp = planning_progress_fingerprint(before)
     pending = any(
         row.get("status") == "pending"
@@ -360,7 +339,6 @@ def collect_planning_state_research_convergent(
             )
         )
     )
-    _ensure_implementation_blocks(value)
     _dedupe(value)
     _rehash(value)
     validate_planning_state(value, prompt=prompt)
@@ -395,13 +373,10 @@ def collect_planning_state_research_convergent(
 def compile_researched_requirements_convergent(
     router: Any, prompt: str, state: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """Allow the finite implementation-universe expansion once, then freeze it."""
+    """Compile the finite requirement set without creating new research obligations."""
     validate_planning_state(state, prompt=prompt)
     if _requirements(state):
         value = deepcopy(dict(state))
-        if _ensure_implementation_blocks(value):
-            _rehash(value)
-            validate_planning_state(value, prompt=prompt)
         fp = planning_progress_fingerprint(value)
         _emit(
             "PLANNING_FIXED_POINT_REQUIREMENTS_ALREADY_FROZEN",
@@ -415,61 +390,24 @@ def compile_researched_requirements_convergent(
     old_research = _id_map(state, "research_queue", "research_id")
     before_fp = planning_progress_fingerprint(state)
     value = deepcopy(dict(compile_researched_requirements(router, prompt, state)))
-    _ensure_implementation_blocks(value)
     _rehash(value)
     validate_planning_state(value, prompt=prompt)
 
     requirements = _requirements(value)
     new_unknowns = _id_map(value, "unresolved", "unresolved_id")
     new_research = _id_map(value, "research_queue", "research_id")
-    if not set(old_unknowns).issubset(new_unknowns) or not set(old_research).issubset(new_research):
+    if set(old_unknowns) != set(new_unknowns) or set(old_research) != set(new_research):
         raise PlanningConvergenceError(
-            "PLANNING_NON_MONOTONE_TRANSITION: requirement compilation removed obligations"
+            "PLANNING_OUT_OF_UNIVERSE_OBLIGATION: requirement compilation changed research obligations"
         )
-    added_unknowns = set(new_unknowns) - set(old_unknowns)
-    added_research = set(new_research) - set(old_research)
-
-    if requirements:
-        if len(added_unknowns) != len(requirements) or len(added_research) != len(requirements):
-            raise PlanningConvergenceError(
-                "PLANNING_OUT_OF_UNIVERSE_OBLIGATION: expected exactly one implementation "
-                "obligation and research item per requirement"
-            )
-        seen_refs: set[str] = set()
-        for uid in added_unknowns:
-            row = new_unknowns[uid]
-            requirement_ref = str(row.get("requirement_ref") or "")
-            research_ref = str(row.get("research_ref") or "")
-            valid = (
-                row.get("reason") == "implementation_method"
-                and row.get("status") == "open"
-                and requirement_ref in requirements
-                and requirement_ref not in seen_refs
-                and research_ref in added_research
-                and _IMPLEMENTATION_STAGE in (row.get("blocks") or [])
-            )
-            if not valid:
-                raise PlanningConvergenceError(
-                    "PLANNING_OUT_OF_UNIVERSE_OBLIGATION: invalid implementation obligation expansion"
-                )
-            seen_refs.add(requirement_ref)
-        for rid in added_research:
-            row = new_research[rid]
-            if (
-                row.get("status") != "pending"
-                or str(row.get("requirement_ref") or "") not in requirements
-            ):
-                raise PlanningConvergenceError(
-                    "PLANNING_OUT_OF_UNIVERSE_OBLIGATION: invalid implementation research expansion"
-                )
 
     emit_root_cause(
-        "planning_obligation_universe_frozen",
+        "planning_requirement_universe_frozen",
         stage="planning_state",
         operation="compile_researched_requirements_convergent",
         result="PASS" if requirements else "STOP",
         reason=(
-            "PLANNING_OBLIGATION_UNIVERSE_FROZEN"
+            "PLANNING_REQUIREMENT_UNIVERSE_FROZEN"
             if requirements
             else "PLANNING_FRONTIER_EXHAUSTED"
         ),
@@ -477,8 +415,6 @@ def compile_researched_requirements_convergent(
             "fingerprint_before": before_fp,
             "fingerprint_after": planning_progress_fingerprint(value),
             "requirements": sorted(requirements),
-            "added_unresolved": sorted(added_unknowns),
-            "added_research": sorted(added_research),
             "obligation_universe_size": len(new_unknowns),
             "research_universe_size": len(new_research),
         },
