@@ -104,7 +104,7 @@ def _normalize_relative_files(raw_files: Any) -> list[str] | None:
             not relative
             or candidate.is_absolute()
             or ".." in candidate.parts
-            or not relative.endswith((".java", ".kt"))
+            or not relative.endswith(".java")
         ):
             raise ValueError(f"Invalid task diagnostic path: {relative!r}")
         normalized.append(relative)
