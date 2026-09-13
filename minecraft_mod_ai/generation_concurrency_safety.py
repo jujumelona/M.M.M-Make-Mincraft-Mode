@@ -280,7 +280,9 @@ def _enable_anchor_fenced_parallelism(work_graph_module: Any) -> None:
     anchor_resolver = getattr(work_graph_module, "_exclusive_anchor_keys", None)
     if not callable(anchor_resolver) or not getattr(anchor_resolver, "_mmm_unscoped_fallback", False):
         return
-    scheduler_safety._SERIAL_CPU_STAGES = ()
+    # Anchor-collision edges are additive protection. Keep the scheduler's
+    # serial-stage admission as a fail-closed fallback for direct, incomplete,
+    # or edge-less work graphs; never disable it process-wide.
     _install_cpu_capacity_policy(scheduler_safety)
 
 
