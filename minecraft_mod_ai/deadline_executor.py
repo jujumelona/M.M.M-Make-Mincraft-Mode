@@ -2,9 +2,11 @@ from __future__ import annotations
 
 """Deadline-aware parallel execution for model-backed planning work.
 
-The executor is intentionally small: callers retain semantic ownership of retries,
-checkpoints, and failure policy. This module owns only bounded scheduling, monotonic
-work/stage deadlines, context propagation, cancellation, and non-blocking shutdown.
+Callers retain semantic ownership of retries, checkpoints, and failure policy. This
+module owns bounded scheduling, monotonic work/stage deadlines, context propagation,
+cancellation, and executor shutdown. Results are materialized only after the executor
+has been closed so callers cannot accidentally leak its lifecycle by abandoning an
+iterator early.
 """
 
 from collections import deque
@@ -68,26 +70,31 @@ class ParallelTaskError(RuntimeError):
         super().__init__(f"{self.stage} worker failed for {self.item!r}: {cause}")
 
 
-def iter_completed_with_deadlines(
+def collect_completed_with_deadlines(
     items: Iterable[_Item],
     worker: Callable[[_Item], _Result],
     *,
     max_workers: int,
     stage: str,
     sort_key: Callable[[_Item], object] | None = None,
-) -> Iterator[tuple[_Item, _Result]]:
-    """Yield completed work while enforcing per-unit and whole-stage deadlines.
+) -> list[tuple[_Item, _Result]]:
+    """Run bounded parallel work and return results after executor shutdown.
 
     Only active work is submitted, so queued work never consumes its timeout before it
-    actually owns an executor slot. Every worker receives the same absolute deadline in
-    its copied context, allowing model capacity locks to use the remaining budget too.
-    Executor cleanup never waits for an uncooperative thread; transport adapters remain
-    responsible for their own finite I/O timeout.
+    owns an executor slot. Every worker receives the same absolute deadline in its
+    copied context, allowing model-capacity locks and transports that honor the model
+    deadline to use the remaining budget too.
+
+    The executor is fully detached from the caller before this function returns. A
+    caller may therefore stop consuming the returned results at any point without
+    making worker cleanup depend on generator finalization or garbage collection.
+    Running Python threads cannot be forcibly killed, so transport/model adapters must
+    still enforce finite I/O timeouts derived from the propagated deadline.
     """
 
     indexed = list(enumerate(items))
     if not indexed:
-        return
+        return []
 
     workers = max(1, min(int(max_workers), len(indexed)))
     started_at = time.monotonic()
@@ -99,6 +106,7 @@ def iter_completed_with_deadlines(
     )
     pending = deque(indexed)
     active: dict[Future[_Result], _ActiveTask[_Item]] = {}
+    completed: list[tuple[_Item, _Result]] = []
     pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix=stage)
 
     def submit_one(sequence: int, item: _Item) -> None:
@@ -165,15 +173,39 @@ def iter_completed_with_deadlines(
                     raise
                 except Exception as exc:
                     raise ParallelTaskError(stage=stage, item=meta.item, cause=exc) from exc
-                yield meta.item, result
+                completed.append((meta.item, result))
     finally:
         for future in active:
             future.cancel()
         pool.shutdown(wait=False, cancel_futures=True)
 
+    return completed
+
+
+def iter_completed_with_deadlines(
+    items: Iterable[_Item],
+    worker: Callable[[_Item], _Result],
+    *,
+    max_workers: int,
+    stage: str,
+    sort_key: Callable[[_Item], object] | None = None,
+) -> Iterator[tuple[_Item, _Result]]:
+    """Compatibility iterator over already-collected, executor-detached results."""
+
+    return iter(
+        collect_completed_with_deadlines(
+            items,
+            worker,
+            max_workers=max_workers,
+            stage=stage,
+            sort_key=sort_key,
+        )
+    )
+
 
 __all__ = [
     "ParallelExecutionTimeout",
     "ParallelTaskError",
+    "collect_completed_with_deadlines",
     "iter_completed_with_deadlines",
 ]
