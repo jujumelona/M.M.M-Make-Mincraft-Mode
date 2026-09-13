@@ -38,7 +38,7 @@ class _DeterministicImageRouter(ModelRouter):
         width: int,
         height: int,
         **_kwargs,
-    ):
+    ) -> Path:
         assert role == "image_generator"
         assert prompt
         assert seed >= 0
@@ -58,7 +58,7 @@ class _DeterministicImageRouter(ModelRouter):
             image.save(target, format="PNG", optimize=False)
         finally:
             image.close()
-        return {"output_path": str(target)}
+        return target
 
 
 def _module_assets(modules: tuple[ProductionModule, ...]) -> tuple[AssetRequest, ...]:
