@@ -108,6 +108,5 @@ def test_prompt_convergence_runs_with_empty_research_queue_before_requirement_se
 
     result = pipeline.prepare_planning_state(None, PROMPT)
 
-    assert events[:2] == [("collect", 0, 0), "compile_requirements"]
-    assert events[-1] == ("collect", 1, 0)
+    assert events == [("collect", 0, 0), "compile_requirements"]
     assert result["plan_ready"] is True
