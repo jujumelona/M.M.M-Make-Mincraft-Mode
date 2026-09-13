@@ -13,7 +13,7 @@ from .generation_accuracy_contract import (
 from .generation_accuracy_contract import install_inner as install_generation_accuracy_inner
 from .generation_accuracy_contract import install_outer as install_generation_accuracy_outer
 from .hardware_concurrency_installation import install as install_hardware_concurrency
-from .project_jdk_provisioning_installation import install as install_project_jdk_provisioning
+from . import jdtls_bootstrap as _jdtls_bootstrap
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
 from .source_observation_budget_installation import install as install_source_observation_budget
@@ -35,6 +35,11 @@ def _validate_runtime_template_authority() -> None:
 # package must never synthesize that receipt from a desired/default server width.
 install_hardware_concurrency()
 initialize_runtime()
+# A generation/quality MCP child inherits the target-selected MMM_JAVA_VERSION.
+# Colab setup may have run before that value existed, so ensure the exact project
+# JDK again at fresh process bootstrap.  When no target Java version is present,
+# this is a no-op.  java_lsp remains the single canonical resolver/validator.
+_jdtls_bootstrap._ensure_project_jdk()
 _validate_runtime_template_authority()
 from . import custom_module_generator as _custom_module_generator
 from . import execution_feedback_replan_contract as _execution_feedback_replan_contract
@@ -42,7 +47,6 @@ from . import java_lsp as _java_lsp
 from . import model_router as _model_router
 
 install_checkpoint_performance(_custom_module_generator)
-install_project_jdk_provisioning(_java_lsp)
 install_source_set_boundary(_java_lsp)
 # Install the accuracy verifier before runtime finalization. The atomic coder slicer is
 # finalized later and therefore calls through this boundary once for every obligation.
