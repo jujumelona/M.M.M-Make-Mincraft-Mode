@@ -145,3 +145,84 @@ def test_research_metric_vector_always_preserves_plan_alignment() -> None:
     weights = research._adaptive_weights("Service.compute dependency API", metrics)
     assert "plan_alignment" in weights
     assert abs(sum(weights.values()) - 1.0) < 1e-9
+
+
+def test_deadline_executor_detaches_pool_before_iterator_is_returned(monkeypatch) -> None:
+    from concurrent.futures import Future
+
+    from minecraft_mod_ai import deadline_executor as deadline
+
+    instances = []
+
+    class ImmediateExecutor:
+        def __init__(self, *args, **kwargs) -> None:
+            self.shutdown_calls = []
+            instances.append(self)
+
+        def submit(self, function, *args, **kwargs):
+            future = Future()
+            try:
+                future.set_result(function(*args, **kwargs))
+            except BaseException as exc:
+                future.set_exception(exc)
+            return future
+
+        def shutdown(self, *, wait=True, cancel_futures=False) -> None:
+            self.shutdown_calls.append((wait, cancel_futures))
+
+    monkeypatch.setattr(deadline, "ThreadPoolExecutor", ImmediateExecutor)
+
+    results = deadline.iter_completed_with_deadlines(
+        [1, 2],
+        lambda value: value * 10,
+        max_workers=2,
+        stage="test-stage",
+    )
+
+    assert instances
+    assert instances[0].shutdown_calls == [(False, True)]
+    assert list(results) == [(1, 10), (2, 20)]
+
+
+def test_deadline_executor_timeout_cancels_before_nonblocking_shutdown(monkeypatch) -> None:
+    from concurrent.futures import Future
+
+    import pytest
+
+    from minecraft_mod_ai import deadline_executor as deadline
+
+    instances = []
+
+    class NeverCompletingExecutor:
+        def __init__(self, *args, **kwargs) -> None:
+            self.futures = []
+            self.shutdown_calls = []
+            instances.append(self)
+
+        def submit(self, function, *args, **kwargs):
+            future = Future()
+            self.futures.append(future)
+            return future
+
+        def shutdown(self, *, wait=True, cancel_futures=False) -> None:
+            self.shutdown_calls.append((wait, cancel_futures))
+
+    monkeypatch.setattr(deadline, "ThreadPoolExecutor", NeverCompletingExecutor)
+    monkeypatch.setattr(deadline, "planning_work_unit_timeout_seconds", lambda: 60.0)
+    monkeypatch.setattr(
+        deadline,
+        "planning_stage_deadline",
+        lambda *, work_units, workers, started_at: started_at,
+    )
+
+    with pytest.raises(deadline.ParallelExecutionTimeout):
+        deadline.collect_completed_with_deadlines(
+            ["blocked"],
+            lambda item: item,
+            max_workers=1,
+            stage="timeout-stage",
+        )
+
+    assert instances
+    assert all(future.cancelled() for future in instances[0].futures)
+    assert instances[0].shutdown_calls == [(False, True)]
