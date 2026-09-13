@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import threading
+
+from minecraft_mod_ai import deadline_executor
 from minecraft_mod_ai import reference_source_research as reference
 
 
@@ -123,3 +126,56 @@ def test_combined_reference_retrieval_merges_independent_providers(monkeypatch) 
         "wikidata",
         "github_reference",
     }
+
+
+def test_reference_provider_deadline_returns_without_waiting_for_blocked_provider(monkeypatch) -> None:
+    release = threading.Event()
+    slow_finished = threading.Event()
+
+    def provider(name: str):
+        return (
+            [
+                {
+                    "source_id": name,
+                    "content_sha256": f"sha256:{name}",
+                    "content": f"{name} evidence body",
+                }
+            ],
+            {"provider": name, "status": "available", "result_count": 1},
+        )
+
+    def blocked_github(queries, anchors):
+        del queries, anchors
+        try:
+            release.wait(timeout=1.0)
+            return provider("github_reference")
+        finally:
+            slow_finished.set()
+
+    monkeypatch.setattr(reference, "_wikipedia_sources", lambda queries, anchors: provider("wikipedia"))
+    monkeypatch.setattr(reference, "_wikidata_sources", lambda queries, anchors: provider("wikidata"))
+    monkeypatch.setattr(reference, "_github_reference_sources", blocked_github)
+    monkeypatch.setattr(deadline_executor, "planning_work_unit_timeout_seconds", lambda: 0.02)
+    monkeypatch.setattr(
+        deadline_executor,
+        "planning_stage_deadline",
+        lambda *, work_units, workers, started_at=None: float(started_at) + 0.02,
+    )
+
+    try:
+        result = reference.retrieve_reference_grounded_evidence(
+            [
+                "MapleStory gameplay rules",
+                "MapleStory documented systems behavior rules",
+            ]
+        )
+        assert slow_finished.is_set() is False
+    finally:
+        release.set()
+
+    row = result["queries"][0]
+    assert row["content_record_count"] == 2
+    assert row["provider_receipts"]["wikipedia"]["status"] == "available"
+    assert row["provider_receipts"]["wikidata"]["status"] == "available"
+    assert row["provider_receipts"]["github_reference"]["status"] == "error"
+    assert "ParallelExecutionTimeout" in row["retrieval_errors"][0]["error"]
