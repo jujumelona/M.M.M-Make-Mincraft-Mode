@@ -24,7 +24,6 @@ UNRESOLVED_REASONS = (
     "scope",
     "repository_fact",
     "minecraft_api",
-    "implementation_method",
     "compatibility",
     "contradiction",
     "user_preference",
@@ -32,9 +31,8 @@ UNRESOLVED_REASONS = (
 )
 
 # The request-boundary model may describe only unknowns that genuinely belong to the
-# authored request. Implementation/API/repository/compatibility unknowns are created by
-# host stages after concrete requirements exist; allowing them here lets a small model
-# turn ordinary design freedom into a false pre-requirement blocker.
+# authored request. API/repository/compatibility unknowns are created by host stages when
+# concrete facts are actually needed; design freedom is not a pre-requirement blocker.
 _MODEL_UNRESOLVED_REASONS = MODEL_UNRESOLVED_REASONS
 
 _MODEL_BLOCKS_BY_REASON: dict[str, tuple[str, ...]] = {
@@ -48,7 +46,6 @@ RESOLUTION_ROUTES = (
     "external_research",
     "repository_rag",
     "minecraft_research",
-    "implementation_research",
     "compatibility_research",
     "default_policy",
     "user_only",
@@ -69,7 +66,6 @@ _ROUTE_BY_REASON: dict[str, str] = {
     "scope": "default_policy",
     "repository_fact": "repository_rag",
     "minecraft_api": "minecraft_research",
-    "implementation_method": "implementation_research",
     "compatibility": "compatibility_research",
     "contradiction": "user_only",
     "user_preference": "user_only",
@@ -80,7 +76,6 @@ _RESEARCH_ROUTES = frozenset(
         "external_research",
         "repository_rag",
         "minecraft_research",
-        "implementation_research",
         "compatibility_research",
     }
 )
@@ -89,13 +84,6 @@ ROUTE_SOURCES: dict[str, tuple[str, ...]] = {
     "external_research": ("web_sources",),
     "repository_rag": ("repository", "project_rag"),
     "minecraft_research": ("minecraft_docs", "minecraft_source"),
-    "implementation_research": (
-        "repository",
-        "existing_mods",
-        "minecraft_docs",
-        "minecraft_source",
-        "project_rag",
-    ),
     "compatibility_research": (
         "repository",
         "existing_mods",
