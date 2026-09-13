@@ -6,6 +6,8 @@ from minecraft_mod_ai.model_adapters.base import ModelConfigurationError
 from minecraft_mod_ai.planning_state_contract import _build_host_state
 from minecraft_mod_ai.planning_state_resolution import compile_researched_requirements
 
+# Requirement pagination proves authored-behavior coverage only; compiling requirements
+# must not create implementation-research obligations.
 PROMPT = "Gather resources, earn currency, trade, build spacecraft parts, upgrade weapons and hire crew."
 BEHAVIORS = [
     "Players gather resources.", "Players earn currency.", "Players trade resources.",
