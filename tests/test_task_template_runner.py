@@ -4,7 +4,7 @@ import pytest
 
 from minecraft_mod_ai import bounded_record_template as bounded
 from minecraft_mod_ai import task_template_runner as runner
-from minecraft_mod_ai.task_template_catalog import ROOT, load_template
+from minecraft_mod_ai.task_template_catalog import ROOT, load_record_template, load_template
 
 
 def count_reply(count=0):
@@ -37,7 +37,9 @@ def test_record_roundtrip_uses_cardinality_then_exact_record(monkeypatch):
     assert count_schema["properties"]["count"] == {"type": "integer", "minimum": 0}
     assert "maximum" not in count_schema["properties"]["count"]
     assert set(count_schema["properties"]) == {"count"}
-    assert calls[1]["response_schema"] == load_template(
+    # The model-facing schema is the compiled record schema, which materializes global
+    # atomicity bounds (for example maxLength) before a record call is issued.
+    assert calls[1]["response_schema"] == load_record_template(
         "feature/behavior_contract/entry_conditions"
     )["record_schema"]
 
