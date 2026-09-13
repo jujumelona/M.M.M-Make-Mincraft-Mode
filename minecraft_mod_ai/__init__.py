@@ -19,9 +19,6 @@ from .source_observation_budget_installation import install as install_source_ob
 from .source_set_boundary_installation import install as install_source_set_boundary
 from .task_template_catalog import RUNTIME_TEMPLATE_ROOT
 from .template_contract_validation import runtime_consumer_roots, validate_catalog
-from .verifier_fail_closed_completion_installation import (
-    install as install_verifier_fail_closed_completion,
-)
 from .versioned_reference_context_installation import install as install_versioned_reference_context
 
 
@@ -54,9 +51,6 @@ assert_generation_accuracy_inner(_model_router)
 # termination rule before runtime_finalization installs the durable feedback wrapper.
 install_execution_feedback_semantic_convergence(_execution_feedback_replan_contract)
 finalize_runtime()
-# Final runtime composition is now known; make completion fail closed without altering
-# the mutation/verifier dispatch wrappers composed by runtime_finalization.
-install_verifier_fail_closed_completion(_progress_aware_tool_loop)
 # The outer normalizer runs after atomic aggregation so multi-obligation text summaries
 # retain the fixed {"summary": ...} contract consumed by CustomModuleGenerator.
 install_generation_accuracy_outer(_model_router)

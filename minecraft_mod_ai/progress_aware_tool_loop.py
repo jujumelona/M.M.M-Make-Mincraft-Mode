@@ -546,8 +546,13 @@ class HostRunState:
     evidence_fingerprints: set[str] = field(default_factory=set)
     mutation_context: TargetMutationContext | None = None
     applied_mutations: list[str] = field(default_factory=list)
+    created_paths: set[str] = field(default_factory=set)
     workspace_changed: bool = False
     validation_status: str = "PENDING"
+    latest_verifier_tool: str | None = None
+    latest_verifier_errors: tuple[dict[str, Any], ...] = ()
+    latest_verifier_fingerprint: str | None = None
+    repair_guidance_fingerprint: str | None = None
     last_failure_digest: str | None = None
     last_failure_reason: str | None = None
     last_result_digest: str | None = None
@@ -620,14 +625,134 @@ class HostRunState:
             self.evidence_fingerprints.add(fp)
             return True
 
-    def record_mutation(self, tool_name: str, payload: Mapping[str, Any]) -> bool:
-        applied = mutation_payload_applied(tool_name, payload)
-        if applied:
-            with self._lock:
-                self.applied_mutations.append(tool_name)
-                self.workspace_changed = True
-            return True
-        return False
+    def record_mutation(
+        self,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        payload: Mapping[str, Any],
+    ) -> bool:
+        # Mutation, target authority, and verifier invalidation share one owner.
+        if not mutation_payload_applied(tool_name, payload):
+            return False
+
+        operation = str(arguments.get("operation") or "").strip().casefold()
+        path = ""
+        for key in _SOURCE_EDIT_PATH_KEYS:
+            value = arguments.get(key)
+            if isinstance(value, str) and value.strip():
+                path = _canonical_mutation_path(value)
+                break
+
+        with self._lock:
+            self.applied_mutations.append(tool_name)
+            self.workspace_changed = True
+            if path and operation in _SOURCE_CREATE_OPERATIONS:
+                self.created_paths.add(path)
+
+            context = self.mutation_context
+            if context is not None and path == _canonical_mutation_path(context.target_path):
+                source_body = context.source_body
+                if operation in _SOURCE_CREATE_OPERATIONS:
+                    content = arguments.get("content")
+                    if isinstance(content, str):
+                        source_body = content
+                elif operation == "replace_exact" and isinstance(source_body, str):
+                    old = arguments.get("old")
+                    new = arguments.get("new")
+                    if (
+                        isinstance(old, str)
+                        and isinstance(new, str)
+                        and old
+                        and source_body.count(old) == 1
+                    ):
+                        source_body = source_body.replace(old, new, 1)
+                self.mutation_context = replace(
+                    context,
+                    source_body=source_body,
+                    is_new_file=False,
+                    evidence_source="mutation_receipt",
+                )
+
+            self.validation_status = "PENDING"
+            self.latest_verifier_tool = None
+            self.latest_verifier_errors = ()
+            self.latest_verifier_fingerprint = None
+            self.repair_guidance_fingerprint = None
+        return True
+
+    def record_verification(
+        self,
+        tool_name: str,
+        payload: Mapping[str, Any],
+        status: str,
+    ) -> bool:
+        from .validation_diagnostic_contract import diagnostic_errors
+
+        result = payload.get("result")
+        receipt = result if isinstance(result, Mapping) else payload
+        errors: list[dict[str, Any]] = []
+        if status == "FAIL":
+            for item in diagnostic_errors(receipt):
+                compact = {
+                    key: item.get(key)
+                    for key in (
+                        "uri",
+                        "path",
+                        "file",
+                        "severity",
+                        "code",
+                        "source",
+                        "message",
+                        "range",
+                        "line",
+                    )
+                    if item.get(key) not in (None, "", [], {})
+                }
+                if compact:
+                    errors.append(compact)
+
+        fingerprint = evidence_fingerprint(
+            {"tool": tool_name, "status": status, "errors": errors}
+        )
+        with self._lock:
+            changed = (
+                status != self.validation_status
+                or fingerprint != self.latest_verifier_fingerprint
+            )
+            self.validation_status = status
+            self.latest_verifier_tool = tool_name
+            self.latest_verifier_errors = tuple(errors)
+            self.latest_verifier_fingerprint = fingerprint
+            if status != "FAIL":
+                self.repair_guidance_fingerprint = None
+            return changed
+
+    def take_verifier_repair_guidance(self) -> str | None:
+        with self._lock:
+            if (
+                self.validation_status != "FAIL"
+                or not self.latest_verifier_fingerprint
+                or self.latest_verifier_fingerprint == self.repair_guidance_fingerprint
+            ):
+                return None
+            self.repair_guidance_fingerprint = self.latest_verifier_fingerprint
+            context = self.mutation_context
+            evidence = {
+                "verifier": self.latest_verifier_tool,
+                "diagnostics": list(self.latest_verifier_errors),
+                "target_path": context.target_path if context is not None else None,
+                "target_is_new_file": context.is_new_file if context is not None else None,
+                "paths_created_in_this_run": sorted(self.created_paths),
+            }
+
+        return (
+            "MMM_CORE_VERIFIER_REPAIR_V1\n"
+            "The verifier still reports source defects. Repair the existing target; "
+            "do not restart generation and do not recreate any path that already has "
+            "an APPLIED mutation receipt. Make a material existing-file source edit "
+            "that addresses the diagnostics, then allow VERIFY to run again.\n"
+            + json.dumps(evidence, ensure_ascii=False, sort_keys=True, default=str)
+        )
 
     def record_failure(self, tool_name: str, error: Any) -> None:
         """Record failure diagnostics without treating a new error string as progress."""
@@ -1715,6 +1840,11 @@ def _generate_with_tools_impl(
                     "Writable coder reached the host tool-round limit before a "
                     "reviewed source mutation was applied; refusing a prose-only implementation."
                 )
+            if implementation_requires_mutation and state.validation_status == "FAIL":
+                raise ModelConfigurationError(
+                    "VERIFICATION_REPAIR_FIXED_POINT: host execution boundary reached while "
+                    "trustworthy verifier evidence still reports source defects."
+                )
             return _finalize_without_tools(
                 router,
                 config,
@@ -1751,6 +1881,12 @@ def _generate_with_tools_impl(
                     "Writable coder reached a no-progress boundary before a reviewed source "
                     f"mutation was applied; refusing a prose-only implementation.{reason_suffix}\n"
                     f"Execution trajectory:\n{traj_summary}"
+                )
+            if implementation_requires_mutation and state.validation_status == "FAIL":
+                raise ModelConfigurationError(
+                    "VERIFICATION_REPAIR_FIXED_POINT: the same source/action/result state "
+                    "recurred while trustworthy verifier diagnostics remain unresolved."
+                    f"{reason_suffix}\nExecution trajectory:\n{traj_summary}"
                 )
             return _finalize_without_tools(
                 router,
@@ -1904,6 +2040,11 @@ def _generate_with_tools_impl(
             f"  exposed_tools={sorted(phase_tool_names)} tool_choice={tool_choice}",
             flush=True,
         )
+
+        if implementation_requires_mutation and state.phase == LoopPhase.ACT:
+            repair_guidance = state.take_verifier_repair_guidance()
+            if repair_guidance is not None:
+                messages.append({"role": "system", "content": repair_guidance})
 
         turn_request = replace(
             request,
@@ -2062,6 +2203,33 @@ def _generate_with_tools_impl(
                     action_decision=action_decision,
                 )
                 state.trajectory.append(trace_entry)
+                continue
+            if implementation_requires_mutation and state.validation_status == "FAIL":
+                state.phase = LoopPhase.ACT
+                repeated = state.record_no_progress_result(
+                    {
+                        "phase": LoopPhase.ACT.value,
+                        "validation_status": "FAIL",
+                        "verifier_fingerprint": state.latest_verifier_fingerprint,
+                        "prose": content,
+                    }
+                )
+                if repeated > 1:
+                    raise ModelConfigurationError(
+                        "VERIFICATION_REPAIR_FIXED_POINT: coder repeated the same prose-only "
+                        "state while trustworthy verifier diagnostics remain unresolved."
+                    )
+                messages.extend([
+                    {"role": "assistant", "content": content},
+                    {
+                        "role": "system",
+                        "content": (
+                            "Verifier status remains FAIL. Prose cannot complete this implementation. "
+                            "Use the exposed mutation tool to materially repair the existing target, "
+                            "then allow host verification to run again."
+                        ),
+                    },
+                ])
                 continue
             if implementation_requires_mutation and not state.workspace_changed and not mutation_history_applied(messages):
                 if state.phase == LoopPhase.OBSERVE and is_mutation_ready(messages, state):
@@ -2445,7 +2613,7 @@ def _generate_with_tools_impl(
             )
 
             if call.name in _MUTATION_ACT_TOOLS:
-                mutation_applied = state.record_mutation(call.name, payload)
+                mutation_applied = state.record_mutation(call.name, call.arguments, payload)
                 emit_root_cause(
                     "mutation_adjudicated",
                     stage=stage,
@@ -2532,8 +2700,7 @@ def _generate_with_tools_impl(
                         call.name, payload.get("error", "verification unavailable")
                     )
                     continue
-                if status != state.validation_status:
-                    state.validation_status = status
+                if state.record_verification(call.name, payload, status):
                     turn_made_progress = True
                 if status == "FAIL" and implementation_requires_mutation:
                     # Only trustworthy verifier evidence may request another edit.
@@ -2615,6 +2782,7 @@ def _generate_with_tools_impl(
                     "mutation_context_after": ctx_after,
                     "model_tool_calls": model_calls_info,
                     "validation_status": state.validation_status,
+                    "verifier_fingerprint": state.latest_verifier_fingerprint,
                     "workspace_changed": state.workspace_changed,
                     "applied_mutations": tuple(state.applied_mutations),
                     "tool_results": _fixed_point_tool_results(executed),
