@@ -1,9 +1,9 @@
 """Host-owned catalog queries and receipts, separate from API/source evidence.
 
 Catalog search is keyword retrieval (Modrinth /search), not an instruction-following
-RAG endpoint. Build a query bundle from the approved capability, requirement wording,
-research objective, and original task context; union hits by catalog identity. A zero-hit
-path is retrieval evidence, never proof that no candidate exists.
+RAG endpoint. Start from the unresolved requirement's exact capability and let corrective
+retrieval relax only that requirement when evidence is insufficient. A zero-hit path is
+retrieval evidence, never proof that no candidate exists.
 """
 from __future__ import annotations
 
@@ -36,12 +36,14 @@ def catalog_queries(
     *,
     prompt: str = "",
 ) -> list[str]:
-    """Compile a recall-oriented catalog query bundle without replacing task context.
+    """Compile the precise first catalog query for one unresolved requirement.
 
-    ``semantic_capability`` is useful as one retrieval facet, but it is not allowed to
-    become the entire search universe. Requirement wording, research intent and the
-    original user prompt remain independent query paths so a narrow compiled label can
-    fail without erasing the broader task.
+    The initial provider request uses only this requirement's compiled capability. It never
+    imports sibling requirement vocabulary and it does not immediately relax a compound
+    capability to a broad singleton keyword. If that precise route is insufficient,
+    planning_candidate_evidence.expansion_queries performs a material, requirement-local
+    corrective expansion. The full task and siblings remain available in host context for
+    traceability, not as automatic search terms.
     """
     requirement = next((row for row in state.get("decisions", [])
                         if isinstance(row, Mapping)
@@ -51,25 +53,11 @@ def catalog_queries(
     from .planning_candidate_evidence import terms
     parts = terms(capability)
 
-    candidates: list[str] = []
     if parts:
-        # Relax conjunctive feature names so a narrow phrase cannot hide the ecosystem.
-        candidates.extend([" ".join(parts), parts[0]])
+        return [" ".join(parts)]
 
-    # Other approved requirements expose ecosystem vocabulary lost by a narrow label.
-    # They expand retrieval only; requirement-local evidence still decides relevance.
-    for sibling in state.get("decisions", []):
-        if not isinstance(sibling, Mapping) or sibling.get("decision_type") != "requirement":
-            continue
-        sibling_parts = terms(sibling.get("semantic_capability"))
-        if sibling_parts:
-            candidates.extend([" ".join(sibling_parts), sibling_parts[0]])
-
-    if candidates:
-        return list(dict.fromkeys(candidates))
-
-    # Reference/repository questions without a compiled capability retain their own
-    # queries; do not borrow another requirement's identity or invent a mod name.
+    # Repository questions without a compiled capability retain their own authored queries;
+    # do not borrow another requirement's identity or invent a mod name.
     return list(dict.fromkeys(_query_text(q) for q in research.get("queries", [])
                               if _query_text(q)))
 
