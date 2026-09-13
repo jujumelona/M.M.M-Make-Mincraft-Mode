@@ -22,6 +22,7 @@ jobs:
           python-version: '3.11'
       - name: Apply core state-owner migration
         run: |
+          python -c "from pathlib import Path; p=Path('.github/scripts/refactor_progress_loop_state_owner.py'); s=p.read_text(); old='text, count = pattern.subn(new_methods, text, count=1)'; new='text, count = pattern.subn(lambda _match: new_methods, text, count=1)'; assert s.count(old) == 1; p.write_text(s.replace(old,new,1))"
           python -m py_compile .github/scripts/refactor_progress_loop_state_owner.py
           python .github/scripts/refactor_progress_loop_state_owner.py
       - name: Verify focused contracts
