@@ -7,6 +7,7 @@ import pytest
 
 from minecraft_mod_ai.capabilities import capability_names
 from minecraft_mod_ai.capability_plugins import buildable_plugin_ids
+from minecraft_mod_ai.complete_spec import AssetRequest
 from minecraft_mod_ai.mod_development_methods import resolve_mod_development_methods
 from minecraft_mod_ai.mod_scope_contract import install
 from minecraft_mod_ai.skill_catalog import (
@@ -100,6 +101,8 @@ def test_skill_policy_has_no_standalone_map_tools() -> None:
 
 def _fake_contract_modules():
     class FakeCompleteSpec:
+        AssetRequest = globals()["AssetRequest"]
+
         @staticmethod
         def complete_proposal_from_parts(**kwargs):
             return kwargs
