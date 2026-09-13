@@ -20,12 +20,21 @@ from minecraft_mod_ai.complete_spec import (
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.planner import HeuristicPlanner
 from minecraft_mod_ai.production_contract import compile_production_contract
+from minecraft_mod_ai.resource_asset_production import attach_generation_plan
 from minecraft_mod_ai.resource_contracts import derive_module_asset_specs
 
 
 def _module_assets(modules: tuple[ProductionModule, ...]) -> tuple[AssetRequest, ...]:
     """Finalize deterministic module assets before the production contract is frozen."""
     return tuple(AssetRequest(**row) for row in derive_module_asset_specs(modules))
+
+
+def _bind_asset_plan(
+    orchestrator: CompleteProductionOrchestrator,
+    proposal,
+):
+    """Mirror the real planner boundary: resource execution semantics are approved, not inferred later."""
+    return attach_generation_plan(orchestrator.router_factory(), proposal)
 
 
 def test_planner_lowers_implementation_facts_and_jobs():
@@ -98,6 +107,7 @@ def test_orchestrator_executes_artifact_jobs_and_materializes_to_disk(tmp_path: 
     )
 
     orchestrator = CompleteProductionOrchestrator(workspace_root=tmp_path / "out")
+    proposal = _bind_asset_plan(orchestrator, proposal)
     result = orchestrator.execute(
         proposal,
         approval_hash=proposal.calculate_hash(),
@@ -173,6 +183,7 @@ def test_orchestrator_executes_artifact_jobs_for_blocks_and_materializes_to_disk
     )
 
     orchestrator = CompleteProductionOrchestrator(workspace_root=tmp_path / "out")
+    proposal = _bind_asset_plan(orchestrator, proposal)
     result = orchestrator.execute(
         proposal,
         approval_hash=proposal.calculate_hash(),
