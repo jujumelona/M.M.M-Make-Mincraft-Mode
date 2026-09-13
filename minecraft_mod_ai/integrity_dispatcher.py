@@ -94,7 +94,16 @@ def verify_job_binding(job, resolved, context):
     }
     if any(impl.get(k) != v for k, v in checks.items()) or job.implementation_id != actual.implementation_id:
         raise ValueError("RUNTIME_INTEGRITY_BINDING_MISMATCH")
-    if job.template_id and job.template_id != impl.get("template") and job.template_id not in impl.get("prerequisite_templates", ()):
+    allowed_templates = {
+        template_id
+        for template_id in (
+            impl.get("template"),
+            *impl.get("prerequisite_templates", ()),
+            *impl.get("extra_templates", ()),
+        )
+        if template_id
+    }
+    if job.template_id and job.template_id not in allowed_templates:
         raise ValueError("RUNTIME_TEMPLATE_BINDING_MISMATCH")
     registry = authority.implementations
     if not registry.verify_implementation_hash(actual.implementation_id, actual.content_sha256):
