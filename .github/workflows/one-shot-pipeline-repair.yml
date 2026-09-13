@@ -35,7 +35,7 @@ jobs:
             | gzip -d > /tmp/repair.patch
           git apply --check /tmp/repair.patch
           git apply /tmp/repair.patch
-          python tools/package_skills.py
+          PYTHONPATH=. python tools/package_skills.py
           mkdir -p plugins/mmm-minecraft-mod-ai/skills/make-minecraft-mod
           cat > plugins/mmm-minecraft-mod-ai/skills/make-minecraft-mod/SKILL.md <<'MAKE_SKILL'
           ---
