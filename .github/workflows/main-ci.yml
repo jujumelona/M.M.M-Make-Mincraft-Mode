@@ -237,11 +237,12 @@ jobs:
           java-version: '17'
       - name: Install test dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
-      - name: Exercise planner, host loop, repair, and verifier path
+      - name: Exercise planner, public API, host loop, repair, and verifier path
         run: >-
           python -m pytest -q
           tests/test_unified_host_execution_loop.py
           tests/test_space_progression_planner_and_verifier_regression.py
+          tests/test_complete_session_public_e2e.py
 
   jdt-readiness:
     runs-on: ubuntu-latest
@@ -328,6 +329,7 @@ jobs:
               "test_generation_collision_anchors.py",
               "test_unified_host_execution_loop.py",
               "test_space_progression_planner_and_verifier_regression.py",
+              "test_complete_session_public_e2e.py",
               "test_java_lsp_readiness.py",
           }
           shard_number = int(os.environ["SHARD"])
