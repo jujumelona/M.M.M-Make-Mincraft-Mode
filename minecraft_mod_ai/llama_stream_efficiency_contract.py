@@ -19,6 +19,10 @@ from functools import wraps
 from typing import Any
 
 from .llama_sse_protocol import LlamaSseServerError, sse_error_from_line
+from .model_concurrency import (
+    ModelExecutionDeadlineExceeded,
+    remaining_model_execution_seconds,
+)
 
 _CLIENT_LOCK = threading.RLock()
 _CLIENTS: dict[str, Any] = {}
@@ -67,10 +71,35 @@ def _tool_idle_timeout_seconds() -> float:
     )
 
 
+def _remaining_transport_budget() -> float | None:
+    remaining = remaining_model_execution_seconds()
+    if remaining is not None and remaining <= 0.0:
+        raise ModelExecutionDeadlineExceeded(
+            "model execution deadline expired during native llama transport"
+        )
+    return remaining
+
+
 def _bounded_timeout(timeout: Any, *, read_seconds: float) -> Any:
-    """Preserve stricter caller settings while forbidding an infinite read timeout."""
+    """Bound every HTTP phase by both inactivity policy and the absolute model deadline."""
 
     import httpx
+
+    remaining = _remaining_transport_budget()
+    if remaining is not None:
+        read_seconds = min(read_seconds, remaining)
+
+    def bounded_phase(value: Any, default: float) -> float:
+        if value is None:
+            candidate = default
+        else:
+            try:
+                candidate = float(value)
+            except (TypeError, ValueError):
+                candidate = default
+            if candidate <= 0.0:
+                candidate = default
+        return min(candidate, remaining) if remaining is not None else candidate
 
     timeout_cls = getattr(httpx, "Timeout", None)
     if (isinstance(timeout_cls, type) and isinstance(timeout, timeout_cls)) or hasattr(timeout, "read"):
@@ -84,18 +113,18 @@ def _bounded_timeout(timeout: Any, *, read_seconds: float) -> Any:
         write = getattr(timeout, "write", None)
         pool = getattr(timeout, "pool", None)
         return httpx.Timeout(
-            connect=connect if connect is not None else 30.0,
+            connect=bounded_phase(connect, 30.0),
             read=read,
-            write=write if write is not None else 30.0,
-            pool=pool if pool is not None else 30.0,
+            write=bounded_phase(write, 30.0),
+            pool=bounded_phase(pool, 30.0),
         )
     if isinstance(timeout, (int, float)) and float(timeout) > 0.0:
         read_seconds = min(read_seconds, float(timeout))
     return httpx.Timeout(
-        connect=30.0,
+        connect=bounded_phase(None, 30.0),
         read=read_seconds,
-        write=30.0,
-        pool=30.0,
+        write=bounded_phase(None, 30.0),
+        pool=bounded_phase(None, 30.0),
     )
 
 
@@ -190,7 +219,6 @@ def _append_message_delta(message: dict[str, Any], delta: Mapping[str, Any]) -> 
     return progressed
 
 
-
 class _StreamingCompletionClient:
     """Reuse one HTTP client and aggregate every chat completion through SSE."""
 
@@ -218,7 +246,12 @@ class _StreamingCompletionClient:
             or not url.rstrip("/").endswith("/chat/completions")
             or payload.get("stream") is True
         ):
-            return self._client.post(url, **kwargs)
+            native_kwargs = dict(kwargs)
+            native_kwargs["timeout"] = _bounded_timeout(
+                native_kwargs.get("timeout"),
+                read_seconds=_stream_idle_timeout_seconds(),
+            )
+            return self._client.post(url, **native_kwargs)
 
         has_tools = bool(payload.get("tools"))
         if has_tools and not hasattr(self._client, "stream"):
@@ -278,6 +311,7 @@ class _StreamingCompletionClient:
                         request=request,
                     )
                 for raw_line in response.iter_lines():
+                    _remaining_transport_budget()
                     parsed_error = sse_error_from_line(raw_line)
                     if parsed_error is not None:
                         status, error = parsed_error
@@ -511,6 +545,7 @@ def install(hardware_module: Any) -> None:
                     flush=True,
                 )
                 for raw_line in response.iter_lines():
+                    _remaining_transport_budget()
                     parsed_error = sse_error_from_line(raw_line)
                     if parsed_error is not None:
                         status, error = parsed_error
