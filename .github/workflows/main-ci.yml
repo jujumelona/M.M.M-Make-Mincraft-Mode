@@ -195,19 +195,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        family:
-          - syntax
-          - versions
-          - subsystems
-          - model_registry
-          - runtime_contracts
-          - environment
-          - filesystem
-          - structured_output
-          - timeout_retry
-          - concurrency_queue
-          - pipeline
-          - smtp
+        family: [syntax, versions, subsystems, model_registry, runtime_contracts, environment, filesystem, structured_output, timeout_retry, concurrency_queue, pipeline, smtp]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -272,6 +260,17 @@ jobs:
           if failed:
               raise SystemExit('wheel import failures: ' + ', '.join(failed))
           PY
+
+  root-cause-wrapper-contract:
+    name: Root-cause wrapper contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.11', cache: pip}
+      - run: python -m pip install --prefer-binary -e '.[dev,ui]'
+      - run: python -m pytest -q tests/test_root_cause_audit_wrapper.py
 
   minecraft-integrity:
     name: Real Fabric integrity
@@ -383,31 +382,10 @@ jobs:
       - run: python -m pip install --prefer-binary -e . pytest
       - run: python -m pytest -q "${{ matrix.test }}"
 
-  ci-gate:
-    name: CI Gate
+  audit:
+    name: Aggregate granular audit gate
     if: ${{ always() }}
-    needs:
-      - debug-audit
-      - architecture-quality
-      - compile
-      - ruff
-      - dead-code
-      - import-smoke
-      - runtime-concurrency
-      - runtime-efficiency
-      - runtime-mutations
-      - mineflayer-syntax
-      - colab-validation
-      - skill-packaging
-      - removed-surface
-      - audit-families
-      - dependency-check
-      - package-build
-      - wheel-clean-import
-      - minecraft-integrity
-      - test-plan
-      - tests
-      - python313
+    needs: [debug-audit, architecture-quality, compile, ruff, dead-code, import-smoke, runtime-concurrency, runtime-efficiency, runtime-mutations, mineflayer-syntax, colab-validation, skill-packaging, removed-surface, audit-families, dependency-check, package-build, wheel-clean-import, root-cause-wrapper-contract, minecraft-integrity, test-plan]
     runs-on: ubuntu-latest
     steps:
       - env:
@@ -417,3 +395,18 @@ jobs:
           for result in $RESULTS; do
             test "$result" = success
           done
+
+  ci-gate:
+    name: CI Gate
+    if: ${{ always() }}
+    needs: [audit, tests, python313]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          AUDIT: ${{ needs.audit.result }}
+          TESTS: ${{ needs.tests.result }}
+          PY313: ${{ needs.python313.result }}
+        run: |
+          test "$AUDIT" = success
+          test "$TESTS" = success
+          test "$PY313" = success
