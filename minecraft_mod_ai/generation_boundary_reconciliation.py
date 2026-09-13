@@ -141,6 +141,27 @@ def _install_geckolib_project_preflight(geckolib_module: Any) -> None:
     geckolib_module.inspect_fabric_project = inspect_fabric_project
 
 
+def _resume_failed_generation_nodes(ledger: Any, work_plan: Any) -> tuple[str, ...]:
+    """Requeue persisted generation failures that belong to the current work plan.
+
+    A resumed run must be able to dispatch a previously failed generation node again.
+    Successful work remains cached, while input-required and explicitly cancelled work
+    stay terminal so resume cannot bypass user input or cancellation semantics.
+    """
+
+    states = ledger.state_map()
+    resumed: list[str] = []
+    for node in work_plan.nodes:
+        node_id = str(node.node_id)
+        if not str(node.stage).startswith("generate:"):
+            continue
+        if states.get(node_id) != "failed":
+            continue
+        ledger.retry(node_id)
+        resumed.append(node_id)
+    return tuple(resumed)
+
+
 def _install_orchestrator_generation_preflight(orchestrator_module: Any) -> None:
     """Validate normalized modules plus imported state before concurrent dispatch."""
 
@@ -167,6 +188,8 @@ def _install_orchestrator_generation_preflight(orchestrator_module: Any) -> None
         options: Any,
         router: Any,
     ):
+        if bool(getattr(options, "resume", False)):
+            _resume_failed_generation_nodes(ledger, work_plan)
         spec = approved.base_proposal.spec
         try:
             validate_production_generation_project(
