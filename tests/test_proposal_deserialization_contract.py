@@ -3,6 +3,8 @@ from __future__ import annotations
 import pytest
 
 from minecraft_mod_ai import complete_spec, spec
+from minecraft_mod_ai.pipeline import MinecraftModPipeline
+from minecraft_mod_ai.planner import HeuristicPlanner
 from minecraft_mod_ai.proposal_deserialization_contract import (
     _validate_platform_json,
     install,
@@ -10,13 +12,14 @@ from minecraft_mod_ai.proposal_deserialization_contract import (
 
 
 def _complete_payload() -> dict:
+    base = MinecraftModPipeline(planner=HeuristicPlanner()).plan("Add a test item")
     return {
         "schema_version": "mmm/complete-proposal-v1",
         "proposal_version": 1,
         "status": "awaiting_user_approval",
         "requested_prompt": "test",
-        "base_proposal": {},
-        "game_design": {},
+        "base_proposal": base.to_dict(),
+        "game_design": {"goal": "test deserialization"},
         "modules": [],
         "assets": [],
         "acceptance_tests": ["works"],
