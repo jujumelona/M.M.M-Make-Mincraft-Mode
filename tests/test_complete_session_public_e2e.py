@@ -67,8 +67,13 @@ class _FakeGradleRunner:
 
         jar_path.parent.mkdir(parents=True, exist_ok=True)
         fabric_mod = Path(project_root) / "src" / "main" / "resources" / "fabric.mod.json"
+        processed_metadata = (
+            fabric_mod.read_text(encoding="utf-8")
+            .replace("${version}", "1.0.0")
+            .replace("${mod_version}", "1.0.0")
+        )
         with zipfile.ZipFile(jar_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            archive.write(fabric_mod, "fabric.mod.json")
+            archive.writestr("fabric.mod.json", processed_metadata)
             archive.writestr("com/example/publice2e/PublicE2eMod.class", b"e2e")
         return _DictReport(
             {
