@@ -502,8 +502,6 @@ class JavaLanguageService:
         if rpc is not None:
             self._close_rpc_locked()
 
-        # Resolve and validate the Minecraft project JDK *before* starting JDT LS.
-        # JDT LS's launcher JVM is controlled separately by MMM_JDTLS_JAVA_HOME.
         project_java_home = _resolve_project_java_home()
         configuration = _jdt_configuration(project_java_home)
         environment = _jdtls_environment()
@@ -523,7 +521,6 @@ class JavaLanguageService:
                     "capabilities": {
                         "textDocument": {
                             "publishDiagnostics": {"relatedInformation": True},
-                            "hover": {"contentFormat": ["plaintext", "markdown"]},
                         },
                         "workspace": {
                             "configuration": True,
@@ -541,8 +538,6 @@ class JavaLanguageService:
             )
             rpc.notify("initialized", {})
             rpc.notify("workspace/didChangeConfiguration", {"settings": configuration})
-            # ServiceReady/progress notifications are not sufficient. READY only follows
-            # a semantic probe under an actual project Java source root.
             _await_java_core_ready(
                 rpc,
                 root,
@@ -603,11 +598,17 @@ class JavaLanguageService:
             page_receipts: list[dict[str, Any]] = []
             total_source_bytes = 0
             for page_index, page in enumerate(pages):
-                sources, source_bytes = _read_source_page(page, max_source_bytes=self.diagnostic_page_max_source_bytes)
+                sources, source_bytes = _read_source_page(
+                    page,
+                    max_source_bytes=self.diagnostic_page_max_source_bytes,
+                )
                 expected_uris = {path.as_uri() for path, _text in sources}
                 for source_path, source_text in sources:
                     rpc.notify("textDocument/didOpen", {"textDocument": {
-                        "uri": source_path.as_uri(), "languageId": "java", "version": 1, "text": source_text,
+                        "uri": source_path.as_uri(),
+                        "languageId": "java",
+                        "version": 1,
+                        "text": source_text,
                     }})
                 try:
                     page_diagnostics = _collect_diagnostics(
@@ -619,7 +620,10 @@ class JavaLanguageService:
                     _raise_on_java_core_bootstrap_failure(page_diagnostics)
                 finally:
                     for source_path, _source_text in sources:
-                        rpc.notify("textDocument/didClose", {"textDocument": {"uri": source_path.as_uri()}})
+                        rpc.notify(
+                            "textDocument/didClose",
+                            {"textDocument": {"uri": source_path.as_uri()}},
+                        )
                 diagnostics.update(page_diagnostics)
                 page_errors, page_warnings = _diagnostic_counts(page_diagnostics)
                 relative_paths = [source_path.relative_to(root).as_posix() for source_path, _ in sources]
@@ -646,7 +650,13 @@ class JavaLanguageService:
                 timeout_seconds=timeout_seconds,
             )
 
-    def workspace_symbols(self, project_root: str | Path, query: str, *, timeout_seconds: int = 60) -> dict[str, Any]:
+    def workspace_symbols(
+        self,
+        project_root: str | Path,
+        query: str,
+        *,
+        timeout_seconds: int = 60,
+    ) -> dict[str, Any]:
         root = Path(project_root).expanduser().resolve()
         if not root.is_dir():
             raise FileNotFoundError(root)
@@ -655,7 +665,11 @@ class JavaLanguageService:
         with self._session_lock:
             rpc = self._ensure_rpc_locked(root, timeout_seconds=timeout_seconds)
             result = rpc.request("workspace/symbol", {"query": query}, timeout=timeout_seconds)
-            return {"schema_version": "mmm/java-symbols-v1", "query": query, "symbols": result or []}
+            return {
+                "schema_version": "mmm/java-symbols-v1",
+                "query": query,
+                "symbols": result or [],
+            }
 
 
 JavaLanguageService.diagnostics.__mmm_source_set_boundary__ = True
@@ -688,7 +702,11 @@ def _validated_java_file(root: Path, candidate: Path) -> Path:
 
 def _java_files(root: Path, relative_files: Iterable[str] | None) -> list[Path]:
     if relative_files is None:
-        candidates = (_validated_java_file(root, path) for path in root.rglob("*.java") if path.is_file())
+        candidates = (
+            _validated_java_file(root, path)
+            for path in root.rglob("*.java")
+            if path.is_file()
+        )
     else:
         requested: list[Path] = []
         for relative in relative_files:
@@ -700,7 +718,12 @@ def _java_files(root: Path, relative_files: Iterable[str] | None) -> list[Path]:
     return sorted(set(candidates), key=lambda path: path.as_posix())
 
 
-def _diagnostic_pages(files: Iterable[Path], *, max_files: int, max_source_bytes: int) -> list[tuple[Path, ...]]:
+def _diagnostic_pages(
+    files: Iterable[Path],
+    *,
+    max_files: int,
+    max_source_bytes: int,
+) -> list[tuple[Path, ...]]:
     pages: list[tuple[Path, ...]] = []
     current: list[Path] = []
     current_bytes = 0
@@ -711,7 +734,9 @@ def _diagnostic_pages(files: Iterable[Path], *, max_files: int, max_source_bytes
                 "Java source exceeds the per-page JDT LS source-byte limit: "
                 f"{path} ({source_bytes} > {max_source_bytes})."
             )
-        if current and (len(current) >= max_files or current_bytes + source_bytes > max_source_bytes):
+        if current and (
+            len(current) >= max_files or current_bytes + source_bytes > max_source_bytes
+        ):
             pages.append(tuple(current))
             current = []
             current_bytes = 0
@@ -722,7 +747,11 @@ def _diagnostic_pages(files: Iterable[Path], *, max_files: int, max_source_bytes
     return pages
 
 
-def _read_source_page(page: Iterable[Path], *, max_source_bytes: int) -> tuple[list[tuple[Path, str]], int]:
+def _read_source_page(
+    page: Iterable[Path],
+    *,
+    max_source_bytes: int,
+) -> tuple[list[tuple[Path, str]], int]:
     sources: list[tuple[Path, str]] = []
     total_bytes = 0
     for path in page:
@@ -749,7 +778,9 @@ def _java_source_root(root: Path) -> Path:
     )
 
 
-def _java_core_bootstrap_messages(diagnostics: dict[str, list[dict[str, Any]]]) -> list[str]:
+def _java_core_bootstrap_messages(
+    diagnostics: dict[str, list[dict[str, Any]]],
+) -> list[str]:
     messages: list[str] = []
     for values in diagnostics.values():
         for item in values:
@@ -759,7 +790,9 @@ def _java_core_bootstrap_messages(diagnostics: dict[str, list[dict[str, Any]]]) 
     return sorted(set(messages))
 
 
-def _raise_on_java_core_bootstrap_failure(diagnostics: dict[str, list[dict[str, Any]]]) -> None:
+def _raise_on_java_core_bootstrap_failure(
+    diagnostics: dict[str, list[dict[str, Any]]],
+) -> None:
     messages = _java_core_bootstrap_messages(diagnostics)
     if not messages:
         return
@@ -770,15 +803,6 @@ def _raise_on_java_core_bootstrap_failure(diagnostics: dict[str, list[dict[str, 
     )
 
 
-def _hover_has_semantic_value(value: Any) -> bool:
-    if value is None:
-        return False
-    if isinstance(value, dict):
-        contents = value.get("contents")
-        return contents not in (None, "", [], {})
-    return bool(value)
-
-
 def _await_java_core_ready(
     rpc: _JsonRpcProcess,
     root: Path,
@@ -786,12 +810,19 @@ def _await_java_core_ready(
     timeout_seconds: float,
     quiet_seconds: float,
 ) -> None:
+    """Wait for compiler diagnostics to prove core Java types resolve.
+
+    Hover is intentionally not used as a readiness signal. It is an optional language
+    feature request and can block independently of compiler diagnostics while JDT is
+    importing a Gradle workspace.
+    """
+
     source_root = _java_source_root(root)
     probe_path = source_root / f"{_SEMANTIC_PROBE_NAME}.java"
     uri = probe_path.resolve(strict=False).as_uri()
     deadline = time.monotonic() + float(timeout_seconds)
     version = 1
-    last_reason = "semantic probe has not completed"
+    last_reason = "semantic diagnostics have not completed"
 
     while time.monotonic() < deadline:
         rpc.notify("textDocument/didOpen", {"textDocument": {
@@ -808,33 +839,21 @@ def _await_java_core_ready(
                 timeout_seconds=remaining,
                 quiet_seconds=quiet_seconds,
             )
-            _raise_on_java_core_bootstrap_failure(diagnostics)
+            core_messages = _java_core_bootstrap_messages(diagnostics)
             errors = [
                 item
                 for values in diagnostics.values()
                 for item in values
                 if int(item.get("severity", 1)) == 1
             ]
-            if errors:
-                last_reason = "; ".join(str(item.get("message", "")) for item in errors[-3:])
+            if not core_messages and not errors:
+                return
+            if core_messages:
+                last_reason = "; ".join(core_messages[-3:])
             else:
-                remaining = max(0.001, deadline - time.monotonic())
-                object_hover = rpc.request(
-                    "textDocument/hover",
-                    {"textDocument": {"uri": uri}, "position": {"line": 1, "character": 6}},
-                    timeout=remaining,
+                last_reason = "; ".join(
+                    str(item.get("message", "")) for item in errors[-3:]
                 )
-                remaining = max(0.001, deadline - time.monotonic())
-                string_hover = rpc.request(
-                    "textDocument/hover",
-                    {"textDocument": {"uri": uri}, "position": {"line": 2, "character": 6}},
-                    timeout=remaining,
-                )
-                if _hover_has_semantic_value(object_hover) and _hover_has_semantic_value(string_hover):
-                    return
-                last_reason = "JDT did not semantically resolve both Object and String"
-        except JDTWorkspaceBootstrapError:
-            raise
         except (JDTLanguageServerError, TimeoutError) as exc:
             last_reason = f"{type(exc).__name__}: {exc}"
         finally:
@@ -846,8 +865,8 @@ def _await_java_core_ready(
             time.sleep(min(0.25, remaining))
 
     raise JDTWorkspaceBootstrapError(
-        "JDT workspace bootstrap failure: ServiceReady/initialize was insufficient; "
-        "the project-source semantic probe could not resolve java.lang.Object and java.lang.String "
+        "JDT workspace bootstrap failure: initialize/status notifications were insufficient; "
+        "project-source diagnostics did not prove java.lang.Object/java.lang.String readiness "
         f"before validation. Last probe state: {last_reason}"
     )
 
@@ -938,13 +957,30 @@ def _collect_diagnostics(
 def _sorted_diagnostics(values: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(
         values,
-        key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":"), ensure_ascii=False),
+        key=lambda item: json.dumps(
+            item,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ),
     )
 
 
-def _diagnostic_counts(diagnostics: dict[str, list[dict[str, Any]]]) -> tuple[int, int]:
-    errors = sum(1 for values in diagnostics.values() for item in values if int(item.get("severity", 1)) == 1)
-    warnings = sum(1 for values in diagnostics.values() for item in values if int(item.get("severity", 2)) == 2)
+def _diagnostic_counts(
+    diagnostics: dict[str, list[dict[str, Any]]],
+) -> tuple[int, int]:
+    errors = sum(
+        1
+        for values in diagnostics.values()
+        for item in values
+        if int(item.get("severity", 1)) == 1
+    )
+    warnings = sum(
+        1
+        for values in diagnostics.values()
+        for item in values
+        if int(item.get("severity", 2)) == 2
+    )
     return errors, warnings
 
 
@@ -961,7 +997,8 @@ def _diagnostic_result(
     timeout_seconds: float,
 ) -> dict[str, Any]:
     deterministic_diagnostics = {
-        uri: _sorted_diagnostics(values) for uri, values in sorted(diagnostics.items())
+        uri: _sorted_diagnostics(values)
+        for uri, values in sorted(diagnostics.items())
     }
     errors, warnings = _diagnostic_counts(deterministic_diagnostics)
     return {

@@ -6,22 +6,41 @@ import time
 from collections import deque
 from types import SimpleNamespace
 
-from minecraft_mod_ai import agent_tool_runtime
+import pytest
+
+from minecraft_mod_ai import agent_tool_runtime, java_lsp
 from minecraft_mod_ai.generation_verifier_resilience import (
     _collect_diagnostics_progress_aware,
-    gradle_fallback_receipt,
     install,
     run_generation_verifier,
     synthesized_verifier_turn,
 )
 from minecraft_mod_ai.java_lsp import JDTLanguageServerError
-from minecraft_mod_ai.progress_aware_tool_loop import _verification_outcome
+
+
+def _project(tmp_path):
+    root = tmp_path / "project"
+    source = root / "src" / "main" / "java" / "Example.java"
+    source.parent.mkdir(parents=True)
+    source.write_text("final class Example {}\n", encoding="utf-8")
+    (root / "build.gradle").write_text("plugins {}\n", encoding="utf-8")
+    return root, source
+
+
+def _ok_result(root):
+    return {
+        "schema_version": "mmm/java-diagnostics-v2",
+        "project_root": str(root),
+        "files_opened": 1,
+        "error_count": 0,
+        "warning_count": 0,
+        "diagnostics": {},
+    }
 
 
 def test_synthesized_verifier_turn_is_host_owned(monkeypatch):
     monkeypatch.setenv("MMM_JDT_DIAGNOSTIC_IDLE_TIMEOUT_SECONDS", "77")
     turn = synthesized_verifier_turn([{"role": "user", "content": "task"}])
-
     assert turn.content == ""
     assert len(turn.tool_calls) == 1
     call = turn.tool_calls[0]
@@ -30,7 +49,199 @@ def test_synthesized_verifier_turn_is_host_owned(monkeypatch):
     assert call.id.startswith("host_verify_")
 
 
-def test_install_elides_forced_verifier_model_turn(monkeypatch):
+def test_generation_verifier_baselines_then_only_checks_changed_java(tmp_path):
+    project, source = _project(tmp_path)
+    calls = []
+
+    class FakeJava:
+        def diagnostics(self, root, *, relative_files=None, timeout_seconds=0):
+            calls.append(relative_files)
+            return _ok_result(root)
+
+        def close(self):
+            raise AssertionError("Java-only edits must reuse the persistent JDT session")
+
+    runtime = SimpleNamespace(workspace_root=str(project))
+    factory_calls = []
+
+    def factory():
+        factory_calls.append(1)
+        return FakeJava()
+
+    first = run_generation_verifier(
+        runtime,
+        {},
+        runtime_module=agent_tool_runtime,
+        java_service_factory=factory,
+    )
+    second = run_generation_verifier(
+        runtime,
+        {},
+        runtime_module=agent_tool_runtime,
+        java_service_factory=factory,
+    )
+    source.write_text("final class Example { int value; }\n", encoding="utf-8")
+    third = run_generation_verifier(
+        runtime,
+        {},
+        runtime_module=agent_tool_runtime,
+        java_service_factory=factory,
+    )
+
+    assert first["verification_scope"] == "full"
+    assert second["verification_scope"] == "unchanged"
+    assert second["skipped"] is True
+    assert third["verification_scope"] == "incremental"
+    assert third["verified_files"] == ["src/main/java/Example.java"]
+    assert calls == [None, ["src/main/java/Example.java"]]
+    assert len(factory_calls) == 1
+
+
+def test_model_change_restarts_jdt_and_forces_full_scan(tmp_path):
+    project, _source = _project(tmp_path)
+    calls = []
+    closed = []
+
+    class FakeJava:
+        def diagnostics(self, root, *, relative_files=None, timeout_seconds=0):
+            calls.append(relative_files)
+            return _ok_result(root)
+
+        def close(self):
+            closed.append(True)
+
+    runtime = SimpleNamespace(workspace_root=str(project))
+    run_generation_verifier(
+        runtime,
+        {},
+        runtime_module=agent_tool_runtime,
+        java_service_factory=FakeJava,
+    )
+    (project / "build.gradle").write_text("plugins { id 'java' }\n", encoding="utf-8")
+    result = run_generation_verifier(
+        runtime,
+        {},
+        runtime_module=agent_tool_runtime,
+        java_service_factory=FakeJava,
+    )
+
+    assert closed == [True]
+    assert calls == [None, None]
+    assert result["verification_scope"] == "full"
+
+
+def test_java_deletion_restarts_jdt_and_forces_full_scan(tmp_path):
+    project, source = _project(tmp_path)
+    other = source.with_name("Other.java")
+    other.write_text("final class Other {}\n", encoding="utf-8")
+    calls = []
+    closed = []
+
+    class FakeJava:
+        def diagnostics(self, root, *, relative_files=None, timeout_seconds=0):
+            calls.append(relative_files)
+            return _ok_result(root)
+
+        def close(self):
+            closed.append(True)
+
+    runtime = SimpleNamespace(workspace_root=str(project))
+    run_generation_verifier(
+        runtime,
+        {},
+        runtime_module=agent_tool_runtime,
+        java_service_factory=FakeJava,
+    )
+    other.unlink()
+    result = run_generation_verifier(
+        runtime,
+        {},
+        runtime_module=agent_tool_runtime,
+        java_service_factory=FakeJava,
+    )
+
+    assert closed == [True]
+    assert calls == [None, None]
+    assert result["verification_scope"] == "full"
+
+
+def test_explicit_full_scan_rechecks_unchanged_project(tmp_path):
+    project, _source = _project(tmp_path)
+    calls = []
+
+    class FakeJava:
+        def diagnostics(self, root, *, relative_files=None, timeout_seconds=0):
+            calls.append(relative_files)
+            return _ok_result(root)
+
+    runtime = SimpleNamespace(workspace_root=str(project))
+    run_generation_verifier(
+        runtime,
+        {},
+        runtime_module=agent_tool_runtime,
+        java_service_factory=FakeJava,
+    )
+    result = run_generation_verifier(
+        runtime,
+        {"full_scan": True},
+        runtime_module=agent_tool_runtime,
+        java_service_factory=FakeJava,
+    )
+    assert calls == [None, None]
+    assert result["verification_scope"] == "full"
+
+
+def test_jdt_failure_is_fail_closed_without_gradle_fallback(tmp_path):
+    project, _source = _project(tmp_path)
+    closed = []
+
+    class FailingJava:
+        def diagnostics(self, root, *, relative_files=None, timeout_seconds=0):
+            raise JDTLanguageServerError("workspace import failed")
+
+        def close(self):
+            closed.append(True)
+
+    runtime = SimpleNamespace(workspace_root=str(project))
+    with pytest.raises(agent_tool_runtime.AgentToolRuntimeError, match="JDT is unavailable"):
+        run_generation_verifier(
+            runtime,
+            {},
+            runtime_module=agent_tool_runtime,
+            java_service_factory=FailingJava,
+        )
+
+    assert closed == [True]
+    assert not hasattr(runtime, "_mmm_generation_java_service")
+    assert not hasattr(runtime, "_mmm_generation_jdt_disabled_reason")
+
+
+def test_jdt_readiness_uses_diagnostics_and_never_hover(monkeypatch, tmp_path):
+    project, _source = _project(tmp_path)
+    notifications = []
+
+    class FakeRpc:
+        def notify(self, method, params):
+            notifications.append(method)
+
+        def request(self, method, params, timeout):
+            raise AssertionError(f"readiness must not call {method}")
+
+    def diagnostics(_rpc, *, expected_uris, timeout_seconds, quiet_seconds):
+        return {next(iter(expected_uris)): []}
+
+    monkeypatch.setattr(java_lsp, "_collect_diagnostics", diagnostics)
+    java_lsp._await_java_core_ready(
+        FakeRpc(),
+        project,
+        timeout_seconds=1.0,
+        quiet_seconds=0.0,
+    )
+
+    assert notifications == ["textDocument/didOpen", "textDocument/didClose"]
+
+
+def test_install_elides_forced_verifier_model_turn():
     class DummyRuntime:
         def _call(self, stage, name, arguments, *, external_server_ids):
             return {"delegated": True}
@@ -39,10 +250,7 @@ def test_install_elides_forced_verifier_model_turn(monkeypatch):
         def _stage(stage):
             return stage
 
-    model_calls = []
-
     def original_turn(*args, **kwargs):
-        model_calls.append((args, kwargs))
         raise AssertionError("forced verifier must not invoke the coder model")
 
     fake_runtime_module = SimpleNamespace(
@@ -51,19 +259,14 @@ def test_install_elides_forced_verifier_model_turn(monkeypatch):
         _bounded_result=agent_tool_runtime._bounded_result,
         AgentToolRuntimeError=agent_tool_runtime.AgentToolRuntimeError,
     )
-    fake_progress_module = SimpleNamespace(
-        _generate_turn_with_context_recovery=original_turn,
-    )
-    fake_java_module = SimpleNamespace(
-        _collect_diagnostics_traced=lambda *args, **kwargs: {},
-    )
+    fake_progress_module = SimpleNamespace(_generate_turn_with_context_recovery=original_turn)
+    fake_java_module = SimpleNamespace(_collect_diagnostics_traced=lambda *args, **kwargs: {})
 
     install(
         agent_tool_runtime_module=fake_runtime_module,
         progress_loop_module=fake_progress_module,
         java_lsp_trace_module=fake_java_module,
     )
-
     response = fake_progress_module._generate_turn_with_context_recovery(
         object(),
         config=object(),
@@ -74,146 +277,7 @@ def test_install_elides_forced_verifier_model_turn(monkeypatch):
         tool_choice={"type": "function", "function": {"name": "java_diagnostics"}},
         parallel_tool_calls=False,
     )
-
-    assert model_calls == []
     assert response.tool_calls[0].name == "java_diagnostics"
-
-
-def test_gradle_fallback_failure_is_source_failure_not_verifier_unavailable(tmp_path):
-    log = tmp_path / "gradle-build.log"
-    log.write_text("error: cannot find symbol\n", encoding="utf-8")
-    report = SimpleNamespace(
-        passed=False,
-        commands=(SimpleNamespace(log_path=str(log)),),
-        to_dict=lambda: {
-            "status": "FAIL",
-            "commands": [{"log_path": str(log), "exit_code": 1}],
-            "error": "Gradle build failed.",
-        },
-    )
-
-    receipt = gradle_fallback_receipt(
-        report,
-        JDTLanguageServerError("JDT transport unavailable"),
-    )
-    outcome = _verification_outcome(
-        "java_diagnostics",
-        {"ok": True, "result": receipt},
-    )
-
-    assert receipt["status"] == "OK"
-    assert receipt["verification_outcome"] == "FAIL"
-    assert receipt["diagnostics"]["gradle://build"][0]["severity"] == 1
-    assert "cannot find symbol" in receipt["diagnostics"]["gradle://build"][0]["message"]
-    assert outcome == "FAIL"
-
-
-def test_generation_verifier_ignores_model_timeout_and_falls_back(monkeypatch, tmp_path):
-    project = tmp_path / "run" / "project"
-    (project / "src" / "main" / "java").mkdir(parents=True)
-    (project / "build.gradle").write_text("plugins {}\n", encoding="utf-8")
-    monkeypatch.setenv("MMM_JDT_DIAGNOSTIC_IDLE_TIMEOUT_SECONDS", "83")
-
-    class FailingJava:
-        def diagnostics(self, root, *, relative_files=None, timeout_seconds=0):
-            assert root == project
-            assert timeout_seconds == 83
-            assert relative_files == ["src/main/java/Example.java"]
-            raise JDTLanguageServerError("cold import unavailable")
-
-    class PassingReport:
-        passed = True
-        commands = ()
-
-        @staticmethod
-        def to_dict():
-            return {"status": "PASS", "commands": [], "error": None}
-
-    class FakeGradleRunner:
-        def build(self, root, *, run_gametest):
-            assert root == project
-            assert run_gametest is False
-            return PassingReport()
-
-    runtime = SimpleNamespace(
-        workspace_root=str(project),
-    )
-    result = run_generation_verifier(
-        runtime,
-        {
-            "timeout_seconds": 1,
-            "relative_files": ["./src/main/java/Example.java"],
-        },
-        runtime_module=agent_tool_runtime,
-        java_service_factory=FailingJava,
-        gradle_runner_factory=lambda _cache: FakeGradleRunner(),
-    )
-
-    assert result["verification_backend"] == "gradle_build_fallback"
-    assert result["verification_outcome"] == "PASS"
-    assert result["diagnostics"] == {}
-    assert result["_mmm_observation"]["truncated"] is False
-    assert "cold import unavailable" in runtime._mmm_generation_jdt_disabled_reason
-
-
-def test_jdt_unavailable_opens_run_local_circuit_breaker(tmp_path):
-    project = tmp_path / "project"
-    (project / "src" / "main" / "java").mkdir(parents=True)
-    (project / "build.gradle").write_text("plugins {}\n", encoding="utf-8")
-    java_factory_calls = []
-    gradle_calls = []
-
-    class FailingJava:
-        def diagnostics(self, root, *, relative_files=None, timeout_seconds=0):
-            raise JDTLanguageServerError("workspace import failed")
-
-        def close(self):
-            java_factory_calls.append("closed")
-
-    class PassingReport:
-        passed = True
-        commands = ()
-
-        @staticmethod
-        def to_dict():
-            return {"status": "PASS", "commands": [], "error": None}
-
-    class FakeGradleRunner:
-        def build(self, root, *, run_gametest):
-            gradle_calls.append(root)
-            return PassingReport()
-
-    def first_java_factory():
-        java_factory_calls.append("created")
-        return FailingJava()
-
-    def forbidden_second_java_factory():
-        raise AssertionError("open JDT circuit must bypass JDT on later repair verification")
-
-    runtime = SimpleNamespace(workspace_root=str(project))
-    kwargs = {
-        "runtime_module": agent_tool_runtime,
-        "gradle_runner_factory": lambda _cache: FakeGradleRunner(),
-    }
-    first = run_generation_verifier(
-        runtime,
-        {"relative_files": ["src/main/java/Example.java"]},
-        java_service_factory=first_java_factory,
-        **kwargs,
-    )
-    second = run_generation_verifier(
-        runtime,
-        {"relative_files": ["src/main/java/Example.java"]},
-        java_service_factory=forbidden_second_java_factory,
-        **kwargs,
-    )
-
-    assert first["verification_outcome"] == "PASS"
-    assert second["verification_outcome"] == "PASS"
-    assert java_factory_calls == ["created", "closed"]
-    assert gradle_calls == [project, project]
-    assert not hasattr(runtime, "_mmm_generation_java_service")
-    assert "workspace import failed" in runtime._mmm_generation_jdt_disabled_reason
 
 
 def test_jdt_progress_refreshes_idle_deadline():
@@ -243,17 +307,13 @@ def test_jdt_progress_refreshes_idle_deadline():
     )
 
     def producer():
-        # Total elapsed time exceeds the initial 0.10 s idle deadline, but valid JDT
-        # progress arrives before each idle window expires.
         time.sleep(0.06)
         rpc.messages.put({"method": "$/progress", "params": {"value": {"kind": "report"}}})
         time.sleep(0.06)
-        rpc.messages.put(
-            {
-                "method": "textDocument/publishDiagnostics",
-                "params": {"uri": expected_uri, "diagnostics": []},
-            }
-        )
+        rpc.messages.put({
+            "method": "textDocument/publishDiagnostics",
+            "params": {"uri": expected_uri, "diagnostics": []},
+        })
 
     thread = threading.Thread(target=producer, daemon=True)
     thread.start()
@@ -265,51 +325,4 @@ def test_jdt_progress_refreshes_idle_deadline():
         page_index=0,
     )
     thread.join(timeout=1.0)
-
     assert result == {expected_uri: []}
-
-
-def test_non_verifier_turn_still_delegates():
-    calls = []
-
-    class DummyRuntime:
-        def _call(self, stage, name, arguments, *, external_server_ids):
-            calls.append((stage, name, arguments, external_server_ids))
-            return {"ok": True}
-
-        @staticmethod
-        def _stage(stage):
-            return stage
-
-    def original_turn(*args, **kwargs):
-        return "delegated"
-
-    fake_runtime_module = SimpleNamespace(
-        AgentToolRuntime=DummyRuntime,
-        _discover_model_project_root=agent_tool_runtime._discover_model_project_root,
-        _bounded_result=agent_tool_runtime._bounded_result,
-        AgentToolRuntimeError=agent_tool_runtime.AgentToolRuntimeError,
-    )
-    fake_progress_module = SimpleNamespace(
-        _generate_turn_with_context_recovery=original_turn,
-    )
-    fake_java_module = SimpleNamespace(
-        _collect_diagnostics_traced=lambda *args, **kwargs: {},
-    )
-
-    install(
-        agent_tool_runtime_module=fake_runtime_module,
-        progress_loop_module=fake_progress_module,
-        java_lsp_trace_module=fake_java_module,
-    )
-
-    assert fake_progress_module._generate_turn_with_context_recovery(
-        object(),
-        config=object(),
-        adapter=object(),
-        request=object(),
-        messages=[],
-        media_paths=(),
-        tool_choice={"type": "function", "function": {"name": "apply_source_edit"}},
-        parallel_tool_calls=False,
-    ) == "delegated"
