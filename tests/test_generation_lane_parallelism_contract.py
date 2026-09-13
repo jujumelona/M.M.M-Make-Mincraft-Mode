@@ -75,9 +75,13 @@ def test_builtin_sidecar_integration_is_deterministic_cpu_work() -> None:
     assert node.resource_class == "cpu_io"
 
 
-def test_anchor_fencing_replaces_retired_stage_write_locks() -> None:
+def test_anchor_fencing_is_additive_to_fail_closed_stage_admission() -> None:
     assert not hasattr(safety, "_stage_write_lock")
-    assert safety._SERIAL_CPU_STAGES == ()
+    assert safety._SERIAL_CPU_STAGES == (
+        "generate:content",
+        "generate:system",
+        "generate:entity",
+    )
 
 
 def test_custom_modules_keep_dependency_aware_bounded_shards(monkeypatch) -> None:
