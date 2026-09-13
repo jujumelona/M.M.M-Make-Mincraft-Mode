@@ -227,7 +227,11 @@ def install() -> None:
     from . import agent_tool_runtime, complete_orchestrator, java_lsp_trace
     from . import fabric_official_template_provider as fabric_provider
     from . import geckolib_generator, progress_aware_tool_loop, resource_asset_production
+    from . import generation_verifier_resilience
     from .generation_verifier_resilience import install as install_generation_verifier_resilience
+    from .generation_verifier_runtime_contract import (
+        install as install_generation_verifier_runtime_contract,
+    )
 
     _install_resource_asset_preflight(
         resource_asset_production,
@@ -239,6 +243,10 @@ def install() -> None:
         agent_tool_runtime_module=agent_tool_runtime,
         progress_loop_module=progress_aware_tool_loop,
         java_lsp_trace_module=java_lsp_trace,
+    )
+    install_generation_verifier_runtime_contract(
+        agent_tool_runtime_module=agent_tool_runtime,
+        verifier_module=generation_verifier_resilience,
     )
 
     original_platform_lock_writer = fabric_provider._write_platform_lock
