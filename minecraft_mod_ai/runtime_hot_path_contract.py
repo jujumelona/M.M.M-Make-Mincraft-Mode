@@ -18,6 +18,7 @@ canonical exhaustive retrieval path.
 
 import asyncio
 import concurrent.futures
+import json
 import sqlite3
 import threading
 from collections.abc import Mapping, Sequence
@@ -26,6 +27,8 @@ from typing import Any
 
 import anyio
 
+from .root_cause_trace import emit_root_cause
+
 _MCP_MARKER = "_mmm_nonblocking_transport_execute_v1"
 _EXTERNAL_MARKER = "_mmm_external_mcp_parallel_provider_v1"
 _RAG_MARKER = "_mmm_rag_lsh_query_ready_v1"
@@ -33,6 +36,84 @@ _LSH_STATE_TABLE = "mmm_semantic_lsh_state"
 _LSH_STATE_KEY = "ready"
 _LSH_STATE_VERSION = "v1"
 _SQLITE_MAGIC = b"SQLite format 3\x00"
+_MCP_MAX_CONSECUTIVE_INFRA_FAILURES = 3
+_MCP_RETRY_SAFE_VERIFIERS = frozenset(
+    {
+        "java_diagnostics",
+        "jdt_diagnostics",
+        "run_gradle_build",
+        "gradle_build",
+        "run_gametest",
+    }
+)
+_MCP_TRANSIENT_MARKERS = (
+    "timed out",
+    "timeout",
+    "connection reset",
+    "connection closed",
+    "channel closed",
+    "transport closed",
+    "session closed",
+    "closed resource",
+    "broken pipe",
+    "broken resource",
+    "end of stream",
+    "unexpected eof",
+    "eof",
+)
+_MCP_DETERMINISTIC_MARKERS = (
+    "invalid task diagnostic path",
+    "relative_files must be",
+    "argument",
+    "schema drift",
+    "schema",
+    "unsupported",
+    "unsafe path",
+    "outside",
+    "no such file",
+    "not found",
+    "does not exist",
+    "no java files",
+)
+
+
+def _exception_objects(exc: BaseException) -> tuple[BaseException, ...]:
+    seen: set[int] = set()
+    pending = [exc]
+    result: list[BaseException] = []
+    while pending:
+        current = pending.pop()
+        marker = id(current)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        result.append(current)
+        if isinstance(current, BaseExceptionGroup):
+            pending.extend(current.exceptions)
+        cause = getattr(current, "__cause__", None)
+        context = getattr(current, "__context__", None)
+        if isinstance(cause, BaseException):
+            pending.append(cause)
+        if isinstance(context, BaseException):
+            pending.append(context)
+    return tuple(result)
+
+
+def _is_transient_mcp_transport_failure(exc: BaseException) -> bool:
+    chain = _exception_objects(exc)
+    if any(isinstance(item, asyncio.CancelledError) for item in chain):
+        return False
+    if any(
+        isinstance(item, (TimeoutError, ConnectionError, EOFError, BrokenPipeError))
+        for item in chain
+    ):
+        return True
+    text = " | ".join(
+        f"{type(item).__name__}: {item}" for item in chain
+    ).casefold()
+    if any(marker in text for marker in _MCP_DETERMINISTIC_MARKERS):
+        return False
+    return any(marker in text for marker in _MCP_TRANSIENT_MARKERS)
 
 
 async def _submit_without_blocking_loop(worker: Any, request: Any) -> None:
@@ -41,8 +122,6 @@ async def _submit_without_blocking_loop(worker: Any, request: Any) -> None:
     request.result.add_done_callback(lambda _future: worker._release_pending())
     enqueue: concurrent.futures.Future[Any] | None = None
     try:
-        # Worker startup can wait on a threading.Event for up to five seconds. Keep
-        # that wait outside the model/tool event loop.
         await asyncio.to_thread(worker._ensure_started)
         with worker._state_lock:
             if worker._closed:
@@ -85,20 +164,78 @@ def _install_nonblocking_transport(mcp_transport_pool_module: Any) -> None:
         arguments: Mapping[str, Any] | None = None,
         expected_schema_sha256: str = "",
     ) -> Any:
-        future: concurrent.futures.Future[Any] = concurrent.futures.Future()
-        request = mcp_transport_pool_module._TransportRequest(
-            operation=operation,
-            stage=stage,
-            env=dict(env),
-            timeout_seconds=float(timeout_seconds),
-            result=future,
-            name=name,
-            arguments=dict(arguments or {}),
-            expected_schema_sha256=expected_schema_sha256,
-        )
-        worker = self._reserve_worker()
-        await _submit_without_blocking_loop(worker, request)
-        return await asyncio.wrap_future(future)
+        retry_safe = operation == "call_tool" and name in _MCP_RETRY_SAFE_VERIFIERS
+        failures: list[dict[str, Any]] = []
+        while True:
+            future: concurrent.futures.Future[Any] = concurrent.futures.Future()
+            request = mcp_transport_pool_module._TransportRequest(
+                operation=operation,
+                stage=stage,
+                env=dict(env),
+                timeout_seconds=float(timeout_seconds),
+                result=future,
+                name=name,
+                arguments=dict(arguments or {}),
+                expected_schema_sha256=expected_schema_sha256,
+            )
+            worker = self._reserve_worker()
+            try:
+                await _submit_without_blocking_loop(worker, request)
+                value = await asyncio.wrap_future(future)
+            except BaseException as exc:
+                if not retry_safe or not _is_transient_mcp_transport_failure(exc):
+                    raise
+                failures.append(
+                    {
+                        "attempt": len(failures) + 1,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    }
+                )
+                exhausted = len(failures) >= _MCP_MAX_CONSECUTIVE_INFRA_FAILURES
+                emit_root_cause(
+                    "mcp_verifier_transport_retry",
+                    stage=stage,
+                    operation=name,
+                    gate="mcp_transport_health",
+                    result="FAIL" if exhausted else "RETRY",
+                    reason=(
+                        "transient verifier transport retries exhausted"
+                        if exhausted
+                        else "transient verifier transport failure; worker session will be reacquired"
+                    ),
+                    details={
+                        "failure_count": len(failures),
+                        "max_failures": _MCP_MAX_CONSECUTIVE_INFRA_FAILURES,
+                        "retry_history": tuple(failures),
+                    },
+                    exc=exc,
+                )
+                if exhausted:
+                    from .agent_tool_runtime import AgentToolRuntimeError
+
+                    raise AgentToolRuntimeError(
+                        "MCP_TRANSIENT_RETRY_EXHAUSTED: verifier transport failed "
+                        f"{_MCP_MAX_CONSECUTIVE_INFRA_FAILURES} consecutive times; "
+                        f"retry_history={json.dumps(failures, ensure_ascii=False, sort_keys=True)}"
+                    ) from exc
+                await asyncio.sleep(0)
+                continue
+
+            if failures:
+                emit_root_cause(
+                    "mcp_verifier_transport_recovered",
+                    stage=stage,
+                    operation=name,
+                    gate="mcp_transport_health",
+                    result="PASS",
+                    reason="fresh MCP worker session recovered verifier transport",
+                    details={
+                        "prior_failures": tuple(failures),
+                        "consecutive_failure_count": 0,
+                    },
+                )
+            return value
 
     setattr(execute, _MCP_MARKER, True)
     execute.__wrapped__ = current  # type: ignore[attr-defined]
@@ -127,9 +264,6 @@ def _install_parallel_external_provider(external_mcp_router_module: Any) -> None
                 arguments=arguments,
             )
 
-        # Every provider call owns an independent MCP session. The old global router
-        # RLock therefore serialized unrelated providers without protecting shared
-        # transport state. Keep only the existing sync/async bridge semantics.
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -195,8 +329,6 @@ def _publish_lsh_ready(connection: sqlite3.Connection) -> None:
         f"INSERT OR REPLACE INTO {_LSH_STATE_TABLE}(key, value) VALUES (?, ?)",
         (_LSH_STATE_KEY, _LSH_STATE_VERSION),
     )
-    # Also commits stale-row cleanup performed by the canonical reconciler when no
-    # missing embedding batch happened to trigger its internal commit loop.
     connection.commit()
 
 
@@ -212,9 +344,6 @@ def _invalidate_lsh_ready(module: Any, target: Path) -> None:
                 )
                 connection.commit()
     except sqlite3.Error as exc:
-        # Never mutate a semantic index while an old ready marker may still be
-        # visible. A failed invalidation therefore blocks the build rather than
-        # permitting stale side-index candidates during concurrent search.
         raise RuntimeError("cannot invalidate semantic LSH ready marker") from exc
 
 
@@ -260,8 +389,6 @@ def _install_rag_lsh_ready_contract(research_rag_performance_module: Any) -> Non
                     if not _lsh_table_ready(module, connection):
                         ensure_semantic_lsh(connection)
             except Exception:
-                # Side index is optimization-only. Leaving the marker absent forces
-                # semantic search back to the canonical exhaustive path.
                 pass
         return result
 
@@ -336,4 +463,9 @@ def assert_installed(
         raise RuntimeError("RAG LSH query-ready contract is not installed")
 
 
-__all__ = ["assert_installed", "install"]
+__all__ = [
+    "assert_installed",
+    "install",
+    "_MCP_MAX_CONSECUTIVE_INFRA_FAILURES",
+    "_is_transient_mcp_transport_failure",
+]

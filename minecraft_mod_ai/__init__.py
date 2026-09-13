@@ -10,7 +10,6 @@ from .generation_accuracy_contract import (
 from .generation_accuracy_contract import install_inner as install_generation_accuracy_inner
 from .generation_accuracy_contract import install_outer as install_generation_accuracy_outer
 from .hardware_concurrency_installation import install as install_hardware_concurrency
-from .mcp_transient_retry_contract import install as install_mcp_transient_retry
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
 from .source_observation_budget_installation import install as install_source_observation_budget
@@ -44,7 +43,6 @@ install_source_set_boundary(_java_lsp)
 install_generation_accuracy_inner(_model_router)
 assert_generation_accuracy_inner(_model_router)
 finalize_runtime()
-install_mcp_transient_retry()
 # The outer normalizer runs after atomic aggregation so multi-obligation text summaries
 # retain the fixed {"summary": ...} contract consumed by CustomModuleGenerator.
 install_generation_accuracy_outer(_model_router)
