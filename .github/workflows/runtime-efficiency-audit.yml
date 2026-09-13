@@ -40,8 +40,16 @@ jobs:
             exit 0
           fi
           BASE_DIR="$(mktemp -d)"
-          git worktree add --detach "$BASE_DIR" "$BASE_REF"
-          trap 'git worktree remove --force "$BASE_DIR" >/dev/null 2>&1 || true' EXIT
+          trap 'rm -rf "$BASE_DIR"' EXIT
+          AUDIT_PATHS=(
+            .github/scripts/audit_runtime_efficiency.py
+            minecraft_mod_ai
+            tools
+          )
+          if git cat-file -e "${BASE_REF}:download_resources.py" 2>/dev/null; then
+            AUDIT_PATHS+=(download_resources.py)
+          fi
+          git archive --format=tar "$BASE_REF" -- "${AUDIT_PATHS[@]}" | tar -xf - -C "$BASE_DIR"
           (
             cd "$BASE_DIR"
             python .github/scripts/audit_runtime_efficiency.py --output /tmp/runtime-efficiency-baseline.json
