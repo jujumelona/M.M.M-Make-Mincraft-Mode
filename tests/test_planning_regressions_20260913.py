@@ -1,3 +1,5 @@
+"""Regression coverage for semantic requirement pagination and planner contracts."""
+
 from __future__ import annotations
 
 import json
@@ -215,6 +217,7 @@ def test_mixed_repeat_page_keeps_novel_requirements_until_true_fixed_point() -> 
     assert statements[-2:] == ["Requirement 13", "Requirement 14"]
     assert statements.count("Requirement 5") == 1
     assert statements.count("Requirement 6") == 1
+
 
 def test_success_postcondition_primary_schema_matches_atomic_recovery_bound() -> None:
     template_path = (
