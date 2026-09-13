@@ -25,6 +25,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+          cache: pip
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -79,7 +80,9 @@ jobs:
           fi
 
           BASE_ROOT="$RUNNER_TEMP/runtime-mutation-baseline"
-          git worktree add --detach "$BASE_ROOT" "$BASE_SHA"
+          rm -rf "$BASE_ROOT"
+          mkdir -p "$BASE_ROOT"
+          git archive --format=tar "$BASE_SHA" -- minecraft_mod_ai | tar -xf - -C "$BASE_ROOT"
           python .github/scripts/audit_runtime_mutations.py \
             --baseline-root "$BASE_ROOT" \
             --output "$RUNNER_TEMP/runtime-mutation-audit.json" \
