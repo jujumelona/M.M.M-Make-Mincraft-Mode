@@ -62,6 +62,24 @@ jobs:
           )
 
           update(
+              'tests/test_java_lsp_scaling.py',
+              '        if method == "textDocument/didOpen":\n            uri = str(params["textDocument"]["uri"])\n            self.opened_uris.append(uri)\n            number = int(Path(uri).stem.removeprefix("Generated"))\n',
+              '        if method == "textDocument/didOpen":\n            uri = str(params["textDocument"]["uri"])\n            stem = Path(uri).stem\n            if stem == "__MmmJdtReadinessProbe":\n                self.messages.put(\n                    {\n                        "method": "textDocument/publishDiagnostics",\n                        "params": {"uri": uri, "diagnostics": []},\n                    }\n                )\n                return\n            self.opened_uris.append(uri)\n            number = int(stem.removeprefix("Generated"))\n',
+          )
+
+          update(
+              'tests/test_java_lsp_scaling.py',
+              'def test_workspace_symbol_calls_reuse_one_initialized_jdt_process(\n    tmp_path: Path,\n    monkeypatch: pytest.MonkeyPatch,\n) -> None:\n    _FakeJsonRpcProcess.instances.clear()\n',
+              'def test_workspace_symbol_calls_reuse_one_initialized_jdt_process(\n    tmp_path: Path,\n    monkeypatch: pytest.MonkeyPatch,\n) -> None:\n    _write_java_files(tmp_path, 1)\n    _FakeJsonRpcProcess.instances.clear()\n',
+          )
+
+          update(
+              'tests/test_java_lsp_scaling.py',
+              '    first_root.mkdir()\n    second_root.mkdir()\n    _FakeJsonRpcProcess.instances.clear()\n',
+              '    first_root.mkdir()\n    second_root.mkdir()\n    _write_java_files(first_root, 1)\n    _write_java_files(second_root, 1)\n    _FakeJsonRpcProcess.instances.clear()\n',
+          )
+
+          update(
               'tests/test_scheduler_claim_install_identity.py',
               '    second = ledger.claim_ready("mmm-orchestrator", stages=stages, lease_seconds=60)\n    assert first is not None and first["node_id"] == "a-content"\n    assert second is not None and second["node_id"] == "c-system"\n    assert ledger.task("b-content")["state"] == "pending"\n',
               '    second = ledger.claim_ready("mmm-orchestrator", stages=stages, lease_seconds=60)\n    third = ledger.claim_ready("mmm-orchestrator", stages=stages, lease_seconds=60)\n    assert first is not None and first["node_id"] == "a-content"\n    assert second is not None and second["node_id"] == "b-content"\n    assert third is not None and third["node_id"] == "c-system"\n',
