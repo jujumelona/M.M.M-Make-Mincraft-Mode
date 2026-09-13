@@ -14,121 +14,229 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  static-quality:
-    name: Static and architecture quality
+  debug-audit:
+    name: Debug repo audit
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 2
       - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-          cache: pip
+        with: {python-version: '3.11', cache: pip}
       - run: python -m pip install --prefer-binary 'build>=1,<2' -e '.[dev,ui]'
-      - run: |
-          python .github/scripts/debug_repo_audit.py
-          python .github/scripts/audit_code_quality_regression.py --output audit/code-quality-regression.json
-          python -m compileall -q minecraft_mod_ai tests tools download_resources.py
-          python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
-          vulture minecraft_mod_ai tools download_resources.py --min-confidence 100
-          python -c "import minecraft_mod_ai"
+      - run: python .github/scripts/debug_repo_audit.py
+
+  architecture-quality:
+    name: Architecture quality regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with: {fetch-depth: 2}
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.11', cache: pip}
+      - run: python -m pip install --prefer-binary 'build>=1,<2' -e '.[dev,ui]'
+      - run: python .github/scripts/audit_code_quality_regression.py --output audit/code-quality-regression.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: static-quality-${{ github.sha }}
+          name: architecture-quality-${{ github.sha }}
+          path: audit/code-quality-regression.json
           if-no-files-found: warn
-          retention-days: 14
-          path: audit/
 
-  runtime-safety:
-    name: Runtime safety and regression gates
+  compile:
+    name: Python compile
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 2
       - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-          cache: pip
-      - run: python -m pip install --prefer-binary 'build>=1,<2' -e '.[dev,ui]'
+        with: {python-version: '3.11'}
+      - run: python -m compileall -q minecraft_mod_ai tests tools download_resources.py
+
+  ruff:
+    name: Ruff critical errors
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.11', cache: pip}
+      - run: python -m pip install --prefer-binary ruff
+      - run: python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
+
+  dead-code:
+    name: Dead code audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.11', cache: pip}
+      - run: python -m pip install --prefer-binary vulture
+      - run: vulture minecraft_mod_ai tools download_resources.py --min-confidence 100
+
+  import-smoke:
+    name: Package import smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.11', cache: pip}
+      - run: python -m pip install --prefer-binary -e .
+      - run: python -c "import minecraft_mod_ai"
+
+  runtime-concurrency:
+    name: Runtime concurrency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.11'}
+      - run: python .github/scripts/audit_runtime_concurrency.py
+
+  runtime-efficiency:
+    name: Runtime efficiency regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with: {fetch-depth: 2}
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.11'}
       - run: |
-          python .github/scripts/audit_runtime_concurrency.py
-          python .github/scripts/audit_runtime_efficiency.py --output audit/runtime-efficiency.json
-      - name: Gate runtime efficiency and mutation regressions against parent
-        shell: bash
-        run: |
           set -euo pipefail
-          BASE_REF="HEAD^"
-          git cat-file -e "${BASE_REF}^{commit}"
+          mkdir -p audit
+          python .github/scripts/audit_runtime_efficiency.py --output audit/runtime-efficiency.json
           BASE_DIR="$(mktemp -d)"
           trap 'rm -rf "$BASE_DIR"' EXIT
-          AUDIT_PATHS=(.github/scripts/audit_runtime_efficiency.py .github/scripts/audit_runtime_mutations.py minecraft_mod_ai tools)
-          if git cat-file -e "${BASE_REF}:download_resources.py" 2>/dev/null; then AUDIT_PATHS+=(download_resources.py); fi
-          git archive --format=tar "$BASE_REF" -- "${AUDIT_PATHS[@]}" | tar -xf - -C "$BASE_DIR"
+          git archive --format=tar HEAD^ -- .github/scripts/audit_runtime_efficiency.py minecraft_mod_ai tools download_resources.py | tar -xf - -C "$BASE_DIR"
           (cd "$BASE_DIR" && python .github/scripts/audit_runtime_efficiency.py --output /tmp/runtime-efficiency-baseline.json)
           python .github/scripts/gate_runtime_efficiency.py --baseline /tmp/runtime-efficiency-baseline.json --current audit/runtime-efficiency.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: runtime-efficiency-${{ github.sha }}
+          path: audit/runtime-efficiency.json
+          if-no-files-found: warn
+
+  runtime-mutations:
+    name: Runtime mutation regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with: {fetch-depth: 2}
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.11'}
+      - run: |
+          set -euo pipefail
+          mkdir -p audit
+          BASE_DIR="$(mktemp -d)"
+          trap 'rm -rf "$BASE_DIR"' EXIT
+          git archive --format=tar HEAD^ -- .github/scripts/audit_runtime_mutations.py minecraft_mod_ai tools download_resources.py | tar -xf - -C "$BASE_DIR"
           python .github/scripts/audit_runtime_mutations.py --baseline-root "$BASE_DIR" --fail-on-new --output audit/runtime-mutations.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: runtime-safety-${{ github.sha }}
+          name: runtime-mutations-${{ github.sha }}
+          path: audit/runtime-mutations.json
           if-no-files-found: warn
-          retention-days: 14
-          path: audit/
 
-  packaging-integrity:
-    name: Packaging and Minecraft integrity
+  mineflayer-syntax:
+    name: Mineflayer bridge syntax
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - run: node --check minecraft_mod_ai/integrations/mineflayer/bridge.mjs
+
+  colab-validation:
+    name: Colab validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.11', cache: pip}
+      - run: python -m pip install --prefer-binary -e '.[dev,ui]'
+      - run: python tools/validate_colab_notebook.py
+
+  skill-packaging:
+    name: Skill packaging determinism
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.11', cache: pip}
+      - run: python -m pip install --prefer-binary -e .
+      - run: |
+          python tools/package_skills.py
+          git diff --exit-code -- minecraft_mod_ai/packaged_skills.json plugins/mmm-minecraft-mod-ai/skills
+
+  removed-surface:
+    name: Removed surface invariant
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - run: test ! -e minecraft_mod_ai/agentic_pre_design_rag.py
+
+  minecraft-integrity:
+    name: Real Fabric integrity
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-          cache: pip
+        with: {python-version: '3.11', cache: pip}
       - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '17'
+        with: {distribution: temurin, java-version: '17'}
       - run: python -m pip install --prefer-binary 'build>=1,<2' -e '.[dev,ui]'
-      - run: |
-          node --check minecraft_mod_ai/integrations/mineflayer/bridge.mjs
-          python tools/validate_colab_notebook.py
-          python tools/package_skills.py
-          git diff --exit-code -- minecraft_mod_ai/packaged_skills.json plugins/mmm-minecraft-mod-ai/skills
-          test ! -e minecraft_mod_ai/agentic_pre_design_rag.py
-          python tools/verify_integrity_minecraft.py --output .mmm/integrity-validation
-          python tools/root_cause_audit_wrapper.py
+      - run: python tools/verify_integrity_minecraft.py --output .mmm/integrity-validation
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: packaging-integrity-${{ github.sha }}
+          name: minecraft-integrity-${{ github.sha }}
+          path: .mmm/integrity-validation
           if-no-files-found: warn
-          retention-days: 14
-          path: .mmm/
 
-  tests:
-    name: Python 3.11 tests shard ${{ matrix.shard }}/4
+  root-cause-audit:
+    name: Exhaustive root-cause audit
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-          cache: pip
+        with: {python-version: '3.11', cache: pip}
       - uses: actions/setup-java@v5
+        with: {distribution: temurin, java-version: '17'}
+      - run: python -m pip install --prefer-binary 'build>=1,<2' -e '.[dev,ui]'
+      - run: python tools/root_cause_audit_wrapper.py
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          distribution: temurin
-          java-version: '17'
+          name: root-cause-audit-${{ github.sha }}
+          path: .mmm/
+          if-no-files-found: warn
+
+  tests:
+    name: Python 3.11 tests shard ${{ matrix.shard }}/16
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.11', cache: pip}
+      - uses: actions/setup-java@v5
+        with: {distribution: temurin, java-version: '17'}
       - run: python -m pip install --prefer-binary -e '.[dev,ui]'
       - name: Select deterministic test shard
         shell: bash
@@ -140,7 +248,7 @@ jobs:
           from pathlib import Path
           from tools.ci_test_shard import select_shard
           paths = sorted(str(path) for path in Path('tests').glob('test_*.py'))
-          print('\n'.join(select_shard(paths, shard_number=int(os.environ['SHARD']), shard_count=4)))
+          print('\n'.join(select_shard(paths, shard_number=int(os.environ['SHARD']), shard_count=16)))
           PY
           test -s /tmp/tests.txt
       - name: Run test shard
@@ -154,11 +262,10 @@ jobs:
         if: always()
         with:
           name: tests-shard-${{ matrix.shard }}-${{ github.sha }}
-          if-no-files-found: warn
-          retention-days: 14
           path: |
             audit/tests-${{ matrix.shard }}.log
             audit/tests-${{ matrix.shard }}.xml
+          if-no-files-found: warn
 
   python313:
     name: Python 3.13 planning/RAG compatibility
@@ -167,26 +274,35 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
-        with:
-          python-version: '3.13'
+        with: {python-version: '3.13'}
       - run: python -m pip install --prefer-binary -e . pytest
       - run: python -m pytest -q tests/test_planning_state_contract.py tests/test_planning_mod_discovery.py tests/test_planning_ssot_invariants.py tests/test_planning_research_relevance_guards.py tests/test_research_evidence_handoff_contract.py tests/test_public_acceptance_runtime_boundary.py
 
   ci-gate:
     name: CI Gate
     if: ${{ always() }}
-    needs: [static-quality, runtime-safety, packaging-integrity, tests, python313]
+    needs:
+      - debug-audit
+      - architecture-quality
+      - compile
+      - ruff
+      - dead-code
+      - import-smoke
+      - runtime-concurrency
+      - runtime-efficiency
+      - runtime-mutations
+      - mineflayer-syntax
+      - colab-validation
+      - skill-packaging
+      - removed-surface
+      - minecraft-integrity
+      - root-cause-audit
+      - tests
+      - python313
     runs-on: ubuntu-latest
     steps:
       - env:
-          STATIC: ${{ needs.static-quality.result }}
-          RUNTIME: ${{ needs.runtime-safety.result }}
-          PACKAGING: ${{ needs.packaging-integrity.result }}
-          TESTS: ${{ needs.tests.result }}
-          PY313: ${{ needs.python313.result }}
+          RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
-          test "$STATIC" = success
-          test "$RUNTIME" = success
-          test "$PACKAGING" = success
-          test "$TESTS" = success
-          test "$PY313" = success
+          echo "$RESULTS"
+          test "${RESULTS//success/}" = "                "
