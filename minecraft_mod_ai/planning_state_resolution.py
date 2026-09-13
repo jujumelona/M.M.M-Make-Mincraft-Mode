@@ -327,14 +327,17 @@ def _preserve_blocked_state(state: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], budget: int) -> Any:
-    """Bound each response page while semantic frontier exhaustion owns termination.
+    """Bound response pages and stop only when the semantic frontier stops advancing.
 
-    A full page is evidence only that the bounded response filled its transport envelope;
-    it is never evidence that the authored behavior universe is complete. The compiler
-    must therefore continue after every full page. Completion is represented by the
-    compiler itself returning a short/empty continuation page. Exact duplicate rows are
-    a no-progress fixed point and context exhaustion fails closed rather than silently
-    freezing a partial requirement universe.
+    A full page proves only that the transport envelope was filled, so it always requests
+    another page. Continuation rows are validated as a page before any row is committed.
+    If a continuation re-enters an exact requirement already supplied in
+    ``already_compiled_requirements``, that whole page is rejected: mixing repeated and
+    apparently-new paraphrases cannot certify new semantic coverage. The repeated prior
+    requirement is the convergence witness that the bounded compiler has returned to its
+    covered frontier, so the host completes with the last fully novel page set instead of
+    throwing away the whole plan. Duplicate rows inside a single page are simply collapsed;
+    the resulting short page then closes the frontier naturally.
     """
     from .model_adapters import ModelConfigurationError
 
@@ -383,6 +386,10 @@ def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], bud
             result="INFO",
             details={"page_index": page_index + 1, "requirements": rows},
         )
+
+        page_rows: list[dict[str, Any]] = []
+        page_seen: set[str] = set()
+        repeated_prior: list[dict[str, Any]] = []
         for row in rows:
             if not isinstance(row, Mapping) or not _text(row.get("statement")):
                 raise ModelConfigurationError("REQUIREMENT_PAGINATION_FAILED: invalid requirement row")
@@ -395,13 +402,37 @@ def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], bud
                 ensure_ascii=False,
             )
             if identity in seen:
-                raise ModelConfigurationError(
-                    "REQUIREMENT_PAGINATION_NO_PROGRESS: repeated requirement cannot certify remaining coverage"
-                )
-            seen.add(identity)
-            collected.append(dict(row))
+                repeated_prior.append(dict(row))
+                continue
+            if identity in page_seen:
+                continue
+            page_seen.add(identity)
+            page_rows.append(dict(row))
+
         page_index += 1
-        page_full = len(rows) >= page_size
+        if repeated_prior:
+            emit_root_cause(
+                "planner_requirement_page",
+                stage="planning_state",
+                operation="researched_requirement_compile",
+                result="COMPLETE",
+                reason="REQUIREMENT_REPEAT_FRONTIER_EXHAUSTED",
+                details={
+                    "page_index": page_index,
+                    "page_requirement_count": len(rows),
+                    "accepted_requirement_count": 0,
+                    "discarded_page_requirement_count": len(rows),
+                    "repeated_prior_requirements": repeated_prior,
+                    "total_requirement_count": len(collected),
+                    "requirements": rows,
+                },
+            )
+            return {"requirements": collected}
+
+        for identity in page_seen:
+            seen.add(identity)
+        collected.extend(page_rows)
+        page_full = len(page_rows) >= page_size
         emit_root_cause(
             "planner_requirement_page",
             stage="planning_state",
@@ -415,8 +446,9 @@ def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], bud
             details={
                 "page_index": page_index,
                 "page_requirement_count": len(rows),
+                "accepted_requirement_count": len(page_rows),
                 "total_requirement_count": len(collected),
-                "requirements": rows,
+                "requirements": page_rows,
             },
         )
         if not page_full:
