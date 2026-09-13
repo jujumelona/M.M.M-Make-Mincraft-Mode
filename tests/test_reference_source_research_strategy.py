@@ -84,7 +84,10 @@ def test_provider_transport_retries_transient_failure() -> None:
         attempts += 1
         if attempts == 1:
             raise RuntimeError("transient")
-        return ([{"source_id": "fixture", "content_sha256": "sha256:x"}], {"provider": "fixture", "status": "available", "result_count": 1})
+        return (
+            [{"source_id": "fixture", "content_sha256": "sha256:x"}],
+            {"provider": "fixture", "status": "available", "result_count": 1},
+        )
 
     found, receipt, error = reference._retrieve_provider("fixture", flaky_provider)
 
@@ -94,22 +97,26 @@ def test_provider_transport_retries_transient_failure() -> None:
     assert error is None
 
 
-def test_combined_reference_retrieval_merges_independent_providers(monkeypatch) -> None:
-    def provider(name: str):
+def test_reference_retrieval_uses_identity_first_query_rows_without_provider_fanout(monkeypatch) -> None:
+    def wikipedia(queries, anchors):
+        query = next((value for value in queries if value not in anchors), queries[0])
         return (
             [
                 {
-                    "source_id": name,
-                    "content_sha256": f"sha256:{name}",
-                    "content": f"{name} evidence body",
+                    "source_id": f"wikipedia:{query}",
+                    "content_sha256": f"sha256:wikipedia:{query}",
+                    "content": f"wikipedia evidence body for {query}",
                 }
             ],
-            {"provider": name, "status": "available", "result_count": 1},
+            {"provider": "wikipedia", "status": "available", "result_count": 1},
         )
 
-    monkeypatch.setattr(reference, "_wikipedia_sources", lambda queries, anchors: provider("wikipedia"))
-    monkeypatch.setattr(reference, "_wikidata_sources", lambda queries, anchors: provider("wikidata"))
-    monkeypatch.setattr(reference, "_github_reference_sources", lambda queries, anchors: provider("github_reference"))
+    def forbidden_provider(*_args, **_kwargs):
+        raise AssertionError("fallback providers must not run after wikipedia evidence")
+
+    monkeypatch.setattr(reference, "_wikipedia_sources", wikipedia)
+    monkeypatch.setattr(reference, "_wikidata_sources", forbidden_provider)
+    monkeypatch.setattr(reference, "_github_reference_sources", forbidden_provider)
 
     result = reference.retrieve_reference_grounded_evidence(
         [
@@ -118,43 +125,39 @@ def test_combined_reference_retrieval_merges_independent_providers(monkeypatch) 
         ]
     )
 
-    assert result["retrieval_strategy"] == "identity_first_bounded_expansion"
+    assert result["retrieval_strategy"] == "identity_first_bounded_query_rows"
     assert result["inferred_reference_names"] == ["maplestory"]
-    assert result["queries"][0]["content_record_count"] == 3
-    assert set(result["queries"][0]["provider_receipts"]) == {
-        "wikipedia",
-        "wikidata",
-        "github_reference",
-    }
+    assert [row["query"] for row in result["queries"]] == [
+        "MapleStory gameplay rules",
+        "MapleStory documented systems behavior rules",
+    ]
+    for row in result["queries"]:
+        assert row["content_record_count"] == 1
+        assert row["provider_receipts"]["wikidata"]["status"] == (
+            "skipped_wikipedia_has_evidence"
+        )
+        assert row["provider_receipts"]["github_reference"]["status"] == (
+            "skipped_wikipedia_has_evidence"
+        )
 
 
-def test_reference_provider_deadline_returns_without_waiting_for_blocked_provider(monkeypatch) -> None:
+def test_reference_query_deadline_returns_without_waiting_for_blocked_row(monkeypatch) -> None:
     release = threading.Event()
     slow_finished = threading.Event()
 
-    def provider(name: str):
-        return (
-            [
-                {
-                    "source_id": name,
-                    "content_sha256": f"sha256:{name}",
-                    "content": f"{name} evidence body",
-                }
-            ],
-            {"provider": name, "status": "available", "result_count": 1},
-        )
-
-    def blocked_github(queries, anchors):
+    def blocked_wikipedia(queries, anchors):
         del queries, anchors
         try:
             release.wait(timeout=1.0)
-            return provider("github_reference")
+            return (
+                [],
+                {"provider": "wikipedia", "status": "available", "result_count": 0},
+            )
         finally:
             slow_finished.set()
 
-    monkeypatch.setattr(reference, "_wikipedia_sources", lambda queries, anchors: provider("wikipedia"))
-    monkeypatch.setattr(reference, "_wikidata_sources", lambda queries, anchors: provider("wikidata"))
-    monkeypatch.setattr(reference, "_github_reference_sources", blocked_github)
+    monkeypatch.setattr(reference, "_MAX_QUERY_WORKERS", 1)
+    monkeypatch.setattr(reference, "_wikipedia_sources", blocked_wikipedia)
     monkeypatch.setattr(deadline_executor, "planning_work_unit_timeout_seconds", lambda: 0.02)
     monkeypatch.setattr(
         deadline_executor,
@@ -163,19 +166,12 @@ def test_reference_provider_deadline_returns_without_waiting_for_blocked_provide
     )
 
     try:
-        result = reference.retrieve_reference_grounded_evidence(
-            [
-                "MapleStory gameplay rules",
-                "MapleStory documented systems behavior rules",
-            ]
-        )
+        result = reference.retrieve_reference_grounded_evidence(["MapleStory gameplay rules"])
         assert slow_finished.is_set() is False
     finally:
         release.set()
 
     row = result["queries"][0]
-    assert row["content_record_count"] == 2
-    assert row["provider_receipts"]["wikipedia"]["status"] == "available"
-    assert row["provider_receipts"]["wikidata"]["status"] == "available"
-    assert row["provider_receipts"]["github_reference"]["status"] == "error"
+    assert row["content_record_count"] == 0
+    assert row["provider_receipts"]["reference_query"]["status"] == "error"
     assert "ParallelExecutionTimeout" in row["retrieval_errors"][0]["error"]
