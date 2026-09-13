@@ -540,6 +540,8 @@ class HostRunState:
     phase: LoopPhase = LoopPhase.OBSERVE
     step_index: int = 0
     no_progress_streak: int = 0
+    seen_no_progress_digests: set[str] = field(default_factory=set)
+    semantic_fixed_point: bool = False
     attempted_queries: set[str] = field(default_factory=set)
     attempted_sources: set[str] = field(default_factory=set)
     localization_attempted_sources: set[str] = field(default_factory=set)
@@ -555,7 +557,6 @@ class HostRunState:
     repair_guidance_fingerprint: str | None = None
     last_failure_digest: str | None = None
     last_failure_reason: str | None = None
-    last_result_digest: str | None = None
     termination_reason: str | None = None
     trajectory: list[ExecutionStepTrace] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -768,13 +769,11 @@ class HostRunState:
             self.last_failure_reason = None
             self.last_failure_digest = None
 
-    def record_no_progress_result(self, value: Any) -> int:
-        """Count only a repeated stable state/action/result as a fixed point.
+    def record_no_progress_result(self, value: Any) -> bool:
+        """Return True only when the same stable semantic state recurs.
 
-        Two different recoverable failures are not convergence.  In particular, an
-        authority rejection followed by a phase correction must leave a small model one
-        more turn to obey the corrected contract.  The global tool-round limit still
-        bounds alternating or otherwise non-convergent behavior.
+        A new action/result frontier is not convergence, regardless of how many turns
+        have elapsed. Any material progress clears this recurrence memory.
         """
 
         stable = _stable_value(value, drop_volatile=True)
@@ -787,16 +786,17 @@ class HostRunState:
         )
         digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         with self._lock:
-            if digest == self.last_result_digest:
-                self.no_progress_streak += 1
-            else:
-                self.last_result_digest = digest
-                self.no_progress_streak = 1
-            return self.no_progress_streak
+            repeated = digest in self.seen_no_progress_digests
+            self.seen_no_progress_digests.add(digest)
+            self.semantic_fixed_point = repeated
+            # Compatibility/telemetry bit only; never used as a numeric threshold.
+            self.no_progress_streak = int(repeated)
+            return repeated
 
     def clear_no_progress_result(self) -> None:
         with self._lock:
-            self.last_result_digest = None
+            self.seen_no_progress_digests.clear()
+            self.semantic_fixed_point = False
             self.no_progress_streak = 0
 
     def next_untried_internal_tool(
@@ -1715,7 +1715,6 @@ def _generate_with_tools_impl(
     from .grounding_policy import host_baseline_evidence_ready
     from .model_router import (
         _RAG_EVIDENCE_TOOLS,
-        _agent_tool_round_limit,
         _execute_tool_waves,
         _external_rag_capability,
         _tool_schema_names,
@@ -1728,10 +1727,8 @@ def _generate_with_tools_impl(
     all_exposed_names = frozenset(_tool_schema_names(all_exposed_tools))
     state = HostRunState()
     forced_rag_tool: str | None = None
-    forced_rag_attempts = 0
     required_rag_choice = False
     unavailable_verifiers: set[str] = set()
-    round_limit = _agent_tool_round_limit()
     host_grounded = host_baseline_evidence_ready(request.messages)
     require_rag = bool(
         router._agent_require_fresh_evidence
@@ -1766,7 +1763,6 @@ def _generate_with_tools_impl(
             "role": role,
             "message_count": len(messages),
             "exposed_tools": sorted(all_exposed_names),
-            "round_limit": round_limit,
             "host_grounded": host_grounded,
             "require_rag": require_rag,
             "implementation_requires_mutation": implementation_requires_mutation,
@@ -1829,41 +1825,12 @@ def _generate_with_tools_impl(
             },
         )
 
-        if state.step_index > round_limit:
-            if require_rag and not state.has_fresh_evidence:
-                raise ModelConfigurationError(
-                    "Agent reached the host tool-round limit before required "
-                    "evidence became available."
-                )
-            if implementation_requires_mutation and not state.workspace_changed and not mutation_history_applied(messages):
-                raise ModelConfigurationError(
-                    "Writable coder reached the host tool-round limit before a "
-                    "reviewed source mutation was applied; refusing a prose-only implementation."
-                )
-            if implementation_requires_mutation and state.validation_status == "FAIL":
-                raise ModelConfigurationError(
-                    "VERIFICATION_REPAIR_FIXED_POINT: host execution boundary reached while "
-                    "trustworthy verifier evidence still reports source defects."
-                )
-            return _finalize_without_tools(
-                router,
-                config,
-                adapter,
-                request,
-                messages,
-                instruction=(
-                    f"The host tool-round limit was reached after {round_limit} rounds. "
-                    "Do not call more tools. Return the final answer using only observations already present."
-                ),
-                empty_error="Agent returned an empty final response at the explicit tool-round limit.",
-            )
-
-        if forced_rag_tool is None and state.no_progress_streak >= 2:
+        if forced_rag_tool is None and state.semantic_fixed_point:
             traj_summary = format_trajectory_summary(state.trajectory)
             reason_suffix = f": {state.last_failure_reason}" if state.last_failure_reason else ""
             print(
                 f"\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
-                f"[HOST NO-PROGRESS BOUNDARY HIT] Step={state.step_index} Streak={state.no_progress_streak}\n"
+                f"[HOST SEMANTIC FIXED POINT] Step={state.step_index}\n"
                 f"Reason: {state.last_failure_reason}\n"
                 f"Trajectory:\n{traj_summary}\n"
                 f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n",
@@ -2115,40 +2082,10 @@ def _generate_with_tools_impl(
                     "one reviewed RAG tool call was required, but the model returned prose."
                 )
             if forced_rag_tool is not None:
-                forced_rag_attempts += 1
-                if forced_rag_attempts >= 1:
-                    raise ModelConfigurationError(
-                        f"Production coder did not honor host-forced RAG tool choice {forced_rag_tool!r} "
-                        "after one bounded forced attempt."
-                    )
-                messages.extend([
-                    {"role": "assistant", "content": content},
-                    {
-                        "role": "system",
-                        "content": f"Call the required function {forced_rag_tool} exactly once now. Do not answer in prose.",
-                    },
-                ])
-                trace_entry = ExecutionStepTrace(
-                    step_index=state.step_index,
-                    phase_before=phase_before,
-                    localization_stage_before=loc_stage_before,
-                    mutation_context_before=ctx_before,
-                    exposed_tools=sorted(phase_tool_names),
-                    tool_choice=tool_choice,
-                    input_messages_count=len(messages),
-                    model_response_content=content,
-                    model_tool_calls=[],
-                    query_signatures=[],
-                    tool_results=[],
-                    mutation_context_after=ctx_before,
-                    localization_stage_after=loc_stage_before,
-                    phase_after=state.phase.value,
-                    turn_made_progress=False,
-                    no_progress_streak_after=state.no_progress_streak,
-                    action_decision=f"host_guided_to_{forced_rag_tool}",
+                raise ModelConfigurationError(
+                    f"Production coder violated host-forced RAG tool choice {forced_rag_tool!r} "
+                    "by returning prose instead of the required tool call."
                 )
-                state.trajectory.append(trace_entry)
-                continue
             if require_rag and not state.has_fresh_evidence:
                 eligible_rag_names = tuple(
                     sorted(
@@ -2164,7 +2101,6 @@ def _generate_with_tools_impl(
                     )
                 if len(eligible_rag_names) == 1:
                     forced_rag_tool = eligible_rag_names[0]
-                    forced_rag_attempts = 0
                     guidance = (
                         f"Baseline production evidence is still required. Call {forced_rag_tool} "
                         "exactly once with a concrete query for the current implementation need."
@@ -2214,7 +2150,7 @@ def _generate_with_tools_impl(
                         "prose": content,
                     }
                 )
-                if repeated > 1:
+                if repeated:
                     raise ModelConfigurationError(
                         "VERIFICATION_REPAIR_FIXED_POINT: coder repeated the same prose-only "
                         "state while trustworthy verifier diagnostics remain unresolved."
@@ -2298,7 +2234,6 @@ def _generate_with_tools_impl(
                     )
                     if forced_tool is not None:
                         forced_rag_tool = forced_tool
-                        forced_rag_attempts = 0
                         messages.extend([
                             {"role": "assistant", "content": content},
                             {
@@ -2356,7 +2291,6 @@ def _generate_with_tools_impl(
                     f"Production coder violated host-forced RAG tool choice {forced_rag_tool!r}; received {called}."
                 )
             forced_rag_tool = None
-            forced_rag_attempts = 0
 
         if forced_verify_tool is not None:
             if len(turn.tool_calls) != 1 or turn.tool_calls[0].name != forced_verify_tool:
@@ -2780,7 +2714,6 @@ def _generate_with_tools_impl(
                     "localization_stage_before": loc_stage_before,
                     "localization_stage_after": loc_stage_after,
                     "mutation_context_after": ctx_after,
-                    "model_tool_calls": model_calls_info,
                     "validation_status": state.validation_status,
                     "verifier_fingerprint": state.latest_verifier_fingerprint,
                     "workspace_changed": state.workspace_changed,
