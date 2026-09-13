@@ -17,10 +17,11 @@ import re
 import threading
 import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import httpx
+
+from .deadline_executor import ParallelExecutionTimeout, iter_completed_with_deadlines
 
 _TIMEOUT = 12.0
 _UA = "MMM-ReferenceResearch/3.0 (+https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode)"
@@ -684,8 +685,30 @@ def _retrieve_provider(
     )
 
 
+def _provider_deadline_failure(
+    provider: str,
+    *,
+    timed_out_provider: str,
+    deadline_kind: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, str]]:
+    message = (
+        "ParallelExecutionTimeout: "
+        f"{deadline_kind} deadline exceeded; timed_out_provider={timed_out_provider}"
+    )
+    return (
+        [],
+        {
+            "provider": provider,
+            "status": "error",
+            "result_count": 0,
+            "deadline_kind": deadline_kind,
+        },
+        {"provider": provider, "error": message},
+    )
+
+
 def retrieve_reference_grounded_evidence(queries: Sequence[str]) -> dict[str, Any]:
-    """Run identity-first bounded expansion before declaring reference research empty."""
+    """Run identity-first expansion with one deadline-aware provider executor."""
     query_list = list(dict.fromkeys(_text(raw) for raw in queries if _text(raw)))
     anchors, search_plan = _reference_search_plan(query_list)
     provider_specs: tuple[tuple[str, _ReferenceProvider], ...] = (
@@ -694,15 +717,43 @@ def retrieve_reference_grounded_evidence(queries: Sequence[str]) -> dict[str, An
         ("github_reference", lambda: _github_reference_sources(search_plan, anchors)),
     )
 
-    with ThreadPoolExecutor(
-        max_workers=len(provider_specs),
-        thread_name_prefix="mmm-reference-provider",
-    ) as executor:
-        futures = [
-            executor.submit(_retrieve_provider, provider, function)
-            for provider, function in provider_specs
+    completed: dict[
+        str,
+        tuple[list[dict[str, Any]], dict[str, Any], dict[str, str] | None],
+    ] = {}
+    deadline_error: ParallelExecutionTimeout | None = None
+    try:
+        for (provider, _function), result in iter_completed_with_deadlines(
+            provider_specs,
+            lambda spec: _retrieve_provider(spec[0], spec[1]),
+            max_workers=len(provider_specs),
+            stage="mmm-reference-provider",
+            sort_key=lambda spec: spec[0],
+        ):
+            completed[provider] = result
+    except ParallelExecutionTimeout as exc:
+        deadline_error = exc
+
+    if deadline_error is None:
+        provider_results = [completed[provider] for provider, _ in provider_specs]
+    else:
+        timed_out_item = deadline_error.item
+        timed_out_provider = (
+            str(timed_out_item[0])
+            if isinstance(timed_out_item, tuple) and timed_out_item
+            else "unknown"
+        )
+        provider_results = [
+            completed.get(
+                provider,
+                _provider_deadline_failure(
+                    provider,
+                    timed_out_provider=timed_out_provider,
+                    deadline_kind=deadline_error.deadline_kind,
+                ),
+            )
+            for provider, _ in provider_specs
         ]
-        provider_results = [future.result() for future in futures]
 
     records: list[dict[str, Any]] = []
     providers: dict[str, Any] = {}
