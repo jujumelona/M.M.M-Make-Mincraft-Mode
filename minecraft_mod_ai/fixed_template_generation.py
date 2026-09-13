@@ -34,17 +34,21 @@ def _adapter_name(router: Any, role: str) -> str:
     return str(getattr(config, "adapter", "") or "")
 
 
-def _structured_text_transport_required(
-    router: Any,
-    role: str,
-    *,
-    enable_tools: bool,
-) -> bool:
+def _structured_text_transport_required(router: Any, role: str) -> bool:
     return (
-        not enable_tools
-        or _adapter_name(router, role) == "mock"
-        or not hasattr(router, "generate_tool_decision")
+        _adapter_name(router, role) == "mock"
+        or not callable(getattr(router, "generate_tool_decision", None))
     )
+
+
+def _structured_text_generator(router: Any):
+    generate_text = getattr(router, "generate_text", None)
+    if not callable(generate_text):
+        raise RuntimeError(
+            "FIXED_TEMPLATE_TRANSPORT_UNAVAILABLE: router exposes neither "
+            "generate_tool_decision nor generate_text"
+        )
+    return generate_text
 
 
 def _semantic_prelude_required(
@@ -126,9 +130,11 @@ def generate_fixed_template_value(
         raise TypeError("fixed-template generation requires a response_schema mapping")
     assert_atomic_model_schema(response_schema, surface=f"fixed template for role {role!r}")
 
-    # Tool-disabled calls must stay on structured text transport. ``mock`` is a deterministic
-    # fixture engine, and routers without a tool-decision surface require the same transport.
-    if _structured_text_transport_required(router, role, enable_tools=enable_tools):
+    # ``enable_tools`` controls semantic/external tools, not the host-owned function-argument
+    # transport used to fill a fixed response template. Mock and text-only routers keep the
+    # structured-text fallback; real tool-capable routers always use native template transport.
+    if _structured_text_transport_required(router, role):
+        generate_text = _structured_text_generator(router)
         fixture_kwargs: dict[str, Any] = {
             "media_paths": media_paths,
             "response_format": _JSON_FIXTURE_FORMAT,
@@ -140,7 +146,7 @@ def generate_fixed_template_value(
         # misleading ``tool_stage=None`` pseudo-capability to adapters and test routers.
         if tool_stage is not None:
             fixture_kwargs["tool_stage"] = tool_stage
-        raw = router.generate_text(role, messages, **fixture_kwargs)
+        raw = generate_text(role, messages, **fixture_kwargs)
         extra_evidence_refs = None
         try:
             val = json.loads(raw)
