@@ -111,7 +111,9 @@ jobs:
           python .github/scripts/audit_runtime_efficiency.py --output audit/runtime-efficiency.json
           BASE_DIR="$(mktemp -d)"
           trap 'rm -rf "$BASE_DIR"' EXIT
-          git archive --format=tar HEAD^ -- .github/scripts/audit_runtime_efficiency.py minecraft_mod_ai tools download_resources.py | tar -xf - -C "$BASE_DIR"
+          AUDIT_PATHS=(.github/scripts/audit_runtime_efficiency.py minecraft_mod_ai tools)
+          if git cat-file -e HEAD^:download_resources.py 2>/dev/null; then AUDIT_PATHS+=(download_resources.py); fi
+          git archive --format=tar HEAD^ -- "${AUDIT_PATHS[@]}" | tar -xf - -C "$BASE_DIR"
           (cd "$BASE_DIR" && python .github/scripts/audit_runtime_efficiency.py --output /tmp/runtime-efficiency-baseline.json)
           python .github/scripts/gate_runtime_efficiency.py --baseline /tmp/runtime-efficiency-baseline.json --current audit/runtime-efficiency.json
       - uses: actions/upload-artifact@v4
@@ -135,7 +137,9 @@ jobs:
           mkdir -p audit
           BASE_DIR="$(mktemp -d)"
           trap 'rm -rf "$BASE_DIR"' EXIT
-          git archive --format=tar HEAD^ -- .github/scripts/audit_runtime_mutations.py minecraft_mod_ai tools download_resources.py | tar -xf - -C "$BASE_DIR"
+          AUDIT_PATHS=(.github/scripts/audit_runtime_mutations.py minecraft_mod_ai tools)
+          if git cat-file -e HEAD^:download_resources.py 2>/dev/null; then AUDIT_PATHS+=(download_resources.py); fi
+          git archive --format=tar HEAD^ -- "${AUDIT_PATHS[@]}" | tar -xf - -C "$BASE_DIR"
           python .github/scripts/audit_runtime_mutations.py --baseline-root "$BASE_DIR" --fail-on-new --output audit/runtime-mutations.json
       - uses: actions/upload-artifact@v4
         if: always()
@@ -305,4 +309,6 @@ jobs:
           RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
           echo "$RESULTS"
-          test "${RESULTS//success/}" = "                "
+          for result in $RESULTS; do
+            test "$result" = success
+          done
