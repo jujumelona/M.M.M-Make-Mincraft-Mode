@@ -1,6 +1,9 @@
 """M.M.M Make Mincraft Mode: scalable multimodal Minecraft mod production tools."""
 
 from .custom_checkpoint_performance_installation import install as install_checkpoint_performance
+from .execution_feedback_semantic_convergence_installation import (
+    install as install_execution_feedback_semantic_convergence,
+)
 from .generation_accuracy_contract import (
     assert_inner_installed as assert_generation_accuracy_inner,
 )
@@ -33,6 +36,7 @@ install_hardware_concurrency()
 initialize_runtime()
 _validate_runtime_template_authority()
 from . import custom_module_generator as _custom_module_generator
+from . import execution_feedback_replan_contract as _execution_feedback_replan_contract
 from . import java_lsp as _java_lsp
 from . import model_router as _model_router
 
@@ -42,6 +46,9 @@ install_source_set_boundary(_java_lsp)
 # finalized later and therefore calls through this boundary once for every obligation.
 install_generation_accuracy_inner(_model_router)
 assert_generation_accuracy_inner(_model_router)
+# Execution feedback must own deterministic base-project diagnostics and its retry
+# termination rule before runtime_finalization installs the durable feedback wrapper.
+install_execution_feedback_semantic_convergence(_execution_feedback_replan_contract)
 finalize_runtime()
 # The outer normalizer runs after atomic aggregation so multi-obligation text summaries
 # retain the fixed {"summary": ...} contract consumed by CustomModuleGenerator.
