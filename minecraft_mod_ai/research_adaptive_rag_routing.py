@@ -10,10 +10,11 @@ corrective fallback when the authoritative catalog has no usable source.
 
 import copy
 from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from pathlib import Path
 from typing import Any
+
+from .deadline_executor import collect_completed_with_deadlines
 
 _MARKER = "_mmm_adaptive_pre_design_rag_v1"
 
@@ -266,12 +267,15 @@ def harden(pre_design_module: Any, small_model_module: Any) -> None:
             executed_by_key[key] = result
         elif search_jobs:
             worker_count = min(8, len(search_jobs))
-            with ThreadPoolExecutor(
+            completed = collect_completed_with_deadlines(
+                search_jobs,
+                run,
                 max_workers=worker_count,
-                thread_name_prefix="mmm_adaptive_pre_design_rag",
-            ) as pool:
-                for key, result in pool.map(run, search_jobs):
-                    executed_by_key[key] = result
+                stage="mmm_adaptive_pre_design_rag",
+                sort_key=lambda job: int(job["index"]),
+            )
+            for _job, (key, result) in completed:
+                executed_by_key[key] = result
 
         by_domain: dict[str, list[dict[str, Any]]] = {
             str(item.get("domain_id", "")): [] for item in domains
