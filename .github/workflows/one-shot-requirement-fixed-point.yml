@@ -51,27 +51,27 @@ jobs:
               raise SystemExit('expected requirement-pagination doc block not found')
           source = source.replace(old_doc, new_doc, 1)
 
-          start_marker = '        if repeated_prior:\n'
-          end_marker = '        seen.update(page_seen)\n'
-          start = source.find(start_marker)
-          end = source.find(end_marker, start)
+          start = source.find('        if repeated_prior:\n')
+          end = source.find('        seen.update(page_seen)\n', start)
           if start < 0 or end < 0:
               raise SystemExit('expected repeated-prior termination block not found')
-          replacement = '''        if not page_rows:
-              emit_root_cause(
-                  "planner_requirement_page", stage="planning_state",
-                  operation="researched_requirement_compile", result="COMPLETE",
-                  reason="REQUIREMENT_SEMANTIC_FRONTIER_EXHAUSTED",
-                  details={
-                      "page_index": page_index, "page_requirement_count": len(rows),
-                      "accepted_requirement_count": 0,
-                      "discarded_repeat_count": len(repeated_prior),
-                      "repeated_prior_requirements": repeated_prior,
-                      "total_requirement_count": len(collected), "requirements": rows,
-                  },
-              )
-              return {"requirements": collected}
-          '''
+          replacement = '\n'.join([
+              '        if not page_rows:',
+              '            emit_root_cause(',
+              '                "planner_requirement_page", stage="planning_state",',
+              '                operation="researched_requirement_compile", result="COMPLETE",',
+              '                reason="REQUIREMENT_SEMANTIC_FRONTIER_EXHAUSTED",',
+              '                details={',
+              '                    "page_index": page_index, "page_requirement_count": len(rows),',
+              '                    "accepted_requirement_count": 0,',
+              '                    "discarded_repeat_count": len(repeated_prior),',
+              '                    "repeated_prior_requirements": repeated_prior,',
+              '                    "total_requirement_count": len(collected), "requirements": rows,',
+              '                },',
+              '            )',
+              '            return {"requirements": collected}',
+              '',
+          ])
           source = source[:start] + replacement + source[end:]
           old_full = '        page_full = len(page_rows) >= page_size\n'
           new_full = '        page_full = len(rows) >= page_size\n'
@@ -91,51 +91,52 @@ jobs:
               1,
           )
 
-          old_page = '''            {
-                  "requirements": [
-                      self._row("Paraphrased economy requirement", "economy_again"),
-                      self._row("Paraphrased trading requirement", "trading_again"),
-                      self._row("Requirement 5", "cap_5"),
-                      self._row("Requirement 6", "cap_6"),
-                  ]
-              },
-          '''
-          new_page = '''            {
-                  "requirements": [
-                      self._row("Requirement 13", "cap_13"),
-                      self._row("Requirement 14", "cap_14"),
-                      self._row("Requirement 5", "cap_5"),
-                      self._row("Requirement 6", "cap_6"),
-                  ]
-              },
-              {
-                  "requirements": [
-                      self._row("Requirement 13", "cap_13"),
-                      self._row("Requirement 14", "cap_14"),
-                      self._row("Requirement 5", "cap_5"),
-                      self._row("Requirement 6", "cap_6"),
-                  ]
-              },
-          '''
-          if old_page not in test:
+          page_start = test.find(
+              '            {\n'
+              '                "requirements": [\n'
+              '                    self._row("Paraphrased economy requirement", "economy_again"),\n'
+          )
+          page_end = test.find('        ]\n\n    @staticmethod', page_start)
+          if page_start < 0 or page_end < 0:
               raise SystemExit('expected mixed repeat fixture page not found')
-          test = test.replace(old_page, new_page, 1)
+          new_pages = '\n'.join([
+              '            {',
+              '                "requirements": [',
+              '                    self._row("Requirement 13", "cap_13"),',
+              '                    self._row("Requirement 14", "cap_14"),',
+              '                    self._row("Requirement 5", "cap_5"),',
+              '                    self._row("Requirement 6", "cap_6"),',
+              '                ]',
+              '            },',
+              '            {',
+              '                "requirements": [',
+              '                    self._row("Requirement 13", "cap_13"),',
+              '                    self._row("Requirement 14", "cap_14"),',
+              '                    self._row("Requirement 5", "cap_5"),',
+              '                    self._row("Requirement 6", "cap_6"),',
+              '                ]',
+              '            },',
+              '',
+          ])
+          test = test[:page_start] + new_pages + test[page_end:]
 
           test_start = test.find('def test_explicit_coverage_review_closes_frontier_without_requesting_partial_page() -> None:\n')
           test_end = test.find('\ndef test_success_postcondition_primary_schema_matches_atomic_recovery_bound()', test_start)
           if test_start < 0 or test_end < 0:
               raise SystemExit('expected stale frontier regression test not found')
-          new_test = '''def test_mixed_repeat_page_keeps_novel_requirements_until_true_fixed_point() -> None:
-              router = _RepeatedFrontierRouter()
-              result = _generate_requirement_pages(router, _requirement_messages(), 100_000)
-
-              assert len(router.calls) == 5
-              assert len(result["requirements"]) == 14
-              statements = [row["statement"] for row in result["requirements"]]
-              assert statements[-2:] == ["Requirement 13", "Requirement 14"]
-              assert statements.count("Requirement 5") == 1
-              assert statements.count("Requirement 6") == 1
-          '''
+          new_test = '\n'.join([
+              'def test_mixed_repeat_page_keeps_novel_requirements_until_true_fixed_point() -> None:',
+              '    router = _RepeatedFrontierRouter()',
+              '    result = _generate_requirement_pages(router, _requirement_messages(), 100_000)',
+              '',
+              '    assert len(router.calls) == 5',
+              '    assert len(result["requirements"]) == 14',
+              '    statements = [row["statement"] for row in result["requirements"]]',
+              '    assert statements[-2:] == ["Requirement 13", "Requirement 14"]',
+              '    assert statements.count("Requirement 5") == 1',
+              '    assert statements.count("Requirement 6") == 1',
+              '',
+          ])
           test = test[:test_start] + new_test + test[test_end:]
           test_path.write_text(test, encoding='utf-8')
           PY
