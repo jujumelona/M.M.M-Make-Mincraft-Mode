@@ -16,7 +16,7 @@ CUSTOM_CAPABILITY_SENTINEL = "custom"
 
 from .planner_operation import planner_operation
 from .planning_contract_ssot import SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA
-from .planning_state_contract import ROUTE_SOURCES, validate_planning_state
+from .planning_state_contract import validate_planning_state
 from .root_cause_trace import emit_root_cause
 
 _REQUIREMENT_TOOL = "submit_researched_requirements"
@@ -96,7 +96,6 @@ def _fit_context_to_budget(
     if _size() <= target_budget:
         return fitted
 
-    # Phase 1: Trim research claims
     claims = fitted.get("research_claims", [])
     while claims and _size() > target_budget:
         claims.pop()
@@ -106,7 +105,6 @@ def _fit_context_to_budget(
     if _size() <= target_budget:
         return fitted
 
-    # Phase 2: Trim resolved items
     resolved = fitted.get("resolved", [])
     while len(resolved) > 1 and _size() > target_budget:
         resolved.pop()
@@ -114,7 +112,6 @@ def _fit_context_to_budget(
     if _size() <= target_budget:
         return fitted
 
-    # Phase 3: Shorten resolution prose in remaining resolved item
     if resolved:
         res = str(resolved[0].get("resolution") or "")
         if len(res) > 200:
@@ -123,7 +120,6 @@ def _fit_context_to_budget(
     if _size() <= target_budget:
         return fitted
 
-    # Phase 4: Bounded prompt preview if context is still constrained
     if "original_prompt" in fitted and _size() > target_budget:
         orig = str(fitted["original_prompt"])
         if len(orig) > 1000:
@@ -194,19 +190,6 @@ def _resolved_context(state: Mapping[str, Any], prompt: str = "") -> dict[str, A
     return res
 
 
-def _next_id(items: Sequence[Mapping[str, Any]], key: str, prefix: str) -> str:
-    maximum = 0
-    for item in items:
-        raw = str(item.get(key) or "")
-        if not raw.startswith(prefix):
-            continue
-        try:
-            maximum = max(maximum, int(raw.removeprefix(prefix)))
-        except ValueError:
-            continue
-    return f"{prefix}{maximum + 1:03d}"
-
-
 def _rehash(state: dict[str, Any]) -> dict[str, Any]:
     from .planning_state_contract import _hash_without
 
@@ -275,8 +258,6 @@ def _normalize_requirement_rows(
     if not normalized:
         normalized = _fallback_requirement_rows(state, prompt)
 
-    # Collapse only exact semantic duplicates. Equal player-facing prose can still
-    # represent distinct capabilities or independently testable acceptance contracts.
     deduped: list[dict[str, Any]] = []
     seen: set[tuple[str, str, tuple[str, ...]]] = set()
     for row in normalized:
@@ -552,8 +533,6 @@ def compile_researched_requirements(
 
     value = deepcopy(dict(state))
     value.setdefault("decisions", [])
-    value.setdefault("unresolved", [])
-    value.setdefault("research_queue", [])
     value.setdefault("blockers", [])
     value["blockers"] = [
         item
@@ -566,54 +545,15 @@ def compile_researched_requirements(
         if not (isinstance(item, Mapping) and item.get("decision_type") == "requirement")
     ]
 
-    implementation_sources = list(ROUTE_SOURCES["implementation_research"])
     for index, row in enumerate(requirement_rows, start=1):
-        requirement_id = f"req_{index:03d}"
-        requirement = {
-            "requirement_id": requirement_id,
-            "statement": row["statement"],
-            "semantic_capability": row["semantic_capability"],
-            "acceptance": row["acceptance"],
-            "status": "implementation_research_pending",
-        }
         value["decisions"].append(
             {
                 "decision_id": f"d_{len(value['decisions']) + 1:03d}",
                 "decision_type": "requirement",
-                **deepcopy(requirement),
-            }
-        )
-        unresolved_id = _next_id(value["unresolved"], "unresolved_id", "u_")
-        research_id = _next_id(value["research_queue"], "research_id", "r_")
-        value["unresolved"].append(
-            {
-                "unresolved_id": unresolved_id,
-                "question": f"How can this requirement be implemented correctly: {row['statement']}",
-                "reason": "implementation_method",
-                "blocks": [],
-                "information_needed": (
-                    "Reusable implementation patterns, Minecraft API/source behavior, support "
-                    f"artifacts, dependencies, and verification guidance for: {row['statement']}"
-                ),
-                "resolution_route": "implementation_research",
-                "source_kinds": implementation_sources,
-                "status": "open",
-                "research_ref": research_id,
-                "requirement_ref": requirement_id,
-            }
-        )
-        value["research_queue"].append(
-            {
-                "research_id": research_id,
-                "resolves": [unresolved_id],
-                "requirement_ref": requirement_id,
-                "objective": f"Find useful implementation/reuse options for {row['statement']}",
-                "information_needed": (
-                    "Concrete implementation patterns and support artifacts without inventing APIs."
-                ),
-                "source_kinds": implementation_sources,
-                "queries": [],
-                "status": "pending",
+                "requirement_id": f"req_{index:03d}",
+                "statement": row["statement"],
+                "semantic_capability": row["semantic_capability"],
+                "acceptance": row["acceptance"],
             }
         )
 
