@@ -6,7 +6,6 @@ import json
 import os
 import re
 import shutil
-import time
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -330,75 +329,17 @@ def _install_repair_search_and_memory(repair_module: Any) -> None:
     repair_with_memory._mmm_verified_repair_memory = True
     cls.repair = repair_with_memory
 
-def _resource_class(payload_json: str) -> str:
-    try:
-        payload = json.loads(payload_json)
-    except json.JSONDecodeError:
-        return 'cpu_io'
-    value = str(payload.get('resource_class', 'cpu_io')) if isinstance(payload, dict) else 'cpu_io'
-    return value if value in {'cpu_io', 'llm', 'image_gpu', 'commit'} else 'cpu_io'
-
-def _install_balanced_work_claims(work_graph_module: Any) -> None:
-    cls = work_graph_module.DurableWorkLedger
-    current = cls.claim_ready
-    if getattr(current, '_mmm_balanced_resource_claim', False):
-        return
-
-    def claim_ready_balanced(self: Any, worker_id: str, *, stages: Sequence[str]=(), lease_seconds: int=900) -> dict[str, Any] | None:
-        if not worker_id.strip():
-            raise work_graph_module.WorkGraphError('worker_id must not be empty.')
-        if lease_seconds < 1:
-            raise work_graph_module.WorkGraphError('lease_seconds must be positive.')
-        now = time.time()
-        cpu_default = min(4, os.cpu_count() or 2)
-        capacities = {'cpu_io': _env_int('MMM_PIPELINE_CPU_WORKERS', cpu_default, maximum=32), 'llm': _env_int('MMM_PIPELINE_LLM_WORKERS', 1, maximum=4), 'image_gpu': _env_int('MMM_PIPELINE_IMAGE_WORKERS', 1, maximum=2), 'commit': 1}
-        with self._connect() as connection:
-            connection.execute('BEGIN IMMEDIATE')
-            connection.execute("\n                UPDATE tasks\n                SET state = ?, lease_owner = NULL, lease_until = NULL,\n                    error = 'expired worker lease', updated_at = ?\n                WHERE state = ? AND lease_until IS NOT NULL AND lease_until < ?\n                ", (work_graph_module.WorkState.PENDING.value, now, work_graph_module.WorkState.RUNNING.value, now))
-            running = Counter()
-            for payload_json, in connection.execute('SELECT payload_json FROM tasks WHERE state = ?', (work_graph_module.WorkState.RUNNING.value,)):
-                running[_resource_class(str(payload_json))] += 1
-            stage_sql = ''
-            params: list[Any] = [work_graph_module.WorkState.PENDING.value, work_graph_module.WorkState.SUCCEEDED.value]
-            if stages:
-                placeholders = ','.join('?' for _ in stages)
-                stage_sql = f' AND task.stage IN ({placeholders})'
-                params.extend(stages)
-            rows = connection.execute(f'\n                SELECT task.node_id, task.payload_json\n                FROM tasks AS task\n                WHERE task.state = ?\n                  AND NOT EXISTS (\n                    SELECT 1\n                    FROM edges\n                    JOIN tasks AS dependency\n                      ON dependency.node_id = edges.dependency_id\n                    WHERE edges.node_id = task.node_id\n                      AND dependency.state != ?\n                  )\n                  {stage_sql}\n                ORDER BY task.node_id\n                LIMIT 256\n                ', tuple(params)).fetchall()
-            candidates = []
-            class_priority = {'llm': 0, 'image_gpu': 1, 'cpu_io': 2, 'commit': 3}
-            for node_id, payload_json in rows:
-                resource = _resource_class(str(payload_json))
-                capacity = capacities[resource]
-                active = running[resource]
-                if active >= capacity:
-                    continue
-                utilization = active / max(1, capacity)
-                candidates.append((utilization, class_priority[resource], str(node_id), resource))
-            if not candidates:
-                connection.commit()
-                return None
-            candidates.sort()
-            _utilization, _priority, node_id, _resource = candidates[0]
-            connection.execute('\n                UPDATE tasks\n                SET state = ?, attempt = attempt + 1, lease_owner = ?,\n                    lease_until = ?, error = NULL, updated_at = ?\n                WHERE node_id = ? AND state = ?\n                ', (work_graph_module.WorkState.RUNNING.value, worker_id, now + lease_seconds, now, node_id, work_graph_module.WorkState.PENDING.value))
-            if connection.total_changes == 0:
-                connection.rollback()
-                return None
-            connection.commit()
-        return self.task(node_id)
-    claim_ready_balanced._mmm_balanced_resource_claim = True
-    cls.claim_ready = claim_ready_balanced
 
 def install(*, repair_module: Any, work_graph_module: Any) -> None:
-    """Install repair search and balanced execution without planner mutation.
+    """Install verifier-guided repair search without mutating scheduler ownership.
 
-    * repair: verifier-guided candidates, parallel JDT checks and verified memory;
-    * execution: ready work is claimed across resource lanes instead of pre-claiming
-      a queue for one scarce executor.
-
-    Existing MTP, conditional semantic review, staged commits and fail-closed quality
-    evidence remain authoritative and are intentionally not replaced here.
+    Work claiming is owned by ``scheduler_parallel_safety_contract`` through the
+    explicit ``DurableWorkLedger.claim_ready`` delegation. ``work_graph_module`` is
+    retained only for call-site compatibility while older bootstrap call sites are
+    simplified.
     """
+    del work_graph_module
     _install_repair_search_and_memory(repair_module)
-    _install_balanced_work_claims(work_graph_module)
+
+
 __all__ = ['install']
