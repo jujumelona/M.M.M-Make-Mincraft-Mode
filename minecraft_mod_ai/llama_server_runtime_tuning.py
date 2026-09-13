@@ -735,10 +735,10 @@ def _parallel_probe(
     started = time.perf_counter()
     try:
         rounds: list[list[Any]] = []
-        for probe_request in (request, _medium_prefill_request(request)):
-            with ThreadPoolExecutor(
-                max_workers=concurrency, thread_name_prefix="mmm_llama_slot_probe"
-            ) as pool:
+        with ThreadPoolExecutor(
+            max_workers=concurrency, thread_name_prefix="mmm_llama_slot_probe"
+        ) as pool:
+            for probe_request in (request, _medium_prefill_request(request)):
                 values = [
                     future.result()
                     for future in [
@@ -752,7 +752,7 @@ def _parallel_probe(
                         for _ in range(concurrency)
                     ]
                 ]
-            rounds.append(values)
+                rounds.append(values)
         elapsed = time.perf_counter() - started
         round_hashes: list[str] = []
         for values in rounds:
