@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import shlex
 import subprocess
 import threading
@@ -126,11 +127,33 @@ class _JsonRpcProcess:
                 self.messages.put(message)
 
     def _read_stderr(self) -> None:
+        from .agent_tool_runtime import _redact_text
+        from .root_cause_trace import emit_root_cause
+
         stream = self.process.stderr
         if stream is None:
             return
+        private_key_block = False
         for raw in iter(stream.readline, b""):
-            self.stderr.append(raw.decode("utf-8", errors="replace").rstrip())
+            decoded = raw.decode("utf-8", errors="replace").rstrip()
+            if private_key_block:
+                if re.search(r"-----END [^-]*PRIVATE KEY-----", decoded):
+                    private_key_block = False
+                continue
+            if re.search(r"-----BEGIN [^-]*PRIVATE KEY-----", decoded):
+                private_key_block = not bool(re.search(r"-----END [^-]*PRIVATE KEY-----", decoded))
+                line = "[REDACTED_PRIVATE_KEY]"
+            else:
+                line = _redact_text(decoded)
+            self.stderr.append(line)
+            emit_root_cause(
+                "jdt_stderr",
+                stage="jdt",
+                operation="stderr_reader",
+                gate="jdt_process_stderr",
+                result="INFO",
+                details={"pid": self.process.pid, "line": line},
+            )
 
 
 def _respond_to_server_request(

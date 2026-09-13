@@ -9,7 +9,8 @@ aggregate the failure.
 Every event is mirrored to stderr and appended to the JSONL journal. Failure and
 emergency records force an fsync and stderr flush, which also flush earlier buffered
 records, so the critical failure tail is durable without forcing a disk or pipe barrier
-for every successful hot-path event.
+for every successful hot-path event. Verifier retries, recovery and live JDT stderr
+also flush the display stream immediately without adding an fsync per log line.
 """
 
 import heapq
@@ -395,7 +396,14 @@ def emit_root_cause(
             (serialized + "\n").encode("utf-8", "backslashreplace"),
             sync=failure,
         )
-        _stderr_line(serialized, flush=failure)
+        _stderr_line(
+            serialized,
+            flush=failure or event in {
+                "mcp_verifier_transport_retry",
+                "mcp_verifier_transport_recovered",
+                "jdt_stderr",
+            },
+        )
     except BaseException as logger_exc:
         _emergency_trace(
             event=event,

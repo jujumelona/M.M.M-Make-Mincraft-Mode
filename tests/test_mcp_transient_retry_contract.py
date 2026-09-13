@@ -37,7 +37,7 @@ def _installed_fake_pool():
     return Pool
 
 
-def test_transient_java_diagnostics_failure_retries_and_recovers(monkeypatch) -> None:
+def test_transient_java_diagnostics_failure_retries_and_recovers(monkeypatch, capsys) -> None:
     pool_cls = _installed_fake_pool()
     attempts = 0
 
@@ -63,6 +63,9 @@ def test_transient_java_diagnostics_failure_retries_and_recovers(monkeypatch) ->
 
     assert anyio.run(run) == {"diagnostics": []}
     assert attempts == 2
+    output = capsys.readouterr().err
+    assert '"event":"mcp_verifier_transport_retry"' in output
+    assert '"event":"mcp_verifier_transport_recovered"' in output
 
 
 def test_deterministic_verifier_error_is_not_retried(monkeypatch) -> None:

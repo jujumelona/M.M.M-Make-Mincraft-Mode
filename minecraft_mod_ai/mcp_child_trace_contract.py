@@ -36,10 +36,9 @@ def _subprocess_stderr_target() -> Iterator[tuple[Any, str, dict[str, str]]]:
 
     IPython/Colab replace ``sys.stderr`` with an OutStream whose ``fileno()`` raises
     ``io.UnsupportedOperation``. Passing that object to MCP's stdio client therefore
-    fails before the child process exists. Prefer the active stderr when it is a real
-    fd-backed stream, then the interpreter's original stderr, and finally a duplicate
-    of process fd 2. The fd-2 duplicate keeps child/JDT diagnostics parent-visible and
-    avoids the old TemporaryFile behavior that swallowed the first root cause.
+    fails before the child process exists. Relay a pipe into the active notebook
+    stream so child logs reach the cell, not just the kernel's OS stderr. Ordinary
+    terminals keep direct fd-backed output; missing Python streams use fd 2.
     """
 
     probe_failures: dict[str, str] = {}
@@ -53,6 +52,10 @@ def _subprocess_stderr_target() -> Iterator[tuple[Any, str, dict[str, str]]]:
             yield stream, route, probe_failures
             return
         probe_failures[route] = failure
+        if route == "parent_stderr" and callable(getattr(stream, "write", None)):
+            with _notebook_stderr_relay(stream) as target:
+                yield target, "notebook_stderr_relay", probe_failures
+            return
 
     try:
         duplicate_fd = os.dup(2)
@@ -70,6 +73,40 @@ def _subprocess_stderr_target() -> Iterator[tuple[Any, str, dict[str, str]]]:
         yield fallback, "parent_fd2_duplicate", probe_failures
     finally:
         fallback.close()
+
+
+@contextmanager
+def _notebook_stderr_relay(destination: Any) -> Iterator[Any]:
+    """Give Popen a real fd and continuously drain it into the captured cell stream."""
+    read_fd, write_fd = os.pipe()
+    reader = os.fdopen(read_fd, "r", encoding="utf-8", errors="replace")
+    writer = os.fdopen(write_fd, "w", encoding="utf-8", buffering=1)
+
+    def forward() -> None:
+        with reader:
+            while chunk := reader.readline(8192):
+                try:
+                    destination.write(chunk)
+                    destination.flush()
+                except Exception:  # noqa: BLE001, S112 - keep draining after a closed notebook sink
+                    # A closed notebook output must not block a child's stderr pipe.
+                    # Continue draining; the child also keeps a durable trace journal.
+                    continue
+
+    relay = threading.Thread(target=forward, name="mmm-notebook-stderr", daemon=True)
+    try:
+        relay.start()
+    except BaseException:
+        writer.close()
+        reader.close()
+        raise
+    try:
+        yield writer
+    finally:
+        writer.close()
+        # Called after MCP teardown. EOF drains the final log lines; a descendant
+        # holding an inherited fd must not hang the host's exception cleanup.
+        relay.join(timeout=2.0)
 
 
 @asynccontextmanager
