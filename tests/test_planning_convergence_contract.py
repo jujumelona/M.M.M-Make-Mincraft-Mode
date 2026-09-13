@@ -6,7 +6,6 @@ import pytest
 
 import minecraft_mod_ai.planning_convergence_contract as convergence
 from minecraft_mod_ai.planning_state_contract import (
-    ROUTE_SOURCES,
     _build_host_state,
     _hash_without,
     validate_planning_state,
@@ -157,7 +156,7 @@ def test_terminal_research_status_cannot_move_back_to_pending():
         convergence.assert_research_transition_monotone(before, after)
 
 
-def test_requirement_boundary_freezes_exactly_one_blocking_implementation_obligation_per_requirement(monkeypatch):
+def test_requirement_boundary_freezes_requirements_without_creating_research_obligations(monkeypatch):
     state = _base_state()
     state["unresolved"][0]["status"] = "resolved"
     state["research_queue"][0]["status"] = "complete"
@@ -180,6 +179,8 @@ def test_requirement_boundary_freezes_exactly_one_blocking_implementation_obliga
     )
     _rehash(state)
     validate_planning_state(state, prompt=PROMPT)
+    unresolved_before = deepcopy(state["unresolved"])
+    research_before = deepcopy(state["research_queue"])
 
     def fake_compile(router, prompt, original):
         value = deepcopy(original)
@@ -191,33 +192,6 @@ def test_requirement_boundary_freezes_exactly_one_blocking_implementation_obliga
                 "statement": "Implement the behavior.",
                 "semantic_capability": "custom",
                 "acceptance": ["Behavior is observable."],
-                "status": "implementation_research_pending",
-            }
-        )
-        value["unresolved"].append(
-            {
-                "unresolved_id": "u_002",
-                "question": "How is req_001 implemented?",
-                "reason": "implementation_method",
-                "blocks": [],
-                "information_needed": "Concrete implementation evidence.",
-                "resolution_route": "implementation_research",
-                "source_kinds": list(ROUTE_SOURCES["implementation_research"]),
-                "status": "open",
-                "research_ref": "r_002",
-                "requirement_ref": "req_001",
-            }
-        )
-        value["research_queue"].append(
-            {
-                "research_id": "r_002",
-                "resolves": ["u_002"],
-                "requirement_ref": "req_001",
-                "objective": "Find implementation evidence.",
-                "information_needed": "Concrete implementation evidence.",
-                "source_kinds": list(ROUTE_SOURCES["implementation_research"]),
-                "queries": [],
-                "status": "pending",
             }
         )
         return _rehash(value)
@@ -231,6 +205,5 @@ def test_requirement_boundary_freezes_exactly_one_blocking_implementation_obliga
         if row.get("decision_type") == "requirement"
     ]
     assert requirements == ["req_001"]
-    assert result["unresolved"][-1]["requirement_ref"] == "req_001"
-    assert result["unresolved"][-1]["blocks"] == ["implementation_plan"]
-    assert result["research_queue"][-1]["requirement_ref"] == "req_001"
+    assert result["unresolved"] == unresolved_before
+    assert result["research_queue"] == research_before
