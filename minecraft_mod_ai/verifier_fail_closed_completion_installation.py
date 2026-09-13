@@ -103,28 +103,6 @@ def _tool_call_arguments(call: Mapping[str, Any]) -> Mapping[str, Any] | None:
     return parsed if isinstance(parsed, Mapping) else None
 
 
-def _mutation_call_arguments(
-    messages: Sequence[Mapping[str, Any]],
-) -> dict[str, tuple[str, Mapping[str, Any]]]:
-    calls: dict[str, tuple[str, Mapping[str, Any]]] = {}
-    for message in messages:
-        if str(message.get("role") or "").strip().casefold() != "assistant":
-            continue
-        raw_calls = message.get("tool_calls")
-        if not isinstance(raw_calls, Sequence) or isinstance(raw_calls, (str, bytes, bytearray)):
-            continue
-        for call in raw_calls:
-            if not isinstance(call, Mapping):
-                continue
-            call_id = str(call.get("id") or "").strip()
-            function = call.get("function")
-            name = str(function.get("name") or "").strip() if isinstance(function, Mapping) else ""
-            arguments = _tool_call_arguments(call)
-            if call_id and name and arguments is not None:
-                calls[call_id] = (name, arguments)
-    return calls
-
-
 def _normalized_path(value: Any) -> str:
     path = str(value or "").strip().replace("\\", "/")
     while path.startswith("./"):
@@ -133,14 +111,35 @@ def _normalized_path(value: Any) -> str:
 
 
 def _applied_created_paths(messages: Sequence[Mapping[str, Any]]) -> frozenset[str]:
-    """Return paths whose retained create action has a receipt-proven byte diff."""
-    calls = _mutation_call_arguments(messages)
+    """Return paths whose chronological create action has a receipt-proven byte diff.
+
+    Some task-bound adapters intentionally reuse a stable tool-call id across turns. The
+    matching must therefore be chronological: each tool observation belongs to the most
+    recent preceding assistant call with that id, not to the final call stored under the
+    id after scanning all history.
+    """
+    active_calls: dict[str, tuple[str, Mapping[str, Any]]] = {}
     created: set[str] = set()
     for message in messages:
-        if str(message.get("role") or "").strip().casefold() != "tool":
+        role = str(message.get("role") or "").strip().casefold()
+        if role == "assistant":
+            raw_calls = message.get("tool_calls")
+            if not isinstance(raw_calls, Sequence) or isinstance(raw_calls, (str, bytes, bytearray)):
+                continue
+            for call in raw_calls:
+                if not isinstance(call, Mapping):
+                    continue
+                call_id = str(call.get("id") or "").strip()
+                function = call.get("function")
+                name = str(function.get("name") or "").strip() if isinstance(function, Mapping) else ""
+                arguments = _tool_call_arguments(call)
+                if call_id and name and arguments is not None:
+                    active_calls[call_id] = (name, arguments)
+            continue
+        if role != "tool":
             continue
         call_id = str(message.get("tool_call_id") or "").strip()
-        call = calls.get(call_id)
+        call = active_calls.get(call_id)
         if call is None:
             continue
         name, arguments = call
@@ -203,12 +202,12 @@ def _repair_guidance(
 
 
 def _guidance_already_present(messages: Sequence[Mapping[str, Any]]) -> bool:
-    for message in reversed(tuple(messages)):
-        if str(message.get("role") or "").strip().casefold() != "system":
-            continue
-        content = message.get("content")
-        return isinstance(content, str) and content.startswith(_REPAIR_GUIDANCE_MARKER)
-    return False
+    return any(
+        str(message.get("role") or "").strip().casefold() == "system"
+        and isinstance(message.get("content"), str)
+        and str(message.get("content")).startswith(_REPAIR_GUIDANCE_MARKER)
+        for message in reversed(tuple(messages))
+    )
 
 
 def _turn_create_conflict(turn: Any, applied_created_paths: frozenset[str]) -> str | None:
