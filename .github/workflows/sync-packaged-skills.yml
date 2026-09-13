@@ -1,4 +1,4 @@
-name: Sync packaged skills
+name: Validate packaged skills sync
 
 on:
   push:
@@ -6,22 +6,29 @@ on:
     paths:
       - "skills/**/SKILL.md"
       - "tools/package_skills.py"
+      - "minecraft_mod_ai/packaged_skills.json"
+      - "plugins/mmm-minecraft-mod-ai/skills/**/SKILL.md"
+      - ".github/workflows/sync-packaged-skills.yml"
+  pull_request:
+    paths:
+      - "skills/**/SKILL.md"
+      - "tools/package_skills.py"
+      - "minecraft_mod_ai/packaged_skills.json"
+      - "plugins/mmm-minecraft-mod-ai/skills/**/SKILL.md"
       - ".github/workflows/sync-packaged-skills.yml"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: sync-packaged-skills-main
+  group: validate-packaged-skills-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  sync:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 2
 
       - uses: actions/setup-python@v6
         with:
@@ -34,15 +41,13 @@ jobs:
       - name: Regenerate packaged and plugin Skills
         run: python tools/package_skills.py
 
-      - name: Commit synchronized Skill artifacts
+      - name: Verify generated Skill artifacts are committed
         shell: bash
         run: |
-          git add minecraft_mod_ai/packaged_skills.json plugins/mmm-minecraft-mod-ai/skills/*/SKILL.md
-          if git diff --cached --quiet; then
-            echo "Skill artifacts are already synchronized."
-            exit 0
+          if ! git diff --exit-code -- \
+            minecraft_mod_ai/packaged_skills.json \
+            plugins/mmm-minecraft-mod-ai/skills/*/SKILL.md; then
+            echo "Packaged/plugin Skill artifacts are out of sync."
+            echo "Run 'python tools/package_skills.py' and commit the generated files."
+            exit 1
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "chore: synchronize packaged skill catalog"
-          git push origin HEAD:main
