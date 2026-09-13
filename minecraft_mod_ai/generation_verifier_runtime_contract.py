@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 _TARGET_MARKER = "_mmm_generation_verifier_targeted_turn"
+_FALLBACK_MARKER = "_mmm_generation_compile_only_fallback"
 _CLOSE_MARKER = "_mmm_generation_verifier_close"
 _MUTATION_TOOLS = frozenset({"apply_source_edit", "apply_source_patch"})
 _JAVA_SUFFIX = ".java"
@@ -91,8 +92,30 @@ def latest_mutated_source_files(messages: Sequence[Mapping[str, Any]]) -> tuple[
     return ()
 
 
+class _CompileOnlyFallbackAdapter:
+    """Preserve the old fallback callable contract while replacing full build with compileJava."""
+
+    def __init__(self, cache: Path) -> None:
+        from .generation_gradle_compile_fallback import GradleCompileVerifier
+
+        self.verifier = GradleCompileVerifier(cache, command_timeout_seconds=1200)
+
+    def build(self, project_root: Path, *, run_gametest: bool) -> Any:
+        from .runner import BuildRunnerError
+
+        if run_gametest:
+            raise BuildRunnerError("Generation compile fallback must not run GameTest.")
+        report = self.verifier.verify(project_root)
+        if not report.available:
+            raise BuildRunnerError(
+                report.error
+                or "Gradle compileJava fallback ended without trustworthy source diagnostics."
+            )
+        return report
+
+
 def install(*, agent_tool_runtime_module: Any, verifier_module: Any) -> None:
-    """Target verifier work to changed Java files and own JDT service cleanup."""
+    """Target verifier work, compile-only fallback, and JDT lifecycle to the host runtime."""
 
     current_synth = verifier_module.synthesized_verifier_turn
     if not getattr(current_synth, _TARGET_MARKER, False):
@@ -130,6 +153,39 @@ def install(*, agent_tool_runtime_module: Any, verifier_module: Any) -> None:
         setattr(synthesized_verifier_turn, _TARGET_MARKER, True)
         synthesized_verifier_turn.__wrapped__ = current_synth
         verifier_module.synthesized_verifier_turn = synthesized_verifier_turn
+
+    current_fallback = verifier_module._run_gradle_fallback
+    if not getattr(current_fallback, _FALLBACK_MARKER, False):
+
+        @wraps(current_fallback)
+        def run_compile_only_fallback(
+            runtime: Any,
+            project_root: Path,
+            jdt_error: BaseException,
+            *,
+            runtime_module: Any,
+            gradle_runner_factory: Any | None,
+        ) -> dict[str, Any]:
+            # Test/diagnostic injection remains authoritative. Production defaults to
+            # the compile-only adapter so unrelated packaging/resource work cannot
+            # masquerade as Java source verification.
+            injected = gradle_runner_factory is not None
+            factory = gradle_runner_factory or (lambda cache: _CompileOnlyFallbackAdapter(cache))
+            result = current_fallback(
+                runtime,
+                project_root,
+                jdt_error,
+                runtime_module=runtime_module,
+                gradle_runner_factory=factory,
+            )
+            if not injected and result.get("verification_backend") == "gradle_build_fallback":
+                result = dict(result)
+                result["verification_backend"] = "gradle_compile_fallback"
+            return result
+
+        setattr(run_compile_only_fallback, _FALLBACK_MARKER, True)
+        run_compile_only_fallback.__wrapped__ = current_fallback
+        verifier_module._run_gradle_fallback = run_compile_only_fallback
 
     runtime_cls = agent_tool_runtime_module.AgentToolRuntime
     current_close = runtime_cls.close
