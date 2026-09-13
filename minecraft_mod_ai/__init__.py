@@ -15,6 +15,9 @@ from .generation_accuracy_contract import install_outer as install_generation_ac
 from .hardware_concurrency_installation import install as install_hardware_concurrency
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
+from .semantic_tool_context_alignment_installation import (
+    install as install_semantic_tool_context_alignment,
+)
 from .source_observation_budget_installation import install as install_source_observation_budget
 from .source_set_boundary_installation import install as install_source_set_boundary
 from .task_template_catalog import RUNTIME_TEMPLATE_ROOT
@@ -50,6 +53,16 @@ assert_generation_accuracy_inner(_model_router)
 # termination rule before runtime_finalization installs the durable feedback wrapper.
 install_execution_feedback_semantic_convergence(_execution_feedback_replan_contract)
 finalize_runtime()
+# Semantic source-window admission must see the exact mandatory request envelope after
+# runtime finalization has composed the model-router and context-budget contracts.
+from . import model_context_budget as _model_context_budget
+from . import planning_semantic_research as _planning_semantic_research
+
+install_semantic_tool_context_alignment(
+    semantic_module=_planning_semantic_research,
+    model_router_module=_model_router,
+    context_module=_model_context_budget,
+)
 # The outer normalizer runs after atomic aggregation so multi-obligation text summaries
 # retain the fixed {"summary": ...} contract consumed by CustomModuleGenerator.
 install_generation_accuracy_outer(_model_router)
