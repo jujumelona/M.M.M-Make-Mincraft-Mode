@@ -587,6 +587,15 @@ def install(loop_module: Any) -> None:
         context = original_extract(payload)
         if context is None:
             return None
+        # ``host_reserved`` is an internal existence classification. The public
+        # extraction contract has always described a new approved target as a fresh
+        # owned anchor; keep that stable while retaining the stricter direct helper.
+        if (
+            bool(getattr(context, "is_new_file", False))
+            and str(getattr(context, "evidence_source", "") or "")
+            == "evidence_host_reserved_owned_anchor"
+        ):
+            context = replace(context, evidence_source="evidence_fresh_owned_anchor")
         writable, creatable = _owned_anchor_sets(payload, loop_module)
         target = loop_module._canonical_mutation_path(context.target_path)
         pinned = bool(

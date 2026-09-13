@@ -123,7 +123,12 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
             module_node[module.module_id] = node_id
             for anchor in _exclusive_anchor_keys(module):
                 exclusive_anchor_node[anchor] = node_id
-    for index, assets in enumerate(_chunks(proposal.assets, max(1, policy.java_shard_size))):
+    selected_assets = tuple(
+        asset for asset in proposal.assets
+        if not str(getattr(asset, 'owner_module_id', '') or '')
+        or str(getattr(asset, 'owner_module_id', '') or '') in selected_ids
+    )
+    for index, assets in enumerate(_chunks(selected_assets, max(1, policy.java_shard_size))):
         node_id = f'generate-assets-{index:08d}'
         dependencies = {'prepare-project'}
         for asset in assets:

@@ -28,14 +28,19 @@ def _approved_proposal(module_count: int = 33):
 
 
 def test_every_advertised_collection_section_is_reachable(tmp_path: Path) -> None:
+    proposal = _approved_proposal(9)
     index = proposal_store.write_sharded_complete_proposal(
-        _approved_proposal(9),
+        proposal,
         tmp_path / "complete-proposal.json",
         shard_size=2,
         part_size_bytes=16 * 1024,
     )
 
-    expected = {"modules": 9, "assets": 0, "acceptance_tests": 1}
+    expected = {
+        "modules": len(proposal.modules),
+        "assets": len(proposal.assets),
+        "acceptance_tests": len(proposal.acceptance_tests),
+    }
     for section, total in expected.items():
         page = proposal_store.read_sharded_complete_proposal_section(
             index, section, limit=2

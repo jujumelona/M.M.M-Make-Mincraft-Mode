@@ -64,6 +64,20 @@ class VersionedResearchCodeContext(ResearchCodeContext):
             item.metrics["current_project_authority"] = 1.0
             item.bestfit_score = max(item.bestfit_score, 0.80)
 
+        # Current-project source is authoritative. External reference repositories are a
+        # fallback lane, not a mandatory hot-path dependency. If the local project already
+        # produced code-bearing examples for this query, do not incur network resolution
+        # latency or let external evidence perturb a fully grounded implementation turn.
+        if local:
+            self.rounds.append(
+                {
+                    "trigger": "versioned_reference_skipped_local_authority",
+                    "query_sha256": _sha(query),
+                    "local_evidence_count": len(local),
+                }
+            )
+            return local
+
         if self._external_reference_queries >= self._external_reference_query_budget:
             return local
         self._external_reference_queries += 1

@@ -64,6 +64,7 @@ def test_complete_module_and_asset_payloads_are_bound_to_current_content() -> No
     asset = {
         'asset_id': 'weather_compass_texture',
         'kind': 'item_texture',
+        'render_kind': 'item.generated',
         'prompt': 'weather compass icon',
         'target_path': 'assets/example/textures/item/weather_compass.png',
         'width': 16,

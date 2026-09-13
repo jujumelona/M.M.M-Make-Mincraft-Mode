@@ -71,7 +71,10 @@ def test_build_hot_path_is_incremental_and_skips_current_wrapper(
     runner = GradleRunner(cache)
     monkeypatch.setattr(runner, "_ensure_gradle", lambda _version, _sha: gradle)
     monkeypatch.setattr(runner, "_wrapper_is_current", lambda *_args: True)
-    monkeypatch.setattr(runner, "_find_release_jar", lambda _root: str(project / "build/libs/mod.jar"))
+    release_jar = project / "build/libs/mod.jar"
+    release_jar.parent.mkdir(parents=True, exist_ok=True)
+    release_jar.write_bytes(b"jar")
+    monkeypatch.setattr(runner, "_find_release_jar", lambda _root: str(release_jar))
 
     calls: list[tuple[str, tuple[str, ...]]] = []
 
@@ -91,5 +94,8 @@ def test_build_hot_path_is_incremental_and_skips_current_wrapper(
     report = runner._build_locked(project, run_gametest=False)
 
     assert report.status == "PASS"
-    assert calls == [("build", ("--no-daemon", "build", "--stacktrace"))]
+    assert calls[-1][0] == "incremental_build"
+    assert "build" in calls[-1][1]
+    assert "clean" not in calls[-1][1]
+    assert "--build-cache" in calls[-1][1]
     assert "clean" not in calls[0][1]

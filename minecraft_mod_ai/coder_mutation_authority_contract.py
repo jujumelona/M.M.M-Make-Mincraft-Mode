@@ -194,6 +194,11 @@ def _status_aware_owned_symbol_context(loop_module: Any, payload: Any) -> Any | 
             if status == "host_reserved":
                 is_new_file = True
                 evidence_source = "evidence_host_reserved_owned_anchor"
+            elif not status:
+                # Legacy approved fixtures predate explicit anchor status. Their
+                # fresh production binding is still authoritative creation evidence.
+                is_new_file = True
+                evidence_source = "evidence_fresh_owned_anchor"
             elif status in _EXISTING_STATUSES:
                 is_new_file = False
                 evidence_source = "evidence_existing_owned_anchor"

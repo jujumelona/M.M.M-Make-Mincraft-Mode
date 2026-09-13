@@ -19,6 +19,8 @@ from minecraft_mod_ai.complete_spec import (
 from minecraft_mod_ai.geckolib_generator import generate_geckolib_entity_assets
 from minecraft_mod_ai.generator import FabricProjectGenerator
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
+from minecraft_mod_ai.model_router import ModelRouter
+from minecraft_mod_ai.resource_asset_production import attach_generation_plan
 from minecraft_mod_ai.planner import HeuristicPlanner
 from minecraft_mod_ai.production_contract import compile_production_contract
 from minecraft_mod_ai.project_edit import inspect_fabric_project
@@ -28,6 +30,49 @@ from minecraft_mod_ai.source_patch import (
     sha256_file,
 )
 from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec, SpecValidationError
+
+
+class _DeterministicImageRouter(ModelRouter):
+    def generate_image(
+        self,
+        role: str,
+        *,
+        prompt: str,
+        output_path: str | Path,
+        seed: int,
+        width: int,
+        height: int,
+        **_kwargs,
+    ) -> Path:
+        assert role == "image_generator"
+        from PIL import Image, ImageDraw
+
+        target = Path(output_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        image = Image.new("RGBA", (width, height), (24, 24, 24, 255))
+        try:
+            draw = ImageDraw.Draw(image)
+            inset_x = max(1, width // 4)
+            inset_y = max(1, height // 4)
+            draw.rectangle(
+                (inset_x, inset_y, width - inset_x - 1, height - inset_y - 1),
+                fill=(192, 192, 192, 255),
+            )
+            image.save(target, format="PNG", optimize=False)
+        finally:
+            image.close()
+        return target
+
+
+def _source_only_orchestrator(tmp_path: Path) -> CompleteProductionOrchestrator:
+    return CompleteProductionOrchestrator(
+        workspace_root=tmp_path / "out",
+        router_factory=_DeterministicImageRouter,
+    )
+
+
+def _bind_asset_plan(orchestrator: CompleteProductionOrchestrator, proposal: CompleteProposal) -> CompleteProposal:
+    return attach_generation_plan(orchestrator.router_factory(), proposal)
 
 
 def _spec() -> ModSpec:
@@ -88,8 +133,10 @@ def test_geckolib_generator_accumulates_real_entity_bindings(tmp_path: Path) -> 
 
 def test_complete_orchestrator_source_only_connects_all_generators(tmp_path: Path) -> None:
     base = MinecraftModPipeline(planner=HeuristicPlanner()).plan('Create one frost item')
-    proposal = complete_proposal_from_parts(requested_prompt='weapon, quest, animated entity and menu', base_proposal=base, game_design={'title': 'Integrated'}, modules=(ProductionModule('frost_blade', 'weapon', {'attack_damage': 6}), ProductionModule('first_quest', 'quest', {}, ('frost_blade',)), ProductionModule('frost_guard', 'entity', {'max_health': 60, 'attack_damage': 8, 'movement_speed': 0.27, 'follow_range': 40, 'archetype': 'biped', 'behavior': 'hostile_melee', 'entity_width': 0.8, 'entity_height': 2.0, 'spawn_group': 'monster', 'main_color': '#5ba6d8'}), ProductionModule('status_menu', 'gui', {'template': 'read_only_menu'})), acceptance_tests=('all generated systems are present',))
-    result = CompleteProductionOrchestrator(workspace_root=tmp_path / 'out').execute(proposal, approval_hash=proposal.calculate_hash(), run_name='integrated', options=CompleteExecutionOptions(source_only=True, run_jdt=False, run_blockbench=False, run_runtime=False, run_client=False, run_mineflayer=False, run_visual_review=False))
+    proposal = complete_proposal_from_parts(requested_prompt='weapon, quest, animated entity and menu', base_proposal=base, game_design={'title': 'Integrated'}, modules=(ProductionModule('frost_blade', 'weapon', {'display_name': 'Frost Blade', 'main_color': '#5ba6d8', 'attack_damage': 6, 'attack_speed': -2.4}), ProductionModule('first_quest', 'quest', {}, ('frost_blade',)), ProductionModule('frost_guard', 'entity', {'max_health': 60, 'attack_damage': 8, 'movement_speed': 0.27, 'follow_range': 40, 'archetype': 'biped', 'behavior': 'hostile_melee', 'entity_width': 0.8, 'entity_height': 2.0, 'spawn_group': 'monster', 'main_color': '#5ba6d8'}), ProductionModule('status_menu', 'gui', {'template': 'read_only_menu'})), acceptance_tests=('all generated systems are present',))
+    orchestrator = _source_only_orchestrator(tmp_path)
+    proposal = _bind_asset_plan(orchestrator, proposal)
+    result = orchestrator.execute(proposal, approval_hash=proposal.calculate_hash(), run_name='integrated', options=CompleteExecutionOptions(source_only=True, run_jdt=False, run_blockbench=False, run_runtime=False, run_client=False, run_mineflayer=False, run_visual_review=False))
     assert result.status == 'SOURCE_READY'
     project = Path(result.project_root)
     package_path = Path(*base.spec.package_name.split('.'))
@@ -102,11 +149,13 @@ def test_complete_orchestrator_source_only_connects_all_generators(tmp_path: Pat
 
 def test_v2_source_only_persists_fail_closed_quality_convergence(tmp_path: Path) -> None:
     base = MinecraftModPipeline(planner=HeuristicPlanner()).plan('Create one frost item')
-    modules = (ProductionModule('frost_item', 'item'),)
+    modules = (ProductionModule('frost_item', 'item', {'display_name': 'Frost Item', 'main_color': '#5ba6d8'}),)
     game_design = {'title': 'Evidence-bound source build'}
     compiled = compile_production_contract(requested_prompt='Create one frost item', game_design=game_design, modules=modules, acceptance_tests=('the requested item exists',))
     proposal = complete_proposal_from_parts(requested_prompt='Create one frost item', base_proposal=base, game_design={**game_design, '_production_contract': compiled.contract}, modules=modules, acceptance_tests=compiled.acceptance_tests)
-    result = CompleteProductionOrchestrator(workspace_root=tmp_path / 'out').execute(proposal, approval_hash=proposal.calculate_hash(), run_name='quality-source', options=CompleteExecutionOptions(source_only=True, run_jdt=False, run_blockbench=False, run_runtime=False, run_client=False, run_mineflayer=False, run_visual_review=False))
+    orchestrator = _source_only_orchestrator(tmp_path)
+    proposal = _bind_asset_plan(orchestrator, proposal)
+    result = orchestrator.execute(proposal, approval_hash=proposal.calculate_hash(), run_name='quality-source', options=CompleteExecutionOptions(source_only=True, run_jdt=False, run_blockbench=False, run_runtime=False, run_client=False, run_mineflayer=False, run_visual_review=False))
     assert result.status == 'SOURCE_READY'
     assert result.release_ready is False
     assert result.quality_report is not None

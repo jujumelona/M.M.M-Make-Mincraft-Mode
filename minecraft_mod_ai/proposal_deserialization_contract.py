@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import fields
 from enum import Enum
 from functools import wraps
+import re
 from typing import Any
 
 from .spec import PlatformLock
@@ -54,6 +55,17 @@ def _string_list(
         )
     return result
 
+
+
+
+_CANONICAL_MODULE_ID_RE = re.compile(r"^[a-z0-9]+(?:_[a-z0-9]+)*$")
+
+
+def _canonical_module_id(value: Any, field: str, error_type: type[Exception]) -> str:
+    raw = _require_string(value, field, error_type)
+    if not _CANONICAL_MODULE_ID_RE.fullmatch(raw):
+        raise error_type(f"{field} must already be lowercase snake_case.")
+    return raw
 
 def _validate_platform_json(platform: dict[str, Any], error_type: type[Exception]) -> None:
     typed_fields = {'resource_pack_format', 'deterministic_module_kinds'}
@@ -206,6 +218,13 @@ def install_proposal_deserialization_contracts(
         error = spec_validation_error
         raw = _require_dict(data, 'proposal', error)
         unknown = sorted(set(raw) - cls._TOP_LEVEL_KEYS)
+        provenance_fields = ("evidence_snapshot_hash", "capability_manifest_hash")
+        missing_provenance = [field for field in provenance_fields if field not in raw]
+        if missing_provenance:
+            raise error(
+                "Proposal is missing authoritative provenance receipts: "
+                + ", ".join(missing_provenance)
+            )
         missing = sorted(cls._TOP_LEVEL_KEYS - cls._BACKWARD_COMPATIBLE_KEYS - set(raw))
         if unknown:
             raise error(f'Unknown proposal fields: {unknown}')
@@ -282,11 +301,11 @@ def install_proposal_deserialization_contracts(
             ),
             acceptance_tests=tuple(_string_list(raw['acceptance_tests'], 'acceptance_tests', error)),
             evidence_sources=evidence_sources,
-            evidence_snapshot_hash=raw.get(
-                'evidence_snapshot_hash', evidence_snapshot_hash(evidence_sources)
+            evidence_snapshot_hash=_require_string(
+                raw['evidence_snapshot_hash'], 'evidence_snapshot_hash', error
             ),
-            capability_manifest_hash=raw.get(
-                'capability_manifest_hash', capability_manifest_hash()
+            capability_manifest_hash=_require_string(
+                raw['capability_manifest_hash'], 'capability_manifest_hash', error
             ),
             imported_source_snapshot_hash=raw.get('imported_source_snapshot_hash', ''),
             risk_approvals=tuple(_string_list(raw.get('risk_approvals', []), 'risk_approvals', error)),
@@ -304,13 +323,20 @@ def install_proposal_deserialization_contracts(
         try:
             modules = tuple(
                 production_module_cls(
-                    module_id=item['module_id'],
+                    module_id=_canonical_module_id(item['module_id'], f'modules[{index}].module_id', error),
                     kind=item['kind'],
                     config=dict(item.get('config', {})),
-                    depends_on=tuple(item.get('depends_on', ())),
-                    required_gates=tuple(item.get('required_gates', ())),
+                    depends_on=tuple(
+                        _canonical_module_id(dep, f'modules[{index}].depends_on[{dep_index}]', error)
+                        for dep_index, dep in enumerate(
+                            _string_list(item.get('depends_on', []), f'modules[{index}].depends_on', error)
+                        )
+                    ),
+                    required_gates=tuple(
+                        _string_list(item.get('required_gates', []), f'modules[{index}].required_gates', error)
+                    ),
                 )
-                for item in _require_list(raw['modules'], 'modules', error)
+                for index, item in enumerate(_require_list(raw['modules'], 'modules', error))
             )
             assets = tuple(
                 asset_request_cls(**item)

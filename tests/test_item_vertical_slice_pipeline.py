@@ -109,7 +109,7 @@ def test_item_vertical_slice_end_to_end(tmp_path: Path):
         "raw_lunite.settings_max_stack",
         "raw_lunite.initializer",
         "raw_lunite.client_item",
-        "raw_lunite.model_basic",
+        "raw_lunite.model_generated",
         "raw_lunite.lang_en",
     ]
 

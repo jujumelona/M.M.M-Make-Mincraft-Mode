@@ -22,6 +22,17 @@ class ExpansionGraphRouter:
         context = json.loads(messages[-1]["content"])
         if tool_name == "submit_one_design_content_entity_count":
             return {"count": len(self.nodes)}
+        if tool_name == "submit_one_design_content_relation_count":
+            selected = [
+                edge for edge in self.edges
+                if edge["source_id"] == context.get("source_id")
+                and edge["target_id"] == context.get("target_id")
+            ]
+            return {"count": len(selected)}
+        if tool_name == "submit_design_decision_count":
+            return {"count": 0, "blocked_reason": ""}
+        if tool_name == "submit_design_research_fact_count":
+            return {"count": 0, "blocked_reason": ""}
         if tool_name == "submit_one_design_continue_record":
             target = str(context.get("target_template") or "")
             return {"required": target == "design/research_fact" and not context.get("accepted_record_ids")}
@@ -39,7 +50,11 @@ class ExpansionGraphRouter:
         if normalized_tool == "submit_design_content_entity":
             rows = self.nodes
         elif normalized_tool == "submit_design_content_relation":
-            rows = self.edges
+            rows = [
+                edge for edge in self.edges
+                if edge["source_id"] == context.get("source_id")
+                and edge["target_id"] == context.get("target_id")
+            ]
         elif normalized_tool == "submit_design_content_capability":
             entity = context.get("entity")
             eid = entity["entity_id"] if isinstance(entity, dict) else str(context.get("module_id") or "")
@@ -140,6 +155,8 @@ class ExpansionGraphRouter:
                 index = len(accepted)
             if not 0 <= index < len(rows):
                 raise AssertionError(f"single record index out of range for {normalized_tool}: {index}")
+            if normalized_tool == "submit_design_content_relation":
+                return {"relation_type": rows[index]["relation_type"]}
             return deepcopy(rows[index])
         if len(accepted) < len(rows):
             return {
@@ -181,10 +198,9 @@ def test_entity_exists_lowering_and_asset_mold():
     assert len(design["assets"]) == 1
     asset = design["assets"][0]
     assert asset.kind == "entity"
-    assert asset.width == 64
-    assert asset.height == 64
-    assert "mob texture map" in asset.prompt
-    assert "#5B2A86" in asset.prompt
+    assert asset.render_kind == "entity.fixed_uv"
+    assert asset.subject_id == "space_boss"
+    assert asset.visual_spec["palette"]["primary"] == "#5B2A86"
 
 
 def test_gui_panel_lowering_and_asset_mold():
@@ -206,9 +222,9 @@ def test_gui_panel_lowering_and_asset_mold():
 
     asset = design["assets"][0]
     assert asset.kind == "gui"
-    assert asset.width == 256
-    assert asset.height == 256
-    assert "container interface panel" in asset.prompt
+    assert asset.render_kind == "gui.sprite"
+    assert asset.subject_id == "fusion_gui"
+    assert asset.visual_description
 
 
 def test_machine_and_network_capabilities():

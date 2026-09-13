@@ -15,10 +15,7 @@ from typing import Any
 CUSTOM_CAPABILITY_SENTINEL = "custom"
 
 from .planner_operation import planner_operation
-from .planning_contract_ssot import (
-    REQUIREMENT_COVERAGE_SCHEMA,
-    SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA,
-)
+from .planning_contract_ssot import SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA
 from .planning_state_contract import ROUTE_SOURCES, validate_planning_state
 from .root_cause_trace import emit_root_cause
 
@@ -336,7 +333,14 @@ def _preserve_blocked_state(state: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], budget: int) -> Any:
-    """Bound each model response, not the total number of authored behaviors."""
+    """Page requirements until the semantic frontier stops advancing.
+
+    A full page only means the response envelope was filled, so it requests another
+    page. A continuation page that re-enters an already accepted exact requirement is
+    a deterministic convergence witness: reject that entire page and keep the last
+    fully novel set. This avoids a second model call whose schema is unrelated to the
+    page router and keeps termination evidence in the same protocol.
+    """
     from .model_adapters import ModelConfigurationError
 
     page_size = int(_REQUIREMENT_PARAMETERS["properties"]["requirements"]["maxItems"])
@@ -344,14 +348,13 @@ def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], bud
     seen: set[str] = set()
     payload = json.loads(messages[1]["content"])
     page_index = 0
-    remaining: dict[str, Any] | None = None
     while True:
         current_messages = deepcopy(messages)
         if collected:
             current_messages[1]["content"] = json.dumps(
-                {**payload, "already_compiled_requirements": collected,
-                 "uncovered_authored_behavior": remaining},
-                ensure_ascii=False, separators=(",", ":"),
+                {**payload, "already_compiled_requirements": collected},
+                ensure_ascii=False,
+                separators=(",", ":"),
             )
             if sum(len(row["content"].encode("utf-8")) for row in current_messages) > budget:
                 raise ModelConfigurationError(
@@ -381,6 +384,9 @@ def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], bud
             operation="researched_requirement_compile", result="INFO",
             details={"page_index": page_index + 1, "requirements": rows},
         )
+        page_rows: list[dict[str, Any]] = []
+        page_seen: set[str] = set()
+        repeated_prior: list[dict[str, Any]] = []
         for row in rows:
             if not isinstance(row, Mapping) or not _text(row.get("statement")):
                 raise ModelConfigurationError("REQUIREMENT_PAGINATION_FAILED: invalid requirement row")
@@ -391,65 +397,43 @@ def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], bud
                 ensure_ascii=False,
             )
             if identity in seen:
-                raise ModelConfigurationError(
-                    "REQUIREMENT_PAGINATION_NO_PROGRESS: repeated requirement cannot certify remaining coverage"
-                )
-            seen.add(identity)
-            collected.append(dict(row))
+                repeated_prior.append(dict(row))
+                continue
+            if identity in page_seen:
+                continue
+            page_seen.add(identity)
+            page_rows.append(dict(row))
         page_index += 1
+        if repeated_prior:
+            emit_root_cause(
+                "planner_requirement_page", stage="planning_state",
+                operation="researched_requirement_compile", result="COMPLETE",
+                reason="REQUIREMENT_REPEAT_FRONTIER_EXHAUSTED",
+                details={
+                    "page_index": page_index, "page_requirement_count": len(rows),
+                    "accepted_requirement_count": 0,
+                    "discarded_page_requirement_count": len(rows),
+                    "repeated_prior_requirements": repeated_prior,
+                    "total_requirement_count": len(collected), "requirements": rows,
+                },
+            )
+            return {"requirements": collected}
+        seen.update(page_seen)
+        collected.extend(page_rows)
+        page_full = len(page_rows) >= page_size
         emit_root_cause(
             "planner_requirement_page", stage="planning_state",
             operation="researched_requirement_compile",
-            result="CONTINUE" if len(rows) >= page_size else "COMPLETE",
-            details={"page_index": page_index, "page_requirement_count": len(rows),
-                     "total_requirement_count": len(collected), "requirements": rows},
+            result="CONTINUE" if page_full else "COMPLETE",
+            reason="REQUIREMENT_PAGE_FULL_CONTINUE" if page_full else "REQUIREMENT_SEMANTIC_FRONTIER_EXHAUSTED",
+            details={
+                "page_index": page_index, "page_requirement_count": len(rows),
+                "accepted_requirement_count": len(page_rows),
+                "total_requirement_count": len(collected), "requirements": page_rows,
+            },
         )
-        if len(rows) < page_size:
+        if not page_full:
             return {"requirements": collected}
-        coverage_messages = [
-            {"role": "system", "content": (
-                "Compare the original authored task with the collected requirements. Decide whether "
-                "any explicitly requested player-visible behavior is still missing. A full page does "
-                "not mean more requirements exist. Do not invent features to fill pages, expand vague "
-                "'etc' into features, or repeat covered behavior with extra implementation details. "
-                "If all requested behaviors are represented, return complete=true and both remaining "
-                "fields empty. Otherwise return complete=false, an exact verbatim quote from the task "
-                "that requests the missing behavior, and a description of that behavior."
-            )},
-            {"role": "user", "content": json.dumps(
-                {**payload, "already_compiled_requirements": collected}, ensure_ascii=False,
-                separators=(",", ":"),
-            )},
-        ]
-        if sum(len(row["content"].encode("utf-8")) for row in coverage_messages) > budget:
-            raise ModelConfigurationError("REQUIREMENT_PAGINATION_CONTEXT_EXHAUSTED: coverage review cannot fit")
-        try:
-            with planner_operation("requirement_coverage_review", output_tokens=512):
-                remaining = router.generate_tool_decision(
-                    "planner", coverage_messages, tool_name="review_requirement_coverage",
-                    parameters=REQUIREMENT_COVERAGE_SCHEMA,
-                    description="Decide whether an explicitly authored behavior remains uncovered.",
-                )
-        except Exception as exc:
-            raise ModelConfigurationError(
-                "REQUIREMENT_COVERAGE_FAILED: cannot certify partial requirement coverage"
-            ) from exc
-        emit_root_cause(
-            "planner_requirement_coverage", stage="planning_state",
-            operation="requirement_coverage_review", result="INFO", details={"review": remaining},
-        )
-        if not isinstance(remaining, Mapping) or type(remaining.get("complete")) is not bool:
-            raise ModelConfigurationError("REQUIREMENT_COVERAGE_INVALID: missing explicit completion decision")
-        quote = remaining.get("remaining_source_quote")
-        behavior = _text(remaining.get("remaining_behavior"))
-        if remaining["complete"]:
-            if quote != "" or behavior:
-                raise ModelConfigurationError("REQUIREMENT_COVERAGE_INVALID: completion contradicts remaining behavior")
-            return {"requirements": collected}
-        task = payload.get("task", {})
-        source = str(task.get("original_prompt") or task.get("prompt") or "")
-        if not isinstance(quote, str) or not quote.strip() or quote not in source or not behavior:
-            raise ModelConfigurationError("REQUIREMENT_COVERAGE_INVALID: remaining behavior lacks an exact task quote")
 
 
 def compile_researched_requirements(

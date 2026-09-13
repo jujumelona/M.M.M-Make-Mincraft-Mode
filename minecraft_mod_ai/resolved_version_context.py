@@ -24,6 +24,11 @@ def _check_schema_cached(encoded_schema: str):
     Draft202012Validator.check_schema(json.loads(encoded_schema))
 
 
+@lru_cache(maxsize=256)
+def _context_id_cached(snapshot_json: str) -> str:
+    return "sha256:" + sha256(snapshot_json.encode()).hexdigest()
+
+
 def _freeze(value):
     if isinstance(value, dict):
         return MappingProxyType({key: _freeze(item) for key, item in value.items()})
@@ -173,7 +178,7 @@ class ResolvedVersionContext:
 
     @property
     def context_id(self):
-        return "sha256:" + sha256(self.snapshot_json.encode()).hexdigest()
+        return _context_id_cached(self.snapshot_json)
 
     @property
     def minecraft(self):
@@ -460,7 +465,22 @@ def execution_context(context, job):
     raw = (context or {}).get("resolved_version_context")
     identifier = getattr(job, "context_id", "")
     if raw is None:
-        if identifier or getattr(job, "canonical_leaf", "") or getattr(job, "implementation_id", ""):
+        implementation_id = str(getattr(job, "implementation_id", "") or "")
+        allow_unbound_template_graph = bool(
+            (context or {}).get("_mmm_allow_unbound_template_graph")
+        )
+        # The artifact graph is the explicit compatibility boundary for deterministic
+        # template jobs expanded without a HOST snapshot. Direct template execution
+        # remains fail-closed, and any HOST-bound/generator job still requires its
+        # immutable resolved context.
+        if (
+            allow_unbound_template_graph
+            and not identifier
+            and implementation_id.startswith("template:")
+            and getattr(job, "template_id", "")
+        ):
+            return None
+        if identifier or getattr(job, "canonical_leaf", "") or implementation_id:
             raise VersionContextError("VERSION_CONTEXT_REQUIRED", artifact=job.job_id)
         return None
     if isinstance(raw, ResolvedVersionContext):

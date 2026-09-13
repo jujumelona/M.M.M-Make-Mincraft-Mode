@@ -521,6 +521,7 @@ def test_exact_parallel_fails_closed_when_reference_or_target_cannot_run() -> No
 
 
 def test_baseline_tuning_oom_releases_attempt_key(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("MMM_LLAMA_SERVER_AUTOTUNE_INLINE", "1")
     model = tmp_path / "model.gguf"
     model.write_bytes(b"GGUF")
     base_ensure = inspect.unwrap(autotune.ensure_tuned_server)

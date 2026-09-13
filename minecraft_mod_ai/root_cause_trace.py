@@ -487,7 +487,7 @@ def emit_root_cause(
 
             try:
                 payload["details_artifact"] = save_trace_artifact(
-                    safe_details,
+                    details,
                     durable_trace_path().parent / "artifacts",
                     sync=failure,
                 )

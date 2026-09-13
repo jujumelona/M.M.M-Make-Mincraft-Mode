@@ -443,6 +443,7 @@ def install(*, custom_module_generator_module: Any, model_router_module: Any) ->
         return
 
     original_generate_text = Router.generate_text
+    original_collect = custom_module_generator_module._collect_initial_observations
     original_reuse = custom_module_generator_module._materialize_owned_reuse_context
 
     @wraps(original_generate_text)
@@ -514,6 +515,8 @@ def install(*, custom_module_generator_module: Any, model_router_module: Any) ->
 
     setattr(generate_text, _MARKER, True)
     setattr(collect_initial_observations, _MARKER, True)
+    if getattr(original_collect, "__mmm_repository_grounding_live_context__", False):
+        setattr(collect_initial_observations, "__mmm_repository_grounding_live_context__", True)
     setattr(materialize_owned_reuse_context, _MARKER, True)
     Router.generate_text = generate_text
     custom_module_generator_module._collect_initial_observations = collect_initial_observations

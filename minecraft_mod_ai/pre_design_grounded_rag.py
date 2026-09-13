@@ -404,8 +404,8 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
             def fetch_description(
                 job: tuple[int, int],
             ) -> tuple[int, tuple[int, str, str]]:
-                index, mod_id = job
-                return index, description(mod_id)
+                position, mod_id = job
+                return position, description(mod_id)
 
             for _job, indexed_result in iter_completed_with_deadlines(
                 description_jobs,
@@ -414,9 +414,9 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
                 stage="predesign-curseforge-descriptions",
                 sort_key=lambda item: item[0],
             ):
-                index, value = indexed_result
-                fetched_by_index[index] = value
-            fetched = [fetched_by_index[index] for index in range(len(new_ids))]
+                position, value = indexed_result
+                fetched_by_index[position] = value
+            fetched = [fetched_by_index[position] for position in range(len(new_ids))]
             for mod_id, body, error in fetched:
                 if body:
                     descriptions[mod_id] = body
@@ -475,11 +475,13 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
             next_index = index + len(rows)
         else:
             try:
-                server_index = int(pagination.get("index", index) or index)
-                result_count = int(pagination.get("resultCount", len(rows)) or len(rows))
-                provider_total = max(
-                    provider_total, int(pagination.get("totalCount", 0) or 0)
-                )
+                raw_server_index = pagination.get("index", index)
+                raw_result_count = pagination.get("resultCount", len(rows))
+                raw_total_count = pagination.get("totalCount", 0)
+                server_index = index if raw_server_index is None else int(raw_server_index)
+                result_count = len(rows) if raw_result_count is None else int(raw_result_count)
+                total_count = 0 if raw_total_count is None else int(raw_total_count)
+                provider_total = max(provider_total, total_count)
             except (TypeError, ValueError, OverflowError):
                 server_index = index
                 result_count = len(rows)

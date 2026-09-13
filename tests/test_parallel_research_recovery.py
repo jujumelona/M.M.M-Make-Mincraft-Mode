@@ -79,7 +79,7 @@ def test_parallel_domain_failure_recovers_serially_without_weakening_terminal_se
     def research_domain(router, *, prompt, domain, deterministic, trace_metadata):
         domain_id = domain["domain_id"]
         attempts[domain_id] = attempts.get(domain_id, 0) + 1
-        if threading.current_thread().name.startswith("mmm_research_domain"):
+        if threading.current_thread().name.startswith("central-research-domain-wave"):
             raise RuntimeError("shared local router rejected concurrent request")
         return {
             "domain_id": domain_id,

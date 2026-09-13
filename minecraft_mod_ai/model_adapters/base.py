@@ -105,13 +105,12 @@ class GenerationRequest:
 
 
 class ModelAdapter(ABC):
-    # Request-local adapter objects may safely share transport calibration entries.
-    # The llama adapter's cache key binds every entry to the managed server process
-    # generation and exact template-calibration payload; external servers do not cache.
-    _prefill_template_prefix_cache: dict[str, str] = {}
-
     def __init__(self, config: AdapterConfig) -> None:
         self.config = config
+        # Calibration belongs to this adapter instance. A class-level mutable cache
+        # leaks prefixes between unrelated routers/tests and can survive a managed
+        # server generation change through a different adapter object.
+        self._prefill_template_prefix_cache: dict[str, str] = {}
 
     @abstractmethod
     def generate(self, request: GenerationRequest) -> str:

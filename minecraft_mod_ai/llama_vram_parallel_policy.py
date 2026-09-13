@@ -424,7 +424,9 @@ def install(runtime_tuning: Any, autotune: Any | None = None) -> None:
     _configure_benchmark_defaults()
     _install_resource_admission(runtime_tuning)
     _install_bounded_cold_search(runtime_tuning)
-    _install_bounded_parallel_candidates(runtime_tuning)
+    # Keep canonical resource-feasible candidate enumeration intact. Fast startup
+    # already chooses one live width through _recommended_parallel; narrowing this
+    # public candidate function caused resource-admission callers to see only p1.
     _install_selection_version(runtime_tuning)
     _install_fast_start_profile(runtime_tuning, autotune)
 

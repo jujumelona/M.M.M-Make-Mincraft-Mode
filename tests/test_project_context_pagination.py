@@ -99,7 +99,7 @@ class _ContextPagingRouter:
             'static final String LAST = "HIGH_INDEX_SOURCE_SENTINEL"; }\n',
             encoding="utf-8",
         )
-        return "Implemented cross-file hook from grounded source evidence."
+        return json.dumps({"summary": "Implemented cross-file hook from grounded source evidence."})
 
 
 def test_custom_generator_exposes_grounded_context_and_agent_can_fetch_more_with_tools(tmp_path: Path) -> None:
@@ -183,4 +183,7 @@ def test_custom_generator_exposes_grounded_context_and_agent_can_fetch_more_with
     assert result["operation_count"] == 1
     assert "FIRST_PAGE_SOURCE_FACT" in generated_text
     assert "HIGH_INDEX_SOURCE_SENTINEL" in generated_text
-    assert result["source_observation_receipt"]["source_page_count"] > 1
+    receipt = result["source_observation_receipt"]
+    assert receipt["source_page_count"] == 1
+    assert receipt["policy"]["initial_page_only"] is True
+    assert receipt["policy"]["supplemental_retrieval_available"] is True

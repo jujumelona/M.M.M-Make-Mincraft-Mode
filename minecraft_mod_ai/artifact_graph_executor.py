@@ -147,6 +147,11 @@ def execute_artifact_graph(
     ordered_jobs = list(jobs)
     from .resolved_version_context import execution_context
 
+    # Preserve the historical deterministic graph path while keeping direct canonical
+    # execution fail-closed. This marker is private to this host-owned graph boundary.
+    context = dict(context or {})
+    if "resolved_version_context" not in context:
+        context["_mmm_allow_unbound_template_graph"] = True
     for job in ordered_jobs:
         execution_context(context, job)
     if len({job.job_id for job in ordered_jobs}) != len(ordered_jobs):

@@ -193,6 +193,25 @@ def resolve_platform_fail_closed(
     selected_loader = explicit_loader or existing_loader or "fabric"
     provider = provider_for_loader(selected_loader)
 
+    # A revise/port request is an optimization problem: the authored version is a
+    # migration hint, not permission to bypass evidence ranking with a pinned host receipt.
+    if existing_version and migration_requested:
+        optimization = resolver._optimize(
+            text,
+            design=design,
+            module_kinds=kinds,
+            loader_constraint=explicit_loader or existing_loader,
+            version_hint=explicit_version,
+            target_research_fn=target_research_fn,
+        )
+        return resolver._optimized_selection(
+            optimization,
+            source="canonical_migration_evidence",
+            explicit_version=bool(explicit_version),
+            explicit_loader=bool(explicit_loader),
+            migration_requested=True,
+        )
+
     discovery_mode = str(os.getenv("MMM_ECOSYSTEM_DISCOVERY", "auto")).strip().casefold()
     if discovery_mode not in {"auto", "on", "off"}:
         raise SpecValidationError("MMM_ECOSYSTEM_DISCOVERY must be auto, on or off.")
