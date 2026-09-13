@@ -5,6 +5,7 @@ import os
 import queue
 import re
 import shlex
+import shutil
 import subprocess
 import threading
 import time
@@ -21,14 +22,110 @@ from .source_set_boundary_contract import (
 _DEFAULT_DIAGNOSTIC_PAGE_MAX_FILES = 128
 _DEFAULT_DIAGNOSTIC_PAGE_MAX_SOURCE_BYTES = 8 * 1024 * 1024
 _DEFAULT_DIAGNOSTIC_QUIET_SECONDS = 2.0
+_JAVA_CORE_UNRESOLVED = re.compile(
+    r"(?:java\.lang\.(?:Object|String).*cannot be resolved|"
+    r"The type java\.lang\.(?:Object|String) cannot be resolved|"
+    r"java\.lang\.(?:Object|String).*indirectly referenced)",
+    re.IGNORECASE,
+)
 
 
 class JDTLanguageServerError(RuntimeError):
     pass
 
 
+def _configuration_value(configuration: dict[str, Any], section: str | None) -> Any:
+    if not section:
+        return configuration
+    current: Any = configuration
+    for part in section.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def _java_executable(java_home: Path) -> Path:
+    suffix = ".exe" if os.name == "nt" else ""
+    return java_home / "bin" / f"java{suffix}"
+
+
+def _java_major_version(java_home: Path) -> int | None:
+    executable = _java_executable(java_home)
+    if not executable.is_file():
+        return None
+    try:
+        completed = subprocess.run(
+            [str(executable), "-version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5,
+            check=False,
+            shell=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    text = f"{completed.stdout}\n{completed.stderr}"
+    match = re.search(r'(?:java|openjdk) version "(?:1\.)?(\d+)', text)
+    if match is None:
+        match = re.search(r'^(?:openjdk|java)\s+(\d+)', text, re.MULTILINE)
+    return int(match.group(1)) if match is not None else None
+
+
+def _project_java_runtime() -> dict[str, Any] | None:
+    candidates: list[Path] = []
+    for variable in ("MMM_JDT_PROJECT_JAVA_HOME", "JDK17_HOME", "JAVA_HOME"):
+        raw = os.environ.get(variable, "").strip()
+        if raw:
+            candidates.append(Path(raw).expanduser())
+    discovered = shutil.which("java")
+    if discovered:
+        candidates.append(Path(discovered).resolve().parent.parent)
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            home = candidate.resolve(strict=True)
+        except OSError:
+            continue
+        if home in seen:
+            continue
+        seen.add(home)
+        if _java_major_version(home) != 17:
+            continue
+        return {
+            "name": "JavaSE-17",
+            "path": str(home),
+            "default": True,
+        }
+    return None
+
+
+def _jdt_configuration() -> dict[str, Any]:
+    java_configuration: dict[str, Any] = {
+        "updateBuildConfiguration": "automatic",
+    }
+    runtime = _project_java_runtime()
+    if runtime is not None:
+        java_configuration["runtimes"] = [runtime]
+    return {
+        "java": {
+            "autobuild": {"enabled": True},
+            "configuration": java_configuration,
+            "import": {"gradle": {"enabled": True}},
+        }
+    }
+
+
 class _JsonRpcProcess:
-    def __init__(self, command: list[str], cwd: Path) -> None:
+    def __init__(
+        self,
+        command: list[str],
+        cwd: Path,
+        *,
+        configuration: dict[str, Any] | None = None,
+    ) -> None:
         self.process = subprocess.Popen(
             command,
             cwd=str(cwd),
@@ -40,6 +137,7 @@ class _JsonRpcProcess:
         self.messages: queue.Queue[dict[str, Any]] = queue.Queue()
         self.stderr: deque[str] = deque(maxlen=30)
         self.workspace_folders = [{"uri": cwd.resolve().as_uri(), "name": cwd.name}]
+        self.configuration = configuration or {}
         self._reader = threading.Thread(target=self._read_stdout, daemon=True)
         self._error_reader = threading.Thread(target=self._read_stderr, daemon=True)
         self._reader.start()
@@ -177,7 +275,16 @@ def _respond_to_server_request(
         result: Any = None
     elif method == "workspace/configuration":
         items = params.get("items")
-        result = [None] * len(items) if isinstance(items, list) else []
+        result = []
+        if isinstance(items, list):
+            for item in items:
+                section = item.get("section") if isinstance(item, dict) else None
+                result.append(
+                    _configuration_value(
+                        rpc.configuration,
+                        section if isinstance(section, str) else None,
+                    )
+                )
     elif method == "workspace/workspaceFolders":
         result = list(rpc.workspace_folders)
     elif method == "workspace/applyEdit":
@@ -265,7 +372,8 @@ class JavaLanguageService:
             return rpc
         if rpc is not None:
             self._close_rpc_locked()
-        rpc = _JsonRpcProcess(self.command, root)
+        configuration = _jdt_configuration()
+        rpc = _JsonRpcProcess(self.command, root, configuration=configuration)
         try:
             rpc.request(
                 "initialize",
@@ -277,8 +385,15 @@ class JavaLanguageService:
                             "publishDiagnostics": {"relatedInformation": True}
                         },
                         "workspace": {
+                            "configuration": True,
                             "workspaceFolders": True,
                             "symbol": {},
+                        },
+                    },
+                    "initializationOptions": {
+                        "settings": configuration,
+                        "extendedClientCapabilities": {
+                            "progressReportProvider": True,
                         },
                     },
                     "workspaceFolders": list(rpc.workspace_folders),
@@ -286,6 +401,16 @@ class JavaLanguageService:
                 timeout=min(timeout_seconds, 45),
             )
             rpc.notify("initialized", {})
+            rpc.notify(
+                "workspace/didChangeConfiguration",
+                {"settings": configuration},
+            )
+            _await_java_core_ready(
+                rpc,
+                root,
+                timeout_seconds=timeout_seconds,
+                quiet_seconds=min(self.diagnostic_quiet_seconds, 0.25),
+            )
         except BaseException:
             rpc.close()
             raise
@@ -524,6 +649,80 @@ def _read_source_page(
             )
         sources.append((path, raw.decode("utf-8", errors="replace")))
     return sources, total_bytes
+
+
+def _java_core_bootstrap_messages(
+    diagnostics: dict[str, list[dict[str, Any]]],
+) -> list[str]:
+    messages: list[str] = []
+    for values in diagnostics.values():
+        for item in values:
+            message = str(item.get("message", ""))
+            if _JAVA_CORE_UNRESOLVED.search(message):
+                messages.append(message)
+    return sorted(set(messages))
+
+
+def _await_java_core_ready(
+    rpc: _JsonRpcProcess,
+    root: Path,
+    *,
+    timeout_seconds: float,
+    quiet_seconds: float,
+) -> None:
+    files = _java_files(root, None)
+    if not files:
+        return
+    probe = files[0]
+    source_text = probe.read_bytes().decode("utf-8", errors="replace")
+    uri = probe.as_uri()
+    deadline = time.monotonic() + float(timeout_seconds)
+    last_bootstrap_messages: list[str] = []
+    version = 1
+
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        rpc.notify(
+            "textDocument/didOpen",
+            {
+                "textDocument": {
+                    "uri": uri,
+                    "languageId": "java",
+                    "version": version,
+                    "text": source_text,
+                }
+            },
+        )
+        try:
+            diagnostics = _collect_diagnostics(
+                rpc,
+                expected_uris={uri},
+                timeout_seconds=remaining,
+                quiet_seconds=quiet_seconds,
+            )
+        finally:
+            rpc.notify(
+                "textDocument/didClose",
+                {"textDocument": {"uri": uri}},
+            )
+        last_bootstrap_messages = _java_core_bootstrap_messages(diagnostics)
+        if not last_bootstrap_messages:
+            return
+        version += 1
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(0.25, remaining))
+
+    detail = "; ".join(last_bootstrap_messages[-3:])
+    suffix = f" Diagnostics: {detail}" if detail else ""
+    raise JDTLanguageServerError(
+        "JDT workspace bootstrap did not become Java-core ready before validation: "
+        "java.lang.Object/java.lang.String remained unresolved."
+        f"{suffix}"
+    )
 
 
 def _collect_diagnostics(
