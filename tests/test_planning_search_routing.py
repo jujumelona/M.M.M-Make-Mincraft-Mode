@@ -1,4 +1,5 @@
 import json
+import tomllib
 from pathlib import Path
 
 from minecraft_mod_ai.planning_candidate_evidence import (
@@ -79,6 +80,22 @@ def test_query_expansion_never_inherits_sibling_requirements():
     assert "settlements" not in joined
 
 
+def test_direct_requirement_candidate_can_enter_on_material_partial_match():
+    pool = global_grounded_pool(
+        {
+            "r_001": _grounded(
+                [
+                    ("modrinth:direct", "Spacecraft documentation and examples."),
+                    ("modrinth:noise", "Furniture decoration chairs and tables."),
+                ]
+            )
+        }
+    )
+    trace = requirement_candidate_trace(_requirement(), pool)
+    frontier = semantic_frontier_pool(_requirement(), pool, trace)
+    assert _source_ids(frontier) == {"modrinth:direct"}
+
+
 def test_task_cache_projects_to_requirement_local_semantic_frontier():
     unrelated = [
         (f"modrinth:unrelated-{index}", "Furniture decoration chairs and tables.")
@@ -143,12 +160,17 @@ def test_semantic_reviewer_never_uses_excluded_task_cache_sources(monkeypatch):
     assert not any(source_id.startswith("modrinth:unrelated-") for source_id in seen_source_ids)
 
 
-def test_planning_mcp_stage_is_explicitly_configured():
+def test_planning_mcp_stage_is_explicitly_configured_for_clients():
     root = Path(__file__).resolve().parents[1]
     config = json.loads((root / ".mcp.json").read_text(encoding="utf-8"))
     server = config["mcpServers"]["mmm-planning"]
     assert server["env"]["MMM_MCP_STAGE"] == "planning"
     assert server["args"][-1] == "minecraft_mod_ai.mcp_server"
+
+    codex = tomllib.loads((root / ".codex/config.toml").read_text(encoding="utf-8"))
+    codex_server = codex["mcp_servers"]["mmm-planning"]
+    assert codex_server["env"]["MMM_MCP_STAGE"] == "planning"
+    assert codex_server["args"][-1] == "minecraft_mod_ai.mcp_server"
 
 
 def test_adaptive_evidence_skill_uses_fixed_point_not_attempt_cap():
