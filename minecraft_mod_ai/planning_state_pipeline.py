@@ -235,7 +235,7 @@ def prepare_planning_state(
     checkpoint: Callable[[dict[str, Any]], None] | None = None,
     detail_section_applicability_resolver: DetailSectionApplicabilityResolver | None = None,
 ) -> dict[str, Any]:
-    """Resolve prompt meaning, reference scope, implementation evidence, and plan detail.
+    """Resolve prompt meaning, reference scope, requirements, and plan detail.
 
     The optional applicability resolver is a trusted host boundary. It receives only
     opaque requirement IDs, never prompt text, requirement prose, model output, or
@@ -343,33 +343,6 @@ def prepare_planning_state(
     if checkpoint is not None:
         checkpoint(deepcopy(state))
 
-    state = _transition(
-        "collect_implementation_research",
-        lambda: collect_planning_state_research_convergent(
-            router,
-            prompt,
-            state,
-            trace_metadata=trace_metadata,
-        ),
-        input_state=state,
-    )
-    if checkpoint is not None:
-        checkpoint(deepcopy(state))
-
-    # Stop on the actual research blocker and persist the complete blocked state before
-    # any detailed-plan invariant can replace the first cause.
-    if _stage_unknowns(state, "implementation_plan"):
-        _raise_blocked(
-            state,
-            operation="implementation_plan",
-            message=(
-                "PLANNING_IMPLEMENTATION_RESEARCH_BLOCKED: "
-                + _block_summary(state, stage="implementation_plan")
-            ),
-        )
-
-    from .planning_candidate_evidence import assert_candidate_research_complete
-    assert_candidate_research_complete(state)
     section_selection = _transition(
         "select_detail_sections",
         lambda: required_sections_by_requirement(state),
