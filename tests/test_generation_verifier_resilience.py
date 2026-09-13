@@ -6,9 +6,7 @@ import time
 from collections import deque
 from types import SimpleNamespace
 
-import pytest
-
-from minecraft_mod_ai import agent_tool_runtime, progress_aware_tool_loop
+from minecraft_mod_ai import agent_tool_runtime
 from minecraft_mod_ai.generation_verifier_resilience import (
     _collect_diagnostics_progress_aware,
     gradle_fallback_receipt,
