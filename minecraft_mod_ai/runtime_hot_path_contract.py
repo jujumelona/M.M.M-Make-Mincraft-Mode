@@ -88,8 +88,9 @@ def _exception_objects(exc: BaseException) -> tuple[BaseException, ...]:
             continue
         seen.add(marker)
         result.append(current)
-        if isinstance(current, BaseExceptionGroup):
-            pending.extend(current.exceptions)
+        grouped = getattr(current, "exceptions", None)
+        if isinstance(grouped, tuple):
+            pending.extend(item for item in grouped if isinstance(item, BaseException))
         cause = getattr(current, "__cause__", None)
         context = getattr(current, "__context__", None)
         if isinstance(cause, BaseException):
