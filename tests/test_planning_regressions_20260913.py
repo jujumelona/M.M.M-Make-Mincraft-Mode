@@ -19,9 +19,7 @@ class _PagedRequirementRouter:
                     {
                         "statement": "Gather resources and earn money.",
                         "semantic_capability": "economy",
-                        "acceptance": [
-                            "Resources can be gathered and converted into money."
-                        ],
+                        "acceptance": ["Resources can be gathered and converted into money."],
                     },
                     {
                         "statement": "Trade resources and equipment.",
@@ -31,51 +29,31 @@ class _PagedRequirementRouter:
                     {
                         "statement": "Build a spacecraft from separate parts.",
                         "semantic_capability": "spacecraft_construction",
-                        "acceptance": [
-                            "Separate spacecraft parts assemble into a usable craft."
-                        ],
+                        "acceptance": ["Separate spacecraft parts assemble into a usable craft."],
                     },
                     {
-                        "statement": (
-                            "Upgrade weapons, crew, and spacecraft performance through "
-                            "purchases or trades."
-                        ),
+                        "statement": "Upgrade weapons, crew, and spacecraft performance through purchases or trades.",
                         "semantic_capability": "spacecraft_upgrade",
-                        "acceptance": [
-                            "Purchased or traded upgrades change the relevant capability."
-                        ],
+                        "acceptance": ["Purchased or traded upgrades change the relevant capability."],
                     },
                 ]
             },
             {
                 "requirements": [
                     {
-                        "statement": (
-                            "Launch the completed spacecraft into space and travel to "
-                            "other planets."
-                        ),
+                        "statement": "Launch the completed spacecraft into space and travel to other planets.",
                         "semantic_capability": "space_travel",
-                        "acceptance": [
-                            "The player can leave the starting world and reach another "
-                            "planet."
-                        ],
+                        "acceptance": ["The player can leave the starting world and reach another planet."],
                     },
                     {
-                        "statement": (
-                            "Gather special minerals on other planets and fight aliens."
-                        ),
+                        "statement": "Gather special minerals on other planets and fight aliens.",
                         "semantic_capability": "planet_exploration",
-                        "acceptance": [
-                            "Planetary minerals and hostile aliens are both encountered "
-                            "in play."
-                        ],
+                        "acceptance": ["Planetary minerals and hostile aliens are both encountered in play."],
                     },
                     {
                         "statement": "Establish colonies on other planets.",
                         "semantic_capability": "colonization",
-                        "acceptance": [
-                            "The player can create a persistent colony on another planet."
-                        ],
+                        "acceptance": ["The player can create a persistent colony on another planet."],
                     },
                 ]
             },
@@ -95,7 +73,8 @@ class _PagedRequirementRouter:
                 "remaining_behavior": "Launch the spacecraft and cover the remaining planetary behaviors.",
             }
         page_index = sum(
-            1 for call in self.calls
+            1
+            for call in self.calls
             if call.get("tool_name") == "submit_researched_requirements"
         ) - 1
         return self._pages[page_index]
@@ -108,22 +87,6 @@ class _RepeatedFrontierRouter:
             {"requirements": [self._row(f"Requirement {index}", f"cap_{index}") for index in range(1, 5)]},
             {"requirements": [self._row(f"Requirement {index}", f"cap_{index}") for index in range(5, 9)]},
             {"requirements": [self._row(f"Requirement {index}", f"cap_{index}") for index in range(9, 13)]},
-            {
-                "requirements": [
-                    self._row("Requirement 13", "cap_13"),
-                    self._row("Requirement 14", "cap_14"),
-                    self._row("Requirement 5", "cap_5"),
-                    self._row("Requirement 6", "cap_6"),
-                ]
-            },
-            {
-                "requirements": [
-                    self._row("Requirement 13", "cap_13"),
-                    self._row("Requirement 14", "cap_14"),
-                    self._row("Requirement 5", "cap_5"),
-                    self._row("Requirement 6", "cap_6"),
-                ]
-            },
         ]
 
     @staticmethod
@@ -143,7 +106,8 @@ class _RepeatedFrontierRouter:
         self.calls.append({"role": role, "messages": messages, **kwargs})
         if kwargs.get("tool_name") == "review_requirement_coverage":
             page_count = sum(
-                1 for call in self.calls
+                1
+                for call in self.calls
                 if call.get("tool_name") == "submit_researched_requirements"
             )
             if page_count >= 3:
@@ -158,7 +122,8 @@ class _RepeatedFrontierRouter:
                 "remaining_behavior": "Additional explicitly authored behavior remains.",
             }
         page_index = sum(
-            1 for call in self.calls
+            1
+            for call in self.calls
             if call.get("tool_name") == "submit_researched_requirements"
         ) - 1
         return self._pages[page_index]
@@ -189,32 +154,55 @@ def _requirement_messages() -> list[dict[str, str]]:
     ]
 
 
-def test_full_requirement_page_never_closes_semantic_frontier() -> None:
+def test_full_requirement_page_requires_coverage_proof_before_continuation() -> None:
     router = _PagedRequirementRouter()
     result = _generate_requirement_pages(router, _requirement_messages(), 100_000)
 
-    assert len(router.calls) == 2
+    requirement_calls = [
+        call
+        for call in router.calls
+        if call.get("tool_name") == "submit_researched_requirements"
+    ]
+    coverage_calls = [
+        call
+        for call in router.calls
+        if call.get("tool_name") == "review_requirement_coverage"
+    ]
+    assert len(requirement_calls) == 2
+    assert len(coverage_calls) == 1
     assert len(result["requirements"]) == 7
-    statements = " ".join(row["statement"] for row in result["requirements"])
-    assert "spacecraft" in statements
-    assert "other planets" in statements
-    assert "aliens" in statements
-    assert "colonies" in statements
 
-    second_messages = router.calls[1]["messages"]
-    assert isinstance(second_messages, list)
-    second_payload = json.loads(second_messages[1]["content"])
-    assert len(second_payload["already_compiled_requirements"]) == 4
+    coverage_messages = coverage_calls[0]["messages"]
+    assert isinstance(coverage_messages, list)
+    coverage_payload = json.loads(coverage_messages[1]["content"])
+    assert len(coverage_payload["already_compiled_requirements"]) == 4
+
+    continuation_messages = requirement_calls[1]["messages"]
+    assert isinstance(continuation_messages, list)
+    continuation_payload = json.loads(continuation_messages[1]["content"])
+    assert len(continuation_payload["already_compiled_requirements"]) == 4
+    assert continuation_payload["uncovered_authored_behavior"]["complete"] is False
 
 
-def test_mixed_repeat_page_keeps_novel_requirements_until_true_fixed_point() -> None:
+def test_complete_coverage_stops_without_forcing_repeat_pages() -> None:
     router = _RepeatedFrontierRouter()
     result = _generate_requirement_pages(router, _requirement_messages(), 100_000)
 
-    assert len(router.calls) == 5
-    assert len(result["requirements"]) == 14
+    requirement_calls = [
+        call
+        for call in router.calls
+        if call.get("tool_name") == "submit_researched_requirements"
+    ]
+    coverage_calls = [
+        call
+        for call in router.calls
+        if call.get("tool_name") == "review_requirement_coverage"
+    ]
+    assert len(requirement_calls) == 3
+    assert len(coverage_calls) == 3
+    assert len(result["requirements"]) == 12
     statements = [row["statement"] for row in result["requirements"]]
-    assert statements[-2:] == ["Requirement 13", "Requirement 14"]
+    assert statements[-2:] == ["Requirement 11", "Requirement 12"]
     assert statements.count("Requirement 5") == 1
     assert statements.count("Requirement 6") == 1
 
