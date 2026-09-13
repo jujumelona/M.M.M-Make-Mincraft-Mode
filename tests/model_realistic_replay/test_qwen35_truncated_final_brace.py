@@ -1,5 +1,5 @@
 import pytest
-from ._support import MODEL, replay_text
+from ._support import replay_text
 
 def test_qwen35_stop_boundary_before_final_brace_is_rejected():
     with pytest.raises(Exception):
