@@ -9,8 +9,9 @@ last and makes their shared invariants explicit:
 * retrieval may refine source/symbol evidence, but cannot replace the target or expand
   the writable exact-set;
 * once a mutation tool has parsed its arguments and the host has returned a structured
-  semantic rejection, the coder must not re-enter argument generation for the same
-  action. That failure belongs to the outer adjudication/replan boundary.
+  non-recoverable semantic rejection, the coder must not re-enter argument generation
+  for the same action. Recoverable workspace-state conflicts remain inside the normal
+  corrective tool loop.
 
 Authority is derived structurally from host-role task payloads instead of coupling
 correctness to an ``evidence_source`` string produced by another wrapper.
@@ -21,6 +22,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from functools import wraps
 from typing import Any
+
+from .mutation_failure_classification import is_recoverable_mutation_failure
 
 _MARKER = "_mmm_mutation_authority_final_guard_v1"
 _SEMANTIC_BOUNDARY_MARKER = "_mmm_post_argument_semantic_boundary_v1"
@@ -34,7 +37,6 @@ _POST_ARGUMENT_SEMANTIC_FAILURE_CODES = frozenset(
     {
         "MUTATION_TARGET_DRIFT",
         "MUTATION_TARGET_UNBOUND",
-        "MUTATION_TARGET_CREATION_CONFLICT",
         "PATH_OUTSIDE_WRITABLE_SET",
         "PHASE_PROTOCOL_VIOLATION",
     }
@@ -163,6 +165,8 @@ def _is_post_argument_semantic_failure_code(code: Any) -> bool:
     normalized = str(code or "").strip().upper()
     if not normalized:
         return False
+    if is_recoverable_mutation_failure(normalized):
+        return False
     return normalized in _POST_ARGUMENT_SEMANTIC_FAILURE_CODES or normalized.startswith(
         _POST_ARGUMENT_SEMANTIC_FAILURE_PREFIXES
     )
@@ -171,11 +175,12 @@ def _is_post_argument_semantic_failure_code(code: Any) -> bool:
 def _latest_post_argument_semantic_failure(
     messages: Sequence[Mapping[str, Any]],
 ) -> tuple[str, str] | None:
-    """Return a trailing host/tool semantic rejection, never an argument decode error.
+    """Return a trailing non-recoverable host/tool semantic rejection.
 
     A real post-argument failure exists only after a tool result was emitted. Native
     argument generation/JSON/schema failures happen before such a result exists and are
-    intentionally left to ``native_atomic_argument_recovery``.
+    intentionally left to ``native_atomic_argument_recovery``. Recoverable mutation
+    state conflicts are likewise left to the progress-aware corrective ACT loop.
     """
 
     for message in reversed(messages):
@@ -335,7 +340,6 @@ def install(loop_module: Any | None = None) -> None:
                     else:
                         state.mutation_context = host_pin
             return ready
-
 
         Context.merge = merge
         loop_module.is_mutation_ready = is_mutation_ready
