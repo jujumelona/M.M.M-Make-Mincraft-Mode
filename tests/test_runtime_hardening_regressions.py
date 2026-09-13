@@ -11,6 +11,7 @@ import minecraft_mod_ai.custom_generation_search_contract as custom_search
 import minecraft_mod_ai.llama_server_hardware_policy as llama_hardware
 import minecraft_mod_ai.performance_final_contract as performance
 import minecraft_mod_ai.scheduler_parallel_safety_contract as safety
+from minecraft_mod_ai.config_paths import config_path
 from minecraft_mod_ai.model_registry import ModelRegistry
 from minecraft_mod_ai.model_router import ModelRouter
 from minecraft_mod_ai.work_graph import DurableWorkLedger, WorkGraphPlan, WorkNode
@@ -178,14 +179,13 @@ def test_custom_search_propagates_keyboard_interrupt(monkeypatch, tmp_path: Path
 
 
 def test_t4_aliases_resolve_to_actual_qwen35_9b() -> None:
-    for path in ("config/model_registry.yaml", "minecraft_mod_ai/config/model_registry.yaml"):
-        registry = ModelRegistry(path)
-        for profile in ("t4_local", "t4_quality"):
-            planner = registry.role(profile, "planner")
-            assert planner.model_id == "unsloth/Qwen3.5-9B-MTP-GGUF"
-            assert planner.extra["gguf_filename"] == "Qwen3.5-9B-UD-Q4_K_XL.gguf"
-            assert planner.extra["runtime_context_default"] == 32768
-            assert planner.max_context == 262144
+    registry = ModelRegistry(config_path("model_registry.yaml"))
+    for profile in ("t4_local", "t4_quality"):
+        planner = registry.role(profile, "planner")
+        assert planner.model_id == "unsloth/Qwen3.5-9B-MTP-GGUF"
+        assert planner.extra["gguf_filename"] == "Qwen3.5-9B-UD-Q4_K_XL.gguf"
+        assert planner.extra["runtime_context_default"] == 32768
+        assert planner.max_context == 262144
 
 
 def test_bounded_section_budget_caps_paginated_qwen_section_only(monkeypatch) -> None:
