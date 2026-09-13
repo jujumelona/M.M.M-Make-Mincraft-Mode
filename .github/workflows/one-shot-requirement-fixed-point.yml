@@ -157,7 +157,6 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add minecraft_mod_ai/planning_state_resolution.py tests/test_planning_regressions_20260913.py
-          git add -u .github/workflows/one-shot-requirement-fixed-point.yml
           git diff --cached --check
           git commit -m 'fix: stop requirement paging at true fixed point'
       - name: Rebase onto latest main and reverify merged tree
