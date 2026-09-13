@@ -36,8 +36,8 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm .github/scripts/refactor_progress_loop_state_owner.py
-          git rm .github/workflows/refactor-progress-loop-state-owner.yml
+          git rm -f .github/scripts/refactor_progress_loop_state_owner.py
+          git rm -f .github/workflows/refactor-progress-loop-state-owner.yml
           git add -A
           git commit -m 'refactor: make verifier repair host-state owned'
           git pull --rebase origin main
