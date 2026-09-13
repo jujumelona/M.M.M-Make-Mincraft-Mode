@@ -22,7 +22,7 @@ from .fixed_template_generation import generate_fixed_template_value
 from .model_adapters.base import ModelConfigurationError
 from .model_concurrency import router_native_model_parallelism
 from .model_context_budget import request_message_budget
-from .planning_candidate_evidence import fingerprint
+from .planning_candidate_evidence import fingerprint, semantic_frontier_pool
 from .planning_criterion_fragments import requirement_acceptance_criteria
 
 _VERDICTS = ("supported", "partial", "negated", "unrelated", "insufficient")
@@ -415,13 +415,14 @@ def review_requirement_sources(
         config = SimpleNamespace()
     assessment_budget, verification_budget = _semantic_request_budgets(config)
     obligations = requirement_acceptance_criteria(requirement)
+    frontier = semantic_frontier_pool(requirement, pool, trace)
     scores = {
         row["source_id"]: len(row["matched_facets"])
         for row in trace["candidates"]
     }
     records = [
         record
-        for query in pool.get("queries", [])
+        for query in frontier.get("queries", [])
         for record in query.get("evidence_records", [])
     ]
     records.sort(
@@ -635,7 +636,7 @@ def review_requirement_sources(
     result = {
         "schema_version": "mmm/semantic-research-review-v2",
         "requirement_sha256": req_sha,
-        "pool_sha256": fingerprint(pool),
+        "pool_sha256": fingerprint(frontier),
         "observations": [],
     }
     source_index = {
@@ -645,6 +646,26 @@ def review_requirement_sources(
         ): record
         for record in records
     }
+    from .root_cause_trace import emit_root_cause
+
+    task_source_count = sum(
+        len(query.get("evidence_records", [])) for query in pool.get("queries", [])
+    )
+    emit_root_cause(
+        "planning_semantic_research_frontier", stage="planning_state",
+        operation="review_requirement_sources", result="START",
+        reason="requirement_local_evidence_frontier",
+        details={
+            "requirement_id": requirement.get("requirement_id"),
+            "requirement_sha256": req_sha,
+            "task_pool_sha256": frontier.get("task_pool_sha256"),
+            "task_source_count": task_source_count,
+            "frontier_source_count": len(records),
+            "excluded_source_count": max(0, task_source_count - len(records)),
+            "acceptance_obligation_count": len(obligations),
+        },
+    )
+
     satisfied = set()
     workers = max(1, router_native_model_parallelism(router))
     pending = iter(jobs())
@@ -669,7 +690,7 @@ def review_requirement_sources(
             recent.append(observation)
         checked = validate_semantic_review(
             requirement,
-            pool,
+            frontier,
             {**result, "observations": recent},
             _source_index=source_index,
             _pool_sha=result["pool_sha256"],
@@ -677,8 +698,7 @@ def review_requirement_sources(
         satisfied.update(
             proof["obligation_index"] for proof in checked["accepted_proofs"]
         )
-    checked = validate_semantic_review(requirement, pool, result)
-    from .root_cause_trace import emit_root_cause
+    checked = validate_semantic_review(requirement, frontier, result)
 
     emit_root_cause(
         "planning_semantic_research_summary", stage="planning_state",
@@ -689,6 +709,8 @@ def review_requirement_sources(
             "requirement_id": requirement.get("requirement_id"),
             "requirement_sha256": req_sha,
             "pool_sha256": checked["pool_sha256"],
+            "task_pool_sha256": frontier.get("task_pool_sha256"),
+            "task_source_count": task_source_count,
             "source_count": len(records),
             "observation_count": len(checked["observations"]),
             "accepted_proof_count": len(checked["accepted_proofs"]),
