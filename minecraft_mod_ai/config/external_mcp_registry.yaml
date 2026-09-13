@@ -12,6 +12,15 @@ servers:
     version_policy: dynamic
     loaders: [fabric]
     trust: first_party
+  mmm-planning:
+    status: enabled
+    federated: false
+    transport: stdio
+    command: [python, -m, minecraft_mod_ai.mcp_stdio_entrypoint, minecraft_mod_ai.mcp_server]
+    env: {MMM_MCP_STAGE: planning}
+    version_policy: dynamic
+    loaders: [fabric]
+    trust: first_party
   mmm-research:
     status: enabled
     federated: false
