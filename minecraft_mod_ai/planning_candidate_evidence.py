@@ -45,22 +45,24 @@ def query_context(state: Mapping[str, Any], research: Mapping[str, Any], prompt:
 
 
 def expansion_queries(context: Mapping[str, Any]) -> list[str]:
-    """Relax within authored topic anchors; never turn prose into singleton searches."""
-    rows = [context.get("requirement", {}), *context.get("sibling_requirements", [])]
-    queries = []
-    for row in rows:
-        parts = terms(row.get("semantic_capability"))
-        if not parts:
-            continue
-        anchor = parts[0]
-        queries.extend([" ".join(parts), anchor])
-        queries.extend(f"{anchor} {word}" for word in terms(row.get("statement"))
-                       if word != anchor)
+    """Expand only the unresolved requirement; sibling intent must not widen retrieval."""
+    row = context.get("requirement", {})
+    parts = terms(row.get("semantic_capability"))
+    if not parts:
+        return []
+    anchor = parts[0]
+    queries = [" ".join(parts), anchor]
+    queries.extend(f"{anchor} {word}" for word in terms(row.get("statement"))
+                   if word != anchor)
     return list(dict.fromkeys(q for q in queries if q))
 
 
 def global_grounded_pool(grounded_domains: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
-    """Union catalog/repository bodies across requirements without dropping provenance."""
+    """Union catalog/repository bodies across requirements without dropping provenance.
+
+    This object is a task cache. Semantic review must derive a requirement-local frontier
+    with :func:`semantic_frontier_pool` instead of scanning this cache directly.
+    """
     sources: dict[tuple[str, str], dict[str, Any]] = {}
     for domain_id, grounded in grounded_domains.items():
         for raw in grounded.get("queries", []):
@@ -85,10 +87,12 @@ def global_grounded_pool(grounded_domains: Mapping[str, Mapping[str, Any]]) -> d
 def requirement_candidate_trace(
     requirement: Mapping[str, Any], pool: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Evaluate every candidate against this requirement's own authored facets.
+    """Evaluate every cached candidate against this requirement's own authored facets.
 
     No sibling intent or generic research instructions enter the relevance vocabulary.
     Missing vocabulary is unresolved, rather than evidence that a candidate is irrelevant.
+    The trace may retain unresolved candidates for audit/recall, but only coherent candidates
+    enter semantic review.
     """
     capability = str(requirement.get("semantic_capability") or "")
     facets = [[word] for word in terms(capability)]
@@ -142,6 +146,44 @@ def requirement_candidate_trace(
             "semantic_implementation_proof": False, "pool_sha256": fingerprint(pool)}
 
 
+def semantic_frontier_pool(
+    requirement: Mapping[str, Any],
+    pool: Mapping[str, Any],
+    trace: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Project the task cache into the finite evidence frontier for one requirement.
+
+    Admission is host-owned and deterministic: a source must contain all authored capability
+    facets in one candidate body before the expensive semantic verifier may inspect it.
+    Unresolved candidates remain in the task cache and trace, so corrective retrieval can
+    discover better evidence without converting the LLM verifier into a search engine.
+    There is deliberately no numeric top-k or attempt cap here.
+    """
+    candidate_trace = trace or requirement_candidate_trace(requirement, pool)
+    admitted = {
+        str(row.get("source_id") or "")
+        for row in candidate_trace.get("candidates", [])
+        if row.get("status") == "lexical_evidence"
+    }
+    queries = []
+    for raw in pool.get("queries", []):
+        records = [
+            dict(record)
+            for record in raw.get("evidence_records", [])
+            if str(record.get("source_id") or "") in admitted
+        ]
+        if not records:
+            continue
+        queries.append({**dict(raw), "evidence_records": records})
+    return {
+        "schema_version": "mmm/requirement-semantic-frontier-v1",
+        "requirement_ref": requirement.get("requirement_id"),
+        "requirement_sha256": fingerprint(requirement),
+        "task_pool_sha256": fingerprint(pool),
+        "queries": queries,
+    }
+
+
 def assert_candidate_research_complete(state: Mapping[str, Any]) -> None:
     """Recompute admission at the detailed-planner boundary, including restored states."""
     for research in state.get("research_queue", []):
@@ -151,10 +193,12 @@ def assert_candidate_research_complete(state: Mapping[str, Any]) -> None:
             continue
         discovery = research.get("mod_discovery") or {}
         pool = state.get("task_candidate_pool") or {}
-        trace = requirement_candidate_trace(requirement_for(state, research), pool)
+        requirement = requirement_for(state, research)
+        trace = requirement_candidate_trace(requirement, pool)
+        frontier = semantic_frontier_pool(requirement, pool, trace)
         saved_trace = research.get("candidate_trace") or {}
         from .planning_semantic_research import validate_semantic_review
-        review = validate_semantic_review(requirement_for(state, research), pool,
+        review = validate_semantic_review(requirement, frontier,
                                           saved_trace.get("semantic_review") or {})
         trace["semantic_review"] = review
         trace["coverage_complete"] = review["complete"]
