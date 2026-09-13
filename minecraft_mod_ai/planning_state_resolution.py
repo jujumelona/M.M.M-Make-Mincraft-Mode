@@ -336,10 +336,11 @@ def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], bud
     """Page requirements until the semantic frontier stops advancing.
 
     A full page only means the response envelope was filled, so it requests another
-    page. A continuation page that re-enters an already accepted exact requirement is
-    a deterministic convergence witness: reject that entire page and keep the last
-    fully novel set. This avoids a second model call whose schema is unrelated to the
-    page router and keeps termination evidence in the same protocol.
+    page whenever that response advances the requirement frontier. Repeated exact
+    requirements are ignored, but they do not authorize dropping novel requirements
+    that arrived in the same page. The fixed point is reached only when a continuation
+    contributes no previously unseen requirement. Context exhaustion remains a
+    fail-closed execution safety boundary rather than a semantic completion signal.
     """
     from .model_adapters import ModelConfigurationError
 
@@ -404,15 +405,15 @@ def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], bud
             page_seen.add(identity)
             page_rows.append(dict(row))
         page_index += 1
-        if repeated_prior:
+        if not page_rows:
             emit_root_cause(
                 "planner_requirement_page", stage="planning_state",
                 operation="researched_requirement_compile", result="COMPLETE",
-                reason="REQUIREMENT_REPEAT_FRONTIER_EXHAUSTED",
+                reason="REQUIREMENT_SEMANTIC_FRONTIER_EXHAUSTED",
                 details={
                     "page_index": page_index, "page_requirement_count": len(rows),
                     "accepted_requirement_count": 0,
-                    "discarded_page_requirement_count": len(rows),
+                    "discarded_repeat_count": len(repeated_prior),
                     "repeated_prior_requirements": repeated_prior,
                     "total_requirement_count": len(collected), "requirements": rows,
                 },
@@ -420,7 +421,7 @@ def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], bud
             return {"requirements": collected}
         seen.update(page_seen)
         collected.extend(page_rows)
-        page_full = len(page_rows) >= page_size
+        page_full = len(rows) >= page_size
         emit_root_cause(
             "planner_requirement_page", stage="planning_state",
             operation="researched_requirement_compile",

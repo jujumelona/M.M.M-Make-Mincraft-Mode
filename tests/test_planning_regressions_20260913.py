@@ -108,8 +108,16 @@ class _RepeatedFrontierRouter:
             {"requirements": [self._row(f"Requirement {index}", f"cap_{index}") for index in range(9, 13)]},
             {
                 "requirements": [
-                    self._row("Paraphrased economy requirement", "economy_again"),
-                    self._row("Paraphrased trading requirement", "trading_again"),
+                    self._row("Requirement 13", "cap_13"),
+                    self._row("Requirement 14", "cap_14"),
+                    self._row("Requirement 5", "cap_5"),
+                    self._row("Requirement 6", "cap_6"),
+                ]
+            },
+            {
+                "requirements": [
+                    self._row("Requirement 13", "cap_13"),
+                    self._row("Requirement 14", "cap_14"),
                     self._row("Requirement 5", "cap_5"),
                     self._row("Requirement 6", "cap_6"),
                 ]
@@ -183,7 +191,7 @@ def test_full_requirement_page_never_closes_semantic_frontier() -> None:
     router = _PagedRequirementRouter()
     result = _generate_requirement_pages(router, _requirement_messages(), 100_000)
 
-    assert len(router.calls) == 3
+    assert len(router.calls) == 2
     assert len(result["requirements"]) == 7
     statements = " ".join(row["statement"] for row in result["requirements"])
     assert "spacecraft" in statements
@@ -191,23 +199,22 @@ def test_full_requirement_page_never_closes_semantic_frontier() -> None:
     assert "aliens" in statements
     assert "colonies" in statements
 
-    second_messages = router.calls[2]["messages"]
+    second_messages = router.calls[1]["messages"]
     assert isinstance(second_messages, list)
     second_payload = json.loads(second_messages[1]["content"])
     assert len(second_payload["already_compiled_requirements"]) == 4
 
 
-def test_explicit_coverage_review_closes_frontier_without_requesting_partial_page() -> None:
+def test_mixed_repeat_page_keeps_novel_requirements_until_true_fixed_point() -> None:
     router = _RepeatedFrontierRouter()
     result = _generate_requirement_pages(router, _requirement_messages(), 100_000)
 
-    assert len(router.calls) == 6
-    assert len(result["requirements"]) == 12
+    assert len(router.calls) == 5
+    assert len(result["requirements"]) == 14
     statements = [row["statement"] for row in result["requirements"]]
-    assert "Paraphrased economy requirement" not in statements
-    assert "Paraphrased trading requirement" not in statements
-    assert statements[-1] == "Requirement 12"
-
+    assert statements[-2:] == ["Requirement 13", "Requirement 14"]
+    assert statements.count("Requirement 5") == 1
+    assert statements.count("Requirement 6") == 1
 
 def test_success_postcondition_primary_schema_matches_atomic_recovery_bound() -> None:
     template_path = (
