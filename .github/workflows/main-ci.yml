@@ -1,50 +1,23 @@
 name: CI
-# Fail-closed pipeline gate: CI is green only when every required contract and production-path regression passes.
 
 on:
   workflow_dispatch:
   pull_request:
   push:
-    branches:
-      - main
+    branches: [main]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-audit-v12-${{ github.event_name }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  group: exhaustive-ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  integrity:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    name: Registry integrity and real Fabric evidence
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-          cache: pip
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - run: python -m pip install --prefer-binary -e '.[dev]'
-      - run: python -m pytest -q tests/test_integrity_pipeline.py tests/test_integrity_enforcement.py tests/test_implementation_registry.py
-      - run: python tools/verify_integrity_minecraft.py --output .mmm/integrity-validation
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: real-fabric-integrity-evidence
-          path: .mmm/integrity-validation
-          include-hidden-files: true
-          retention-days: 14
-
   audit:
+    name: Repository-wide audit
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    name: Static and packaging audit
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
         with:
@@ -53,364 +26,89 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
-      - name: Install test dependencies
-        run: python -m pip install --prefer-binary -e '.[dev]'
-      - name: Audit internal imports and bootstrap contracts
-        run: python .github/scripts/debug_repo_audit.py
-      - name: Audit runtime mutation delta
-        env:
-          EVENT_BEFORE: ${{ github.event.before }}
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: python -m pip install --prefer-binary 'build>=1,<2' -e '.[dev,ui]'
+      - name: Static, packaging, liveness, and runtime audits
         run: |
-          BASE_SHA="$EVENT_BEFORE"
-          ZERO_SHA="0000000000000000000000000000000000000000"
-          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "$ZERO_SHA" ]; then
-            BASE_SHA="$(git rev-parse HEAD^)"
-          elif ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            git fetch --no-tags --depth=1 origin "$BASE_SHA"
-          fi
-
-          BASE_ROOT="$RUNNER_TEMP/runtime-mutation-baseline"
-          rm -rf "$BASE_ROOT"
-          mkdir -p "$BASE_ROOT"
-          git archive --format=tar "$BASE_SHA" -- minecraft_mod_ai | tar -xf - -C "$BASE_ROOT"
-          python .github/scripts/audit_runtime_mutations.py \
-            --baseline-root "$BASE_ROOT" \
-            --output "$RUNNER_TEMP/runtime-mutation-audit.json" \
-            --fail-on-new
-      - name: Compile Python sources
-        run: python -m compileall -q minecraft_mod_ai tests tools download_resources.py
-      - name: Enforce dead-code and control-flow hygiene
-        run: python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
-      - name: Enforce high-confidence unreachable-code hygiene
-        run: vulture minecraft_mod_ai tools download_resources.py --min-confidence 100
-      - name: Import package bootstrap
-        run: python -c "import minecraft_mod_ai"
-      - name: Validate Mineflayer bridge syntax
-        run: node --check minecraft_mod_ai/integrations/mineflayer/bridge.mjs
-      - name: Validate canonical Colab notebook
-        run: python tools/validate_colab_notebook.py
-      - name: Verify packaged Skill catalog
-        id: packaged_skill_catalog
-        run: |
+          python .github/scripts/debug_repo_audit.py
+          python .github/scripts/audit_runtime_concurrency.py
+          python .github/scripts/audit_runtime_efficiency.py --output audit/runtime-efficiency.json
+          python -m compileall -q minecraft_mod_ai tests tools download_resources.py
+          python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
+          vulture minecraft_mod_ai tools download_resources.py --min-confidence 100
+          python -c "import minecraft_mod_ai"
+          node --check minecraft_mod_ai/integrations/mineflayer/bridge.mjs
+          python tools/validate_colab_notebook.py
           python tools/package_skills.py
           git diff --exit-code -- minecraft_mod_ai/packaged_skills.json plugins/mmm-minecraft-mod-ai/skills
-      - name: Upload regenerated Skill catalog
-        if: ${{ failure() && steps.packaged_skill_catalog.outcome == 'failure' }}
-        uses: actions/upload-artifact@v4
+          test ! -e minecraft_mod_ai/agentic_pre_design_rag.py
+      - name: Real Fabric integrity
+        run: python tools/verify_integrity_minecraft.py --output .mmm/integrity-validation
+      - name: Exhaustive root-cause audit
+        run: python tools/root_cause_audit_wrapper.py
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: regenerated-skill-catalog-${{ github.sha }}
-          if-no-files-found: error
-          retention-days: 2
-          path: |
-            minecraft_mod_ai/packaged_skills.json
-            plugins/mmm-minecraft-mod-ai/skills
-
-  runtime-clean:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    name: Runtime composition
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-          cache: pip
-      - run: python -m pip install --prefer-binary -e '.[dev]'
-      - name: Fail-closed runtime composition contracts
-        run: >-
-          python -m pytest -q
-          tests/test_runtime_bootstrap_clean.py
-          tests/test_runtime_contract_composer.py
-          tests/test_runtime_contract_composer_ownership.py
-          tests/test_runtime_wrapper_signature_integrity.py
-
-  mcp-evidence:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    name: Minecraft MCP evidence
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-          cache: pip
-      - run: python -m pip install --prefer-binary -e '.[dev]'
-      - run: >-
-          python -m pytest -q
-          tests/test_minecraft_mcp_evidence_contract.py
-          tests/test_external_mcp_role_scope.py
-          tests/test_research_coordinator.py
-
-  planner-contract:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    name: Planner and fixed-template contract
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-          cache: pip
-      - run: python -m pip install --prefer-binary -e '.[dev]'
-      - run: >-
-          python -m pytest -q
-          tests/test_fixed_template_generation_boundary.py
-          tests/test_no_direct_structured_text_generation.py
-          tests/test_host_selected_mutation_action.py
-          tests/test_planning_criterion_fixed_templates.py
-          tests/test_planning_criterion_fragment_repair.py
-          tests/test_planning_missing_section_targeted_repair.py
-          tests/test_planner_template_schema.py
-          tests/test_planning_detail_selection.py
-          tests/test_planning_detail_runtime_selection.py
-          tests/test_planning_detail_applicability.py
-          tests/test_planning_detail_grounding.py
-          tests/test_planning_handoff_contract.py
-          tests/test_planning_semantic_research.py
-          tests/test_planning_semantic_research_runtime_contract.py
-
-  coder-contract:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    name: Coder task-local contract
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-          cache: pip
-      - run: python -m pip install --prefer-binary -e '.[dev]'
-      - run: >-
-          python -m pytest -q
-          tests/test_evidence_execution_contract.py
-          tests/test_coder_execution_contract.py
-          tests/test_task_local_small_model_architecture.py
-          tests/test_small_model_boundary_regressions.py
-
-  ui-contract:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    name: Conversational UI contract
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-          cache: pip
-      - run: python -m pip install --prefer-binary -e '.[dev,ui]'
-      - run: python -m pytest -q tests/test_conversational_ui.py
-
-  parallel-repair:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    name: Parallel execution safety
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-          cache: pip
-      - run: python -m pip install --prefer-binary -e '.[dev]'
-      - run: >-
-          python -m pytest -q
-          tests/test_agentic_search_efficiency_contract.py
-          tests/test_repair_candidate_purity_contract.py
-          tests/test_llama_parallel_runtime_contract.py
-          tests/test_artifact_checkpoint_concurrency.py
-          tests/test_source_patch_path_concurrency.py
-          tests/test_artifact_graph_executor.py
-          tests/test_generation_collision_anchors.py
-
-  production-path:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    name: Production path regression
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-          cache: pip
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - name: Install test dependencies
-        run: python -m pip install --prefer-binary -e '.[dev]'
-      - name: Exercise planner, public API, host loop, repair, and verifier path
-        run: >-
-          python -m pytest -q
-          tests/test_unified_host_execution_loop.py
-          tests/test_space_progression_planner_and_verifier_regression.py
-          tests/test_complete_session_public_e2e.py
-
-  jdt-readiness:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    name: Required JDT readiness gate
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-          cache: pip
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - name: Install test dependencies
-        run: python -m pip install --prefer-binary -e '.[dev]'
-      - name: Required JDT readiness gate
-        env:
-          MMM_JAVA_VERSION: '17'
-        run: python -m pytest -q tests/test_java_lsp_readiness.py
-
-  remaining-tests:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    name: Remaining tests ${{ matrix.shard }}/3
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3]
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-          cache: pip
-      - name: Install test dependencies
-        run: python -m pip install --prefer-binary -e '.[dev]'
-      - name: Run deterministic pytest shard with compact diagnostics
-        env:
-          SHARD: ${{ matrix.shard }}
-        run: |
-          python - <<'PY'
-          import os
-          import subprocess
-          import sys
-          from pathlib import Path
-
-          from tools.ci_test_shard import select_shard
-
-          dedicated = {
-              "test_runtime_bootstrap_clean.py",
-              "test_runtime_contract_composer.py",
-              "test_runtime_contract_composer_ownership.py",
-              "test_runtime_wrapper_signature_integrity.py",
-              "test_minecraft_mcp_evidence_contract.py",
-              "test_external_mcp_role_scope.py",
-              "test_research_coordinator.py",
-              "test_fixed_template_generation_boundary.py",
-              "test_no_direct_structured_text_generation.py",
-              "test_host_selected_mutation_action.py",
-              "test_planning_criterion_fixed_templates.py",
-              "test_planning_criterion_fragment_repair.py",
-              "test_planning_missing_section_targeted_repair.py",
-              "test_planner_template_schema.py",
-              "test_planning_detail_selection.py",
-              "test_planning_detail_runtime_selection.py",
-              "test_planning_detail_applicability.py",
-              "test_planning_detail_grounding.py",
-              "test_planning_handoff_contract.py",
-              "test_planning_semantic_research.py",
-              "test_planning_semantic_research_runtime_contract.py",
-              "test_evidence_execution_contract.py",
-              "test_coder_execution_contract.py",
-              "test_task_local_small_model_architecture.py",
-              "test_small_model_boundary_regressions.py",
-              "test_conversational_ui.py",
-              "test_agentic_search_efficiency_contract.py",
-              "test_repair_candidate_purity_contract.py",
-              "test_llama_parallel_runtime_contract.py",
-              "test_artifact_checkpoint_concurrency.py",
-              "test_source_patch_path_concurrency.py",
-              "test_artifact_graph_executor.py",
-              "test_generation_collision_anchors.py",
-              "test_unified_host_execution_loop.py",
-              "test_space_progression_planner_and_verifier_regression.py",
-              "test_complete_session_public_e2e.py",
-              "test_java_lsp_readiness.py",
-          }
-          shard_number = int(os.environ["SHARD"])
-          eligible = [
-              path
-              for path in Path("tests").glob("test_*.py")
-              if path.name not in dedicated
-          ]
-          files = list(
-              select_shard(
-                  eligible,
-                  shard_number=shard_number,
-                  shard_count=3,
-              )
-          )
-          if not files:
-              raise SystemExit("pytest shard selected no files")
-          raise SystemExit(
-              subprocess.call(
-                  [
-                      sys.executable,
-                      "tools/pytest_diagnostics.py",
-                      "--log",
-                      f"audit/pytest-shard-{shard_number}.log",
-                      "--junit",
-                      f"audit/pytest-shard-{shard_number}.xml",
-                      "--durations",
-                      "15",
-                      "--maxfail",
-                      "25",
-                      *files,
-                  ]
-              )
-          )
-          PY
-      - name: Upload raw pytest diagnostics
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: pytest-shard-${{ matrix.shard }}-${{ github.sha }}
+          name: exhaustive-audit-${{ github.sha }}
           if-no-files-found: warn
           retention-days: 14
           path: |
-            audit/pytest-shard-${{ matrix.shard }}.log
-            audit/pytest-shard-${{ matrix.shard }}.xml
+            audit/
+            .mmm/
+
+  tests:
+    name: Every Python 3.11 test
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: python -m pip install --prefer-binary -e '.[dev,ui]'
+      - name: Run entire test suite
+        run: python tools/pytest_diagnostics.py --log audit/all-tests.log --junit audit/all-tests.xml --durations 50 --maxfail 100 tests
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: all-tests-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            audit/all-tests.log
+            audit/all-tests.xml
+
+  python313:
+    name: Python 3.13 planning/RAG compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - run: python -m pip install --prefer-binary -e . pytest
+      - run: python -m pytest -q tests/test_planning_state_contract.py tests/test_planning_mod_discovery.py tests/test_planning_ssot_invariants.py tests/test_planning_research_relevance_guards.py tests/test_research_evidence_handoff_contract.py tests/test_public_acceptance_runtime_boundary.py
 
   ci-gate:
     name: CI Gate
     if: ${{ always() }}
-    needs:
-      - integrity
-      - audit
-      - runtime-clean
-      - mcp-evidence
-      - planner-contract
-      - coder-contract
-      - ui-contract
-      - parallel-repair
-      - production-path
-      - jdt-readiness
-      - remaining-tests
+    needs: [audit, tests, python313]
     runs-on: ubuntu-latest
-    timeout-minutes: 5
     steps:
-      - name: Fail unless every required CI job succeeded
-        env:
-          REQUIRED_JOBS: ${{ toJSON(needs) }}
+      - env:
+          AUDIT: ${{ needs.audit.result }}
+          TESTS: ${{ needs.tests.result }}
+          PY313: ${{ needs.python313.result }}
         run: |
-          python - <<'PY'
-          import json
-          import os
-
-          jobs = json.loads(os.environ["REQUIRED_JOBS"])
-          failed = {
-              name: details.get("result", "missing")
-              for name, details in jobs.items()
-              if details.get("result") != "success"
-          }
-          if failed:
-              for name, result in sorted(failed.items()):
-                  print(f"::error title=Required CI job did not succeed::{name}: {result}")
-              raise SystemExit(1)
-          print("All required CI jobs succeeded; CI Gate is authoritative.")
-          PY
+          test "$AUDIT" = success
+          test "$TESTS" = success
+          test "$PY313" = success
