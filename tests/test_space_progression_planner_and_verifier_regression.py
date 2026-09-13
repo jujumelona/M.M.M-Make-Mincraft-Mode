@@ -415,7 +415,7 @@ def _schema(name: str) -> dict:
     }
 
 
-def test_logged_malformed_diagnostics_path_is_rebound_and_verification_completes(capsys) -> None:
+def test_host_owned_diagnostics_is_task_bound_and_verification_completes(capsys) -> None:
     capsule = compile_task_capsule(_module())
     assert capsule is not None
 
@@ -436,23 +436,6 @@ def test_logged_malformed_diagnostics_path_is_rebound_and_verification_completes
                         ToolCall(
                             id="edit",
                             name="apply_source_edit",
-                            arguments=args,
-                            raw_arguments=json.dumps(args),
-                        ),
-                    )
-                )
-            if self.turn == 2:
-                args = {
-                    "action": "java_diagnostics",
-                    "arguments": {
-                        "diagnostics_config": {"allowlist": ["/wrong/.java"]}
-                    },
-                }
-                return GenerationResponse(
-                    tool_calls=(
-                        ToolCall(
-                            id="verify",
-                            name="java_diagnostics",
                             arguments=args,
                             raw_arguments=json.dumps(args),
                         ),
