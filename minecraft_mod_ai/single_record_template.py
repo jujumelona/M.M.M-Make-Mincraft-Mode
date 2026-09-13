@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any, Callable
 
 from jsonschema import Draft202012Validator
 
 from .fixed_template_generation import generate_fixed_template_value
+from .model_output_atomicity_contract import MAX_MODEL_FIELDS, assert_atomic_model_schema
 from .task_template_catalog import load_record_template
 from .task_template_input import task_binding, task_context
 
@@ -52,6 +54,90 @@ def _ordinal_instruction(context: dict[str, Any]) -> str:
     return ""
 
 
+def _atomic_record_schema_slices(
+    schema: dict[str, Any],
+    *,
+    identifier: str,
+) -> tuple[dict[str, Any], ...]:
+    """Project one logical record into deterministic small-model field slices.
+
+    The runtime catalog owns the complete logical record, which can be wider than one
+    model call.  This boundary owns the physical model-call width: it projects only the
+    top-level fields while the host merges the slices and validates the complete logical
+    record afterwards.  The number of calls is therefore derived from schema completeness,
+    not from a retry/iteration cap.
+    """
+
+    if schema.get("type") != "object":
+        raise SingleRecordTemplateError(
+            f"SINGLE_TEMPLATE_SCHEMA: {identifier} record_schema must be an object"
+        )
+    properties = schema.get("properties")
+    required = schema.get("required")
+    if not isinstance(properties, Mapping) or not isinstance(required, list):
+        raise SingleRecordTemplateError(
+            f"SINGLE_TEMPLATE_SCHEMA: {identifier} must declare properties and required fields"
+        )
+
+    field_names = tuple(properties)
+    if not field_names:
+        raise SingleRecordTemplateError(
+            f"SINGLE_TEMPLATE_SCHEMA: {identifier} has no model-authored fields"
+        )
+
+    required_set = set(required)
+    undeclared_required = required_set.difference(field_names)
+    if undeclared_required:
+        raise SingleRecordTemplateError(
+            f"SINGLE_TEMPLATE_SCHEMA: {identifier} has undeclared required fields "
+            f"{sorted(undeclared_required)!r}"
+        )
+
+    slices: list[dict[str, Any]] = []
+    for start in range(0, len(field_names), MAX_MODEL_FIELDS):
+        names = field_names[start : start + MAX_MODEL_FIELDS]
+        projected = {
+            "type": "object",
+            "properties": {name: deepcopy(properties[name]) for name in names},
+            "required": [name for name in names if name in required_set],
+            "additionalProperties": False,
+        }
+        for metadata_key in ("title", "description"):
+            if metadata_key in schema:
+                projected[metadata_key] = deepcopy(schema[metadata_key])
+        try:
+            assert_atomic_model_schema(
+                projected,
+                surface=f"record slice for {identifier!r}",
+            )
+        except Exception as exc:
+            raise SingleRecordTemplateError(
+                f"SINGLE_TEMPLATE_ATOMIC_PROJECTION: cannot project {identifier} fields "
+                f"{list(names)!r} into one atomic model call: {exc}"
+            ) from exc
+        slices.append(projected)
+    return tuple(slices)
+
+
+def _merge_record_slice(
+    merged: dict[str, Any],
+    part: Any,
+    *,
+    identifier: str,
+) -> None:
+    if not isinstance(part, Mapping):
+        raise SingleRecordTemplateError(
+            f"SINGLE_TEMPLATE_RECORD: expected object slice for {identifier}"
+        )
+    overlap = set(merged).intersection(part)
+    if overlap:
+        raise SingleRecordTemplateError(
+            f"SINGLE_TEMPLATE_RECORD: duplicate projected fields for {identifier}: "
+            f"{sorted(overlap)!r}"
+        )
+    merged.update(deepcopy(dict(part)))
+
+
 def run_single_record_template(
     router: Any,
     identifier: str,
@@ -78,28 +164,52 @@ def run_single_record_template(
         value = deepcopy(saved)
     else:
         generate = generator or generate_fixed_template_value
-        value = generate(
-            router,
-            "planner",
-            [
-                {
-                    "role": "system",
-                    "content": (
-                        template["task"]
-                        + "\n"
-                        + "\n".join(template["rules"])
-                        + _ordinal_instruction(normalized_context)
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": json.dumps(normalized_context, ensure_ascii=False),
-                },
-            ],
-            response_schema=schema,
-            enable_tools=False,
-            tool_name="submit_one_" + identifier.replace("/", "_"),
-        )
+        base_messages = [
+            {
+                "role": "system",
+                "content": (
+                    template["task"]
+                    + "\n"
+                    + "\n".join(template["rules"])
+                    + _ordinal_instruction(normalized_context)
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(normalized_context, ensure_ascii=False),
+            },
+        ]
+        slices = _atomic_record_schema_slices(schema, identifier=identifier)
+        value: dict[str, Any] = {}
+        for part_index, part_schema in enumerate(slices, start=1):
+            messages = list(base_messages)
+            if value:
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "The host has already accepted these fields for the same logical "
+                            "record: "
+                            + json.dumps(value, ensure_ascii=False, sort_keys=True)
+                            + ". Fill only the fields declared by the current fixed template "
+                            "and keep them semantically consistent with the accepted fields."
+                        ),
+                    }
+                )
+            tool_name = "submit_one_" + identifier.replace("/", "_")
+            if len(slices) > 1:
+                tool_name += f"_part_{part_index}_of_{len(slices)}"
+            part = generate(
+                router,
+                "planner",
+                messages,
+                response_schema=part_schema,
+                enable_tools=False,
+                tool_name=tool_name,
+            )
+            Draft202012Validator(part_schema).validate(part)
+            _merge_record_slice(value, part, identifier=identifier)
+
         validator.validate(value)
         if _contains_blank_string(value, schema):
             raise SingleRecordTemplateError(
