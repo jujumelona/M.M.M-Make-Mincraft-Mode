@@ -169,8 +169,10 @@ def _proposal() -> CompleteProposal:
                 module_id="debug_token",
                 kind="item",
                 config={
+                    "display_name": "Debug Token",
                     "display_name_en": "Debug Token",
                     "display_name_ko": "디버그 토큰",
+                    "main_color": "#7A5CFF",
                 },
                 required_gates=("registry", "resource", "gradle", "jar validation"),
             ),
