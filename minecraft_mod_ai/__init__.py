@@ -49,6 +49,11 @@ install_generation_accuracy_outer(_model_router)
 assert_generation_accuracy_outer(_model_router)
 install_versioned_reference_context()
 
+from . import complete_orchestrator as _complete_orchestrator
+from .prepared_project_resume_integrity import install as install_prepared_project_resume_integrity
+
+install_prepared_project_resume_integrity(_complete_orchestrator)
+
 from .api import (
     ChatReply,
     CompleteChatReply,
