@@ -49,6 +49,22 @@ def _introduced(
     return introduced
 
 
+def _introduced_duplicate_relations(
+    current: dict[str, Any],
+    baseline: dict[str, Any],
+) -> list[tuple[tuple[str, str], tuple[str, str]]]:
+    return introduced_duplicate_pairs(
+        (
+            _duplicate_members(group)
+            for group in current.get("exact_duplicate_function_bodies", ())
+        ),
+        (
+            _duplicate_members(group)
+            for group in baseline.get("exact_duplicate_function_bodies", ())
+        ),
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--current", type=Path, required=True)
@@ -62,10 +78,7 @@ def main() -> int:
         list(baseline.get("findings", ())),
         _finding_identity,
     )
-    introduced_duplicates = introduced_duplicate_pairs(
-        (_duplicate_members(group) for group in current.get("exact_duplicate_function_bodies", ())),
-        (_duplicate_members(group) for group in baseline.get("exact_duplicate_function_bodies", ())),
-    )
+    introduced_duplicates = _introduced_duplicate_relations(current, baseline)
 
     print(
         "runtime efficiency delta: "
