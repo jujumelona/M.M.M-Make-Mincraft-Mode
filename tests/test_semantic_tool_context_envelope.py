@@ -1,8 +1,7 @@
 from minecraft_mod_ai import model_context_budget as context_budget
-from minecraft_mod_ai import model_router as model_router_module
 from minecraft_mod_ai import planning_semantic_research as semantic
-from minecraft_mod_ai.semantic_tool_context_alignment_installation import (
-    tool_decision_request_messages,
+from minecraft_mod_ai.tool_decision_request_envelope import (
+    mandatory_tool_decision_messages,
 )
 
 
@@ -28,13 +27,11 @@ def test_semantic_admission_counts_router_mandatory_tool_context():
         max_index,
         max_index,
     )
-    forced_assessment = tool_decision_request_messages(
-        model_router_module,
+    forced_assessment = mandatory_tool_decision_messages(
         raw_assessment,
         tool_name=semantic._ASSESSMENT_TOOL_NAME,
     )
-    forced_verification = tool_decision_request_messages(
-        model_router_module,
+    forced_verification = mandatory_tool_decision_messages(
         raw_verification,
         tool_name=semantic._VERIFICATION_TOOL_NAME,
     )
@@ -65,13 +62,11 @@ def test_semantic_admission_accepts_when_full_router_envelope_fits():
     units = semantic._source_units(window)
     max_index = len(units) - 1
 
-    assessment_request = tool_decision_request_messages(
-        model_router_module,
+    assessment_request = mandatory_tool_decision_messages(
         semantic._assessment_messages(requirement, obligation, source_id, units),
         tool_name=semantic._ASSESSMENT_TOOL_NAME,
     )
-    verification_request = tool_decision_request_messages(
-        model_router_module,
+    verification_request = mandatory_tool_decision_messages(
         semantic._verification_messages(
             requirement,
             obligation,

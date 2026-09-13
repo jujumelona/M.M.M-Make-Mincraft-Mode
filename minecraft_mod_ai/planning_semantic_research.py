@@ -21,9 +21,10 @@ from .deadline_executor import iter_completed_with_deadlines
 from .fixed_template_generation import generate_fixed_template_value
 from .model_adapters.base import ModelConfigurationError
 from .model_concurrency import router_native_model_parallelism
-from .model_context_budget import request_message_budget
+from .model_context_budget import _canonical_size, request_message_budget
 from .planning_candidate_evidence import fingerprint, semantic_frontier_pool
 from .planning_criterion_fragments import requirement_acceptance_criteria
+from .tool_decision_request_envelope import mandatory_tool_decision_messages
 
 _VERDICTS = ("supported", "partial", "negated", "unrelated", "insufficient")
 _ASSESSMENT_SCHEMA = {
@@ -170,11 +171,6 @@ def _verification_messages(
     )
 
 
-def _message_bytes(messages: tuple[dict[str, Any], ...]) -> int:
-    """Count the same serialized message envelope enforced at the model boundary."""
-    return len(json.dumps(messages, ensure_ascii=False).encode("utf-8"))
-
-
 def _tool_surface(
     tool_name: str,
     schema: Mapping[str, Any],
@@ -224,10 +220,12 @@ def _semantic_window_fits(
     assessment_budget: int,
     verification_budget: int,
 ) -> bool:
-    """Require both model turns to fit before admitting a source window.
+    """Require both final forced-tool request envelopes to fit before admission.
 
-    Verification carries the source units once plus the host-selected range. It no longer
-    duplicates both the full source window and the selected quote.
+    The router adds mandatory repository policy and required-function protocol messages
+    after semantic source windows are constructed. Admission therefore measures those
+    exact mandatory messages with the same canonical byte counter used by the context
+    safety contract instead of measuring only caller-authored semantic messages.
     """
     if not window:
         return False
@@ -235,25 +233,31 @@ def _semantic_window_fits(
     if not units:
         return False
     max_index = len(units) - 1
-    assessment_messages = _assessment_messages(
-        requirement_statement,
-        obligation,
-        source_id,
-        units,
+    assessment_request = mandatory_tool_decision_messages(
+        _assessment_messages(
+            requirement_statement,
+            obligation,
+            source_id,
+            units,
+        ),
+        tool_name=_ASSESSMENT_TOOL_NAME,
     )
     # The largest valid unit index in both integer fields is the worst-size verifier payload
     # for this window, so an actual selected range can never serialize larger than this.
-    verification_messages = _verification_messages(
-        requirement_statement,
-        obligation,
-        source_id,
-        units,
-        max_index,
-        max_index,
+    verification_request = mandatory_tool_decision_messages(
+        _verification_messages(
+            requirement_statement,
+            obligation,
+            source_id,
+            units,
+            max_index,
+            max_index,
+        ),
+        tool_name=_VERIFICATION_TOOL_NAME,
     )
     return (
-        _message_bytes(assessment_messages) < assessment_budget
-        and _message_bytes(verification_messages) < verification_budget
+        _canonical_size(assessment_request) <= assessment_budget
+        and _canonical_size(verification_request) <= verification_budget
     )
 
 
