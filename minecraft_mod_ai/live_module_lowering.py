@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-"""Explicit lowering of semantic production modules for validated live targets.
+"""Finalize semantic production modules for validated live targets.
 
 Unlike the removed platform contract, this module does not install wrappers or select a
-platform. It is a pure post-planning transformation over an already validated proposal.
+platform. It is the final pure post-planning transformation over an already validated
+proposal: live-target module lowering runs first, then the canonical resource asset plan
+is bound to that final semantic proposal before it can be approved.
 """
 
 from collections.abc import Mapping
@@ -16,18 +18,30 @@ from .spec import SpecValidationError
 _LIVE_NON_SOURCE_KINDS = frozenset({"integration"})
 
 
+def _finalize_post_planning(planner: Any, result: CompleteProposal) -> CompleteProposal:
+    """Bind execution-critical resource semantics before proposal approval/hash freeze."""
+    from .resource_asset_production import attach_generation_plan
+
+    router = getattr(planner, "router", None)
+    if router is None:
+        raise SpecValidationError(
+            "Canonical asset planning requires the planner router before proposal approval."
+        )
+    return attach_generation_plan(router, result)
+
+
 def lower_live_modules(planner: Any, result: CompleteProposal) -> CompleteProposal:
     selection = result.game_design.get("_platform_selection", {})
     target = selection.get("target", {}) if isinstance(selection, dict) else {}
     if not isinstance(target, dict) or target.get("source_api_family") != "fabric_live_ai":
-        return result
+        return _finalize_post_planning(planner, result)
 
     migration_requested = bool(
         isinstance(selection, dict) and selection.get("migration_requested")
     )
     migration_from = selection.get("migration_from") if isinstance(selection, dict) else None
     if not migration_requested and _validated_retain_only(result):
-        return result
+        return _finalize_post_planning(planner, result)
 
     bootstrap_contents = _bootstrap_content_payload(result)
     bootstrap_boss = _bootstrap_boss_payload(result)
@@ -110,7 +124,7 @@ def lower_live_modules(planner: Any, result: CompleteProposal) -> CompletePropos
         changed = True
 
     if not changed:
-        return result
+        return _finalize_post_planning(planner, result)
 
     lowered_tuple = tuple(lowered)
     game_design = {
@@ -139,7 +153,7 @@ def lower_live_modules(planner: Any, result: CompleteProposal) -> CompletePropos
         approval_hash="",
     ).with_hash()
     updated.validate(policy=getattr(planner, "policy", None))
-    return updated
+    return _finalize_post_planning(planner, updated)
 
 
 def _bootstrap_content_payload(result: CompleteProposal) -> list[dict[str, Any]]:
