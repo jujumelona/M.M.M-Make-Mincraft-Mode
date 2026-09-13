@@ -13,7 +13,7 @@ def _request(*, width: int = 16, height: int = 16) -> AssetRequest:
         asset_id="widget_icon",
         kind="item",
         visual_description="A compact pixel-art widget icon",
-        render_kind="item_texture",
+        render_kind="item.generated",
         subject_id="widget",
         requested_width=width,
         requested_height=height,
@@ -25,7 +25,7 @@ def test_semantic_asset_request_is_bound_to_current_resource_contract() -> None:
     request.validate()
     assert request.asset_id == "widget_icon"
     assert request.kind == "item"
-    assert request.render_kind == "item_texture"
+    assert request.render_kind == "item.generated"
     assert request.subject_id == "widget"
     assert request.requested_width == 16
     assert request.requested_height == 16
