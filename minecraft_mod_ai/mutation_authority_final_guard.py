@@ -24,6 +24,7 @@ from functools import wraps
 from typing import Any
 
 from .mutation_failure_classification import is_recoverable_mutation_failure
+from .repair_mutation_recovery_contract import install as install_repair_mutation_recovery
 
 _MARKER = "_mmm_mutation_authority_final_guard_v1"
 _SEMANTIC_BOUNDARY_MARKER = "_mmm_post_argument_semantic_boundary_v1"
@@ -156,8 +157,6 @@ def _host_pin_from_messages(
             "disagree on the exact mutation target or writable set."
         )
 
-    # Equal signatures are semantically identical. Choosing the last receipt makes the
-    # tie deterministic without allowing wrapper insertion order to alter authority.
     return max(finalists, key=lambda item: item[0])[1]
 
 
@@ -238,8 +237,6 @@ def _install_semantic_generation_boundary(loop_module: Any) -> None:
                 is_host_directed = bool(forced or tool_choice == "required")
 
                 if code == "PHASE_PROTOCOL_VIOLATION" and is_host_directed:
-                    # The host explicitly scheduled this action for the updated phase;
-                    # this is an authorized phase transition, not a repeated unguided retry.
                     pass
                 else:
                     emit = getattr(loop_module, "emit_root_cause", None)
@@ -299,9 +296,6 @@ def install(loop_module: Any | None = None) -> None:
             )
 
         def is_mutation_ready(messages: Sequence[Mapping[str, Any]], state: Any) -> bool:
-            # Install the host pin *before* generic message scanning. This prevents a
-            # retrieved/fixture file from becoming target identity merely because it is a
-            # READY source snapshot and appears earlier in the execution flow.
             host_pin = _host_pin_from_messages(messages, loop_module)
             if host_pin is not None:
                 with state._lock:
@@ -345,6 +339,10 @@ def install(loop_module: Any | None = None) -> None:
         loop_module.is_mutation_ready = is_mutation_ready
         setattr(loop_module, _MARKER, True)
 
+    # Repair recovery must sit inside this final guard: it narrows the model-visible
+    # frontier and verifier semantics, while the semantic failure boundary remains the
+    # outermost authority decision point.
+    install_repair_mutation_recovery(loop_module)
     _install_semantic_generation_boundary(loop_module)
 
 
