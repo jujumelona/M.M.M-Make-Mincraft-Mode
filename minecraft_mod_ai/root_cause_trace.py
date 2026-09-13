@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-"""Bounded, secret-safe, durable structured tracing for host-owned execution boundaries.
+"""Compact, source-first structured tracing for host-owned execution boundaries.
 
-The trace is independent of model output. It records what the host actually attempted,
-what gate/result was observed, and the original exception chain before callers wrap or
-aggregate the failure.
-
-Every event is mirrored to stderr and appended to the JSONL journal. Failure and
-emergency records force an fsync and stderr flush, which also flush earlier buffered
-records, so the critical failure tail is durable without forcing a disk or pipe barrier
-for every successful hot-path event. Verifier retries, recovery and live JDT stderr
-also flush the display stream immediately without adding an fsync per log line.
+The journal is append-only and independent of model output. Boundary records contain
+small identifiers instead of serialized domain objects, while failure records point at
+the deepest causal source location so a failing definition can be found from the log
+without repository-wide searching.
 """
 
 import heapq
@@ -35,6 +30,9 @@ _TRACE_SEQUENCE = itertools.count(1)
 _TRACE_ID: ContextVar[str] = ContextVar("mmm_root_trace_id", default="")
 _SPAN_ID: ContextVar[str] = ContextVar("mmm_root_span_id", default="")
 _FIRST_FAILURE_SEQ: ContextVar[int] = ContextVar("mmm_root_first_failure_seq", default=0)
+_DIAGNOSTIC_CONTEXT: ContextVar[dict[str, Any]] = ContextVar(
+    "mmm_root_diagnostic_context", default={}
+)
 _TRACE_WRITE_LOCK = threading.Lock()
 _STRING_LIMIT = 512
 _COLLECTION_LIMIT = 64
@@ -67,6 +65,46 @@ _FAILURE_STATUSES = frozenset(
     }
 )
 _SKIP_STATUSES = frozenset({"SKIP", "SKIPPED", "NOT_RUN"})
+_IDENTIFIER_KEYS = (
+    "run_id",
+    "trace_id",
+    "stage",
+    "operation",
+    "template",
+    "template_id",
+    "template_path",
+    "logical_path",
+    "artifact",
+    "artifact_id",
+    "source",
+    "source_path",
+    "path",
+    "invariant",
+    "blocked_stage",
+    "status",
+    "name",
+    "id",
+)
+_DIAGNOSTIC_KEYS = (
+    "run_id",
+    "stage",
+    "operation",
+    "template",
+    "template_id",
+    "template_path",
+    "logical_path",
+    "artifact",
+    "artifact_id",
+    "source",
+    "source_path",
+    "source_symbol",
+    "source_line",
+    "invariant",
+    "expected",
+    "actual",
+    "offending_fields",
+    "blocked_stage",
+)
 F = TypeVar("F", bound=Callable[..., Any])
 
 
@@ -116,6 +154,22 @@ def trace_scope(operation: str, *, trace_id: str = ""):
         _TRACE_ID.reset(trace_token)
 
 
+@contextmanager
+def diagnostic_context(**fields: Any):
+    """Attach small source/contract identifiers to every nested trace event."""
+
+    parent = dict(_DIAGNOSTIC_CONTEXT.get())
+    merged = dict(parent)
+    for key, value in fields.items():
+        if key in _DIAGNOSTIC_KEYS and value not in (None, "", [], {}, ()):
+            merged[key] = bounded_safe(value, key=key)
+    token = _DIAGNOSTIC_CONTEXT.set(merged)
+    try:
+        yield merged
+    finally:
+        _DIAGNOSTIC_CONTEXT.reset(token)
+
+
 def _secret_key(value: Any) -> bool:
     key = str(value or "").casefold().replace("-", "_")
     return any(part in key for part in _SECRET_KEY_PARTS)
@@ -129,8 +183,6 @@ def _bounded_collection(items: Sequence[Any], total: int, *, depth: int) -> list
 
 
 def _bounded_sequence(value: Sequence[Any], *, depth: int) -> list[Any]:
-    """Bound a sequence without copying or traversing its unreported tail."""
-
     total = len(value)
     if isinstance(value, (list, tuple)):
         items = value[:_COLLECTION_LIMIT]
@@ -140,8 +192,6 @@ def _bounded_sequence(value: Sequence[Any], *, depth: int) -> list[Any]:
 
 
 def _bounded_set(value: set[Any] | frozenset[Any], *, depth: int) -> list[Any]:
-    """Keep deterministic set traces with O(limit) auxiliary memory."""
-
     total = len(value)
     if total <= _COLLECTION_LIMIT:
         items = sorted(value, key=repr)
@@ -183,8 +233,105 @@ def bounded_safe(value: Any, *, depth: int = 0, key: str = "") -> Any:
     return bounded_safe(rendered, depth=depth + 1)
 
 
+def _scalar_identifier(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return bounded_safe(value)
+    return None
+
+
+def _value_summary(value: Any) -> dict[str, Any]:
+    """Summarize a boundary value without serializing the domain object itself."""
+
+    summary: dict[str, Any] = {"type": type(value).__name__}
+    if value is None or isinstance(value, (bool, int, float, str)):
+        summary["value"] = bounded_safe(value)
+        return summary
+    if isinstance(value, Mapping):
+        summary["size"] = len(value)
+        identifiers: dict[str, Any] = {}
+        for key in _IDENTIFIER_KEYS:
+            if key in value:
+                scalar = _scalar_identifier(value.get(key))
+                if scalar is not None:
+                    identifiers[key] = scalar
+        if identifiers:
+            summary["identifiers"] = identifiers
+        return summary
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        summary["size"] = len(value)
+        return summary
+    identifiers = {}
+    for key in _IDENTIFIER_KEYS:
+        try:
+            scalar = _scalar_identifier(getattr(value, key))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        except BaseException:
+            continue
+        if scalar is not None:
+            identifiers[key] = scalar
+    if identifiers:
+        summary["identifiers"] = identifiers
+    return summary
+
+
+def _argument_summary(
+    signature: inspect.Signature, args: tuple[Any, ...], kwargs: Mapping[str, Any]
+) -> dict[str, Any]:
+    try:
+        bound = signature.bind_partial(*args, **dict(kwargs))
+    except Exception as bind_exc:
+        return {"binding_error": f"{type(bind_exc).__name__}: {bind_exc}"}
+    return {name: _value_summary(value) for name, value in bound.arguments.items()}
+
+
+def _deepest_exception(exc: BaseException) -> BaseException:
+    current = exc
+    seen: set[int] = set()
+    while id(current) not in seen:
+        seen.add(id(current))
+        child = current.__cause__ if current.__cause__ is not None else current.__context__
+        if child is None:
+            break
+        current = child
+    return current
+
+
+def _exception_diagnostics(exc: BaseException) -> dict[str, Any]:
+    root = _deepest_exception(exc)
+    diagnostics: dict[str, Any] = dict(_DIAGNOSTIC_CONTEXT.get())
+    for key in _DIAGNOSTIC_KEYS:
+        if key in diagnostics:
+            continue
+        try:
+            value = getattr(root, key)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        except BaseException:
+            continue
+        if value not in (None, "", [], {}, ()):
+            diagnostics[key] = bounded_safe(value, key=key)
+    try:
+        frames = traceback.extract_tb(root.__traceback__) if root.__traceback__ else []
+    except BaseException:
+        frames = []
+    if frames:
+        leaf = frames[-1]
+        diagnostics["source"] = {
+            "file": leaf.filename,
+            "line": leaf.lineno,
+            "function": leaf.name,
+        }
+    diagnostics["cause_type"] = type(root).__name__
+    try:
+        diagnostics["cause"] = bounded_safe(str(root))
+    except BaseException:
+        diagnostics["cause"] = f"<unprintable:{type(root).__name__}>"
+    return diagnostics
+
+
 def exception_chain(exc: BaseException) -> list[dict[str, Any]]:
-    """Preserve the causal exception chain instead of only the final wrapper message."""
+    """Preserve the causal exception chain exactly once for the trace's first failure."""
 
     chain: list[dict[str, Any]] = []
     seen: set[int] = set()
@@ -192,11 +339,7 @@ def exception_chain(exc: BaseException) -> list[dict[str, Any]]:
     while current is not None and id(current) not in seen and len(chain) < 16:
         seen.add(id(current))
         try:
-            frames = (
-                traceback.extract_tb(current.__traceback__)[-20:]
-                if current.__traceback__
-                else []
-            )
+            frames = traceback.extract_tb(current.__traceback__)[-20:] if current.__traceback__ else []
         except BaseException:
             frames = []
         try:
@@ -208,29 +351,19 @@ def exception_chain(exc: BaseException) -> list[dict[str, Any]]:
                 "type": type(current).__name__,
                 "message": message,
                 "frames": [
-                    {
-                        "file": frame.filename,
-                        "line": frame.lineno,
-                        "function": frame.name,
-                    }
+                    {"file": frame.filename, "line": frame.lineno, "function": frame.name}
                     for frame in frames
                 ],
             }
         )
-        current = (
-            current.__cause__ if current.__cause__ is not None else current.__context__
-        )
+        current = current.__cause__ if current.__cause__ is not None else current.__context__
     return chain
 
 
 def _semantic_outcome(value: Any) -> str:
     if not isinstance(value, Mapping):
         return "PASS"
-    status = (
-        str(value.get("status") or value.get("state") or value.get("outcome") or "")
-        .strip()
-        .upper()
-    )
+    status = str(value.get("status") or value.get("state") or value.get("outcome") or "").strip().upper()
     if status in _FAILURE_STATUSES:
         return "FAIL"
     if status in _SKIP_STATUSES:
@@ -247,8 +380,6 @@ def _is_failure(result: str, exc: BaseException | None) -> bool:
 
 
 def _append_durable_line(line: bytes, *, sync: bool) -> None:
-    """Append one JSONL record; force durability only at failure boundaries."""
-
     path = durable_trace_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY
@@ -268,8 +399,6 @@ def _append_durable_line(line: bytes, *, sync: bool) -> None:
 
 
 def _stderr_line(line: str, *, flush: bool) -> None:
-    """Mirror one trace record without turning every success into a pipe barrier."""
-
     try:
         sys.stderr.write(_TRACE_PREFIX + line + "\n")
         if flush:
@@ -286,34 +415,21 @@ def _emergency_trace(
     original_exc: BaseException | None,
     logger_exc: BaseException,
 ) -> None:
-    """Best-effort fallback that cannot mask the caller's original failure."""
-
     record = {
         "schema_version": "mmm/root-cause-trace-emergency-v1",
         "trace_seq": trace_seq,
         "trace_id": trace_id,
         "event": "trace_emergency_fallback",
         "original_event": str(event),
-        "original_exception_type": type(original_exc).__name__
-        if original_exc is not None
-        else "",
+        "original_exception_type": type(original_exc).__name__ if original_exc is not None else "",
         "logger_exception_type": type(logger_exc).__name__,
     }
     try:
-        encoded = (
-            json.dumps(
-                record,
-                ensure_ascii=True,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8", "backslashreplace")
-            + b"\n"
-        )
+        encoded = json.dumps(record, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8", "backslashreplace"
+        ) + b"\n"
     except BaseException:
-        encoded = (
-            b'{"schema_version":"mmm/root-cause-trace-emergency-v1",'
-            b'"event":"trace_emergency_fallback"}\n'
-        )
+        encoded = b'{"schema_version":"mmm/root-cause-trace-emergency-v1","event":"trace_emergency_fallback"}\n'
     try:
         _append_durable_line(encoded, sync=True)
     except BaseException:
@@ -335,14 +451,14 @@ def emit_root_cause(
     details: Mapping[str, Any] | None = None,
     exc: BaseException | None = None,
 ) -> None:
-    """Emit one append-only event without allowing diagnostics to replace first cause."""
+    """Emit one append-only event; only the first failure carries the full exception chain."""
 
     trace_seq = next(_TRACE_SEQUENCE)
     trace_id = current_trace_id()
     failure = _is_failure(result, exc)
     try:
         payload: dict[str, Any] = {
-            "schema_version": "mmm/root-cause-trace-v3",
+            "schema_version": "mmm/root-cause-trace-v4",
             "trace_seq": trace_seq,
             "trace_id": trace_id,
             "event": str(event),
@@ -360,30 +476,42 @@ def emit_root_cause(
             payload["result"] = result
         if reason:
             payload["reason"] = bounded_safe(reason)
+
+        context = dict(_DIAGNOSTIC_CONTEXT.get())
+        if context:
+            payload["diagnostic_context"] = bounded_safe(context)
         if details:
-            payload["details"] = bounded_safe(details)
+            safe_details = bounded_safe(details)
+            payload["details"] = safe_details
             from .planner_trace_artifacts import save_trace_artifact
 
             try:
                 payload["details_artifact"] = save_trace_artifact(
-                    details,
+                    safe_details,
                     durable_trace_path().parent / "artifacts",
                     sync=failure,
                 )
             except Exception as artifact_error:
                 payload["details_artifact_error"] = type(artifact_error).__name__
-        if exc is not None:
-            payload["exception_chain"] = exception_chain(exc)
 
+        first_failure_seq = _FIRST_FAILURE_SEQ.get()
+        is_first_failure = False
         if failure:
-            first_failure_seq = _FIRST_FAILURE_SEQ.get()
             if first_failure_seq <= 0:
                 first_failure_seq = trace_seq
                 _FIRST_FAILURE_SEQ.set(trace_seq)
+                is_first_failure = True
             payload["first_failure_seq"] = first_failure_seq
-            payload["is_first_failure"] = first_failure_seq == trace_seq
-        elif _FIRST_FAILURE_SEQ.get() > 0:
-            payload["first_failure_seq"] = _FIRST_FAILURE_SEQ.get()
+            payload["is_first_failure"] = is_first_failure
+        elif first_failure_seq > 0:
+            payload["first_failure_seq"] = first_failure_seq
+
+        if exc is not None:
+            payload["failure"] = _exception_diagnostics(exc)
+            if is_first_failure:
+                payload["exception_chain"] = exception_chain(exc)
+            else:
+                payload["exception_chain_ref"] = first_failure_seq
 
         serialized = json.dumps(
             payload,
@@ -398,7 +526,9 @@ def emit_root_cause(
         )
         _stderr_line(
             serialized,
-            flush=failure or event in {
+            flush=failure
+            or event
+            in {
                 "mcp_verifier_transport_retry",
                 "mcp_verifier_transport_recovered",
                 "jdt_stderr",
@@ -426,7 +556,7 @@ def emit_root_cause(
 
 
 def traced_callable(function: F, *, stage: str, operation: str | None = None) -> F:
-    """Trace every invocation at a shared host boundary without changing its contract."""
+    """Trace a host boundary using identifiers/types rather than full argument objects."""
 
     operation_name = operation or function.__name__
     signature = inspect.signature(function)
@@ -434,23 +564,13 @@ def traced_callable(function: F, *, stage: str, operation: str | None = None) ->
     @wraps(function)
     def wrapped(*args: Any, **kwargs: Any) -> Any:
         started = time.monotonic()
-        try:
-            bound = signature.bind_partial(*args, **kwargs)
-            safe_arguments = {
-                name: bounded_safe(value, key=name)
-                for name, value in bound.arguments.items()
-            }
-        except Exception as bind_exc:
-            safe_arguments = {
-                "argument_binding": f"{type(bind_exc).__name__}: {bind_exc}"
-            }
         emit_root_cause(
             "operation_start",
             stage=stage,
             operation=operation_name,
             gate="host_boundary",
             result="START",
-            details={"arguments": safe_arguments},
+            details={"arguments": _argument_summary(signature, args, kwargs)},
         )
         try:
             value = function(*args, **kwargs)
@@ -476,7 +596,7 @@ def traced_callable(function: F, *, stage: str, operation: str | None = None) ->
             reason="host operation returned",
             details={
                 "elapsed_ms": round((time.monotonic() - started) * 1000.0, 3),
-                "result_summary": bounded_safe(value),
+                "result_summary": _value_summary(value),
             },
         )
         return value
@@ -487,6 +607,7 @@ def traced_callable(function: F, *, stage: str, operation: str | None = None) ->
 __all__ = [
     "bounded_safe",
     "current_trace_id",
+    "diagnostic_context",
     "durable_trace_path",
     "emit_root_cause",
     "exception_chain",
