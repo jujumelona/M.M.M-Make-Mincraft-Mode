@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai import java_lsp
+from minecraft_mod_ai.java_lsp_trace import TracedJavaLanguageService
 
 
 def _fake_jdk(tmp_path: Path, name: str, version: str) -> Path:
@@ -103,6 +104,11 @@ def test_service_ready_cannot_bypass_semantic_probe(monkeypatch, tmp_path: Path)
         service._ensure_rpc_locked(tmp_path.resolve(), timeout_seconds=5)
     assert service.ready is False
     assert fake.closed is True
+
+
+def test_traced_service_cannot_override_canonical_readiness() -> None:
+    assert "_ensure_rpc_locked" not in TracedJavaLanguageService.__dict__
+    assert TracedJavaLanguageService._ensure_rpc_locked is java_lsp.JavaLanguageService._ensure_rpc_locked
 
 
 def test_semantic_probe_requires_object_and_string_resolution(monkeypatch, tmp_path: Path) -> None:
