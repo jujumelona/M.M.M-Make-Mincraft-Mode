@@ -31,11 +31,12 @@ jobs:
           distribution: temurin
           java-version: '17'
       - run: python -m pip install --prefer-binary 'build>=1,<2' -e '.[dev,ui]'
-      - name: Static, packaging, liveness, and runtime audits
+      - name: Static, packaging, liveness, runtime, and structural audits
         run: |
           python .github/scripts/debug_repo_audit.py
           python .github/scripts/audit_runtime_concurrency.py
           python .github/scripts/audit_runtime_efficiency.py --output audit/runtime-efficiency.json
+          python .github/scripts/audit_code_quality_regression.py --output audit/code-quality-regression.json
           python -m compileall -q minecraft_mod_ai tests tools download_resources.py
           python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
           vulture minecraft_mod_ai tools download_resources.py --min-confidence 100
