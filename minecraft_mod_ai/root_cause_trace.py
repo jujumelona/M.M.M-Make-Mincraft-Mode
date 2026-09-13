@@ -402,6 +402,15 @@ def emit_root_cause(
                 "mcp_verifier_transport_retry",
                 "mcp_verifier_transport_recovered",
                 "jdt_stderr",
+                "jdt_server_progress",
+                "gradle_command_start",
+                "gradle_command_output",
+                "gradle_command_result",
+                "gradle_distribution_start",
+                "gradle_cache_lock_wait",
+                "gradle_cache_lock_acquired",
+                "planning_semantic_research_summary",
+                "planner_requirement_page",
             },
         )
     except BaseException as logger_exc:

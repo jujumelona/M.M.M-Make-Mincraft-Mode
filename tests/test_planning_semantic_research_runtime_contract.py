@@ -101,6 +101,7 @@ def test_verifier_context_sends_source_once_with_host_selected_range():
 def test_structured_output_fixed_point_rejects_one_source_without_killing_planning(
     monkeypatch,
     tmp_path,
+    capsys,
 ):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(semantic, "request_message_budget", lambda *_: 4096)
@@ -134,6 +135,13 @@ def test_structured_output_fixed_point_rejects_one_source_without_killing_planni
         == "model_structured_output_invalid"
     )
     assert result["observations"][0]["verdict"] == "invalid_output"
+    events = [json.loads(line.split("ROOT CAUSE TRACE: ", 1)[1])
+              for line in capsys.readouterr().err.splitlines()
+              if line.startswith("ROOT CAUSE TRACE: ")]
+    summary = next(event for event in events if event["event"] == "planning_semantic_research_summary")
+    assert summary["details"]["assessment_verdict_counts"] == {"invalid_output": 1}
+    assert summary["details"]["missing_obligations"] == [req["acceptance"][0]]
+    assert summary["details"]["accepted_proof_count"] == 0
 
 
 def test_host_reconstructs_exact_evidence_and_proof_text(monkeypatch, tmp_path):

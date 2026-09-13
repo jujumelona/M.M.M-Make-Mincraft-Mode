@@ -5,11 +5,13 @@ import os
 import shutil
 import signal
 import subprocess
+import threading
 import time
 import urllib.request
 import zipfile
 from collections.abc import Iterable
 from contextlib import contextmanager
+from contextvars import copy_context
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -217,6 +219,10 @@ class GradleRunner:
         )
 
     def _ensure_gradle(self, gradle_version: str, gradle_sha256: str) -> Path:
+        from .root_cause_trace import emit_root_cause
+
+        emit_root_cause("gradle_distribution_start", stage="verify", operation="prepare_gradle", result="START",
+                        details={"version": gradle_version, "sha256": gradle_sha256, "cache_dir": str(self.cache_dir)})
         distribution_dir = self.cache_dir / f"gradle-{gradle_version}"
         executable = distribution_dir / "bin" / (
             "gradle.bat" if os.name == "nt" else "gradle"
@@ -299,6 +305,9 @@ class GradleRunner:
         env: dict[str, str],
         log_path: Path,
     ) -> CommandResult:
+        from .agent_tool_runtime import _redact_text, _sanitize_observation
+        from .root_cause_trace import emit_root_cause
+
         command = (str(executable), *arguments)
         started = time.monotonic()
         timed_out = False
@@ -306,6 +315,12 @@ class GradleRunner:
             getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
             if os.name == "nt"
             else 0
+        )
+        emit_root_cause(
+            "gradle_command_start", stage="verify", operation=name, result="START",
+            details={"command": _sanitize_observation(command), "cwd": str(cwd),
+                     "log_path": str(log_path), "timeout_seconds": self.command_timeout_seconds,
+                     "java_home": env.get("JAVA_HOME", ""), "gradle_user_home": env.get("GRADLE_USER_HOME", "")},
         )
         process = subprocess.Popen(
             command,
@@ -321,29 +336,73 @@ class GradleRunner:
             creationflags=creation_flags,
             start_new_session=(os.name != "nt"),
         )
+        reader_errors: list[BaseException] = []
+
+        def read_output() -> None:
+            try:
+                with log_path.open("w", encoding="utf-8") as log:
+                    if process.stdout is None:
+                        raise BuildRunnerError("Gradle output pipe is unavailable")
+                    private_key = False
+                    for raw in process.stdout:
+                        if private_key:
+                            if "-----END " in raw and "PRIVATE KEY-----" in raw:
+                                private_key = False
+                            continue
+                        if "-----BEGIN " in raw and "PRIVATE KEY-----" in raw:
+                            private_key = "-----END " not in raw
+                            line = "[REDACTED_PRIVATE_KEY]\n"
+                        else:
+                            line = _redact_text(raw)
+                        log.write(line)
+                        log.flush()
+                        emit_root_cause(
+                            "gradle_command_output", stage="verify", operation=name, result="INFO",
+                            details={"pid": process.pid, "log_path": str(log_path), "line": line.rstrip()},
+                        )
+            except Exception as exc:
+                reader_errors.append(exc)
+                emit_root_cause("gradle_output_failure", stage="verify", operation=name,
+                                result="FAIL", reason=f"{type(exc).__name__}: {exc}", exc=exc)
+
+        reader = threading.Thread(target=copy_context().run, args=(read_output,), daemon=True)
+        reader.start()
         try:
-            output, _ = process.communicate(timeout=self.command_timeout_seconds)
+            process.wait(timeout=self.command_timeout_seconds)
             exit_code = process.returncode
-        except subprocess.TimeoutExpired as exc:
+        except subprocess.TimeoutExpired:
             timed_out = True
             _terminate_process_tree(process)
             try:
-                tail, _ = process.communicate(timeout=15)
+                process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 process.kill()
-                tail, _ = process.communicate()
-            raw = exc.output or ""
-            output = (
-                raw.decode("utf-8", errors="replace")
-                if isinstance(raw, bytes)
-                else raw
-            )
-            if tail and tail not in output:
-                output += tail
-            output += "\n[ M.M.M Make Mincraft Mode: command timed out; process tree terminated ]\n"
+                process.wait(timeout=5)
             exit_code = 124
+        except BaseException:
+            _terminate_process_tree(process)
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+            raise
+        finally:
+            reader.join(timeout=15)
+            if not reader.is_alive() and process.stdout is not None:
+                process.stdout.close()
+        if reader.is_alive() or reader_errors:
+            raise BuildRunnerError("Gradle command log could not be fully drained") from (
+                reader_errors[0] if reader_errors else None
+            )
+        if timed_out:
+            with log_path.open("a", encoding="utf-8") as log:
+                log.write("\n[ M.M.M Make Mincraft Mode: command timed out; process tree terminated ]\n")
         duration = time.monotonic() - started
-        log_path.write_text(output, encoding="utf-8")
+        emit_root_cause(
+            "gradle_command_result", stage="verify", operation=name,
+            result="TIMEOUT" if timed_out else "PASS" if exit_code == 0 else "FAIL",
+            details={"pid": process.pid, "exit_code": exit_code, "duration_seconds": round(duration, 3),
+                     "log_path": str(log_path)},
+        )
         return CommandResult(
             name=name,
             command=command,
@@ -421,6 +480,8 @@ def _exclusive_cache_lock(
     *,
     timeout_seconds: int,
 ) -> Iterable[None]:
+    from .root_cause_trace import emit_root_cause
+
     if type(timeout_seconds) is not int or timeout_seconds < 1:
         raise BuildRunnerError(
             "Gradle cache lock timeout must be a positive integer."
@@ -431,6 +492,8 @@ def _exclusive_cache_lock(
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
     acquired = False
     deadline = time.monotonic() + timeout_seconds
+    emit_root_cause("gradle_cache_lock_wait", stage="verify", operation="cache_lock", result="START",
+                    details={"lock_path": str(lock_path), "timeout_seconds": timeout_seconds})
     try:
         while not acquired:
             try:
@@ -450,6 +513,8 @@ def _exclusive_cache_lock(
             f"pid={os.getpid()}\nacquired={time.time()}\n".encode("ascii"),
         )
         os.fsync(fd)
+        emit_root_cause("gradle_cache_lock_acquired", stage="verify", operation="cache_lock", result="PASS",
+                        details={"lock_path": str(lock_path), "pid": os.getpid()})
         yield
     finally:
         if acquired:

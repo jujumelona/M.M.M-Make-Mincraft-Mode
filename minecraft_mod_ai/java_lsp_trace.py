@@ -10,7 +10,7 @@ collapsing them into an anonymous diagnostics-publication timeout.
 import json
 import queue
 import time
-from collections import Counter
+from collections import Counter, deque
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +26,27 @@ from .java_lsp import (
     _sorted_diagnostics,
 )
 from .root_cause_trace import emit_root_cause
+
+
+def _record_server_progress(rpc: Any, message: dict[str, Any]) -> None:
+    method = str(message.get("method") or "")
+    if method not in {"language/status", "language/eventNotification", "$/progress", "window/logMessage", "window/showMessage"}:
+        return
+    if message.get("_mmm_progress_traced"):
+        return
+    from .agent_tool_runtime import _sanitize_observation
+
+    entry = {"method": method, "params": _sanitize_observation(message.get("params"))}
+    tail = getattr(rpc, "server_progress_tail", None)
+    if tail is None:
+        tail = deque(maxlen=30)
+        rpc.server_progress_tail = tail
+    tail.append(entry)
+    message["_mmm_progress_traced"] = True
+    emit_root_cause(
+        "jdt_server_progress", stage="jdt", operation="project_import",
+        result="INFO", details={"pid": getattr(rpc.process, "pid", None), **entry},
+    )
 
 
 class _TracedJsonRpcProcess(_JsonRpcProcess):
@@ -115,6 +136,7 @@ class _TracedJsonRpcProcess(_JsonRpcProcess):
                     )
                 method = str(message.get("method") or "<response>")
                 self.protocol_counts[method] += 1
+                _record_server_progress(self, message)
                 self.messages.put(message)
         except BaseException as exc:
             self.reader_failure = exc
@@ -450,6 +472,7 @@ def _collect_diagnostics_traced(
             ignored_methods[str(message.get("method") or "<server-request>")] += 1
             continue
         if message.get("method") != "textDocument/publishDiagnostics":
+            _record_server_progress(rpc, message)
             ignored_methods[str(message.get("method") or "<response>")] += 1
             continue
         params = message.get("params")
@@ -508,6 +531,7 @@ def _collect_diagnostics_traced(
         "stderr_tail": list(rpc.stderr)[-8:],
         "protocol_counts": dict(getattr(rpc, "protocol_counts", {})),
         "elapsed_ms": round((time.monotonic() - started) * 1000.0, 3),
+        "server_progress_tail": list(getattr(rpc, "server_progress_tail", ())),
     }
     if missing_uris:
         emit_root_cause(

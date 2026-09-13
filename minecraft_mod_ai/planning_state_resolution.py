@@ -332,6 +332,72 @@ def _preserve_blocked_state(state: Mapping[str, Any]) -> dict[str, Any]:
     return _rehash(value)
 
 
+def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], budget: int) -> Any:
+    """Bound each model response, not the total number of authored behaviors."""
+    from .model_adapters import ModelConfigurationError
+
+    page_size = int(_REQUIREMENT_PARAMETERS["properties"]["requirements"]["maxItems"])
+    collected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    payload = json.loads(messages[1]["content"])
+    page_index = 0
+    while True:
+        current_messages = deepcopy(messages)
+        if collected:
+            current_messages[1]["content"] = json.dumps(
+                {**payload, "already_compiled_requirements": collected},
+                ensure_ascii=False, separators=(",", ":"),
+            )
+            if sum(len(row["content"].encode("utf-8")) for row in current_messages) > budget:
+                raise ModelConfigurationError(
+                    "REQUIREMENT_PAGINATION_CONTEXT_EXHAUSTED: continuation cannot fit "
+                    "without losing authored task or prior requirement coverage"
+                )
+        try:
+            with planner_operation("researched_requirement_compile", output_tokens=2048):
+                raw = router.generate_tool_decision(
+                    "planner", current_messages,
+                    tool_name=_REQUIREMENT_TOOL, parameters=_REQUIREMENT_PARAMETERS,
+                    description="Submit the next page of independently testable player-visible requirements.",
+                )
+        except Exception as exc:
+            if not collected:
+                raise
+            raise ModelConfigurationError(
+                "REQUIREMENT_PAGINATION_FAILED: continuation failed; partial requirements are not complete"
+            ) from exc
+        rows = raw.get("requirements") if isinstance(raw, Mapping) else None
+        if not isinstance(rows, list):
+            if not collected:
+                return raw
+            raise ModelConfigurationError("REQUIREMENT_PAGINATION_FAILED: invalid continuation page")
+        for row in rows:
+            if not isinstance(row, Mapping) or not _text(row.get("statement")):
+                raise ModelConfigurationError("REQUIREMENT_PAGINATION_FAILED: invalid requirement row")
+            identity = json.dumps(
+                [_text(row.get("statement")).casefold(),
+                 _text(row.get("semantic_capability")).casefold(),
+                 [value.casefold() for value in _strings(row.get("acceptance"))]],
+                ensure_ascii=False,
+            )
+            if identity in seen:
+                raise ModelConfigurationError(
+                    "REQUIREMENT_PAGINATION_NO_PROGRESS: repeated requirement cannot certify remaining coverage"
+                )
+            seen.add(identity)
+            collected.append(dict(row))
+        page_index += 1
+        emit_root_cause(
+            "planner_requirement_page", stage="planning_state",
+            operation="researched_requirement_compile",
+            result="CONTINUE" if len(rows) >= page_size else "COMPLETE",
+            details={"page_index": page_index, "page_requirement_count": len(rows),
+                     "total_requirement_count": len(collected), "requirements": rows},
+        )
+        if len(rows) < page_size:
+            return {"requirements": collected}
+
+
 def compile_researched_requirements(
     router: Any,
     prompt: str,
@@ -350,10 +416,13 @@ def compile_researched_requirements(
         "receipts, provenance keys, files, classes, registrations, or invented APIs. "
         "Use a short descriptive semantic capability label for bookkeeping only; "
         "it must not choose Minecraft artifacts or architecture. Missing balance values or detailed "
-        "mechanics are later design work. Return at most four requirements. If the task contains "
-        "more behaviors, consolidate tightly related user-stated behaviors into the same requirement "
-        "and concise observable acceptance check rather than dropping them. Return behavior statements "
-        "and observable acceptance conditions only."
+        "mechanics are later design work. Return the next page of at most four requirements. "
+        "Each requirement must express one independently testable behavior. Never combine separate "
+        "behaviors to fit the page: the host will request further pages. Exclude behaviors in "
+        "already_compiled_requirements. Return four new requirements while at least four remain; "
+        "return fewer only when every remaining user-stated behavior is covered, or an empty array "
+        "when none remain. Preserve dependencies and qualifiers in each behavior. Return behavior "
+        "statements and observable acceptance conditions only."
     )
     catalog = {}
     overhead_bytes = len(system_content.encode("utf-8")) + len(
@@ -383,14 +452,7 @@ def compile_researched_requirements(
     raw: Any = None
     generation_error: BaseException | None = None
     try:
-        with planner_operation("researched_requirement_compile", output_tokens=2048):
-            raw = router.generate_tool_decision(
-                "planner",
-                messages,
-                tool_name=_REQUIREMENT_TOOL,
-                parameters=_REQUIREMENT_PARAMETERS,
-                description="Submit player-visible requirements.",
-            )
+        raw = _generate_requirement_pages(router, messages, budget)
     except BaseException as exc:
         from .model_adapters import ModelConfigurationError
 

@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import tempfile
+from collections import Counter
 from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
@@ -676,7 +677,30 @@ def review_requirement_sources(
         satisfied.update(
             proof["obligation_index"] for proof in checked["accepted_proofs"]
         )
-    return validate_semantic_review(requirement, pool, result)
+    checked = validate_semantic_review(requirement, pool, result)
+    from .root_cause_trace import emit_root_cause
+
+    emit_root_cause(
+        "planning_semantic_research_summary", stage="planning_state",
+        operation="review_requirement_sources",
+        result="PASS" if checked["complete"] else "BLOCKED",
+        reason="all_obligations_supported" if checked["complete"] else "semantic_evidence_incomplete",
+        details={
+            "requirement_id": requirement.get("requirement_id"),
+            "requirement_sha256": req_sha,
+            "pool_sha256": checked["pool_sha256"],
+            "source_count": len(records),
+            "observation_count": len(checked["observations"]),
+            "accepted_proof_count": len(checked["accepted_proofs"]),
+            "assessment_verdict_counts": dict(Counter(str(row.get("verdict", "unknown"))
+                                                      for row in checked["observations"])),
+            "verification_verdict_counts": dict(Counter(str(row.get("verification_verdict", "not_run"))
+                                                        for row in checked["observations"])),
+            "missing_obligations": [obligations[index] for index in checked["missing_obligation_indices"]],
+            "observations": checked["observations"],
+        },
+    )
+    return checked
 
 
 def _validate_v1_observation(

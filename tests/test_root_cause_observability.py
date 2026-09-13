@@ -112,6 +112,7 @@ def test_jdt_timeout_reports_missing_and_mismatched_uris(capsys: pytest.CaptureF
             "params": {"uri": unexpected, "diagnostics": []},
         }
     )
+    rpc.messages.put({"method": "language/status", "params": {"type": "Starting", "message": "Importing Gradle project"}})
 
     with pytest.raises(JDTLanguageServerError) as exc_info:
         _collect_diagnostics_traced(
@@ -132,3 +133,6 @@ def test_jdt_timeout_reports_missing_and_mismatched_uris(capsys: pytest.CaptureF
     timeout = next(item for item in payloads if item["event"] == "jdt_publish_timeout")
     assert timeout["details"]["missing_uris"] == [expected]
     assert timeout["details"]["unexpected_uris"] == [unexpected]
+    progress = next(item for item in payloads if item["event"] == "jdt_server_progress")
+    assert progress["details"]["params"]["message"] == "Importing Gradle project"
+    assert timeout["details"]["server_progress_tail"][-1]["params"]["message"] == "Importing Gradle project"

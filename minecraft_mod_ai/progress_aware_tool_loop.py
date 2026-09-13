@@ -1838,11 +1838,13 @@ def _generate_with_tools_impl(
                     details={
                         "unavailable_verifiers": sorted(unavailable_verifiers),
                         "exposed_verifiers": sorted(available_verifier_names),
+                        "last_failure_reason": state.last_failure_reason,
                     },
                 )
                 raise ModelConfigurationError(
                     "VERIFIER_UNAVAILABLE: no healthy host verifier remains; refusing to send "
-                    "the coder back into retrieval or mutation without trustworthy diagnostics."
+                    "the coder back into retrieval or mutation without trustworthy diagnostics. "
+                    f"Last failure: {state.last_failure_reason}"
                 )
             phase_tools = tuple(
                 schema for schema in phase_tools

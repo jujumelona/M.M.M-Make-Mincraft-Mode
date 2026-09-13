@@ -390,7 +390,10 @@ class AgentToolRuntime:
             raise
         except Exception as exc:
             emit_root_cause("agent_tool_call_failure", stage=selected, operation=tool_name, gate="runtime_dispatch", result="FAIL", reason=f"{type(exc).__name__}: {exc}", details={"arguments": payload}, exc=exc)
-            raise AgentToolRuntimeError(_redact_text(str(exc))) from exc
+            raise AgentToolRuntimeError(
+                f"{tool_name}: {type(exc).__name__}: "
+                + _redact_text(str(exc) or "no exception message; see preceding child/transport trace")
+            ) from exc
         bounded = _bounded_result(result)
         emit_root_cause("agent_tool_call_result", stage=selected, operation=tool_name, gate="runtime_dispatch", result="PASS", details={"arguments": payload, "result": bounded})
         return bounded
