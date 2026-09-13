@@ -13,6 +13,7 @@ from .generation_accuracy_contract import (
 from .generation_accuracy_contract import install_inner as install_generation_accuracy_inner
 from .generation_accuracy_contract import install_outer as install_generation_accuracy_outer
 from .hardware_concurrency_installation import install as install_hardware_concurrency
+from .project_jdk_provisioning_installation import install as install_project_jdk_provisioning
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
 from .source_observation_budget_installation import install as install_source_observation_budget
@@ -41,6 +42,7 @@ from . import java_lsp as _java_lsp
 from . import model_router as _model_router
 
 install_checkpoint_performance(_custom_module_generator)
+install_project_jdk_provisioning(_java_lsp)
 install_source_set_boundary(_java_lsp)
 # Install the accuracy verifier before runtime finalization. The atomic coder slicer is
 # finalized later and therefore calls through this boundary once for every obligation.
