@@ -153,6 +153,67 @@ def test_generation_verifier_ignores_model_timeout_and_falls_back(monkeypatch, t
     assert result["verification_outcome"] == "PASS"
     assert result["diagnostics"] == {}
     assert result["_mmm_observation"]["truncated"] is False
+    assert "cold import unavailable" in runtime._mmm_generation_jdt_disabled_reason
+
+
+def test_jdt_unavailable_opens_run_local_circuit_breaker(tmp_path):
+    project = tmp_path / "project"
+    (project / "src" / "main" / "java").mkdir(parents=True)
+    (project / "build.gradle").write_text("plugins {}\n", encoding="utf-8")
+    java_factory_calls = []
+    gradle_calls = []
+
+    class FailingJava:
+        def diagnostics(self, root, *, relative_files=None, timeout_seconds=0):
+            raise JDTLanguageServerError("workspace import failed")
+
+        def close(self):
+            java_factory_calls.append("closed")
+
+    class PassingReport:
+        passed = True
+        commands = ()
+
+        @staticmethod
+        def to_dict():
+            return {"status": "PASS", "commands": [], "error": None}
+
+    class FakeGradleRunner:
+        def build(self, root, *, run_gametest):
+            gradle_calls.append(root)
+            return PassingReport()
+
+    def first_java_factory():
+        java_factory_calls.append("created")
+        return FailingJava()
+
+    def forbidden_second_java_factory():
+        raise AssertionError("open JDT circuit must bypass JDT on later repair verification")
+
+    runtime = SimpleNamespace(workspace_root=str(project))
+    kwargs = {
+        "runtime_module": agent_tool_runtime,
+        "gradle_runner_factory": lambda _cache: FakeGradleRunner(),
+    }
+    first = run_generation_verifier(
+        runtime,
+        {"relative_files": ["src/main/java/Example.java"]},
+        java_service_factory=first_java_factory,
+        **kwargs,
+    )
+    second = run_generation_verifier(
+        runtime,
+        {"relative_files": ["src/main/java/Example.java"]},
+        java_service_factory=forbidden_second_java_factory,
+        **kwargs,
+    )
+
+    assert first["verification_outcome"] == "PASS"
+    assert second["verification_outcome"] == "PASS"
+    assert java_factory_calls == ["created", "closed"]
+    assert gradle_calls == [project, project]
+    assert not hasattr(runtime, "_mmm_generation_java_service")
+    assert "workspace import failed" in runtime._mmm_generation_jdt_disabled_reason
 
 
 def test_jdt_progress_refreshes_idle_deadline():
