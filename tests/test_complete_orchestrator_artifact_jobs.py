@@ -17,11 +17,48 @@ from minecraft_mod_ai.complete_spec import (
     ProductionModule,
     complete_proposal_from_parts,
 )
+from minecraft_mod_ai.model_router import ModelRouter
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.planner import HeuristicPlanner
 from minecraft_mod_ai.production_contract import compile_production_contract
 from minecraft_mod_ai.resource_asset_production import attach_generation_plan
 from minecraft_mod_ai.resource_contracts import derive_module_asset_specs
+
+
+class _DeterministicImageRouter(ModelRouter):
+    """Keep artifact-graph integration independent from the optional diffusion runtime."""
+
+    def generate_image(
+        self,
+        role: str,
+        *,
+        prompt: str,
+        output_path: str | Path,
+        seed: int,
+        width: int,
+        height: int,
+        **_kwargs,
+    ):
+        assert role == "image_generator"
+        assert prompt
+        assert seed >= 0
+        from PIL import Image, ImageDraw
+
+        target = Path(output_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        image = Image.new("RGBA", (width, height), (24, 24, 24, 255))
+        try:
+            draw = ImageDraw.Draw(image)
+            inset_x = max(1, width // 4)
+            inset_y = max(1, height // 4)
+            draw.rectangle(
+                (inset_x, inset_y, width - inset_x - 1, height - inset_y - 1),
+                fill=(192, 192, 192, 255),
+            )
+            image.save(target, format="PNG", optimize=False)
+        finally:
+            image.close()
+        return {"output_path": str(target)}
 
 
 def _module_assets(modules: tuple[ProductionModule, ...]) -> tuple[AssetRequest, ...]:
@@ -35,6 +72,13 @@ def _bind_asset_plan(
 ):
     """Mirror the real planner boundary: resource execution semantics are approved, not inferred later."""
     return attach_generation_plan(orchestrator.router_factory(), proposal)
+
+
+def _orchestrator(tmp_path: Path) -> CompleteProductionOrchestrator:
+    return CompleteProductionOrchestrator(
+        workspace_root=tmp_path / "out",
+        router_factory=_DeterministicImageRouter,
+    )
 
 
 def test_planner_lowers_implementation_facts_and_jobs():
@@ -106,7 +150,7 @@ def test_orchestrator_executes_artifact_jobs_and_materializes_to_disk(tmp_path: 
         acceptance_tests=compiled.acceptance_tests,
     )
 
-    orchestrator = CompleteProductionOrchestrator(workspace_root=tmp_path / "out")
+    orchestrator = _orchestrator(tmp_path)
     proposal = _bind_asset_plan(orchestrator, proposal)
     result = orchestrator.execute(
         proposal,
@@ -182,7 +226,7 @@ def test_orchestrator_executes_artifact_jobs_for_blocks_and_materializes_to_disk
         acceptance_tests=compiled.acceptance_tests,
     )
 
-    orchestrator = CompleteProductionOrchestrator(workspace_root=tmp_path / "out")
+    orchestrator = _orchestrator(tmp_path)
     proposal = _bind_asset_plan(orchestrator, proposal)
     result = orchestrator.execute(
         proposal,
