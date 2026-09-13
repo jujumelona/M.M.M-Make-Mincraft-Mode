@@ -22,16 +22,30 @@ from .source_set_boundary_contract import (
 _DEFAULT_DIAGNOSTIC_PAGE_MAX_FILES = 128
 _DEFAULT_DIAGNOSTIC_PAGE_MAX_SOURCE_BYTES = 8 * 1024 * 1024
 _DEFAULT_DIAGNOSTIC_QUIET_SECONDS = 2.0
+_DEFAULT_PROJECT_JAVA_VERSION = 17
+_SEMANTIC_PROBE_NAME = "__MmmJdtReadinessProbe"
+_SEMANTIC_PROBE_SOURCE = (
+    f"final class {_SEMANTIC_PROBE_NAME} {{\n"
+    "    Object objectValue;\n"
+    "    String stringValue;\n"
+    "}\n"
+)
 _JAVA_CORE_UNRESOLVED = re.compile(
-    r"(?:java\.lang\.(?:Object|String).*cannot be resolved|"
-    r"The type java\.lang\.(?:Object|String) cannot be resolved|"
-    r"java\.lang\.(?:Object|String).*indirectly referenced)",
+    r"(?:"
+    r"(?:the type\s+)?java\.lang\.(?:Object|String).*cannot be resolved"
+    r"|java\.lang\.(?:Object|String).*indirectly referenced"
+    r"|(?:^|[^.\w])(?:Object|String)\s+cannot be resolved(?:\s+to\s+a\s+type)?"
+    r")",
     re.IGNORECASE,
 )
 
 
 class JDTLanguageServerError(RuntimeError):
     pass
+
+
+class JDTWorkspaceBootstrapError(JDTLanguageServerError):
+    """JDT LS started or configured without a usable Java project bootstrap."""
 
 
 def _configuration_value(configuration: dict[str, Any], section: str | None) -> Any:
@@ -50,7 +64,28 @@ def _java_executable(java_home: Path) -> Path:
     return java_home / "bin" / f"java{suffix}"
 
 
+def _parse_java_major(value: str) -> int | None:
+    text = value.strip().strip('"').strip("'")
+    match = re.search(r"(?:1\.)?(\d+)", text)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _java_major_from_release(java_home: Path) -> int | None:
+    release = java_home / "release"
+    try:
+        text = release.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    match = re.search(r'^JAVA_VERSION\s*=\s*["\']([^"\']+)["\']', text, re.MULTILINE)
+    return _parse_java_major(match.group(1)) if match is not None else None
+
+
 def _java_major_version(java_home: Path) -> int | None:
+    major = _java_major_from_release(java_home)
+    if major is not None:
+        return major
     executable = _java_executable(java_home)
     if not executable.is_file():
         return None
@@ -67,55 +102,148 @@ def _java_major_version(java_home: Path) -> int | None:
     except (OSError, subprocess.SubprocessError):
         return None
     text = f"{completed.stdout}\n{completed.stderr}"
-    match = re.search(r'(?:java|openjdk) version "(?:1\.)?(\d+)', text)
+    match = re.search(r'(?:java|openjdk) version "([^"]+)', text)
     if match is None:
-        match = re.search(r'^(?:openjdk|java)\s+(\d+)', text, re.MULTILINE)
-    return int(match.group(1)) if match is not None else None
+        match = re.search(r'^(?:openjdk|java)\s+([^\s]+)', text, re.MULTILINE)
+    return _parse_java_major(match.group(1)) if match is not None else None
 
 
-def _project_java_runtime() -> dict[str, Any] | None:
+def _requested_project_java_major() -> int:
+    raw = os.environ.get("MMM_JAVA_VERSION", str(_DEFAULT_PROJECT_JAVA_VERSION)).strip()
+    major = _parse_java_major(raw)
+    if major is None or major <= 0:
+        raise JDTWorkspaceBootstrapError(
+            f"Invalid MMM_JAVA_VERSION={raw!r}; expected a Java major version."
+        )
+    return major
+
+
+def _candidate_java_homes(required_major: int) -> list[Path]:
     candidates: list[Path] = []
-    for variable in ("MMM_JDT_PROJECT_JAVA_HOME", "JDK17_HOME", "JAVA_HOME"):
-        raw = os.environ.get(variable, "").strip()
-        if raw:
-            candidates.append(Path(raw).expanduser())
+
+    def add(raw: str | Path | None) -> None:
+        if raw is None:
+            return
+        text = str(raw).strip()
+        if text:
+            candidates.append(Path(text).expanduser())
+
+    for variable in (
+        "MMM_PROJECT_JAVA_HOME",
+        "MMM_JDT_PROJECT_JAVA_HOME",
+        f"JAVA_HOME_{required_major}",
+        f"JDK{required_major}_HOME",
+        f"JDK_{required_major}_HOME",
+        "JAVA_HOME",
+    ):
+        add(os.environ.get(variable))
+
     discovered = shutil.which("java")
     if discovered:
-        candidates.append(Path(discovered).resolve().parent.parent)
+        add(Path(discovered).resolve().parent.parent)
 
+    if os.name == "nt":
+        roots = [
+            os.environ.get("ProgramFiles"),
+            os.environ.get("ProgramFiles(x86)"),
+            os.environ.get("LOCALAPPDATA"),
+        ]
+        patterns = (
+            "Java/*",
+            "Eclipse Adoptium/*",
+            "Microsoft/jdk-*",
+            "Programs/Eclipse Adoptium/*",
+        )
+        for root in roots:
+            if not root:
+                continue
+            base = Path(root)
+            for pattern in patterns:
+                candidates.extend(base.glob(pattern))
+    elif os.uname().sysname == "Darwin":
+        candidates.extend(Path("/Library/Java/JavaVirtualMachines").glob("*/Contents/Home"))
+        candidates.extend(Path.home().glob("Library/Java/JavaVirtualMachines/*/Contents/Home"))
+    else:
+        candidates.extend(Path("/usr/lib/jvm").glob("*"))
+        candidates.extend(Path("/opt").glob("jdk*"))
+        candidates.extend(Path.home().glob(".jdks/*"))
+        candidates.extend(Path.home().glob(".sdkman/candidates/java/*"))
+
+    return candidates
+
+
+def _resolve_project_java_home(required_major: int | None = None) -> Path:
+    required = required_major if required_major is not None else _requested_project_java_major()
     seen: set[Path] = set()
-    for candidate in candidates:
+    observed: list[str] = []
+    for candidate in _candidate_java_homes(required):
         try:
             home = candidate.resolve(strict=True)
         except OSError:
             continue
-        if home in seen:
+        if home in seen or not home.is_dir():
             continue
         seen.add(home)
-        if _java_major_version(home) != 17:
+        major = _java_major_version(home)
+        if major is None:
             continue
-        return {
-            "name": "JavaSE-17",
-            "path": str(home),
-            "default": True,
-        }
-    return None
+        observed.append(f"{home}=>{major}")
+        if major == required:
+            return home
+    detail = ", ".join(observed) if observed else "no usable Java homes discovered"
+    raise JDTWorkspaceBootstrapError(
+        "JDT workspace bootstrap failure: no project JDK matching "
+        f"MMM_JAVA_VERSION={required} was found ({detail})."
+    )
 
 
-def _jdt_configuration() -> dict[str, Any]:
-    java_configuration: dict[str, Any] = {
-        "updateBuildConfiguration": "automatic",
+def _java_runtime_name(major: int) -> str:
+    return "JavaSE-1.8" if major == 8 else f"JavaSE-{major}"
+
+
+def _project_java_runtime(project_java_home: Path | None = None) -> dict[str, Any]:
+    required = _requested_project_java_major()
+    home = project_java_home or _resolve_project_java_home(required)
+    actual = _java_major_version(home)
+    if actual != required:
+        raise JDTWorkspaceBootstrapError(
+            "JDT workspace bootstrap failure: resolved project JDK version mismatch: "
+            f"required={required}, actual={actual}, home={home}."
+        )
+    return {
+        "name": _java_runtime_name(required),
+        "path": str(home),
+        "default": True,
     }
-    runtime = _project_java_runtime()
-    if runtime is not None:
-        java_configuration["runtimes"] = [runtime]
+
+
+def _jdt_configuration(project_java_home: Path | None = None) -> dict[str, Any]:
+    runtime = _project_java_runtime(project_java_home)
     return {
         "java": {
             "autobuild": {"enabled": True},
-            "configuration": java_configuration,
+            "configuration": {
+                "updateBuildConfiguration": "automatic",
+                "runtimes": [runtime],
+            },
             "import": {"gradle": {"enabled": True}},
         }
     }
+
+
+def _jdtls_environment() -> dict[str, str]:
+    env = dict(os.environ)
+    launcher_home = os.environ.get("MMM_JDTLS_JAVA_HOME", "").strip()
+    if launcher_home:
+        home = Path(launcher_home).expanduser().resolve()
+        executable = _java_executable(home)
+        if not executable.is_file():
+            raise JDTLanguageServerError(
+                f"MMM_JDTLS_JAVA_HOME does not contain a Java launcher: {home}"
+            )
+        env["JAVA_HOME"] = str(home)
+        env["PATH"] = f"{home / 'bin'}{os.pathsep}{env.get('PATH', '')}"
+    return env
 
 
 class _JsonRpcProcess:
@@ -125,6 +253,7 @@ class _JsonRpcProcess:
         cwd: Path,
         *,
         configuration: dict[str, Any] | None = None,
+        environment: dict[str, str] | None = None,
     ) -> None:
         self.process = subprocess.Popen(
             command,
@@ -133,6 +262,7 @@ class _JsonRpcProcess:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             shell=False,
+            env=environment,
         )
         self.messages: queue.Queue[dict[str, Any]] = queue.Queue()
         self.stderr: deque[str] = deque(maxlen=30)
@@ -153,7 +283,7 @@ class _JsonRpcProcess:
         try:
             while time.monotonic() < deadline:
                 try:
-                    message = self.messages.get(timeout=min(0.25, deadline - time.monotonic()))
+                    message = self.messages.get(timeout=min(0.25, max(0.001, deadline - time.monotonic())))
                 except queue.Empty:
                     continue
                 if _respond_to_server_request(self, message):
@@ -201,28 +331,31 @@ class _JsonRpcProcess:
         stream = self.process.stdout
         if stream is None:
             return
-        while True:
-            headers: dict[str, str] = {}
+        try:
             while True:
-                line = stream.readline()
-                if not line:
-                    return
-                if line in {b"\r\n", b"\n"}:
-                    break
-                decoded = line.decode("ascii", errors="replace").strip()
-                if ":" in decoded:
-                    key, value = decoded.split(":", 1)
-                    headers[key.lower()] = value.strip()
-            length = int(headers.get("content-length", "0"))
-            if length <= 0:
-                continue
-            body = stream.read(length)
-            try:
-                message = json.loads(body.decode("utf-8"))
-            except Exception:
-                continue
-            if isinstance(message, dict):
-                self.messages.put(message)
+                headers: dict[str, str] = {}
+                while True:
+                    line = stream.readline()
+                    if not line:
+                        return
+                    if line in {b"\r\n", b"\n"}:
+                        break
+                    decoded = line.decode("ascii", errors="replace").strip()
+                    if ":" in decoded:
+                        key, value = decoded.split(":", 1)
+                        headers[key.lower()] = value.strip()
+                length = int(headers.get("content-length", "0"))
+                if length <= 0:
+                    continue
+                body = stream.read(length)
+                try:
+                    message = json.loads(body.decode("utf-8"))
+                except Exception:
+                    continue
+                if isinstance(message, dict):
+                    self.messages.put(message)
+        except BaseException as exc:
+            self._mmm_reader_failure = exc
 
     def _read_stderr(self) -> None:
         from .agent_tool_runtime import _redact_text
@@ -254,14 +387,10 @@ class _JsonRpcProcess:
             )
 
 
-def _respond_to_server_request(
-    rpc: _JsonRpcProcess,
-    message: dict[str, Any],
-) -> bool:
+def _respond_to_server_request(rpc: _JsonRpcProcess, message: dict[str, Any]) -> bool:
     method = message.get("method")
     if "id" not in message or not isinstance(method, str):
         return False
-
     params = message.get("params")
     if not isinstance(params, dict):
         params = {}
@@ -279,27 +408,17 @@ def _respond_to_server_request(
         if isinstance(items, list):
             for item in items:
                 section = item.get("section") if isinstance(item, dict) else None
-                result.append(
-                    _configuration_value(
-                        rpc.configuration,
-                        section if isinstance(section, str) else None,
-                    )
-                )
+                result.append(_configuration_value(rpc.configuration, section if isinstance(section, str) else None))
     elif method == "workspace/workspaceFolders":
         result = list(rpc.workspace_folders)
     elif method == "workspace/applyEdit":
         result = {"applied": False}
     else:
-        rpc.send(
-            {
-                "jsonrpc": "2.0",
-                "id": message.get("id"),
-                "error": {
-                    "code": -32601,
-                    "message": f"Unsupported server request: {method}",
-                },
-            }
-        )
+        rpc.send({
+            "jsonrpc": "2.0",
+            "id": message.get("id"),
+            "error": {"code": -32601, "message": f"Unsupported server request: {method}"},
+        })
         return True
 
     rpc.send({"jsonrpc": "2.0", "id": message.get("id"), "result": result})
@@ -307,20 +426,14 @@ def _respond_to_server_request(
 
 
 class JavaLanguageService:
-    """Small bounded LSP client for Eclipse JDT LS.
-
-    JDT LS itself requires Java 21; the imported Minecraft project remains Java 17.
-    The command is operator configuration, never model-generated input.
-    """
+    """Bounded Eclipse JDT LS client with fail-closed project-JDK readiness."""
 
     def __init__(
         self,
         command: str | None = None,
         *,
         diagnostic_page_max_files: int = _DEFAULT_DIAGNOSTIC_PAGE_MAX_FILES,
-        diagnostic_page_max_source_bytes: int = (
-            _DEFAULT_DIAGNOSTIC_PAGE_MAX_SOURCE_BYTES
-        ),
+        diagnostic_page_max_source_bytes: int = _DEFAULT_DIAGNOSTIC_PAGE_MAX_SOURCE_BYTES,
         diagnostic_quiet_seconds: float = _DEFAULT_DIAGNOSTIC_QUIET_SECONDS,
     ) -> None:
         raw = command or os.environ.get("MMM_JDTLS_CMD", "").strip()
@@ -330,19 +443,21 @@ class JavaLanguageService:
         if diagnostic_page_max_files <= 0:
             raise ValueError("diagnostic_page_max_files must be positive.")
         if diagnostic_page_max_source_bytes <= 0:
-            raise ValueError(
-                "diagnostic_page_max_source_bytes must be positive."
-            )
+            raise ValueError("diagnostic_page_max_source_bytes must be positive.")
         if diagnostic_quiet_seconds < 0:
             raise ValueError("diagnostic_quiet_seconds cannot be negative.")
         self.diagnostic_page_max_files = diagnostic_page_max_files
-        self.diagnostic_page_max_source_bytes = (
-            diagnostic_page_max_source_bytes
-        )
+        self.diagnostic_page_max_source_bytes = diagnostic_page_max_source_bytes
         self.diagnostic_quiet_seconds = diagnostic_quiet_seconds
         self._session_lock = threading.RLock()
         self._rpc: _JsonRpcProcess | None = None
         self._project_root: Path | None = None
+        self._project_java_home: Path | None = None
+        self._ready = False
+
+    @property
+    def ready(self) -> bool:
+        return self._ready and self._rpc is not None and self._rpc_alive(self._rpc)
 
     @staticmethod
     def _rpc_alive(rpc: _JsonRpcProcess) -> bool:
@@ -354,26 +469,30 @@ class JavaLanguageService:
         rpc = self._rpc
         self._rpc = None
         self._project_root = None
+        self._project_java_home = None
+        self._ready = False
         if rpc is not None:
             rpc.close()
 
-    def _ensure_rpc_locked(
-        self,
-        root: Path,
-        *,
-        timeout_seconds: int,
-    ) -> _JsonRpcProcess:
+    def _ensure_rpc_locked(self, root: Path, *, timeout_seconds: int) -> _JsonRpcProcess:
         rpc = self._rpc
-        if (
-            rpc is not None
-            and self._project_root == root
-            and self._rpc_alive(rpc)
-        ):
+        if rpc is not None and self._project_root == root and self.ready:
             return rpc
         if rpc is not None:
             self._close_rpc_locked()
-        configuration = _jdt_configuration()
-        rpc = _JsonRpcProcess(self.command, root, configuration=configuration)
+
+        # Resolve and validate the Minecraft project JDK *before* starting JDT LS.
+        # JDT LS's launcher JVM is controlled separately by MMM_JDTLS_JAVA_HOME.
+        project_java_home = _resolve_project_java_home()
+        configuration = _jdt_configuration(project_java_home)
+        environment = _jdtls_environment()
+
+        rpc = _JsonRpcProcess(
+            self.command,
+            root,
+            configuration=configuration,
+            environment=environment,
+        )
         try:
             rpc.request(
                 "initialize",
@@ -382,7 +501,8 @@ class JavaLanguageService:
                     "rootUri": root.as_uri(),
                     "capabilities": {
                         "textDocument": {
-                            "publishDiagnostics": {"relatedInformation": True}
+                            "publishDiagnostics": {"relatedInformation": True},
+                            "hover": {"contentFormat": ["plaintext", "markdown"]},
                         },
                         "workspace": {
                             "configuration": True,
@@ -392,19 +512,16 @@ class JavaLanguageService:
                     },
                     "initializationOptions": {
                         "settings": configuration,
-                        "extendedClientCapabilities": {
-                            "progressReportProvider": True,
-                        },
+                        "extendedClientCapabilities": {"progressReportProvider": True},
                     },
                     "workspaceFolders": list(rpc.workspace_folders),
                 },
                 timeout=min(timeout_seconds, 45),
             )
             rpc.notify("initialized", {})
-            rpc.notify(
-                "workspace/didChangeConfiguration",
-                {"settings": configuration},
-            )
+            rpc.notify("workspace/didChangeConfiguration", {"settings": configuration})
+            # ServiceReady/progress notifications are not sufficient. READY only follows
+            # a semantic probe under an actual project Java source root.
             _await_java_core_ready(
                 rpc,
                 root,
@@ -416,6 +533,8 @@ class JavaLanguageService:
             raise
         self._rpc = rpc
         self._project_root = root
+        self._project_java_home = project_java_home
+        self._ready = True
         return rpc
 
     def close(self) -> None:
@@ -437,9 +556,7 @@ class JavaLanguageService:
         try:
             assert_server_safe_source_sets(root)
         except (SourceSetBoundaryError, FileNotFoundError, OSError, UnicodeError) as exc:
-            raise JDTLanguageServerError(
-                f"Java source-set preflight failed: {exc}"
-            ) from exc
+            raise JDTLanguageServerError(f"Java source-set preflight failed: {exc}") from exc
         files = _java_files(root, relative_files)
         pages = _diagnostic_pages(
             files,
@@ -465,23 +582,12 @@ class JavaLanguageService:
             page_receipts: list[dict[str, Any]] = []
             total_source_bytes = 0
             for page_index, page in enumerate(pages):
-                sources, source_bytes = _read_source_page(
-                    page,
-                    max_source_bytes=self.diagnostic_page_max_source_bytes,
-                )
+                sources, source_bytes = _read_source_page(page, max_source_bytes=self.diagnostic_page_max_source_bytes)
                 expected_uris = {path.as_uri() for path, _text in sources}
                 for source_path, source_text in sources:
-                    rpc.notify(
-                        "textDocument/didOpen",
-                        {
-                            "textDocument": {
-                                "uri": source_path.as_uri(),
-                                "languageId": "java",
-                                "version": 1,
-                                "text": source_text,
-                            }
-                        },
-                    )
+                    rpc.notify("textDocument/didOpen", {"textDocument": {
+                        "uri": source_path.as_uri(), "languageId": "java", "version": 1, "text": source_text,
+                    }})
                 try:
                     page_diagnostics = _collect_diagnostics(
                         rpc,
@@ -489,30 +595,23 @@ class JavaLanguageService:
                         timeout_seconds=timeout_seconds,
                         quiet_seconds=self.diagnostic_quiet_seconds,
                     )
+                    _raise_on_java_core_bootstrap_failure(page_diagnostics)
                 finally:
                     for source_path, _source_text in sources:
-                        rpc.notify(
-                            "textDocument/didClose",
-                            {"textDocument": {"uri": source_path.as_uri()}},
-                        )
+                        rpc.notify("textDocument/didClose", {"textDocument": {"uri": source_path.as_uri()}})
                 diagnostics.update(page_diagnostics)
                 page_errors, page_warnings = _diagnostic_counts(page_diagnostics)
-                relative_paths = [
-                    source_path.relative_to(root).as_posix()
-                    for source_path, _source_text in sources
-                ]
-                page_receipts.append(
-                    {
-                        "page_index": page_index,
-                        "file_count": len(sources),
-                        "source_bytes": source_bytes,
-                        "first_file": relative_paths[0],
-                        "last_file": relative_paths[-1],
-                        "diagnostic_uri_count": len(page_diagnostics),
-                        "error_count": page_errors,
-                        "warning_count": page_warnings,
-                    }
-                )
+                relative_paths = [source_path.relative_to(root).as_posix() for source_path, _ in sources]
+                page_receipts.append({
+                    "page_index": page_index,
+                    "file_count": len(sources),
+                    "source_bytes": source_bytes,
+                    "first_file": relative_paths[0],
+                    "last_file": relative_paths[-1],
+                    "diagnostic_uri_count": len(page_diagnostics),
+                    "error_count": page_errors,
+                    "warning_count": page_warnings,
+                })
                 total_source_bytes += source_bytes
             return _diagnostic_result(
                 root=root,
@@ -526,13 +625,7 @@ class JavaLanguageService:
                 timeout_seconds=timeout_seconds,
             )
 
-    def workspace_symbols(
-        self,
-        project_root: str | Path,
-        query: str,
-        *,
-        timeout_seconds: int = 60,
-    ) -> dict[str, Any]:
+    def workspace_symbols(self, project_root: str | Path, query: str, *, timeout_seconds: int = 60) -> dict[str, Any]:
         root = Path(project_root).expanduser().resolve()
         if not root.is_dir():
             raise FileNotFoundError(root)
@@ -540,37 +633,25 @@ class JavaLanguageService:
             raise ValueError("timeout_seconds must be positive.")
         with self._session_lock:
             rpc = self._ensure_rpc_locked(root, timeout_seconds=timeout_seconds)
-            result = rpc.request(
-                "workspace/symbol",
-                {"query": query},
-                timeout=timeout_seconds,
-            )
-            return {
-                "schema_version": "mmm/java-symbols-v1",
-                "query": query,
-                "symbols": result or [],
-            }
+            result = rpc.request("workspace/symbol", {"query": query}, timeout=timeout_seconds)
+            return {"schema_version": "mmm/java-symbols-v1", "query": query, "symbols": result or []}
 
 
 JavaLanguageService.diagnostics.__mmm_source_set_boundary__ = True
 
 
 def _validated_java_file(root: Path, candidate: Path) -> Path:
-    """Return one canonical in-root Java file without following symlink aliases."""
-
     try:
         relative = candidate.relative_to(root)
     except ValueError as exc:
         raise ValueError("Java file escaped the project root.") from exc
     if not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
         raise ValueError("Java file path is not a canonical project-relative path.")
-
     current = root
     for part in relative.parts:
         current = current / part
         if current.is_symlink():
             raise ValueError("Java file path traversed a symbolic link.")
-
     try:
         resolved = candidate.resolve(strict=True)
     except OSError as exc:
@@ -586,11 +667,7 @@ def _validated_java_file(root: Path, candidate: Path) -> Path:
 
 def _java_files(root: Path, relative_files: Iterable[str] | None) -> list[Path]:
     if relative_files is None:
-        candidates = (
-            _validated_java_file(root, path)
-            for path in root.rglob("*.java")
-            if path.is_file()
-        )
+        candidates = (_validated_java_file(root, path) for path in root.rglob("*.java") if path.is_file())
     else:
         requested: list[Path] = []
         for relative in relative_files:
@@ -602,12 +679,7 @@ def _java_files(root: Path, relative_files: Iterable[str] | None) -> list[Path]:
     return sorted(set(candidates), key=lambda path: path.as_posix())
 
 
-def _diagnostic_pages(
-    files: Iterable[Path],
-    *,
-    max_files: int,
-    max_source_bytes: int,
-) -> list[tuple[Path, ...]]:
+def _diagnostic_pages(files: Iterable[Path], *, max_files: int, max_source_bytes: int) -> list[tuple[Path, ...]]:
     pages: list[tuple[Path, ...]] = []
     current: list[Path] = []
     current_bytes = 0
@@ -618,10 +690,7 @@ def _diagnostic_pages(
                 "Java source exceeds the per-page JDT LS source-byte limit: "
                 f"{path} ({source_bytes} > {max_source_bytes})."
             )
-        if current and (
-            len(current) >= max_files
-            or current_bytes + source_bytes > max_source_bytes
-        ):
+        if current and (len(current) >= max_files or current_bytes + source_bytes > max_source_bytes):
             pages.append(tuple(current))
             current = []
             current_bytes = 0
@@ -632,11 +701,7 @@ def _diagnostic_pages(
     return pages
 
 
-def _read_source_page(
-    page: Iterable[Path],
-    *,
-    max_source_bytes: int,
-) -> tuple[list[tuple[Path, str]], int]:
+def _read_source_page(page: Iterable[Path], *, max_source_bytes: int) -> tuple[list[tuple[Path, str]], int]:
     sources: list[tuple[Path, str]] = []
     total_bytes = 0
     for path in page:
@@ -644,16 +709,26 @@ def _read_source_page(
         total_bytes += len(raw)
         if total_bytes > max_source_bytes:
             raise ValueError(
-                "Java sources changed while preparing a JDT LS page and now "
-                "exceed its source-byte limit."
+                "Java sources changed while preparing a JDT LS page and now exceed its source-byte limit."
             )
         sources.append((path, raw.decode("utf-8", errors="replace")))
     return sources, total_bytes
 
 
-def _java_core_bootstrap_messages(
-    diagnostics: dict[str, list[dict[str, Any]]],
-) -> list[str]:
+def _java_source_root(root: Path) -> Path:
+    for relative in ("src/main/java", "src/client/java", "src/test/java"):
+        candidate = root / relative
+        if candidate.is_dir():
+            return candidate.resolve()
+    files = _java_files(root, None)
+    if files:
+        return files[0].parent
+    raise JDTWorkspaceBootstrapError(
+        "JDT workspace bootstrap failure: no Java source root exists for the semantic readiness probe."
+    )
+
+
+def _java_core_bootstrap_messages(diagnostics: dict[str, list[dict[str, Any]]]) -> list[str]:
     messages: list[str] = []
     for values in diagnostics.values():
         for item in values:
@@ -663,6 +738,26 @@ def _java_core_bootstrap_messages(
     return sorted(set(messages))
 
 
+def _raise_on_java_core_bootstrap_failure(diagnostics: dict[str, list[dict[str, Any]]]) -> None:
+    messages = _java_core_bootstrap_messages(diagnostics)
+    if not messages:
+        return
+    detail = "; ".join(messages[-3:])
+    raise JDTWorkspaceBootstrapError(
+        "JDT workspace bootstrap failure: java.lang.Object/java.lang.String cannot be resolved. "
+        f"Diagnostics: {detail}"
+    )
+
+
+def _hover_has_semantic_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, dict):
+        contents = value.get("contents")
+        return contents not in (None, "", [], {})
+    return bool(value)
+
+
 def _await_java_core_ready(
     rpc: _JsonRpcProcess,
     root: Path,
@@ -670,58 +765,69 @@ def _await_java_core_ready(
     timeout_seconds: float,
     quiet_seconds: float,
 ) -> None:
-    files = _java_files(root, None)
-    if not files:
-        return
-    probe = files[0]
-    source_text = probe.read_bytes().decode("utf-8", errors="replace")
-    uri = probe.as_uri()
+    source_root = _java_source_root(root)
+    probe_path = source_root / f"{_SEMANTIC_PROBE_NAME}.java"
+    uri = probe_path.resolve(strict=False).as_uri()
     deadline = time.monotonic() + float(timeout_seconds)
-    last_bootstrap_messages: list[str] = []
     version = 1
+    last_reason = "semantic probe has not completed"
 
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        rpc.notify(
-            "textDocument/didOpen",
-            {
-                "textDocument": {
-                    "uri": uri,
-                    "languageId": "java",
-                    "version": version,
-                    "text": source_text,
-                }
-            },
-        )
+    while time.monotonic() < deadline:
+        rpc.notify("textDocument/didOpen", {"textDocument": {
+            "uri": uri,
+            "languageId": "java",
+            "version": version,
+            "text": _SEMANTIC_PROBE_SOURCE,
+        }})
         try:
+            remaining = max(0.001, deadline - time.monotonic())
             diagnostics = _collect_diagnostics(
                 rpc,
                 expected_uris={uri},
                 timeout_seconds=remaining,
                 quiet_seconds=quiet_seconds,
             )
+            _raise_on_java_core_bootstrap_failure(diagnostics)
+            errors = [
+                item
+                for values in diagnostics.values()
+                for item in values
+                if int(item.get("severity", 1)) == 1
+            ]
+            if errors:
+                last_reason = "; ".join(str(item.get("message", "")) for item in errors[-3:])
+            else:
+                remaining = max(0.001, deadline - time.monotonic())
+                object_hover = rpc.request(
+                    "textDocument/hover",
+                    {"textDocument": {"uri": uri}, "position": {"line": 1, "character": 6}},
+                    timeout=remaining,
+                )
+                remaining = max(0.001, deadline - time.monotonic())
+                string_hover = rpc.request(
+                    "textDocument/hover",
+                    {"textDocument": {"uri": uri}, "position": {"line": 2, "character": 6}},
+                    timeout=remaining,
+                )
+                if _hover_has_semantic_value(object_hover) and _hover_has_semantic_value(string_hover):
+                    return
+                last_reason = "JDT did not semantically resolve both Object and String"
+        except JDTWorkspaceBootstrapError:
+            raise
+        except (JDTLanguageServerError, TimeoutError) as exc:
+            last_reason = f"{type(exc).__name__}: {exc}"
         finally:
-            rpc.notify(
-                "textDocument/didClose",
-                {"textDocument": {"uri": uri}},
-            )
-        last_bootstrap_messages = _java_core_bootstrap_messages(diagnostics)
-        if not last_bootstrap_messages:
-            return
+            rpc.notify("textDocument/didClose", {"textDocument": {"uri": uri}})
+
         version += 1
         remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        time.sleep(min(0.25, remaining))
+        if remaining > 0:
+            time.sleep(min(0.25, remaining))
 
-    detail = "; ".join(last_bootstrap_messages[-3:])
-    suffix = f" Diagnostics: {detail}" if detail else ""
-    raise JDTLanguageServerError(
-        "JDT workspace bootstrap did not become Java-core ready before validation: "
-        "java.lang.Object/java.lang.String remained unresolved."
-        f"{suffix}"
+    raise JDTWorkspaceBootstrapError(
+        "JDT workspace bootstrap failure: ServiceReady/initialize was insufficient; "
+        "the project-source semantic probe could not resolve java.lang.Object and java.lang.String "
+        f"before validation. Last probe state: {last_reason}"
     )
 
 
@@ -745,11 +851,7 @@ def _collect_diagnostics(
     while True:
         now = time.monotonic()
         complete = expected_uris.issubset(diagnostics)
-        if (
-            complete
-            and settled_since is not None
-            and now - settled_since >= quiet_seconds
-        ):
+        if complete and settled_since is not None and now - settled_since >= quiet_seconds:
             return dict(sorted(diagnostics.items()))
 
         reader_failure = getattr(rpc, "_mmm_reader_failure", None)
@@ -793,12 +895,9 @@ def _collect_diagnostics(
         if uri not in expected_uris:
             continue
         values = params.get("diagnostics")
-        if not isinstance(values, list) or any(
-            not isinstance(item, dict) for item in values
-        ):
+        if not isinstance(values, list) or any(not isinstance(item, dict) for item in values):
             raise JDTLanguageServerError(
-                "JDT LS published a malformed diagnostics payload for an opened "
-                "Java file."
+                "JDT LS published a malformed diagnostics payload for an opened Java file."
             )
         diagnostics[uri] = _sorted_diagnostics(values)
         settled_since = time.monotonic()
@@ -806,10 +905,8 @@ def _collect_diagnostics(
     missing_count = len(expected_uris.difference(diagnostics))
     if missing_count:
         raise JDTLanguageServerError(
-            "JDT LS did not publish diagnostics for every opened Java file before "
-            "the validation deadline: "
-            f"observed={len(diagnostics)}, expected={len(expected_uris)}, "
-            f"missing={missing_count}."
+            "JDT LS did not publish diagnostics for every opened Java file before the validation deadline: "
+            f"observed={len(diagnostics)}, expected={len(expected_uris)}, missing={missing_count}."
         )
     raise JDTLanguageServerError(
         "JDT LS diagnostics did not become quiescent before the validation deadline "
@@ -817,35 +914,16 @@ def _collect_diagnostics(
     )
 
 
-def _sorted_diagnostics(
-    values: Iterable[dict[str, Any]],
-) -> list[dict[str, Any]]:
+def _sorted_diagnostics(values: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(
         values,
-        key=lambda item: json.dumps(
-            item,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        ),
+        key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":"), ensure_ascii=False),
     )
 
 
-def _diagnostic_counts(
-    diagnostics: dict[str, list[dict[str, Any]]],
-) -> tuple[int, int]:
-    errors = sum(
-        1
-        for values in diagnostics.values()
-        for item in values
-        if int(item.get("severity", 1)) == 1
-    )
-    warnings = sum(
-        1
-        for values in diagnostics.values()
-        for item in values
-        if int(item.get("severity", 2)) == 2
-    )
+def _diagnostic_counts(diagnostics: dict[str, list[dict[str, Any]]]) -> tuple[int, int]:
+    errors = sum(1 for values in diagnostics.values() for item in values if int(item.get("severity", 1)) == 1)
+    warnings = sum(1 for values in diagnostics.values() for item in values if int(item.get("severity", 2)) == 2)
     return errors, warnings
 
 
@@ -862,8 +940,7 @@ def _diagnostic_result(
     timeout_seconds: float,
 ) -> dict[str, Any]:
     deterministic_diagnostics = {
-        uri: _sorted_diagnostics(values)
-        for uri, values in sorted(diagnostics.items())
+        uri: _sorted_diagnostics(values) for uri, values in sorted(diagnostics.items())
     }
     errors, warnings = _diagnostic_counts(deterministic_diagnostics)
     return {
