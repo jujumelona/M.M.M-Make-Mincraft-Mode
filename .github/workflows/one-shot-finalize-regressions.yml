@@ -1,0 +1,511 @@
+name: One Shot Finalize Regressions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-finalize-regressions.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -q -e '.[dev]'
+      - name: Update stale regression contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_function(path: str, name: str, replacement: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              marker = f'def {name}('
+              start = text.index(marker)
+              next_def = text.find('\n\ndef ', start + len(marker))
+              end = len(text) if next_def < 0 else next_def + 2
+              p.write_text(text[:start] + replacement.rstrip() + '\n\n' + text[end:], encoding='utf-8')
+
+          p = Path('tests/test_unified_host_execution_loop.py')
+          text = p.read_text(encoding='utf-8')
+          replacements = {
+              'state.record_mutation("apply_source_patch", failed_payload)': 'state.record_mutation("apply_source_patch", {}, failed_payload)',
+              'state.record_mutation("apply_source_patch", applied_payload)': 'state.record_mutation("apply_source_patch", {}, applied_payload)',
+              'state.record_mutation("apply_source_edit", unchanged)': 'state.record_mutation("apply_source_edit", {}, unchanged)',
+          }
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f'missing unified-host stale call: {old}')
+              text = text.replace(old, new, 1)
+          p.write_text(text, encoding='utf-8')
+
+          replace_function(
+              'tests/test_unified_host_execution_loop.py',
+              'test_wrong_source_edit_path_retries_pinned_act_without_rag',
+              '''def test_wrong_source_edit_path_fails_closed_for_outer_replan_without_rag() -> None:
+              """Executed target drift is an outer-replan boundary, not an in-loop retry."""
+              router = MagicMock()
+              router._generation_scope.return_value = nullcontext()
+              router._agent_require_fresh_evidence = False
+
+              config = MagicMock()
+              config.adapter = "llama_cpp"
+              config.max_context = 16384
+              config.max_input_tokens = 0
+              config.max_new_tokens = 4096
+              config.extra = {"runtime_contract": "qwen", "qwen_family": "qwen3.5"}
+
+              adapter = MagicMock()
+              adapter.generate_turn.side_effect = [
+                  GenerationResponse(
+                      tool_calls=(
+                          ToolCall(
+                              id="wrong_path",
+                              name="apply_source_edit",
+                              arguments={
+                                  "operation": "create_file",
+                                  "path": "src/Wrong.java",
+                                  "content": "public class Wrong {}",
+                              },
+                          ),
+                      )
+                  ),
+                  GenerationResponse(
+                      tool_calls=(
+                          ToolCall(
+                              id="right_path",
+                              name="apply_source_edit",
+                              arguments={
+                                  "operation": "create_file",
+                                  "path": "src/Right.java",
+                                  "content": "public class Right {}",
+                              },
+                          ),
+                      )
+                  ),
+              ]
+              runtime = MagicMock()
+              runtime.call.return_value = _applied_patch_payload("src/Right.java")
+              request = GenerationRequest(
+                  messages=(
+                      {
+                          "role": "user",
+                          "content": (
+                              '{"phase":"implement_module","operation":"create_file",'
+                              '"path":"src/Right.java"}'
+                          ),
+                      },
+                  ),
+                  tools=(
+                      _tool_schema("search_code_rag"),
+                      _tool_schema("apply_source_edit"),
+                  ),
+                  tool_choice=None,
+                  parallel_tool_calls=False,
+              )
+
+              with pytest.raises(
+                  ModelConfigurationError,
+                  match="POST_ARGUMENT_SEMANTIC_FAILURE: MUTATION_TARGET_DRIFT",
+              ):
+                  generate_with_tools(
+                      router,
+                      config=config,
+                      adapter=adapter,
+                      request=request,
+                      runtime=runtime,
+                      stage="generation",
+                      role="coder",
+                  )
+
+              assert adapter.generate_turn.call_count == 1
+              assert runtime.call.call_count == 0
+              exposed = [
+                  [schema["function"]["name"] for schema in call.args[0].tools]
+                  for call in adapter.generate_turn.call_args_list
+              ]
+              assert exposed == [["apply_source_edit"]]'''
+          )
+
+          replace_function(
+              'tests/test_unified_host_execution_loop.py',
+              'test_distinct_contract_failures_do_not_fake_a_no_progress_fixed_point',
+              '''def test_distinct_contract_failures_escalate_target_drift_after_phase_correction() -> None:
+              """A phase violation may be corrected in-loop; executed target drift must escalate."""
+              router = MagicMock()
+              router._generation_scope.return_value = nullcontext()
+              router._agent_require_fresh_evidence = False
+
+              config = MagicMock()
+              config.adapter = "llama_cpp"
+              config.max_context = 16384
+              config.max_input_tokens = 0
+              config.max_new_tokens = 4096
+              config.extra = {"runtime_contract": "qwen", "qwen_family": "qwen3.5"}
+
+              adapter = MagicMock()
+              adapter.generate_turn.side_effect = [
+                  GenerationResponse(
+                      tool_calls=(
+                          ToolCall(id="phase_error", name="search_code_rag", arguments={"query": "wrong phase"}),
+                      )
+                  ),
+                  GenerationResponse(
+                      tool_calls=(
+                          ToolCall(
+                              id="target_error",
+                              name="apply_source_edit",
+                              arguments={
+                                  "operation": "replace",
+                                  "path": "src/Wrong.java",
+                                  "content": "public class Wrong {}",
+                              },
+                          ),
+                      )
+                  ),
+              ]
+              runtime = MagicMock()
+              runtime.call.return_value = _applied_patch_payload("src/Right.java")
+              request = GenerationRequest(
+                  messages=(
+                      {
+                          "role": "user",
+                          "content": (
+                              '{"phase":"implement_module","initial_exact_source_context":'
+                              '{"files":{"src/Right.java":"public class Right {}"}}}'
+                          ),
+                      },
+                  ),
+                  tools=(
+                      _tool_schema("search_code_rag"),
+                      _tool_schema("apply_source_edit"),
+                  ),
+                  tool_choice=None,
+                  parallel_tool_calls=False,
+              )
+
+              with pytest.raises(
+                  ModelConfigurationError,
+                  match="POST_ARGUMENT_SEMANTIC_FAILURE: MUTATION_TARGET_DRIFT",
+              ):
+                  generate_with_tools(
+                      router,
+                      config=config,
+                      adapter=adapter,
+                      request=request,
+                      runtime=runtime,
+                      stage="generation",
+                      role="coder",
+                  )
+
+              assert adapter.generate_turn.call_count == 2
+              assert runtime.call.call_count == 0'''
+          )
+
+          p = Path('tests/test_space_progression_planner_and_verifier_regression.py')
+          text = p.read_text(encoding='utf-8')
+          import_anchor = 'from minecraft_mod_ai import evidence_first_planning as planning\n'
+          structural_import = 'from minecraft_mod_ai import structural_minecraft_runtime_contract as structural\n'
+          if structural_import not in text:
+              if import_anchor not in text:
+                  raise SystemExit('planning import anchor missing')
+              text = text.replace(import_anchor, import_anchor + structural_import, 1)
+          p.write_text(text, encoding='utf-8')
+
+          replace_function(
+              'tests/test_space_progression_planner_and_verifier_regression.py',
+              'test_space_progression_semantics_dependencies_and_obligations_are_complete',
+              '''def test_space_progression_semantics_dependencies_and_obligations_are_complete() -> None:
+              catalog = request_catalog(PROMPT, _grounded_requirements())
+              by_capability = {item["capability"]: item for item in catalog["requirements"]}
+
+              assert len(by_capability) == 12
+              performance = by_capability["spacecraft.performance_upgrade"]
+              assert performance["semantic_type"] == "gameplay_mechanic"
+              assert "spacecraft.gameplay_stat_schema" in performance["implementation_capabilities"]
+              assert performance["artifact_task_ids"]
+              assert performance["artifact_obligations"]
+              assert performance["runtime_acceptance"]
+              assert any(
+                  "authored spacecraft stat dimensions" in item
+                  for item in performance["design_resolution_obligations"]
+              )
+              assert any(
+                  "buy/sell prices" in item
+                  for item in by_capability["economy.trade"]["design_resolution_obligations"]
+              )
+              assert any(
+                  "removal/death behavior" in item
+                  for item in by_capability["crew.recruitment"]["design_resolution_obligations"]
+              )
+              assert any(
+                  "development stages" in item
+                  for item in by_capability["colony.colonization"]["design_resolution_obligations"]
+              )
+
+              launch = by_capability["space.launch"]
+              launch_dependencies = {
+                  next(
+                      item["capability"]
+                      for item in catalog["requirements"]
+                      if item["requirement_id"] == ref
+                  )
+                  for ref in launch["depends_on"]
+              }
+              assert launch_dependencies == {
+                  "spacecraft.component_construction",
+                  "spacecraft.weapon_upgrade",
+                  "crew.recruitment",
+                  "spacecraft.performance_upgrade",
+                  "spacecraft.expansion",
+              }
+              assert launch["unlock_policy"]["optional_requirement_refs"] == []
+              for capability in ("planet.special_mineral", "alien.combat", "colony.colonization"):
+                  assert by_capability[capability]["depends_on"] == [launch["requirement_id"]]
+              construction_dependencies = set(
+                  by_capability["spacecraft.component_construction"]["depends_on"]
+              )
+              assert by_capability["economy.trade"]["requirement_id"] in construction_dependencies
+
+              branches = planning._branch_predicates(catalog["requirements"], (), {"project_topology": {}})
+              assert branches["needs_mixin"]["status"] == "NOT_APPLICABLE"
+              ownership = {
+                  "module_id": ":",
+                  "source_set": "main",
+                  "source_root": "src/main/java",
+                  "resource_root": "src/main/resources",
+                  "test_root": "src/test/java",
+                  "namespace": "generated.mod",
+                  "mod_id": "space_mod",
+                  "extension": "java",
+                  "topology_module_ids": [],
+                  "topology_source_sets": [],
+              }
+              gap = {
+                  "gap_id": "gap_ship_performance",
+                  "requirement_ref": performance["requirement_id"],
+                  "capability": performance["capability"],
+                  "missing_provides": performance["provides"],
+                  "acceptance": performance["acceptance"],
+                  "runtime_acceptance": performance["runtime_acceptance"],
+                  "implementation_capabilities": performance["implementation_capabilities"],
+                  "artifact_obligations": performance["artifact_obligations"],
+                  "semantic_type": performance["semantic_type"],
+                  "unlock_policy": performance["unlock_policy"],
+              }
+
+              steps = structural.structural_steps_for_requirement(gap)
+              assert [step.name for step in steps[:6]] == [
+                  "trigger",
+                  "input",
+                  "state",
+                  "transition",
+                  "output",
+                  "failure",
+              ]
+              assert steps[-2].name == "integration"
+              assert steps[-1].name == "runtime_scenario"
+              assert steps[-1].template_id == "validation/runtime_test"
+              assert not any("build_config" in step.anchor_kinds for step in steps)
+
+              anchor_probe = planning._anchors(
+                  "spacecraft.performance_upgrade", steps[-1], "task_probe", ownership
+              )
+              assert {
+                  anchor["source_set"]
+                  for anchor in anchor_probe
+                  if anchor["kind"] == "test"
+              } == {"test"}
+
+              tasks = planning._compile_tasks(
+                  (gap,),
+                  (
+                      {
+                          "requirement_ref": performance["requirement_id"],
+                          "component_refs": [],
+                          "source_refs": [],
+                      },
+                  ),
+                  {"coordinates": {"minecraft_version": "1.21.1", "loader": "fabric"}},
+                  branches,
+                  ownership,
+              )
+              final_task = tasks[-1]
+              assert final_task["template_id"] == "structural_artifact_pipeline"
+              assert final_task["template_catalog_schema"] == "mmm/structural-minecraft-tasks"
+              assert final_task["required_gates"] == ["source_static_validation", "target_compile"]
+              assert final_task["done_predicate"] == {
+                  "operator": "all",
+                  "checks": [
+                      "owned_anchor_hashes_recorded",
+                      "declared_provides_observed",
+                      "required_gates_passed",
+                  ],
+              }
+              assert any(anchor["source_set"] == "test" for anchor in final_task["owned_anchors"])
+              assert "spacecraft.performance_upgrade" in final_task["semantic_outcome"]
+
+              dimensions, _reasons = _infer_dimensions(
+                  requested_prompt="우주선 성능을 거래 구매로 업그레이드한다",
+                  game_design={"capability": "spacecraft.performance_upgrade"},
+                  research_brief=None,
+                  modules=(),
+                  assets=(),
+              )
+              assert "performance" not in dimensions
+              assert "state_save_migration" not in dimensions'''
+          )
+
+          p = Path('tests/test_java_lsp_scaling.py')
+          text = p.read_text(encoding='utf-8')
+          old = '''    def __init__(self, command: list[str], cwd: Path) -> None:
+                  self.command = command
+                  self.cwd = cwd
+          '''
+          new = '''    def __init__(
+                  self,
+                  command: list[str],
+                  cwd: Path,
+                  configuration: dict[str, Any] | None = None,
+                  environment: dict[str, str] | None = None,
+              ) -> None:
+                  self.command = command
+                  self.cwd = cwd
+                  self.configuration = configuration
+                  self.environment = environment
+          '''
+          if old not in text:
+              raise SystemExit('JDT fake constructor anchor missing')
+          text = text.replace(old, new, 1)
+          old = '''        if method == "workspace/symbol":
+                      return {"query": params.get("query", "")}
+                  raise AssertionError(f"unexpected fake JDT request: {method}")
+          '''
+          new = '''        if method == "textDocument/hover":
+                      uri = str(params.get("textDocument", {}).get("uri", ""))
+                      if Path(uri).stem == "__MmmJdtReadinessProbe":
+                          line = int(params.get("position", {}).get("line", 0))
+                          symbol = "Object" if line == 1 else "String"
+                          return {
+                              "contents": {
+                                  "kind": "plaintext",
+                                  "value": f"java.lang.{symbol}",
+                              }
+                          }
+                  if method == "workspace/symbol":
+                      return {"query": params.get("query", "")}
+                  raise AssertionError(f"unexpected fake JDT request: {method}")
+          '''
+          if old not in text:
+              raise SystemExit('JDT fake request anchor missing')
+          text = text.replace(old, new, 1)
+          old = '''        if method == "textDocument/didOpen":
+                      uri = str(params["textDocument"]["uri"])
+                      self.opened_uris.append(uri)
+                      number = int(Path(uri).stem.removeprefix("Generated"))
+          '''
+          new = '''        if method == "textDocument/didOpen":
+                      uri = str(params["textDocument"]["uri"])
+                      stem = Path(uri).stem
+                      if stem == "__MmmJdtReadinessProbe":
+                          self.messages.put(
+                              {
+                                  "method": "textDocument/publishDiagnostics",
+                                  "params": {"uri": uri, "diagnostics": []},
+                              }
+                          )
+                          return
+                      self.opened_uris.append(uri)
+                      number = int(stem.removeprefix("Generated"))
+          '''
+          if old not in text:
+              raise SystemExit('JDT didOpen anchor missing')
+          text = text.replace(old, new, 1)
+          text = text.replace(
+              '    assert rpc.request_timeouts == [3]\n',
+              '    assert rpc.request_methods[:3] == ["initialize", "textDocument/hover", "textDocument/hover"]\n    assert all(0 < value <= 3 for value in rpc.request_timeouts)\n',
+              1,
+          )
+          symbol_anchor = '''def test_workspace_symbol_calls_reuse_one_initialized_jdt_process(
+              tmp_path: Path,
+              monkeypatch: pytest.MonkeyPatch,
+          ) -> None:
+              _FakeJsonRpcProcess.instances.clear()
+          '''
+          symbol_new = '''def test_workspace_symbol_calls_reuse_one_initialized_jdt_process(
+              tmp_path: Path,
+              monkeypatch: pytest.MonkeyPatch,
+          ) -> None:
+              _write_java_files(tmp_path, 1)
+              _FakeJsonRpcProcess.instances.clear()
+          '''
+          if symbol_anchor not in text:
+              raise SystemExit('JDT workspace-symbol test anchor missing')
+          text = text.replace(symbol_anchor, symbol_new, 1)
+          text = text.replace(
+              '    assert rpc.request_methods == ["initialize", "workspace/symbol", "workspace/symbol"]\n',
+              '    assert rpc.request_methods == ["initialize", "textDocument/hover", "textDocument/hover", "workspace/symbol", "workspace/symbol"]\n',
+              1,
+          )
+          roots_anchor = '''    first_root.mkdir()
+              second_root.mkdir()
+              _FakeJsonRpcProcess.instances.clear()
+          '''
+          roots_new = '''    first_root.mkdir()
+              second_root.mkdir()
+              _write_java_files(first_root, 1)
+              _write_java_files(second_root, 1)
+              _FakeJsonRpcProcess.instances.clear()
+          '''
+          if roots_anchor not in text:
+              raise SystemExit('JDT root-switch test anchor missing')
+          text = text.replace(roots_anchor, roots_new, 1)
+          p.write_text(text, encoding='utf-8')
+          PY
+          git diff --check
+      - name: Verify repaired contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_unified_host_execution_loop.py \
+            tests/test_space_progression_planner_and_verifier_regression.py \
+            tests/test_java_lsp_readiness.py \
+            tests/test_java_lsp_scaling.py
+          python -m ruff check \
+            tests/test_unified_host_execution_loop.py \
+            tests/test_space_progression_planner_and_verifier_regression.py \
+            tests/test_java_lsp_scaling.py \
+            --select F,E7,E9
+      - name: Commit verified repair and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if [ "$(git rev-parse origin/main)" != "$(git rev-parse HEAD)" ]; then
+            echo 'main moved during verified repair; refusing non-fast-forward write' >&2
+            exit 1
+          fi
+          git rm .github/workflows/one-shot-finalize-regressions.yml
+          git diff --check
+          git config user.name 'jujumelona'
+          git config user.email 'qasdaa025@gmail.com'
+          git add tests/test_unified_host_execution_loop.py tests/test_space_progression_planner_and_verifier_regression.py tests/test_java_lsp_scaling.py
+          git commit -m 'test: align regressions with fail-closed host contracts'
+          git push origin HEAD:main
