@@ -561,8 +561,7 @@ def traced_callable(function: F, *, stage: str, operation: str | None = None) ->
     operation_name = operation or function.__name__
     signature = inspect.signature(function)
 
-    @wraps(function)
-    def wrapped(*args: Any, **kwargs: Any) -> Any:
+    def invoke(args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> Any:
         started = time.monotonic()
         emit_root_cause(
             "operation_start",
@@ -573,7 +572,7 @@ def traced_callable(function: F, *, stage: str, operation: str | None = None) ->
             details={"arguments": _argument_summary(signature, args, kwargs)},
         )
         try:
-            value = function(*args, **kwargs)
+            value = function(*args, **dict(kwargs))
         except BaseException as exc:
             emit_root_cause(
                 "operation_failure",
@@ -600,6 +599,15 @@ def traced_callable(function: F, *, stage: str, operation: str | None = None) ->
             },
         )
         return value
+
+    @wraps(function)
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        if _SPAN_ID.get():
+            return invoke(args, kwargs)
+        # A standalone host boundary is a distinct trace. Force a fresh correlation ID
+        # instead of inheriting a ContextVar value left by a previous independent call.
+        with trace_scope(operation_name, trace_id=uuid.uuid4().hex):
+            return invoke(args, kwargs)
 
     return cast(F, wrapped)
 
