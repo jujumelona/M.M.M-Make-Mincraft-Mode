@@ -6,17 +6,17 @@ from minecraft_mod_ai.atomic_slot_executor import SlotDefinition
 from minecraft_mod_ai.task_template_catalog import load_template
 
 
-def test_graph_cardinality_surfaces_do_not_use_model_count_or_continue():
-    source = Path("minecraft_mod_ai/task_template_runner.py").read_text(encoding="utf-8")
-    graph_section = source[source.index('if identifier == "design/content_property"'):source.index('# Research facts and design decisions')]
+def test_graph_cardinality_surfaces_do_not_use_model_continue_loops():
+    source = Path("minecraft_mod_ai/design_record_runtime.py").read_text(encoding="utf-8")
     assert '"design/record_count"' not in source
-    assert '"design/continue_record"' not in graph_section
-    assert '"design/relation_set"' in graph_section
-    assert "entity_count" in graph_section
+    assert '"design/continue_record"' not in source
+    assert '"design/content_entity_count"' in source
+    assert '"design/content_relation_count"' in source
+    assert "deterministic_model_map" in source
 
 
 def test_relation_templates_are_bounded_atomic_schemas():
-    for identifier in ("design/content_relation", "design/relation_set"):
+    for identifier in ("design/content_relation", "design/content_relation_count"):
         template = load_template(identifier)
         SlotDefinition(identifier, template["record_schema"]).validate_schema()
 
