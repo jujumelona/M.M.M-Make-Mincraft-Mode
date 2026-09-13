@@ -50,7 +50,7 @@ def test_compound_capability_requires_each_facet_not_one_word():
     assert ["upgrade"] in trace["missing_facets"]
 
 
-def test_task_and_sibling_queries_reach_actual_brief():
+def test_task_context_is_retained_without_sibling_catalog_pollution():
     from minecraft_mod_ai.planning_state_research import _research_brief
     state = {"original_prompt": "Mine minerals and trade to build spacecraft",
              "decisions": [requirement(), requirement("req_002", "space.exploration")],
@@ -60,7 +60,8 @@ def test_task_and_sibling_queries_reach_actual_brief():
     brief, _, _ = _research_brief(state["original_prompt"], state)
     domain = brief["domains"][0]
     assert state["original_prompt"] == domain["task_query_context"]["original_task"]
-    assert "space" in domain["catalog_queries"]
+    assert domain["catalog_queries"] == ["spacecraft upgrade"]
+    assert "space" not in domain["catalog_queries"]
     assert domain["task_query_context"]["sibling_requirements"][0]["requirement_id"] == "req_002"
 
 
