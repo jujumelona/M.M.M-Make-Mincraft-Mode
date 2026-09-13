@@ -3,6 +3,7 @@ name: Audit Runtime Bottleneck Candidates
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     paths:
       - minecraft_mod_ai/**/*.py
       - tests/**/*.py
@@ -11,13 +12,16 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: audit-runtime-bottleneck-candidates-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
-        with:
-          ref: main
       - name: Enumerate bottleneck and arbitrary-cap candidates
         shell: bash
         run: |
@@ -29,7 +33,7 @@ jobs:
           git grep -n -E '_MAX_[A-Z0-9_]+[[:space:]]*=[[:space:]]*[0-9]+|min\([[:space:]]*[0-9]+[[:space:]]*,|min\([^,]+,[[:space:]]*[0-9]+\)|max\([[:space:]]*[0-9]+[[:space:]]*,' -- minecraft_mod_ai || true
 
           echo '=== environment defaults/clamps that can become runtime caps ==='
-          git grep -n -E "os\\.environ\\.get\\([^)]*,[[:space:]]*[\"'][0-9]+[\"']|_env_(int|float)\\([^,]+,[[:space:]]*[0-9]+" -- minecraft_mod_ai || true
+          git grep -n -E "os\.environ\.get\([^)]*,[[:space:]]*[\"'][0-9]+[\"']|_env_(int|float)\([^,]+,[[:space:]]*[0-9]+" -- minecraft_mod_ai || true
 
           echo '=== retry / round / turn / no-progress bounds ==='
           git grep -n -E 'max_(round|turn|attempt|retry|retries)|MAX_(ROUND|TURN|ATTEMPT|RETRY|RETRIES)|retry_count|no_progress|streak|attempts?[[:space:]]*[<>=]' -- minecraft_mod_ai || true
