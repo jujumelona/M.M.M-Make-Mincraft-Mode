@@ -26,6 +26,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install -q -e '.[dev]'
       - name: Apply verified repair patch
         shell: bash
         run: |
@@ -35,7 +37,7 @@ jobs:
             | gzip -d > /tmp/repair.patch
           git apply --check /tmp/repair.patch
           git apply /tmp/repair.patch
-          PYTHONPATH=. python tools/package_skills.py
+          python tools/package_skills.py
           mkdir -p plugins/mmm-minecraft-mod-ai/skills/make-minecraft-mod
           cat > plugins/mmm-minecraft-mod-ai/skills/make-minecraft-mod/SKILL.md <<'MAKE_SKILL'
           ---
@@ -55,8 +57,6 @@ jobs:
           Keep version, evidence, generation, and validation authority with the canonical skills and MCP stages.
           MAKE_SKILL
           git diff --check
-      - name: Install test dependencies
-        run: python -m pip install -q -e '.[dev]'
       - name: Verify original regression set
         run: >-
           python -m pytest -q
