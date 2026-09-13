@@ -636,7 +636,7 @@ def review_requirement_sources(
     result = {
         "schema_version": "mmm/semantic-research-review-v2",
         "requirement_sha256": req_sha,
-        "pool_sha256": fingerprint(frontier),
+        "pool_sha256": fingerprint(pool),
         "observations": [],
     }
     source_index = {
@@ -698,7 +698,7 @@ def review_requirement_sources(
         satisfied.update(
             proof["obligation_index"] for proof in checked["accepted_proofs"]
         )
-    checked = validate_semantic_review(requirement, frontier, result)
+    checked = validate_semantic_review(requirement, pool, result)
 
     emit_root_cause(
         "planning_semantic_research_summary", stage="planning_state",
