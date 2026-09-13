@@ -31,7 +31,7 @@ def test_root_cause_trace_is_durable_and_preserves_first_failure(tmp_path, monke
     ]
     first_failure = records[1]
     secondary_failure = records[2]
-    assert first_failure["schema_version"] == "mmm/root-cause-trace-v3"
+    assert first_failure["schema_version"] == "mmm/root-cause-trace-v4"
     assert first_failure["is_first_failure"] is True
     assert secondary_failure["is_first_failure"] is False
     assert secondary_failure["first_failure_seq"] == first_failure["first_failure_seq"]
