@@ -22,7 +22,8 @@ runtime_mutation_audit.json
 runtime_mutation_summary.json
 .mmm/
 
-# Keep Markdown documents local; publish README files only.
+# Keep Markdown documents local; publish README files and canonical Codex plugin Skills.
 *.[mM][dD]
 *.[mM][aA][rR][kK][dD][oO][wW][nN]
 ![rR][eE][aA][dD][mM][eE].[mM][dD]
+!plugins/mmm-minecraft-mod-ai/skills/**/SKILL.md
