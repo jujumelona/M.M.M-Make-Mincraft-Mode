@@ -126,13 +126,13 @@ def test_jdt_timeout_reports_missing_and_mismatched_uris(capsys: pytest.CaptureF
     message = str(exc_info.value)
     assert expected in message
     assert unexpected in message
-    assert "reader_alive=True" in message
     captured = capsys.readouterr()
     assert "ROOT CAUSE TRACE:" not in captured.out
     payloads = _trace_payloads(captured.err)
     timeout = next(item for item in payloads if item["event"] == "jdt_publish_timeout")
     assert timeout["details"]["missing_uris"] == [expected]
     assert timeout["details"]["unexpected_uris"] == [unexpected]
+    assert timeout["details"]["reader_alive"] is True
     progress = next(item for item in payloads if item["event"] == "jdt_server_progress")
     assert progress["details"]["params"]["message"] == "Importing Gradle project"
     assert timeout["details"]["server_progress_tail"][-1]["params"]["message"] == "Importing Gradle project"
