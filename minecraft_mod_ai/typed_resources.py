@@ -52,6 +52,40 @@ def _validate_json(value: JsonValue) -> None:
         raise ResourceValidationError(f"Unsupported JSON value: {type(value).__name__}")
 
 
+def _require_object(value: JsonValue, kind: ResourceKind) -> dict[str, JsonValue]:
+    if not isinstance(value, dict):
+        raise ResourceValidationError(f"{kind} resource must be an object.")
+    return value
+
+
+def _validate_language(value: dict[str, JsonValue]) -> None:
+    if any(not isinstance(item, str) for item in value.values()):
+        raise ResourceValidationError("Language resource values must be strings.")
+
+
+def _valid_fabric_entry(entry: JsonValue) -> bool:
+    if isinstance(entry, str):
+        return bool(entry)
+    if not isinstance(entry, dict):
+        return False
+    value = entry.get("value")
+    adapter = entry.get("adapter")
+    return isinstance(value, str) and bool(value) and (
+        "adapter" not in entry or isinstance(adapter, str)
+    )
+
+
+def _validate_fabric(value: dict[str, JsonValue]) -> None:
+    entrypoints = value.get("entrypoints", {})
+    if not isinstance(entrypoints, dict):
+        raise ResourceValidationError("Fabric entrypoints must be an object.")
+    for entries in entrypoints.values():
+        if not isinstance(entries, list):
+            raise ResourceValidationError("Fabric entrypoints must be lists.")
+        if any(not _valid_fabric_entry(entry) for entry in entries):
+            raise ResourceValidationError("Invalid Fabric entrypoint.")
+
+
 @dataclass(frozen=True)
 class JsonResource:
     value: JsonValue
@@ -69,28 +103,13 @@ class JsonResource:
 
     def validate(self) -> None:
         _validate_json(self.value)
-        if self.kind in ("fabric", "lang", "config") and not isinstance(self.value, dict):
-            raise ResourceValidationError(f"{self.kind} resource must be an object.")
+        if self.kind not in ("fabric", "lang", "config"):
+            return
+        value = _require_object(self.value, self.kind)
         if self.kind == "lang":
-            assert isinstance(self.value, dict)
-            if any(not isinstance(value, str) for value in self.value.values()):
-                raise ResourceValidationError("Language resource values must be strings.")
-        if self.kind == "fabric":
-            assert isinstance(self.value, dict)
-            entrypoints = self.value.get("entrypoints", {})
-            if not isinstance(entrypoints, dict):
-                raise ResourceValidationError("Fabric entrypoints must be an object.")
-            for entries in entrypoints.values():
-                if not isinstance(entries, list):
-                    raise ResourceValidationError("Fabric entrypoints must be lists.")
-                for entry in entries:
-                    if isinstance(entry, str) and entry:
-                        continue
-                    if (isinstance(entry, dict) and isinstance(entry.get("value"), str)
-                            and entry["value"] and ("adapter" not in entry
-                            or isinstance(entry["adapter"], str))):
-                        continue
-                    raise ResourceValidationError("Invalid Fabric entrypoint.")
+            _validate_language(value)
+        elif self.kind == "fabric":
+            _validate_fabric(value)
 
     def serialize(self) -> str:
         # Validate again: callers may have edited nested containers since parsing.
@@ -137,35 +156,59 @@ class GradleDependency:
                     f'{self.group}:{self.artifact}:{self.version}') + ')\n}\n')
 
 
+def _skip_line_comment(text: str, index: int) -> int | None:
+    if not text.startswith('//', index):
+        return None
+    end = text.find('\n', index)
+    return len(text) if end < 0 else end + 1
+
+
+def _skip_block_comment(text: str, index: int) -> int | None:
+    if not text.startswith('/*', index):
+        return None
+    end = text.find('*/', index + 2)
+    if end < 0:
+        raise ResourceValidationError('Unterminated Gradle comment')
+    return end + 2
+
+
+def _skip_quoted_string(text: str, index: int) -> int | None:
+    char = text[index]
+    if char not in {'"', "'"}:
+        return None
+    quote = char * 3 if text.startswith(char * 3, index) else char
+    cursor = index + len(quote)
+    while cursor < len(text) and not text.startswith(quote, cursor):
+        cursor += 2 if text[cursor] == '\\' else 1
+    if cursor >= len(text):
+        raise ResourceValidationError('Unterminated Gradle string')
+    return cursor + len(quote)
+
+
+def _update_delimiter_stack(stack: list[str], char: str) -> None:
+    if char in '{[(':
+        stack.append(char)
+        return
+    closing = {'}': '{', ']': '[', ')': '('}
+    expected = closing.get(char)
+    if expected is not None and (not stack or stack.pop() != expected):
+        raise ResourceValidationError('Unbalanced Gradle delimiters')
+
+
 def validate_gradle_append(text: str) -> None:
     """Reject unterminated lexical constructs before appending a top-level script."""
     stack: list[str] = []
     index = 0
     while index < len(text):
-        if text.startswith('//', index):
-            end = text.find('\n', index)
-            index = len(text) if end < 0 else end + 1
+        next_index = _skip_line_comment(text, index)
+        if next_index is None:
+            next_index = _skip_block_comment(text, index)
+        if next_index is None:
+            next_index = _skip_quoted_string(text, index)
+        if next_index is not None:
+            index = next_index
             continue
-        if text.startswith('/*', index):
-            end = text.find('*/', index + 2)
-            if end < 0:
-                raise ResourceValidationError('Unterminated Gradle comment')
-            index = end + 2
-            continue
-        char = text[index]
-        if char in {'"', "'"}:
-            quote = char * 3 if text.startswith(char * 3, index) else char
-            index += len(quote)
-            while index < len(text) and not text.startswith(quote, index):
-                index += 2 if text[index] == '\\' else 1
-            if index >= len(text):
-                raise ResourceValidationError('Unterminated Gradle string')
-            index += len(quote)
-            continue
-        if char in '{[(':
-            stack.append(char)
-        elif char in '}])' and (not stack or stack.pop() != {'}': '{', ']': '[', ')': '('}[char]):
-            raise ResourceValidationError('Unbalanced Gradle delimiters')
+        _update_delimiter_stack(stack, text[index])
         index += 1
     if stack:
         raise ResourceValidationError('Unclosed Gradle block')
