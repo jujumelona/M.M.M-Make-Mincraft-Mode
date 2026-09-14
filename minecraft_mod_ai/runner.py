@@ -511,21 +511,36 @@ class GradleRunner:
     ) -> tuple[int, bool]:
         try:
             process.wait(timeout=self.command_timeout_seconds)
-            return int(process.returncode or 0), False
         except subprocess.TimeoutExpired:
-            _terminate_process_tree(process)
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
+            self._terminate_timed_out_process(process)
             return 124, True
         except BaseException:
-            _terminate_process_tree(process)
-            if process.poll() is None:
-                process.kill()
-                process.wait(timeout=5)
+            self._terminate_interrupted_process(process)
             raise
+        return int(process.returncode or 0), False
+
+    @staticmethod
+    def _terminate_timed_out_process(process: subprocess.Popen[str]) -> None:
+        _terminate_process_tree(process)
+        GradleRunner._wait_after_termination(process)
+
+    @staticmethod
+    def _wait_after_termination(process: subprocess.Popen[str]) -> None:
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            GradleRunner._kill_and_wait(process)
+
+    @staticmethod
+    def _terminate_interrupted_process(process: subprocess.Popen[str]) -> None:
+        _terminate_process_tree(process)
+        if process.poll() is None:
+            GradleRunner._kill_and_wait(process)
+
+    @staticmethod
+    def _kill_and_wait(process: subprocess.Popen[str]) -> None:
+        process.kill()
+        process.wait(timeout=5)
 
     @staticmethod
     def _command_status(exit_code: int, *, timed_out: bool) -> str:
