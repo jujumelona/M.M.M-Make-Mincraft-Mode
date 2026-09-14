@@ -250,14 +250,15 @@ def store_criterion_progress(
     criterion: str,
     fragment: Mapping[str, Any],
 ) -> dict[str, Any]:
+    """Path-copy only criterion progress instead of cloning the complete planning state."""
     selected = normalize_required_sections(selected_sections)
-    value = deepcopy(dict(state))
-    rows = value.get(_PROGRESS_KEY, []) or []
+    value = dict(state)
+    rows = state.get(_PROGRESS_KEY, []) or []
     if not isinstance(rows, list):
         raise ValueError("DETAILED_PLAN_PROGRESS: detail_progress must be an array")
 
     kept = [
-        deepcopy(row)
+        row
         for row in rows
         if not (
             isinstance(row, Mapping)
@@ -290,12 +291,13 @@ def store_criterion_progress(
 def clear_requirement_progress(
     state: Mapping[str, Any], requirement_ref: str
 ) -> dict[str, Any]:
-    value = deepcopy(dict(state))
-    rows = value.get(_PROGRESS_KEY, []) or []
+    """Drop one requirement's progress without cloning unrelated state payloads."""
+    value = dict(state)
+    rows = state.get(_PROGRESS_KEY, []) or []
     if not isinstance(rows, list):
         raise ValueError("DETAILED_PLAN_PROGRESS: detail_progress must be an array")
     value[_PROGRESS_KEY] = [
-        deepcopy(row)
+        row
         for row in rows
         if not (
             isinstance(row, Mapping)
