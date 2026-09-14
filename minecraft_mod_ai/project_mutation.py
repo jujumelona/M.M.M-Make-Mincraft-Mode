@@ -9,7 +9,7 @@ import threading
 import uuid
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -36,8 +36,7 @@ class FileChange:
     after_sha256: str | None
 
     def to_dict(self) -> dict[str, Any]:
-        return {'path': self.path, 'operation': self.operation,
-                'before_sha256': self.before_sha256, 'after_sha256': self.after_sha256}
+        return dict(asdict(self))
 
 
 @dataclass(frozen=True)
