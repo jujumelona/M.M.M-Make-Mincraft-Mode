@@ -1,23 +1,11 @@
 name: Model-realistic replay
 
 on:
+  workflow_call:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - 'minecraft_mod_ai/model_adapters/**'
-      - 'minecraft_mod_ai/fixed_template_generation.py'
-      - 'tests/model_realistic_replay/**'
-      - 'tools/model_realistic_replay_matrix.py'
-      - '.github/workflows/model-realistic-replay.yml'
-  push:
-    branches: [main]
 
 permissions:
   contents: read
-
-concurrency:
-  group: model-realistic-replay-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   plan:
@@ -33,6 +21,7 @@ jobs:
         run: |
           set -euo pipefail
           MATRIX="$(python -m tools.model_realistic_replay_matrix)"
+          test "$MATRIX" != '{"include":[]}'
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
           python -m tools.model_realistic_replay_matrix
 
