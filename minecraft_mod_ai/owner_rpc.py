@@ -15,6 +15,12 @@ from pathlib import Path
 from typing import Any
 
 
+# Owner/JDT requests are infrastructure diagnostics.  The public diagnostics
+# budget is 90 seconds; never allow a stale downstream default (historically
+# 600 seconds) to outlive that budget and wedge the verification pipeline.
+_MAX_OWNER_REQUEST_SECONDS = 90.0
+
+
 class OwnerRPCError(RuntimeError):
     pass
 
@@ -95,6 +101,7 @@ class OwnerRPC:
     def request(self, method: str, params: Mapping[str, Any], *, timeout: float) -> dict[str, Any]:
         if timeout <= 0:
             raise ValueError('Owner request timeout must be positive')
+        timeout = min(float(timeout), _MAX_OWNER_REQUEST_SECONDS)
         with self._lock:
             if self._closed:
                 raise OwnerRPCError('Owner process is closed')
