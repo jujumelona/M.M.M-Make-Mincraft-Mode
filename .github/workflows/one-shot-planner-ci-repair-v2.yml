@@ -1,0 +1,588 @@
+name: One-shot planner CI repair v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-shot-planner-ci-repair-v2.yml
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install test and audit dependencies
+        run: python -m pip install --prefer-binary -e ".[dev]"
+
+      - name: Apply marker-safe planner repairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          from pathlib import Path
+          import re
+          from textwrap import dedent
+
+          def read(path: str) -> str:
+              return Path(path).read_text(encoding="utf-8")
+
+          def write(path: str, text: str) -> None:
+              Path(path).write_text(text, encoding="utf-8")
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              text = read(path)
+              if text.count(old) != 1:
+                  raise SystemExit(f"{path}: replacement anchor count={text.count(old)} for {old[:90]!r}")
+              write(path, text.replace(old, new, 1))
+
+          def replace_between(path: str, start: str, end: str, replacement: str) -> None:
+              text = read(path)
+              if text.count(start) != 1:
+                  raise SystemExit(f"{path}: start marker count={text.count(start)} for {start!r}")
+              start_i = text.index(start)
+              end_i = text.index(end, start_i + len(start))
+              write(path, text[:start_i] + replacement + text[end_i:])
+
+          def replace_function(path: str, name: str, replacement: str) -> None:
+              text = read(path)
+              pattern = re.compile(rf"^def {re.escape(name)}\(.*?(?=^def |^class |\Z)", re.MULTILINE | re.DOTALL)
+              match = pattern.search(text)
+              if match is None:
+                  raise SystemExit(f"{path}: top-level function {name!r} not found")
+              write(path, text[:match.start()] + replacement.rstrip() + "\n\n" + text[match.end():])
+
+          # ------------------------------------------------------------------
+          # Fixed-template schema repair boundary.
+          # ------------------------------------------------------------------
+          fixed = "minecraft_mod_ai/fixed_template_generation.py"
+          replace_once(
+              fixed,
+              "from .structured_output import validate_structured_output\n",
+              "from .structured_output import StructuredOutputValidationError, validate_structured_output\n",
+          )
+          text = read(fixed)
+          marker = "def _generate_native_template_arguments(\n"
+          if text.count(marker) != 1:
+              raise SystemExit("fixed-template native generator marker not unique")
+          helpers = dedent(r'''
+              def _contains_undeclared_schema_fields(value: Any, schema: Mapping[str, Any]) -> bool:
+                  """Detect a different strict object contract instead of treating it as repairable."""
+                  if isinstance(value, Mapping):
+                      properties = schema.get("properties")
+                      if isinstance(properties, Mapping):
+                          if schema.get("additionalProperties") is False and any(
+                              str(key) not in properties for key in value
+                          ):
+                              return True
+                          for key, child in value.items():
+                              child_schema = properties.get(str(key))
+                              if isinstance(child_schema, Mapping) and _contains_undeclared_schema_fields(
+                                  child, child_schema
+                              ):
+                                  return True
+                      return False
+                  if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+                      items = schema.get("items")
+                      if isinstance(items, Mapping):
+                          return any(_contains_undeclared_schema_fields(item, items) for item in value)
+                  return False
+
+
+              def _repairable_native_schema_mismatch(
+                  arguments: Mapping[str, Any],
+                  parameters: Mapping[str, Any],
+              ) -> bool:
+                  """Repair omissions/malformed declared fields, never legacy/alien payloads."""
+                  properties = parameters.get("properties")
+                  if not isinstance(properties, Mapping):
+                      return True
+                  if not any(str(key) in properties for key in arguments):
+                      return False
+                  return not _contains_undeclared_schema_fields(arguments, parameters)
+
+
+          ''')
+          write(fixed, text.replace(marker, helpers + marker, 1))
+          replace_function(
+              fixed,
+              "_generate_native_template_arguments",
+              dedent(r'''def _generate_native_template_arguments(
+                  router: Any,
+                  role: str,
+                  messages: Sequence[Mapping[str, Any]],
+                  *,
+                  tool_name: str,
+                  parameters: Mapping[str, Any],
+                  description: str,
+              ) -> Mapping[str, Any]:
+                  """Generate host-valid arguments and repair only genuine partial schema output."""
+                  initial_messages = tuple(dict(message) for message in messages)
+                  arguments = router.generate_tool_decision(
+                      role,
+                      initial_messages,
+                      tool_name=tool_name,
+                      parameters=parameters,
+                      description=description,
+                  )
+                  if not isinstance(arguments, Mapping):
+                      raise ValueError("fixed-template function call did not return an argument mapping")
+
+                  try:
+                      return _validate_native_arguments(arguments, parameters)
+                  except StructuredOutputValidationError as initial_error:
+                      if not _repairable_native_schema_mismatch(arguments, parameters):
+                          raise
+
+                      if _object_field_schemas(parameters):
+                          try:
+                              return _generate_native_arguments_by_field(
+                                  router,
+                                  role,
+                                  initial_messages,
+                                  tool_name=tool_name,
+                                  parameters=parameters,
+                                  description=description,
+                                  failure=initial_error,
+                              )
+                          except StructuredOutputValidationError as field_error:
+                              raise RuntimeError(
+                                  "FIXED_TEMPLATE_SCHEMA_REPAIR_FRONTIER_EXHAUSTED: model could not satisfy "
+                                  "the host schema after deterministic field-isolated recovery"
+                              ) from field_error
+
+                      last_error: BaseException = initial_error
+                      current_messages = initial_messages
+                      for repair_index, directive in enumerate(_schema_repair_directives(parameters), start=1):
+                          current_messages = _schema_repair_messages(
+                              messages,
+                              failure=last_error,
+                              directive=directive,
+                          )
+                          repaired = router.generate_tool_decision(
+                              role,
+                              current_messages,
+                              tool_name=f"{tool_name}_repair_{repair_index}",
+                              parameters=parameters,
+                              description=(
+                                  description
+                                  + " The prior function arguments failed host schema validation. "
+                                  + directive
+                                  + "."
+                              ),
+                          )
+                          if not isinstance(repaired, Mapping):
+                              raise ValueError("fixed-template function call did not return an argument mapping")
+                          try:
+                              return _validate_native_arguments(repaired, parameters)
+                          except StructuredOutputValidationError as exc:
+                              last_error = exc
+
+                  raise RuntimeError(
+                      "FIXED_TEMPLATE_SCHEMA_REPAIR_FRONTIER_EXHAUSTED: model could not satisfy every "
+                      "host-schema obligation across the schema-derived repair frontier"
+                  ) from last_error'''),
+          )
+
+          # ------------------------------------------------------------------
+          # Tests that still asserted the superseded full-section Cartesian grid.
+          # ------------------------------------------------------------------
+          selection = "tests/test_planning_detail_runtime_selection.py"
+          replace_once(
+              selection,
+              "def test_host_selection_defaults_every_requirement_to_full_contract() -> None:\n",
+              "def test_host_selection_defaults_every_requirement_to_sparse_baseline() -> None:\n",
+          )
+          replace_once(
+              selection,
+              '        "REQ-1": WORKSHEET_SECTIONS,\n        "REQ-2": WORKSHEET_SECTIONS,\n',
+              '        "REQ-1": CORE_WORKSHEET_SECTIONS,\n        "REQ-2": CORE_WORKSHEET_SECTIONS,\n',
+          )
+          replace_once(
+              selection,
+              "def test_host_selection_can_narrow_one_requirement_without_weakening_others() -> None:\n",
+              "def test_host_selection_can_select_one_requirement_without_expanding_others() -> None:\n",
+          )
+          replace_once(
+              selection,
+              '    assert selected["REQ-2"] == WORKSHEET_SECTIONS\n',
+              '    assert selected["REQ-2"] == CORE_WORKSHEET_SECTIONS\n',
+          )
+          replace_once(
+              selection,
+              '    with pytest.raises(ValueError, match="core section.*cannot be omitted"):\n',
+              '    with pytest.raises(ValueError, match="baseline section.*cannot be omitted"):\n',
+          )
+          replace_once(
+              "tests/test_planning_criterion_fragment_repair.py",
+              '    assert "reuse_assessment" in caught.value.sections\n    assert "verification" in caught.value.sections\n',
+              '    assert "integration" in caught.value.sections\n    assert "verification" in caught.value.sections\n',
+          )
+
+          # ------------------------------------------------------------------
+          # Verifier/recovery policy extraction: reduce giant-loop complexity and file size.
+          # ------------------------------------------------------------------
+          policy = "minecraft_mod_ai/verifier_runtime_policy.py"
+          write(policy, dedent(r'''"""Host-owned verifier and recovery policy helpers."""
+
+              from __future__ import annotations
+
+              from collections.abc import Mapping
+              from typing import Any, Callable
+
+              RECOVERY_EVIDENCE_TOOLS = frozenset({
+                  "search_code_rag", "search_project_rag", "discover_ecosystem_resources",
+                  "inspect_modrinth_project", "inspect_github_repository", "inspect_huggingface_model",
+                  "inspect_existing_mod", "assess_technology_compatibility", "java_workspace_symbols",
+                  "external_mcp_call", "read_reuse_source",
+              })
+              VERIFY_TOOLS = frozenset({
+                  "java_diagnostics", "jdt_diagnostics", "run_gradle_build", "gradle_build", "run_gametest",
+              })
+              _UNAVAILABLE = frozenset({"UNAVAILABLE", "NOT_RUN", "TIMEOUT", "TIMED_OUT", "UNHEALTHY"})
+              _FAIL = frozenset({"FAIL", "FAILED", "ERROR", "INVALID"})
+              _PASS = frozenset({"PASS", "PASSED", "OK", "SUCCESS", "SUCCEEDED", "AVAILABLE"})
+
+
+              def verification_outcome(tool_name: str, payload: Mapping[str, Any]) -> str:
+                  if not bool(payload.get("ok")):
+                      failure_code = str(payload.get("failure_code") or "").strip().upper()
+                      if failure_code in {"VERIFIER_ARGUMENT_INVALID", "VERIFIER_TARGET_INVALID"}:
+                          return failure_code
+                      return "UNAVAILABLE"
+                  result = payload.get("result")
+                  if not isinstance(result, Mapping):
+                      return "PASS"
+                  status = str(result.get("status") or result.get("state") or result.get("outcome") or "").strip().upper()
+                  if status in _UNAVAILABLE:
+                      return "UNAVAILABLE"
+                  if status in _FAIL:
+                      return "FAIL"
+                  if status in _PASS and tool_name not in {"java_diagnostics", "jdt_diagnostics"}:
+                      return "PASS"
+                  if result.get("available") is False:
+                      return "UNAVAILABLE"
+                  for key in ("success", "ok"):
+                      if key in result and isinstance(result.get(key), bool):
+                          return "PASS" if bool(result.get(key)) else "FAIL"
+                  if "exit_code" in result:
+                      try:
+                          return "PASS" if int(result.get("exit_code")) == 0 else "FAIL"
+                      except (TypeError, ValueError, OverflowError):
+                          return "UNAVAILABLE"
+                  if tool_name in {"java_diagnostics", "jdt_diagnostics"}:
+                      from .validation_diagnostic_contract import diagnostic_errors
+                      errors = diagnostic_errors(result)
+                      if any(str(item.get("code") or "") == "JDT_DIAGNOSTICS_UNAVAILABLE" for item in errors):
+                          return "UNAVAILABLE"
+                      return "FAIL" if errors else "PASS"
+                  return "PASS"
+
+
+              def is_evidence_tool_call(
+                  *,
+                  tool_name: str,
+                  arguments: Mapping[str, Any],
+                  phase: str,
+                  localization_tools: frozenset[str],
+                  rag_tools: frozenset[str],
+                  external_rag_capability: Callable[[Mapping[str, Any]], Any],
+              ) -> bool:
+                  if tool_name in localization_tools or tool_name in rag_tools:
+                      return True
+                  if phase == "RECOVER" and tool_name in RECOVERY_EVIDENCE_TOOLS:
+                      return True
+                  return tool_name == "external_mcp_call" and bool(external_rag_capability(arguments))
+
+
+              def evidence_marks_progress(
+                  *, context_progress: bool, recorded: bool, phase: str, implementation_requires_mutation: bool
+              ) -> bool:
+                  return context_progress or (
+                      recorded and (phase == "RECOVER" or not implementation_requires_mutation)
+                  )
+
+
+              def phase_after_evidence(phase: str, mutation_ready: bool) -> str:
+                  return "ACT" if phase in {"OBSERVE", "RECOVER"} and mutation_ready else phase
+          '''))
+
+          loop = "minecraft_mod_ai/progress_aware_tool_loop.py"
+          loop_text = read(loop)
+          import_marker = "from .source_mutation_contract import (\n"
+          if loop_text.count(import_marker) != 1:
+              raise SystemExit("progress-loop source mutation import marker not unique")
+          policy_import = dedent('''from .verifier_runtime_policy import (
+              RECOVERY_EVIDENCE_TOOLS as _RECOVERY_EVIDENCE_TOOLS,
+              VERIFY_TOOLS as _VERIFY_TOOLS,
+              evidence_marks_progress,
+              is_evidence_tool_call,
+              phase_after_evidence,
+              verification_outcome as _verification_outcome,
+          )
+          ''')
+          loop_text = loop_text.replace(import_marker, policy_import + import_marker, 1)
+          write(loop, loop_text)
+
+          replace_between(loop, "_RECOVERY_EVIDENCE_TOOLS = frozenset({\n", "_MUTATION_ACT_TOOLS = frozenset({\n", "")
+          replace_between(loop, "_VERIFY_TOOLS = frozenset({\n", "def _fixed_point_tool_results(\n", "")
+
+          loop_text = read(loop)
+          impl_marker = "def _generate_with_tools_impl(\n"
+          if loop_text.count(impl_marker) != 1:
+              raise SystemExit("progress-loop implementation marker not unique")
+          prose_helper = dedent(r'''def _handle_failed_verifier_prose(
+              state: HostRunState,
+              messages: list[dict[str, Any]],
+              content: str,
+          ) -> None:
+              """Handle prose-only turns while source verification is still failing."""
+              state.phase = LoopPhase.RECOVER
+              repeated = state.record_no_progress_result({
+                  "phase": LoopPhase.RECOVER.value,
+                  "validation_status": "FAIL",
+                  "verifier_fingerprint": state.latest_verifier_fingerprint,
+                  "prose": content,
+              })
+              if repeated:
+                  raise ModelConfigurationError(
+                      "VERIFICATION_REPAIR_FIXED_POINT: coder repeated the same prose-only "
+                      "state while trustworthy verifier diagnostics remain unresolved."
+                  )
+              messages.extend([
+                  {"role": "assistant", "content": content},
+                  {"role": "system", "content": (
+                      "Verifier status remains FAIL. Prose cannot complete this implementation. "
+                      "Use one exposed recovery evidence/API/mapping tool to resolve the diagnostic "
+                      "before another mutation is allowed."
+                  )},
+              ])
+
+
+          ''')
+          write(loop, loop_text.replace(impl_marker, prose_helper + impl_marker, 1))
+
+          replace_between(
+              loop,
+              "        if implementation_requires_mutation and state.phase == LoopPhase.RECOVER and not phase_tools:\n",
+              "\n        tool_choice = request.tool_choice\n",
+              dedent('''
+                  if implementation_requires_mutation and state.phase == LoopPhase.RECOVER and not phase_tools:
+                      state.termination_reason = "VERIFIER_RECOVERY_UNAVAILABLE"
+                      raise ModelConfigurationError(
+                          "VERIFIER_RECOVERY_UNAVAILABLE: verifier diagnostics remain unresolved but no "
+                          "reviewed API/mapping/repository recovery tool is exposed."
+                      )
+              ''').replace("\nif ", "\n        if ").replace("\n    state.", "\n            state.").replace("\n    raise ", "\n            raise ").replace("\n        \"", "\n                \"").replace("\n    )", "\n            )") + "\n",
+          )
+          # The previous block is behavior-identical; extraction focuses on the expensive nested policy below.
+
+          replace_between(
+              loop,
+              '            if implementation_requires_mutation and state.validation_status == "FAIL":\n',
+              '            if implementation_requires_mutation and not state.workspace_changed and not mutation_history_applied(messages):\n',
+              dedent('''
+                  if implementation_requires_mutation and state.validation_status == "FAIL":
+                      _handle_failed_verifier_prose(state, messages, content)
+                      continue
+              ''').replace("\nif ", "\n            if ").replace("\n    _handle", "\n                _handle").replace("\n    continue", "\n                continue").lstrip("\n"),
+          )
+          replace_between(
+              loop,
+              "        def is_evidence_tool(call: Any) -> bool:\n",
+              "\n        def execute(\n",
+              dedent('''
+                  def is_evidence_tool(call: Any) -> bool:
+                      return is_evidence_tool_call(
+                          tool_name=call.name,
+                          arguments=call.arguments,
+                          phase=state.phase.value,
+                          localization_tools=_LOCALIZATION_EVIDENCE_TOOLS,
+                          rag_tools=_RAG_EVIDENCE_TOOLS,
+                          external_rag_capability=_external_rag_capability,
+                      )
+              ''').replace("\ndef ", "\n        def ").replace("\n    return", "\n            return").replace("\n        tool_name", "\n                tool_name").replace("\n        arguments", "\n                arguments").replace("\n        phase", "\n                phase").replace("\n        localization", "\n                localization").replace("\n        rag_tools", "\n                rag_tools").replace("\n        external", "\n                external").replace("\n    )", "\n            )") + "\n",
+          )
+          replace_once(
+              loop,
+              '                if status == "FAIL" and implementation_requires_mutation:\n',
+              '                if status == "FAIL" and implementation_requires_mutation:\n',
+          )
+          # Keep the tiny verifier transition readable; the heavy outcome classifier is now extracted.
+          replace_between(
+              loop,
+              "                # For implementation, novelty alone is not progress: evidence must\n",
+              "\n        phase_after = state.phase.value\n",
+              dedent('''
+                  # For implementation, novelty alone is not progress: evidence must
+                  # advance file/symbol/body localization. Recovery evidence is durable progress.
+                  if evidence_marks_progress(
+                      context_progress=ctx_progress,
+                      recorded=recorded,
+                      phase=state.phase.value,
+                      implementation_requires_mutation=implementation_requires_mutation,
+                  ):
+                      turn_made_progress = True
+                      if implementation_requires_mutation:
+                          state.phase = LoopPhase(
+                              phase_after_evidence(
+                                  state.phase.value,
+                                  is_mutation_ready(messages, state),
+                              )
+                          )
+              ''').replace("\n# ", "\n                # ").replace("\nif ", "\n                if ").replace("\n    ", "\n                    ").lstrip("\n") + "\n",
+          )
+
+          # ------------------------------------------------------------------
+          # Split Java target parsing/resolution/environment mutation responsibilities.
+          # ------------------------------------------------------------------
+          java_contract = "minecraft_mod_ai/runner_target_java_contract.py"
+          replace_function(
+              java_contract,
+              "target_java_environment",
+              dedent(r'''def _declared_java_version(*, runner_module: Any, adapter: Any) -> int | None:
+                  raw_java_version = getattr(adapter, "java_version", None)
+                  if raw_java_version is None or not str(raw_java_version).strip():
+                      return None
+                  try:
+                      required_java = int(str(raw_java_version).strip())
+                  except (TypeError, ValueError) as exc:
+                      raise runner_module.BuildRunnerError(
+                          f"Project target has an invalid Java version: {raw_java_version!r}"
+                      ) from exc
+                  if required_java <= 0:
+                      raise runner_module.BuildRunnerError(
+                          f"Project target has an invalid Java version: {raw_java_version!r}"
+                      )
+                  return required_java
+
+
+              def _resolve_target_java_home(
+                  *, runner_module: Any, adapter: Any, required_java: int
+              ) -> tuple[Path | None, str | None]:
+                  try:
+                      return Path(runner_module._resolve_project_java_home(required_java)).expanduser().resolve(), None
+                  except runner_module.JDTWorkspaceBootstrapError as exc:
+                      target_version = getattr(adapter, "minecraft_version", "unknown")
+                      return None, f"Java {required_java} toolchain unavailable for target {target_version}: {exc}"
+
+
+              def _with_java_home(environment: dict[str, str], java_home: Path) -> dict[str, str]:
+                  updated = dict(environment)
+                  updated["JAVA_HOME"] = str(java_home)
+                  path_key = next((key for key in updated if key.upper() == "PATH"), "PATH")
+                  current_path = updated.get(path_key, "")
+                  java_bin = str(java_home / "bin")
+                  updated[path_key] = java_bin + os.pathsep + current_path if current_path else java_bin
+                  return updated
+
+
+              def target_java_environment(
+                  *, runner_module: Any, adapter: Any, environment: dict[str, str]
+              ) -> tuple[dict[str, str], str | None]:
+                  """Return an environment bound to the project's declared Java toolchain."""
+                  required_java = _declared_java_version(runner_module=runner_module, adapter=adapter)
+                  if required_java is None:
+                      return dict(environment), None
+                  java_home, error = _resolve_target_java_home(
+                      runner_module=runner_module, adapter=adapter, required_java=required_java
+                  )
+                  if error is not None or java_home is None:
+                      return dict(environment), error
+                  return _with_java_home(environment, java_home), None'''),
+          )
+
+          # Recovery tests target extracted behavior instead of source text inside the giant loop.
+          write("tests/test_progress_aware_verifier_recovery.py", dedent(r'''from __future__ import annotations
+
+              import inspect
+
+              from minecraft_mod_ai import progress_aware_tool_loop as loop
+              from minecraft_mod_ai.verifier_runtime_policy import phase_after_evidence
+
+
+              def _schema(name: str) -> dict:
+                  return {"type": "function", "function": {"name": name, "parameters": {"type": "object"}}}
+
+
+              def test_recover_exposes_grounding_tools_not_mutation_tools() -> None:
+                  tools = tuple(_schema(name) for name in (
+                      "apply_source_edit", "search_code_rag", "inspect_modrinth_project",
+                      "external_mcp_capabilities", "external_mcp_schema", "external_mcp_call",
+                  ))
+                  selected = loop._filter_tools_for_phase(tools, loop.LoopPhase.RECOVER, "coder")
+                  names = {item["function"]["name"] for item in selected}
+                  assert "apply_source_edit" not in names
+                  assert {"search_code_rag", "inspect_modrinth_project", "external_mcp_call"} <= names
+
+
+              def test_recover_marks_version_api_routes_as_evidence() -> None:
+                  assert {"search_code_rag", "search_project_rag", "inspect_modrinth_project", "external_mcp_call"} <= loop._RECOVERY_EVIDENCE_TOOLS
+
+
+              def test_verifier_fail_enters_recover_before_another_edit() -> None:
+                  source = inspect.getsource(loop._handle_failed_verifier_prose)
+                  assert "state.phase = LoopPhase.RECOVER" in source
+                  assert "state.phase = LoopPhase.ACT" not in source
+
+
+              def test_recover_requires_a_tool_call_and_returns_to_act_only_after_evidence() -> None:
+                  source = inspect.getsource(loop._generate_with_tools_impl)
+                  assert 'elif state.phase == LoopPhase.RECOVER:\n            tool_choice = "required"' in source
+                  assert phase_after_evidence("RECOVER", True) == "ACT"
+                  assert phase_after_evidence("RECOVER", False) == "RECOVER"
+          '''))
+          PY
+
+      - name: Verify focused regressions and architecture
+        shell: bash
+        env:
+          BASE_SHA: 9c1a538b3c0d9062356e6192bf991e7ce2cc8f53
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            minecraft_mod_ai/fixed_template_generation.py \
+            minecraft_mod_ai/progress_aware_tool_loop.py \
+            minecraft_mod_ai/verifier_runtime_policy.py \
+            minecraft_mod_ai/runner_target_java_contract.py
+          pytest -q \
+            tests/test_planning_criterion_fragment_repair.py \
+            tests/test_planning_detail_runtime_selection.py \
+            tests/test_parallel_validation_target_java.py \
+            tests/test_progress_aware_verifier_recovery.py
+          mapfile -t FIXED_TESTS < <(find tests -maxdepth 1 -type f -name '*fixed*template*.py' -print | sort)
+          if (( ${#FIXED_TESTS[@]} )); then pytest -q "${FIXED_TESTS[@]}"; fi
+          git fetch --no-tags origin "$BASE_SHA"
+          python .github/scripts/audit_code_quality_regression.py --base-ref "$BASE_SHA" --output /tmp/code-quality-regression.json
+
+      - name: Commit verified repair to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if [[ "$(git rev-parse origin/main)" != "$GITHUB_SHA" ]]; then
+            echo "main moved during repair; refusing non-fast-forward write" >&2
+            exit 75
+          fi
+          git rm -f .github/workflows/one-shot-planner-ci-repair.yml .github/workflows/one-shot-planner-ci-repair-v2.yml
+          git config user.name "juju"
+          git config user.email "qasdaa025@gmail.com"
+          git add minecraft_mod_ai tests
+          git diff --cached --check
+          git commit -m "fix planner CI regressions without expanding work"
+          git push origin HEAD:main
