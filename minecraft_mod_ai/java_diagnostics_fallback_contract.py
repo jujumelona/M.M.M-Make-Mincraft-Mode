@@ -13,5 +13,7 @@ from typing import Any
 def install(service_type: type[Any]) -> None:
     """Intentionally leave ``ProductionToolService.java_diagnostics`` unchanged."""
 
+    del service_type
+
 
 __all__ = ["install"]
