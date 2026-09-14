@@ -41,7 +41,10 @@ def _shared_commit_pool() -> ThreadPoolExecutor:
     global _COMMIT_POOL
     with _COMMIT_POOL_LOCK:
         if _COMMIT_POOL is None:
-            _COMMIT_POOL = ThreadPoolExecutor(max_workers=_global_commit_worker_count(), thread_name_prefix="mmm_source_patch_commit")
+            _COMMIT_POOL = ThreadPoolExecutor(
+                max_workers=_global_commit_worker_count(),
+                thread_name_prefix="mmm_source_patch_commit",
+            )
         return _COMMIT_POOL
 
 
@@ -61,8 +64,6 @@ class SourcePatchError(RuntimeError):
         super().__init__(message)
 
     def __str__(self) -> str:
-        # The model tool runtime currently normalizes exceptions to text. Keep a
-        # machine-readable suffix so the transaction fact survives that boundary.
         return f"{super().__str__()} [workspace_impact={self.workspace_impact}]"
 
 
@@ -128,15 +129,7 @@ class PatchReceipt:
 
 
 class TransactionalSourcePatcher:
-    """Apply exact, hash-guarded text patches inside one project root.
-
-    Operations are fully validated in memory before any file is changed. Real writes
-    use atomic ``os.replace`` and all touched files are rolled back if any commit step
-    fails. No-op operations remain valid/idempotent but never rewrite or fsync the
-    unchanged file. Symlinks, path traversal and broad directory deletion are rejected.
-    Concurrent transactions serialize only when their target-path sets overlap; a
-    coarse project read/merge/write section still excludes every scoped transaction.
-    """
+    """Apply exact, hash-guarded text patches inside one project root."""
 
     _OPERATION_FIELDS = {
         "create": frozenset({"operation", "path", "content"}),
@@ -164,186 +157,249 @@ class TransactionalSourcePatcher:
         except ResidualContractLoadError as exc:
             raise SourcePatchError(f"Residual write policy is invalid: {exc}") from exc
 
-    def apply(self, operations: Iterable[dict[str, Any]]) -> dict[str, Any]:
-        # Normalize first so the exact collision set is host-known before acquiring
-        # filesystem mutation locks. Multi-path locks are acquired in canonical order
-        # by project_path_write_locks, preserving hash preconditions and rollback while
-        # allowing disjoint transactions to run concurrently.
+    def _normalized_transaction(
+        self,
+        operations: Iterable[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         normalized = [self._normalize(item) for item in operations]
         if not normalized:
             raise SourcePatchError("At least one patch operation is required.")
         paths = [item["path"] for item in normalized]
         if len(paths) != len(set(paths)):
             raise SourcePatchError("A patch transaction may touch each path only once.")
+        return normalized
+
+    def apply(self, operations: Iterable[dict[str, Any]]) -> dict[str, Any]:
+        normalized = self._normalized_transaction(operations)
+        paths = [item["path"] for item in normalized]
         owner = mutation_owner(self.project_root)
         with owner.transaction(paths):
             try:
                 return self._apply_locked(normalized)
             except SourcePatchError as exc:
-                if exc.workspace_impact in {'drift', 'uncertain'}:
-                    owner.invalidate()
+                self._invalidate_on_uncertain_state(owner, exc)
                 raise
 
-    def _apply_locked(self, operations: Iterable[dict[str, Any]]) -> dict[str, Any]:
-        normalized = [self._normalize(item) for item in operations]
-        if not normalized:
-            raise SourcePatchError("At least one patch operation is required.")
-        paths = [item["path"] for item in normalized]
-        if len(paths) != len(set(paths)):
-            raise SourcePatchError("A patch transaction may touch each path only once.")
+    @staticmethod
+    def _invalidate_on_uncertain_state(owner: Any, exc: SourcePatchError) -> None:
+        if exc.workspace_impact in {"drift", "uncertain"}:
+            owner.invalidate()
 
+    def _validate_residual_contract(self, item: dict[str, Any], before: bytes | None) -> None:
+        if not self._residual_contracts:
+            return
+        try:
+            validate_residual_write_against_contracts(
+                item["path"],
+                sha256_bytes(before) if before is not None else None,
+                self._residual_contracts,
+            )
+        except PermissionError as exc:
+            raise SourcePatchError(f"RESIDUAL_WRITE_CONTRACT: {exc}") from exc
+
+    def _operation_result(
+        self,
+        item: dict[str, Any],
+        *,
+        exists: bool,
+        before: bytes | None,
+    ) -> bytes | None:
+        operation = item["operation"]
+        if operation == "create":
+            if exists:
+                raise SourcePatchError(f"Create target already exists: {item['path']}")
+            return item["content"].encode("utf-8")
+        if not exists:
+            raise SourcePatchError(f"Patch target does not exist: {item['path']}")
+        actual = sha256_bytes(before or b"")
+        if item.get("expected_sha256") != actual:
+            raise SourcePatchError(
+                f"SHA-256 precondition failed for {item['path']}: "
+                f"{actual} != {item.get('expected_sha256')}",
+                workspace_impact="drift",
+            )
+        if operation == "replace":
+            return item["content"].encode("utf-8")
+        if operation == "edit":
+            return self._edit(before or b"", item).encode("utf-8")
+        if operation == "delete":
+            return None
+        raise SourcePatchError(f"Unsupported operation: {operation}")
+
+    def _validate_json_result(self, item: dict[str, Any], after: bytes | None) -> None:
+        if after is None or not item["path"].endswith(".json"):
+            return
+        from .typed_resources import JsonResource, ResourceValidationError, resource_kind
+
+        try:
+            JsonResource.parse(after.decode("utf-8"), kind=resource_kind(item["path"]))
+        except (UnicodeError, ResourceValidationError) as exc:
+            raise SourcePatchError(f"Invalid JSON output {item['path']}: {exc}") from exc
+
+    @staticmethod
+    def _preserve_equivalent_bytes(before: bytes | None, after: bytes | None) -> bytes | None:
+        if before == after:
+            return before
+        if before is None or after is None:
+            return after
+        if before.replace(b"\r\n", b"\n") == after.replace(b"\r\n", b"\n"):
+            return before
+        return after
+
+    def _stage_one(
+        self,
+        item: dict[str, Any],
+        validated_parents: set[Path],
+    ) -> tuple[Path, bytes | None, bytes | None, PatchReceipt]:
+        path = self._path(
+            item["path"],
+            allow_missing=item["operation"] == "create",
+            validated_parents=validated_parents,
+        )
+        exists = path.exists()
+        if exists and (not path.is_file() or path.is_symlink()):
+            raise SourcePatchError(f"Patch target is not a regular file: {item['path']}")
+        before = path.read_bytes() if exists else None
+        self._validate_residual_contract(item, before)
+        after = self._operation_result(item, exists=exists, before=before)
+        self._validate_json_result(item, after)
+        after = self._preserve_equivalent_bytes(before, after)
+        receipt = PatchReceipt(
+            path=item["path"],
+            operation=item["operation"],
+            before_sha256=sha256_bytes(before) if before is not None else None,
+            after_sha256=sha256_bytes(after) if after is not None else None,
+        )
+        return path, before, after, receipt
+
+    def _stage_transaction(
+        self,
+        normalized: Iterable[dict[str, Any]],
+    ) -> tuple[dict[Path, bytes | None], dict[Path, bytes | None], list[PatchReceipt]]:
         staged: dict[Path, bytes | None] = {}
         originals: dict[Path, bytes | None] = {}
         receipts: list[PatchReceipt] = []
-        # The path-set lock freezes every overlapping in-process transaction. Parent
-        # safety therefore only needs to be checked once per unique directory during
-        # this transaction instead of once per file. Large generated catalogs commonly
-        # contain thousands of sibling files under the same three or four directories.
         validated_parents: set[Path] = {self.project_root}
         for item in normalized:
-            path = self._path(
-                item["path"],
-                allow_missing=item["operation"] == "create",
-                validated_parents=validated_parents,
-            )
-            exists = path.exists()
-            if exists and (not path.is_file() or path.is_symlink()):
-                raise SourcePatchError(f"Patch target is not a regular file: {item['path']}")
-            before = path.read_bytes() if exists else None
+            path, before, after, receipt = self._stage_one(item, validated_parents)
             originals[path] = before
-            if self._residual_contracts:
-                try:
-                    validate_residual_write_against_contracts(
-                        item["path"],
-                        sha256_bytes(before) if before is not None else None,
-                        self._residual_contracts,
-                    )
-                except PermissionError as exc:
-                    raise SourcePatchError(
-                        f"RESIDUAL_WRITE_CONTRACT: {exc}"
-                    ) from exc
-            expected = item.get("expected_sha256")
-            if item["operation"] == "create":
-                if exists:
-                    raise SourcePatchError(f"Create target already exists: {item['path']}")
-                after = item["content"].encode("utf-8")
-            else:
-                if not exists:
-                    raise SourcePatchError(f"Patch target does not exist: {item['path']}")
-                actual = sha256_bytes(before or b"")
-                if expected != actual:
-                    raise SourcePatchError(
-                        f"SHA-256 precondition failed for {item['path']}: {actual} != {expected}",
-                        workspace_impact="drift",
-                    )
-                if item["operation"] == "replace":
-                    after = item["content"].encode("utf-8")
-                elif item["operation"] == "edit":
-                    after = self._edit(before or b"", item).encode("utf-8")
-                elif item["operation"] == "delete":
-                    after = None
-                else:  # pragma: no cover - normalized above
-                    raise SourcePatchError(f"Unsupported operation: {item['operation']}")
-            if after is not None and path.suffix == '.json':
-                from .typed_resources import (
-                    JsonResource,
-                    ResourceValidationError,
-                    resource_kind,
-                )
-
-                try:
-                    JsonResource.parse(after.decode('utf-8'), kind=resource_kind(item['path']))
-                except (UnicodeError, ResourceValidationError) as exc:
-                    raise SourcePatchError(f"Invalid JSON output {item['path']}: {exc}") from exc
-            if before == after or (
-                before is not None
-                and after is not None
-                and before.replace(b"\r\n", b"\n") == after.replace(b"\r\n", b"\n")
-            ):
-                after = before
             staged[path] = after
-            receipts.append(
-                PatchReceipt(
-                    path=item["path"],
-                    operation=item["operation"],
-                    before_sha256=sha256_bytes(before) if before is not None else None,
-                    after_sha256=sha256_bytes(after) if after is not None else None,
-                )
-            )
+            receipts.append(receipt)
+        return staged, originals, receipts
 
-        # Idempotent operations are part of the receipt but never hit the filesystem.
-        # This removes needless temp-file writes/fsyncs and keeps "APPLIED" reserved
-        # for transactions that actually changed at least one file.
-        ordered_staged = [
-            (path, after)
-            for path, after in staged.items()
-            if originals[path] != after
-        ]
+    @staticmethod
+    def _changed_staged_paths(
+        staged: dict[Path, bytes | None],
+        originals: dict[Path, bytes | None],
+    ) -> list[tuple[Path, bytes | None]]:
+        return [(path, after) for path, after in staged.items() if originals[path] != after]
+
+    @staticmethod
+    def _serial_commit(
+        ordered_staged: list[tuple[Path, bytes | None]],
+    ) -> tuple[set[Path], dict[Path, BaseException]]:
         committed: set[Path] = set()
         errors: dict[Path, BaseException] = {}
+        for path, after in ordered_staged:
+            try:
+                _commit_staged_path(path, after)
+            except BaseException as exc:
+                errors[path] = exc
+                break
+            committed.add(path)
+        return committed, errors
+
+    @staticmethod
+    def _parallel_commit(
+        ordered_staged: list[tuple[Path, bytes | None]],
+        workers: int,
+    ) -> tuple[set[Path], dict[Path, BaseException]]:
+        committed: set[Path] = set()
+        errors: dict[Path, BaseException] = {}
+        permits = threading.BoundedSemaphore(workers)
+
+        def commit_with_permit(path: Path, after: bytes | None) -> None:
+            with permits:
+                _commit_staged_path(path, after)
+
+        pool = _shared_commit_pool()
+        futures = {
+            pool.submit(commit_with_permit, path, after): path
+            for path, after in ordered_staged
+        }
+        for future in as_completed(futures):
+            path = futures[future]
+            try:
+                future.result()
+            except BaseException as exc:
+                errors[path] = exc
+            else:
+                committed.add(path)
+        return committed, errors
+
+    def _commit_transaction(
+        self,
+        ordered_staged: list[tuple[Path, bytes | None]],
+    ) -> tuple[set[Path], dict[Path, BaseException]]:
         workers = _commit_worker_count(len(ordered_staged))
         if workers <= 1:
-            for path, after in ordered_staged:
-                try:
-                    _commit_staged_path(path, after)
-                except BaseException as exc:
-                    errors[path] = exc
-                    break
-                committed.add(path)
-        else:
-            pool = _shared_commit_pool()
-            permits = threading.BoundedSemaphore(workers)
-            def commit_with_permit(path: Path, after: bytes | None) -> None:
-                with permits:
-                    _commit_staged_path(path, after)
-            futures = {pool.submit(commit_with_permit, path, after): path for path, after in ordered_staged}
-            for future in as_completed(futures):
-                path = futures[future]
-                try:
-                    future.result()
-                except BaseException as exc:
-                    errors[path] = exc
+            return self._serial_commit(ordered_staged)
+        return self._parallel_commit(ordered_staged, workers)
+
+    def _rollback_committed(
+        self,
+        committed_order: list[Path],
+        originals: dict[Path, bytes | None],
+    ) -> list[tuple[Path, BaseException]]:
+        rollback_errors: list[tuple[Path, BaseException]] = []
+        for path in reversed(committed_order):
+            original = originals[path]
+            try:
+                if original is None:
+                    if path.exists():
+                        path.unlink()
                 else:
-                    committed.add(path)
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(original)
+            except BaseException as exc:
+                rollback_errors.append((path, exc))
+        return rollback_errors
 
-        if errors:
-            committed_order = [
-                path for path, _after in ordered_staged if path in committed
-            ]
-            rollback_errors: list[tuple[Path, BaseException]] = []
-            for path in reversed(committed_order):
-                original = originals[path]
-                try:
-                    if original is None:
-                        if path.exists():
-                            path.unlink()
-                    else:
-                        path.parent.mkdir(parents=True, exist_ok=True)
-                        path.write_bytes(original)
-                except BaseException as exc:
-                    rollback_errors.append((path, exc))
-            first_error = next(
-                errors[path]
-                for path, _after in ordered_staged
-                if path in errors
-            )
-            if rollback_errors:
-                rollback_path, rollback_error = rollback_errors[0]
-                relative = rollback_path.relative_to(self.project_root).as_posix()
-                raise SourcePatchError(
-                    "Patch transaction failed and rollback was incomplete for "
-                    f"{relative}: {rollback_error}",
-                    workspace_impact="uncertain",
-                ) from first_error
+    def _raise_commit_failure(
+        self,
+        ordered_staged: list[tuple[Path, bytes | None]],
+        originals: dict[Path, bytes | None],
+        committed: set[Path],
+        errors: dict[Path, BaseException],
+    ) -> None:
+        if not errors:
+            return
+        committed_order = [path for path, _after in ordered_staged if path in committed]
+        rollback_errors = self._rollback_committed(committed_order, originals)
+        first_error = next(errors[path] for path, _after in ordered_staged if path in errors)
+        if rollback_errors:
+            rollback_path, rollback_error = rollback_errors[0]
+            relative = rollback_path.relative_to(self.project_root).as_posix()
             raise SourcePatchError(
-                f"Patch transaction rolled back: {first_error}",
-                workspace_impact="rolled_back",
+                "Patch transaction failed and rollback was incomplete for "
+                f"{relative}: {rollback_error}",
+                workspace_impact="uncertain",
             ) from first_error
+        raise SourcePatchError(
+            f"Patch transaction rolled back: {first_error}",
+            workspace_impact="rolled_back",
+        ) from first_error
 
+    def _receipt(self, receipts: list[PatchReceipt]) -> dict[str, Any]:
         changed_paths = [receipt.path for receipt in receipts if receipt.changed]
         changes = mutation_owner(self.project_root).committed(
-            FileChange(receipt.path, receipt.operation, receipt.before_sha256,
-                       receipt.after_sha256) for receipt in receipts
+            FileChange(
+                receipt.path,
+                receipt.operation,
+                receipt.before_sha256,
+                receipt.after_sha256,
+            )
+            for receipt in receipts
         )
         return {
             "schema_version": "mmm/source-patch-receipt-v1",
@@ -353,6 +409,14 @@ class TransactionalSourcePatcher:
             "operations": [receipt.to_dict() for receipt in receipts],
             "change_set": changes.to_dict(),
         }
+
+    def _apply_locked(self, operations: Iterable[dict[str, Any]]) -> dict[str, Any]:
+        normalized = self._normalized_transaction(operations)
+        staged, originals, receipts = self._stage_transaction(normalized)
+        ordered_staged = self._changed_staged_paths(staged, originals)
+        committed, errors = self._commit_transaction(ordered_staged)
+        self._raise_commit_failure(ordered_staged, originals, committed, errors)
+        return self._receipt(receipts)
 
     def snapshot(self, relative_paths: Iterable[str]) -> dict[str, Any]:
         files: list[dict[str, Any]] = []
@@ -385,14 +449,7 @@ class TransactionalSourcePatcher:
         operation: str,
         value: dict[str, Any],
     ) -> dict[str, Any]:
-        """Drop only fields that are valid for a different source operation.
-
-        Small models can copy conditional sibling fields from a mixed JSON contract
-        (for example ``expected_sha256`` on ``create``). The operation discriminator
-        is authoritative, so those known siblings are harmless transport noise and
-        can be removed deterministically. Arbitrary unknown fields are deliberately
-        preserved so strict validation still rejects schema drift and unsafe output.
-        """
+        """Drop only fields that are valid for a different source operation."""
 
         allowed = cls._OPERATION_FIELDS.get(operation)
         canonical = dict(value)
@@ -483,10 +540,6 @@ class TransactionalSourcePatcher:
         candidate = Path(relative)
         if candidate.is_absolute() or ".." in candidate.parts:
             raise SourcePatchError(f"Unsafe patch path: {relative}")
-        # ``project_root`` is already resolved and candidate is a lexical relative path
-        # with parent traversal forbidden. Resolving every target here would stat the
-        # same parent chain again for every sibling; explicit parent checks below own
-        # symlink and non-directory validation instead.
         target = self.project_root / candidate
         if target == self.project_root:
             raise SourcePatchError("The project root itself cannot be patched.")
