@@ -382,6 +382,10 @@ jobs:
       - run: python -m pip install --prefer-binary -e . pytest
       - run: python -m pytest -q "${{ matrix.test }}"
 
+  model-realistic-replay:
+    name: Model-realistic replay
+    uses: ./.github/workflows/model-realistic-replay.yml
+
   audit:
     name: Aggregate granular audit gate
     if: ${{ always() }}
@@ -399,14 +403,16 @@ jobs:
   ci-gate:
     name: CI Gate
     if: ${{ always() }}
-    needs: [audit, tests, python313]
+    needs: [audit, tests, python313, model-realistic-replay]
     runs-on: ubuntu-latest
     steps:
       - env:
           AUDIT: ${{ needs.audit.result }}
           TESTS: ${{ needs.tests.result }}
           PY313: ${{ needs.python313.result }}
+          MODEL_REPLAY: ${{ needs.model-realistic-replay.result }}
         run: |
           test "$AUDIT" = success
           test "$TESTS" = success
           test "$PY313" = success
+          test "$MODEL_REPLAY" = success
