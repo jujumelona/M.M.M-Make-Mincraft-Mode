@@ -15,10 +15,10 @@ from pathlib import Path
 from typing import Any
 
 
-# Owner/JDT requests are infrastructure diagnostics.  The public diagnostics
-# budget is 90 seconds; never allow a stale downstream default (historically
-# 600 seconds) to outlive that budget and wedge the verification pipeline.
-_MAX_OWNER_REQUEST_SECONDS = 90.0
+# Callers own their public/idle timeout. Some verifier paths intentionally pass a
+# longer hard budget so a cold JDT owner can finish startup. Honor that explicit
+# budget up to a transport safety ceiling instead of silently truncating it to 90s.
+_MAX_OWNER_REQUEST_SECONDS = 600.0
 
 
 class OwnerRPCError(RuntimeError):
