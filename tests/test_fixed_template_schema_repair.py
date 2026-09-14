@@ -63,7 +63,7 @@ def test_fixed_template_regenerates_after_schema_rejection() -> None:
     router = _SchemaRepairRouter()
     schema = {
         "type": "object",
-        "properties": {"statement": {"type": "string"}},
+        "properties": {"statement": {"type": "string", "maxLength": 256}},
         "required": ["statement"],
         "additionalProperties": False,
     }
@@ -93,7 +93,13 @@ def test_fixed_template_repairs_mapping_rejected_by_host_nested_schema() -> None
         "properties": {
             "payload": {
                 "type": "object",
-                "properties": {"statement": {"type": "string", "minLength": 1}},
+                "properties": {
+                    "statement": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256,
+                    }
+                },
                 "required": ["statement"],
                 "additionalProperties": False,
             }
