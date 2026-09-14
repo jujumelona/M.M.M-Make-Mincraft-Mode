@@ -181,6 +181,20 @@ def _requirement_ids(state: Mapping[str, Any]) -> tuple[str, ...]:
     )
 
 
+def _has_open_user_only_unknown(state: Mapping[str, Any]) -> bool:
+    """Return True when planning is correctly waiting on information only the user can supply."""
+
+    unresolved = state.get("unresolved")
+    if not isinstance(unresolved, list):
+        return False
+    return any(
+        isinstance(item, Mapping)
+        and item.get("status") == "open"
+        and item.get("resolution_route") == "user_only"
+        for item in unresolved
+    )
+
+
 def _host_add_requirement(state: Mapping[str, Any]) -> dict[str, Any]:
     if _requirements_exist(state):
         return deepcopy(dict(state))
@@ -489,6 +503,18 @@ def prepare_planning_state(
         except Exception as exc:
             _host_transition_notice("compile_researched_requirements", state, exc)
         if not _requirements_exist(state):
+            if _has_open_user_only_unknown(state):
+                emit_root_cause(
+                    "planning_state_waiting_for_user_input",
+                    stage="planning_state",
+                    operation="requirement_selection",
+                    result="RESUMABLE",
+                    reason="an open user-only unknown must be supplied by the user before requirement selection",
+                    details=_state_summary(state),
+                )
+                if checkpoint is not None:
+                    checkpoint(deepcopy(state))
+                return state
             state = _host_add_requirement(state)
             emit_root_cause(
                 "planning_state_host_requirement",
