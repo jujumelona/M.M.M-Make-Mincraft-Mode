@@ -2,24 +2,33 @@ name: Full Debug Gate
 
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: full-debug-${{ github.ref }}
+  group: full-debug-${{ github.event.workflow_run.head_sha || github.sha }}
   cancel-in-progress: true
 
 jobs:
   debug-gate:
-    name: Import, pytest, audit, package
+    name: Automatic root-cause debug
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       PYTHONUTF8: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
     steps:
-      - name: Checkout current main
+      - name: Checkout exact failing revision
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 2
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -27,35 +36,116 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
       - name: Install debug dependencies
         run: python -m pip install --prefer-binary "build>=1,<2" -e ".[dev,ui]"
 
+      - name: Capture trigger and runtime evidence
+        if: ${{ always() }}
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DEBUG_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}
+          UPSTREAM_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          UPSTREAM_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          mkdir -p audit/debug
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = {
+              "event_name": os.environ.get("EVENT_NAME", ""),
+              "debug_sha": os.environ.get("DEBUG_SHA", ""),
+              "upstream_run_id": os.environ.get("UPSTREAM_RUN_ID", ""),
+              "upstream_conclusion": os.environ.get("UPSTREAM_CONCLUSION", ""),
+              "upstream_url": os.environ.get("UPSTREAM_URL", ""),
+          }
+          Path("audit/debug/trigger.json").write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          {
+            echo "=== git ==="
+            git rev-parse HEAD
+            git status --short
+            git log -1 --decorate --stat
+            echo "=== platform ==="
+            uname -a
+            echo "=== python ==="
+            python --version
+            python -m pip --version
+            echo "=== java ==="
+            java -version || true
+            echo "=== node ==="
+            node --version || true
+            npm --version || true
+            echo "=== resources ==="
+            df -h
+            free -h || true
+          } > audit/debug/environment.log 2>&1
+          python -m pip freeze > audit/debug/pip-freeze.txt
+
+      - name: Download all artifacts from failed CI run
+        if: ${{ github.event_name == 'workflow_run' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+          path: audit/upstream
+
       - name: Catch stale or missing internal imports
+        continue-on-error: true
         run: python .github/scripts/debug_repo_audit.py
 
       - name: Import package bootstrap
+        continue-on-error: true
         run: python -c "import minecraft_mod_ai"
 
-      - name: Execute Colab Debug fixture and focused regressions
+      - name: Collect the entire pytest graph
+        continue-on-error: true
+        shell: bash
         run: |
-          python -m pytest -q \
+          set -o pipefail
+          python -m pytest --collect-only -q 2>&1 | tee audit/debug/pytest-collect.log
+
+      - name: Execute focused debug regressions with causal diagnostics
+        continue-on-error: true
+        run: |
+          python tools/pytest_diagnostics.py \
+            --log audit/debug/focused-pytest.log \
+            --junit audit/debug/focused-pytest.xml \
+            --durations 50 \
+            --maxfail 100 \
             tests/test_colab_debug_fixture_path.py \
             tests/test_record_cardinality_blocking_contract.py \
-            tests/test_worksheet_atomic_chunker.py
+            tests/test_worksheet_atomic_chunker.py \
+            tests/test_root_cause_audit_wrapper.py
 
       - name: Run exhaustive project Debug audit with compact root-cause output
         if: ${{ always() }}
         run: python tools/root_cause_audit_wrapper.py
 
-      - name: Upload Debug report even on failure
+      - name: Upload complete Debug evidence even on failure
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: full-project-debug-${{ github.sha }}
+          name: full-project-debug-${{ github.event.workflow_run.head_sha || github.sha }}
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 30
           path: |
             audit/FULL_PROJECT_AUDIT.json
             audit/FULL_PROJECT_AUDIT.log
             audit/FULL_PROJECT_AUDIT.runner.log
+            audit/debug/
+            audit/upstream/
             audit/dist/*
