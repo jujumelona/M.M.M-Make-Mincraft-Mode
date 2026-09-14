@@ -129,7 +129,7 @@ def run_generation_verifier(
     runtime_module: Any,
     java_service_factory: Any | None = None,
 ) -> dict[str, Any]:
-    """Return one completed JDT Core build's current project-wide diagnostics."""
+    """Return one completed host verifier result for the current project state."""
     from .java_core import JavaCoreService
     from .java_lsp import JDTLanguageServerError
     from .owner_rpc import OwnerRPCError
@@ -144,21 +144,76 @@ def run_generation_verifier(
             service = (java_service_factory or JavaCoreService)()
             setattr(runtime, _JDT_SERVICE_ATTR, service)
         result = service.diagnostics(
-            root, timeout_seconds=host_jdt_hard_timeout_seconds(host_jdt_idle_timeout_seconds()),
+            root,
+            timeout_seconds=host_jdt_hard_timeout_seconds(host_jdt_idle_timeout_seconds()),
             full_scan=bool(payload.get("full_scan", False)),
         )
-        if result.get("complete") is not True or not result.get("session_id") or not result.get("model_id"):
+        if (
+            result.get("complete") is not True
+            or not result.get("session_id")
+            or not result.get("model_id")
+        ):
             raise OwnerRPCError("JDT Core returned incomplete or unbound verification")
-    except (OSError, ValueError, TypeError, TimeoutError, JDTLanguageServerError, OwnerRPCError) as exc:
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        TimeoutError,
+        JDTLanguageServerError,
+        OwnerRPCError,
+    ) as exc:
         _close_generation_jdt(runtime)
-        emit_root_cause("generation_verifier_jdt_unavailable", stage="generation",
-                        operation=_VERIFIER_NAME, result="FAIL", reason=str(exc), exc=exc)
-        raise runtime_module.AgentToolRuntimeError(
-            f"Generation verification failed because JDT is unavailable: {exc}"
-        ) from exc
-    emit_root_cause("generation_verifier_jdt_result", stage="generation", operation=_VERIFIER_NAME,
-                    result="FAIL" if result.get("error_count") else "PASS", details={"result": result})
+        emit_root_cause(
+            "generation_verifier_jdt_unavailable",
+            stage="generation",
+            operation=_VERIFIER_NAME,
+            result="FAIL",
+            reason=str(exc),
+            exc=exc,
+        )
+        from .generation_verifier_fallback_installation import _gradle_fallback_receipt
+
+        emit_root_cause(
+            "generation_verifier_gradle_fallback_start",
+            stage="generation",
+            operation="run_gradle_build",
+            gate="target_compile",
+            result="START",
+            reason=str(exc),
+        )
+        try:
+            return _gradle_fallback_receipt(
+                runtime,
+                Path(root),
+                runtime_module=runtime_module,
+                jdt_error=exc,
+            )
+        except Exception as fallback_exc:
+            emit_root_cause(
+                "generation_verifier_gradle_fallback_unavailable",
+                stage="generation",
+                operation="run_gradle_build",
+                gate="target_compile",
+                result="FAIL",
+                reason=f"{type(fallback_exc).__name__}: {fallback_exc}",
+                exc=fallback_exc,
+            )
+            raise runtime_module.AgentToolRuntimeError(
+                "Generation verification has no healthy backend: "
+                f"JDT unavailable ({exc}); Gradle fallback unavailable "
+                f"({type(fallback_exc).__name__}: {fallback_exc})"
+            ) from fallback_exc
+    emit_root_cause(
+        "generation_verifier_jdt_result",
+        stage="generation",
+        operation=_VERIFIER_NAME,
+        result="FAIL" if result.get("error_count") else "PASS",
+        details={"result": result},
+    )
     return runtime_module._bounded_result(result)
+
+
+setattr(run_generation_verifier, "_mmm_generation_gradle_fallback", True)
 
 
 def _collect_diagnostics_progress_aware(
@@ -245,7 +300,10 @@ def _collect_diagnostics_progress_aware(
             break
         wait_seconds = min(0.25, idle_remaining, hard_remaining)
         if complete and settled_since is not None:
-            wait_seconds = min(wait_seconds, max(0.001, quiet_seconds - (now - settled_since)))
+            wait_seconds = min(
+                wait_seconds,
+                max(0.001, quiet_seconds - (now - settled_since)),
+            )
         try:
             message = rpc.messages.get(timeout=max(0.001, wait_seconds))
         except queue.Empty:
@@ -349,7 +407,11 @@ def install(
             external_server_ids: frozenset[str] | None,
         ) -> dict[str, Any]:
             selected = self._stage(stage)
-            if selected == "generation" and str(name).strip() == _VERIFIER_NAME and external_server_ids is None:
+            if (
+                selected == "generation"
+                and str(name).strip() == _VERIFIER_NAME
+                and external_server_ids is None
+            ):
                 return run_generation_verifier(
                     self,
                     arguments,
@@ -390,7 +452,10 @@ def install(
                     operation=_VERIFIER_NAME,
                     gate="host_verifier_authority",
                     result="PASS",
-                    reason="forced verifier selection is mechanical and does not require coder inference",
+                    reason=(
+                        "forced verifier selection is mechanical and does not require "
+                        "coder inference"
+                    ),
                 )
                 return turn
             return current_turn(
@@ -406,7 +471,9 @@ def install(
 
         setattr(generate_turn_with_host_verifier, _MARKER, True)
         generate_turn_with_host_verifier.__wrapped__ = current_turn
-        progress_loop_module._generate_turn_with_context_recovery = generate_turn_with_host_verifier
+        progress_loop_module._generate_turn_with_context_recovery = (
+            generate_turn_with_host_verifier
+        )
 
     current_collector = java_lsp_trace_module._collect_diagnostics_traced
     if not getattr(current_collector, _JDT_COLLECTOR_MARKER, False):
