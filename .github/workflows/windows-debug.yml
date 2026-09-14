@@ -74,7 +74,7 @@ jobs:
           python -m pip freeze | Out-File -FilePath "audit/windows/pip-freeze-${{ matrix.python-version }}.txt" -Encoding utf8
 
       - name: Compile Python tree
-        run: python -m compileall -q src tests tools
+        run: python -m compileall -q minecraft_mod_ai tests tools
 
       - name: Import package bootstrap
         run: python -c "import minecraft_mod_ai"
