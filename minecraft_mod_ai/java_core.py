@@ -34,7 +34,7 @@ class JavaCoreService:
                 self.close()
                 raise
 
-    def _diagnostics(self, root: Path, timeout: int, full_scan: bool) -> dict[str, Any]:
+    def _prepare_project(self, root: Path) -> None:
         from .jvm_owner_bootstrap import owner_command
 
         if self._root != root:
@@ -44,54 +44,114 @@ class JavaCoreService:
         if self._rpc is None:
             self._workspace = tempfile.TemporaryDirectory(prefix='mmm-jdt-core-')
             self._rpc = OwnerRPC(owner_command(Path(self._workspace.name)))
+
+    def _resolve_and_open(self, root: Path, timeout: int) -> dict[str, Any]:
+        assert self._rpc is not None
+        raw = self._rpc.request('resolve', {'project_root': str(root)}, timeout=timeout)
+        model = ResolvedBuildModel.from_dict(raw)
+        if Path(model.project_root).resolve() != root:
+            raise OwnerRPCError('Resolved model belongs to another project')
+        response = self._rpc.request('open', {'model': model.to_dict()}, timeout=timeout)
+        self._model = model
+        return response
+
+    def _incremental_build(self, owner, revision, timeout: int, full_scan: bool) -> dict[str, Any]:
+        assert self._rpc is not None
+        changes = []
+        if self._revision is not None and self._revision.owner_id == revision.owner_id:
+            changes = [change.to_dict() for change in owner.changes_since(self._revision).changes]
+        return self._rpc.request(
+            'build',
+            {'changes': changes, 'full': full_scan},
+            timeout=timeout,
+        )
+
+    @staticmethod
+    def _validate_response(response: dict[str, Any]) -> None:
+        if response.get('complete') is not True or not isinstance(response.get('diagnostics'), list):
+            raise OwnerRPCError('Incomplete JDT Core build response')
+        if not response.get('session_id') or not isinstance(response.get('generation'), (int, float)):
+            raise OwnerRPCError('JDT Core response lacks build identity')
+
+    @staticmethod
+    def _normalize_diagnostic(row: Any, root: Path) -> tuple[str, dict[str, Any]]:
+        if not isinstance(row, dict) or row.get('severity') not in {'error', 'warning', 'info'}:
+            raise OwnerRPCError('Malformed JDT Core diagnostic')
+        severity = {'error': 1, 'warning': 2, 'info': 3}[row['severity']]
+        line = max(0, int(row.get('line', 1)) - 1)
+        uri = str(row.get('uri') or row.get('path') or root.as_uri())
+        normalized = {
+            **row,
+            'severity': severity,
+            'range': {
+                'start': {'line': line, 'character': 0},
+                'end': {'line': line, 'character': 0},
+            },
+        }
+        return uri, normalized
+
+    def _normalize_diagnostics(self, rows: list[Any], root: Path) -> dict[str, list[dict[str, Any]]]:
+        diagnostics: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            uri, normalized = self._normalize_diagnostic(row, root)
+            diagnostics.setdefault(uri, []).append(normalized)
+        return diagnostics
+
+    def _result_payload(
+        self,
+        root: Path,
+        revision,
+        response: dict[str, Any],
+        diagnostics: dict[str, list[dict[str, Any]]],
+        *,
+        full_scope: bool,
+    ) -> dict[str, Any]:
+        assert self._model is not None
+        assert self._model_revision is not None
+        return {
+            'schema_version': 'mmm/java-diagnostics-v3',
+            'project_root': str(root),
+            'verification_backend': 'jdt_core',
+            'verification_scope': 'full' if full_scope else 'incremental',
+            'error_count': sum(row['severity'] == 1 for rows in diagnostics.values() for row in rows),
+            'warning_count': sum(row['severity'] == 2 for rows in diagnostics.values() for row in rows),
+            'diagnostics': diagnostics,
+            'complete': True,
+            'skipped': False,
+            'project_revision': revision.to_dict(),
+            'model_id': self._model.model_id,
+            'model_revision': self._model_revision.digest,
+            'session_id': response['session_id'],
+            'generation': response['generation'],
+        }
+
+    def _diagnostics(self, root: Path, timeout: int, full_scan: bool) -> dict[str, Any]:
+        self._prepare_project(root)
         assert self._inputs is not None
         owner = mutation_owner(root)
         revision = owner.revision
         inputs = self._inputs.revision()
         refresh = self._model is None or inputs != self._model_revision
-        if refresh:
-            raw = self._rpc.request('resolve', {'project_root': str(root)}, timeout=timeout)
-            model = ResolvedBuildModel.from_dict(raw)
-            if Path(model.project_root).resolve() != root:
-                raise OwnerRPCError('Resolved model belongs to another project')
-            response = self._rpc.request('open', {'model': model.to_dict()}, timeout=timeout)
-            self._model = model
-        else:
-            changes = []
-            if self._revision is not None and self._revision.owner_id == revision.owner_id:
-                changes = [change.to_dict() for change in owner.changes_since(self._revision).changes]
-            response = self._rpc.request('build', {'changes': changes, 'full': full_scan}, timeout=timeout)
-        if response.get('complete') is not True or not isinstance(response.get('diagnostics'), list):
-            raise OwnerRPCError('Incomplete JDT Core build response')
-        if not response.get('session_id') or not isinstance(response.get('generation'), (int, float)):
-            raise OwnerRPCError('JDT Core response lacks build identity')
+        response = (
+            self._resolve_and_open(root, timeout)
+            if refresh
+            else self._incremental_build(owner, revision, timeout, full_scan)
+        )
+        self._validate_response(response)
         if inputs != self._inputs.revision() or owner.revision != revision:
             raise OwnerRPCError('Project changed during verification')
         if refresh:
             self._inputs.track_resolved_inputs(self._model)
         self._model_revision = self._inputs.revision()
         self._revision = revision
-        diagnostics: dict[str, list[dict[str, Any]]] = {}
-        for row in response['diagnostics']:
-            if not isinstance(row, dict) or row.get('severity') not in {'error', 'warning', 'info'}:
-                raise OwnerRPCError('Malformed JDT Core diagnostic')
-            severity = {'error': 1, 'warning': 2, 'info': 3}[row['severity']]
-            line = max(0, int(row.get('line', 1)) - 1)
-            diagnostics.setdefault(str(row.get('uri') or row.get('path') or root.as_uri()), []).append({
-                **row, 'severity': severity,
-                'range': {'start': {'line': line, 'character': 0}, 'end': {'line': line, 'character': 0}},
-            })
-        assert self._model is not None
-        return {
-            'schema_version': 'mmm/java-diagnostics-v3', 'project_root': str(root),
-            'verification_backend': 'jdt_core', 'verification_scope': 'full' if refresh or full_scan else 'incremental',
-            'error_count': sum(row['severity'] == 1 for rows in diagnostics.values() for row in rows),
-            'warning_count': sum(row['severity'] == 2 for rows in diagnostics.values() for row in rows),
-            'diagnostics': diagnostics, 'complete': True, 'skipped': False,
-            'project_revision': revision.to_dict(), 'model_id': self._model.model_id,
-            'model_revision': self._model_revision.digest, 'session_id': response['session_id'],
-            'generation': response['generation'],
-        }
+        diagnostics = self._normalize_diagnostics(response['diagnostics'], root)
+        return self._result_payload(
+            root,
+            revision,
+            response,
+            diagnostics,
+            full_scope=refresh or full_scan,
+        )
 
     def close(self) -> None:
         with self._lock:
