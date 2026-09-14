@@ -414,6 +414,43 @@ def ensure_dependency(
         return TransactionalSourcePatcher(info.root).apply(operations)
 
 
+def _unchanged_patch_receipt() -> dict[str, Any]:
+    return {
+        "schema_version": "mmm/source-patch-receipt-v1",
+        "status": "UNCHANGED",
+        "operations": [],
+    }
+
+
+def _text_file_operation(
+    info: FabricProjectInfo,
+    relative: str,
+    content: str,
+    *,
+    replace_existing: bool,
+) -> dict[str, Any] | None:
+    if relative.lower().endswith(".json"):
+        content = _serialize_resource(_json_resource(content, relative))
+    path = info.root / relative
+    if not path.exists():
+        return {"operation": "create", "path": relative, "content": content}
+    if not path.is_file() or path.is_symlink():
+        raise ProjectEditError(
+            f"Generated target is not a regular file: {relative}"
+        )
+    current, current_sha256 = _read_utf8_with_digest(path)
+    if current == content:
+        return None
+    if not replace_existing:
+        raise ProjectEditError(f"Generated target already exists: {relative}")
+    return {
+        "operation": "replace",
+        "path": relative,
+        "expected_sha256": current_sha256,
+        "content": content,
+    }
+
+
 def write_text_files(
     info: FabricProjectInfo,
     files: dict[str, str],
@@ -421,55 +458,27 @@ def write_text_files(
     replace_existing: bool = False,
 ) -> dict[str, Any]:
     if not files:
-        return {
-            "schema_version": "mmm/source-patch-receipt-v1",
-            "status": "UNCHANGED",
-            "operations": [],
-        }
+        return _unchanged_patch_receipt()
     # The target set is exact before any project state is read, so this operation
     # needs only path-scoped serialization. Keeping the pre-read and the transactional
     # commit under the same path set preserves SHA preconditions without blocking
     # unrelated generated files elsewhere in the project.
     with project_path_write_locks(info.root, files):
-        operations: list[dict[str, Any]] = []
-        for relative, content in sorted(files.items()):
-            if relative.lower().endswith(".json"):
-                content = _serialize_resource(_json_resource(content, relative))
-            path = info.root / relative
-            if path.exists():
-                if not path.is_file() or path.is_symlink():
-                    raise ProjectEditError(
-                        f"Generated target is not a regular file: {relative}"
-                    )
-                current, current_sha256 = _read_utf8_with_digest(path)
-                if current == content:
-                    continue
-                if not replace_existing:
-                    raise ProjectEditError(
-                        f"Generated target already exists: {relative}"
-                    )
-                operations.append(
-                    {
-                        "operation": "replace",
-                        "path": relative,
-                        "expected_sha256": current_sha256,
-                        "content": content,
-                    }
+        operations = [
+            operation
+            for relative, content in sorted(files.items())
+            if (
+                operation := _text_file_operation(
+                    info,
+                    relative,
+                    content,
+                    replace_existing=replace_existing,
                 )
-            else:
-                operations.append(
-                    {
-                        "operation": "create",
-                        "path": relative,
-                        "content": content,
-                    }
-                )
+            )
+            is not None
+        ]
         if not operations:
-            return {
-                "schema_version": "mmm/source-patch-receipt-v1",
-                "status": "UNCHANGED",
-                "operations": [],
-            }
+            return _unchanged_patch_receipt()
         return TransactionalSourcePatcher(info.root).apply(operations)
 
 
