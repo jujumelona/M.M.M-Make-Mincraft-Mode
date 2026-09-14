@@ -1,0 +1,65 @@
+name: Production Path Contract
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'minecraft_mod_ai/model_adapters/**'
+      - 'minecraft_mod_ai/model_router.py'
+      - 'minecraft_mod_ai/progress_aware_tool_loop.py'
+      - 'minecraft_mod_ai/planner.py'
+      - 'minecraft_mod_ai/routed_planner.py'
+      - 'minecraft_mod_ai/planning_pipeline.py'
+      - 'tests/test_llama_cpp_native_tool_call_contract.py'
+      - 'tests/test_production_tool_call_isolation_contract.py'
+      - 'tests/test_production_path_contract.py'
+      - '.github/workflows/production-path-contract.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'minecraft_mod_ai/model_adapters/**'
+      - 'minecraft_mod_ai/model_router.py'
+      - 'minecraft_mod_ai/progress_aware_tool_loop.py'
+      - 'minecraft_mod_ai/planner.py'
+      - 'minecraft_mod_ai/routed_planner.py'
+      - 'minecraft_mod_ai/planning_pipeline.py'
+      - 'tests/test_llama_cpp_native_tool_call_contract.py'
+      - 'tests/test_production_tool_call_isolation_contract.py'
+      - 'tests/test_production_path_contract.py'
+      - '.github/workflows/production-path-contract.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-path-contract-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deterministic-production-path:
+    name: Deterministic production path
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install runtime and test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Compile production boundary modules
+        run: |
+          python -m py_compile \
+            minecraft_mod_ai/model_adapters/base.py \
+            minecraft_mod_ai/model_adapters/llama_cpp_adapter.py \
+            minecraft_mod_ai/model_router.py \
+            minecraft_mod_ai/progress_aware_tool_loop.py \
+            minecraft_mod_ai/planner.py \
+            minecraft_mod_ai/routed_planner.py
+      - name: Run production-path fault-injection contracts
+        run: |
+          python -m pytest -q \
+            tests/test_llama_cpp_native_tool_call_contract.py \
+            tests/test_production_tool_call_isolation_contract.py \
+            tests/test_production_path_contract.py
