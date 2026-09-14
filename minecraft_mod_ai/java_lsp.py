@@ -49,6 +49,13 @@ class JDTWorkspaceBootstrapError(JDTLanguageServerError):
     """JDT LS started or configured without a usable Java project bootstrap."""
 
 
+def _remaining_jdt_deadline(deadline: float, *, operation: str) -> float:
+    remaining = float(deadline) - time.monotonic()
+    if remaining <= 0:
+        raise JDTLanguageServerError(f"JDT LS {operation} deadline exceeded.")
+    return remaining
+
+
 def _configuration_value(configuration: dict[str, Any], section: str | None) -> Any:
     if not section:
         return configuration
@@ -495,7 +502,15 @@ class JavaLanguageService:
         if rpc is not None:
             rpc.close()
 
-    def _ensure_rpc_locked(self, root: Path, *, timeout_seconds: int) -> _JsonRpcProcess:
+    def _ensure_rpc_locked(
+        self,
+        root: Path,
+        *,
+        timeout_seconds: int,
+        deadline: float | None = None,
+    ) -> _JsonRpcProcess:
+        deadline = deadline if deadline is not None else time.monotonic() + float(timeout_seconds)
+        _remaining_jdt_deadline(deadline, operation="session initialization")
         rpc = self._rpc
         if rpc is not None and self._project_root == root and self.ready:
             return rpc
@@ -534,7 +549,7 @@ class JavaLanguageService:
                     },
                     "workspaceFolders": list(rpc.workspace_folders),
                 },
-                timeout=min(timeout_seconds, 45),
+                timeout=min(_remaining_jdt_deadline(deadline, operation="initialize"), 45.0),
             )
             rpc.notify("initialized", {})
             rpc.notify("workspace/didChangeConfiguration", {"settings": configuration})
@@ -543,6 +558,7 @@ class JavaLanguageService:
                 root,
                 timeout_seconds=timeout_seconds,
                 quiet_seconds=min(self.diagnostic_quiet_seconds, 0.25),
+                deadline=deadline,
             )
         except BaseException:
             rpc.close()
@@ -569,6 +585,7 @@ class JavaLanguageService:
             raise FileNotFoundError(root)
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive.")
+        deadline = time.monotonic() + float(timeout_seconds)
         try:
             assert_server_safe_source_sets(root)
         except (SourceSetBoundaryError, FileNotFoundError, OSError, UnicodeError) as exc:
@@ -593,11 +610,17 @@ class JavaLanguageService:
             )
 
         with self._session_lock:
-            rpc = self._ensure_rpc_locked(root, timeout_seconds=timeout_seconds)
+            _remaining_jdt_deadline(deadline, operation="diagnostics")
+            rpc = self._ensure_rpc_locked(
+                root,
+                timeout_seconds=timeout_seconds,
+                deadline=deadline,
+            )
             diagnostics: dict[str, list[dict[str, Any]]] = {}
             page_receipts: list[dict[str, Any]] = []
             total_source_bytes = 0
             for page_index, page in enumerate(pages):
+                _remaining_jdt_deadline(deadline, operation="diagnostics")
                 sources, source_bytes = _read_source_page(
                     page,
                     max_source_bytes=self.diagnostic_page_max_source_bytes,
@@ -614,8 +637,11 @@ class JavaLanguageService:
                     page_diagnostics = _collect_diagnostics(
                         rpc,
                         expected_uris=expected_uris,
-                        timeout_seconds=timeout_seconds,
+                        timeout_seconds=_remaining_jdt_deadline(
+                            deadline, operation="diagnostics"
+                        ),
                         quiet_seconds=self.diagnostic_quiet_seconds,
+                        deadline=deadline,
                     )
                     _raise_on_java_core_bootstrap_failure(page_diagnostics)
                 finally:
@@ -662,9 +688,19 @@ class JavaLanguageService:
             raise FileNotFoundError(root)
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive.")
+        deadline = time.monotonic() + float(timeout_seconds)
         with self._session_lock:
-            rpc = self._ensure_rpc_locked(root, timeout_seconds=timeout_seconds)
-            result = rpc.request("workspace/symbol", {"query": query}, timeout=timeout_seconds)
+            _remaining_jdt_deadline(deadline, operation="workspace symbols")
+            rpc = self._ensure_rpc_locked(
+                root,
+                timeout_seconds=timeout_seconds,
+                deadline=deadline,
+            )
+            result = rpc.request(
+                "workspace/symbol",
+                {"query": query},
+                timeout=_remaining_jdt_deadline(deadline, operation="workspace symbols"),
+            )
             return {
                 "schema_version": "mmm/java-symbols-v1",
                 "query": query,
@@ -809,6 +845,7 @@ def _await_java_core_ready(
     *,
     timeout_seconds: float,
     quiet_seconds: float,
+    deadline: float | None = None,
 ) -> None:
     """Wait for compiler diagnostics to prove core Java types resolve.
 
@@ -820,7 +857,7 @@ def _await_java_core_ready(
     source_root = _java_source_root(root)
     probe_path = source_root / f"{_SEMANTIC_PROBE_NAME}.java"
     uri = probe_path.resolve(strict=False).as_uri()
-    deadline = time.monotonic() + float(timeout_seconds)
+    deadline = deadline if deadline is not None else time.monotonic() + float(timeout_seconds)
     version = 1
     last_reason = "semantic diagnostics have not completed"
 
@@ -832,12 +869,13 @@ def _await_java_core_ready(
             "text": _SEMANTIC_PROBE_SOURCE,
         }})
         try:
-            remaining = max(0.001, deadline - time.monotonic())
+            remaining = _remaining_jdt_deadline(deadline, operation="semantic readiness")
             diagnostics = _collect_diagnostics(
                 rpc,
                 expected_uris={uri},
                 timeout_seconds=remaining,
                 quiet_seconds=quiet_seconds,
+                deadline=deadline,
             )
             core_messages = _java_core_bootstrap_messages(diagnostics)
             errors = [
@@ -877,6 +915,7 @@ def _collect_diagnostics(
     expected_uris: set[str],
     timeout_seconds: float,
     quiet_seconds: float,
+    deadline: float | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     if timeout_seconds <= 0:
         raise ValueError("JDT diagnostics timeout must be positive.")
@@ -886,7 +925,7 @@ def _collect_diagnostics(
         return {}
 
     diagnostics: dict[str, list[dict[str, Any]]] = {}
-    deadline = time.monotonic() + float(timeout_seconds)
+    deadline = deadline if deadline is not None else time.monotonic() + float(timeout_seconds)
     settled_since: float | None = None
     while True:
         now = time.monotonic()
@@ -921,7 +960,7 @@ def _collect_diagnostics(
             settle_remaining = quiet_seconds - (now - settled_since)
             wait_seconds = min(wait_seconds, max(0.001, settle_remaining))
         try:
-            message = rpc.messages.get(timeout=max(0.001, wait_seconds))
+            message = rpc.messages.get(timeout=wait_seconds)
         except queue.Empty:
             continue
         if _respond_to_server_request(rpc, message):
