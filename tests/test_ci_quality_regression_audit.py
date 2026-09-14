@@ -125,14 +125,26 @@ def test_new_serial_expensive_loop_is_rejected():
 def test_main_ci_topology_requires_full_suite_and_authoritative_audits():
     audit = _load_auditor()
     good = """
-    python .github/scripts/audit_runtime_concurrency.py
-    python .github/scripts/audit_runtime_efficiency.py --output audit/runtime-efficiency.json
-    python .github/scripts/audit_code_quality_regression.py --output audit/code-quality-regression.json
-    python tools/verify_integrity_minecraft.py --output .mmm/integrity-validation
-    python tools/root_cause_audit_wrapper.py
-    python tools/pytest_diagnostics.py tests
+name: CI
+jobs:
+  audit:
+    steps:
+      - run: python .github/scripts/audit_runtime_concurrency.py
+      - run: python .github/scripts/audit_runtime_efficiency.py --output audit/runtime-efficiency.json
+      - run: python .github/scripts/audit_code_quality_regression.py --output audit/code-quality-regression.json
+      - run: python tools/verify_integrity_minecraft.py --output .mmm/integrity-validation
+      - run: python tools/root_cause_audit_wrapper.py
+  tests:
+    steps:
+      - run: python tools/pytest_diagnostics.py tests
+  python313:
+    steps: []
+  model-realistic-replay:
+    uses: ./.github/workflows/model-realistic-replay.yml
+  ci-gate:
     needs: [audit, tests, python313, model-realistic-replay]
-    """
+    steps: []
+"""
     assert audit.audit_main_ci_text(good) == []
 
     bad = good.replace("python tools/pytest_diagnostics.py tests", "python -m pytest tests/test_one.py")
