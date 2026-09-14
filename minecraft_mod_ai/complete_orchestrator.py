@@ -1128,14 +1128,13 @@ class CompleteProductionOrchestrator:
             review_workers = max(1, min(4, int(capacities['cpu_io'])))
         review_pool = ThreadPoolExecutor(max_workers=max(1, review_workers), thread_name_prefix='blockbench_review')
         node_futures: dict[str, Future[Any]] = {}
-        node_deadlines: dict[str, float] = {}
         idle_wait = threading.Event()
         lease_seconds = 900
         heartbeat_seconds = 60.0
 
-        def dispatch_node(node: WorkNode, *, deadline_monotonic: float) -> Future[Any]:
+        def dispatch_node(node: WorkNode) -> Future[Any]:
             resource_class = node.resource_class or str(node.payload.get('resource_class', 'cpu_io'))
-            args = (run_with_model_execution_deadline, deadline_monotonic, process_node, node)
+            args = (process_node, node)
             if resource_class == 'llm':
                 return llm_pool.submit(*args)
             if resource_class == 'image_gpu':
@@ -1149,7 +1148,6 @@ class CompleteProductionOrchestrator:
                 done_ids = [node_id for node_id, future in node_futures.items() if future.done()]
                 for node_id in done_ids:
                     future = node_futures.pop(node_id)
-                    node_deadlines.pop(node_id, None)
                     try:
                         future.result(timeout=0)
                     except BaseException as exc:
@@ -1162,23 +1160,6 @@ class CompleteProductionOrchestrator:
                         )
                         raise CompleteProductionError(f'Pipeline generation node failed: {node_id}: {type(exc).__name__}: {exc}') from exc
 
-                now_monotonic = time.monotonic()
-                expired_ids = [
-                    node_id
-                    for node_id, future in node_futures.items()
-                    if not future.done() and now_monotonic >= node_deadlines[node_id]
-                ]
-                if expired_ids:
-                    for expired_id in expired_ids:
-                        node_futures[expired_id].cancel()
-                        try:
-                            if str(ledger.task(expired_id)['state']) == 'running':
-                                ledger.fail(expired_id, 'generation node lease deadline exceeded')
-                        except WorkGraphError:
-                            pass
-                    raise CompleteProductionError(
-                        f'Pipeline generation lease deadline exceeded: {sorted(expired_ids)}'
-                    )
                 while True:
                     claimed = ledger.claim_ready(worker_id='mmm-orchestrator', stages=generation_stages, lease_seconds=lease_seconds)
                     if claimed is None:
@@ -1189,22 +1170,13 @@ class CompleteProductionOrchestrator:
                         raise CompleteProductionError(f'Ledger claimed an unknown generation node: {node_id}')
                     if node_id in node_futures:
                         raise CompleteProductionError(f'Generation node was claimed twice: {node_id}')
-                    lease_until = claimed.get('lease_until')
-                    remaining_lease = float(lease_seconds)
-                    if lease_until is not None:
-                        remaining_lease = max(0.05, float(lease_until) - time.time())
-                    deadline_monotonic = time.monotonic() + remaining_lease
-                    node_deadlines[node_id] = deadline_monotonic
-                    node_futures[node_id] = dispatch_node(
-                        node, deadline_monotonic=deadline_monotonic
-                    )
+                    node_futures[node_id] = dispatch_node(node)
                 if node_futures:
-                    nearest_deadline = min(node_deadlines.values())
-                    wait_timeout = min(
-                        heartbeat_seconds,
-                        max(0.0, nearest_deadline - time.monotonic()),
+                    wait(
+                        tuple(node_futures.values()),
+                        timeout=heartbeat_seconds,
+                        return_when=FIRST_COMPLETED,
                     )
-                    wait(tuple(node_futures.values()), timeout=wait_timeout, return_when=FIRST_COMPLETED)
                     continue
                 task_rows = {node.node_id: ledger.task(node.node_id) for node in generation_nodes}
                 states = {node_id: str(task['state']) for node_id, task in task_rows.items()}
