@@ -1,0 +1,151 @@
+name: Cumulative Regression Guard
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: cumulative-regression-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cumulative-regression:
+    name: Last-good cumulative regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONUTF8: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout current revision
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install audit dependencies
+        run: python -m pip install --prefer-binary "build>=1,<2" -e ".[dev,ui]"
+
+      - name: Resolve last known-good cumulative baseline
+        id: baseline
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          BASE_SHA=""
+          for WORKFLOW in cumulative-regression-guard.yml main-ci.yml; do
+            while IFS= read -r CANDIDATE; do
+              if [[ -z "$CANDIDATE" || "$CANDIDATE" == "$GITHUB_SHA" ]]; then
+                continue
+              fi
+              STATUS="$(
+                gh api \
+                  "repos/$GITHUB_REPOSITORY/compare/$CANDIDATE...$GITHUB_SHA" \
+                  --jq '.status' 2>/dev/null || true
+              )"
+              if [[ "$STATUS" == "ahead" || "$STATUS" == "identical" ]]; then
+                BASE_SHA="$CANDIDATE"
+                break 2
+              fi
+            done < <(
+              gh api --paginate \
+                "repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW/runs?branch=main&status=success&per_page=100" \
+                --jq '.workflow_runs[].head_sha'
+            )
+          done
+
+          if [[ -z "$BASE_SHA" ]]; then
+            BASE_SHA="$(git rev-parse HEAD^)"
+          fi
+
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "Resolved cumulative regression baseline: $BASE_SHA"
+
+      - name: Run fast diagnostic contracts
+        run: |
+          mkdir -p audit/cumulative
+          python tools/pytest_diagnostics.py \
+            --log audit/cumulative/diagnostic-contracts.log \
+            --junit audit/cumulative/diagnostic-contracts.xml \
+            --timeout-seconds 300 \
+            --faulthandler-timeout-seconds 60 \
+            --durations 25 \
+            --maxfail 25 \
+            tests/test_ci_quality_regression_audit.py \
+            tests/test_pytest_diagnostics_timeout_evidence.py \
+            tests/test_root_cause_audit_wrapper.py
+
+      - name: Run cumulative architecture regression audit
+        env:
+          BASE_SHA: ${{ steps.baseline.outputs.base_sha }}
+        run: |
+          mkdir -p audit/cumulative
+          python .github/scripts/audit_code_quality_regression.py \
+            --base-ref "$BASE_SHA" \
+            --output audit/cumulative/code-quality-regression.json
+
+      - name: Run cumulative runtime efficiency regression audit
+        shell: bash
+        env:
+          BASE_SHA: ${{ steps.baseline.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p audit/cumulative
+          python .github/scripts/audit_runtime_efficiency.py \
+            --output audit/cumulative/runtime-efficiency.json
+          BASE_DIR="$(mktemp -d)"
+          trap 'rm -rf "$BASE_DIR"' EXIT
+          AUDIT_PATHS=(.github/scripts/audit_runtime_efficiency.py minecraft_mod_ai tools)
+          if git cat-file -e "$BASE_SHA":download_resources.py 2>/dev/null; then
+            AUDIT_PATHS+=(download_resources.py)
+          fi
+          git archive --format=tar "$BASE_SHA" -- "${AUDIT_PATHS[@]}" | tar -xf - -C "$BASE_DIR"
+          (
+            cd "$BASE_DIR"
+            python .github/scripts/audit_runtime_efficiency.py \
+              --output /tmp/runtime-efficiency-cumulative-baseline.json
+          )
+          python .github/scripts/gate_runtime_efficiency.py \
+            --baseline /tmp/runtime-efficiency-cumulative-baseline.json \
+            --current audit/cumulative/runtime-efficiency.json
+
+      - name: Run cumulative runtime mutation regression audit
+        shell: bash
+        env:
+          BASE_SHA: ${{ steps.baseline.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p audit/cumulative
+          BASE_DIR="$(mktemp -d)"
+          trap 'rm -rf "$BASE_DIR"' EXIT
+          AUDIT_PATHS=(.github/scripts/audit_runtime_mutations.py minecraft_mod_ai tools)
+          if git cat-file -e "$BASE_SHA":download_resources.py 2>/dev/null; then
+            AUDIT_PATHS+=(download_resources.py)
+          fi
+          git archive --format=tar "$BASE_SHA" -- "${AUDIT_PATHS[@]}" | tar -xf - -C "$BASE_DIR"
+          python .github/scripts/audit_runtime_mutations.py \
+            --baseline-root "$BASE_DIR" \
+            --fail-on-new \
+            --output audit/cumulative/runtime-mutations.json
+
+      - name: Upload cumulative regression evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cumulative-regression-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 30
+          path: audit/cumulative/
