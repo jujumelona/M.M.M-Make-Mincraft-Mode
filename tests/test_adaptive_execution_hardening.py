@@ -147,6 +147,90 @@ def test_research_metric_vector_always_preserves_plan_alignment() -> None:
     assert abs(sum(weights.values()) - 1.0) < 1e-9
 
 
+def test_criterion_progress_path_copy_preserves_unrelated_payload_identity() -> None:
+    from minecraft_mod_ai.planning_criterion_fragments import store_criterion_progress
+
+    unrelated = {"rows": [object() for _ in range(32)]}
+    state = {"large_unrelated_payload": unrelated, "detail_progress": []}
+    result = store_criterion_progress(
+        state,
+        requirement_ref="REQ-1",
+        selected_sections=("behavior",),
+        criterion_index=0,
+        criterion="works",
+        fragment={"section_updates": []},
+    )
+
+    assert result is not state
+    assert result["large_unrelated_payload"] is unrelated
+    assert state["detail_progress"] == []
+    assert len(result["detail_progress"]) == 1
+
+
+def test_planner_checkpoint_does_not_clone_unrelated_nested_payload(monkeypatch) -> None:
+    from minecraft_mod_ai import planning_state_adaptive_implementation as planning
+
+    unrelated = {"large": [object() for _ in range(32)]}
+    snapshots = []
+    monkeypatch.setattr(planning, "_rehash", lambda value: value)
+    monkeypatch.setattr(planning, "validate_planning_state", lambda value: None)
+
+    state = {"large_unrelated_payload": unrelated, "state_sha256": "old"}
+    result = planning._checkpoint_state(state, snapshots.append)
+
+    assert result is not state
+    assert result["large_unrelated_payload"] is unrelated
+    assert snapshots[0] is not result
+    assert snapshots[0]["large_unrelated_payload"] is unrelated
+
+
+def test_artifact_progress_path_copy_preserves_unrelated_payload_identity() -> None:
+    from minecraft_mod_ai import planning_state_adaptive_implementation as planning
+
+    unrelated = {"rows": [object() for _ in range(32)]}
+    state = {"large_unrelated_payload": unrelated, "artifact_progress": {}}
+    result = planning._store_artifact_progress(
+        state,
+        requirement_ref="REQ-1",
+        artifact_kind="item",
+        step_id="feature/item/register",
+        receipt={"status": "PLANNED"},
+    )
+
+    assert result is not state
+    assert result["large_unrelated_payload"] is unrelated
+    assert state["artifact_progress"] == {}
+    assert result["artifact_progress"]["REQ-1"]["item"]["feature/item/register"] == {
+        "status": "PLANNED"
+    }
+
+
+def test_completed_planning_job_releases_heavy_payload() -> None:
+    import gc
+    import weakref
+
+    from minecraft_mod_ai import planning_state_adaptive_implementation as planning
+
+    class Payload:
+        pass
+
+    payload = Payload()
+    payload_ref = weakref.ref(payload)
+    job = {
+        "requirement_ref": "REQ-1",
+        "evidence": payload,
+        "fragments": {0: payload},
+        "artifact_fragments": {"item": {"step": payload}},
+    }
+
+    planning._release_completed_job_payload(job)
+    del payload
+    gc.collect()
+
+    assert job == {"requirement_ref": "REQ-1"}
+    assert payload_ref() is None
+
+
 def test_deadline_executor_streams_with_bounded_submission_window(monkeypatch) -> None:
     from concurrent.futures import Future
 
