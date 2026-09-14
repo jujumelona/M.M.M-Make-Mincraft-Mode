@@ -167,7 +167,7 @@ def test_artifact_step_checkpointing_and_resumption_skips_completed_steps(monkey
     monkeypatch.setattr(adaptive, "router_native_model_parallelism", lambda _router: 1)
 
     checkpoints: list[dict[str, object]] = []
-    with pytest.raises(RuntimeError, match="DETAILED_PLAN_BLOCKED"):
+    with pytest.raises(ValueError, match="Simulated failure on"):
         adaptive.compile_progress_monotone_detailed_plans(
             _Router(),
             "prompt",
@@ -181,11 +181,10 @@ def test_artifact_step_checkpointing_and_resumption_skips_completed_steps(monkey
         b for b in last_checkpoint["blockers"]
         if b.get("stage") == "detailed_planning" and b.get("terminal") is True
     ]
-    assert len(blockers) == 1
-    failed_step = expected_steps[fail_on_index]
-    assert blockers[0]["section"] == f"artifact:item:{failed_step}"
+    assert blockers == []
+    persisted_steps = last_checkpoint["artifact_progress"]["req_ruby_sword"]["item"]
+    assert set(persisted_steps) == set(expected_steps[:fail_on_index])
 
-    last_checkpoint["blockers"] = []
     resume_calls: list[str] = []
 
     def successful_compile_artifact_step(
