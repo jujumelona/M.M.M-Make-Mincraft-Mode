@@ -1,3 +1,5 @@
+"""Build/repair stage isolated from the complete-production orchestrator."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -33,6 +35,8 @@ def run_build_with_repair(
     router_factory: Callable[[], ModelRouter],
     policy: ScalePolicy,
 ) -> tuple[dict[str, Any], ModelRouter | None]:
+    """Run build, bounded repair when requested, and the fail-closed rebuild path."""
+
     build = GradleRunner(cache).build(project_root, run_gametest=run_gametest).to_dict()
     repair: dict[str, Any] | None = None
     active_router = router
