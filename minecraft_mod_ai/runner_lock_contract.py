@@ -35,60 +35,6 @@ def _release(fd: int) -> None:
     fcntl.flock(fd, fcntl.LOCK_UN)
 
 
-def _install_cache_lock(runner_module: Any) -> None:
-    current_lock = runner_module._exclusive_cache_lock
-    if getattr(current_lock, "_mmm_os_advisory_cache_lock", False):
-        return
-
-    @contextmanager
-    def exclusive_cache_lock(
-        cache_dir: Path,
-        *,
-        timeout_seconds: int,
-    ) -> Iterable[None]:
-        if type(timeout_seconds) is not int or timeout_seconds < 1:
-            raise runner_module.BuildRunnerError(
-                "Gradle cache lock timeout must be a positive integer."
-            )
-        cache_dir = Path(cache_dir).expanduser().resolve()
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        lock_path = cache_dir / ".minecraft-mod-ai-cache.lock"
-        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-        acquired = False
-        deadline = time.monotonic() + timeout_seconds
-        try:
-            while not acquired:
-                try:
-                    _acquire(fd)
-                    acquired = True
-                except (BlockingIOError, OSError):
-                    if time.monotonic() >= deadline:
-                        raise runner_module.BuildRunnerError(
-                            f"Timed out waiting for the Gradle cache lock: {lock_path}"
-                        )
-                    time.sleep(0.2)
-
-            os.ftruncate(fd, 0)
-            os.lseek(fd, 0, os.SEEK_SET)
-            os.write(
-                fd,
-                f"pid={os.getpid()}\nacquired={time.time()}\n".encode("ascii"),
-            )
-            os.fsync(fd)
-            yield
-        finally:
-            if acquired:
-                try:
-                    _release(fd)
-                except OSError:
-                    pass
-            os.close(fd)
-
-    exclusive_cache_lock._mmm_os_advisory_cache_lock = True  # type: ignore[attr-defined]
-    exclusive_cache_lock.__wrapped__ = current_lock  # type: ignore[attr-defined]
-    runner_module._exclusive_cache_lock = exclusive_cache_lock
-
-
 def _install_gradle_lock(runner_module: Any) -> None:
     cls = runner_module.GradleRunner
     current_ensure = cls._ensure_gradle
@@ -131,7 +77,57 @@ def install(runner_module: Any) -> None:
     only `_ensure_gradle`, where MMM itself mutates the shared distribution cache.
     """
 
-    _install_cache_lock(runner_module)
+    current_lock = runner_module._exclusive_cache_lock
+    if not getattr(current_lock, "_mmm_os_advisory_cache_lock", False):
+
+        @contextmanager
+        def exclusive_cache_lock(
+            cache_dir: Path,
+            *,
+            timeout_seconds: int,
+        ) -> Iterable[None]:
+            if type(timeout_seconds) is not int or timeout_seconds < 1:
+                raise runner_module.BuildRunnerError(
+                    "Gradle cache lock timeout must be a positive integer."
+                )
+            cache_dir = Path(cache_dir).expanduser().resolve()
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            lock_path = cache_dir / ".minecraft-mod-ai-cache.lock"
+            fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+            acquired = False
+            deadline = time.monotonic() + timeout_seconds
+            try:
+                while not acquired:
+                    try:
+                        _acquire(fd)
+                        acquired = True
+                    except (BlockingIOError, OSError):
+                        if time.monotonic() >= deadline:
+                            raise runner_module.BuildRunnerError(
+                                f"Timed out waiting for the Gradle cache lock: {lock_path}"
+                            )
+                        time.sleep(0.2)
+
+                os.ftruncate(fd, 0)
+                os.lseek(fd, 0, os.SEEK_SET)
+                os.write(
+                    fd,
+                    f"pid={os.getpid()}\nacquired={time.time()}\n".encode("ascii"),
+                )
+                os.fsync(fd)
+                yield
+            finally:
+                if acquired:
+                    try:
+                        _release(fd)
+                    except OSError:
+                        pass
+                os.close(fd)
+
+        exclusive_cache_lock._mmm_os_advisory_cache_lock = True  # type: ignore[attr-defined]
+        exclusive_cache_lock.__wrapped__ = current_lock  # type: ignore[attr-defined]
+        runner_module._exclusive_cache_lock = exclusive_cache_lock
+
     _install_gradle_lock(runner_module)
     _install_build_contract(runner_module)
 
