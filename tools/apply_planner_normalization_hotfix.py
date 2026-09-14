@@ -7,6 +7,14 @@ import textwrap
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _replace_once(text: str, old: str, new: str, *, label: str) -> str:
+    if old not in text:
+        raise RuntimeError(f"{label}: expected source text not found")
+    if text.count(old) != 1:
+        raise RuntimeError(f"{label}: expected exactly one source match")
+    return text.replace(old, new, 1)
+
+
 def patch_pipeline() -> None:
     path = ROOT / "minecraft_mod_ai" / "planning_state_pipeline.py"
     text = path.read_text(encoding="utf-8")
@@ -44,9 +52,68 @@ def patch_stale_verifier_test() -> None:
     text = path.read_text(encoding="utf-8")
     text = text.replace("import queue\nimport threading\nimport time\nfrom collections import deque\n", "")
     text = text.replace("    _collect_diagnostics_progress_aware,\n", "")
+    text = text.replace(
+        "def test_jdt_failure_is_fail_closed_without_gradle_fallback(tmp_path):",
+        "def test_jdt_failure_fails_closed_when_no_verification_backend_is_healthy(tmp_path):",
+    )
+    text = text.replace(
+        'with pytest.raises(agent_tool_runtime.AgentToolRuntimeError, match="JDT is unavailable"):',
+        'with pytest.raises(\n        agent_tool_runtime.AgentToolRuntimeError,\n        match="Generation verification has no healthy backend",\n    ):',
+    )
+    text = text.replace(
+        "def diagnostics(_rpc, *, expected_uris, timeout_seconds, quiet_seconds):\n",
+        "def diagnostics(\n        _rpc, *, expected_uris, timeout_seconds, quiet_seconds, deadline=None\n    ):\n",
+    )
     legacy_test = "\ndef test_jdt_progress_refreshes_idle_deadline():\n"
     if legacy_test in text:
         text = text[: text.index(legacy_test)].rstrip() + "\n"
+    path.write_text(text, encoding="utf-8")
+
+
+def patch_applicability_tests() -> None:
+    path = ROOT / "tests" / "test_planning_detail_applicability.py"
+    text = path.read_text(encoding="utf-8")
+    text = text.replace(
+        "    WORKSHEET_SECTIONS,\n",
+        "    CONDITIONAL_WORKSHEET_SECTIONS,\n    WORKSHEET_SECTIONS,\n",
+        1,
+    )
+    text = text.replace(
+        "def test_missing_applicability_keeps_full_fail_safe_contract() -> None:\n"
+        "    assert required_detail_sections_for_requirement(_requirement()) == WORKSHEET_SECTIONS\n",
+        "def test_missing_applicability_uses_minimal_core_without_speculative_work() -> None:\n"
+        "    assert required_detail_sections_for_requirement(_requirement()) == CORE_WORKSHEET_SECTIONS\n",
+    )
+    text = text.replace(
+        "def test_unknown_applicability_keeps_conditional_sections() -> None:",
+        "def test_unknown_applicability_does_not_schedule_conditional_sections() -> None:",
+    )
+    text = text.replace("    assert selected == WORKSHEET_SECTIONS\n", "    assert selected == CORE_WORKSHEET_SECTIONS\n", 1)
+    text = text.replace(
+        "def test_required_and_unknown_conditionals_are_retained() -> None:",
+        "def test_only_required_conditionals_are_retained() -> None:",
+    )
+    text = text.replace(
+        '    assert "resources_and_ui" in selected\n',
+        '    assert "resources_and_ui" not in selected\n',
+        1,
+    )
+    text = text.replace(
+        "def test_prompt_wording_never_omits_a_section() -> None:",
+        "def test_prompt_wording_never_expands_section_selection() -> None:",
+    )
+    text = text.replace(
+        "    assert required_detail_sections_for_requirement(requirement) == WORKSHEET_SECTIONS\n",
+        "    assert required_detail_sections_for_requirement(requirement) == CORE_WORKSHEET_SECTIONS\n",
+        1,
+    )
+    text = text.replace(
+        '        "REQ-2": WORKSHEET_SECTIONS,\n',
+        '        "REQ-2": CORE_WORKSHEET_SECTIONS,\n',
+    )
+    old_expected = '''    assert normalized == {\n        "authority_and_network": "unknown",\n        "persistence": "not_applicable",\n        "resources_and_ui": "unknown",\n    }\n'''
+    new_expected = '''    assert normalized == {\n        section: ("not_applicable" if section == "persistence" else "unknown")\n        for section in CONDITIONAL_WORKSHEET_SECTIONS\n    }\n'''
+    text = text.replace(old_expected, new_expected, 1)
     path.write_text(text, encoding="utf-8")
 
 
@@ -69,7 +136,7 @@ def test_checkpointed_atomic_results_are_not_regenerated_after_scheduler_interru
 
     def compile_criterion(_router, *, requirement_ref, criterion_index, **_kwargs):
         generated.append(criterion_index)
-        return _fragment(requirement_ref, criterion_index)
+        return _real_fragment()
 
     monkeypatch.setattr(adaptive, "_compile_criterion", compile_criterion)
 
@@ -145,6 +212,7 @@ def test_checkpointed_atomic_results_are_not_regenerated_after_scheduler_interru
 def main() -> None:
     patch_pipeline()
     patch_stale_verifier_test()
+    patch_applicability_tests()
     patch_resume_regression_test()
 
 
