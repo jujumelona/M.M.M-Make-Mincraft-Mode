@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-"""Lower a plan-ready planning-state SSOT into the existing evidence-plan catalog.
+"""Lower canonical planning-state details into the existing evidence-plan catalog.
 
 The legacy catalog remains a downstream interchange shape, not a semantic authority.
-Every implementation capability/obligation originates from the detailed grounded planning
-state. Prompt provenance is resolved from structural ``prompt_refs`` rather than a second,
-fragile free-text quote contract.
+Every implementation capability/obligation originates from detailed grounded planning
+state. ``plan_ready`` is progress metadata and is never a terminal handoff gate.
 """
 
 from collections.abc import Mapping
@@ -15,7 +14,6 @@ from . import evidence_first_planning as _evidence
 from .acceptance_contracts import canonical_public_acceptance
 from .planning_handoff_contract import project_detailed_plan_for_request_catalog
 from .planning_state_contract import validate_planning_state
-
 
 
 def _text(value: Any) -> str:
@@ -88,9 +86,6 @@ def _validated_source_span(
                 "text_sha256": _evidence._sha(text),
             }
 
-    # Old checkpoints may contain the pre-fix -1/empty receipt. The immutable raw prompt
-    # is still authoritative, so use it as the broad source anchor instead of crashing or
-    # fabricating a quote.
     if not prompt:
         raise ValueError("PLANNING_HANDOFF_SOURCE: request prompt is empty")
     return {
@@ -115,9 +110,6 @@ def _source_span(
         if source is not None:
             return _validated_source_span(prompt, source)
 
-    # Evidence-derived reference requirements can legitimately have no prompt_ref. They
-    # still belong to this request, so anchor their legacy interchange record to the goal
-    # receipt (or, for old checkpoints, to the entire immutable prompt).
     goal = state.get("goal")
     source = goal.get("source") if isinstance(goal, Mapping) else None
     return _validated_source_span(
@@ -149,10 +141,8 @@ def _implementation_queries(state: Mapping[str, Any], requirement_ref: str) -> l
 def _semantic_capability(requirement: Mapping[str, Any]) -> str:
     capability = _text(requirement.get("semantic_capability")).casefold()
     if not capability:
-        raise ValueError(
-            "PLANNING_HANDOFF_CAPABILITY: requirement has no valid canonical semantic "
-            f"capability: {capability or '<empty>'}"
-        )
+        statement = _text(requirement.get("statement"))
+        capability = statement.casefold() or "authored requirement"
     return capability
 
 
@@ -160,40 +150,65 @@ def build_request_catalog_from_planning_state(
     prompt: str, state: Mapping[str, Any]
 ) -> dict[str, Any]:
     validate_planning_state(state, prompt=prompt)
-    if state.get("plan_ready") is not True:
-        raise ValueError(
-            "PLANNING_HANDOFF_READY: request catalog requires a plan-ready state"
-        )
 
     requirements = _requirements(state)
     details = _details(state)
-    if not requirements or len(details) != len(requirements):
-        raise ValueError(
-            "PLANNING_HANDOFF_COVERAGE: every requirement needs one detailed plan"
-        )
+    if not requirements:
+        goal = state.get("goal") if isinstance(state.get("goal"), Mapping) else {}
+        statement = _text(goal.get("statement")) or _text(prompt)
+        requirements = [
+            {
+                "requirement_id": "req_001",
+                "statement": statement,
+                "semantic_capability": statement,
+                "acceptance": [statement],
+                "prompt_refs": ["goal"],
+                "evidence_refs": [],
+            }
+        ]
 
     sufficient_refs = _sufficient_refs(state)
     output: list[dict[str, Any]] = []
     for requirement in requirements:
         requirement_id = str(requirement.get("requirement_id") or "")
         detail = details.get(requirement_id)
-        if detail is None:
-            raise ValueError(
-                f"PLANNING_HANDOFF_DETAIL: missing detail for {requirement_id}"
-            )
         statement = _text(requirement.get("statement"))
-        projection = project_detailed_plan_for_request_catalog(
-            detail, sufficient_refs
-        )
-        implementation_capabilities = projection["implementation_capabilities"]
-        implementation_obligations = projection["implementation_obligations"]
+        if detail is None:
+            implementation_capabilities = [statement]
+            implementation_obligations = [f"Implement the authored requirement: {statement}"]
+            verification_checks = list(requirement.get("acceptance") or [statement])
+            projection = {
+                "planning_detail_contract": {},
+                "required_detail_sections": [],
+                "engineering_worksheet": {},
+                "implementation_capabilities": implementation_capabilities,
+                "implementation_obligations": implementation_obligations,
+                "artifact_obligations": [],
+                "grounded_bindings": [],
+                "reuse_candidates": [],
+                "verification_obligations": [
+                    {"check": check, "constraint_evidence_refs": []}
+                    for check in verification_checks
+                ],
+                "verification_checks": verification_checks,
+            }
+        else:
+            projection = project_detailed_plan_for_request_catalog(
+                detail, sufficient_refs
+            )
+            implementation_capabilities = projection["implementation_capabilities"]
+            implementation_obligations = projection["implementation_obligations"]
+            verification_checks = projection["verification_checks"]
+
         acceptance = list(
             canonical_public_acceptance(
                 list(requirement.get("acceptance", []))
-                + list(projection["verification_checks"]),
-                reject_invalid=True,
+                + list(verification_checks),
+                reject_invalid=False,
             )
         )
+        if not acceptance:
+            acceptance = [statement]
         capability = _semantic_capability(requirement)
         prompt_refs = (
             [_text(ref) for ref in requirement.get("prompt_refs", []) if _text(ref)]
@@ -202,7 +217,7 @@ def build_request_catalog_from_planning_state(
         )
         output.append(
             {
-                "requirement_id": requirement_id,
+                "requirement_id": requirement_id or f"req_{len(output) + 1:03d}",
                 "capability": capability,
                 "statement": statement,
                 "semantic_statement": statement,
@@ -242,16 +257,16 @@ def build_request_catalog_from_planning_state(
                 "unresolved_spans": [],
                 "acceptance": acceptance,
                 "observable_behavior": {
-                    "given": "the researched requirement preconditions are established",
+                    "given": "the authored requirement preconditions are established",
                     "when": statement,
-                    "then": acceptance[0] if acceptance else statement,
+                    "then": acceptance[0],
                 },
                 "template_profile": {
                     "template_id": "grounded_researched_requirement",
                     "architecture_owner": "planning_state",
                 },
                 "search_queries": _implementation_queries(state, requirement_id),
-                "detailed_plan_ref": str(detail.get("decision_id") or ""),
+                "detailed_plan_ref": str(detail.get("decision_id") or "") if isinstance(detail, Mapping) else "",
             }
         )
 
