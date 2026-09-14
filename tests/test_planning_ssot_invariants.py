@@ -145,6 +145,7 @@ def test_requirement_selection_does_not_create_implementation_research_obligatio
         for item in resolved["research_queue"]
     )
 
+
 def test_state_integrity_rejects_unhashed_restored_state_mutation():
     state = _user_only_state()
     state["unresolved"][0]["status"] = "resolved"
@@ -184,14 +185,29 @@ def test_raw_prompt_cannot_bypass_grounded_planning_state_authority():
 
 def test_worksheet_requires_all_selected_sections_and_grounded_refs():
     sheet = _worksheet()
-    assert validate_worksheet(sheet, {"source:1"}) == sheet
+    assert (
+        validate_worksheet(
+            sheet,
+            {"source:1"},
+            required_sections=WORKSHEET_SECTIONS,
+        )
+        == sheet
+    )
 
     partial = deepcopy(sheet)
     partial.pop("state_model")
     with pytest.raises(ValueError, match="WORKSHEET"):
-        validate_worksheet(partial, {"source:1"})
+        validate_worksheet(
+            partial,
+            {"source:1"},
+            required_sections=WORKSHEET_SECTIONS,
+        )
 
     invalid_ref = deepcopy(sheet)
     invalid_ref["algorithm"]["constraint_evidence_refs"] = ["model:guess"]
     with pytest.raises(ValueError, match="WORKSHEET"):
-        validate_worksheet(invalid_ref, {"source:1"})
+        validate_worksheet(
+            invalid_ref,
+            {"source:1"},
+            required_sections=WORKSHEET_SECTIONS,
+        )
