@@ -3,8 +3,9 @@ from __future__ import annotations
 """Host-owned incremental Java generation verification.
 
 JDT Core owns incremental dependency analysis and completed-build diagnostics.
-The host owns deadlines and mutation/model identity. No inferred unchanged PASS,
-source hash scans, alternate backend, or run-local circuit breaker is used.
+The host owns deadlines and mutation/model identity. JDT remains the primary verifier;
+when its infrastructure is unavailable, the host may fall back to a real Gradle build
+without inferring a PASS from unchanged source state.
 """
 
 import hashlib
@@ -14,6 +15,7 @@ import queue
 import time
 from collections import Counter
 from collections.abc import Mapping
+from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
 from typing import Any
@@ -24,6 +26,18 @@ _MARKER = "_mmm_host_owned_generation_verifier"
 _JDT_COLLECTOR_MARKER = "_mmm_progress_aware_jdt_collector"
 _VERIFIER_NAME = "java_diagnostics"
 _JDT_SERVICE_ATTR = "_mmm_generation_java_service"
+
+
+@dataclass(frozen=True)
+class _DiagnosticTimeoutContext:
+    expected_uris: set[str]
+    diagnostics: dict[str, list[dict[str, Any]]]
+    unexpected_uris: set[str]
+    ignored_methods: Counter[str]
+    malformed_messages: int
+    started: float
+    last_progress: float
+    page_index: int
 
 
 def _bounded_int_env(name: str, *, default: int, minimum: int, maximum: int) -> int:
@@ -234,31 +248,26 @@ setattr(run_generation_verifier, "_mmm_generation_gradle_fallback", True)
 def _raise_diagnostic_timeout(
     rpc: Any,
     *,
-    expected_uris: set[str],
-    diagnostics: dict[str, list[dict[str, Any]]],
-    unexpected_uris: set[str],
-    ignored_methods: Counter[str],
-    malformed_messages: int,
-    started: float,
-    last_progress: float,
-    page_index: int,
+    context: _DiagnosticTimeoutContext,
     timeout_kind: str,
     timeout_seconds: float,
     hard_timeout: float,
 ) -> None:
     from .java_lsp import JDTLanguageServerError
 
+    diagnostics = context.diagnostics
+    expected_uris = context.expected_uris
     missing_uris = sorted(expected_uris.difference(diagnostics))
     state = {
-        "page_index": page_index,
+        "page_index": context.page_index,
         "timeout_kind": timeout_kind,
         "idle_timeout_seconds": float(timeout_seconds),
         "hard_timeout_seconds": hard_timeout,
         "observed_uris": sorted(diagnostics),
         "missing_uris": missing_uris,
-        "unexpected_uris": sorted(unexpected_uris),
-        "ignored_methods": dict(ignored_methods),
-        "malformed_messages": malformed_messages,
+        "unexpected_uris": sorted(context.unexpected_uris),
+        "ignored_methods": dict(context.ignored_methods),
+        "malformed_messages": context.malformed_messages,
         "process_pid": getattr(rpc.process, "pid", None),
         "process_returncode": rpc.process.poll(),
         "reader_alive": rpc._reader.is_alive(),
@@ -266,8 +275,8 @@ def _raise_diagnostic_timeout(
         "queued_messages": rpc.messages.qsize(),
         "stderr_tail": list(rpc.stderr)[-8:],
         "protocol_counts": dict(getattr(rpc, "protocol_counts", {})),
-        "elapsed_ms": round((time.monotonic() - started) * 1000.0, 3),
-        "idle_ms": round((time.monotonic() - last_progress) * 1000.0, 3),
+        "elapsed_ms": round((time.monotonic() - context.started) * 1000.0, 3),
+        "idle_ms": round((time.monotonic() - context.last_progress) * 1000.0, 3),
         "server_progress_tail": list(getattr(rpc, "server_progress_tail", ())),
     }
     event = "jdt_publish_timeout" if missing_uris else "jdt_quiet_timeout"
@@ -419,14 +428,16 @@ def _collect_diagnostics_progress_aware(
 
     _raise_diagnostic_timeout(
         rpc,
-        expected_uris=expected_uris,
-        diagnostics=diagnostics,
-        unexpected_uris=unexpected_uris,
-        ignored_methods=ignored_methods,
-        malformed_messages=malformed_messages,
-        started=started,
-        last_progress=last_progress,
-        page_index=page_index,
+        context=_DiagnosticTimeoutContext(
+            expected_uris=expected_uris,
+            diagnostics=diagnostics,
+            unexpected_uris=unexpected_uris,
+            ignored_methods=ignored_methods,
+            malformed_messages=malformed_messages,
+            started=started,
+            last_progress=last_progress,
+            page_index=page_index,
+        ),
         timeout_kind=timeout_kind,
         timeout_seconds=timeout_seconds,
         hard_timeout=hard_timeout,
