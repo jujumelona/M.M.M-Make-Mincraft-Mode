@@ -41,6 +41,12 @@ DetailSectionApplicabilityResolver = Callable[
     Mapping[str, Mapping[str, str]],
 ]
 PlanningCheckpoint = Callable[[dict[str, Any]], None]
+_DetailProgressPosition = tuple[
+    frozenset[str],
+    frozenset[tuple[str, int]],
+    frozenset[tuple[str, str, str]],
+    frozenset[str],
+]
 _STATE_COLLECTIONS = (
     "known",
     "references",
@@ -171,10 +177,11 @@ def _host_initial_state(prompt: str) -> dict[str, Any]:
 
 def _requirements_exist(state: Mapping[str, Any]) -> bool:
     decisions = state.get("decisions")
+    if not isinstance(decisions, list):
+        return False
     return any(
         isinstance(item, Mapping) and item.get("decision_type") == "requirement"
         for item in decisions
-        if isinstance(decisions, list)
     )
 
 
@@ -342,79 +349,72 @@ def _select_detail_sections(
     return state, selection
 
 
-def _detail_progress_position(state: Mapping[str, Any]) -> tuple[
-    frozenset[str],
-    frozenset[tuple[str, int]],
-    frozenset[tuple[str, str, str]],
-    frozenset[str],
-]:
-    """Return durable completed-obligation markers used to prove resumable progress.
-
-    The marker sets are finite because every key belongs to a host-declared requirement,
-    acceptance criterion, artifact responsibility, or fixed-template binding. Content
-    changes alone never count as progress.
-    """
-
-    completed_details = frozenset(
+def _completed_detail_refs(state: Mapping[str, Any]) -> frozenset[str]:
+    decisions = state.get("decisions")
+    if not isinstance(decisions, list):
+        return frozenset()
+    return frozenset(
         str(item.get("requirement_ref") or "")
-        for item in state.get("decisions", [])
+        for item in decisions
         if isinstance(item, Mapping)
         and item.get("decision_type") == "detailed_implementation_plan"
         and item.get("requirement_ref")
     )
 
-    criterion_markers: set[tuple[str, int]] = set()
-    detail_progress = state.get("detail_progress", []) or []
-    if isinstance(detail_progress, list):
-        for row in detail_progress:
-            if not isinstance(row, Mapping):
-                continue
-            requirement_ref = str(row.get("requirement_ref") or "")
-            criterion_index = row.get("criterion_index")
-            if requirement_ref and type(criterion_index) is int and criterion_index >= 0:
-                criterion_markers.add((requirement_ref, criterion_index))
 
-    artifact_markers: set[tuple[str, str, str]] = set()
-    artifact_progress = state.get("artifact_progress", {}) or {}
-    if isinstance(artifact_progress, Mapping):
-        for requirement_ref, by_kind in artifact_progress.items():
-            if not isinstance(by_kind, Mapping):
-                continue
-            for artifact_kind, by_step in by_kind.items():
-                if not isinstance(by_step, Mapping):
-                    continue
-                for step_id in by_step:
-                    artifact_markers.add(
-                        (str(requirement_ref), str(artifact_kind), str(step_id))
-                    )
+def _criterion_progress_markers(
+    state: Mapping[str, Any],
+) -> frozenset[tuple[str, int]]:
+    rows = state.get("detail_progress")
+    if not isinstance(rows, list):
+        return frozenset()
+    return frozenset(
+        (requirement_ref, criterion_index)
+        for row in rows
+        if isinstance(row, Mapping)
+        for requirement_ref in (str(row.get("requirement_ref") or ""),)
+        for criterion_index in (row.get("criterion_index"),)
+        if requirement_ref and type(criterion_index) is int and criterion_index >= 0
+    )
 
-    template_progress = state.get("template_progress", {}) or {}
-    template_bindings = frozenset(
-        str(binding)
-        for binding in template_progress
-    ) if isinstance(template_progress, Mapping) else frozenset()
+
+def _artifact_progress_markers(
+    state: Mapping[str, Any],
+) -> frozenset[tuple[str, str, str]]:
+    progress = state.get("artifact_progress")
+    if not isinstance(progress, Mapping):
+        return frozenset()
+    return frozenset(
+        (str(requirement_ref), str(artifact_kind), str(step_id))
+        for requirement_ref, by_kind in progress.items()
+        if isinstance(by_kind, Mapping)
+        for artifact_kind, by_step in by_kind.items()
+        if isinstance(by_step, Mapping)
+        for step_id in by_step
+    )
+
+
+def _template_progress_bindings(state: Mapping[str, Any]) -> frozenset[str]:
+    progress = state.get("template_progress")
+    if not isinstance(progress, Mapping):
+        return frozenset()
+    return frozenset(str(binding) for binding in progress)
+
+
+def _detail_progress_position(state: Mapping[str, Any]) -> _DetailProgressPosition:
+    """Return finite durable markers that prove strict resumable planning progress."""
 
     return (
-        completed_details,
-        frozenset(criterion_markers),
-        frozenset(artifact_markers),
-        template_bindings,
+        _completed_detail_refs(state),
+        _criterion_progress_markers(state),
+        _artifact_progress_markers(state),
+        _template_progress_bindings(state),
     )
 
 
 def _detail_progress_strictly_advanced(
-    before: tuple[
-        frozenset[str],
-        frozenset[tuple[str, int]],
-        frozenset[tuple[str, str, str]],
-        frozenset[str],
-    ],
-    after: tuple[
-        frozenset[str],
-        frozenset[tuple[str, int]],
-        frozenset[tuple[str, str, str]],
-        frozenset[str],
-    ],
+    before: _DetailProgressPosition,
+    after: _DetailProgressPosition,
 ) -> bool:
     before_details, before_criteria, before_artifacts, before_templates = before
     after_details, after_criteria, after_artifacts, after_templates = after
