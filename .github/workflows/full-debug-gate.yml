@@ -3,7 +3,7 @@ name: Full Debug Gate
 on:
   workflow_dispatch:
   workflow_run:
-    workflows: [CI, Windows Debug, Workflow Lint]
+    workflows: [CI, Windows Debug, Workflow Lint, Audit Runtime Bottleneck Candidates]
     types: [completed]
 
 permissions:
@@ -59,6 +59,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           DEBUG_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          UPSTREAM_WORKFLOW: ${{ github.event.workflow_run.name }}
           UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}
           UPSTREAM_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           UPSTREAM_URL: ${{ github.event.workflow_run.html_url }}
@@ -72,6 +73,7 @@ jobs:
           payload = {
               "event_name": os.environ.get("EVENT_NAME", ""),
               "debug_sha": os.environ.get("DEBUG_SHA", ""),
+              "upstream_workflow": os.environ.get("UPSTREAM_WORKFLOW", ""),
               "upstream_run_id": os.environ.get("UPSTREAM_RUN_ID", ""),
               "upstream_conclusion": os.environ.get("UPSTREAM_CONCLUSION", ""),
               "upstream_url": os.environ.get("UPSTREAM_URL", ""),
@@ -102,7 +104,7 @@ jobs:
           } > audit/debug/environment.log 2>&1
           python -m pip freeze > audit/debug/pip-freeze.txt
 
-      - name: Download all artifacts from failed CI run
+      - name: Download all artifacts from failed upstream workflow
         if: ${{ github.event_name == 'workflow_run' }}
         continue-on-error: true
         uses: actions/download-artifact@v4
@@ -155,7 +157,9 @@ jobs:
             tests/test_colab_debug_fixture_path.py \
             tests/test_record_cardinality_blocking_contract.py \
             tests/test_worksheet_atomic_chunker.py \
-            tests/test_root_cause_audit_wrapper.py
+            tests/test_root_cause_audit_wrapper.py \
+            tests/test_ci_quality_regression_audit.py \
+            tests/test_pytest_diagnostics_timeout_evidence.py
 
       - name: Run exhaustive project Debug audit with compact root-cause output
         if: ${{ always() }}
