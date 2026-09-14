@@ -137,23 +137,71 @@ def _schema_repair_messages(
     )
 
 
-def _schema_repair_directives(parameters: Mapping[str, Any]) -> tuple[str, ...]:
-    """Build a finite repair frontier directly from the schema's required obligations."""
+def _schema_required_paths(
+    schema: Mapping[str, Any],
+    *,
+    path: str = "$",
+) -> tuple[str, ...]:
+    """Enumerate every required obligation reachable through required containers."""
 
-    required = parameters.get("required")
-    required_fields = tuple(
-        str(item)
-        for item in required
-        if isinstance(required, list) and isinstance(item, str) and item.strip()
-    )
+    paths: list[str] = []
+    schema_type = schema.get("type")
+    properties = schema.get("properties")
+    required = schema.get("required")
+
+    if (schema_type == "object" or isinstance(properties, Mapping)) and isinstance(
+        properties, Mapping
+    ):
+        required_fields = (
+            tuple(str(item) for item in required if isinstance(item, str) and item.strip())
+            if isinstance(required, list)
+            else ()
+        )
+        for field in required_fields:
+            field_path = f"{path}.{field}"
+            paths.append(field_path)
+            child = properties.get(field)
+            if isinstance(child, Mapping):
+                paths.extend(_schema_required_paths(child, path=field_path))
+        return tuple(dict.fromkeys(paths))
+
+    if schema_type == "array" or "items" in schema:
+        items = schema.get("items")
+        if isinstance(items, Mapping):
+            paths.extend(_schema_required_paths(items, path=f"{path}[]"))
+    return tuple(dict.fromkeys(paths))
+
+
+def _schema_repair_directives(parameters: Mapping[str, Any]) -> tuple[str, ...]:
+    """Build a finite repair frontier directly from all schema-required obligations."""
+
     directives = [
         "reconstruct the complete argument object from the schema from scratch",
     ]
     directives.extend(
-        f"reconstruct the complete object while explicitly satisfying required field {field!r}"
-        for field in required_fields
+        "reconstruct the complete object while explicitly satisfying required schema path "
+        f"{required_path!r}"
+        for required_path in _schema_required_paths(parameters)
     )
     return tuple(directives)
+
+
+def _validate_native_arguments(
+    arguments: Mapping[str, Any],
+    parameters: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """Run the exact host validator before a native call can leave the repair frontier."""
+
+    encoded = json.dumps(dict(arguments), ensure_ascii=False, separators=(",", ":"))
+    validated = validate_structured_output(
+        encoded,
+        response_format=_JSON_FIXTURE_FORMAT,
+        response_schema=parameters,
+    )
+    value = json.loads(validated)
+    if not isinstance(value, Mapping):
+        raise ValueError("fixed-template function call did not validate to an argument mapping")
+    return value
 
 
 def _generate_native_template_arguments(
@@ -165,13 +213,15 @@ def _generate_native_template_arguments(
     parameters: Mapping[str, Any],
     description: str,
 ) -> Mapping[str, Any]:
-    """Generate valid tool arguments using a schema-derived repair frontier."""
+    """Generate host-valid tool arguments using a schema-derived repair frontier."""
 
     directives = ("initial schema fill", *_schema_repair_directives(parameters))
     current_messages = tuple(dict(message) for message in messages)
     last_error: BaseException | None = None
     for repair_index, directive in enumerate(directives):
-        current_tool_name = tool_name if repair_index == 0 else f"{tool_name}_repair_{repair_index}"
+        current_tool_name = (
+            tool_name if repair_index == 0 else f"{tool_name}_repair_{repair_index}"
+        )
         current_description = description
         if repair_index:
             current_description = (
@@ -189,8 +239,10 @@ def _generate_native_template_arguments(
                 description=current_description,
             )
             if not isinstance(arguments, Mapping):
-                raise ValueError("fixed-template function call did not return an argument mapping")
-            return arguments
+                raise ValueError(
+                    "fixed-template function call did not return an argument mapping"
+                )
+            return _validate_native_arguments(arguments, parameters)
         except Exception as exc:
             last_error = exc
             next_index = repair_index + 1
@@ -246,7 +298,11 @@ def generate_fixed_template_value(
         extra_evidence_refs = None
         try:
             val = json.loads(raw)
-            if isinstance(val, Mapping) and "evidence_refs" in val and "evidence_refs" not in response_schema.get("properties", {}):
+            if (
+                isinstance(val, Mapping)
+                and "evidence_refs" in val
+                and "evidence_refs" not in response_schema.get("properties", {})
+            ):
                 extra_evidence_refs = val["evidence_refs"]
                 val = {k: v for k, v in val.items() if k != "evidence_refs"}
                 raw = json.dumps(val, ensure_ascii=False)
@@ -303,7 +359,11 @@ def generate_fixed_template_value(
         value = arguments
 
     extra_evidence_refs = None
-    if isinstance(value, Mapping) and "evidence_refs" in value and "evidence_refs" not in response_schema.get("properties", {}):
+    if (
+        isinstance(value, Mapping)
+        and "evidence_refs" in value
+        and "evidence_refs" not in response_schema.get("properties", {})
+    ):
         extra_evidence_refs = value["evidence_refs"]
         value = {k: v for k, v in value.items() if k != "evidence_refs"}
 
