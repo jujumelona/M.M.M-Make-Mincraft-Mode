@@ -1,15 +1,22 @@
-"""Build/repair stage isolated from the complete-production orchestrator."""
+"""Build/repair execution and checkpoint ownership for complete production."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from .model_router import ModelRouter
 from .repair_engine import RepairEngine
 from .runner import GradleRunner
 from .scale_policy import ScalePolicy
+from .work_graph import DurableWorkLedger, run_named_checkpoint
+
+
+class BuildRepairOptions(Protocol):
+    run_gametest: bool
+    auto_repair: bool
+    max_repair_attempts: int | None
 
 
 def _attested_repair_build(repair_result: Any) -> dict[str, Any] | None:
@@ -58,3 +65,54 @@ def run_build_with_repair(
             ).to_dict()
         )
     return {"build": build, "repair": repair}, active_router
+
+
+def run_build_repair_checkpoint(
+    *,
+    ledger: DurableWorkLedger,
+    graph_hash: str,
+    validation_manifest: str,
+    project_root: Path,
+    run_root: Path,
+    options: BuildRepairOptions,
+    router: ModelRouter | None,
+    router_factory: Callable[[], ModelRouter],
+    policy: ScalePolicy,
+    validate_cached: Callable[[Any], bool],
+) -> tuple[dict[str, Any], ModelRouter | None]:
+    """Own the durable Gradle/repair checkpoint and return any router it activated."""
+
+    cache = run_root / ".cache/gradle"
+    active_router = router
+
+    def action() -> dict[str, Any]:
+        nonlocal active_router
+        bundle, active_router = run_build_with_repair(
+            project_root=project_root,
+            cache=cache,
+            run_gametest=options.run_gametest,
+            auto_repair=options.auto_repair,
+            max_repair_attempts=options.max_repair_attempts,
+            router=active_router,
+            router_factory=router_factory,
+            policy=policy,
+        )
+        return bundle
+
+    bundle = run_named_checkpoint(
+        ledger,
+        "gradle-build",
+        stage="build",
+        input_value={
+            "graph_hash": graph_hash,
+            "project_manifest": validation_manifest,
+            "run_gametest": options.run_gametest,
+            "auto_repair": options.auto_repair,
+            "max_repair_attempts": options.max_repair_attempts,
+        },
+        action=action,
+        encode=lambda value: value,
+        decode=lambda cached: cached,
+        validate_cached=lambda cached: validate_cached(cached.get("build")),
+    )
+    return bundle, active_router
