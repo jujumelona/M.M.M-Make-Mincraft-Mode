@@ -215,6 +215,16 @@ def _capability_key(row: Mapping[str, Any]) -> str:
     return _text(row.get("statement")).casefold()
 
 
+def _requirement_contract_key(
+    row: Mapping[str, Any],
+) -> tuple[str, str, tuple[str, ...]]:
+    return (
+        _capability_key(row),
+        _text(row.get("statement")).casefold(),
+        tuple(sorted(text.casefold() for text in _strings(row.get("acceptance")))),
+    )
+
+
 def _normalize_requirement_rows(
     raw: Any,
     state: Mapping[str, Any],
@@ -246,21 +256,15 @@ def _normalize_requirement_rows(
     if not normalized:
         normalized = _fallback_requirement_rows(state, prompt)
 
-    # Same capability means one implementation obligation. Merge observable cases instead
-    # of multiplying detailed plans for acquisition/stat/location/specialization variants.
-    merged: dict[str, dict[str, Any]] = {}
-    order: list[str] = []
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, tuple[str, ...]]] = set()
     for row in normalized:
-        key = _capability_key(row)
-        if key not in merged:
-            merged[key] = deepcopy(row)
-            order.append(key)
+        key = _requirement_contract_key(row)
+        if key in seen:
             continue
-        current = merged[key]
-        current["acceptance"] = list(
-            dict.fromkeys(_strings(current.get("acceptance")) + _strings(row.get("acceptance")))
-        )
-    return [merged[key] for key in order]
+        seen.add(key)
+        deduped.append(row)
+    return deduped
 
 
 def _blocking_unknowns(
@@ -302,8 +306,8 @@ def _preserve_blocked_state(state: Mapping[str, Any]) -> dict[str, Any]:
     return _rehash(value)
 
 
-def _page_identity(row: Mapping[str, Any]) -> str:
-    return _capability_key(row)
+def _page_identity(row: Mapping[str, Any]) -> tuple[str, str, tuple[str, ...]]:
+    return _requirement_contract_key(row)
 
 
 def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], budget: int) -> Any:
@@ -312,7 +316,7 @@ def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], bud
 
     page_size = int(_REQUIREMENT_PARAMETERS["properties"]["requirements"]["maxItems"])
     collected: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str, tuple[str, ...]]] = set()
     payload = json.loads(messages[1]["content"])
     page_index = 0
     while True:
@@ -359,7 +363,7 @@ def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], bud
         )
 
         page_rows: list[dict[str, Any]] = []
-        page_seen: set[str] = set()
+        page_seen: set[tuple[str, str, tuple[str, ...]]] = set()
         repeated_prior: list[dict[str, Any]] = []
         for row in rows:
             if not isinstance(row, Mapping) or not _text(row.get("statement")):
