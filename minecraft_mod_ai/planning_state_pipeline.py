@@ -154,6 +154,55 @@ def _emit_incomplete(
     )
 
 
+def _compile_detailed_plans_resumable(
+    router: Any,
+    prompt: str,
+    state: dict[str, Any],
+    section_selection: Any,
+    checkpoint: Callable[[dict[str, Any]], None] | None,
+) -> dict[str, Any]:
+    """Compile detail while preserving the newest completed work unit on interruption."""
+    latest_state = deepcopy(state)
+
+    def save_detailed_state(value: dict[str, Any]) -> None:
+        nonlocal latest_state
+        latest_state = deepcopy(value)
+        if checkpoint is not None:
+            checkpoint(deepcopy(value))
+
+    try:
+        result = _transition(
+            "compile_progress_monotone_detailed_plans",
+            lambda: compile_progress_monotone_detailed_plans(
+                router,
+                prompt,
+                state,
+                required_sections_by_requirement=section_selection,
+                checkpoint=save_detailed_state,
+            ),
+            input_state=state,
+        )
+    except Exception as exc:
+        result = latest_state
+        _emit_incomplete(
+            result,
+            operation="compile_progress_monotone_detailed_plans",
+            reason=f"{type(exc).__name__}: {exc}",
+        )
+    else:
+        if result.get("plan_ready") is True:
+            emit_planning_goal_satisfied(result)
+        else:
+            _emit_incomplete(
+                result,
+                operation="final_readiness",
+                reason="planning state still has resumable work",
+            )
+    if checkpoint is not None:
+        checkpoint(deepcopy(result))
+    return result
+
+
 def prepare_planning_state(
     router: Any,
     prompt: str,
@@ -271,52 +320,13 @@ def prepare_planning_state(
         lambda: required_sections_by_requirement(state),
         input_state=state,
     )
-
-    # Keep the most recent completed work unit locally as well as in the caller's
-    # checkpoint. If a worker is interrupted, return this state instead of turning the
-    # interruption into a planner FAIL/BLOCKED result.
-    latest_state = deepcopy(state)
-
-    def save_detailed_state(value: dict[str, Any]) -> None:
-        nonlocal latest_state
-        latest_state = deepcopy(value)
-        if checkpoint is not None:
-            checkpoint(deepcopy(value))
-
-    try:
-        state = _transition(
-            "compile_progress_monotone_detailed_plans",
-            lambda: compile_progress_monotone_detailed_plans(
-                router,
-                prompt,
-                state,
-                required_sections_by_requirement=section_selection,
-                checkpoint=save_detailed_state,
-            ),
-            input_state=state,
-        )
-    except Exception as exc:
-        state = latest_state
-        _emit_incomplete(
-            state,
-            operation="compile_progress_monotone_detailed_plans",
-            reason=f"{type(exc).__name__}: {exc}",
-        )
-        if checkpoint is not None:
-            checkpoint(deepcopy(state))
-        return state
-
-    if state.get("plan_ready") is True:
-        emit_planning_goal_satisfied(state)
-    else:
-        _emit_incomplete(
-            state,
-            operation="final_readiness",
-            reason="planning state still has resumable work",
-        )
-    if checkpoint is not None:
-        checkpoint(deepcopy(state))
-    return state
+    return _compile_detailed_plans_resumable(
+        router,
+        prompt,
+        state,
+        section_selection,
+        checkpoint,
+    )
 
 
 __all__ = ["DetailSectionApplicabilityResolver", "prepare_planning_state"]
