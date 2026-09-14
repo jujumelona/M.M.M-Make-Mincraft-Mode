@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: windows-debug-${{ github.ref }}-${{ matrix.python-version }}
+  group: windows-debug-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
