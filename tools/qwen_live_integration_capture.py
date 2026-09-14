@@ -8,11 +8,9 @@ from typing import Any
 
 import httpx
 
+from minecraft_mod_ai.llama_server_autotune import ensure_tuned_server
 from minecraft_mod_ai.model_adapters.base import GenerationRequest
-from minecraft_mod_ai.model_adapters.llama_cpp_adapter import (
-    LlamaCppAdapter,
-    _plain_generation_response,
-)
+from minecraft_mod_ai.model_adapters.llama_cpp_adapter import _plain_generation_response
 from minecraft_mod_ai.model_registry import ModelRegistry
 from minecraft_mod_ai.structured_output import validate_structured_output
 
@@ -80,9 +78,8 @@ def run_capture(
         raise RuntimeError(
             f"live Qwen capture requires llama_cpp, got {config.adapter!r} for {role!r}"
         )
-    adapter = LlamaCppAdapter(config)
     request = GenerationRequest(messages=({"role": "user", "content": PROMPT},))
-    server_url = adapter._server_url(request)
+    server_url = ensure_tuned_server(config, request)
     payload: dict[str, Any] = {
         "model": "local",
         "messages": [dict(message) for message in request.messages],
@@ -94,10 +91,13 @@ def run_capture(
     if stop:
         payload["stop"] = [stop]
 
-    with httpx.Client(timeout=httpx.Timeout(timeout_seconds)) as client:
-        response = client.post(_chat_url(server_url), json=payload)
-        response.raise_for_status()
-        body = response.json()
+    response = httpx.post(
+        _chat_url(server_url),
+        json=payload,
+        timeout=httpx.Timeout(timeout_seconds),
+    )
+    response.raise_for_status()
+    body = response.json()
 
     message = _raw_assistant_message(body)
     accepted, validation_error, production_content = _production_validation(message)
