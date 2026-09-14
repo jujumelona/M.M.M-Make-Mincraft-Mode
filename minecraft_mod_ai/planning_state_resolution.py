@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-"""Compile player-visible requirements without model-authored identity contracts.
+"""Compile the smallest complete set of player-visible implementation capabilities.
 
-The planner model describes behavior. Host code owns bookkeeping. Model output is never
-required to reproduce prompt IDs, evidence IDs, hashes, receipts, or any other internal
-identifier, so a harmless metadata mismatch cannot abort planning.
+The model describes semantic capabilities and observable acceptance. Host code owns IDs,
+bookkeeping and convergence. Variants that share one implementation subsystem/state
+owner are acceptance cases of one requirement, not separate requirements.
 """
 
 import json
@@ -80,17 +80,12 @@ def _fit_context_to_budget(
     byte_budget: int,
     catalog_and_system_bytes: int,
 ) -> dict[str, Any]:
-    """Ensure serialized user task payload strictly respects the active runtime context budget."""
     target_budget = max(4096, byte_budget - catalog_and_system_bytes - 1024)
     fitted = deepcopy(context)
 
     def _size() -> int:
         return len(
-            json.dumps(
-                fitted,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode("utf-8")
+            json.dumps(fitted, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         )
 
     if _size() <= target_budget:
@@ -102,34 +97,22 @@ def _fit_context_to_budget(
     if not claims:
         fitted.pop("research_claims", None)
 
-    if _size() <= target_budget:
-        return fitted
-
     resolved = fitted.get("resolved", [])
     while len(resolved) > 1 and _size() > target_budget:
         resolved.pop()
-
-    if _size() <= target_budget:
-        return fitted
-
-    if resolved:
-        res = str(resolved[0].get("resolution") or "")
-        if len(res) > 200:
-            resolved[0]["resolution"] = res[:200] + "..."
-
-    if _size() <= target_budget:
-        return fitted
+    if resolved and _size() > target_budget:
+        prose = str(resolved[0].get("resolution") or "")
+        if len(prose) > 200:
+            resolved[0]["resolution"] = prose[:200] + "..."
 
     if "original_prompt" in fitted and _size() > target_budget:
-        orig = str(fitted["original_prompt"])
-        if len(orig) > 1000:
-            fitted["original_prompt"] = orig[:1000] + "..."
-
+        original = str(fitted["original_prompt"])
+        if len(original) > 1000:
+            fitted["original_prompt"] = original[:1000] + "..."
     return fitted
 
 
 def _resolved_context(state: Mapping[str, Any], prompt: str = "") -> dict[str, Any]:
-    """Give the model semantic facts, never host receipts or identity bookkeeping."""
     known = [
         {"statement": _text(item.get("statement"))}
         for item in state.get("known", [])
@@ -144,9 +127,9 @@ def _resolved_context(state: Mapping[str, Any], prompt: str = "") -> dict[str, A
         for item in state.get("unresolved", []):
             if isinstance(item, Mapping):
                 uid = str(item.get("unresolved_id") or "")
-                q = _text(item.get("question"))
-                if uid and q:
-                    unresolved_questions[uid] = q
+                question = _text(item.get("question"))
+                if uid and question:
+                    unresolved_questions[uid] = question
 
     resolved: list[dict[str, Any]] = []
     seen_resolutions: set[str] = set()
@@ -158,11 +141,10 @@ def _resolved_context(state: Mapping[str, Any], prompt: str = "") -> dict[str, A
             if not prose or prose in seen_resolutions:
                 continue
             seen_resolutions.add(prose)
+            entry: dict[str, Any] = {"resolution": prose}
             question = unresolved_questions.get(str(item.get("unresolved_id") or ""))
-            entry: dict[str, Any] = {}
             if question:
                 entry["question"] = question
-            entry["resolution"] = prose
             resolved.append(entry)
 
     evidence_claims: list[str] = []
@@ -180,14 +162,14 @@ def _resolved_context(state: Mapping[str, Any], prompt: str = "") -> dict[str, A
                     evidence_claims.append(text)
                     seen_resolutions.add(text)
 
-    res: dict[str, Any] = {}
+    result: dict[str, Any] = {}
     if original_prompt:
-        res["original_prompt"] = original_prompt
-    res["goal"] = goal_statement
-    res["known"] = known
-    res["resolved"] = resolved
-    res["research_claims"] = list(dict.fromkeys(evidence_claims))[:8]
-    return res
+        result["original_prompt"] = original_prompt
+    result["goal"] = goal_statement
+    result["known"] = known
+    result["resolved"] = resolved
+    result["research_claims"] = list(dict.fromkeys(evidence_claims))[:8]
+    return result
 
 
 def _rehash(state: dict[str, Any]) -> dict[str, Any]:
@@ -199,7 +181,6 @@ def _rehash(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def _fallback_requirement_rows(state: Mapping[str, Any], prompt: str) -> list[dict[str, Any]]:
-    """Deterministically preserve authored behavior if model output is absent or unusable."""
     statements: list[str] = []
     rows = state.get("known")
     if isinstance(rows, list):
@@ -225,6 +206,13 @@ def _fallback_requirement_rows(state: Mapping[str, Any], prompt: str) -> list[di
         }
         for statement in dict.fromkeys(statements)
     ]
+
+
+def _capability_key(row: Mapping[str, Any]) -> str:
+    capability = _text(row.get("semantic_capability")).casefold()
+    if capability and capability != CUSTOM_CAPABILITY_SENTINEL:
+        return capability
+    return _text(row.get("statement")).casefold()
 
 
 def _normalize_requirement_rows(
@@ -258,18 +246,21 @@ def _normalize_requirement_rows(
     if not normalized:
         normalized = _fallback_requirement_rows(state, prompt)
 
-    deduped: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, tuple[str, ...]]] = set()
+    # Same capability means one implementation obligation. Merge observable cases instead
+    # of multiplying detailed plans for acquisition/stat/location/specialization variants.
+    merged: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
     for row in normalized:
-        key = (
-            _text(row.get("statement")).casefold(),
-            _text(row.get("semantic_capability")).casefold(),
-            tuple(text.casefold() for text in _strings(row.get("acceptance"))),
+        key = _capability_key(row)
+        if key not in merged:
+            merged[key] = deepcopy(row)
+            order.append(key)
+            continue
+        current = merged[key]
+        current["acceptance"] = list(
+            dict.fromkeys(_strings(current.get("acceptance")) + _strings(row.get("acceptance")))
         )
-        if key not in seen:
-            seen.add(key)
-            deduped.append(row)
-    return deduped
+    return [merged[key] for key in order]
 
 
 def _blocking_unknowns(
@@ -277,7 +268,6 @@ def _blocking_unknowns(
     *,
     stage: str = "requirement_selection",
 ) -> list[Mapping[str, Any]]:
-    """Return only unresolved rows that explicitly block the requested host stage."""
     rows = state.get("unresolved", [])
     if not isinstance(rows, list):
         return []
@@ -291,7 +281,6 @@ def _blocking_unknowns(
 
 
 def _preserve_blocked_state(state: Mapping[str, Any]) -> dict[str, Any]:
-    """Represent incomplete requirement knowledge in state instead of throwing it away."""
     value = deepcopy(dict(state))
     blocking = _blocking_unknowns(value, stage="requirement_selection")
     existing = [
@@ -313,8 +302,12 @@ def _preserve_blocked_state(state: Mapping[str, Any]) -> dict[str, Any]:
     return _rehash(value)
 
 
+def _page_identity(row: Mapping[str, Any]) -> str:
+    return _capability_key(row)
+
+
 def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], budget: int) -> Any:
-    """Page requirements until the authored semantic frontier stops advancing."""
+    """Page only genuinely new capabilities until the semantic frontier is exhausted."""
     from .model_adapters import ModelConfigurationError
 
     page_size = int(_REQUIREMENT_PARAMETERS["properties"]["requirements"]["maxItems"])
@@ -333,7 +326,7 @@ def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], bud
             if sum(len(row["content"].encode("utf-8")) for row in current_messages) > budget:
                 raise ModelConfigurationError(
                     "REQUIREMENT_PAGINATION_CONTEXT_EXHAUSTED: continuation cannot fit "
-                    "without losing authored task or prior requirement coverage"
+                    "without losing authored task or prior capability coverage"
                 )
         try:
             with planner_operation("researched_requirement_compile", output_tokens=2048):
@@ -342,7 +335,7 @@ def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], bud
                     current_messages,
                     tool_name=_REQUIREMENT_TOOL,
                     parameters=_REQUIREMENT_PARAMETERS,
-                    description="Submit the next page of independently testable player-visible requirements.",
+                    description="Submit the next page of minimal distinct player-visible capabilities.",
                 )
         except Exception as exc:
             if not collected:
@@ -350,11 +343,13 @@ def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], bud
             raise ModelConfigurationError(
                 "REQUIREMENT_PAGINATION_FAILED: continuation failed; partial requirements are not complete"
             ) from exc
+
         rows = raw.get("requirements") if isinstance(raw, Mapping) else None
         if not isinstance(rows, list):
             if not collected:
                 return raw
             raise ModelConfigurationError("REQUIREMENT_PAGINATION_FAILED: invalid continuation page")
+
         emit_root_cause(
             "planner_requirement_page_received",
             stage="planning_state",
@@ -369,14 +364,7 @@ def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], bud
         for row in rows:
             if not isinstance(row, Mapping) or not _text(row.get("statement")):
                 raise ModelConfigurationError("REQUIREMENT_PAGINATION_FAILED: invalid requirement row")
-            identity = json.dumps(
-                [
-                    _text(row.get("statement")).casefold(),
-                    _text(row.get("semantic_capability")).casefold(),
-                    [value.casefold() for value in _strings(row.get("acceptance"))],
-                ],
-                ensure_ascii=False,
-            )
+            identity = _page_identity(row)
             if identity in seen or identity in page_seen:
                 repeated_prior.append(dict(row))
                 continue
@@ -424,12 +412,13 @@ def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], bud
         if not page_full:
             return {"requirements": collected}
 
+
 def compile_researched_requirements(
     router: Any,
     prompt: str,
     state: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Add behavior requirements; semantic model mistakes never become planner invariants."""
+    """Add the minimum distinct capabilities needed to cover the authored request."""
     validate_planning_state(state, prompt=prompt)
     if _blocking_unknowns(state, stage="requirement_selection"):
         return _preserve_blocked_state(state)
@@ -437,21 +426,26 @@ def compile_researched_requirements(
     raw_context = _resolved_context(state, prompt=prompt)
     budget = _planner_context_budget(router)
     system_content = (
-        "Compile independently testable, player-visible requirements from the supplied "
-        "task semantics. Do not output or reason about host IDs, evidence IDs, hashes, "
-        "receipts, provenance keys, files, classes, registrations, or invented APIs. "
-        "Use a short descriptive semantic capability label for bookkeeping only; "
-        "it must not choose Minecraft artifacts or architecture. Missing balance values or detailed "
-        "mechanics are later design work. Return the next page of at most four requirements. "
-        "Each requirement must express one independently testable behavior. Never combine separate "
-        "behaviors to fit the page: the host will request further pages. Exclude behaviors in "
-        "already_compiled_requirements. Return four new requirements while at least four remain; "
-        "When uncovered_authored_behavior is supplied, address that specific missing behavior first. "
-        "return fewer only when every remaining user-stated behavior is covered, or an empty array "
-        "when none remain. Preserve dependencies and qualifiers in each behavior. Return behavior "
-        "statements and observable acceptance conditions only."
+        "Compile the smallest complete set of player-visible implementation capabilities "
+        "from the supplied task semantics. Group behaviors that share the same subsystem, "
+        "state owner, lifecycle, or implementation responsibility into ONE requirement and "
+        "put the observable variants in that requirement's acceptance conditions. Do not "
+        "split a capability merely because acquisition method, stat type, location, actor, "
+        "specialization, or wording differs. Examples: planetary exploration and interplanetary "
+        "travel belong to one travel capability when they use one travel system; mineral discovery "
+        "and extraction belong to one planetary-resource capability; generic and specialized crew "
+        "recruitment belong to one crew capability; combat variants belong to one combat capability "
+        "when they share one combat system. Split only when a genuinely distinct implementation "
+        "capability/state owner is required. Do not output or reason about host IDs, evidence IDs, "
+        "hashes, receipts, provenance keys, files, classes, registrations, or invented APIs. Use a "
+        "short stable subsystem-level semantic capability label. Missing balance values or detailed "
+        "mechanics are later design work. Return at most four NEW capabilities on this page; four is "
+        "a ceiling, never a target. Exclude anything already covered by already_compiled_requirements. "
+        "If no genuinely new capability remains, return an empty requirements array immediately. "
+        "Return fewer than four whenever that is the complete remaining set. Preserve user qualifiers "
+        "as acceptance conditions rather than multiplying requirements."
     )
-    catalog = {}
+    catalog: dict[str, Any] = {}
     overhead_bytes = len(system_content.encode("utf-8")) + len(
         json.dumps(catalog, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     )
@@ -460,16 +454,12 @@ def compile_researched_requirements(
         byte_budget=budget,
         catalog_and_system_bytes=overhead_bytes,
     )
-    user_payload = {
-        "task": context,
-        "custom_capability": CUSTOM_CAPABILITY_SENTINEL,
-    }
     messages = [
         {"role": "system", "content": system_content},
         {
             "role": "user",
             "content": json.dumps(
-                user_payload,
+                {"task": context, "custom_capability": CUSTOM_CAPABILITY_SENTINEL},
                 ensure_ascii=False,
                 separators=(",", ":"),
             ),
@@ -492,11 +482,7 @@ def compile_researched_requirements(
             operation="researched_requirement_compile",
             result="FALLBACK",
             reason=f"{type(exc).__name__}: {exc}",
-            details={
-                "messages": messages,
-                "tool_name": _REQUIREMENT_TOOL,
-                "parameters": _REQUIREMENT_PARAMETERS,
-            },
+            details={"messages": messages, "tool_name": _REQUIREMENT_TOOL, "parameters": _REQUIREMENT_PARAMETERS},
             exc=exc,
         )
     else:
@@ -505,12 +491,7 @@ def compile_researched_requirements(
             stage="planning_state",
             operation="researched_requirement_compile",
             result="PASS",
-            details={
-                "messages": messages,
-                "tool_name": _REQUIREMENT_TOOL,
-                "parameters": _REQUIREMENT_PARAMETERS,
-                "raw_output": raw,
-            },
+            details={"messages": messages, "tool_name": _REQUIREMENT_TOOL, "parameters": _REQUIREMENT_PARAMETERS, "raw_output": raw},
         )
 
     requirement_rows = _normalize_requirement_rows(raw, state, prompt)
@@ -529,11 +510,7 @@ def compile_researched_requirements(
             "raw_requirement_count": raw_requirement_count,
             "normalized_requirement_count": len(requirement_rows),
             "normalized_requirements": requirement_rows,
-            "generation_error": (
-                f"{type(generation_error).__name__}: {generation_error}"
-                if generation_error is not None
-                else None
-            ),
+            "generation_error": f"{type(generation_error).__name__}: {generation_error}" if generation_error is not None else None,
         },
     )
 
@@ -541,13 +518,11 @@ def compile_researched_requirements(
     value.setdefault("decisions", [])
     value.setdefault("blockers", [])
     value["blockers"] = [
-        item
-        for item in value["blockers"]
+        item for item in value["blockers"]
         if not (isinstance(item, Mapping) and item.get("stage") == "requirement_selection")
     ]
     value["decisions"] = [
-        item
-        for item in value["decisions"]
+        item for item in value["decisions"]
         if not (isinstance(item, Mapping) and item.get("decision_type") == "requirement")
     ]
 
