@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .project_lock_state import project_lock_state
+
 
 def is_model_input(relative: str) -> bool:
     path = PurePosixPath(relative)
@@ -67,10 +69,8 @@ class ChangeSet:
 
 class ProjectMutationOwner:
     def __init__(self, root: Path) -> None:
-        from .project_write_lock import _ProjectLockState
-
         self.root = root
-        self.lock_state = _ProjectLockState()
+        self.lock_state = project_lock_state(root)
         self._id = uuid.uuid4().hex
         self._revision = 0
         self._model_revision = 0
