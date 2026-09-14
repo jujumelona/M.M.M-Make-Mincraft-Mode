@@ -30,6 +30,7 @@ class OwnerRPC:
         )
         self._responses: queue.Queue[Any] = queue.Queue()
         self._stderr: deque[str] = deque(maxlen=40)
+        self._stdout_noise: deque[str] = deque(maxlen=40)
         self._lock = threading.RLock()
         self._closed = False
         self._sequence = 0
@@ -42,7 +43,24 @@ class OwnerRPC:
         try:
             assert self.process.stdout is not None
             for line in self.process.stdout:
-                message = json.loads(line)
+                candidate = line.strip()
+                if not candidate:
+                    continue
+                # Eclipse/Equinox and the JVM may write startup diagnostics to the
+                # inherited stdout before OwnerApplication redirects System.out.
+                # OwnerApplication protocol replies are always JSON objects, so
+                # non-object lines are transport noise rather than RPC frames.
+                if not candidate.startswith('{'):
+                    self._stdout_noise.append(candidate[-2000:])
+                    continue
+                try:
+                    message = json.loads(candidate)
+                except json.JSONDecodeError as exc:
+                    prefix = candidate[:200]
+                    self._responses.put(OwnerRPCError(
+                        f'Owner protocol error: {exc}; stdout frame prefix={prefix!r}'
+                    ))
+                    return
                 if not isinstance(message, dict):
                     raise TypeError('response must be an object')
                 self._responses.put(message)
@@ -67,7 +85,9 @@ class OwnerRPC:
     ) -> None:
         self.close()
         if isinstance(exc, queue.Empty):
-            raise OwnerRPCError(f'Owner {method} timed out after {timeout}s') from exc
+            noise = list(self._stdout_noise)
+            suffix = f'; non-protocol stdout tail={noise!r}' if noise else ''
+            raise OwnerRPCError(f'Owner {method} timed out after {timeout}s{suffix}') from exc
         if isinstance(exc, OwnerRPCError):
             raise exc
         raise OwnerRPCError(f'Owner transport failed: {exc}') from exc
