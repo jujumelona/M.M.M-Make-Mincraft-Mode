@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,7 +12,25 @@ def _load_auditor():
     spec = importlib.util.spec_from_file_location("ci_quality_auditor", AUDITOR)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+
+    # Running a Python script directly places its directory on sys.path. These
+    # tests load the script by file location, so reproduce that import contract
+    # while keeping the process-wide search path clean after the load.
+    script_dir = str(AUDITOR.parent)
+    inserted_path = script_dir not in sys.path
+    helper_was_loaded = "ci_duplicate_pairs" in sys.modules
+    if inserted_path:
+        sys.path.insert(0, script_dir)
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        if inserted_path:
+            try:
+                sys.path.remove(script_dir)
+            except ValueError:
+                pass
+        if not helper_was_loaded:
+            sys.modules.pop("ci_duplicate_pairs", None)
     return module
 
 
