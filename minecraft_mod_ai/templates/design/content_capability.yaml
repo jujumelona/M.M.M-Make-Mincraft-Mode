@@ -1,5 +1,5 @@
 id: design/content_capability
-task: Select exactly one base Minecraft FactType required by this content entity.
+task: Return the exact base Minecraft FactType dictated by the current content entity kind.
 record_schema:
   type: object
   properties:
@@ -27,10 +27,9 @@ record_schema:
         - EQUIPMENT_ARMOR
         - CUSTOM_ITEM_BEHAVIOR
         - CUSTOM_BLOCK_BEHAVIOR
-        - UNSUPPORTED
   required:
     - fact_type
   additionalProperties: false
 rules:
-  - Use UNSUPPORTED when none of the enumerated FactTypes exactly represents the required capability.
-  - Never substitute an easier artifact type for the requested content entity.
+  - The host binds fact_type to the single FactType mapped from entity.kind before generation; return only that schema-allowed value.
+  - Never invent sentinel, fallback, unsupported, or substitute capability values.

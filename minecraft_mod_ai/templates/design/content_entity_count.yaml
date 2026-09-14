@@ -1,5 +1,5 @@
 id: design/content_entity_count
-task: Determine how many distinct content entities the current requirement explicitly requires.
+task: Determine how many distinct concrete Minecraft content entities the current requirement explicitly requires.
 record_schema:
   type: object
   properties:
@@ -10,9 +10,10 @@ record_schema:
     - count
   additionalProperties: false
 rules:
-  - Count only distinct content entities required by the current authored requirement and supplied grounded context.
+  - Count only concrete content entities that can be represented by the host content-kind contract; do not count umbrella systems such as economy, progression, exploration, combat, trading, or resource management as entities.
+  - System-level mechanics are expressed by design decisions and relations, not by inventing a generic system entity.
   - Do not count implementation modules, files, assets, properties, relations, or speculative additions.
-  - When the requirement explicitly gives a quantity, preserve that quantity exactly.
-  - When one semantic entity is required without an explicit quantity, return 1.
+  - When the requirement explicitly gives a quantity of concrete content entities, preserve that quantity exactly.
+  - Count distinct authored concrete content concepts separately instead of collapsing several concepts into one umbrella entity.
   - Do not clamp authored cardinality to an arbitrary implementation ceiling.
   - This task determines cardinality only. The host owns entity generation, ordering, repetition, validation, and termination.

@@ -1,5 +1,5 @@
 id: design/content_entity
-task: Identify exactly one distinct content entity explicitly required by the current requirement.
+task: Identify exactly one concrete Minecraft content entity explicitly required by the current requirement.
 record_schema:
   type: object
   properties:
@@ -23,7 +23,9 @@ record_schema:
     - role
   additionalProperties: false
 rules:
-  - Use an exact semantic kind from allowed_kinds supplied by the host; never invent a new kind vocabulary.
-  - Describe a semantic content role, not an implementation module.
+  - kind is host-bound at generation time to the authoritative concrete content-kind vocabulary; use only a schema-allowed kind.
+  - Emit a concrete Minecraft content capability such as an item, block, entity, GUI, dimension, recipe, tag, or supported behavior; never emit an umbrella system such as economy, progression, exploration, combat, trading, or resource management as one content entity.
+  - System-level mechanics belong in design decisions and relations between concrete content entities.
+  - Describe the authored semantic role of this concrete content entity, not an implementation module or file.
   - Reuse a host-supplied existing entity_id only when its meaning and role are identical; otherwise create one deterministic lowercase identifier from the explicit requirement.
   - Emit one entity per record. The host controls repetition and must stop or block before invoking this template when meaning is unresolved.
