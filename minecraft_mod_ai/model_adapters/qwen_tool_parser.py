@@ -2,8 +2,10 @@
 
 Transport-level aliases and synthetic argument containers are normalized only when the
 currently exposed schema authorizes the canonical parameter. Unknown keys, conflicting
-aliases, malformed values, and enum violations remain validation failures. Recovery from
-those failures belongs to the host-selected action controller, not this parser.
+aliases, malformed values, and enum violations remain validation failures. A malformed
+sibling call is isolated so already-valid independent calls from the same assistant turn
+are not discarded; if the turn contains no valid call, the original validation failure is
+raised and nothing becomes executable.
 """
 from __future__ import annotations
 
@@ -56,15 +58,53 @@ class ToolCallValidationError(RuntimeError):
     """A model-emitted tool action violates the currently exposed tool contract."""
 
 
+def _malformed_call_end(text: str, start: int, *, wrapped: bool) -> int:
+    """Bound one malformed call without consuming later independent siblings."""
+    if wrapped:
+        close = text.find(_TOOL_CALL_CLOSE, start + len(_TOOL_CALL_OPEN))
+        if close >= 0:
+            return close + len(_TOOL_CALL_CLOSE)
+    function_close = text.find(_FUNCTION_CLOSE, start + 1)
+    if function_close >= 0:
+        end = function_close + len(_FUNCTION_CLOSE)
+        if wrapped:
+            wrapped_close = text.find(_TOOL_CALL_CLOSE, end)
+            if wrapped_close >= 0:
+                between = text[end:wrapped_close]
+                if not between.strip():
+                    end = wrapped_close + len(_TOOL_CALL_CLOSE)
+        return end
+    next_wrapped = text.find(_TOOL_CALL_OPEN, start + 1)
+    next_direct = text.find(_FUNCTION_OPEN, start + len(_FUNCTION_OPEN))
+    candidates = [value for value in (next_wrapped, next_direct) if value > start]
+    return min(candidates) if candidates else len(text)
+
+
+def _malformed_call_label(text: str, start: int, end: int, exc: BaseException) -> str:
+    """Return bounded non-executable feedback for a rejected sibling call."""
+    snippet = " ".join(text[start:end].split())[:180]
+    detail = " ".join(str(exc).split())[:240]
+    return f"[rejected malformed tool call: {detail}; source={snippet!r}]"
+
+
 def parse_qwen_tool_markup(
     text: str,
     schemas: Mapping[str, Mapping[str, Any]],
 ) -> tuple[str, tuple[ToolCall, ...]]:
-    """Parse native Qwen function tags without weakening the exposed tool schema."""
+    """Parse native Qwen function tags without weakening the exposed tool schema.
+
+    Independent sibling calls are transactional at call granularity: a malformed sibling
+    is removed from executable output while already-valid siblings remain available to the
+    host. If no call in a tool-bearing turn validates, raise the first validation error so
+    malformed output can never masquerade as a prose-only success.
+    """
     if not text:
         return "", ()
     calls: list[ToolCall] = []
     spans: list[tuple[int, int]] = []
+    rejected: list[str] = []
+    first_error: ToolCallValidationError | None = None
+    saw_tool_markup = False
     cursor = 0
     while cursor < len(text):
         wrapped_at = text.find(_TOOL_CALL_OPEN, cursor)
@@ -73,29 +113,41 @@ def parse_qwen_tool_markup(
         if not starts:
             break
         start = min(starts)
+        saw_tool_markup = True
         wrapped = wrapped_at == start
         function_at = start + len(_TOOL_CALL_OPEN) if wrapped else start
         function_at = _skip_space(text, function_at)
-        if not text.startswith(_FUNCTION_OPEN, function_at):
+        try:
+            if not text.startswith(_FUNCTION_OPEN, function_at):
+                if wrapped:
+                    raise ToolCallValidationError(
+                        "Qwen tool_call block does not begin with a function"
+                    )
+                cursor = start + 1
+                continue
+            call, end = _parse_qwen_function(
+                text,
+                function_at,
+                schemas,
+                call_index=len(calls),
+            )
             if wrapped:
-                raise ToolCallValidationError(
-                    "Qwen tool_call block does not begin with a function"
-                )
-            cursor = start + 1
+                close_at = _skip_space(text, end)
+                if not text.startswith(_TOOL_CALL_CLOSE, close_at):
+                    raise ToolCallValidationError(
+                        "Qwen tool_call block is missing </tool_call>"
+                    )
+                end = close_at + len(_TOOL_CALL_CLOSE)
+        except ToolCallValidationError as exc:
+            if first_error is None:
+                first_error = exc
+            end = _malformed_call_end(text, start, wrapped=wrapped)
+            if end <= start:
+                end = min(len(text), start + 1)
+            spans.append((start, end))
+            rejected.append(_malformed_call_label(text, start, end, exc))
+            cursor = end
             continue
-        call, end = _parse_qwen_function(
-            text,
-            function_at,
-            schemas,
-            call_index=len(calls),
-        )
-        if wrapped:
-            close_at = _skip_space(text, end)
-            if not text.startswith(_TOOL_CALL_CLOSE, close_at):
-                raise ToolCallValidationError(
-                    "Qwen tool_call block is missing </tool_call>"
-                )
-            end = close_at + len(_TOOL_CALL_CLOSE)
         calls.append(call)
         spans.append((start, end))
         cursor = end
@@ -103,17 +155,29 @@ def parse_qwen_tool_markup(
     for marker in _STRUCTURAL_MARKERS:
         pos = text.find(marker)
         if pos >= 0 and not any(begin <= pos < end for begin, end in spans):
-            raise ToolCallValidationError(
+            exc = ToolCallValidationError(
                 f"unparsed Qwen tool markup begins at {marker!r}"
             )
+            if not calls:
+                raise exc
+            if first_error is None:
+                first_error = exc
+            rejected.append(_malformed_call_label(text, pos, len(text), exc))
+            spans.append((pos, len(text)))
+            break
+    if saw_tool_markup and not calls and first_error is not None:
+        raise first_error
     if not spans:
         return text, ()
     visible: list[str] = []
     previous = 0
-    for begin, end in spans:
-        visible.append(text[previous:begin])
-        previous = end
+    for begin, end in sorted(spans):
+        if begin > previous:
+            visible.append(text[previous:begin])
+        previous = max(previous, end)
     visible.append(text[previous:])
+    if rejected:
+        visible.append("\n" + "\n".join(rejected))
     return "".join(visible), tuple(calls)
 
 
@@ -133,8 +197,6 @@ def _parse_qwen_function(
         raise ToolCallValidationError("Qwen function tag has an empty tool name")
     name = resolve_exposed_model_tool(emitted_name, schemas.keys())
     if name is None:
-        # Preserve unexposed calls so the host phase gate can reject them with causal
-        # feedback. No exposed schema is borrowed or widened here.
         name = emitted_name
         schema: Mapping[str, Any] = {}
     else:
@@ -254,7 +316,6 @@ def _is_host_owned_argument(
     emitted_key: str,
     properties: Mapping[str, Any],
 ) -> bool:
-    """Ignore host-bound execution metadata unless a tool explicitly declares it."""
     return emitted_key in _HOST_OWNED_ARGUMENT_KEYS and emitted_key not in properties
 
 
@@ -263,10 +324,6 @@ def _canonical_key(
     emitted_key: str,
     properties: Mapping[str, Any],
 ) -> str:
-    # Source-edit aliases are schema-declared for transport compatibility, but the
-    # host contract still requires canonical path/operation/etc.  Canonicalize them
-    # before the generic exact-property fast path so aliases satisfy canonical
-    # required fields without widening the schema.
     if tool_name == "apply_source_edit":
         canonical = _APPLY_SOURCE_EDIT_ALIASES.get(emitted_key)
         if canonical and canonical in properties:
