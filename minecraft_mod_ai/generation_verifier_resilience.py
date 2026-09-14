@@ -122,6 +122,47 @@ def _close_generation_jdt(runtime: Any) -> None:
             delattr(runtime, _JDT_SERVICE_ATTR)
 
 
+def _run_gradle_fallback(
+    runtime: Any,
+    root: Path,
+    *,
+    runtime_module: Any,
+    jdt_error: BaseException,
+) -> dict[str, Any]:
+    from .generation_verifier_fallback_installation import _gradle_fallback_receipt
+
+    emit_root_cause(
+        "generation_verifier_gradle_fallback_start",
+        stage="generation",
+        operation="run_gradle_build",
+        gate="target_compile",
+        result="START",
+        reason=str(jdt_error),
+    )
+    try:
+        return _gradle_fallback_receipt(
+            runtime,
+            root,
+            runtime_module=runtime_module,
+            jdt_error=jdt_error,
+        )
+    except Exception as fallback_exc:
+        emit_root_cause(
+            "generation_verifier_gradle_fallback_unavailable",
+            stage="generation",
+            operation="run_gradle_build",
+            gate="target_compile",
+            result="FAIL",
+            reason=f"{type(fallback_exc).__name__}: {fallback_exc}",
+            exc=fallback_exc,
+        )
+        raise runtime_module.AgentToolRuntimeError(
+            "Generation verification has no healthy backend: "
+            f"JDT unavailable ({jdt_error}); Gradle fallback unavailable "
+            f"({type(fallback_exc).__name__}: {fallback_exc})"
+        ) from fallback_exc
+
+
 def run_generation_verifier(
     runtime: Any,
     arguments: Mapping[str, Any] | None,
@@ -137,7 +178,6 @@ def run_generation_verifier(
     payload = dict(arguments or {})
     root, _ = runtime_module._discover_model_project_root(runtime.workspace_root)
     try:
-        # Preserve input validation, but Java dependency scope belongs to JDT.
         _normalize_relative_files(payload.get("relative_files"))
         service = getattr(runtime, _JDT_SERVICE_ATTR, None)
         if service is None:
@@ -171,38 +211,13 @@ def run_generation_verifier(
             reason=str(exc),
             exc=exc,
         )
-        from .generation_verifier_fallback_installation import _gradle_fallback_receipt
-
-        emit_root_cause(
-            "generation_verifier_gradle_fallback_start",
-            stage="generation",
-            operation="run_gradle_build",
-            gate="target_compile",
-            result="START",
-            reason=str(exc),
+        return _run_gradle_fallback(
+            runtime,
+            Path(root),
+            runtime_module=runtime_module,
+            jdt_error=exc,
         )
-        try:
-            return _gradle_fallback_receipt(
-                runtime,
-                Path(root),
-                runtime_module=runtime_module,
-                jdt_error=exc,
-            )
-        except Exception as fallback_exc:
-            emit_root_cause(
-                "generation_verifier_gradle_fallback_unavailable",
-                stage="generation",
-                operation="run_gradle_build",
-                gate="target_compile",
-                result="FAIL",
-                reason=f"{type(fallback_exc).__name__}: {fallback_exc}",
-                exc=fallback_exc,
-            )
-            raise runtime_module.AgentToolRuntimeError(
-                "Generation verification has no healthy backend: "
-                f"JDT unavailable ({exc}); Gradle fallback unavailable "
-                f"({type(fallback_exc).__name__}: {fallback_exc})"
-            ) from fallback_exc
+
     emit_root_cause(
         "generation_verifier_jdt_result",
         stage="generation",
@@ -214,6 +229,67 @@ def run_generation_verifier(
 
 
 setattr(run_generation_verifier, "_mmm_generation_gradle_fallback", True)
+
+
+def _raise_diagnostic_timeout(
+    rpc: Any,
+    *,
+    expected_uris: set[str],
+    diagnostics: dict[str, list[dict[str, Any]]],
+    unexpected_uris: set[str],
+    ignored_methods: Counter[str],
+    malformed_messages: int,
+    started: float,
+    last_progress: float,
+    page_index: int,
+    timeout_kind: str,
+    timeout_seconds: float,
+    hard_timeout: float,
+) -> None:
+    from .java_lsp import JDTLanguageServerError
+
+    missing_uris = sorted(expected_uris.difference(diagnostics))
+    state = {
+        "page_index": page_index,
+        "timeout_kind": timeout_kind,
+        "idle_timeout_seconds": float(timeout_seconds),
+        "hard_timeout_seconds": hard_timeout,
+        "observed_uris": sorted(diagnostics),
+        "missing_uris": missing_uris,
+        "unexpected_uris": sorted(unexpected_uris),
+        "ignored_methods": dict(ignored_methods),
+        "malformed_messages": malformed_messages,
+        "process_pid": getattr(rpc.process, "pid", None),
+        "process_returncode": rpc.process.poll(),
+        "reader_alive": rpc._reader.is_alive(),
+        "stdout_eof": bool(getattr(rpc, "stdout_eof", False)),
+        "queued_messages": rpc.messages.qsize(),
+        "stderr_tail": list(rpc.stderr)[-8:],
+        "protocol_counts": dict(getattr(rpc, "protocol_counts", {})),
+        "elapsed_ms": round((time.monotonic() - started) * 1000.0, 3),
+        "idle_ms": round((time.monotonic() - last_progress) * 1000.0, 3),
+        "server_progress_tail": list(getattr(rpc, "server_progress_tail", ())),
+    }
+    event = "jdt_publish_timeout" if missing_uris else "jdt_quiet_timeout"
+    emit_root_cause(
+        event,
+        stage="jdt",
+        operation="diagnostics",
+        gate="publishDiagnostics" if missing_uris else "diagnostic_quiescence",
+        result="FAIL",
+        reason=f"JDT diagnostics {timeout_kind} timeout",
+        details=state,
+    )
+    if missing_uris:
+        raise JDTLanguageServerError(
+            "JDT LS stopped making diagnostic progress before every opened Java file "
+            f"was observed ({timeout_kind} timeout): observed={len(diagnostics)}, "
+            f"expected={len(expected_uris)}, missing={len(missing_uris)}; state={state}"
+        )
+    raise JDTLanguageServerError(
+        "JDT LS published every opened Java file but did not become quiescent before "
+        f"the {timeout_kind} timeout; state={state}"
+    )
 
 
 def _collect_diagnostics_progress_aware(
@@ -341,48 +417,21 @@ def _collect_diagnostics_progress_aware(
         last_progress = now
         settled_since = now
 
-    missing_uris = sorted(expected_uris.difference(diagnostics))
-    state = {
-        "page_index": page_index,
-        "timeout_kind": timeout_kind,
-        "idle_timeout_seconds": float(timeout_seconds),
-        "hard_timeout_seconds": hard_timeout,
-        "observed_uris": sorted(diagnostics),
-        "missing_uris": missing_uris,
-        "unexpected_uris": sorted(unexpected_uris),
-        "ignored_methods": dict(ignored_methods),
-        "malformed_messages": malformed_messages,
-        "process_pid": getattr(rpc.process, "pid", None),
-        "process_returncode": rpc.process.poll(),
-        "reader_alive": rpc._reader.is_alive(),
-        "stdout_eof": bool(getattr(rpc, "stdout_eof", False)),
-        "queued_messages": rpc.messages.qsize(),
-        "stderr_tail": list(rpc.stderr)[-8:],
-        "protocol_counts": dict(getattr(rpc, "protocol_counts", {})),
-        "elapsed_ms": round((time.monotonic() - started) * 1000.0, 3),
-        "idle_ms": round((time.monotonic() - last_progress) * 1000.0, 3),
-        "server_progress_tail": list(getattr(rpc, "server_progress_tail", ())),
-    }
-    event = "jdt_publish_timeout" if missing_uris else "jdt_quiet_timeout"
-    emit_root_cause(
-        event,
-        stage="jdt",
-        operation="diagnostics",
-        gate="publishDiagnostics" if missing_uris else "diagnostic_quiescence",
-        result="FAIL",
-        reason=f"JDT diagnostics {timeout_kind} timeout",
-        details=state,
+    _raise_diagnostic_timeout(
+        rpc,
+        expected_uris=expected_uris,
+        diagnostics=diagnostics,
+        unexpected_uris=unexpected_uris,
+        ignored_methods=ignored_methods,
+        malformed_messages=malformed_messages,
+        started=started,
+        last_progress=last_progress,
+        page_index=page_index,
+        timeout_kind=timeout_kind,
+        timeout_seconds=timeout_seconds,
+        hard_timeout=hard_timeout,
     )
-    if missing_uris:
-        raise JDTLanguageServerError(
-            "JDT LS stopped making diagnostic progress before every opened Java file "
-            f"was observed ({timeout_kind} timeout): observed={len(diagnostics)}, "
-            f"expected={len(expected_uris)}, missing={len(missing_uris)}; state={state}"
-        )
-    raise JDTLanguageServerError(
-        "JDT LS published every opened Java file but did not become quiescent before "
-        f"the {timeout_kind} timeout; state={state}"
-    )
+    raise AssertionError("unreachable")
 
 
 def install(
