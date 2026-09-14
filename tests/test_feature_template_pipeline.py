@@ -63,7 +63,10 @@ class MockFeatureRouter:
     def generate_tool_decision(self, role, messages, *, tool_name, parameters, **kwargs):
         import json
 
-        context = json.loads(messages[1]["content"])
+        raw_context = str(messages[1]["content"])
+        prefix = "READ_ONLY_INPUT_CONTEXT:\n"
+        assert raw_context.startswith(prefix)
+        context = json.loads(raw_context[len(prefix):])
         self.calls.append((tool_name, context))
 
         if tool_name.startswith("submit_feature_") and tool_name.endswith("_count"):
