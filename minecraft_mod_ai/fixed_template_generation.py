@@ -116,7 +116,7 @@ def _schema_repair_messages(
     messages: Sequence[Mapping[str, Any]],
     *,
     failure: BaseException,
-    repair_index: int,
+    directive: str,
 ) -> tuple[dict[str, Any], ...]:
     """Feed a rejected schema call back to the model without inventing semantic content."""
 
@@ -130,23 +130,30 @@ def _schema_repair_messages(
                 "Regenerate the function arguments from the declared schema instead of "
                 "repeating the rejected argument shape. Populate every required field, use "
                 "only declared fields, and preserve the requested semantics. "
-                f"Repair pass {repair_index}. Host validation error: {type(failure).__name__}: {failure}"
+                f"Repair obligation: {directive}. "
+                f"Host validation error: {type(failure).__name__}: {failure}"
             ),
         },
     )
 
 
-def _schema_repair_budget(parameters: Mapping[str, Any]) -> int:
-    """Derive repair opportunities from schema obligations, not a planner-wide retry cap."""
+def _schema_repair_directives(parameters: Mapping[str, Any]) -> tuple[str, ...]:
+    """Build a finite repair frontier directly from the schema's required obligations."""
 
     required = parameters.get("required")
-    if isinstance(required, list):
-        obligations = sum(1 for item in required if isinstance(item, str) and item)
-    else:
-        obligations = 0
-    # One initial call plus at least two schema-informed reconstructions. Wider records get
-    # one repair opportunity per required obligation, which scales with the actual contract.
-    return max(3, obligations + 1)
+    required_fields = tuple(
+        str(item)
+        for item in required
+        if isinstance(required, list) and isinstance(item, str) and item.strip()
+    )
+    directives = [
+        "reconstruct the complete argument object from the schema from scratch",
+    ]
+    directives.extend(
+        f"reconstruct the complete object while explicitly satisfying required field {field!r}"
+        for field in required_fields
+    )
+    return tuple(directives)
 
 
 def _generate_native_template_arguments(
@@ -158,19 +165,20 @@ def _generate_native_template_arguments(
     parameters: Mapping[str, Any],
     description: str,
 ) -> Mapping[str, Any]:
-    """Generate valid tool arguments, feeding schema failures back into fresh model calls."""
+    """Generate valid tool arguments using a schema-derived repair frontier."""
 
+    directives = ("initial schema fill", *_schema_repair_directives(parameters))
     current_messages = tuple(dict(message) for message in messages)
     last_error: BaseException | None = None
-    budget = _schema_repair_budget(parameters)
-    for repair_index in range(budget):
+    for repair_index, directive in enumerate(directives):
         current_tool_name = tool_name if repair_index == 0 else f"{tool_name}_repair_{repair_index}"
         current_description = description
         if repair_index:
             current_description = (
                 description
-                + " The prior function arguments failed host schema validation; reconstruct "
-                "the complete argument object from the schema rather than repeating them."
+                + " The prior function arguments failed host schema validation. "
+                + directive
+                + "."
             )
         try:
             arguments = router.generate_tool_decision(
@@ -185,16 +193,18 @@ def _generate_native_template_arguments(
             return arguments
         except Exception as exc:
             last_error = exc
-            current_messages = _schema_repair_messages(
-                messages,
-                failure=exc,
-                repair_index=repair_index + 1,
-            )
+            next_index = repair_index + 1
+            if next_index < len(directives):
+                current_messages = _schema_repair_messages(
+                    messages,
+                    failure=exc,
+                    directive=directives[next_index],
+                )
 
     assert last_error is not None
     raise RuntimeError(
-        "FIXED_TEMPLATE_SCHEMA_REPAIR_EXHAUSTED: model could not satisfy the host schema "
-        f"after {budget} schema-derived generation passes"
+        "FIXED_TEMPLATE_SCHEMA_REPAIR_FRONTIER_EXHAUSTED: model could not satisfy every "
+        "host-schema obligation across the schema-derived repair frontier"
     ) from last_error
 
 
