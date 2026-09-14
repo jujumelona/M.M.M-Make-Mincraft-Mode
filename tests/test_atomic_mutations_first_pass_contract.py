@@ -40,16 +40,16 @@ def test_atomic_mutations_schema_rejects_logged_context_echo_shape() -> None:
         },
         ensure_ascii=False,
     )
-    candidate = {
-        "mutations": echoed_context,
-        "commit": "Apply the validated purchase atomically after payment succeeds.",
-        "rollback": "Restore the pre-transaction spacecraft state if commit fails.",
-    }
 
-    errors = list(Draft202012Validator(schema).iter_errors(candidate))
-
-    assert errors
-    assert tuple(errors[0].absolute_path) == ("mutations",)
+    for mutations in (echoed_context, "Context copy: " + echoed_context):
+        candidate = {
+            "mutations": mutations,
+            "commit": "Apply the validated purchase atomically after payment succeeds.",
+            "rollback": "Restore the pre-transaction spacecraft state if commit fails.",
+        }
+        errors = list(Draft202012Validator(schema).iter_errors(candidate))
+        assert errors
+        assert tuple(errors[0].absolute_path) == ("mutations",)
 
 
 def test_atomic_mutations_first_valid_generation_needs_no_repair_turn() -> None:
@@ -99,7 +99,7 @@ def test_atomic_mutations_first_valid_generation_needs_no_repair_turn() -> None:
         assert parameters["properties"]["mutations"]["description"].startswith(
             "Describe only the state change"
         )
-        assert parameters["properties"]["mutations"]["pattern"] == r"^(?!\s*(?:\{|\[)).+"
+        assert parameters["properties"]["mutations"]["pattern"] == r"^(?!.*[{}\[\]]).+$"
         assert "Never copy, serialize, quote, or embed that context" in str(
             page_request.messages[0]["content"]
         )
