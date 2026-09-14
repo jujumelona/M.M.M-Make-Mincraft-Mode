@@ -210,17 +210,15 @@ def _shutdown_pool(
     pool.shutdown(wait=False, cancel_futures=True)
 
 
-def iter_completed_with_deadlines(
+def _iter_completed_with_deadlines_impl(
     items: Iterable[_Item],
     worker: Callable[[_Item], _Result],
     *,
     max_workers: int,
     stage: str,
-    sort_key: Callable[[_Item], object] | None = None,
-    on_result: Callable[[_Item, _Result], None] | None = None,
+    sort_key: Callable[[_Item], object] | None,
+    on_result: Callable[[_Item, _Result], None] | None,
 ) -> Iterator[tuple[_Item, _Result]]:
-    """Yield completed work through a bounded deadline-aware submission window."""
-
     total_units = len(items) if isinstance(items, Sized) else None
     if total_units is not None and total_units <= 0:
         return
@@ -280,6 +278,27 @@ def iter_completed_with_deadlines(
             )
     finally:
         _shutdown_pool(pool, active)
+
+
+def iter_completed_with_deadlines(
+    items: Iterable[_Item],
+    worker: Callable[[_Item], _Result],
+    *,
+    max_workers: int,
+    stage: str,
+    sort_key: Callable[[_Item], object] | None = None,
+    on_result: Callable[[_Item, _Result], None] | None = None,
+) -> Iterator[tuple[_Item, _Result]]:
+    """Yield completed work through a bounded deadline-aware submission window."""
+
+    yield from _iter_completed_with_deadlines_impl(
+        items,
+        worker,
+        max_workers=max_workers,
+        stage=stage,
+        sort_key=sort_key,
+        on_result=on_result,
+    )
 
 
 def collect_completed_with_deadlines(
