@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 
 import minecraft_mod_ai.planning_state_pipeline as pipeline
 
@@ -94,3 +95,16 @@ def test_research_stage_predicate_is_gap_driven():
             ],
         }
     ) is False
+
+
+def test_one_shot_normalization_scaffolding_is_not_committed():
+    repository_root = Path(__file__).resolve().parents[1]
+    assert not (
+        repository_root / "tools" / "apply_cumulative_architecture_normalization.py"
+    ).exists()
+    assert not (
+        repository_root
+        / ".github"
+        / "workflows"
+        / "cumulative-architecture-normalization.yml"
+    ).exists()
