@@ -1,8 +1,10 @@
 """Direct OpenAI-compatible llama.cpp adapter.
 
 Tool turns use exactly one native ``/v1/chat/completions`` request and consume only
-``message.tool_calls``.  The adapter never regenerates arguments, parses Qwen markup,
-continues a failed tool turn, or retries a semantic response.
+``message.tool_calls``. The adapter never regenerates arguments, parses Qwen markup,
+continues a failed tool turn, or retries a semantic response. When parallel native
+tool calls are allowed, independently malformed siblings are converted to explicit
+non-executable host rejection receipts so valid siblings remain usable.
 """
 from __future__ import annotations
 
@@ -26,6 +28,7 @@ from .qwen_tool_parser import ToolCallValidationError
 
 _DEFAULT_HTTPX_POST = httpx.post
 _DEFAULT_COMPLETION_TIMEOUT_SECONDS = 120.0
+_REJECTED_TOOL_CALL_NAME = "__mmm_rejected_tool_call__"
 
 
 class LlamaCppAdapter(ModelAdapter):
@@ -144,7 +147,7 @@ def _native_tool_completion(
     server_url: str,
     request: GenerationRequest,
 ) -> GenerationResponse:
-    """Run one native tool completion. No semantic retry or recovery is permitted."""
+    """Run one native tool completion without semantic regeneration or whole-turn repair."""
 
     from ..llama_exact_context import capacity_safe_payload
     from ..llama_stream_efficiency_contract import _report_server_connection
@@ -159,21 +162,42 @@ def _native_tool_completion(
     _report_server_connection(server_url)
 
     schemas = _request_tool_schema_map(request)
-    calls = _parse_native_tool_calls(message)
-    _validate_tool_calls_against_host_schema(calls, schemas)
-    _validate_tool_choice(request, calls)
+    raw_calls = _raw_native_tool_calls(message)
+    if not request.parallel_tool_calls and len(raw_calls) > 1:
+        raise ToolCallValidationError(
+            "model emitted parallel tool calls when they are disabled"
+        )
+    if request.tool_choice == "none" and raw_calls:
+        raise ToolCallValidationError(
+            "model emitted a tool call when tool_choice is none"
+        )
+
+    parsed, parse_rejections = _parse_native_tool_calls_isolated(raw_calls)
+    valid_calls, schema_rejections = _partition_tool_calls_against_host_schema(
+        parsed, schemas
+    )
+    rejections = (*parse_rejections, *schema_rejections)
+
+    # A turn with no usable native action is still a failed semantic turn. Isolation
+    # exists only to preserve independently valid siblings; it must never turn a wholly
+    # malformed response into apparent progress.
+    if not valid_calls and rejections:
+        error = str(rejections[0].arguments.get("error", "invalid native tool call"))
+        raise ToolCallValidationError(error)
+
+    _validate_tool_choice(request, valid_calls)
 
     content = message.get("content")
     reasoning = message.get("reasoning_content", message.get("reasoning"))
     content_text = content if isinstance(content, str) else ""
     reasoning_text = reasoning if isinstance(reasoning, str) else ""
-    if not calls and not content_text.strip():
+    if not valid_calls and not content_text.strip():
         raise ToolCallValidationError(
             "native tool completion returned neither message.tool_calls nor visible content"
         )
     return GenerationResponse(
         content=content_text.strip(),
-        tool_calls=calls,
+        tool_calls=(*valid_calls, *rejections),
         reasoning_content=reasoning_text.strip(),
     )
 
@@ -222,74 +246,162 @@ def _tool_schema_map(
     return result
 
 
-def _parse_native_tool_calls(message: Mapping[str, Any]) -> tuple[ToolCall, ...]:
+def _raw_native_tool_calls(message: Mapping[str, Any]) -> list[Any]:
     raw_calls = message.get("tool_calls")
     if raw_calls is None:
-        return ()
+        return []
     if not isinstance(raw_calls, list):
-        raise ToolCallValidationError("llama-server returned tool_calls in a non-list shape")
-
-    calls: list[ToolCall] = []
-    for index, raw_call in enumerate(raw_calls):
-        if not isinstance(raw_call, Mapping):
-            raise ToolCallValidationError("llama-server returned an invalid structured tool call")
-        call_type = str(raw_call.get("type", "function") or "function").strip()
-        if call_type != "function":
-            raise ToolCallValidationError(
-                f"llama-server returned unsupported tool call type {call_type!r}"
-            )
-        function = raw_call.get("function")
-        if not isinstance(function, Mapping):
-            raise ToolCallValidationError(
-                "llama-server structured tool call lacks function metadata"
-            )
-        name = str(function.get("name", "")).strip()
-        if not name:
-            raise ToolCallValidationError(
-                "llama-server structured tool call has an empty function name"
-            )
-        raw_value = function.get("arguments", "{}")
-        if isinstance(raw_value, Mapping):
-            arguments = dict(raw_value)
-            raw_arguments = json.dumps(
-                arguments, ensure_ascii=False, separators=(",", ":")
-            )
-        elif isinstance(raw_value, str):
-            raw_arguments = raw_value
-            try:
-                decoded = json.loads(raw_value.strip() or "{}")
-            except json.JSONDecodeError as exc:
-                raise ToolCallValidationError(
-                    f"llama-server structured tool {name!r} returned invalid JSON arguments"
-                ) from exc
-            if not isinstance(decoded, Mapping):
-                raise ToolCallValidationError(
-                    f"llama-server structured tool {name!r} arguments must be an object"
-                )
-            arguments = dict(decoded)
-        else:
-            raise ToolCallValidationError(
-                f"llama-server structured tool {name!r} arguments have an invalid shape"
-            )
-        call_id = str(raw_call.get("id", "")).strip()
-        if not call_id:
-            digest = hashlib.sha256(
-                f"{index}\0{name}\0{raw_arguments}".encode("utf-8")
-            ).hexdigest()[:16]
-            call_id = f"call_{digest}"
-        calls.append(
-            ToolCall(
-                id=call_id,
-                name=name,
-                arguments=arguments,
-                raw_arguments=raw_arguments,
-            )
+        raise ToolCallValidationError(
+            "llama-server returned tool_calls in a non-list shape"
         )
-    return tuple(calls)
+    return raw_calls
 
 
-def _validate_tool_calls_against_host_schema(
-    calls: Sequence[ToolCall],
+def _parse_native_tool_call(raw_call: Any, *, index: int) -> ToolCall:
+    if not isinstance(raw_call, Mapping):
+        raise ToolCallValidationError(
+            "llama-server returned an invalid structured tool call"
+        )
+    call_type = str(raw_call.get("type", "function") or "function").strip()
+    if call_type != "function":
+        raise ToolCallValidationError(
+            f"llama-server returned unsupported tool call type {call_type!r}"
+        )
+    function = raw_call.get("function")
+    if not isinstance(function, Mapping):
+        raise ToolCallValidationError(
+            "llama-server structured tool call lacks function metadata"
+        )
+    name = str(function.get("name", "")).strip()
+    if not name:
+        raise ToolCallValidationError(
+            "llama-server structured tool call has an empty function name"
+        )
+    raw_value = function.get("arguments", "{}")
+    if isinstance(raw_value, Mapping):
+        arguments = dict(raw_value)
+        raw_arguments = json.dumps(
+            arguments, ensure_ascii=False, separators=(",", ":")
+        )
+    elif isinstance(raw_value, str):
+        raw_arguments = raw_value
+        try:
+            decoded = json.loads(raw_value.strip() or "{}")
+        except json.JSONDecodeError as exc:
+            raise ToolCallValidationError(
+                f"llama-server structured tool {name!r} returned invalid JSON arguments"
+            ) from exc
+        if not isinstance(decoded, Mapping):
+            raise ToolCallValidationError(
+                f"llama-server structured tool {name!r} arguments must be an object"
+            )
+        arguments = dict(decoded)
+    else:
+        raise ToolCallValidationError(
+            f"llama-server structured tool {name!r} arguments have an invalid shape"
+        )
+    call_id = str(raw_call.get("id", "")).strip()
+    if not call_id:
+        digest = hashlib.sha256(
+            f"{index}\0{name}\0{raw_arguments}".encode("utf-8")
+        ).hexdigest()[:16]
+        call_id = f"call_{digest}"
+    return ToolCall(
+        id=call_id,
+        name=name,
+        arguments=arguments,
+        raw_arguments=raw_arguments,
+    )
+
+
+def _parse_native_tool_calls(message: Mapping[str, Any]) -> tuple[ToolCall, ...]:
+    """Strict compatibility parser used by direct parser contracts."""
+
+    return tuple(
+        _parse_native_tool_call(raw_call, index=index)
+        for index, raw_call in enumerate(_raw_native_tool_calls(message))
+    )
+
+
+def _raw_call_metadata(raw_call: Any) -> tuple[str, str]:
+    if not isinstance(raw_call, Mapping):
+        return "", ""
+    function = raw_call.get("function")
+    if not isinstance(function, Mapping):
+        return "", ""
+    name = str(function.get("name", "") or "").strip()
+    raw_value = function.get("arguments", "")
+    if isinstance(raw_value, str):
+        raw_arguments = raw_value
+    elif isinstance(raw_value, Mapping):
+        raw_arguments = json.dumps(
+            dict(raw_value), ensure_ascii=False, separators=(",", ":")
+        )
+    else:
+        raw_arguments = repr(raw_value)
+    return name, raw_arguments
+
+
+def _rejected_tool_call(
+    *,
+    index: int,
+    original_tool: str,
+    raw_arguments: str,
+    failure_code: str,
+    error: str,
+) -> ToolCall:
+    rejection = {
+        "original_tool": original_tool,
+        "failure_code": failure_code,
+        "error": error,
+        "raw_arguments": raw_arguments,
+    }
+    serialized = json.dumps(
+        rejection, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    digest = hashlib.sha256(
+        f"{index}\0{original_tool}\0{raw_arguments}\0{failure_code}\0{error}".encode(
+            "utf-8"
+        )
+    ).hexdigest()[:16]
+    return ToolCall(
+        id=f"rejected_{digest}",
+        name=_REJECTED_TOOL_CALL_NAME,
+        arguments=rejection,
+        raw_arguments=serialized,
+    )
+
+
+def _parse_native_tool_calls_isolated(
+    raw_calls: Sequence[Any],
+) -> tuple[tuple[ToolCall, ...], tuple[ToolCall, ...]]:
+    accepted: list[ToolCall] = []
+    rejected: list[ToolCall] = []
+    for index, raw_call in enumerate(raw_calls):
+        try:
+            accepted.append(_parse_native_tool_call(raw_call, index=index))
+        except ToolCallValidationError as exc:
+            original_tool, raw_arguments = _raw_call_metadata(raw_call)
+            message = str(exc)
+            failure_code = (
+                "TOOL_ARGUMENT_JSON_INVALID"
+                if "invalid JSON arguments" in message
+                else "TOOL_CALL_MALFORMED"
+            )
+            rejected.append(
+                _rejected_tool_call(
+                    index=index,
+                    original_tool=original_tool,
+                    raw_arguments=raw_arguments,
+                    failure_code=failure_code,
+                    error=message,
+                )
+            )
+    return tuple(accepted), tuple(rejected)
+
+
+def _validate_tool_call_against_host_schema(
+    call: ToolCall,
     schemas: Mapping[str, Mapping[str, Any]],
 ) -> None:
     try:
@@ -297,32 +409,71 @@ def _validate_tool_calls_against_host_schema(
     except Exception as exc:
         raise RuntimeError("host tool schema validation is unavailable") from exc
 
-    for call in calls:
-        schema = schemas.get(call.name)
-        if schema is None:
-            raise ToolCallValidationError(
-                f"model emitted non-visible tool {call.name!r}"
-            )
-        try:
-            validator_type = validator_for(schema)
-            validator_type.check_schema(schema)
-            errors = sorted(
-                validator_type(schema).iter_errors(dict(call.arguments)),
-                key=lambda error: tuple(str(part) for part in error.absolute_path),
-            )
-        except Exception as exc:
-            raise RuntimeError(
-                f"tool {call.name!r} has an invalid host validation schema"
-            ) from exc
-        if not errors:
-            continue
-        error = errors[0]
-        path = ".".join(str(part) for part in error.absolute_path)
-        detail = " ".join(str(error.message).split())[:240]
-        location = f" at {path}" if path else ""
+    schema = schemas.get(call.name)
+    if schema is None:
         raise ToolCallValidationError(
-            f"tool {call.name!r} emitted schema-invalid arguments{location}: {detail}"
+            f"model emitted non-visible tool {call.name!r}"
         )
+    try:
+        validator_type = validator_for(schema)
+        validator_type.check_schema(schema)
+        errors = sorted(
+            validator_type(schema).iter_errors(dict(call.arguments)),
+            key=lambda error: tuple(str(part) for part in error.absolute_path),
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"tool {call.name!r} has an invalid host validation schema"
+        ) from exc
+    if not errors:
+        return
+    error = errors[0]
+    path = ".".join(str(part) for part in error.absolute_path)
+    detail = " ".join(str(error.message).split())[:240]
+    location = f" at {path}" if path else ""
+    raise ToolCallValidationError(
+        f"tool {call.name!r} emitted schema-invalid arguments{location}: {detail}"
+    )
+
+
+def _validate_tool_calls_against_host_schema(
+    calls: Sequence[ToolCall],
+    schemas: Mapping[str, Mapping[str, Any]],
+) -> None:
+    """Strict compatibility validator used by direct validation contracts."""
+
+    for call in calls:
+        _validate_tool_call_against_host_schema(call, schemas)
+
+
+def _partition_tool_calls_against_host_schema(
+    calls: Sequence[ToolCall],
+    schemas: Mapping[str, Mapping[str, Any]],
+) -> tuple[tuple[ToolCall, ...], tuple[ToolCall, ...]]:
+    accepted: list[ToolCall] = []
+    rejected: list[ToolCall] = []
+    for index, call in enumerate(calls):
+        try:
+            _validate_tool_call_against_host_schema(call, schemas)
+        except ToolCallValidationError as exc:
+            message = str(exc)
+            failure_code = (
+                "TOOL_NOT_VISIBLE"
+                if "non-visible tool" in message
+                else "TOOL_SCHEMA_INVALID"
+            )
+            rejected.append(
+                _rejected_tool_call(
+                    index=index,
+                    original_tool=call.name,
+                    raw_arguments=call.raw_arguments,
+                    failure_code=failure_code,
+                    error=message,
+                )
+            )
+        else:
+            accepted.append(call)
+    return tuple(accepted), tuple(rejected)
 
 
 def _named_tool_choice(choice: Any) -> str:
