@@ -49,7 +49,9 @@ def _canonical_bytes(value: Any) -> bytes:
 
 
 def _sha256_bytes(value: bytes) -> str:
-    return "sha256:" + hashlib.sha256(value).hexdigest()
+    digest = hashlib.sha256()
+    digest.update(value)
+    return "sha256:" + digest.hexdigest()
 
 
 def archive_root() -> Path:
