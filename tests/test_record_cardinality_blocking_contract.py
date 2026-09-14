@@ -19,8 +19,8 @@ def test_prompt_record_cardinality_cannot_be_semantically_blocked():
         assert "blocked_reason" not in schema["properties"], identifier
 
 
-def test_record_cardinality_blocking_remains_default_for_other_templates():
-    schema = record_cardinality_response_schema({})
-
-    assert schema["required"] == ["count", "blocked_reason"]
-    assert "blocked_reason" in schema["properties"]
+def test_record_cardinality_is_count_only_for_every_template():
+    for template in ({}, {"cardinality_blocking": True}, {"cardinality_blocking": False}):
+        schema = record_cardinality_response_schema(template)
+        assert schema["required"] == ["count"]
+        assert "blocked_reason" not in schema["properties"]
