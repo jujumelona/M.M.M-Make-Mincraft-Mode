@@ -77,6 +77,27 @@ def test_missing_target_java_reports_unavailable_without_environment_mutation(tm
     assert host_environment == {"JAVA_HOME": "/host/jdk17", "PATH": "/host/bin"}
 
 
+def test_adapter_without_java_metadata_preserves_environment() -> None:
+    module = SimpleNamespace(BuildRunnerError=RuntimeError)
+    adapter = SimpleNamespace(gradle="8.10.2", gradle_sha256="a" * 64)
+    host_environment = {
+        "JAVA_HOME": "/host/jdk17",
+        "PATH": "/host/bin",
+        "MMM_SENTINEL": "keep",
+    }
+
+    prepared, error = target_java_environment(
+        runner_module=module,
+        adapter=adapter,
+        environment=host_environment,
+    )
+
+    assert error is None
+    assert prepared == host_environment
+    assert prepared is not host_environment
+    assert host_environment["MMM_SENTINEL"] == "keep"
+
+
 def test_invalid_target_java_is_a_contract_error(tmp_path: Path) -> None:
     module = _module(java_home=tmp_path / "jdk-25")
     adapter = SimpleNamespace(java_version="invalid", minecraft_version="26.2")

@@ -15,20 +15,24 @@ def target_java_environment(
 ) -> tuple[dict[str, str], str | None]:
     """Return a command environment bound to the project's declared Java toolchain.
 
-    The helper is intentionally pure with respect to ``runner_module`` and process-global
-    ``os.environ``. Runtime-owned Gradle methods remain installed by the existing parallel
-    validation contract; this function only resolves the target JDK and prepares the
-    per-command environment consumed by that contract.
+    Adapters that do not declare Java metadata retain the incoming environment for
+    compatibility with validation surfaces that predate target-Java selection. An
+    explicitly declared Java version remains a strict contract and is resolved to the
+    target JDK before any Gradle command is launched.
     """
+    raw_java_version = getattr(adapter, "java_version", None)
+    if raw_java_version is None or not str(raw_java_version).strip():
+        return dict(environment), None
+
     try:
-        required_java = int(str(adapter.java_version).strip())
+        required_java = int(str(raw_java_version).strip())
     except (TypeError, ValueError) as exc:
         raise runner_module.BuildRunnerError(
-            f"Project target has an invalid Java version: {adapter.java_version!r}"
+            f"Project target has an invalid Java version: {raw_java_version!r}"
         ) from exc
     if required_java <= 0:
         raise runner_module.BuildRunnerError(
-            f"Project target has an invalid Java version: {adapter.java_version!r}"
+            f"Project target has an invalid Java version: {raw_java_version!r}"
         )
 
     try:
@@ -36,9 +40,10 @@ def target_java_environment(
             runner_module._resolve_project_java_home(required_java)
         ).expanduser().resolve()
     except runner_module.JDTWorkspaceBootstrapError as exc:
+        target_version = getattr(adapter, "minecraft_version", "unknown")
         return dict(environment), (
             f"Java {required_java} toolchain unavailable for target "
-            f"{adapter.minecraft_version}: {exc}"
+            f"{target_version}: {exc}"
         )
 
     updated = dict(environment)
