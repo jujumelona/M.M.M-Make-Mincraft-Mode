@@ -50,7 +50,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add minecraft_mod_ai/planning_state_pipeline.py \
                   tests/test_generation_verifier_resilience.py \
-                  tests/test_planning_progress_monotone.py
+                  tests/test_planning_progress_monotone.py \
+                  tests/test_planning_detail_applicability.py
           git diff --cached --check
           git diff --cached --quiet && exit 0
           git commit -m "normalize planner research and checkpoint resume"
