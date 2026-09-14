@@ -1,0 +1,762 @@
+name: One-shot planner CI repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-shot-planner-ci-repair.yml
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install test and audit dependencies
+        run: python -m pip install --prefer-binary -e ".[dev]"
+
+      - name: Apply planner and architecture repairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          from pathlib import Path
+          import re
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one replacement anchor, found {count}: {old[:80]!r}")
+              file.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          def replace_function(path: str, name: str, replacement: str) -> None:
+              file = Path(path)
+              text = file.read_text(encoding="utf-8")
+              pattern = re.compile(rf"^def {re.escape(name)}\(.*?(?=^def |^class |\Z)", re.MULTILINE | re.DOTALL)
+              match = pattern.search(text)
+              if match is None:
+                  raise SystemExit(f"{path}: function {name!r} not found")
+              updated = text[:match.start()] + replacement.rstrip() + "\n\n" + text[match.end():]
+              file.write_text(updated, encoding="utf-8")
+
+          # 1. Fixed-template repair: retry only schema-shaped partial responses.
+          fixed = "minecraft_mod_ai/fixed_template_generation.py"
+          replace_once(
+              fixed,
+              "from .structured_output import validate_structured_output\n",
+              "from .structured_output import StructuredOutputValidationError, validate_structured_output\n",
+          )
+          fixed_text = Path(fixed).read_text(encoding="utf-8")
+          helper_anchor = "def _generate_native_template_arguments(\n"
+          if fixed_text.count(helper_anchor) != 1:
+              raise SystemExit("fixed-template generation anchor not found exactly once")
+          schema_helpers = r'''
+          def _contains_undeclared_schema_fields(value: Any, schema: Mapping[str, Any]) -> bool:
+              """Return whether a model payload is using a different strict object contract."""
+
+              if isinstance(value, Mapping):
+                  properties = schema.get("properties")
+                  if isinstance(properties, Mapping):
+                      if schema.get("additionalProperties") is False and any(
+                          str(key) not in properties for key in value
+                      ):
+                          return True
+                      for key, child in value.items():
+                          child_schema = properties.get(str(key))
+                          if isinstance(child_schema, Mapping) and _contains_undeclared_schema_fields(
+                              child, child_schema
+                          ):
+                              return True
+                  return False
+              if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+                  items = schema.get("items")
+                  if isinstance(items, Mapping):
+                      return any(_contains_undeclared_schema_fields(item, items) for item in value)
+              return False
+
+
+          def _repairable_native_schema_mismatch(
+              arguments: Mapping[str, Any],
+              parameters: Mapping[str, Any],
+          ) -> bool:
+              """Repair omissions/malformed declared fields, never a legacy or alien contract."""
+
+              properties = parameters.get("properties")
+              if not isinstance(properties, Mapping):
+                  return True
+              if not any(str(key) in properties for key in arguments):
+                  return False
+              return not _contains_undeclared_schema_fields(arguments, parameters)
+
+
+          '''
+          fixed_text = fixed_text.replace(helper_anchor, schema_helpers + helper_anchor, 1)
+          Path(fixed).write_text(fixed_text, encoding="utf-8")
+
+          replace_function(
+              fixed,
+              "_generate_native_template_arguments",
+              r'''def _generate_native_template_arguments(
+              router: Any,
+              role: str,
+              messages: Sequence[Mapping[str, Any]],
+              *,
+              tool_name: str,
+              parameters: Mapping[str, Any],
+              description: str,
+          ) -> Mapping[str, Any]:
+              """Generate host-valid arguments and repair only genuine partial schema output."""
+
+              initial_messages = tuple(dict(message) for message in messages)
+              arguments = router.generate_tool_decision(
+                  role,
+                  initial_messages,
+                  tool_name=tool_name,
+                  parameters=parameters,
+                  description=description,
+              )
+              if not isinstance(arguments, Mapping):
+                  raise ValueError("fixed-template function call did not return an argument mapping")
+
+              try:
+                  return _validate_native_arguments(arguments, parameters)
+              except StructuredOutputValidationError as initial_error:
+                  if not _repairable_native_schema_mismatch(arguments, parameters):
+                      raise
+
+                  # A schema-shaped multi-field response may be repaired field-by-field so one
+                  # malformed field cannot force regeneration of an already valid sibling field.
+                  if _object_field_schemas(parameters):
+                      try:
+                          return _generate_native_arguments_by_field(
+                              router,
+                              role,
+                              initial_messages,
+                              tool_name=tool_name,
+                              parameters=parameters,
+                              description=description,
+                              failure=initial_error,
+                          )
+                      except StructuredOutputValidationError as field_error:
+                          raise RuntimeError(
+                              "FIXED_TEMPLATE_SCHEMA_REPAIR_FRONTIER_EXHAUSTED: model could not satisfy "
+                              "the host schema after deterministic field-isolated recovery"
+                          ) from field_error
+
+                  last_error: BaseException = initial_error
+                  current_messages = initial_messages
+                  for repair_index, directive in enumerate(
+                      _schema_repair_directives(parameters), start=1
+                  ):
+                      current_messages = _schema_repair_messages(
+                          messages,
+                          failure=last_error,
+                          directive=directive,
+                      )
+                      repaired = router.generate_tool_decision(
+                          role,
+                          current_messages,
+                          tool_name=f"{tool_name}_repair_{repair_index}",
+                          parameters=parameters,
+                          description=(
+                              description
+                              + " The prior function arguments failed host schema validation. "
+                              + directive
+                              + "."
+                          ),
+                      )
+                      if not isinstance(repaired, Mapping):
+                          raise ValueError(
+                              "fixed-template function call did not return an argument mapping"
+                          )
+                      try:
+                          return _validate_native_arguments(repaired, parameters)
+                      except StructuredOutputValidationError as exc:
+                          last_error = exc
+
+              raise RuntimeError(
+                  "FIXED_TEMPLATE_SCHEMA_REPAIR_FRONTIER_EXHAUSTED: model could not satisfy every "
+                  "host-schema obligation across the schema-derived repair frontier"
+              ) from last_error''',
+          )
+
+          # 2. Sparse detail-section tests must assert the current baseline contract, not the old full grid.
+          selection = "tests/test_planning_detail_runtime_selection.py"
+          replace_once(
+              selection,
+              "def test_host_selection_defaults_every_requirement_to_full_contract() -> None:\n",
+              "def test_host_selection_defaults_every_requirement_to_sparse_baseline() -> None:\n",
+          )
+          replace_once(
+              selection,
+              '        "REQ-1": WORKSHEET_SECTIONS,\n        "REQ-2": WORKSHEET_SECTIONS,\n',
+              '        "REQ-1": CORE_WORKSHEET_SECTIONS,\n        "REQ-2": CORE_WORKSHEET_SECTIONS,\n',
+          )
+          replace_once(
+              selection,
+              "def test_host_selection_can_narrow_one_requirement_without_weakening_others() -> None:\n",
+              "def test_host_selection_can_select_one_requirement_without_expanding_others() -> None:\n",
+          )
+          replace_once(
+              selection,
+              '    assert selected["REQ-2"] == WORKSHEET_SECTIONS\n',
+              '    assert selected["REQ-2"] == CORE_WORKSHEET_SECTIONS\n',
+          )
+          replace_once(
+              selection,
+              '    with pytest.raises(ValueError, match="core section.*cannot be omitted"):\n',
+              '    with pytest.raises(ValueError, match="baseline section.*cannot be omitted"):\n',
+          )
+
+          criterion_test = "tests/test_planning_criterion_fragment_repair.py"
+          replace_once(
+              criterion_test,
+              '    assert "reuse_assessment" in caught.value.sections\n    assert "verification" in caught.value.sections\n',
+              '    assert "integration" in caught.value.sections\n    assert "verification" in caught.value.sections\n',
+          )
+
+          # 3. Split verifier/recovery policy out of the giant execution loop.
+          policy_path = Path("minecraft_mod_ai/verifier_runtime_policy.py")
+          policy_path.write_text(r'''"""Small host-owned verifier/recovery policy helpers."""
+
+          from __future__ import annotations
+
+          from collections.abc import Mapping
+          from typing import Any, Callable
+
+          RECOVERY_EVIDENCE_TOOLS = frozenset({
+              "search_code_rag",
+              "search_project_rag",
+              "discover_ecosystem_resources",
+              "inspect_modrinth_project",
+              "inspect_github_repository",
+              "inspect_huggingface_model",
+              "inspect_existing_mod",
+              "assess_technology_compatibility",
+              "java_workspace_symbols",
+              "external_mcp_call",
+              "read_reuse_source",
+          })
+
+          VERIFY_TOOLS = frozenset({
+              "java_diagnostics",
+              "jdt_diagnostics",
+              "run_gradle_build",
+              "gradle_build",
+              "run_gametest",
+          })
+
+          _VERIFIER_UNAVAILABLE_STATUSES = frozenset({
+              "UNAVAILABLE", "NOT_RUN", "TIMEOUT", "TIMED_OUT", "UNHEALTHY",
+          })
+          _VERIFIER_FAIL_STATUSES = frozenset({"FAIL", "FAILED", "ERROR", "INVALID"})
+          _VERIFIER_PASS_STATUSES = frozenset({
+              "PASS", "PASSED", "OK", "SUCCESS", "SUCCEEDED", "AVAILABLE",
+          })
+
+
+          def verification_outcome(tool_name: str, payload: Mapping[str, Any]) -> str:
+              """Classify verifier semantics independently from transport/runtime health."""
+              if not bool(payload.get("ok")):
+                  failure_code = str(payload.get("failure_code") or "").strip().upper()
+                  if failure_code in {"VERIFIER_ARGUMENT_INVALID", "VERIFIER_TARGET_INVALID"}:
+                      return failure_code
+                  return "UNAVAILABLE"
+              result = payload.get("result")
+              if not isinstance(result, Mapping):
+                  return "PASS"
+              status = str(
+                  result.get("status") or result.get("state") or result.get("outcome") or ""
+              ).strip().upper()
+              if status in _VERIFIER_UNAVAILABLE_STATUSES:
+                  return "UNAVAILABLE"
+              if status in _VERIFIER_FAIL_STATUSES:
+                  return "FAIL"
+              if status in _VERIFIER_PASS_STATUSES and tool_name not in {
+                  "java_diagnostics", "jdt_diagnostics"
+              }:
+                  return "PASS"
+              if result.get("available") is False:
+                  return "UNAVAILABLE"
+              for key in ("success", "ok"):
+                  if key in result and isinstance(result.get(key), bool):
+                      return "PASS" if bool(result.get(key)) else "FAIL"
+              if "exit_code" in result:
+                  try:
+                      return "PASS" if int(result.get("exit_code")) == 0 else "FAIL"
+                  except (TypeError, ValueError, OverflowError):
+                      return "UNAVAILABLE"
+              if tool_name in {"java_diagnostics", "jdt_diagnostics"}:
+                  from .validation_diagnostic_contract import diagnostic_errors
+                  errors = diagnostic_errors(result)
+                  if any(
+                      str(item.get("code") or "") == "JDT_DIAGNOSTICS_UNAVAILABLE"
+                      for item in errors
+                  ):
+                      return "UNAVAILABLE"
+                  return "FAIL" if errors else "PASS"
+              return "PASS"
+
+
+          def is_evidence_tool_call(
+              *,
+              tool_name: str,
+              arguments: Mapping[str, Any],
+              phase: str,
+              localization_tools: frozenset[str],
+              rag_tools: frozenset[str],
+              external_rag_capability: Callable[[Mapping[str, Any]], Any],
+          ) -> bool:
+              if tool_name in localization_tools or tool_name in rag_tools:
+                  return True
+              if phase == "RECOVER" and tool_name in RECOVERY_EVIDENCE_TOOLS:
+                  return True
+              return tool_name == "external_mcp_call" and bool(
+                  external_rag_capability(arguments)
+              )
+
+
+          def recovery_tools_unavailable(
+              implementation_requires_mutation: bool,
+              phase: str,
+              has_phase_tools: bool,
+          ) -> bool:
+              return implementation_requires_mutation and phase == "RECOVER" and not has_phase_tools
+
+
+          def repair_guidance_allowed(
+              implementation_requires_mutation: bool,
+              phase: str,
+          ) -> bool:
+              return implementation_requires_mutation and phase in {"ACT", "RECOVER"}
+
+
+          def verifier_needs_recovery(status: str, implementation_requires_mutation: bool) -> bool:
+              return implementation_requires_mutation and status == "FAIL"
+
+
+          def evidence_marks_progress(
+              *,
+              context_progress: bool,
+              recorded: bool,
+              phase: str,
+              implementation_requires_mutation: bool,
+          ) -> bool:
+              return context_progress or (
+                  recorded and (phase == "RECOVER" or not implementation_requires_mutation)
+              )
+
+
+          def phase_after_evidence(phase: str, mutation_ready: bool) -> str:
+              if phase in {"OBSERVE", "RECOVER"} and mutation_ready:
+                  return "ACT"
+              return phase
+
+
+          __all__ = [
+              "RECOVERY_EVIDENCE_TOOLS",
+              "VERIFY_TOOLS",
+              "evidence_marks_progress",
+              "is_evidence_tool_call",
+              "phase_after_evidence",
+              "recovery_tools_unavailable",
+              "repair_guidance_allowed",
+              "verification_outcome",
+              "verifier_needs_recovery",
+          ]
+          '''.replace("          ", ""), encoding="utf-8")
+
+          loop = "minecraft_mod_ai/progress_aware_tool_loop.py"
+          loop_text = Path(loop).read_text(encoding="utf-8")
+          import_anchor = '''from .source_mutation_contract import (
+              mutation_history_applied,
+              mutation_payload_applied,
+          )
+          '''.replace("          ", "")
+          import_replacement = import_anchor + '''from .verifier_runtime_policy import (
+              RECOVERY_EVIDENCE_TOOLS as _RECOVERY_EVIDENCE_TOOLS,
+              VERIFY_TOOLS as _VERIFY_TOOLS,
+              evidence_marks_progress,
+              is_evidence_tool_call,
+              phase_after_evidence,
+              recovery_tools_unavailable,
+              repair_guidance_allowed,
+              verification_outcome as _verification_outcome,
+              verifier_needs_recovery,
+          )
+          '''.replace("          ", "")
+          if loop_text.count(import_anchor) != 1:
+              raise SystemExit("progress loop import anchor not found")
+          loop_text = loop_text.replace(import_anchor, import_replacement, 1)
+
+          start = loop_text.index("_RECOVERY_EVIDENCE_TOOLS = frozenset({")
+          end = loop_text.index("_MUTATION_ACT_TOOLS = frozenset({", start)
+          loop_text = loop_text[:start] + loop_text[end:]
+          start = loop_text.index("_VERIFY_TOOLS = frozenset({")
+          end = loop_text.index("def _fixed_point_tool_results(", start)
+          loop_text = loop_text[:start] + loop_text[end:]
+          Path(loop).write_text(loop_text, encoding="utf-8")
+
+          loop_text = Path(loop).read_text(encoding="utf-8")
+          helper_marker = "def _generate_with_tools_impl(\n"
+          if loop_text.count(helper_marker) != 1:
+              raise SystemExit("tool-loop implementation anchor not found")
+          prose_helper = r'''def _handle_failed_verifier_prose(
+              state: HostRunState,
+              messages: list[dict[str, Any]],
+              content: str,
+          ) -> None:
+              """Keep verifier-failure recovery deterministic and outside the main loop body."""
+
+              state.phase = LoopPhase.RECOVER
+              repeated = state.record_no_progress_result(
+                  {
+                      "phase": LoopPhase.RECOVER.value,
+                      "validation_status": "FAIL",
+                      "verifier_fingerprint": state.latest_verifier_fingerprint,
+                      "prose": content,
+                  }
+              )
+              if repeated:
+                  raise ModelConfigurationError(
+                      "VERIFICATION_REPAIR_FIXED_POINT: coder repeated the same prose-only "
+                      "state while trustworthy verifier diagnostics remain unresolved."
+                  )
+              messages.extend([
+                  {"role": "assistant", "content": content},
+                  {
+                      "role": "system",
+                      "content": (
+                          "Verifier status remains FAIL. Prose cannot complete this implementation. "
+                          "Use one exposed recovery evidence/API/mapping tool to resolve the diagnostic "
+                          "before another mutation is allowed."
+                      ),
+                  },
+              ])
+
+
+          '''
+          loop_text = loop_text.replace(helper_marker, prose_helper + helper_marker, 1)
+          Path(loop).write_text(loop_text, encoding="utf-8")
+
+          replace_once(
+              loop,
+              '''        if implementation_requires_mutation and state.phase == LoopPhase.RECOVER and not phase_tools:
+              state.termination_reason = "VERIFIER_RECOVERY_UNAVAILABLE"
+              raise ModelConfigurationError(
+                  "VERIFIER_RECOVERY_UNAVAILABLE: verifier diagnostics remain unresolved but no "
+                  "reviewed API/mapping/repository recovery tool is exposed."
+              )
+          '''.replace("          ", ""),
+              '''        if recovery_tools_unavailable(
+              implementation_requires_mutation,
+              state.phase.value,
+              bool(phase_tools),
+          ):
+              state.termination_reason = "VERIFIER_RECOVERY_UNAVAILABLE"
+              raise ModelConfigurationError(
+                  "VERIFIER_RECOVERY_UNAVAILABLE: verifier diagnostics remain unresolved but no "
+                  "reviewed API/mapping/repository recovery tool is exposed."
+              )
+          '''.replace("          ", ""),
+          )
+          replace_once(
+              loop,
+              '''        if (
+              implementation_requires_mutation
+              and state.phase in {LoopPhase.ACT, LoopPhase.RECOVER}
+          ):
+              repair_guidance = state.take_verifier_repair_guidance()
+              if repair_guidance is not None:
+                  messages.append({"role": "system", "content": repair_guidance})
+          '''.replace("          ", ""),
+              '''        if repair_guidance_allowed(
+              implementation_requires_mutation, state.phase.value
+          ):
+              repair_guidance = state.take_verifier_repair_guidance()
+              if repair_guidance is not None:
+                  messages.append({"role": "system", "content": repair_guidance})
+          '''.replace("          ", ""),
+          )
+          replace_once(
+              loop,
+              '''            if implementation_requires_mutation and state.validation_status == "FAIL":
+              state.phase = LoopPhase.RECOVER
+              repeated = state.record_no_progress_result(
+                  {
+                      "phase": LoopPhase.RECOVER.value,
+                      "validation_status": "FAIL",
+                      "verifier_fingerprint": state.latest_verifier_fingerprint,
+                      "prose": content,
+                  }
+              )
+              if repeated:
+                  raise ModelConfigurationError(
+                      "VERIFICATION_REPAIR_FIXED_POINT: coder repeated the same prose-only "
+                      "state while trustworthy verifier diagnostics remain unresolved."
+                  )
+              messages.extend([
+                  {"role": "assistant", "content": content},
+                  {
+                      "role": "system",
+                      "content": (
+                          "Verifier status remains FAIL. Prose cannot complete this implementation. "
+                          "Use one exposed recovery evidence/API/mapping tool to resolve the diagnostic "
+                          "before another mutation is allowed."
+                      ),
+                  },
+              ])
+              continue
+          '''.replace("          ", ""),
+              '''            if verifier_needs_recovery(
+              state.validation_status, implementation_requires_mutation
+          ):
+              _handle_failed_verifier_prose(state, messages, content)
+              continue
+          '''.replace("          ", ""),
+          )
+          replace_once(
+              loop,
+              '''        def is_evidence_tool(call: Any) -> bool:
+              return (
+                  call.name in _LOCALIZATION_EVIDENCE_TOOLS
+                  or call.name in _RAG_EVIDENCE_TOOLS
+                  or (
+                      state.phase == LoopPhase.RECOVER
+                      and call.name in _RECOVERY_EVIDENCE_TOOLS
+                  )
+                  or (call.name == "external_mcp_call" and bool(_external_rag_capability(call.arguments)))
+              )
+          '''.replace("          ", ""),
+              '''        def is_evidence_tool(call: Any) -> bool:
+              return is_evidence_tool_call(
+                  tool_name=call.name,
+                  arguments=call.arguments,
+                  phase=state.phase.value,
+                  localization_tools=_LOCALIZATION_EVIDENCE_TOOLS,
+                  rag_tools=_RAG_EVIDENCE_TOOLS,
+                  external_rag_capability=_external_rag_capability,
+              )
+          '''.replace("          ", ""),
+          )
+          replace_once(
+              loop,
+              '                if status == "FAIL" and implementation_requires_mutation:\n',
+              '                if verifier_needs_recovery(status, implementation_requires_mutation):\n',
+          )
+          replace_once(
+              loop,
+              '''                if (
+                  ctx_progress
+                  or (state.phase == LoopPhase.RECOVER and recorded)
+                  or (not implementation_requires_mutation and recorded)
+              ):
+                  turn_made_progress = True
+                  if (
+                      state.phase in {LoopPhase.OBSERVE, LoopPhase.RECOVER}
+                      and implementation_requires_mutation
+                      and is_mutation_ready(messages, state)
+                  ):
+                      state.phase = LoopPhase.ACT
+          '''.replace("          ", ""),
+              '''                if evidence_marks_progress(
+                  context_progress=ctx_progress,
+                  recorded=recorded,
+                  phase=state.phase.value,
+                  implementation_requires_mutation=implementation_requires_mutation,
+              ):
+                  turn_made_progress = True
+                  if implementation_requires_mutation:
+                      state.phase = LoopPhase(
+                          phase_after_evidence(
+                              state.phase.value,
+                              is_mutation_ready(messages, state),
+                          )
+                      )
+          '''.replace("          ", ""),
+          )
+
+          # 4. Keep the target-Java contract strict while moving parsing/path mutation out of one function.
+          java_contract = "minecraft_mod_ai/runner_target_java_contract.py"
+          replace_function(
+              java_contract,
+              "target_java_environment",
+              r'''def _declared_java_version(*, runner_module: Any, adapter: Any) -> int | None:
+              raw_java_version = getattr(adapter, "java_version", None)
+              if raw_java_version is None or not str(raw_java_version).strip():
+                  return None
+              try:
+                  required_java = int(str(raw_java_version).strip())
+              except (TypeError, ValueError) as exc:
+                  raise runner_module.BuildRunnerError(
+                      f"Project target has an invalid Java version: {raw_java_version!r}"
+                  ) from exc
+              if required_java <= 0:
+                  raise runner_module.BuildRunnerError(
+                      f"Project target has an invalid Java version: {raw_java_version!r}"
+                  )
+              return required_java
+
+
+          def _resolve_target_java_home(
+              *, runner_module: Any, adapter: Any, required_java: int
+          ) -> tuple[Path | None, str | None]:
+              try:
+                  return Path(
+                      runner_module._resolve_project_java_home(required_java)
+                  ).expanduser().resolve(), None
+              except runner_module.JDTWorkspaceBootstrapError as exc:
+                  target_version = getattr(adapter, "minecraft_version", "unknown")
+                  return None, (
+                      f"Java {required_java} toolchain unavailable for target "
+                      f"{target_version}: {exc}"
+                  )
+
+
+          def _with_java_home(environment: dict[str, str], java_home: Path) -> dict[str, str]:
+              updated = dict(environment)
+              updated["JAVA_HOME"] = str(java_home)
+              path_key = next((key for key in updated if key.upper() == "PATH"), "PATH")
+              current_path = updated.get(path_key, "")
+              java_bin = str(java_home / "bin")
+              updated[path_key] = java_bin + os.pathsep + current_path if current_path else java_bin
+              return updated
+
+
+          def target_java_environment(
+              *,
+              runner_module: Any,
+              adapter: Any,
+              environment: dict[str, str],
+          ) -> tuple[dict[str, str], str | None]:
+              """Return a command environment bound to the project's declared Java toolchain."""
+              required_java = _declared_java_version(runner_module=runner_module, adapter=adapter)
+              if required_java is None:
+                  return dict(environment), None
+              java_home, error = _resolve_target_java_home(
+                  runner_module=runner_module,
+                  adapter=adapter,
+                  required_java=required_java,
+              )
+              if error is not None or java_home is None:
+                  return dict(environment), error
+              return _with_java_home(environment, java_home), None''',
+          )
+
+          # Recovery tests now assert the extracted policy rather than pinning giant-function source text.
+          Path("tests/test_progress_aware_verifier_recovery.py").write_text(r'''from __future__ import annotations
+
+          import inspect
+
+          from minecraft_mod_ai import progress_aware_tool_loop as loop
+          from minecraft_mod_ai.verifier_runtime_policy import (
+              phase_after_evidence,
+              verifier_needs_recovery,
+          )
+
+
+          def _schema(name: str) -> dict:
+              return {"type": "function", "function": {"name": name, "parameters": {"type": "object"}}}
+
+
+          def test_recover_exposes_grounding_tools_not_mutation_tools() -> None:
+              tools = tuple(
+                  _schema(name)
+                  for name in (
+                      "apply_source_edit",
+                      "search_code_rag",
+                      "inspect_modrinth_project",
+                      "external_mcp_capabilities",
+                      "external_mcp_schema",
+                      "external_mcp_call",
+                  )
+              )
+              selected = loop._filter_tools_for_phase(tools, loop.LoopPhase.RECOVER, "coder")
+              names = {item["function"]["name"] for item in selected}
+              assert "apply_source_edit" not in names
+              assert {"search_code_rag", "inspect_modrinth_project", "external_mcp_call"} <= names
+
+
+          def test_recover_marks_version_api_routes_as_evidence() -> None:
+              assert {
+                  "search_code_rag",
+                  "search_project_rag",
+                  "inspect_modrinth_project",
+                  "external_mcp_call",
+              } <= loop._RECOVERY_EVIDENCE_TOOLS
+
+
+          def test_verifier_fail_enters_recover_before_another_edit() -> None:
+              assert verifier_needs_recovery("FAIL", True)
+              assert not verifier_needs_recovery("PASS", True)
+              source = inspect.getsource(loop._handle_failed_verifier_prose)
+              assert "state.phase = LoopPhase.RECOVER" in source
+              assert "state.phase = LoopPhase.ACT" not in source
+
+
+          def test_recover_requires_a_tool_call_and_returns_to_act_only_after_evidence() -> None:
+              source = inspect.getsource(loop._generate_with_tools_impl)
+              assert 'elif state.phase == LoopPhase.RECOVER:\n            tool_choice = "required"' in source
+              assert phase_after_evidence("RECOVER", True) == "ACT"
+              assert phase_after_evidence("RECOVER", False) == "RECOVER"
+          '''.replace("          ", ""), encoding="utf-8")
+          PY
+
+      - name: Verify focused regressions and architecture
+        shell: bash
+        env:
+          BASE_SHA: 9c1a538b3c0d9062356e6192bf991e7ce2cc8f53
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            minecraft_mod_ai/fixed_template_generation.py \
+            minecraft_mod_ai/progress_aware_tool_loop.py \
+            minecraft_mod_ai/verifier_runtime_policy.py \
+            minecraft_mod_ai/runner_target_java_contract.py
+          pytest -q \
+            tests/test_planning_criterion_fragment_repair.py \
+            tests/test_planning_detail_runtime_selection.py \
+            tests/test_parallel_validation_target_java.py \
+            tests/test_progress_aware_verifier_recovery.py
+          mapfile -t FIXED_TESTS < <(find tests -maxdepth 1 -type f -name '*fixed*template*.py' -print | sort)
+          if (( ${#FIXED_TESTS[@]} )); then
+            pytest -q "${FIXED_TESTS[@]}"
+          fi
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          python .github/scripts/audit_code_quality_regression.py \
+            --base-ref "$BASE_SHA" \
+            --output /tmp/code-quality-regression.json
+
+      - name: Commit verified repair to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if [[ "$(git rev-parse origin/main)" != "$GITHUB_SHA" ]]; then
+            echo "main moved during repair; refusing non-fast-forward write" >&2
+            exit 75
+          fi
+          git rm .github/workflows/one-shot-planner-ci-repair.yml
+          git config user.name "juju"
+          git config user.email "qasdaa025@gmail.com"
+          git add minecraft_mod_ai tests
+          git diff --cached --check
+          git commit -m "fix planner CI regressions without expanding work"
+          git push origin HEAD:main
