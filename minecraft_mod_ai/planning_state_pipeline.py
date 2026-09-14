@@ -40,6 +40,7 @@ DetailSectionApplicabilityResolver = Callable[
     [tuple[str, ...]],
     Mapping[str, Mapping[str, str]],
 ]
+PlanningCheckpoint = Callable[[dict[str, Any]], None]
 _STATE_COLLECTIONS = (
     "known",
     "references",
@@ -116,6 +117,14 @@ def _host_transition_notice(operation: str, state: Mapping[str, Any], exc: BaseE
     )
 
 
+def _checkpoint_state(
+    checkpoint: PlanningCheckpoint | None,
+    state: Mapping[str, Any],
+) -> None:
+    if checkpoint is not None:
+        checkpoint(deepcopy(dict(state)))
+
+
 def _rehash(state: Mapping[str, Any]) -> dict[str, Any]:
     value = deepcopy(dict(state))
     value["state_sha256"] = ""
@@ -152,7 +161,6 @@ def _host_initial_state(prompt: str) -> dict[str, Any]:
         "plan_ready": False,
         "state_sha256": "",
     }
-    # Use the same prompt hash function as the canonical contract without routing through a model.
     from .planning_state_contract import _sha
 
     state["prompt_sha256"] = _sha(prompt)
@@ -220,6 +228,118 @@ def _host_add_requirement(state: Mapping[str, Any]) -> dict[str, Any]:
     value = _rehash(value)
     validate_planning_state(value, prompt=str(value.get("original_prompt") or ""))
     return value
+
+
+def _resolve_requirements_or_wait(
+    router: Any,
+    prompt: str,
+    state: dict[str, Any],
+    *,
+    trace_metadata: Mapping[str, Any] | None,
+    checkpoint: PlanningCheckpoint | None,
+) -> tuple[dict[str, Any], bool]:
+    """Resolve authored requirements; return ``waiting=True`` only for user-only unknowns."""
+
+    if _requirements_exist(state):
+        return state, False
+
+    try:
+        state = _transition(
+            "collect_prompt_research",
+            lambda: collect_planning_state_research_convergent(
+                router,
+                prompt,
+                state,
+                trace_metadata=trace_metadata,
+            ),
+            input_state=state,
+        )
+    except Exception as exc:
+        _host_transition_notice("collect_prompt_research", state, exc)
+    _checkpoint_state(checkpoint, state)
+
+    try:
+        state = _transition(
+            "compile_researched_requirements",
+            lambda: compile_researched_requirements_convergent(router, prompt, state),
+            input_state=state,
+        )
+    except Exception as exc:
+        _host_transition_notice("compile_researched_requirements", state, exc)
+
+    if _requirements_exist(state):
+        _checkpoint_state(checkpoint, state)
+        return state, False
+
+    if _has_open_user_only_unknown(state):
+        emit_root_cause(
+            "planning_state_waiting_for_user_input",
+            stage="planning_state",
+            operation="requirement_selection",
+            result="RESUMABLE",
+            reason="an open user-only unknown must be supplied by the user before requirement selection",
+            details=_state_summary(state),
+        )
+        _checkpoint_state(checkpoint, state)
+        return state, True
+
+    state = _host_add_requirement(state)
+    emit_root_cause(
+        "planning_state_host_requirement",
+        stage="planning_state",
+        operation="requirement_selection",
+        result="CONTINUE",
+        reason="host materialized the authored request as a canonical requirement",
+        details=_state_summary(state),
+    )
+    _checkpoint_state(checkpoint, state)
+    return state, False
+
+
+def _select_detail_sections(
+    state: dict[str, Any],
+    *,
+    resolver: DetailSectionApplicabilityResolver | None,
+    checkpoint: PlanningCheckpoint | None,
+) -> tuple[dict[str, Any], Mapping[str, Any]]:
+    try:
+        if resolver is None:
+            state = _transition(
+                "normalize_detail_section_applicability",
+                lambda: ensure_host_detail_section_applicability(state),
+                input_state=state,
+            )
+        else:
+            applicability_by_requirement = _transition(
+                "resolve_detail_section_applicability",
+                lambda: resolver(_requirement_ids(state)),
+                input_state=state,
+            )
+            state = _transition(
+                "apply_detail_section_applicability",
+                lambda: apply_host_detail_section_applicability(
+                    state,
+                    applicability_by_requirement,
+                ),
+                input_state=state,
+            )
+    except Exception as exc:
+        _host_transition_notice("detail_section_applicability", state, exc)
+    _checkpoint_state(checkpoint, state)
+
+    try:
+        selection = _transition(
+            "select_detail_sections",
+            lambda: required_sections_by_requirement(state),
+            input_state=state,
+        )
+    except Exception as exc:
+        selection = {
+            requirement_id: normalize_required_sections()
+            for requirement_id in _requirement_ids(state)
+        }
+        _host_transition_notice("select_detail_sections", state, exc)
+    return state, selection
 
 
 def _detail_progress_position(state: Mapping[str, Any]) -> tuple[
@@ -302,8 +422,6 @@ def _detail_progress_strictly_advanced(
     if not before_details.issubset(after_details):
         return False
     if after_details != before_details:
-        # Completing a requirement intentionally clears its criterion checkpoints, so a
-        # newly completed detailed plan is itself the stronger monotone marker.
         return True
 
     monotone_pairs = (
@@ -321,15 +439,14 @@ def _compile_detailed_plans_resumable(
     prompt: str,
     state: dict[str, Any],
     section_selection: Mapping[str, Any],
-    checkpoint: Callable[[dict[str, Any]], None] | None,
+    checkpoint: PlanningCheckpoint | None,
 ) -> dict[str, Any]:
     latest_state = deepcopy(state)
 
     def save_detailed_state(value: dict[str, Any]) -> None:
         nonlocal latest_state
         latest_state = deepcopy(value)
-        if checkpoint is not None:
-            checkpoint(deepcopy(value))
+        _checkpoint_state(checkpoint, value)
 
     _trace_state_snapshot(
         "planning_state_transition_input",
@@ -405,8 +522,7 @@ def _compile_detailed_plans_resumable(
         result,
     )
     emit_planning_goal_satisfied(result)
-    if checkpoint is not None:
-        checkpoint(deepcopy(result))
+    _checkpoint_state(checkpoint, result)
     return result
 
 
@@ -416,7 +532,7 @@ def prepare_planning_state(
     *,
     trace_metadata: Mapping[str, Any] | None = None,
     existing_state: Mapping[str, Any] | None = None,
-    checkpoint: Callable[[dict[str, Any]], None] | None = None,
+    checkpoint: PlanningCheckpoint | None = None,
     detail_section_applicability_resolver: DetailSectionApplicabilityResolver | None = None,
 ) -> dict[str, Any]:
     """Resolve the request without exposing a terminal planning failure state."""
@@ -474,98 +590,23 @@ def prepare_planning_state(
     if state.get("plan_ready") is True:
         emit_planning_goal_satisfied(state)
         return state
-    if checkpoint is not None:
-        checkpoint(deepcopy(state))
+    _checkpoint_state(checkpoint, state)
 
-    if not _requirements_exist(state):
-        try:
-            state = _transition(
-                "collect_prompt_research",
-                lambda: collect_planning_state_research_convergent(
-                    router,
-                    prompt,
-                    state,
-                    trace_metadata=trace_metadata,
-                ),
-                input_state=state,
-            )
-        except Exception as exc:
-            _host_transition_notice("collect_prompt_research", state, exc)
-        if checkpoint is not None:
-            checkpoint(deepcopy(state))
+    state, waiting_for_user = _resolve_requirements_or_wait(
+        router,
+        prompt,
+        state,
+        trace_metadata=trace_metadata,
+        checkpoint=checkpoint,
+    )
+    if waiting_for_user:
+        return state
 
-        try:
-            state = _transition(
-                "compile_researched_requirements",
-                lambda: compile_researched_requirements_convergent(router, prompt, state),
-                input_state=state,
-            )
-        except Exception as exc:
-            _host_transition_notice("compile_researched_requirements", state, exc)
-        if not _requirements_exist(state):
-            if _has_open_user_only_unknown(state):
-                emit_root_cause(
-                    "planning_state_waiting_for_user_input",
-                    stage="planning_state",
-                    operation="requirement_selection",
-                    result="RESUMABLE",
-                    reason="an open user-only unknown must be supplied by the user before requirement selection",
-                    details=_state_summary(state),
-                )
-                if checkpoint is not None:
-                    checkpoint(deepcopy(state))
-                return state
-            state = _host_add_requirement(state)
-            emit_root_cause(
-                "planning_state_host_requirement",
-                stage="planning_state",
-                operation="requirement_selection",
-                result="CONTINUE",
-                reason="host materialized the authored request as a canonical requirement",
-                details=_state_summary(state),
-            )
-        if checkpoint is not None:
-            checkpoint(deepcopy(state))
-
-    try:
-        if detail_section_applicability_resolver is None:
-            state = _transition(
-                "normalize_detail_section_applicability",
-                lambda: ensure_host_detail_section_applicability(state),
-                input_state=state,
-            )
-        else:
-            applicability_by_requirement = _transition(
-                "resolve_detail_section_applicability",
-                lambda: detail_section_applicability_resolver(_requirement_ids(state)),
-                input_state=state,
-            )
-            state = _transition(
-                "apply_detail_section_applicability",
-                lambda: apply_host_detail_section_applicability(
-                    state,
-                    applicability_by_requirement,
-                ),
-                input_state=state,
-            )
-    except Exception as exc:
-        _host_transition_notice("detail_section_applicability", state, exc)
-    if checkpoint is not None:
-        checkpoint(deepcopy(state))
-
-    try:
-        section_selection = _transition(
-            "select_detail_sections",
-            lambda: required_sections_by_requirement(state),
-            input_state=state,
-        )
-    except Exception as exc:
-        section_selection = {
-            requirement_id: normalize_required_sections()
-            for requirement_id in _requirement_ids(state)
-        }
-        _host_transition_notice("select_detail_sections", state, exc)
-
+    state, section_selection = _select_detail_sections(
+        state,
+        resolver=detail_section_applicability_resolver,
+        checkpoint=checkpoint,
+    )
     return _compile_detailed_plans_resumable(
         router,
         prompt,
