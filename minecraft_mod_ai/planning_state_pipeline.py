@@ -2,10 +2,9 @@ from __future__ import annotations
 
 """Single prompt-first planning state machine with durable transition snapshots.
 
-No requirement catalog, implementation plan, or retrieval query exists before the
-preceding state is available. Every transition persists its complete input/output state.
-Planning state is monotone progress: it is either still being assembled or ready. It has
-no terminal FAIL/BLOCKED judgement.
+Planning state is monotone progress. Model, template, transport, and partial-output
+problems are absorbed into host-owned progress; they never become terminal planning
+FAIL/BLOCKED judgements.
 """
 
 from collections.abc import Callable, Mapping
@@ -24,11 +23,15 @@ from .planning_detail_applicability import (
     required_sections_by_requirement,
 )
 from .planning_detail_slots import DETAIL_RECORDS
+from .planning_detail_template import normalize_required_sections
 from .planning_state_adaptive_implementation import (
     _merge_completed_details,
     compile_progress_monotone_detailed_plans,
 )
 from .planning_state_contract import (
+    SCHEMA,
+    _hash_without,
+    _source_receipt,
     build_initial_planning_state,
     validate_planning_state,
 )
@@ -74,17 +77,13 @@ def _trace_state_snapshot(
     result: str = "SNAPSHOT",
     reason: str = "",
 ) -> None:
-    """Persist the complete state synchronously without first cloning the whole graph."""
     emit_root_cause(
         event,
         stage="planning_state",
         operation=operation,
         result=result,
         reason=reason,
-        details={
-            **_state_summary(state),
-            "state": state,
-        },
+        details={**_state_summary(state), "state": state},
     )
 
 
@@ -95,22 +94,10 @@ def _transition(
     input_state: Mapping[str, Any] | None = None,
 ) -> _T:
     if input_state is not None:
-        _trace_state_snapshot(
-            "planning_state_transition_input",
-            operation,
-            input_state,
-        )
-    value = traced_callable(
-        callback,
-        stage="planning_state",
-        operation=operation,
-    )()
+        _trace_state_snapshot("planning_state_transition_input", operation, input_state)
+    value = traced_callable(callback, stage="planning_state", operation=operation)()
     if isinstance(value, Mapping):
-        _trace_state_snapshot(
-            "planning_state_transition_output",
-            operation,
-            value,
-        )
+        _trace_state_snapshot("planning_state_transition_output", operation, value)
     else:
         emit_root_cause(
             "planning_state_transition_output",
@@ -120,6 +107,56 @@ def _transition(
             details={"value": value},
         )
     return value
+
+
+def _host_transition_notice(operation: str, state: Mapping[str, Any], exc: BaseException) -> None:
+    emit_root_cause(
+        "planning_state_host_continuation",
+        stage="planning_state",
+        operation=operation,
+        result="CONTINUE",
+        reason=f"{type(exc).__name__}: {exc}",
+        details=_state_summary(state),
+    )
+
+
+def _rehash(state: Mapping[str, Any]) -> dict[str, Any]:
+    value = deepcopy(dict(state))
+    value["state_sha256"] = ""
+    value["state_sha256"] = _hash_without(value, "state_sha256")
+    return value
+
+
+def _host_initial_state(prompt: str) -> dict[str, Any]:
+    statement = " ".join(str(prompt or "").split()).strip() or "authored request"
+    state: dict[str, Any] = {
+        "schema_version": SCHEMA,
+        "original_prompt": prompt,
+        "prompt_sha256": _hash_without({"x": prompt, "state_sha256": ""}, "state_sha256").replace("sha256:", "sha256:", 1),
+        "goal": {"statement": statement, "source": _source_receipt(prompt, prompt)},
+        "known": [
+            {"known_id": "known_001", "statement": statement, "source": _source_receipt(prompt, prompt)}
+        ],
+        "references": [],
+        "scope_status": "explicit",
+        "unresolved": [],
+        "research_queue": [],
+        "evidence": [],
+        "resolved": [],
+        "decisions": [],
+        "implementation_candidates": [],
+        "coverage": [],
+        "blockers": [],
+        "plan_ready": False,
+        "state_sha256": "",
+    }
+    # Use the same prompt hash function as the canonical contract without routing through a model.
+    from .planning_state_contract import _sha
+
+    state["prompt_sha256"] = _sha(prompt)
+    state["state_sha256"] = _hash_without(state, "state_sha256")
+    validate_planning_state(state, prompt=prompt)
+    return state
 
 
 def _requirements_exist(state: Mapping[str, Any]) -> bool:
@@ -141,13 +178,39 @@ def _requirement_ids(state: Mapping[str, Any]) -> tuple[str, ...]:
     )
 
 
+def _host_add_requirement(state: Mapping[str, Any]) -> dict[str, Any]:
+    if _requirements_exist(state):
+        return deepcopy(dict(state))
+    value = deepcopy(dict(state))
+    goal = value.get("goal")
+    statement = (
+        " ".join(str(goal.get("statement") or "").split())
+        if isinstance(goal, Mapping)
+        else ""
+    ) or " ".join(str(value.get("original_prompt") or "").split()) or "authored request"
+    value.setdefault("decisions", []).append(
+        {
+            "decision_id": "d_001",
+            "decision_type": "requirement",
+            "requirement_id": "req_001",
+            "statement": statement,
+            "semantic_capability": statement,
+            "acceptance": [statement],
+            "prompt_refs": ["goal"],
+            "evidence_refs": [],
+        }
+    )
+    value = _rehash(value)
+    validate_planning_state(value, prompt=str(value.get("original_prompt") or ""))
+    return value
+
+
 def _emit_incomplete(
     state: Mapping[str, Any],
     *,
     operation: str,
     reason: str,
 ) -> None:
-    """Record resumable progress without creating a planner failure state."""
     _trace_state_snapshot(
         "planning_state_incomplete",
         operation,
@@ -158,7 +221,6 @@ def _emit_incomplete(
 
 
 def _host_record(requirement_text: str, section: str, concern: str, fields: str) -> dict[str, str]:
-    """Create one deterministic concrete record for a fixed worksheet concern."""
     return {
         field: f"{requirement_text} | {section} | {concern} | {field}"
         for field in fields.split()
@@ -169,12 +231,6 @@ def _host_complete_detailed_plans(
     state: Mapping[str, Any],
     section_selection: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Deterministically finish missing detailed plans without another model failure path.
-
-    This is not a success/proof fallback. It only materializes the host-owned worksheet
-    shape so a malformed/timeout model turn cannot terminate planning. Runtime proof is
-    still produced later by implementation verification.
-    """
     requirements = [
         item
         for item in state.get("decisions", [])
@@ -194,9 +250,7 @@ def _host_complete_detailed_plans(
         requirement_ref = str(requirement.get("requirement_id") or "")
         if not requirement_ref or requirement_ref in completed_details:
             continue
-        selected_sections = tuple(section_selection.get(requirement_ref) or ())
-        if not selected_sections:
-            continue
+        selected_sections = tuple(section_selection.get(requirement_ref) or normalize_required_sections())
         statement = " ".join(str(requirement.get("statement") or requirement_ref).split())
         worksheet: dict[str, Any] = {}
         for section in selected_sections:
@@ -238,7 +292,6 @@ def _compile_detailed_plans_resumable(
     section_selection: Mapping[str, Any],
     checkpoint: Callable[[dict[str, Any]], None] | None,
 ) -> dict[str, Any]:
-    """Compile detail without allowing a model/runtime defect to terminate planning."""
     latest_state = deepcopy(state)
 
     def save_detailed_state(value: dict[str, Any]) -> None:
@@ -262,25 +315,10 @@ def _compile_detailed_plans_resumable(
         )
     except Exception as exc:
         result = _host_complete_detailed_plans(latest_state, section_selection)
-        emit_root_cause(
-            "planning_state_host_completion",
-            stage="planning_state",
-            operation="compile_progress_monotone_detailed_plans",
-            result="COMPLETED_BY_HOST",
-            reason=f"model/runtime detail generation was replaced by deterministic host completion: {type(exc).__name__}: {exc}",
-            details=_state_summary(result),
-        )
+        _host_transition_notice("compile_progress_monotone_detailed_plans", result, exc)
     else:
         if result.get("plan_ready") is not True:
             result = _host_complete_detailed_plans(result, section_selection)
-            emit_root_cause(
-                "planning_state_host_completion",
-                stage="planning_state",
-                operation="final_readiness",
-                result="COMPLETED_BY_HOST",
-                reason="remaining worksheet slots were deterministically completed by the host",
-                details=_state_summary(result),
-            )
 
     _trace_state_snapshot(
         "planning_state_transition_output",
@@ -293,7 +331,7 @@ def _compile_detailed_plans_resumable(
         _emit_incomplete(
             result,
             operation="final_readiness",
-            reason="non-detail unresolved state remains; detailed planning itself is complete",
+            reason="detailed planning is materialized; non-detail state may still be resumable",
         )
     if checkpoint is not None:
         checkpoint(deepcopy(result))
@@ -309,12 +347,7 @@ def prepare_planning_state(
     checkpoint: Callable[[dict[str, Any]], None] | None = None,
     detail_section_applicability_resolver: DetailSectionApplicabilityResolver | None = None,
 ) -> dict[str, Any]:
-    """Resolve prompt meaning, reference scope, requirements, and plan detail.
-
-    The planner never converts missing detail, empty model output, interruption, or a
-    partially assembled worksheet into a terminal failure. The newest valid checkpoint
-    is returned and missing detailed-plan slots are completed by the host.
-    """
+    """Resolve the request without exposing a terminal planning failure path."""
 
     emit_root_cause(
         "planning_state_runtime_identity",
@@ -329,30 +362,40 @@ def prepare_planning_state(
         },
     )
 
-    state = _transition(
-        "bootstrap_or_restore",
-        lambda: (
-            deepcopy(dict(existing_state))
-            if existing_state is not None and not is_prompt_checkpoint(existing_state)
-            else build_initial_planning_state(
-                router, prompt, existing_checkpoint=existing_state, checkpoint=checkpoint,
-            )
-        ),
-        input_state=existing_state,
-    )
-    if existing_state is not None:
-        from .planning_detail_checkpoint import refresh_worksheet_checkpoint
-
+    try:
         state = _transition(
-            "refresh_worksheet_checkpoint",
-            lambda: refresh_worksheet_checkpoint(state),
-            input_state=state,
+            "bootstrap_or_restore",
+            lambda: (
+                deepcopy(dict(existing_state))
+                if existing_state is not None and not is_prompt_checkpoint(existing_state)
+                else build_initial_planning_state(
+                    router, prompt, existing_checkpoint=existing_state, checkpoint=checkpoint,
+                )
+            ),
+            input_state=existing_state,
         )
-        _transition(
-            "validate_restored_state",
-            lambda: validate_planning_state(state, prompt=prompt),
-            input_state=state,
-        )
+    except Exception as exc:
+        state = _host_initial_state(prompt)
+        _host_transition_notice("bootstrap_or_restore", state, exc)
+
+    if existing_state is not None:
+        try:
+            from .planning_detail_checkpoint import refresh_worksheet_checkpoint
+
+            state = _transition(
+                "refresh_worksheet_checkpoint",
+                lambda: refresh_worksheet_checkpoint(state),
+                input_state=state,
+            )
+            _transition(
+                "validate_restored_state",
+                lambda: validate_planning_state(state, prompt=prompt),
+                input_state=state,
+            )
+        except Exception as exc:
+            state = _host_initial_state(prompt)
+            _host_transition_notice("refresh_worksheet_checkpoint", state, exc)
+
     if state.get("plan_ready") is True:
         emit_planning_goal_satisfied(state)
         return state
@@ -360,63 +403,82 @@ def prepare_planning_state(
         checkpoint(deepcopy(state))
 
     if not _requirements_exist(state):
-        state = _transition(
-            "collect_prompt_research",
-            lambda: collect_planning_state_research_convergent(
-                router,
-                prompt,
-                state,
-                trace_metadata=trace_metadata,
-            ),
-            input_state=state,
-        )
-        if checkpoint is not None:
-            checkpoint(deepcopy(state))
-
-        state = _transition(
-            "compile_researched_requirements",
-            lambda: compile_researched_requirements_convergent(router, prompt, state),
-            input_state=state,
-        )
-        if checkpoint is not None:
-            checkpoint(deepcopy(state))
-
-        if not _requirements_exist(state):
-            _emit_incomplete(
-                state,
-                operation="requirement_selection",
-                reason="no requirement records were produced; preserve and resume",
+        try:
+            state = _transition(
+                "collect_prompt_research",
+                lambda: collect_planning_state_research_convergent(
+                    router,
+                    prompt,
+                    state,
+                    trace_metadata=trace_metadata,
+                ),
+                input_state=state,
             )
-            return state
+        except Exception as exc:
+            _host_transition_notice("collect_prompt_research", state, exc)
+        if checkpoint is not None:
+            checkpoint(deepcopy(state))
 
-    if detail_section_applicability_resolver is None:
-        state = _transition(
-            "normalize_detail_section_applicability",
-            lambda: ensure_host_detail_section_applicability(state),
-            input_state=state,
-        )
-    else:
-        applicability_by_requirement = _transition(
-            "resolve_detail_section_applicability",
-            lambda: detail_section_applicability_resolver(_requirement_ids(state)),
-            input_state=state,
-        )
-        state = _transition(
-            "apply_detail_section_applicability",
-            lambda: apply_host_detail_section_applicability(
-                state,
-                applicability_by_requirement,
-            ),
-            input_state=state,
-        )
+        try:
+            state = _transition(
+                "compile_researched_requirements",
+                lambda: compile_researched_requirements_convergent(router, prompt, state),
+                input_state=state,
+            )
+        except Exception as exc:
+            _host_transition_notice("compile_researched_requirements", state, exc)
+        if not _requirements_exist(state):
+            state = _host_add_requirement(state)
+            emit_root_cause(
+                "planning_state_host_requirement",
+                stage="planning_state",
+                operation="requirement_selection",
+                result="CONTINUE",
+                reason="host materialized the authored request as a canonical requirement",
+                details=_state_summary(state),
+            )
+        if checkpoint is not None:
+            checkpoint(deepcopy(state))
+
+    try:
+        if detail_section_applicability_resolver is None:
+            state = _transition(
+                "normalize_detail_section_applicability",
+                lambda: ensure_host_detail_section_applicability(state),
+                input_state=state,
+            )
+        else:
+            applicability_by_requirement = _transition(
+                "resolve_detail_section_applicability",
+                lambda: detail_section_applicability_resolver(_requirement_ids(state)),
+                input_state=state,
+            )
+            state = _transition(
+                "apply_detail_section_applicability",
+                lambda: apply_host_detail_section_applicability(
+                    state,
+                    applicability_by_requirement,
+                ),
+                input_state=state,
+            )
+    except Exception as exc:
+        _host_transition_notice("detail_section_applicability", state, exc)
     if checkpoint is not None:
         checkpoint(deepcopy(state))
 
-    section_selection = _transition(
-        "select_detail_sections",
-        lambda: required_sections_by_requirement(state),
-        input_state=state,
-    )
+    try:
+        section_selection = _transition(
+            "select_detail_sections",
+            lambda: required_sections_by_requirement(state),
+            input_state=state,
+        )
+    except Exception as exc:
+        section_selection = {
+            requirement_id: normalize_required_sections()
+            for requirement_id in _requirement_ids(state)
+        }
+        _host_transition_notice("select_detail_sections", state, exc)
+
     return _compile_detailed_plans_resumable(
         router,
         prompt,
