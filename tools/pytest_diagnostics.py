@@ -410,6 +410,7 @@ def _launch_and_wait(
     timeout_seconds: int,
 ) -> tuple[int | None, BaseException | None]:
     process: subprocess.Popen[object] | None = None
+    failure: BaseException | None = None
     try:
         process = subprocess.Popen(
             command,
@@ -419,14 +420,14 @@ def _launch_and_wait(
         )
         return process.wait(timeout=timeout_seconds), None
     except subprocess.TimeoutExpired as exc:
+        failure = exc
         if process is not None:
             _append_process_snapshot(raw_handle, pytest_pid=process.pid)
-            _terminate_process_tree(process)
-        return None, exc
     except OSError as exc:
-        if process is not None:
-            _terminate_process_tree(process)
-        return None, exc
+        failure = exc
+    if process is not None:
+        _terminate_process_tree(process)
+    return None, failure
 
 
 def _capture_pytest(
