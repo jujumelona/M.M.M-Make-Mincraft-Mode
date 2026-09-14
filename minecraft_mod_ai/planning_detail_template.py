@@ -1,15 +1,10 @@
 from __future__ import annotations
 
-"""One engineering worksheet shared by planning and coding.
+"""Engineering worksheet contract with sparse host-owned section selection.
 
-The worksheet deliberately keeps a compact, stable wire shape for small models while
-making the meaning of every slot explicit. Host code owns the canonical section list and
-may narrow it only through an explicit trusted selection. With no selection, all ten
-sections are required. The model never decides which sections apply.
-
-A worksheet specification is an authored design contract, not a retrieved fact. Evidence
-references are therefore optional constraints on that design. Target/API/version/source
-facts are represented separately by the detailed-plan grounded-binding contract.
+The baseline plan contains only behavior, integration, and verification. Every other
+section is optional work and must be explicitly selected by trusted host applicability
+state. Unknown applicability never expands the work graph.
 """
 
 from collections.abc import Iterable, Mapping
@@ -148,33 +143,23 @@ DETAIL_FIELDS = {
 WORKSHEET_SECTIONS: tuple[str, ...] = tuple(DETAIL_FIELDS)
 CORE_WORKSHEET_SECTIONS: tuple[str, ...] = (
     "behavior_contract",
-    "state_model",
-    "algorithm",
     "integration",
-    "failure_and_limits",
-    "reuse_assessment",
     "verification",
 )
-CONDITIONAL_WORKSHEET_SECTIONS: tuple[str, ...] = (
-    "authority_and_network",
-    "persistence",
-    "resources_and_ui",
+CONDITIONAL_WORKSHEET_SECTIONS: tuple[str, ...] = tuple(
+    key for key in WORKSHEET_SECTIONS if key not in CORE_WORKSHEET_SECTIONS
 )
 
 WORKSHEET_INSTRUCTIONS: tuple[str, ...] = (
     "Work on exactly one user-visible requirement; do not redesign neighboring requirements.",
-    "Read all supplied evidence before filling any section. Use constraint_evidence_refs only when retrieved evidence actually constrains the authored design; an empty list is valid.",
-    "Fill all ten sections. Never use a bare N/A, none, TODO, TBD, unknown, same-as-above, or generic placeholder.",
-    "Write a distinct section-specific specification for every section; copying one generic answer across multiple sections is invalid.",
-    "For an inapplicable concern, state the concrete design reason it is inapplicable. Cite evidence only when that conclusion depends on an external fact.",
+    "Use constraint_evidence_refs only when retrieved evidence actually constrains the authored design; an empty list is valid.",
+    "Fill exactly the host-selected sections. Never invent work for an omitted section and never use a bare N/A, none, TODO, TBD, unknown, same-as-above, or generic placeholder.",
+    "Write a distinct section-specific specification for every selected section; copying one generic answer across sections is invalid.",
     "Separate retrieved facts from design decisions. Proposed identifiers, algorithms, paths, constants or behavior rules are authored design, not evidence-backed facts.",
-    "Use exact actors, state owners, triggers, inputs, outputs, branches, units, limits and observable postconditions instead of adjectives such as robust, proper, appropriate or handle correctly.",
-    "Do not silently widen scope. Every claimed behavior must belong to the current requirement or be a necessary dependency established by the planning state.",
-    "Treat compile/static checks as necessary but insufficient: verification must also prove the user-visible runtime behavior and relevant failure paths.",
-    "Before submission, cross-check that state, algorithm, integration, persistence/network branches and verification describe one internally consistent design.",
+    "Use exact actors, state owners, triggers, inputs, outputs, branches, units, limits and observable postconditions instead of vague adjectives.",
+    "Do not silently widen scope. Every claimed behavior must belong to the current requirement or a necessary established dependency.",
+    "Treat compile/static checks as necessary but insufficient: verification must prove user-visible runtime behavior and relevant failure paths.",
 )
-
-
 
 
 def _normalize_section_name(section: str) -> str:
@@ -186,16 +171,10 @@ def _normalize_section_name(section: str) -> str:
 def normalize_required_sections(
     required_sections: Iterable[str] | None = None,
 ) -> tuple[str, ...]:
-    """Return a validated host-owned section selection in canonical order.
-
-    ``None`` is deliberately fail-safe and means every canonical section. An explicit
-    selection may omit only host-proven inapplicable conditional branches. Core sections
-    are mandatory for every detailed plan. Model output must never be used as
-    ``required_sections``.
-    """
+    """Return a validated sparse host-owned section selection in canonical order."""
 
     if required_sections is None:
-        return WORKSHEET_SECTIONS
+        return CORE_WORKSHEET_SECTIONS
     if isinstance(required_sections, (str, bytes)):
         raise ValueError("DETAILED_PLAN_SECTIONS: selection must be an iterable of section names")
 
@@ -215,7 +194,7 @@ def normalize_required_sections(
     missing_core = set(CORE_WORKSHEET_SECTIONS) - set(requested)
     if missing_core:
         raise ValueError(
-            "DETAILED_PLAN_SECTIONS: core section(s) cannot be omitted: "
+            "DETAILED_PLAN_SECTIONS: baseline section(s) cannot be omitted: "
             + ", ".join(key for key in CORE_WORKSHEET_SECTIONS if key in missing_core)
         )
     requested_set = set(requested)
@@ -228,9 +207,6 @@ def _section_description(key: str) -> str:
 
 
 def _instructions_for_sections(selected: tuple[str, ...]) -> tuple[str, ...]:
-    if selected == WORKSHEET_SECTIONS:
-        return WORKSHEET_INSTRUCTIONS
-
     instructions = list(WORKSHEET_INSTRUCTIONS)
     instructions[2] = (
         f"Fill exactly the {len(selected)} host-required sections shown below and do not add omitted sections. "
@@ -240,8 +216,6 @@ def _instructions_for_sections(selected: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def worksheet_prompt(required_sections: Iterable[str] | None = None) -> str:
-    """Return canonical instructions for only the host-required worksheet sections."""
-
     selected = normalize_required_sections(required_sections)
     rows = ["ENGINEERING WORKSHEET — mandatory completion protocol:"]
     rows.extend(
@@ -256,8 +230,6 @@ def worksheet_prompt(required_sections: Iterable[str] | None = None) -> str:
 
 
 def worksheet_section_prompt(section: str) -> str:
-    """Return a compact prompt for one host-selected worksheet section."""
-
     key = _normalize_section_name(section)
     return "\n".join(
         (
@@ -299,21 +271,17 @@ def _worksheet_section_schema(key: str) -> dict[str, Any]:
 
 
 def worksheet_section_schema(section: str) -> dict[str, Any]:
-    """Return the strict response schema for exactly one section."""
-
     return deepcopy(_worksheet_section_schema(_normalize_section_name(section)))
 
 
 def worksheet_schema(required_sections: Iterable[str] | None = None) -> dict[str, Any]:
-    """Build the response schema for an explicit host-owned section selection."""
-
     selected = normalize_required_sections(required_sections)
     return {
         "type": "object",
         "description": (
             "Complete engineering worksheet for exactly the host-required sections. "
             "Specifications are authored design contracts; constraint_evidence_refs only record "
-            "external evidence that actually constrains those designs. Section answers must be distinct."
+            "external evidence that actually constrains those designs."
         ),
         "properties": {key: _worksheet_section_schema(key) for key in selected},
         "required": list(selected),
@@ -342,8 +310,6 @@ def validate_worksheet_section(
     allowed_refs: set[str],
     section: str,
 ) -> dict[str, Any]:
-    """Validate one section without weakening the full worksheet contract."""
-
     key = _normalize_section_name(section)
     if not isinstance(value, Mapping) or set(value) != {
         "specification",
@@ -357,17 +323,27 @@ def validate_worksheet_section(
     error = next(Draft202012Validator(specification_schema(key)).iter_errors(specification), None)
     if error is not None:
         path = ".".join(str(part) for part in error.absolute_path)
-        raise ValueError(f"DETAILED_PLAN_WORKSHEET: {key}.{path} violates fixed specification template: {error.message}")
+        raise ValueError(
+            f"DETAILED_PLAN_WORKSHEET: {key}.{path} violates fixed specification template: {error.message}"
+        )
     reasons = specification["inapplicable_concerns"]
     excluded = [row["concern"] for row in reasons]
     empty = {concern for concern in DETAIL_RECORDS[key] if not specification[concern]}
     if len(excluded) != len(set(excluded)) or set(excluded) != empty:
-        raise ValueError(f"DETAILED_PLAN_WORKSHEET: {key} every empty concern requires exactly one inapplicable reason")
+        raise ValueError(
+            f"DETAILED_PLAN_WORKSHEET: {key} every empty concern requires exactly one inapplicable reason"
+        )
     for concern, records in specification.items():
         for record in records:
             for field, text in record.items():
-                if not text.strip() or (concern == "inapplicable_concerns" and field == "reason" and text.strip().casefold() in _PLACEHOLDERS):
-                    raise ValueError(f"DETAILED_PLAN_WORKSHEET: {key}.{concern}.{field} has no concrete value")
+                if not text.strip() or (
+                    concern == "inapplicable_concerns"
+                    and field == "reason"
+                    and text.strip().casefold() in _PLACEHOLDERS
+                ):
+                    raise ValueError(
+                        f"DETAILED_PLAN_WORKSHEET: {key}.{concern}.{field} has no concrete value"
+                    )
 
     refs = value.get("constraint_evidence_refs")
     if not isinstance(refs, list):
@@ -403,7 +379,9 @@ def validate_worksheet(
     normalized: dict[str, Any] = {}
     for key in selected:
         row = validate_worksheet_section(value[key], allowed_refs, key)
-        normalized_specification = json.dumps(row["specification"], sort_keys=True, ensure_ascii=False).casefold()
+        normalized_specification = json.dumps(
+            row["specification"], sort_keys=True, ensure_ascii=False
+        ).casefold()
         duplicate_of = seen_specifications.get(normalized_specification)
         if duplicate_of is not None:
             raise ValueError(
