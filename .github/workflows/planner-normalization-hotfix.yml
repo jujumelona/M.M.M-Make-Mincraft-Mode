@@ -1,5 +1,6 @@
 name: Planner normalization hotfix
 
+# one-shot normalization runner; remove after the normalized source lands
 on:
   push:
     paths:
