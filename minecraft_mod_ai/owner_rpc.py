@@ -59,6 +59,19 @@ class OwnerRPC:
         except (OSError, UnicodeError):
             return
 
+    def _raise_transport_failure(
+        self,
+        method: str,
+        timeout: float,
+        exc: BaseException,
+    ) -> None:
+        self.close()
+        if isinstance(exc, queue.Empty):
+            raise OwnerRPCError(f'Owner {method} timed out after {timeout}s') from exc
+        if isinstance(exc, OwnerRPCError):
+            raise exc
+        raise OwnerRPCError(f'Owner transport failed: {exc}') from exc
+
     def request(self, method: str, params: Mapping[str, Any], *, timeout: float) -> dict[str, Any]:
         if timeout <= 0:
             raise ValueError('Owner request timeout must be positive')
@@ -84,14 +97,16 @@ class OwnerRPC:
                 if not isinstance(result, dict):
                     raise OwnerRPCError('Owner protocol result must be an object')
                 return result
-            except queue.Empty as exc:
-                self.close()
-                raise OwnerRPCError(f'Owner {method} timed out after {timeout}s') from exc
-            except (OSError, ValueError, OwnerRPCError) as exc:
-                self.close()
-                if isinstance(exc, OwnerRPCError):
-                    raise
-                raise OwnerRPCError(f'Owner transport failed: {exc}') from exc
+            except (queue.Empty, OSError, ValueError, OwnerRPCError) as exc:
+                self._raise_transport_failure(method, timeout, exc)
+                raise AssertionError('unreachable')
+
+    def _process_exited(self, timeout: float) -> bool:
+        try:
+            self.process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return False
+        return True
 
     def close(self) -> None:
         with self._lock:
@@ -101,15 +116,11 @@ class OwnerRPC:
             try:
                 if self.process.stdin is not None:
                     self.process.stdin.close()
-                try:
-                    self.process.wait(timeout=2)
-                except subprocess.TimeoutExpired:
+                if not self._process_exited(2):
                     self.process.terminate()
-                    try:
-                        self.process.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
+                    if not self._process_exited(2):
                         self.process.kill()
-                        self.process.wait(timeout=2)
+                        self._process_exited(2)
             finally:
                 self._reader.join(timeout=2)
                 self._errors.join(timeout=2)
@@ -118,7 +129,10 @@ class OwnerRPC:
                         stream.close()
 
     def __enter__(self) -> OwnerRPC:  # noqa: PYI034 -- Python 3.10 support
+        if self._closed:
+            raise OwnerRPCError('Owner process is closed')
         return self
 
-    def __exit__(self, *_args: object) -> None:
+    def __exit__(self, *_args: object) -> bool:
         self.close()
+        return False
