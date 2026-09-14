@@ -175,14 +175,17 @@ def _schema_required_paths(
 def _schema_repair_directives(parameters: Mapping[str, Any]) -> tuple[str, ...]:
     """Build a finite repair frontier directly from all schema-required obligations."""
 
+    required_paths = sorted(
+        _schema_required_paths(parameters),
+        key=lambda item: (item.count(".") + item.count("[]"), len(item)),
+        reverse=True,
+    )
     directives = [
-        "reconstruct the complete argument object from the schema from scratch",
-    ]
-    directives.extend(
         "reconstruct the complete object while explicitly satisfying required schema path "
         f"{required_path!r}"
-        for required_path in _schema_required_paths(parameters)
-    )
+        for required_path in required_paths
+    ]
+    directives.append("reconstruct the complete argument object from the schema from scratch")
     return tuple(directives)
 
 
