@@ -108,6 +108,19 @@ class OwnerRPC:
             return False
         return True
 
+    def _kill_and_wait(self) -> None:
+        self.process.kill()
+        self._process_exited(2)
+
+    def _terminate_or_kill(self) -> None:
+        self.process.terminate()
+        if not self._process_exited(2):
+            self._kill_and_wait()
+
+    def _retire_process(self) -> None:
+        if not self._process_exited(2):
+            self._terminate_or_kill()
+
     def close(self) -> None:
         with self._lock:
             if self._closed:
@@ -116,11 +129,7 @@ class OwnerRPC:
             try:
                 if self.process.stdin is not None:
                     self.process.stdin.close()
-                if not self._process_exited(2):
-                    self.process.terminate()
-                    if not self._process_exited(2):
-                        self.process.kill()
-                        self._process_exited(2)
+                self._retire_process()
             finally:
                 self._reader.join(timeout=2)
                 self._errors.join(timeout=2)
