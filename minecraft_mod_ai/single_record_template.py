@@ -62,36 +62,6 @@ def _ordinal_instruction(context: dict[str, Any]) -> str:
     return ""
 
 
-def _schema_field_contract(schema: Mapping[str, Any]) -> str:
-    """Render the exact current function-argument fields as a semantic prompt contract."""
-
-    properties = schema.get("properties")
-    if not isinstance(properties, Mapping) or not properties:
-        raise SingleRecordTemplateError(
-            "SINGLE_TEMPLATE_SCHEMA: model-facing slice has no declared properties"
-        )
-    lines = [
-        "CURRENT_FIXED_OUTPUT_FIELDS: populate exactly the declared function arguments below.",
-        _READ_ONLY_CONTEXT_CONTRACT,
-    ]
-    for raw_name, raw_schema in properties.items():
-        name = str(raw_name)
-        field_schema = raw_schema if isinstance(raw_schema, Mapping) else {}
-        field_type = str(field_schema.get("type") or "schema-defined value")
-        description = " ".join(str(field_schema.get("description") or "").split())
-        if not description:
-            description = (
-                f"Return only the semantic value named by {name!r}; do not copy the input "
-                "context or any serialization wrapper into this field."
-            )
-        lines.append(f"- {name} ({field_type}): {description}")
-    lines.append(
-        "Do not invent undeclared arguments. Do not substitute the input object for any "
-        "declared argument."
-    )
-    return "\n".join(lines)
-
-
 def _atomic_record_schema_slices(
     schema: dict[str, Any],
     *,
@@ -226,12 +196,6 @@ def run_single_record_template(
         value: dict[str, Any] = {}
         for part_index, part_schema in enumerate(slices, start=1):
             messages = list(base_messages)
-            messages.append(
-                {
-                    "role": "system",
-                    "content": _schema_field_contract(part_schema),
-                }
-            )
             if value:
                 messages.append(
                     {
@@ -240,8 +204,8 @@ def run_single_record_template(
                             "The host has already accepted these fields for the same logical "
                             "record: "
                             + json.dumps(value, ensure_ascii=False, sort_keys=True)
-                            + ". Fill only the fields declared by the current fixed template "
-                            "and keep them semantically consistent with the accepted fields."
+                            + ". Fill only the fields declared by the supplied native function "
+                            "schema and keep them semantically consistent with the accepted fields."
                         ),
                     }
                 )
