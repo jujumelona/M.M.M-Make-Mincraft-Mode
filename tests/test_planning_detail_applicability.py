@@ -12,7 +12,6 @@ from minecraft_mod_ai.planning_detail_applicability import (
 from minecraft_mod_ai.planning_detail_template import (
     CORE_WORKSHEET_SECTIONS,
     CONDITIONAL_WORKSHEET_SECTIONS,
-    WORKSHEET_SECTIONS,
 )
 
 
