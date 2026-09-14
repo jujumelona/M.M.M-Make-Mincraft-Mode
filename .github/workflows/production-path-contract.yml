@@ -10,6 +10,9 @@ on:
       - 'minecraft_mod_ai/planner.py'
       - 'minecraft_mod_ai/routed_planner.py'
       - 'minecraft_mod_ai/planning_pipeline.py'
+      - 'minecraft_mod_ai/runtime_finalization.py'
+      - 'minecraft_mod_ai/runtime_preflight.py'
+      - 'minecraft_mod_ai/tool_validation_surface_contract.py'
       - 'tests/test_llama_cpp_native_tool_call_contract.py'
       - 'tests/test_production_tool_call_isolation_contract.py'
       - 'tests/test_production_path_contract.py'
@@ -23,6 +26,9 @@ on:
       - 'minecraft_mod_ai/planner.py'
       - 'minecraft_mod_ai/routed_planner.py'
       - 'minecraft_mod_ai/planning_pipeline.py'
+      - 'minecraft_mod_ai/runtime_finalization.py'
+      - 'minecraft_mod_ai/runtime_preflight.py'
+      - 'minecraft_mod_ai/tool_validation_surface_contract.py'
       - 'tests/test_llama_cpp_native_tool_call_contract.py'
       - 'tests/test_production_tool_call_isolation_contract.py'
       - 'tests/test_production_path_contract.py'
@@ -56,7 +62,10 @@ jobs:
             minecraft_mod_ai/model_router.py \
             minecraft_mod_ai/progress_aware_tool_loop.py \
             minecraft_mod_ai/planner.py \
-            minecraft_mod_ai/routed_planner.py
+            minecraft_mod_ai/routed_planner.py \
+            minecraft_mod_ai/runtime_finalization.py \
+            minecraft_mod_ai/runtime_preflight.py \
+            minecraft_mod_ai/tool_validation_surface_contract.py
       - name: Run production-path fault-injection contracts
         run: |
           python -m pytest -q \
