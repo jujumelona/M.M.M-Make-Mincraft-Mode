@@ -2,10 +2,7 @@ from pathlib import Path
 
 import yaml
 
-from minecraft_mod_ai.bounded_record_template import (
-    _cardinality_blocking_enabled,
-    record_cardinality_response_schema,
-)
+from minecraft_mod_ai.bounded_record_template import record_cardinality_response_schema
 
 
 BEHAVIOR_CONTRACT_ROOT = (
@@ -40,8 +37,8 @@ def test_behavior_contract_records_do_not_delegate_host_control_to_model():
         assert "host owns cardinality and iteration" in rules, path.name
 
 
-def test_cardinality_blocking_remains_the_default_for_other_record_templates():
-    assert _cardinality_blocking_enabled({}) is True
+def test_all_record_cardinality_uses_count_only_without_blocking_judgement():
     schema = record_cardinality_response_schema({})
-    assert schema["required"] == ["count", "blocked_reason"]
-    assert "blocked_reason" in schema["properties"]
+    assert schema["required"] == ["count"]
+    assert "blocked_reason" not in schema["properties"]
+    assert schema["additionalProperties"] is False
