@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import io
 import json
 import subprocess
+import tarfile
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -137,34 +139,55 @@ def _serial_expensive_calls(path: str, tree: ast.AST) -> set[tuple[str, str, str
     return rows
 
 
+def _import_candidates(name: str) -> tuple[str, ...]:
+    parts = name.split(".")
+    parents = tuple(".".join(parts[:index]) for index in range(len(parts) - 1, 0, -1))
+    return (name, *parents)
+
+
+def _relative_import_base(owner_package: str, node: ast.ImportFrom) -> str:
+    base = node.module or ""
+    if not node.level:
+        return base
+    package_parts = owner_package.split(".")
+    keep = max(0, len(package_parts) - node.level + 1)
+    prefix = ".".join(package_parts[:keep])
+    return f"{prefix}.{base}".strip(".")
+
+
+def _import_from_targets(
+    owner: str,
+    owner_package: str,
+    node: ast.ImportFrom,
+    modules: set[str],
+) -> set[str]:
+    base = _relative_import_base(owner_package, node)
+    targets: set[str] = set()
+    for alias in node.names:
+        candidate = f"{base}.{alias.name}".strip(".")
+        if candidate in modules and candidate != owner:
+            targets.add(candidate)
+        elif base in modules and base != owner:
+            targets.add(base)
+    return targets
+
+
 def _imports(path: str, tree: ast.AST, modules: set[str]) -> set[str]:
     owner = _module_name(path)
-    result: set[str] = set()
     owner_package = owner.rsplit(".", 1)[0] if "." in owner else owner
+    result: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            for alias in node.names:
-                candidates = [alias.name]
-                parts = alias.name.split(".")
-                candidates.extend(
-                    ".".join(parts[:index]) for index in range(len(parts) - 1, 0, -1)
-                )
-                result.update(
-                    candidate for candidate in candidates if candidate in modules and candidate != owner
-                )
+            candidates = (
+                candidate
+                for alias in node.names
+                for candidate in _import_candidates(alias.name)
+            )
+            result.update(
+                candidate for candidate in candidates if candidate in modules and candidate != owner
+            )
         elif isinstance(node, ast.ImportFrom):
-            base = node.module or ""
-            if node.level:
-                pkg = owner_package.split(".")
-                keep = max(0, len(pkg) - node.level + 1)
-                prefix = ".".join(pkg[:keep])
-                base = f"{prefix}.{base}".strip(".")
-            for alias in node.names:
-                candidate = f"{base}.{alias.name}".strip(".")
-                if candidate in modules and candidate != owner:
-                    result.add(candidate)
-                elif base in modules and base != owner:
-                    result.add(base)
+            result.update(_import_from_targets(owner, owner_package, node, modules))
     return result
 
 
@@ -271,65 +294,80 @@ def analyze_sources(sources: dict[str, str]) -> dict[str, Any]:
     }
 
 
-def compare_snapshots(base: dict[str, Any], head: dict[str, Any]) -> list[dict[str, Any]]:
+def _new_function_violation(key: str, metrics: dict[str, Any]) -> dict[str, Any] | None:
+    exceeded = {
+        "complexity": metrics["complexity"] > MAX_NEW_COMPLEXITY,
+        "span": metrics["span"] > MAX_NEW_FUNCTION_LINES,
+        "parameters": metrics["parameters"] > MAX_NEW_PARAMETERS,
+    }
+    if not any(exceeded.values()):
+        return None
+    return {
+        "category": "new_function_hard_ceiling",
+        "subject": key,
+        "metrics": metrics,
+        "exceeded": exceeded,
+    }
+
+
+def _existing_function_violations(
+    key: str,
+    previous: dict[str, Any],
+    metrics: dict[str, Any],
+) -> list[dict[str, Any]]:
+    violations: list[dict[str, Any]] = []
+    if metrics["complexity"] > previous["complexity"]:
+        violations.append(
+            {
+                "category": "complexity_regression",
+                "subject": key,
+                "before": previous["complexity"],
+                "after": metrics["complexity"],
+            }
+        )
+    if metrics["span"] > previous["span"] and metrics["span"] > MAX_NEW_FUNCTION_LINES:
+        violations.append(
+            {
+                "category": "function_size_regression",
+                "subject": key,
+                "before": previous["span"],
+                "after": metrics["span"],
+            }
+        )
+    if (
+        metrics["parameters"] > previous["parameters"]
+        and metrics["parameters"] > MAX_NEW_PARAMETERS
+    ):
+        violations.append(
+            {
+                "category": "parameter_count_regression",
+                "subject": key,
+                "before": previous["parameters"],
+                "after": metrics["parameters"],
+            }
+        )
+    return violations
+
+
+def _function_regressions(base: dict[str, Any], head: dict[str, Any]) -> list[dict[str, Any]]:
     violations: list[dict[str, Any]] = []
     base_functions = base.get("functions", {})
-    head_functions = head.get("functions", {})
-    for key, metrics in sorted(head_functions.items()):
+    for key, metrics in sorted(head.get("functions", {}).items()):
         previous = base_functions.get(key)
         if previous is None:
-            exceeded = {
-                "complexity": metrics["complexity"] > MAX_NEW_COMPLEXITY,
-                "span": metrics["span"] > MAX_NEW_FUNCTION_LINES,
-                "parameters": metrics["parameters"] > MAX_NEW_PARAMETERS,
-            }
-            if any(exceeded.values()):
-                violations.append(
-                    {
-                        "category": "new_function_hard_ceiling",
-                        "subject": key,
-                        "metrics": metrics,
-                        "exceeded": exceeded,
-                    }
-                )
-        elif metrics["complexity"] > previous["complexity"]:
-            violations.append(
-                {
-                    "category": "complexity_regression",
-                    "subject": key,
-                    "before": previous["complexity"],
-                    "after": metrics["complexity"],
-                }
-            )
-        if (
-            previous is not None
-            and metrics["span"] > previous["span"]
-            and metrics["span"] > MAX_NEW_FUNCTION_LINES
-        ):
-            violations.append(
-                {
-                    "category": "function_size_regression",
-                    "subject": key,
-                    "before": previous["span"],
-                    "after": metrics["span"],
-                }
-            )
-        if (
-            previous is not None
-            and metrics["parameters"] > previous["parameters"]
-            and metrics["parameters"] > MAX_NEW_PARAMETERS
-        ):
-            violations.append(
-                {
-                    "category": "parameter_count_regression",
-                    "subject": key,
-                    "before": previous["parameters"],
-                    "after": metrics["parameters"],
-                }
-            )
+            violation = _new_function_violation(key, metrics)
+            if violation is not None:
+                violations.append(violation)
+        else:
+            violations.extend(_existing_function_violations(key, previous, metrics))
+    return violations
 
+
+def _file_regressions(base: dict[str, Any], head: dict[str, Any]) -> list[dict[str, Any]]:
+    violations: list[dict[str, Any]] = []
+    base_files = base.get("files", {})
     for path, metrics in sorted(head.get("files", {}).items()):
-        previous = base.get("files", {}).get(path)
+        previous = base_files.get(path)
         if previous is None and metrics["lines"] > MAX_NEW_FILE_LINES:
             violations.append(
                 {"category": "new_file_hard_ceiling", "subject": path, "lines": metrics["lines"]}
@@ -347,25 +385,47 @@ def compare_snapshots(base: dict[str, Any], head: dict[str, Any]) -> list[dict[s
                     "after": metrics["lines"],
                 }
             )
+    return violations
 
+
+def _cycle_regressions(base: dict[str, Any], head: dict[str, Any]) -> list[dict[str, Any]]:
     base_cycles = {tuple(row) for row in base.get("import_cycles", [])}
-    for cycle in {tuple(row) for row in head.get("import_cycles", [])} - base_cycles:
-        violations.append({"category": "new_import_cycle", "subject": list(cycle)})
+    head_cycles = {tuple(row) for row in head.get("import_cycles", [])}
+    return [
+        {"category": "new_import_cycle", "subject": list(cycle)}
+        for cycle in sorted(head_cycles - base_cycles)
+    ]
 
-    for pair in introduced_duplicate_pairs(
-        head.get("duplicate_function_groups", []),
-        base.get("duplicate_function_groups", []),
-    ):
-        violations.append(
-            {"category": "new_duplicate_function_body", "subject": list(pair)}
+
+def _duplicate_regressions(base: dict[str, Any], head: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {"category": "new_duplicate_function_body", "subject": list(pair)}
+        for pair in introduced_duplicate_pairs(
+            head.get("duplicate_function_groups", []),
+            base.get("duplicate_function_groups", []),
         )
+    ]
 
+
+def _serial_loop_regressions(base: dict[str, Any], head: dict[str, Any]) -> list[dict[str, Any]]:
     base_serial = {tuple(row) for row in base.get("serial_expensive_loops", [])}
-    for row in {tuple(row) for row in head.get("serial_expensive_loops", [])} - base_serial:
-        violations.append({"category": "new_serial_expensive_loop", "subject": list(row)})
+    head_serial = {tuple(row) for row in head.get("serial_expensive_loops", [])}
+    return [
+        {"category": "new_serial_expensive_loop", "subject": list(row)}
+        for row in sorted(head_serial - base_serial)
+    ]
 
-    for row in head.get("parse_errors", []):
-        violations.append({"category": "python_parse_error", "subject": row})
+
+def compare_snapshots(base: dict[str, Any], head: dict[str, Any]) -> list[dict[str, Any]]:
+    violations = _function_regressions(base, head)
+    violations.extend(_file_regressions(base, head))
+    violations.extend(_cycle_regressions(base, head))
+    violations.extend(_duplicate_regressions(base, head))
+    violations.extend(_serial_loop_regressions(base, head))
+    violations.extend(
+        {"category": "python_parse_error", "subject": row}
+        for row in head.get("parse_errors", [])
+    )
     return violations
 
 
@@ -381,18 +441,46 @@ _REQUIRED_CI_GATE_DEPENDENCIES = frozenset(
 )
 
 
-def _ci_gate_dependencies(text: str) -> set[str]:
-    lines = text.splitlines()
-    gate_index: int | None = None
-    gate_indent = -1
+def _find_ci_gate(lines: list[str]) -> tuple[int, int] | None:
     for index, line in enumerate(lines):
         if line.strip() == "ci-gate:":
-            gate_index = index
-            gate_indent = len(line) - len(line.lstrip())
-            break
-    if gate_index is None:
-        return set()
+            return index, len(line) - len(line.lstrip())
+    return None
 
+
+def _inline_dependencies(payload: str) -> set[str] | None:
+    if payload.startswith("[") and payload.endswith("]"):
+        return {
+            item.strip().strip("'\"")
+            for item in payload[1:-1].split(",")
+            if item.strip()
+        }
+    if payload:
+        return {payload.strip().strip("'\"")}
+    return None
+
+
+def _block_dependencies(lines: list[str], start: int, needs_indent: int) -> set[str]:
+    dependencies: set[str] = set()
+    for line in lines[start:]:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if len(line) - len(line.lstrip()) <= needs_indent:
+            break
+        if stripped.startswith("-"):
+            value = stripped[1:].strip().strip("'\"")
+            if value:
+                dependencies.add(value)
+    return dependencies
+
+
+def _ci_gate_dependencies(text: str) -> set[str]:
+    lines = text.splitlines()
+    gate = _find_ci_gate(lines)
+    if gate is None:
+        return set()
+    gate_index, gate_indent = gate
     for index in range(gate_index + 1, len(lines)):
         line = lines[index]
         stripped = line.strip()
@@ -403,30 +491,8 @@ def _ci_gate_dependencies(text: str) -> set[str]:
             break
         if not stripped.startswith("needs:"):
             continue
-        payload = stripped.partition(":")[2].strip()
-        if payload.startswith("[") and payload.endswith("]"):
-            return {
-                item.strip().strip("'\"")
-                for item in payload[1:-1].split(",")
-                if item.strip()
-            }
-        if payload:
-            return {payload.strip().strip("'\"")}
-
-        dependencies: set[str] = set()
-        needs_indent = indent
-        for dependency_line in lines[index + 1 :]:
-            dependency = dependency_line.strip()
-            if not dependency or dependency.startswith("#"):
-                continue
-            dependency_indent = len(dependency_line) - len(dependency_line.lstrip())
-            if dependency_indent <= needs_indent:
-                break
-            if dependency.startswith("-"):
-                value = dependency[1:].strip().strip("'\"")
-                if value:
-                    dependencies.add(value)
-        return dependencies
+        inline = _inline_dependencies(stripped.partition(":")[2].strip())
+        return inline if inline is not None else _block_dependencies(lines, index + 1, indent)
     return set()
 
 
@@ -474,25 +540,20 @@ def _working_sources(root: Path) -> dict[str, str]:
 
 
 def _git_sources(root: Path, ref: str) -> dict[str, str]:
-    listed = subprocess.run(
-        ["git", "ls-tree", "-r", "--name-only", ref],
+    archived = subprocess.run(
+        ["git", "archive", "--format=tar", ref],
         cwd=root,
         check=True,
-        text=True,
         capture_output=True,
     ).stdout
     values: dict[str, str] = {}
-    for path in listed.splitlines():
-        if not _is_source_path(path):
-            continue
-        result = subprocess.run(
-            ["git", "show", f"{ref}:{path}"],
-            cwd=root,
-            text=True,
-            capture_output=True,
-        )
-        if result.returncode == 0:
-            values[path] = result.stdout
+    with tarfile.open(fileobj=io.BytesIO(archived), mode="r:") as archive:
+        for member in archive.getmembers():
+            if not member.isfile() or not _is_source_path(member.name):
+                continue
+            extracted = archive.extractfile(member)
+            if extracted is not None:
+                values[member.name] = extracted.read().decode("utf-8", errors="replace")
     return values
 
 
@@ -501,7 +562,7 @@ def run_audit(root: Path = ROOT, base_ref: str = "HEAD^") -> dict[str, Any]:
     try:
         base = analyze_sources(_git_sources(root, base_ref))
         base_available = True
-    except (OSError, subprocess.CalledProcessError):
+    except (OSError, subprocess.CalledProcessError, tarfile.TarError):
         base = analyze_sources({})
         base_available = False
     violations = compare_snapshots(base, head)
