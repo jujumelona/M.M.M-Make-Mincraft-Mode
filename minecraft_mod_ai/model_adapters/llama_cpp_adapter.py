@@ -674,7 +674,12 @@ def _qwen_tool_generation_response(
     message: Mapping[str, Any],
     request: GenerationRequest,
 ) -> GenerationResponse:
-    schemas = _tool_schema_map(request.tools)
+    # Convert ToolDefinition objects to dict format
+    tool_schemas = [
+        tool.to_schema() if hasattr(tool, 'to_schema') else tool
+        for tool in request.tools
+    ]
+    schemas = _tool_schema_map(tool_schemas)
     content_value = message.get("content")
     content_raw = content_value if isinstance(content_value, str) else ""
     reasoning_value = message.get("reasoning_content", message.get("reasoning"))
@@ -891,6 +896,15 @@ def _validate_tool_choice(request: GenerationRequest, calls: Sequence[ToolCall])
     if choice == "required":
         if not calls:
             raise RuntimeError("model did not emit a tool call when one is required")
+        return
+    if isinstance(choice, str):
+        # String tool_choice specifies a specific tool name
+        expected = choice.strip()
+        if len(calls) != 1 or calls[0].name != expected:
+            received = ", ".join(call.name for call in calls) or "<none>"
+            raise RuntimeError(
+                f"model violated named tool_choice {expected!r}; received {received}"
+            )
         return
     if isinstance(choice, Mapping):
         function = choice.get("function")

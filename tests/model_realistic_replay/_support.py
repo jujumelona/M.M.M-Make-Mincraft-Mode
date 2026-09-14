@@ -14,7 +14,7 @@ MODEL = "unsloth/Qwen3.5-9B-MTP-GGUF:Qwen3.5-9B-UD-Q4_K_XL.gguf"
 FIXTURE_PROVENANCE = "synthetic_qwen35_failure_shape"
 SCHEMA = {
     "type": "object",
-    "properties": {"answer": {"type": "string"}},
+    "properties": {"answer": {"type": "string", "maxLength": 256}},
     "required": ["answer"],
     "additionalProperties": False,
 }
