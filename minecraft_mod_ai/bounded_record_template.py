@@ -18,36 +18,26 @@ from jsonschema import Draft202012Validator
 
 from .fixed_template_generation import generate_fixed_template_value
 from .model_concurrency import router_native_model_parallelism
-from .model_output_atomicity_contract import MAX_MODEL_STRING_CHARS
 from .single_record_template import run_single_record_template
 from .task_template_catalog import load_record_template
 from .task_template_input import task_binding, task_context
-from .template_errors import TemplateBlocked
 
 _EMPTY_REASON = "No applicable records in the supplied context."
 
 
-def _cardinality_blocking_enabled(template: dict[str, Any] | None) -> bool:
-    """Default to blocking unless a template explicitly delegates cardinality to the host."""
-    return not (template and template.get("cardinality_blocking") is False)
-
-
 def record_cardinality_response_schema(template: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Return the template-specific exact-cardinality response contract."""
-    properties: dict[str, Any] = {
-        "count": {"type": "integer", "minimum": 0},
-    }
-    required = ["count"]
-    if _cardinality_blocking_enabled(template):
-        properties["blocked_reason"] = {
-            "type": "string",
-            "maxLength": MAX_MODEL_STRING_CHARS,
-        }
-        required.append("blocked_reason")
+    """Return the exact-cardinality contract.
+
+    Planning has no blocked/failure judgement here. The narrowed host context is
+    authoritative: zero applicable records is represented only by ``count == 0``.
+    """
+    del template
     return {
         "type": "object",
-        "properties": properties,
-        "required": required,
+        "properties": {
+            "count": {"type": "integer", "minimum": 0},
+        },
+        "required": ["count"],
         "additionalProperties": False,
     }
 
@@ -90,29 +80,27 @@ def _load_cardinality(
     checkpoint: Any,
 ) -> int:
     schema = record_cardinality_response_schema(template)
-    blocking_enabled = _cardinality_blocking_enabled(template)
     binding = "record-cardinality-v1:" + task_binding(template, context, allowed_refs)
     saved = (progress or {}).get(binding)
-    if saved is None:
+
+    # Old checkpoints may contain the removed ``blocked_reason`` field. Reuse only
+    # their numeric count and discard all former judgement metadata.
+    if (
+        isinstance(saved, dict)
+        and isinstance(saved.get("count"), int)
+        and not isinstance(saved.get("count"), bool)
+        and int(saved["count"]) >= 0
+    ):
+        value = {"count": int(saved["count"])}
+    else:
         rules = "\n".join(str(rule) for rule in template.get("rules", ()))
-        blocking_instruction = (
-            "Set blocked_reason only when a missing fact makes the cardinality impossible "
-            "to determine correctly."
-            if blocking_enabled
-            else (
-                "The supplied context is authoritative and sufficient to determine this "
-                "cardinality. Do not make a blocked/missing-fact decision; return count 0 "
-                "when no records apply."
-            )
-        )
         system_prompt = (
             str(template.get("task") or "Produce the requested records.")
             + ("\n" + rules if rules else "")
             + "\nDetermine only the exact number of distinct authored/applicable records "
-            "supported by this narrowed context. Return count 0 when none apply. Do not "
-            "clamp the count to an implementation limit and do not make a continuation, "
-            "done, retry, or loop-control decision. "
-            + blocking_instruction
+            "supported by this narrowed context. The supplied context is authoritative. "
+            "Return count 0 when no records apply. Do not make a blocked, missing-fact, "
+            "failure, continuation, done, retry, or loop-control decision."
         )
         value = generate_fixed_template_value(
             router,
@@ -128,15 +116,7 @@ def _load_cardinality(
         Draft202012Validator(schema).validate(value)
         if checkpoint is not None:
             checkpoint(binding, deepcopy(value))
-    else:
-        if not isinstance(saved, dict):
-            raise ValueError(f"TEMPLATE_PROGRESS: expected cardinality object for {identifier}")
-        value = deepcopy(saved)
-        Draft202012Validator(schema).validate(value)
 
-    blocked_reason = str(value.get("blocked_reason", "")).strip()
-    if blocked_reason:
-        raise TemplateBlocked(f"TEMPLATE_BLOCKED: {identifier}: {blocked_reason}")
     return int(value["count"])
 
 
