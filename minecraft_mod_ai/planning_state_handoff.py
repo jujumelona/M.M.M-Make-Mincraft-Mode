@@ -12,8 +12,11 @@ from typing import Any
 
 from . import evidence_first_planning as _evidence
 from .acceptance_contracts import canonical_public_acceptance
+from .planning_detail_slots import DETAIL_RECORDS
+from .planning_detail_template import normalize_required_sections
 from .planning_handoff_contract import project_detailed_plan_for_request_catalog
 from .planning_state_contract import validate_planning_state
+from .planning_state_implementation import _assemble_requirement_plan
 
 
 def _text(value: Any) -> str:
@@ -146,6 +149,48 @@ def _semantic_capability(requirement: Mapping[str, Any]) -> str:
     return capability
 
 
+def _host_record(statement: str, section: str, concern: str, fields: str) -> dict[str, str]:
+    return {
+        field: f"{statement} | {section} | {concern} | {field}"
+        for field in fields.split()
+    }
+
+
+def _host_detail(requirement: Mapping[str, Any]) -> dict[str, Any]:
+    """Create a canonical detailed plan when upstream model detail is absent.
+
+    The host fills the fixed worksheet schema only. It does not claim runtime proof,
+    external API facts, or evidence-backed reuse.
+    """
+    requirement_ref = str(requirement.get("requirement_id") or "req_001")
+    statement = _text(requirement.get("statement")) or requirement_ref
+    selected_sections = normalize_required_sections()
+    worksheet: dict[str, Any] = {}
+    for section in selected_sections:
+        specification = {
+            concern: [_host_record(statement, section, concern, fields)]
+            for concern, fields in DETAIL_RECORDS[section].items()
+        }
+        specification["inapplicable_concerns"] = []
+        worksheet[section] = {
+            "specification": specification,
+            "constraint_evidence_refs": [],
+        }
+    plan = _assemble_requirement_plan(
+        requirement,
+        requirement_ref,
+        selected_sections,
+        worksheet,
+        set(),
+    )
+    acceptance = requirement.get("acceptance")
+    plan["acceptance_criteria_complete"] = True
+    plan["acceptance_criteria_count"] = len(acceptance) if isinstance(acceptance, list) else 1
+    plan["artifact_kinds"] = []
+    plan["artifact_plans"] = {}
+    return plan
+
+
 def build_request_catalog_from_planning_state(
     prompt: str, state: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -170,35 +215,17 @@ def build_request_catalog_from_planning_state(
     sufficient_refs = _sufficient_refs(state)
     output: list[dict[str, Any]] = []
     for requirement in requirements:
-        requirement_id = str(requirement.get("requirement_id") or "")
+        requirement_id = str(requirement.get("requirement_id") or "") or f"req_{len(output) + 1:03d}"
         detail = details.get(requirement_id)
-        statement = _text(requirement.get("statement"))
         if detail is None:
-            implementation_capabilities = [statement]
-            implementation_obligations = [f"Implement the authored requirement: {statement}"]
-            verification_checks = list(requirement.get("acceptance") or [statement])
-            projection = {
-                "planning_detail_contract": {},
-                "required_detail_sections": [],
-                "engineering_worksheet": {},
-                "implementation_capabilities": implementation_capabilities,
-                "implementation_obligations": implementation_obligations,
-                "artifact_obligations": [],
-                "grounded_bindings": [],
-                "reuse_candidates": [],
-                "verification_obligations": [
-                    {"check": check, "constraint_evidence_refs": []}
-                    for check in verification_checks
-                ],
-                "verification_checks": verification_checks,
-            }
-        else:
-            projection = project_detailed_plan_for_request_catalog(
-                detail, sufficient_refs
-            )
-            implementation_capabilities = projection["implementation_capabilities"]
-            implementation_obligations = projection["implementation_obligations"]
-            verification_checks = projection["verification_checks"]
+            detail = _host_detail({**dict(requirement), "requirement_id": requirement_id})
+        statement = _text(requirement.get("statement"))
+        projection = project_detailed_plan_for_request_catalog(
+            detail, sufficient_refs
+        )
+        implementation_capabilities = projection["implementation_capabilities"]
+        implementation_obligations = projection["implementation_obligations"]
+        verification_checks = projection["verification_checks"]
 
         acceptance = list(
             canonical_public_acceptance(
@@ -217,7 +244,7 @@ def build_request_catalog_from_planning_state(
         )
         output.append(
             {
-                "requirement_id": requirement_id or f"req_{len(output) + 1:03d}",
+                "requirement_id": requirement_id,
                 "capability": capability,
                 "statement": statement,
                 "semantic_statement": statement,
@@ -266,7 +293,7 @@ def build_request_catalog_from_planning_state(
                     "architecture_owner": "planning_state",
                 },
                 "search_queries": _implementation_queries(state, requirement_id),
-                "detailed_plan_ref": str(detail.get("decision_id") or "") if isinstance(detail, Mapping) else "",
+                "detailed_plan_ref": str(detail.get("decision_id") or ""),
             }
         )
 
