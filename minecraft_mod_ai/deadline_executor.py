@@ -4,13 +4,12 @@ from __future__ import annotations
 
 Callers retain semantic ownership of retries, checkpoints, and failure policy. This
 module owns bounded scheduling, monotonic work/stage deadlines, context propagation,
-cancellation, and executor shutdown. Results are materialized only after the executor
-has been closed so callers cannot accidentally leak its lifecycle by abandoning an
-iterator early.
+cancellation, and executor shutdown. Streaming callers receive each completed result
+as soon as it is ready so executor-side result retention stays bounded by active model
+parallelism instead of growing with the full planning workload.
 """
 
-from collections import deque
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sized
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextvars import copy_context
 from dataclasses import dataclass
@@ -70,7 +69,7 @@ class ParallelTaskError(RuntimeError):
         super().__init__(f"{self.stage} worker failed for {self.item!r}: {cause}")
 
 
-def collect_completed_with_deadlines(
+def iter_completed_with_deadlines(
     items: Iterable[_Item],
     worker: Callable[[_Item], _Result],
     *,
@@ -78,41 +77,63 @@ def collect_completed_with_deadlines(
     stage: str,
     sort_key: Callable[[_Item], object] | None = None,
     on_result: Callable[[_Item, _Result], None] | None = None,
-) -> list[tuple[_Item, _Result]]:
-    """Run bounded parallel work and return results after executor shutdown.
+) -> Iterator[tuple[_Item, _Result]]:
+    """Yield completed work with a bounded submission/result-retention window.
 
-    Only active work is submitted, so queued work never consumes its timeout before it
-    owns an executor slot. Every worker receives the same absolute deadline in its
-    copied context, allowing model-capacity locks and transports that honor the model
-    deadline to use the remaining budget too.
+    At most ``max_workers`` futures are alive at once. Completed values are yielded
+    immediately after ``on_result`` has checkpointed them, and the executor keeps no
+    historical completed-results list. This is the memory-bounded path for planning
+    and research stages that may produce large model responses.
 
-    The executor is fully detached from the caller before this function returns. A
-    caller may therefore stop consuming the returned results at any point without
-    making worker cleanup depend on generator finalization or garbage collection.
-    Running Python threads cannot be forcibly killed, so transport/model adapters must
-    still enforce finite I/O timeouts derived from the propagated deadline.
+    Sized inputs retain the existing stage-deadline calculation without copying the
+    entire input. Generic unsized iterables remain lazy and use the per-work-unit
+    execution deadline because their total wave count is unknowable without defeating
+    streaming by materializing the iterable.
+
+    If a caller intentionally stops early, it should close the iterator so pending
+    futures are cancelled immediately. Running Python threads cannot be forcibly
+    killed, so transport/model adapters must still honor the propagated deadline.
     """
 
-    indexed = list(enumerate(items))
-    if not indexed:
-        return []
+    total_units = len(items) if isinstance(items, Sized) else None
+    if total_units is not None and total_units <= 0:
+        return
 
-    workers = max(1, min(int(max_workers), len(indexed)))
+    workers = max(1, int(max_workers))
+    if total_units is not None:
+        workers = min(workers, total_units)
+
     started_at = time.monotonic()
     unit_timeout = planning_work_unit_timeout_seconds()
-    stage_deadline = planning_stage_deadline(
-        work_units=len(indexed),
-        workers=workers,
-        started_at=started_at,
+    stage_deadline = (
+        planning_stage_deadline(
+            work_units=total_units,
+            workers=workers,
+            started_at=started_at,
+        )
+        if total_units is not None
+        else None
     )
-    pending = deque(indexed)
+    source = iter(items)
+    source_exhausted = False
+    next_sequence = 0
     active: dict[Future[_Result], _ActiveTask[_Item]] = {}
-    completed: list[tuple[_Item, _Result]] = []
     pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix=stage)
 
-    def submit_one(sequence: int, item: _Item) -> None:
+    def submit_next() -> bool:
+        nonlocal source_exhausted, next_sequence
+        if source_exhausted:
+            return False
+        try:
+            item = next(source)
+        except StopIteration:
+            source_exhausted = True
+            return False
+
         submitted_at = time.monotonic()
-        deadline = min(stage_deadline, submitted_at + unit_timeout)
+        deadline = submitted_at + unit_timeout
+        if stage_deadline is not None:
+            deadline = min(stage_deadline, deadline)
         context = copy_context()
         future = pool.submit(
             context.run,
@@ -122,33 +143,37 @@ def collect_completed_with_deadlines(
             item,
         )
         active[future] = _ActiveTask(
-            sequence=sequence,
+            sequence=next_sequence,
             item=item,
             deadline=deadline,
             submitted_at=submitted_at,
         )
+        next_sequence += 1
+        return True
 
     try:
-        while pending or active:
-            while pending and len(active) < workers:
-                sequence, item = pending.popleft()
-                submit_one(sequence, item)
+        while len(active) < workers and submit_next():
+            pass
 
-            if not active:
-                break
-
+        while active:
             now = time.monotonic()
             nearest_task_deadline = min(meta.deadline for meta in active.values())
-            wake_deadline = min(stage_deadline, nearest_task_deadline)
+            wake_deadline = nearest_task_deadline
+            if stage_deadline is not None:
+                wake_deadline = min(stage_deadline, wake_deadline)
             timeout = max(0.0, wake_deadline - now)
-            done, _ = wait(
+            done, not_done = wait(
                 tuple(active),
                 timeout=timeout,
                 return_when=FIRST_COMPLETED,
             )
             if not done:
                 now = time.monotonic()
-                deadline_kind = "stage" if now >= stage_deadline else "work_unit"
+                deadline_kind = (
+                    "stage"
+                    if stage_deadline is not None and now >= stage_deadline
+                    else "work_unit"
+                )
                 expired = min(
                     active.values(),
                     key=lambda meta: (meta.deadline, meta.sequence),
@@ -166,7 +191,8 @@ def collect_completed_with_deadlines(
                 key = sort_key(meta.item) if sort_key is not None else meta.sequence
                 return key, meta.sequence
 
-            for future in sorted(done, key=completion_order):
+            ordered = sorted(done, key=completion_order)
+            for future in ordered:
                 meta = active.pop(future)
                 try:
                     result = future.result(timeout=0)
@@ -176,16 +202,24 @@ def collect_completed_with_deadlines(
                     raise ParallelTaskError(stage=stage, item=meta.item, cause=exc) from exc
                 if on_result is not None:
                     on_result(meta.item, result)
-                completed.append((meta.item, result))
+                yield meta.item, result
+                del result
+                del meta
+
+            del ordered
+            del done
+            del not_done
+
+            while len(active) < workers and submit_next():
+                pass
     finally:
         for future in active:
             future.cancel()
+        active.clear()
         pool.shutdown(wait=False, cancel_futures=True)
 
-    return completed
 
-
-def iter_completed_with_deadlines(
+def collect_completed_with_deadlines(
     items: Iterable[_Item],
     worker: Callable[[_Item], _Result],
     *,
@@ -193,11 +227,11 @@ def iter_completed_with_deadlines(
     stage: str,
     sort_key: Callable[[_Item], object] | None = None,
     on_result: Callable[[_Item, _Result], None] | None = None,
-) -> Iterator[tuple[_Item, _Result]]:
-    """Compatibility iterator over already-collected, executor-detached results."""
+) -> list[tuple[_Item, _Result]]:
+    """Compatibility collector for callers that explicitly need all results in memory."""
 
-    return iter(
-        collect_completed_with_deadlines(
+    return list(
+        iter_completed_with_deadlines(
             items,
             worker,
             max_workers=max_workers,
