@@ -670,42 +670,60 @@ def _plain_generation_response(message: Mapping[str, Any]) -> GenerationResponse
     )
 
 
-def _qwen_tool_generation_response(
-    message: Mapping[str, Any],
-    request: GenerationRequest,
-) -> GenerationResponse:
-    # Convert ToolDefinition objects to dict format
+def _request_tool_schema_map(request: GenerationRequest) -> dict[str, Mapping[str, Any]]:
     tool_schemas = [
-        tool.to_schema() if hasattr(tool, 'to_schema') else tool
+        tool.to_schema() if hasattr(tool, "to_schema") else tool
         for tool in request.tools
     ]
-    schemas = _tool_schema_map(tool_schemas)
+    return _tool_schema_map(tool_schemas)
+
+
+def _qwen_response_text(message: Mapping[str, Any]) -> tuple[str, str]:
     content_value = message.get("content")
     content_raw = content_value if isinstance(content_value, str) else ""
     reasoning_value = message.get("reasoning_content", message.get("reasoning"))
     server_reasoning = reasoning_value if isinstance(reasoning_value, str) else ""
     embedded_reasoning, content_raw = _split_qwen_reasoning_markup(content_raw)
-    reasoning_raw = _merge_reasoning(server_reasoning, embedded_reasoning)
+    return _merge_reasoning(server_reasoning, embedded_reasoning), content_raw
 
-    reasoning, reasoning_calls = _parse_qwen_tool_markup(reasoning_raw, schemas)
-    content, content_calls = _parse_qwen_tool_markup(content_raw, schemas)
-    markup_calls = (*reasoning_calls, *content_calls)
+
+def _select_qwen_tool_calls(
+    message: Mapping[str, Any],
+    markup_calls: Sequence[ToolCall],
+    schemas: Mapping[str, Mapping[str, Any]],
+    *,
+    parallel_tool_calls: bool,
+) -> tuple[ToolCall, ...]:
     native_calls = _parse_native_tool_calls(message, schemas)
     if native_calls and markup_calls:
         raise ToolCallValidationError(
             "llama-server returned both structured tool_calls and raw Qwen tool markup"
         )
-    calls = native_calls or markup_calls
-    if len(calls) > 1 and not request.parallel_tool_calls:
-        # Qwen/llama.cpp can ignore the OpenAI parallel-tool hint. Preserve the
-        # host's serial execution contract by exposing only the first action now;
-        # the next action must be regenerated after this tool result is observed.
-        calls = calls[:1]
+    calls = tuple(native_calls or markup_calls)
+    if len(calls) > 1 and not parallel_tool_calls:
+        return calls[:1]
+    return calls
+
+
+def _qwen_tool_generation_response(
+    message: Mapping[str, Any],
+    request: GenerationRequest,
+) -> GenerationResponse:
+    schemas = _request_tool_schema_map(request)
+    reasoning_raw, content_raw = _qwen_response_text(message)
+    reasoning, reasoning_calls = _parse_qwen_tool_markup(reasoning_raw, schemas)
+    content, content_calls = _parse_qwen_tool_markup(content_raw, schemas)
+    calls = _select_qwen_tool_calls(
+        message,
+        (*reasoning_calls, *content_calls),
+        schemas,
+        parallel_tool_calls=request.parallel_tool_calls,
+    )
     _validate_tool_calls_against_host_schema(calls, schemas)
     _validate_tool_choice(request, calls)
     return GenerationResponse(
         content=content.strip(),
-        tool_calls=tuple(calls),
+        tool_calls=calls,
         reasoning_content=reasoning.strip(),
     )
 
@@ -883,6 +901,29 @@ def _tool_schema_map(
     return result
 
 
+def _named_tool_choice(choice: Any) -> str:
+    if isinstance(choice, str):
+        return choice.strip()
+    if not isinstance(choice, Mapping):
+        raise RuntimeError(f"unsupported tool_choice contract: {choice!r}")
+    function = choice.get("function")
+    if not isinstance(function, Mapping):
+        raise TypeError("named tool_choice lacks function metadata")
+    expected = str(function.get("name", "")).strip()
+    if not expected:
+        raise RuntimeError("named tool_choice lacks a function name")
+    return expected
+
+
+def _validate_named_tool_choice(expected: str, calls: Sequence[ToolCall]) -> None:
+    if len(calls) == 1 and calls[0].name == expected:
+        return
+    received = ", ".join(call.name for call in calls) or "<none>"
+    raise RuntimeError(
+        f"model violated named tool_choice {expected!r}; received {received}"
+    )
+
+
 def _validate_tool_choice(request: GenerationRequest, calls: Sequence[ToolCall]) -> None:
     if not request.parallel_tool_calls and len(calls) > 1:
         raise RuntimeError("model emitted parallel tool calls when they are disabled")
@@ -897,29 +938,7 @@ def _validate_tool_choice(request: GenerationRequest, calls: Sequence[ToolCall])
         if not calls:
             raise RuntimeError("model did not emit a tool call when one is required")
         return
-    if isinstance(choice, str):
-        # String tool_choice specifies a specific tool name
-        expected = choice.strip()
-        if len(calls) != 1 or calls[0].name != expected:
-            received = ", ".join(call.name for call in calls) or "<none>"
-            raise RuntimeError(
-                f"model violated named tool_choice {expected!r}; received {received}"
-            )
-        return
-    if isinstance(choice, Mapping):
-        function = choice.get("function")
-        if not isinstance(function, Mapping):
-            raise TypeError("named tool_choice lacks function metadata")
-        expected = str(function.get("name", "")).strip()
-        if not expected:
-            raise RuntimeError("named tool_choice lacks a function name")
-        if len(calls) != 1 or calls[0].name != expected:
-            received = ", ".join(call.name for call in calls) or "<none>"
-            raise RuntimeError(
-                f"model violated named tool_choice {expected!r}; received {received}"
-            )
-        return
-    raise RuntimeError(f"unsupported tool_choice contract: {choice!r}")
+    _validate_named_tool_choice(_named_tool_choice(choice), calls)
 
 
 def _has_semantic_action(turn: GenerationResponse) -> bool:

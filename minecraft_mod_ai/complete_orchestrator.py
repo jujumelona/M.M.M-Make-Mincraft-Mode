@@ -361,6 +361,18 @@ def _refresh_validation_after_build(
     refreshed_jdt = validation_results.get("jdt")
     return refreshed_source, refreshed_jdt, True
 
+def _attested_repair_build(repair_result: Any) -> dict[str, Any] | None:
+    if not isinstance(repair_result, dict) or repair_result.get("status") != "PASS":
+        return None
+    repair_evidence = repair_result.get("evidence")
+    if not isinstance(repair_evidence, dict) or repair_evidence.get("passed") is not True:
+        return None
+    repaired_build = repair_evidence.get("build")
+    if not isinstance(repaired_build, dict) or repaired_build.get("status") != "PASS":
+        return None
+    return repaired_build
+
+
 class CompleteProductionOrchestrator:
     """Approved request -> sharded source -> repair -> runtime -> release."""
 
@@ -371,6 +383,39 @@ class CompleteProductionOrchestrator:
         self.router_factory = router_factory or (lambda: ModelRouter(profile=profile))
         self.policy = policy or ScalePolicy.from_environment()
         self.policy.validate()
+
+    def _run_build_with_repair(
+        self,
+        *,
+        project_root: Path,
+        cache: Path,
+        options: CompleteExecutionOptions,
+        router: ModelRouter | None,
+    ) -> tuple[dict[str, Any], ModelRouter | None]:
+        build_result = GradleRunner(cache).build(
+            project_root, run_gametest=options.run_gametest
+        ).to_dict()
+        repair_result: dict[str, Any] | None = None
+        active_router = router
+        if build_result.get("status") != "PASS" and options.auto_repair:
+            active_router = active_router or self.router_factory()
+            repair_result = RepairEngine(
+                router=active_router,
+                gradle_cache=cache,
+                policy=self.policy,
+            ).repair(
+                project_root,
+                run_gametest=options.run_gametest,
+                max_attempts=options.max_repair_attempts,
+            )
+            repaired_build = _attested_repair_build(repair_result)
+            if repaired_build is not None:
+                build_result = dict(repaired_build)
+            else:
+                build_result = GradleRunner(cache).build(
+                    project_root, run_gametest=options.run_gametest
+                ).to_dict()
+        return {"build": build_result, "repair": repair_result}, active_router
 
     @execution_scoped
     def execute(self, proposal: CompleteProposal | dict[str, Any], *, approval_hash: str, run_name: str, options: CompleteExecutionOptions | None=None, existing_input: str | Path | None=None) -> CompletePipelineResult:
@@ -475,29 +520,13 @@ class CompleteProductionOrchestrator:
 
         def build_with_repair() -> dict[str, Any]:
             nonlocal router
-            build_result = GradleRunner(cache).build(project_root, run_gametest=options.run_gametest).to_dict()
-            repair_result: dict[str, Any] | None = None
-            if build_result.get('status') != 'PASS' and options.auto_repair:
-                router = router or self.router_factory()
-                repair_result = RepairEngine(router=router, gradle_cache=cache, policy=self.policy).repair(project_root, run_gametest=options.run_gametest, max_attempts=options.max_repair_attempts)
-                repair_evidence = repair_result.get('evidence') if isinstance(repair_result, dict) else None
-                repaired_build = repair_evidence.get('build') if isinstance(repair_evidence, dict) else None
-                if (
-                    repair_result.get('status') == 'PASS'
-                    and isinstance(repair_evidence, dict)
-                    and repair_evidence.get('passed') is True
-                    and isinstance(repaired_build, dict)
-                    and repaired_build.get('status') == 'PASS'
-                ):
-                    # RepairEngine already ran the final Gradle/GameTest validation on
-                    # the repaired tree. Reuse that attested receipt instead of running
-                    # the identical expensive build a third time.
-                    build_result = dict(repaired_build)
-                else:
-                    # Preserve fail-closed compatibility for alternate repair engines
-                    # that do not provide a validated build receipt.
-                    build_result = GradleRunner(cache).build(project_root, run_gametest=options.run_gametest).to_dict()
-            return {'build': build_result, 'repair': repair_result}
+            bundle, router = self._run_build_with_repair(
+                project_root=project_root,
+                cache=cache,
+                options=options,
+                router=router,
+            )
+            return bundle
         build_bundle = run_named_checkpoint(ledger, 'gradle-build', stage='build', input_value={'graph_hash': work_plan.graph_hash, 'project_manifest': validation_manifest, 'run_gametest': options.run_gametest, 'auto_repair': options.auto_repair, 'max_repair_attempts': options.max_repair_attempts}, action=build_with_repair, encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: self._cached_build_exists(cached.get('build')))
         build = build_bundle['build']
         repair = build_bundle.get('repair')
