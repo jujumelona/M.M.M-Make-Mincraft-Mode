@@ -42,9 +42,8 @@ jobs:
           apply_script = next(step['run'] for step in steps if step.get('name') == 'Apply anchored product repair')
           subprocess.run(['bash', '-c', 'set -euo pipefail\n' + apply_script], check=True)
 
-          # v3's generated policy file had only one defect: line 1 was already at column 0,
-          # so textwrap.dedent left every later top-level line indented by four spaces.
-          # Normalize that generated file before compilation/tests.
+          # v3 generated two dedent blocks whose first emitted line was already at column 0.
+          # Remove the resulting extra four columns only inside those generated regions.
           policy = Path('minecraft_mod_ai/verifier_runtime_policy.py')
           lines = policy.read_text(encoding='utf-8').splitlines(keepends=True)
           if not lines or not lines[0].startswith('"""Host-owned verifier/recovery policy helpers.'):
@@ -52,6 +51,19 @@ jobs:
           normalized = [lines[0]]
           normalized.extend(line[4:] if line.startswith('    ') else line for line in lines[1:])
           policy.write_text(''.join(normalized), encoding='utf-8')
+
+          java_path = Path('minecraft_mod_ai/runner_target_java_contract.py')
+          java_text = java_path.read_text(encoding='utf-8')
+          start_marker = 'def _declared_java_version('
+          end_marker = 'def target_java_build_environment('
+          start = java_text.index(start_marker)
+          end = java_text.index(end_marker, start)
+          generated = java_text[start:end].splitlines(keepends=True)
+          if not generated or not generated[0].startswith(start_marker):
+              raise SystemExit('unexpected generated Java-contract block')
+          fixed_generated = [generated[0]]
+          fixed_generated.extend(line[4:] if line.startswith('    ') else line for line in generated[1:])
+          java_path.write_text(java_text[:start] + ''.join(fixed_generated) + java_text[end:], encoding='utf-8')
           PY
 
       - name: Verify focused regressions and architecture
