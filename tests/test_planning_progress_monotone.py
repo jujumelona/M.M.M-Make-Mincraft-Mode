@@ -250,7 +250,7 @@ def test_completed_requirement_is_not_regenerated_on_resume(monkeypatch):
     assert len(result["coverage"]) == 1
 
 
-def test_atomic_criterion_failure_is_checkpointed_terminal_and_resume_makes_zero_calls(monkeypatch):
+def test_atomic_criterion_failure_surfaces_without_terminal_blocker_and_resume_retries(monkeypatch):
     requirements = _requirements(1, acceptance_count=2)
     _patch_compile_boundaries(monkeypatch, requirements)
     calls = 0
@@ -264,7 +264,7 @@ def test_atomic_criterion_failure_is_checkpointed_terminal_and_resume_makes_zero
     monkeypatch.setattr(adaptive, "_compile_criterion", fail_criterion)
     monkeypatch.setattr(adaptive, "router_native_model_parallelism", lambda _router: 1)
 
-    with pytest.raises(RuntimeError, match="DETAILED_PLAN_BLOCKED"):
+    with pytest.raises(ValueError, match="atomic criterion made no valid progress"):
         adaptive.compile_progress_monotone_detailed_plans(
             _Router(),
             "prompt",
@@ -274,25 +274,34 @@ def test_atomic_criterion_failure_is_checkpointed_terminal_and_resume_makes_zero
         )
 
     assert calls == 1
-    assert checkpoints
-    terminal = checkpoints[-1]
-    terminal_rows = [
-        row
-        for row in terminal["blockers"]
-        if row.get("stage") == "detailed_planning" and row.get("terminal") is True
-    ]
-    assert len(terminal_rows) == 1
-    assert terminal_rows[0]["section"] == "acceptance_criterion:1"
-
-    calls_before_resume = calls
-    with pytest.raises(RuntimeError, match="terminal detailed-planning blocker"):
-        adaptive.compile_progress_monotone_detailed_plans(
-            _Router(),
-            "prompt",
-            terminal,
-            required_sections_by_requirement={"req_1": WORKSHEET_SECTIONS},
+    assert all(
+        not any(
+            row.get("stage") == "detailed_planning" and row.get("terminal") is True
+            for row in state.get("blockers", [])
         )
-    assert calls == calls_before_resume
+        for state in checkpoints
+    )
+
+    resume_state = checkpoints[-1] if checkpoints else _base_state()
+    resumed_calls: list[int] = []
+
+    def succeed_criterion(_router, *, requirement_ref, criterion_index, **_kwargs):
+        resumed_calls.append(criterion_index)
+        return _fragment(requirement_ref, criterion_index)
+
+    monkeypatch.setattr(adaptive, "_compile_criterion", succeed_criterion)
+    result = adaptive.compile_progress_monotone_detailed_plans(
+        _Router(),
+        "prompt",
+        resume_state,
+        required_sections_by_requirement={"req_1": WORKSHEET_SECTIONS},
+    )
+    assert resumed_calls == [0, 1]
+    assert result["plan_ready"] is True
+    assert not any(
+        row.get("stage") == "detailed_planning" and row.get("terminal") is True
+        for row in result["blockers"]
+    )
 
 
 def test_each_concern_schema_is_closed():
