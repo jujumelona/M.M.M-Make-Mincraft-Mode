@@ -26,6 +26,21 @@ jobs:
           python-version: '3.11'
           cache: pip
 
+      - name: Harden one-shot patcher
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('tools/apply_cumulative_architecture_normalization.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''def _replace_region(text: str, start: str, end: str, replacement: str) -> str:\n    start_index = text.index(start)\n    end_index = text.index(end, start_index)\n    return text[:start_index] + replacement.rstrip() + "\\n\\n" + text[end_index:]\n'''
+          new = '''def _replace_region(text: str, start: str, end: str, replacement: str) -> str:\n    start_index = text.index(start)\n    try:\n        end_index = text.index(end, start_index)\n    except ValueError:\n        marker_lines = [line for line in end.splitlines() if line.strip()]\n        signature = marker_lines[-1]\n        end_index = text.index(signature, start_index)\n        if len(marker_lines) > 1:\n            decorator = marker_lines[0]\n            decorator_index = text.rfind(decorator, start_index, end_index)\n            if decorator_index >= start_index and end_index - decorator_index < 128:\n                end_index = decorator_index\n    return text[:start_index] + replacement.rstrip() + "\\n\\n" + text[end_index:]\n'''
+          if old not in text:
+              raise SystemExit('expected _replace_region helper not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
       - name: Apply architecture normalization
         run: python tools/apply_cumulative_architecture_normalization.py
 
