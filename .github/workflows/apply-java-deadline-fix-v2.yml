@@ -1,0 +1,106 @@
+name: Apply JDT deadline fix v2
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-java-deadline-fix-v2.yml
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch and test
+        shell: bash
+        run: |
+          git fetch origin main
+          git rebase origin/main
+          python - <<'PY'
+          import base64
+          from pathlib import Path
+
+          p = Path("minecraft_mod_ai/java_lsp.py")
+          s = p.read_text(encoding="utf-8")
+
+          def one(old, new):
+              global s
+              n = s.count(old)
+              if n != 1:
+                  raise SystemExit(f"replacement match count={n}: {old[:100]!r}")
+              s = s.replace(old, new, 1)
+
+          one(
+              'class JDTWorkspaceBootstrapError(JDTLanguageServerError):\n    """JDT LS started or configured without a usable Java project bootstrap."""\n\n\ndef _configuration_value',
+              'class JDTWorkspaceBootstrapError(JDTLanguageServerError):\n    """JDT LS started or configured without a usable Java project bootstrap."""\n\n\ndef _remaining_jdt_deadline(deadline: float, *, operation: str) -> float:\n    remaining = float(deadline) - time.monotonic()\n    if remaining <= 0:\n        raise JDTLanguageServerError(f"JDT LS {operation} deadline exceeded.")\n    return remaining\n\n\ndef _configuration_value',
+          )
+          one(
+              '    def _ensure_rpc_locked(self, root: Path, *, timeout_seconds: int) -> _JsonRpcProcess:\n        rpc = self._rpc\n',
+              '    def _ensure_rpc_locked(\n        self,\n        root: Path,\n        *,\n        timeout_seconds: int,\n        deadline: float | None = None,\n    ) -> _JsonRpcProcess:\n        deadline = deadline if deadline is not None else time.monotonic() + float(timeout_seconds)\n        _remaining_jdt_deadline(deadline, operation="session initialization")\n        rpc = self._rpc\n',
+          )
+          one(
+              '                timeout=min(timeout_seconds, 45),\n',
+              '                timeout=min(_remaining_jdt_deadline(deadline, operation="initialize"), 45.0),\n',
+          )
+          one(
+              '                timeout_seconds=timeout_seconds,\n                quiet_seconds=min(self.diagnostic_quiet_seconds, 0.25),\n            )\n',
+              '                timeout_seconds=timeout_seconds,\n                quiet_seconds=min(self.diagnostic_quiet_seconds, 0.25),\n                deadline=deadline,\n            )\n',
+          )
+          one(
+              '        if timeout_seconds <= 0:\n            raise ValueError("timeout_seconds must be positive.")\n        try:\n            assert_server_safe_source_sets(root)\n',
+              '        if timeout_seconds <= 0:\n            raise ValueError("timeout_seconds must be positive.")\n        deadline = time.monotonic() + float(timeout_seconds)\n        try:\n            assert_server_safe_source_sets(root)\n',
+          )
+          one(
+              '            rpc = self._ensure_rpc_locked(root, timeout_seconds=timeout_seconds)\n            diagnostics: dict[str, list[dict[str, Any]]] = {}\n',
+              '            _remaining_jdt_deadline(deadline, operation="diagnostics")\n            rpc = self._ensure_rpc_locked(\n                root,\n                timeout_seconds=timeout_seconds,\n                deadline=deadline,\n            )\n            diagnostics: dict[str, list[dict[str, Any]]] = {}\n',
+          )
+          one(
+              '            for page_index, page in enumerate(pages):\n                sources, source_bytes = _read_source_page(\n',
+              '            for page_index, page in enumerate(pages):\n                _remaining_jdt_deadline(deadline, operation="diagnostics")\n                sources, source_bytes = _read_source_page(\n',
+          )
+          one(
+              '                        timeout_seconds=timeout_seconds,\n                        quiet_seconds=self.diagnostic_quiet_seconds,\n                    )\n',
+              '                        timeout_seconds=_remaining_jdt_deadline(\n                            deadline, operation="diagnostics"\n                        ),\n                        quiet_seconds=self.diagnostic_quiet_seconds,\n                        deadline=deadline,\n                    )\n',
+          )
+          one(
+              '        if timeout_seconds <= 0:\n            raise ValueError("timeout_seconds must be positive.")\n        with self._session_lock:\n            rpc = self._ensure_rpc_locked(root, timeout_seconds=timeout_seconds)\n            result = rpc.request("workspace/symbol", {"query": query}, timeout=timeout_seconds)\n',
+              '        if timeout_seconds <= 0:\n            raise ValueError("timeout_seconds must be positive.")\n        deadline = time.monotonic() + float(timeout_seconds)\n        with self._session_lock:\n            _remaining_jdt_deadline(deadline, operation="workspace symbols")\n            rpc = self._ensure_rpc_locked(\n                root,\n                timeout_seconds=timeout_seconds,\n                deadline=deadline,\n            )\n            result = rpc.request(\n                "workspace/symbol",\n                {"query": query},\n                timeout=_remaining_jdt_deadline(deadline, operation="workspace symbols"),\n            )\n',
+          )
+          one(
+              'def _await_java_core_ready(\n    rpc: _JsonRpcProcess,\n    root: Path,\n    *,\n    timeout_seconds: float,\n    quiet_seconds: float,\n) -> None:\n',
+              'def _await_java_core_ready(\n    rpc: _JsonRpcProcess,\n    root: Path,\n    *,\n    timeout_seconds: float,\n    quiet_seconds: float,\n    deadline: float | None = None,\n) -> None:\n',
+          )
+          one(
+              '    deadline = time.monotonic() + float(timeout_seconds)\n    version = 1\n',
+              '    deadline = deadline if deadline is not None else time.monotonic() + float(timeout_seconds)\n    version = 1\n',
+          )
+          one(
+              '            remaining = max(0.001, deadline - time.monotonic())\n            diagnostics = _collect_diagnostics(\n                rpc,\n                expected_uris={uri},\n                timeout_seconds=remaining,\n                quiet_seconds=quiet_seconds,\n            )\n',
+              '            remaining = _remaining_jdt_deadline(deadline, operation="semantic readiness")\n            diagnostics = _collect_diagnostics(\n                rpc,\n                expected_uris={uri},\n                timeout_seconds=remaining,\n                quiet_seconds=quiet_seconds,\n                deadline=deadline,\n            )\n',
+          )
+          one(
+              'def _collect_diagnostics(\n    rpc: _JsonRpcProcess,\n    *,\n    expected_uris: set[str],\n    timeout_seconds: float,\n    quiet_seconds: float,\n) -> dict[str, list[dict[str, Any]]]:\n',
+              'def _collect_diagnostics(\n    rpc: _JsonRpcProcess,\n    *,\n    expected_uris: set[str],\n    timeout_seconds: float,\n    quiet_seconds: float,\n    deadline: float | None = None,\n) -> dict[str, list[dict[str, Any]]]:\n',
+          )
+          one(
+              '    diagnostics: dict[str, list[dict[str, Any]]] = {}\n    deadline = time.monotonic() + float(timeout_seconds)\n',
+              '    diagnostics: dict[str, list[dict[str, Any]]] = {}\n    deadline = deadline if deadline is not None else time.monotonic() + float(timeout_seconds)\n',
+          )
+          one(
+              '            message = rpc.messages.get(timeout=max(0.001, wait_seconds))\n',
+              '            message = rpc.messages.get(timeout=wait_seconds)\n',
+          )
+          p.write_text(s, encoding="utf-8")
+          test_b64 = 'ZnJvbSBfX2Z1dHVyZV9fIGltcG9ydCBhbm5vdGF0aW9ucwoKaW1wb3J0IHB5dGVzdAoKZnJvbSBtaW5lY3JhZnRfbW9kX2FpIGltcG9ydCBqYXZhX2xzcAoKCmNsYXNzIF9GYWtlUnBjOgogICAgZGVmIF9faW5pdF9fKHNlbGYpIC0+IE5vbmU6CiAgICAgICAgc2VsZi5zdGRlcnI6IGxpc3Rbc3RyXSA9IFtdCiAgICAgICAgc2VsZi5ub3RpZmljYXRpb25zOiBsaXN0W3R1cGxlW3N0ciwgZGljdFtzdHIsIG9iamVjdF1dXSA9IFtdCgogICAgZGVmIG5vdGlmeShzZWxmLCBtZXRob2Q6IHN0ciwgcGFyYW1zOiBkaWN0W3N0ciwgb2JqZWN0XSkgLT4gTm9uZToKICAgICAgICBzZWxmLm5vdGlmaWNhdGlvbnMuYXBwZW5kKChtZXRob2QsIHBhcmFtcykpCgoKZGVmIHRlc3RfZGlhZ25vc3RpY3NfcmV1c2VzX29uZV9hYnNvbHV0ZV9kZWFkbGluZV9hY3Jvc3NfcGFnZXModG1wX3BhdGgsIG1vbmtleXBhdGNoKToKICAgIHNvdXJjZV9yb290ID0gdG1wX3BhdGggLyAic3JjIiAvICJtYWluIiAvICJqYXZhIgogICAgc291cmNlX3Jvb3QubWtkaXIocGFyZW50cz1UcnVlKQogICAgKHNvdXJjZV9yb290IC8gIkEuamF2YSIpLndyaXRlX3RleHQoImZpbmFsIGNsYXNzIEEge31cbiIsIGVuY29kaW5nPSJ1dGYtOCIpCiAgICAoc291cmNlX3Jvb3QgLyAiQi5qYXZhIikud3JpdGVfdGV4dCgiZmluYWwgY2xhc3MgQiB7fVxuIiwgZW5jb2Rpbmc9InV0Zi04IikKCiAgICBzZXJ2aWNlID0gamF2YV9sc3AuSmF2YUxhbmd1YWdlU2VydmljZSgKICAgICAgICBkaWFnbm9zdGljX3BhZ2VfbWF4X2ZpbGVzPTEsCiAgICAgICAgZGlhZ25vc3RpY19xdWlldF9zZWNvbmRzPTAuMCwKICAgICkKICAgIHJwYyA9IF9GYWtlUnBjKCkKICAgIHNlZW46IGxpc3RbdHVwbGVbc3RyLCBmbG9hdF1dID0gW10KCiAgICBtb25rZXlwYXRjaC5zZXRhdHRyKGphdmFfbHNwLCAiYXNzZXJ0X3NlcnZlcl9zYWZlX3NvdXJjZV9zZXRzIiwgbGFtYmRhIF9yb290OiBOb25lKQoKICAgIGRlZiBmYWtlX2Vuc3VyZShyb290LCAqLCB0aW1lb3V0X3NlY29uZHMsIGRlYWRsaW5lPU5vbmUpOgogICAgICAgIGRlbCByb290LCB0aW1lb3V0X3NlY29uZHMKICAgICAgICBhc3NlcnQgZGVhZGxpbmUgaXMgbm90IE5vbmUKICAgICAgICBzZWVuLmFwcGVuZCgoImVuc3VyZSIsIGRlYWRsaW5lKSkKICAgICAgICByZXR1cm4gcnBjCgogICAgZGVmIGZha2VfY29sbGVjdCgKICAgICAgICBfcnBjLAogICAgICAgICosCiAgICAgICAgZXhwZWN0ZWRfdXJpcywKICAgICAgICB0aW1lb3V0X3NlY29uZHMsCiAgICAgICAgcXVpZXRfc2Vjb25kcywKICAgICAgICBkZWFkbGluZT1Ob25lLAogICAgKToKICAgICAgICBkZWwgX3JwYywgdGltZW91dF9zZWNvbmRzLCBxdWlldF9zZWNvbmRzCiAgICAgICAgYXNzZXJ0IGRlYWRsaW5lIGlzIG5vdCBOb25lCiAgICAgICAgc2Vlbi5hcHBlbmQoKCJjb2xsZWN0IiwgZGVhZGxpbmUpKQogICAgICAgIHJldHVybiB7dXJpOiBbXSBmb3IgdXJpIGluIGV4cGVjdGVkX3VyaXN9CgogICAgbW9ua2V5cGF0Y2guc2V0YXR0cihzZXJ2aWNlLCAiX2Vuc3VyZV9ycGNfbG9ja2VkIiwgZmFrZV9lbnN1cmUpCiAgICBtb25rZXlwYXRjaC5zZXRhdHRyKGphdmFfbHNwLCAiX2NvbGxlY3RfZGlhZ25vc3RpY3MiLCBmYWtlX2NvbGxlY3QpCgogICAgcmVzdWx0ID0gc2VydmljZS5kaWFnbm9zdGljcyh0bXBfcGF0aCwgdGltZW91dF9zZWNvbmRzPTkwKQoKICAgIGFzc2VydCByZXN1bHRbInBhZ2VfY291bnQiXSA9PSAyCiAgICBhc3NlcnQgW3BoYXNlIGZvciBwaGFzZSwgX2RlYWRsaW5lIGluIHNlZW5dID09IFsiZW5zdXJlIiwgImNvbGxlY3QiLCAiY29sbGVjdCJdCiAgICBhc3NlcnQgbGVuKHtkZWFkbGluZSBmb3IgX3BoYXNlLCBkZWFkbGluZSBpbiBzZWVufSkgPT0gMQoKCmRlZiB0ZXN0X2V4cGlyZWRfYWJzb2x1dGVfZGVhZGxpbmVfZmFpbHNfY2xvc2VkKG1vbmtleXBhdGNoKToKICAgIG1vbmtleXBhdGNoLnNldGF0dHIoamF2YV9sc3AudGltZSwgIm1vbm90b25pYyIsIGxhbWJkYTogMTAuMCkKICAgIHdpdGggcHl0ZXN0LnJhaXNlcyhqYXZhX2xzcC5KRFRMYW5ndWFnZVNlcnZlckVycm9yLCBtYXRjaD0iZGVhZGxpbmUgZXhjZWVkZWQiKToKICAgICAgICBqYXZhX2xzcC5fcmVtYWluaW5nX2pkdF9kZWFkbGluZSg5LjAsIG9wZXJhdGlvbj0iZGlhZ25vc3RpY3MiKQo='
+          Path("tests/test_java_lsp_deadline_budget.py").write_bytes(base64.b64decode(test_b64))
+          PY
+          python -m compileall -q minecraft_mod_ai/java_lsp.py tests/test_java_lsp_deadline_budget.py
+          python -m pytest -q tests/test_java_lsp_deadline_budget.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add minecraft_mod_ai/java_lsp.py tests/test_java_lsp_deadline_budget.py
+          git commit -m "fix(jdt): enforce end-to-end diagnostics deadline"
+          git pull --rebase origin main
+          git push origin HEAD:main
