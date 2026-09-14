@@ -113,6 +113,8 @@ class ModelRouter:
         *,
         require_fresh_evidence: bool = False,
     ) -> ModelRouter:
+        """Bind model-callable MCP/RAG tools to the actual production workspace."""
+
         root = Path(workspace_root).expanduser().resolve()
         if not root.is_dir() or root.is_symlink():
             raise ModelConfigurationError(
@@ -132,6 +134,8 @@ class ModelRouter:
 
     @contextmanager
     def generation_session(self, role: str):
+        """Pin one backend for a bounded workflow without serializing the workflow."""
+
         config = self.registry.role(self.profile, role)
         adapter = self._new_text_adapter(config, role=role)
         with self._generation_lock:
@@ -142,6 +146,7 @@ class ModelRouter:
                 )
             self._active_generation_role = role
             self._active_generation_adapter = adapter
+
         session_factory = getattr(adapter, "generation_session", None)
         try:
             if callable(session_factory):
@@ -199,6 +204,8 @@ class ModelRouter:
         tool_stage: str | None = None,
         enable_tools: bool = False,
     ) -> Any | None:
+        """Return live adapter input/context token accounting without generation."""
+
         config, adapter = self._generation_adapter(role)
         _stage, _runtime, _tools, request = self._prepare_generation_request(
             role,
@@ -231,7 +238,6 @@ class ModelRouter:
         response_schema: Mapping[str, Any] | None = None,
         tool_stage: str | None = None,
         enable_tools: bool = True,
-        generation_metadata: Mapping[str, Any] | None = None,
     ) -> str:
         config, adapter = self._generation_adapter(role)
         stage, runtime, tools, request = self._prepare_generation_request(
@@ -243,7 +249,6 @@ class ModelRouter:
             response_schema=response_schema,
             tool_stage=tool_stage,
             enable_tools=enable_tools,
-            generation_metadata=generation_metadata,
         )
         if (
             self._agent_require_fresh_evidence
@@ -281,6 +286,8 @@ class ModelRouter:
         parameters: Mapping[str, Any],
         description: str = "",
     ) -> dict[str, Any]:
+        """Return one host-validated native function call instead of free-form JSON."""
+
         name = str(tool_name or "").strip()
         if not name:
             raise ModelConfigurationError("Tool-decision name must not be empty.")
@@ -349,8 +356,9 @@ class ModelRouter:
         response_schema: Mapping[str, Any] | None = None,
         tool_stage: str | None = None,
         enable_tools: bool = True,
-        generation_metadata: Mapping[str, Any] | None = None,
     ) -> tuple[str, Any | None, tuple[Mapping[str, Any], ...], GenerationRequest]:
+        """Build the canonical model request used by every text execution policy."""
+
         stage = (tool_stage or _ROLE_TOOL_STAGE.get(role, "")).strip().lower()
         runtime = None
         tools: tuple[Mapping[str, Any], ...] = ()
@@ -368,9 +376,13 @@ class ModelRouter:
             if raw_tools:
                 from .agent_capability_context import prepare_agent_tool_surface
 
-                tools, capability_context = prepare_agent_tool_surface(stage, role, raw_tools)
+                tools, capability_context = prepare_agent_tool_surface(
+                    stage, role, raw_tools
+                )
                 if tools:
-                    request_messages = _inject_system_context(request_messages, capability_context)
+                    request_messages = _inject_system_context(
+                        request_messages, capability_context
+                    )
         request = GenerationRequest(
             messages=request_messages,
             media_paths=tuple(Path(path) for path in media_paths),
@@ -379,13 +391,32 @@ class ModelRouter:
             tools=tools,
             tool_choice="auto" if tools else None,
             parallel_tool_calls=True,
-            metadata=dict(generation_metadata or {}),
         )
         return stage, runtime, tools, request
 
-    def _generate_with_tools(self, *, config: Any, adapter: Any, request: GenerationRequest, runtime: Any, stage: str, role: str) -> str:
+    def _generate_with_tools(
+        self,
+        *,
+        config: Any,
+        adapter: Any,
+        request: GenerationRequest,
+        runtime: Any,
+        stage: str,
+        role: str,
+    ) -> str:
+        """Delegate to the single production retrieve/act/observe loop owner."""
+
         from .progress_aware_tool_loop import generate_with_tools
-        return generate_with_tools(self, config=config, adapter=adapter, request=request, runtime=runtime, stage=stage, role=role)
+
+        return generate_with_tools(
+            self,
+            config=config,
+            adapter=adapter,
+            request=request,
+            runtime=runtime,
+            stage=stage,
+            role=role,
+        )
 
     _generate_with_tools._mmm_progress_aware_tool_loop_owner = True
 
@@ -401,7 +432,11 @@ class ModelRouter:
                 runtime = self._agent_tool_runtime_factory(profile=self.profile)
             else:
                 from .agent_tool_runtime import AgentToolRuntime
-                runtime = AgentToolRuntime(profile=self.profile, workspace_root=self._agent_workspace_root)
+
+                runtime = AgentToolRuntime(
+                    profile=self.profile,
+                    workspace_root=self._agent_workspace_root,
+                )
             self._agent_tool_runtime = runtime
             return runtime
 
@@ -424,51 +459,105 @@ class ModelRouter:
             return TransformersMultimodalAdapter(config)
         if config.adapter in ("llama_cpp", "vllm"):
             from .model_adapters.llama_cpp_adapter import LlamaCppAdapter
+
             return LlamaCppAdapter(config)
         if config.adapter == "openai_compatible":
             return OpenAICompatibleAdapter(config)
-        raise ModelConfigurationError(f"Role {role!r} cannot generate text with adapter {config.adapter!r}.")
+        raise ModelConfigurationError(
+            f"Role {role!r} cannot generate text with adapter {config.adapter!r}."
+        )
 
-    def embed(self, texts: Sequence[str], role: str = "embedding") -> list[list[float]]:
+    def embed(
+        self,
+        texts: Sequence[str],
+        role: str = "embedding",
+    ) -> list[list[float]]:
         config = self.registry.role(self.profile, role)
         if config.adapter != "embedding":
-            raise ModelConfigurationError(f"Role {role!r} does not expose an embedding adapter.")
+            raise ModelConfigurationError(
+                f"Role {role!r} does not expose an embedding adapter."
+            )
         return EmbeddingAdapter(config).embed(texts)
 
-    def rerank(self, query: str, documents: Sequence[str], *, role: str = "reranker", instruction: str = "Retrieve the Minecraft modding evidence that directly answers the query for the caller-selected platform target. Do not prefer or infer a different Minecraft version or mapping namespace.") -> list[float]:
+    def rerank(
+        self,
+        query: str,
+        documents: Sequence[str],
+        *,
+        role: str = "reranker",
+        instruction: str = (
+            "Retrieve the Minecraft modding evidence that directly answers the query "
+            "for the caller-selected platform target. Do not prefer or infer a different "
+            "Minecraft version or mapping namespace."
+        ),
+    ) -> list[float]:
         config = self.registry.role(self.profile, role)
         if config.adapter != "reranker":
-            raise ModelConfigurationError(f"Role {role!r} does not expose a reranker adapter.")
+            raise ModelConfigurationError(
+                f"Role {role!r} does not expose a reranker adapter."
+            )
         extra = config.extra if isinstance(config.extra, dict) else {}
         device = str(extra.get("device", "cpu") or "cpu").strip().casefold()
-        if device.startswith("cpu") and os.environ.get("MMM_RAG_ENABLE_CPU_DENSE", "").strip() != "1":
+        if (
+            device.startswith("cpu")
+            and os.environ.get("MMM_RAG_ENABLE_CPU_DENSE", "").strip() != "1"
+        ):
             return []
-        return RerankerAdapter(config).score(query, documents, instruction=instruction)
+        return RerankerAdapter(config).score(
+            query,
+            documents,
+            instruction=instruction,
+        )
 
     @contextmanager
     def image_generation_session(self, role: str = "image_generator"):
+        """Hold one exclusive local-image GPU lease through final pipeline parking."""
+
         config = self.registry.role(self.profile, role)
-        local_diffusion = str(config.provider) == "local" and str(config.adapter) == "image_diffusion" and bool(config.exclusive_gpu)
+        local_diffusion = (
+            str(config.provider) == "local"
+            and str(config.adapter) == "image_diffusion"
+            and bool(config.exclusive_gpu)
+        )
         if not local_diffusion:
             yield self
             return
+
         from .model_adapters import image_diffusion as image_module
+
         with self._gpu_scope(True):
             try:
                 yield self
             finally:
                 image_module.finish_image_shard()
 
-    def generate_image(self, role: str, *, prompt: str, output_path: str | Path, width: int = 512, height: int = 512, seed: int = 0) -> Path:
+    def generate_image(
+        self,
+        role: str,
+        *,
+        prompt: str,
+        output_path: str | Path,
+        width: int = 512,
+        height: int = 512,
+        seed: int = 0,
+    ) -> Path:
         config = self.registry.role(self.profile, role)
         if config.adapter == "image_diffusion":
             adapter = ImageDiffusionAdapter(config)
         elif config.adapter == "openai_compatible":
             adapter = OpenAICompatibleAdapter(config)
         else:
-            raise ModelConfigurationError(f"Role {role!r} cannot generate images with adapter {config.adapter!r}.")
+            raise ModelConfigurationError(
+                f"Role {role!r} cannot generate images with adapter {config.adapter!r}."
+            )
         with self._gpu_scope(config.exclusive_gpu):
-            return adapter.generate_image(prompt=prompt, output_path=Path(output_path), width=width, height=height, seed=seed)
+            return adapter.generate_image(
+                prompt=prompt,
+                output_path=Path(output_path),
+                width=width,
+                height=height,
+                seed=seed,
+            )
 
     @staticmethod
     @contextmanager
@@ -480,6 +569,7 @@ class ModelRouter:
             yield
 
 
+# Public runtime markers are attached to the methods that actually own the behavior.
 ModelRouter.generation_session._mmm_llama_shared_slots = True  # type: ignore[attr-defined]
 ModelRouter.generate_text._mmm_llama_shared_slots = True  # type: ignore[attr-defined]
 ModelRouter.generate_text._mmm_preserves_agent_tools = True  # type: ignore[attr-defined]
@@ -490,6 +580,13 @@ ModelRouter._generate_with_tools._mmm_progress_aware_tool_loop_owner = True  # t
 
 
 def _agent_tool_round_limit() -> int | float:
+    """Return only an explicit operator safety cap; default execution is unbounded.
+
+    Semantic completion is owned by verified success or no-progress convergence in the
+    progress-aware loop. ``inf`` preserves the loop's existing numeric comparison while
+    removing the old hidden 128-round completion rule.
+    """
+
     raw = os.environ.get("MMM_AGENT_TOOL_ROUNDS", "").strip()
     if not raw:
         return float("inf")
@@ -512,6 +609,8 @@ def _parallel_read_workers() -> int:
 
 
 def _parallel_read_call(call: Any) -> bool:
+    """Return whether a reviewed call is side-effect-free and safe in a read wave."""
+
     if call.name in _PARALLEL_READ_TOOLS:
         return True
     if call.name != "external_mcp_call":
@@ -520,9 +619,15 @@ def _parallel_read_call(call: Any) -> bool:
     return access == "read"
 
 
-def _execute_tool_waves(calls: Sequence[Any], execute: Callable[[Any], tuple[Any, Mapping[str, Any]]]) -> tuple[tuple[Any, Mapping[str, Any]], ...]:
+def _execute_tool_waves(
+    calls: Sequence[Any],
+    execute: Callable[[Any], tuple[Any, Mapping[str, Any]]],
+) -> tuple[tuple[Any, Mapping[str, Any]], ...]:
+    """Execute maximal read waves concurrently while preserving serial barriers."""
+
     completed: list[tuple[Any, Mapping[str, Any]]] = []
     pending_reads: list[Any] = []
+
     def flush_reads() -> None:
         if not pending_reads:
             return
@@ -532,15 +637,27 @@ def _execute_tool_waves(calls: Sequence[Any], execute: Callable[[Any], tuple[Any
         if workers <= 1:
             completed.extend(execute(call) for call in batch)
             return
+
         indexed_batch = tuple(enumerate(batch))
+
         def execute_indexed(item: tuple[int, Any]) -> tuple[int, tuple[Any, Mapping[str, Any]]]:
             index, call = item
             return index, execute(call)
+
         ordered: list[tuple[Any, Mapping[str, Any]] | None] = [None] * len(batch)
-        for _item, indexed_result in iter_completed_with_deadlines(indexed_batch, execute_indexed, operation="agent_parallel_read", workers=workers):
+        for _item, indexed_result in iter_completed_with_deadlines(
+            indexed_batch,
+            execute_indexed,
+            max_workers=workers,
+            stage="agent_read_wave",
+            sort_key=lambda item: item[0],
+        ):
             index, result = indexed_result
             ordered[index] = result
-        completed.extend(result for result in ordered if result is not None)
+        if any(item is None for item in ordered):
+            raise ModelConfigurationError("Parallel read wave lost a completed tool result.")
+        completed.extend(item for item in ordered if item is not None)
+
     for call in calls:
         if _parallel_read_call(call):
             pending_reads.append(call)
@@ -549,3 +666,154 @@ def _execute_tool_waves(calls: Sequence[Any], execute: Callable[[Any], tuple[Any
         completed.append(execute(call))
     flush_reads()
     return tuple(completed)
+
+
+def _external_rag_capability(arguments: Mapping[str, Any]) -> str:
+    capability = str(arguments.get("capability", "")).strip()
+    return capability if capability in _EXTERNAL_RAG_CAPABILITIES else ""
+
+
+def _external_mcp_result_has_content(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    for key in ("structured", "parsed_text"):
+        item = value.get(key)
+        if item not in (None, "", [], {}):
+            return True
+    texts = value.get("text")
+    if (
+        isinstance(texts, Sequence)
+        and not isinstance(texts, (str, bytes))
+        and any(str(item).strip() for item in texts)
+    ):
+        return True
+    other = value.get("other_content")
+    return (
+        isinstance(other, Sequence)
+        and not isinstance(other, (str, bytes))
+        and bool(other)
+    )
+
+
+def _usable_external_rag_result(arguments: Mapping[str, Any], value: Any) -> bool:
+    """Accept only reviewed external retrieval receipts with real provider content."""
+
+    capability = _external_rag_capability(arguments)
+    if not capability or not isinstance(value, Mapping):
+        return False
+    if str(value.get("schema_version", "")).strip() != "mmm/external-mcp-evidence-bundle-v1":
+        return False
+    if (
+        str(value.get("capability", "")).strip() != capability
+        or str(value.get("status", "")).strip() != "PASS"
+    ):
+        return False
+    evidence = value.get("evidence")
+    if (
+        not isinstance(evidence, Sequence)
+        or isinstance(evidence, (str, bytes))
+        or not evidence
+    ):
+        return False
+    for receipt in evidence:
+        if not isinstance(receipt, Mapping):
+            continue
+        if (
+            str(receipt.get("schema_version", "")).strip()
+            != "mmm/external-mcp-call-receipt-v1"
+        ):
+            continue
+        if (
+            str(receipt.get("capability", "")).strip() != capability
+            or str(receipt.get("status", "")).strip() != "PASS"
+        ):
+            continue
+        if str(receipt.get("access", "")).strip() != "read":
+            continue
+        if _external_mcp_result_has_content(receipt.get("result")):
+            return True
+    return False
+
+
+def _usable_rag_result(value: Any) -> bool:
+    """Accept scored RAG receipts and concrete hits when optional scoring is unavailable."""
+
+    found_receipt = False
+    positive_receipt = False
+    usable_receipt = False
+    found_hits = False
+
+    def visit(item: Any) -> None:
+        nonlocal found_receipt, positive_receipt, usable_receipt, found_hits
+        if isinstance(item, Mapping):
+            receipt = item.get("receipt")
+            if isinstance(receipt, Mapping):
+                found_receipt = True
+                try:
+                    result_count = int(receipt.get("result_count", 0) or 0)
+                    coverage_score = float(receipt.get("coverage_score", 0.0) or 0.0)
+                    relevance_score = float(receipt.get("relevance_score", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    result_count = 0
+                    coverage_score = 0.0
+                    relevance_score = 0.0
+                if result_count > 0:
+                    positive_receipt = True
+                    if coverage_score > 0.0 and relevance_score > 0.0:
+                        usable_receipt = True
+            hits = item.get("hits")
+            if (
+                isinstance(hits, Sequence)
+                and not isinstance(hits, (str, bytes))
+                and hits
+            ):
+                found_hits = True
+            for child in item.values():
+                visit(child)
+        elif isinstance(item, Sequence) and not isinstance(item, (str, bytes)):
+            for child in item:
+                visit(child)
+
+    visit(value)
+    if found_receipt:
+        return usable_receipt or (positive_receipt and found_hits)
+    if found_hits:
+        return True
+    if isinstance(value, Mapping):
+        return bool(value)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return bool(value)
+    return False
+
+
+def _inject_system_context(
+    messages: Sequence[Mapping[str, Any]],
+    content: str,
+) -> tuple[dict[str, Any], ...]:
+    copied = [dict(message) for message in messages]
+    insert_at = 0
+    while insert_at < len(copied) and copied[insert_at].get("role") == "system":
+        insert_at += 1
+    copied.insert(insert_at, {"role": "system", "content": content})
+    return tuple(copied)
+
+
+def _tool_schema_names(
+    tool_schemas: Sequence[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for schema in tool_schemas:
+        function = schema.get("function")
+        if not isinstance(function, Mapping):
+            raise ModelConfigurationError("Tool schema lacks function metadata.")
+        name = str(function.get("name", "")).strip()
+        if not name:
+            raise ModelConfigurationError("Tool schema lacks a function name.")
+        if name in seen:
+            raise ModelConfigurationError(
+                f"Duplicate model tool schema name {name!r} cannot be collapsed."
+            )
+        seen.add(name)
+        names.append(name)
+    return tuple(sorted(names))
