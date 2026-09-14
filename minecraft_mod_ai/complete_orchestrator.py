@@ -32,6 +32,7 @@ from .complete_orchestrator_support import (
     _normalize_modules,
     _system_groups,
 )
+from .complete_build_repair import run_build_with_repair
 from .complete_spec import CompleteProposal, CompleteProposalStatus, ProductionModule
 from .custom_module_generator import CustomModuleGenerator
 from .extended_content_generator import generate_extended_content
@@ -78,10 +79,8 @@ from .publisher import (
     publish_modrinth,
 )
 from .quality_evidence import compile_quality_evidence
-from .repair_engine import RepairEngine
 from .research_ledger import is_research_shard, write_research_shard
 from .root_cause_trace import emit_root_cause
-from .runner import GradleRunner
 from .runtime_manager import MinecraftRuntimeManager
 from .scalable_generator import ScalableFabricProjectGenerator as FabricProjectGenerator
 from .scalable_validator import ScalableProjectValidator
@@ -361,18 +360,6 @@ def _refresh_validation_after_build(
     refreshed_jdt = validation_results.get("jdt")
     return refreshed_source, refreshed_jdt, True
 
-def _attested_repair_build(repair_result: Any) -> dict[str, Any] | None:
-    if not isinstance(repair_result, dict) or repair_result.get("status") != "PASS":
-        return None
-    repair_evidence = repair_result.get("evidence")
-    if not isinstance(repair_evidence, dict) or repair_evidence.get("passed") is not True:
-        return None
-    repaired_build = repair_evidence.get("build")
-    if not isinstance(repaired_build, dict) or repaired_build.get("status") != "PASS":
-        return None
-    return repaired_build
-
-
 class CompleteProductionOrchestrator:
     """Approved request -> sharded source -> repair -> runtime -> release."""
 
@@ -383,39 +370,6 @@ class CompleteProductionOrchestrator:
         self.router_factory = router_factory or (lambda: ModelRouter(profile=profile))
         self.policy = policy or ScalePolicy.from_environment()
         self.policy.validate()
-
-    def _run_build_with_repair(
-        self,
-        *,
-        project_root: Path,
-        cache: Path,
-        options: CompleteExecutionOptions,
-        router: ModelRouter | None,
-    ) -> tuple[dict[str, Any], ModelRouter | None]:
-        build_result = GradleRunner(cache).build(
-            project_root, run_gametest=options.run_gametest
-        ).to_dict()
-        repair_result: dict[str, Any] | None = None
-        active_router = router
-        if build_result.get("status") != "PASS" and options.auto_repair:
-            active_router = active_router or self.router_factory()
-            repair_result = RepairEngine(
-                router=active_router,
-                gradle_cache=cache,
-                policy=self.policy,
-            ).repair(
-                project_root,
-                run_gametest=options.run_gametest,
-                max_attempts=options.max_repair_attempts,
-            )
-            repaired_build = _attested_repair_build(repair_result)
-            if repaired_build is not None:
-                build_result = dict(repaired_build)
-            else:
-                build_result = GradleRunner(cache).build(
-                    project_root, run_gametest=options.run_gametest
-                ).to_dict()
-        return {"build": build_result, "repair": repair_result}, active_router
 
     @execution_scoped
     def execute(self, proposal: CompleteProposal | dict[str, Any], *, approval_hash: str, run_name: str, options: CompleteExecutionOptions | None=None, existing_input: str | Path | None=None) -> CompletePipelineResult:
@@ -520,11 +474,15 @@ class CompleteProductionOrchestrator:
 
         def build_with_repair() -> dict[str, Any]:
             nonlocal router
-            bundle, router = self._run_build_with_repair(
+            bundle, router = run_build_with_repair(
                 project_root=project_root,
                 cache=cache,
-                options=options,
+                run_gametest=options.run_gametest,
+                auto_repair=options.auto_repair,
+                max_repair_attempts=options.max_repair_attempts,
                 router=router,
+                router_factory=self.router_factory,
+                policy=self.policy,
             )
             return bundle
         build_bundle = run_named_checkpoint(ledger, 'gradle-build', stage='build', input_value={'graph_hash': work_plan.graph_hash, 'project_manifest': validation_manifest, 'run_gametest': options.run_gametest, 'auto_repair': options.auto_repair, 'max_repair_attempts': options.max_repair_attempts}, action=build_with_repair, encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: self._cached_build_exists(cached.get('build')))
