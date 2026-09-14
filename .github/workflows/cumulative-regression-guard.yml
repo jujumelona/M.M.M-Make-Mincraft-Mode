@@ -35,7 +35,7 @@ jobs:
           cache: pip
 
       - name: Install audit dependencies
-        run: python -m pip install --prefer-binary "build>=1,<2" -e ".[dev,ui]"
+        run: python -m pip install --prefer-binary "build>=1,<2" -e ".[dev]"
 
       - name: Resolve last known-good cumulative baseline
         id: baseline
