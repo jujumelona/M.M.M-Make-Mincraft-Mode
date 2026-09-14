@@ -1,20 +1,17 @@
 from __future__ import annotations
 
-"""Install a trustworthy Gradle fallback for generation-time JDT outages.
+"""Real Gradle fallback support for generation-time JDT infrastructure outages.
 
-The ordinary verifier remains JDT.  This module only handles infrastructure
-unavailability after the JDT verifier has already failed closed.  The fallback
-runs the repository's pinned Gradle build and returns a real PASS/FAIL receipt;
-it never converts an unavailable verifier into synthetic success.
+The generation verifier owns fallback selection directly.  This module only
+contains the Gradle execution/receipt helper; ``install`` is intentionally a
+no-op retained for import compatibility and performs no runtime rebinding.
 """
 
-from functools import wraps
 from pathlib import Path
 from typing import Any
 
 from .root_cause_trace import emit_root_cause
 
-_MARKER = "_mmm_generation_gradle_fallback"
 _MAX_LOG_TAIL_CHARS = 16 * 1024
 _MAX_LOG_TAIL_LINES = 120
 
@@ -97,69 +94,9 @@ def _gradle_fallback_receipt(
 
 
 def install() -> None:
-    """Wrap the finalized generation verifier with a real-build fallback."""
+    """Compatibility hook; fallback dispatch is owned by the verifier itself."""
 
-    from . import generation_verifier_resilience as verifier_module
-
-    current = verifier_module.run_generation_verifier
-    if getattr(current, _MARKER, False):
-        return
-
-    @wraps(current)
-    def run_generation_verifier_with_gradle_fallback(
-        runtime: Any,
-        arguments: Any,
-        *,
-        runtime_module: Any,
-        java_service_factory: Any | None = None,
-    ) -> dict[str, Any]:
-        try:
-            return current(
-                runtime,
-                arguments,
-                runtime_module=runtime_module,
-                java_service_factory=java_service_factory,
-            )
-        except runtime_module.AgentToolRuntimeError as exc:
-            # Only verifier infrastructure failure is eligible. Source diagnostics
-            # remain ordinary FAIL results and must never be hidden by another backend.
-            if "JDT is unavailable" not in str(exc):
-                raise
-            root, _ = runtime_module._discover_model_project_root(runtime.workspace_root)
-            emit_root_cause(
-                "generation_verifier_gradle_fallback_start",
-                stage="generation",
-                operation="run_gradle_build",
-                gate="target_compile",
-                result="START",
-                reason=str(exc),
-            )
-            try:
-                return _gradle_fallback_receipt(
-                    runtime,
-                    Path(root),
-                    runtime_module=runtime_module,
-                    jdt_error=exc,
-                )
-            except Exception as fallback_exc:
-                emit_root_cause(
-                    "generation_verifier_gradle_fallback_unavailable",
-                    stage="generation",
-                    operation="run_gradle_build",
-                    gate="target_compile",
-                    result="FAIL",
-                    reason=f"{type(fallback_exc).__name__}: {fallback_exc}",
-                    exc=fallback_exc,
-                )
-                raise runtime_module.AgentToolRuntimeError(
-                    "Generation verification has no healthy backend: "
-                    f"JDT unavailable ({exc}); Gradle fallback unavailable "
-                    f"({type(fallback_exc).__name__}: {fallback_exc})"
-                ) from fallback_exc
-
-    setattr(run_generation_verifier_with_gradle_fallback, _MARKER, True)
-    run_generation_verifier_with_gradle_fallback.__wrapped__ = current
-    verifier_module.run_generation_verifier = run_generation_verifier_with_gradle_fallback
+    return None
 
 
 __all__ = ["install"]
