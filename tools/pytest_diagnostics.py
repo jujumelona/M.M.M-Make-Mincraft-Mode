@@ -332,63 +332,52 @@ def _popen_group_kwargs() -> dict[str, object]:
     return {"start_new_session": True}
 
 
+def _snapshot_command() -> list[str]:
+    if os.name == "nt":
+        return ["tasklist", "/V"]
+    return ["ps", "-eo", "pid,ppid,pgid,sid,stat,etime,pcpu,pmem,args", "--forest"]
+
+
 def _append_process_snapshot(raw_handle: object, *, pytest_pid: int) -> None:
     raw_handle.write("\n\n=== PYTEST TIMEOUT PROCESS SNAPSHOT ===\n")
     raw_handle.write(f"pytest_pid={pytest_pid} platform={sys.platform} os_name={os.name}\n")
-    raw_handle.flush()
-
-    commands = (
-        (["tasklist", "/V"],)
-        if os.name == "nt"
-        else (
-            ["ps", "-eo", "pid,ppid,pgid,sid,stat,etime,pcpu,pmem,args", "--forest"],
-            ["ps", "-eo", "pid,ppid,pgid,sid,stat,etime,pcpu,pmem,args"],
+    command = _snapshot_command()
+    try:
+        snapshot = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+            text=True,
+            errors="replace",
+            timeout=_PROCESS_SNAPSHOT_TIMEOUT_SECONDS,
         )
-    )
-    for command in commands:
-        try:
-            snapshot = subprocess.run(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                check=False,
-                text=True,
-                errors="replace",
-                timeout=_PROCESS_SNAPSHOT_TIMEOUT_SECONDS,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raw_handle.write(f"snapshot command failed: {command!r}: {type(exc).__name__}: {exc}\n")
-            raw_handle.flush()
-            continue
         raw_handle.write(f"$ {' '.join(command)}\n")
         raw_handle.write(snapshot.stdout or "<no process snapshot output>\n")
-        raw_handle.flush()
-        if snapshot.returncode == 0:
-            break
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raw_handle.write(f"snapshot command failed: {command!r}: {type(exc).__name__}: {exc}\n")
+    raw_handle.flush()
 
 
-def _terminate_process_tree(process: subprocess.Popen[object]) -> None:
-    if process.poll() is not None:
-        return
+def _terminate_windows_tree(process: subprocess.Popen[object]) -> None:
+    try:
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=_PROCESS_SNAPSHOT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        process.kill()
+    try:
+        process.wait(timeout=_PROCESS_EXIT_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
 
-    if os.name == "nt":
-        try:
-            subprocess.run(
-                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-                timeout=_PROCESS_SNAPSHOT_TIMEOUT_SECONDS,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            process.kill()
-        try:
-            process.wait(timeout=_PROCESS_EXIT_GRACE_SECONDS)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-        return
 
+def _terminate_posix_tree(process: subprocess.Popen[object]) -> None:
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except (OSError, ProcessLookupError):
@@ -398,12 +387,46 @@ def _terminate_process_tree(process: subprocess.Popen[object]) -> None:
         return
     except subprocess.TimeoutExpired:
         pass
-
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except (OSError, ProcessLookupError):
         process.kill()
     process.wait()
+
+
+def _terminate_process_tree(process: subprocess.Popen[object]) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        _terminate_windows_tree(process)
+    else:
+        _terminate_posix_tree(process)
+
+
+def _launch_and_wait(
+    command: list[str],
+    raw_handle: object,
+    *,
+    timeout_seconds: int,
+) -> tuple[int | None, BaseException | None]:
+    process: subprocess.Popen[object] | None = None
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=raw_handle,
+            stderr=subprocess.STDOUT,
+            **_popen_group_kwargs(),
+        )
+        return process.wait(timeout=timeout_seconds), None
+    except subprocess.TimeoutExpired as exc:
+        if process is not None:
+            _append_process_snapshot(raw_handle, pytest_pid=process.pid)
+            _terminate_process_tree(process)
+        return None, exc
+    except OSError as exc:
+        if process is not None:
+            _terminate_process_tree(process)
+        return None, exc
 
 
 def _capture_pytest(
@@ -425,78 +448,55 @@ def _capture_pytest(
             delete=False,
         ) as raw_handle:
             temporary_path = Path(raw_handle.name)
-            process: subprocess.Popen[object] | None = None
-            try:
-                process = subprocess.Popen(
-                    command,
-                    stdout=raw_handle,
-                    stderr=subprocess.STDOUT,
-                    **_popen_group_kwargs(),
-                )
-                returncode = process.wait(timeout=timeout_seconds)
-                failure: BaseException | None = None
-            except subprocess.TimeoutExpired as exc:
-                returncode = None
-                failure = exc
-                if process is not None:
-                    _append_process_snapshot(raw_handle, pytest_pid=process.pid)
-                    _terminate_process_tree(process)
-            except OSError as exc:
-                returncode = None
-                failure = exc
-                if process is not None:
-                    _terminate_process_tree(process)
+            outcome = _launch_and_wait(command, raw_handle, timeout_seconds=timeout_seconds)
         _redact_file(temporary_path, log_path)
-        return returncode, failure
+        return outcome
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
 
 
-def main(argv: Iterable[str] | None = None) -> int:
-    args = _parse_args(argv)
+def _invalid_argument(
+    *, operation: str, cause_type: str, cause: str, fallback: str = "pytest was not started"
+) -> int:
+    print(
+        _render_internal_failure(
+            operation=operation,
+            cause_type=cause_type,
+            cause=cause,
+            fallback=fallback,
+            category=FailureCategory.INPUT,
+        )
+    )
+    return 2
+
+
+def _validate_args(args: argparse.Namespace) -> int | None:
     if not _validate_output_paths(args.log, args.junit):
-        print(
-            _render_internal_failure(
-                operation="validate diagnostic outputs",
-                cause_type="OutputPathCollision",
-                cause="--log and --junit must refer to different files",
-                fallback="pytest was not started",
-                category=FailureCategory.INPUT,
-            )
+        return _invalid_argument(
+            operation="validate diagnostic outputs",
+            cause_type="OutputPathCollision",
+            cause="--log and --junit must refer to different files",
         )
-        return 2
     if args.timeout_seconds <= 0:
-        print(
-            _render_internal_failure(
-                operation="validate pytest timeout",
-                cause_type="InvalidPytestTimeout",
-                cause=f"--timeout-seconds must be positive, got {args.timeout_seconds}",
-                fallback="pytest was not started",
-                category=FailureCategory.INPUT,
-            )
+        return _invalid_argument(
+            operation="validate pytest timeout",
+            cause_type="InvalidPytestTimeout",
+            cause=f"--timeout-seconds must be positive, got {args.timeout_seconds}",
         )
-        return 2
     if args.faulthandler_timeout_seconds <= 0:
-        print(
-            _render_internal_failure(
-                operation="validate faulthandler timeout",
-                cause_type="InvalidFaulthandlerTimeout",
-                cause=(
-                    "--faulthandler-timeout-seconds must be positive, got "
-                    f"{args.faulthandler_timeout_seconds}"
-                ),
-                fallback="pytest was not started",
-                category=FailureCategory.INPUT,
-            )
+        return _invalid_argument(
+            operation="validate faulthandler timeout",
+            cause_type="InvalidFaulthandlerTimeout",
+            cause=(
+                "--faulthandler-timeout-seconds must be positive, got "
+                f"{args.faulthandler_timeout_seconds}"
+            ),
         )
-        return 2
+    return None
 
-    if not _prepare_output_directories(args.log, args.junit):
-        return 1
-    if not _remove_stale_outputs(args.log, args.junit):
-        return 1
 
+def _build_pytest_command(args: argparse.Namespace) -> list[str]:
     stack_timeout_seconds = min(
         args.faulthandler_timeout_seconds,
         max(1, args.timeout_seconds - 1),
@@ -515,10 +515,145 @@ def main(argv: Iterable[str] | None = None) -> int:
     if args.durations > 0:
         command.append(f"--durations={args.durations}")
     command.extend(args.tests)
+    return command
+
+
+def _handle_launch_failure(failure: BaseException | None, args: argparse.Namespace) -> int | None:
+    if failure is None:
+        return None
+    if isinstance(failure, subprocess.TimeoutExpired):
+        print(
+            _render_internal_failure(
+                operation="run pytest",
+                cause_type="TimeoutExpired",
+                cause=f"pytest exceeded timeout={args.timeout_seconds}s",
+                fallback=(
+                    f"redacted pytest output, thread dumps, and process snapshot preserved at {args.log}"
+                ),
+                category=FailureCategory.TRANSIENT,
+            )
+        )
+        print(f"RAW OUTPUT {args.log}")
+        return 124
+    print(
+        _render_internal_failure(
+            operation="launch pytest",
+            cause_type=type(failure).__name__,
+            cause=str(failure),
+            fallback=f"redacted output target={args.log}",
+        )
+    )
+    return 1
+
+
+def _redact_junit(args: argparse.Namespace, process_returncode: int) -> int | None:
+    if not args.junit.is_file():
+        return None
+    try:
+        _redact_file_in_place(
+            args.junit,
+            replacement=_XML_REDACTION_MARKER,
+            preserve_xml_declaration=True,
+        )
+    except OSError as exc:
+        print(
+            _render_internal_failure(
+                operation="redact JUnit",
+                cause_type=type(exc).__name__,
+                cause=str(exc),
+                fallback=f"redacted pytest output preserved at {args.log}",
+            )
+        )
+        return _safe_exit_code(process_returncode)
+    return None
+
+
+def _read_analysis(args: argparse.Namespace, process_returncode: int) -> tuple[JUnitAnalysis | None, int | None]:
+    if not args.junit.is_file():
+        print(
+            _render_internal_failure(
+                operation="produce JUnit",
+                cause_type="MissingJUnit",
+                cause="pytest did not produce the requested JUnit report for this run",
+                fallback=f"redacted pytest output preserved at {args.log}",
+            )
+        )
+        print(f"RAW OUTPUT {args.log}")
+        print(f"JUNIT {args.junit}")
+        return None, _safe_exit_code(process_returncode)
+    try:
+        return analyze_junit(args.junit), None
+    except (OSError, ET.ParseError) as exc:
+        print(
+            _render_internal_failure(
+                operation="parse JUnit",
+                cause_type=type(exc).__name__,
+                cause=str(exc),
+                fallback=f"redacted pytest output preserved at {args.log}",
+            )
+        )
+        print(f"RAW OUTPUT {args.log}")
+        print(f"JUNIT {args.junit}")
+        return None, _safe_exit_code(process_returncode)
+
+
+def _report_success(args: argparse.Namespace, analysis: JUnitAnalysis) -> int:
+    if analysis.failed or analysis.errors:
+        print(
+            _render_internal_failure(
+                operation="validate pytest/JUnit agreement",
+                cause_type="PytestExitMismatch",
+                cause=(
+                    f"pytest exit=0 but JUnit reports failed={analysis.failed} errors={analysis.errors}"
+                ),
+                fallback=f"redacted pytest output preserved at {args.log}",
+            )
+        )
+        return 1
+    if analysis.total == 0:
+        print(
+            _render_internal_failure(
+                operation="validate JUnit evidence",
+                cause_type="EmptyJUnit",
+                cause="pytest exited successfully but JUnit contains zero testcases",
+                fallback=f"redacted pytest output preserved at {args.log}",
+            )
+        )
+        return 1
+    print("FINAL STATUS")
+    print("PASS")
+    print(
+        f"TESTS total={analysis.total} failed={analysis.failed} "
+        f"errors={analysis.errors} skipped={analysis.skipped}"
+    )
+    print(f"RAW OUTPUT {args.log}")
+    return 0
+
+
+def _report_failure(args: argparse.Namespace, returncode: int, analysis: JUnitAnalysis) -> int:
+    print(_render_analysis_failure_summary(analysis))
+    print(
+        f"TESTS total={analysis.total} failed={analysis.failed} "
+        f"errors={analysis.errors} skipped={analysis.skipped}"
+    )
+    print(f"RAW OUTPUT {args.log}")
+    print(f"JUNIT {args.junit}")
+    return _safe_exit_code(returncode)
+
+
+def main(argv: Iterable[str] | None = None) -> int:
+    args = _parse_args(argv)
+    invalid = _validate_args(args)
+    if invalid is not None:
+        return invalid
+    if not _prepare_output_directories(args.log, args.junit):
+        return 1
+    if not _remove_stale_outputs(args.log, args.junit):
+        return 1
 
     try:
         process_returncode, launch_failure = _capture_pytest(
-            command,
+            _build_pytest_command(args),
             args.log,
             timeout_seconds=args.timeout_seconds,
         )
@@ -533,122 +668,21 @@ def main(argv: Iterable[str] | None = None) -> int:
         )
         return 1
 
-    if launch_failure is not None:
-        if isinstance(launch_failure, subprocess.TimeoutExpired):
-            print(
-                _render_internal_failure(
-                    operation="run pytest",
-                    cause_type="TimeoutExpired",
-                    cause=f"pytest exceeded timeout={args.timeout_seconds}s",
-                    fallback=(
-                        f"redacted pytest output, thread dumps, and process snapshot preserved at {args.log}"
-                    ),
-                    category=FailureCategory.TRANSIENT,
-                )
-            )
-            print(f"RAW OUTPUT {args.log}")
-            return 124
-        print(
-            _render_internal_failure(
-                operation="launch pytest",
-                cause_type=type(launch_failure).__name__,
-                cause=str(launch_failure),
-                fallback=f"redacted output target={args.log}",
-            )
-        )
-        return 1
-
+    launch_exit = _handle_launch_failure(launch_failure, args)
+    if launch_exit is not None:
+        return launch_exit
     assert process_returncode is not None
 
-    if args.junit.is_file():
-        try:
-            _redact_file_in_place(
-                args.junit,
-                replacement=_XML_REDACTION_MARKER,
-                preserve_xml_declaration=True,
-            )
-        except OSError as exc:
-            print(
-                _render_internal_failure(
-                    operation="redact JUnit",
-                    cause_type=type(exc).__name__,
-                    cause=str(exc),
-                    fallback=f"redacted pytest output preserved at {args.log}",
-                )
-            )
-            return _safe_exit_code(process_returncode)
-
-    analysis: JUnitAnalysis | None = None
-    if args.junit.is_file():
-        try:
-            analysis = analyze_junit(args.junit)
-        except (OSError, ET.ParseError) as exc:
-            print(
-                _render_internal_failure(
-                    operation="parse JUnit",
-                    cause_type=type(exc).__name__,
-                    cause=str(exc),
-                    fallback=f"redacted pytest output preserved at {args.log}",
-                )
-            )
-            print(f"RAW OUTPUT {args.log}")
-            print(f"JUNIT {args.junit}")
-            return _safe_exit_code(process_returncode)
-
-    if analysis is None:
-        print(
-            _render_internal_failure(
-                operation="produce JUnit",
-                cause_type="MissingJUnit",
-                cause="pytest did not produce the requested JUnit report for this run",
-                fallback=f"redacted pytest output preserved at {args.log}",
-            )
-        )
-        print(f"RAW OUTPUT {args.log}")
-        print(f"JUNIT {args.junit}")
-        return _safe_exit_code(process_returncode)
-
+    redact_exit = _redact_junit(args, process_returncode)
+    if redact_exit is not None:
+        return redact_exit
+    analysis, analysis_exit = _read_analysis(args, process_returncode)
+    if analysis_exit is not None:
+        return analysis_exit
+    assert analysis is not None
     if process_returncode == 0:
-        if analysis.failed or analysis.errors:
-            print(
-                _render_internal_failure(
-                    operation="validate pytest/JUnit agreement",
-                    cause_type="PytestExitMismatch",
-                    cause=(
-                        f"pytest exit=0 but JUnit reports failed={analysis.failed} "
-                        f"errors={analysis.errors}"
-                    ),
-                    fallback=f"redacted pytest output preserved at {args.log}",
-                )
-            )
-            return 1
-        if analysis.total == 0:
-            print(
-                _render_internal_failure(
-                    operation="validate JUnit evidence",
-                    cause_type="EmptyJUnit",
-                    cause="pytest exited successfully but JUnit contains zero testcases",
-                    fallback=f"redacted pytest output preserved at {args.log}",
-                )
-            )
-            return 1
-        print("FINAL STATUS")
-        print("PASS")
-        print(
-            f"TESTS total={analysis.total} failed={analysis.failed} "
-            f"errors={analysis.errors} skipped={analysis.skipped}"
-        )
-        print(f"RAW OUTPUT {args.log}")
-        return 0
-
-    print(_render_analysis_failure_summary(analysis))
-    print(
-        f"TESTS total={analysis.total} failed={analysis.failed} "
-        f"errors={analysis.errors} skipped={analysis.skipped}"
-    )
-    print(f"RAW OUTPUT {args.log}")
-    print(f"JUNIT {args.junit}")
-    return _safe_exit_code(process_returncode)
+        return _report_success(args, analysis)
+    return _report_failure(args, process_returncode, analysis)
 
 
 if __name__ == "__main__":
