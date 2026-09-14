@@ -41,6 +41,53 @@ class _ProductionBatch:
     acceptance_tests: tuple[str, ...] = ()
 
 
+def _merge_atomic_modules(
+    modules: Sequence[ProductionModule],
+    atomic_modules: Sequence[Any],
+) -> tuple[ProductionModule, ...]:
+    merged = list(modules)
+    known_ids = {module.module_id for module in merged}
+    for item in atomic_modules:
+        if isinstance(item, ProductionModule):
+            candidate = item
+        elif isinstance(item, Mapping) and str(item.get("module_id") or "").strip():
+            candidate = _module(item)
+        else:
+            continue
+        if candidate.module_id in known_ids:
+            continue
+        merged.append(candidate)
+        known_ids.add(candidate.module_id)
+    return tuple(merged)
+
+
+def _complete_asset_mapping(value: Mapping[str, Any]) -> bool:
+    return bool(str(value.get("asset_id") or "").strip()) and all(
+        str(value.get(field) or "").strip()
+        for field in ("kind", "prompt", "target_path")
+    )
+
+
+def _merge_atomic_assets(
+    assets: Sequence[AssetRequest],
+    atomic_assets: Sequence[Any],
+) -> tuple[AssetRequest, ...]:
+    merged = list(assets)
+    known_ids = {asset.asset_id for asset in merged}
+    for item in atomic_assets:
+        if isinstance(item, AssetRequest):
+            candidate = item
+        elif isinstance(item, Mapping) and _complete_asset_mapping(item):
+            candidate = _asset(item)
+        else:
+            continue
+        if candidate.asset_id in known_ids:
+            continue
+        merged.append(candidate)
+        known_ids.add(candidate.asset_id)
+    return tuple(merged)
+
+
 class CompleteGameDesignPlanner:
     """Compile one authored request into a coder-ready production proposal.
 
@@ -135,47 +182,14 @@ class CompleteGameDesignPlanner:
             ),
         )
 
-        atomic_modules = (
-            internal_design.get("_atomic_modules")
-            or ()
+        modules = _merge_atomic_modules(
+            modules,
+            internal_design.get("_atomic_modules") or (),
         )
-        all_modules = list(modules)
-        existing_module_ids = {m.module_id for m in all_modules}
-        for item in atomic_modules:
-            if isinstance(item, ProductionModule) and item.module_id not in existing_module_ids:
-                all_modules.append(item)
-                existing_module_ids.add(item.module_id)
-            elif isinstance(item, Mapping):
-                module_id = str(item.get("module_id") or "").strip()
-                if not module_id or module_id in existing_module_ids:
-                    continue
-                mod_obj = _module(item)
-                all_modules.append(mod_obj)
-                existing_module_ids.add(mod_obj.module_id)
-        modules = tuple(all_modules)
-
-        atomic_assets = (
-            internal_design.get("_atomic_assets")
-            or internal_design.get("assets")
-            or ()
+        assets = _merge_atomic_assets(
+            assets,
+            internal_design.get("_atomic_assets") or internal_design.get("assets") or (),
         )
-        all_assets = list(assets)
-        existing_asset_ids = {a.asset_id for a in all_assets}
-        for item in atomic_assets:
-            if isinstance(item, AssetRequest) and item.asset_id not in existing_asset_ids:
-                all_assets.append(item)
-                existing_asset_ids.add(item.asset_id)
-            elif isinstance(item, Mapping):
-                asset_id = str(item.get("asset_id") or "").strip()
-                if not asset_id or asset_id in existing_asset_ids:
-                    continue
-                required_asset_fields = ("kind", "prompt", "target_path")
-                if any(not str(item.get(field) or "").strip() for field in required_asset_fields):
-                    continue
-                asset_obj = _asset(item)
-                all_assets.append(asset_obj)
-                existing_asset_ids.add(asset_obj.asset_id)
-        assets = tuple(all_assets)
 
         contract_design = {
             key: value
