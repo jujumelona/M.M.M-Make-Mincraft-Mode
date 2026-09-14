@@ -256,6 +256,33 @@ def _research_stage_needed(state: Mapping[str, Any]) -> bool:
         for row in unresolved
     )
 
+def _collect_research_if_needed(
+    router: Any,
+    prompt: str,
+    state: dict[str, Any],
+    *,
+    trace_metadata: Mapping[str, Any] | None,
+    checkpoint: PlanningCheckpoint | None,
+) -> dict[str, Any]:
+    if not _research_stage_needed(state):
+        return state
+    try:
+        state = _transition(
+            "collect_prompt_research",
+            lambda: collect_planning_state_research_convergent(
+                router,
+                prompt,
+                state,
+                trace_metadata=trace_metadata,
+            ),
+            input_state=state,
+        )
+    except Exception as exc:
+        _host_transition_notice("collect_prompt_research", state, exc)
+    _checkpoint_state(checkpoint, state)
+    return state
+
+
 def _resolve_requirements_or_wait(
     router: Any,
     prompt: str,
@@ -269,21 +296,13 @@ def _resolve_requirements_or_wait(
     if _requirements_exist(state):
         return state, False
 
-    if _research_stage_needed(state):
-        try:
-            state = _transition(
-                "collect_prompt_research",
-                lambda: collect_planning_state_research_convergent(
-                    router,
-                    prompt,
-                    state,
-                    trace_metadata=trace_metadata,
-                ),
-                input_state=state,
-            )
-        except Exception as exc:
-            _host_transition_notice("collect_prompt_research", state, exc)
-        _checkpoint_state(checkpoint, state)
+    state = _collect_research_if_needed(
+        router,
+        prompt,
+        state,
+        trace_metadata=trace_metadata,
+        checkpoint=checkpoint,
+    )
 
     try:
         state = _transition(
@@ -321,7 +340,6 @@ def _resolve_requirements_or_wait(
     )
     _checkpoint_state(checkpoint, state)
     return state, False
-
 
 def _select_detail_sections(
     state: dict[str, Any],

@@ -45,6 +45,68 @@ def _is_java_toolchain_failure(*parts: str | None) -> bool:
     return any(pattern.search(text) is not None for pattern in _JAVA_TOOLCHAIN_PATTERNS)
 
 
+def _last_gradle_log(report: Any, report_dict: dict[str, Any]) -> str:
+    if report.passed:
+        return ""
+    commands = report_dict.get("commands")
+    if not isinstance(commands, list) or not commands:
+        return ""
+    final_command = commands[-1]
+    if not isinstance(final_command, dict):
+        return ""
+    return _bounded_log_tail(str(final_command.get("log_path") or ""))
+
+
+def _fallback_status(report: Any, last_log: str) -> tuple[str, bool]:
+    toolchain_unavailable = (
+        str(report.status).strip().upper() == "UNAVAILABLE"
+        or _is_java_toolchain_failure(report.error, last_log)
+    )
+    if report.passed:
+        return "PASS", toolchain_unavailable
+    if toolchain_unavailable:
+        return "UNAVAILABLE", True
+    return "FAIL", False
+
+
+def _fallback_diagnostics(
+    report: Any,
+    last_log: str,
+    *,
+    toolchain_unavailable: bool,
+) -> list[dict[str, Any]]:
+    if report.passed:
+        return []
+    message = str(report.error or "Gradle build failed.")
+    if last_log:
+        message += "\n\nGradle log tail:\n" + last_log
+    code = "JAVA_TOOLCHAIN_UNAVAILABLE" if toolchain_unavailable else "GRADLE_BUILD_FAILED"
+    return [
+        {
+            "severity": 1,
+            "source": "gradle",
+            "code": code,
+            "message": message,
+        }
+    ]
+
+
+def _environment_failure_fields(toolchain_unavailable: bool) -> dict[str, Any]:
+    if not toolchain_unavailable:
+        return {}
+    return {
+        "failure_class": "environment",
+        "repairable": False,
+        "code": "JAVA_TOOLCHAIN_UNAVAILABLE",
+    }
+
+
+def _fallback_reason(toolchain_unavailable: bool) -> str:
+    if toolchain_unavailable:
+        return "JDT verifier unavailable and Gradle Java toolchain unavailable"
+    return "JDT verifier unavailable; pinned Gradle build used as host verifier"
+
+
 def _gradle_fallback_receipt(
     runtime: Any,
     root: Path,
@@ -61,39 +123,13 @@ def _gradle_fallback_receipt(
     runner = (gradle_runner_factory or GradleRunner)(cache_root)
     report = runner.build(Path(root).resolve(), run_gametest=False)
     report_dict = report.to_dict()
-
-    diagnostics: list[dict[str, Any]] = []
-    last_log = ""
-    if not report.passed:
-        commands = report_dict.get("commands")
-        if isinstance(commands, list) and commands:
-            final_command = commands[-1]
-            if isinstance(final_command, dict):
-                last_log = _bounded_log_tail(str(final_command.get("log_path") or ""))
-
-    toolchain_unavailable = (
-        str(report.status).strip().upper() == "UNAVAILABLE"
-        or _is_java_toolchain_failure(report.error, last_log)
+    last_log = _last_gradle_log(report, report_dict)
+    status, toolchain_unavailable = _fallback_status(report, last_log)
+    diagnostics = _fallback_diagnostics(
+        report,
+        last_log,
+        toolchain_unavailable=toolchain_unavailable,
     )
-    status = "PASS" if report.passed else "UNAVAILABLE" if toolchain_unavailable else "FAIL"
-
-    if not report.passed:
-        message = str(report.error or "Gradle build failed.")
-        if last_log:
-            message += "\n\nGradle log tail:\n" + last_log
-        diagnostics.append(
-            {
-                "severity": 1,
-                "source": "gradle",
-                "code": (
-                    "JAVA_TOOLCHAIN_UNAVAILABLE"
-                    if toolchain_unavailable
-                    else "GRADLE_BUILD_FAILED"
-                ),
-                "message": message,
-            }
-        )
-
     receipt: dict[str, Any] = {
         "status": status,
         "complete": True,
@@ -106,26 +142,17 @@ def _gradle_fallback_receipt(
         "jdt_unavailable_reason": f"{type(jdt_error).__name__}: {jdt_error}",
         "build": report_dict,
     }
-    if toolchain_unavailable:
-        receipt["failure_class"] = "environment"
-        receipt["repairable"] = False
-        receipt["code"] = "JAVA_TOOLCHAIN_UNAVAILABLE"
-
+    receipt.update(_environment_failure_fields(toolchain_unavailable))
     emit_root_cause(
         "generation_verifier_gradle_fallback_result",
         stage="generation",
         operation="run_gradle_build",
         gate="target_compile",
         result=status,
-        reason=(
-            "JDT verifier unavailable and Gradle Java toolchain unavailable"
-            if toolchain_unavailable
-            else "JDT verifier unavailable; pinned Gradle build used as host verifier"
-        ),
+        reason=_fallback_reason(toolchain_unavailable),
         details={"result": receipt},
     )
     return runtime_module._bounded_result(receipt)
-
 
 def install() -> None:
     """Compatibility hook; fallback dispatch is owned by the verifier itself."""

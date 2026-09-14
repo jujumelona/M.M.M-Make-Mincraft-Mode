@@ -57,6 +57,16 @@ class BuildReport:
         }
 
 
+@dataclass(frozen=True)
+class _PreparedBuild:
+    project_root: Path
+    gradle_version: str
+    gradle_sha256: str
+    gradle: Path
+    logs: Path
+    environment: dict[str, str]
+
+
 class GradleRunner:
     def __init__(
         self,
@@ -83,6 +93,12 @@ class GradleRunner:
         *,
         run_gametest: bool,
     ) -> BuildReport:
+        prepared = self._prepare_build_context(project_root)
+        if isinstance(prepared, BuildReport):
+            return prepared
+        return self._execute_prepared_build(prepared, run_gametest=run_gametest)
+
+    def _prepare_build_context(self, project_root: Path) -> _PreparedBuild | BuildReport:
         project_root = project_root.resolve()
         if not (project_root / "build.gradle").is_file():
             raise BuildRunnerError(f"Not a generated Gradle project: {project_root}")
@@ -92,17 +108,18 @@ class GradleRunner:
             raise BuildRunnerError(
                 f"Project platform lock is missing, mixed, or unsupported: {exc}"
             ) from exc
-
         gradle_version = adapter.gradle
         gradle_sha256 = adapter.gradle_sha256
         try:
             required_java = int(str(adapter.java_version).strip())
-            if required_java <= 0:
-                raise ValueError
         except (TypeError, ValueError) as exc:
             raise BuildRunnerError(
                 f"Project target has an invalid Java version: {adapter.java_version!r}"
             ) from exc
+        if required_java <= 0:
+            raise BuildRunnerError(
+                f"Project target has an invalid Java version: {adapter.java_version!r}"
+            )
         try:
             java_home = _resolve_project_java_home(required_java)
         except JDTWorkspaceBootstrapError as exc:
@@ -117,12 +134,9 @@ class GradleRunner:
                     f"{adapter.minecraft_version}: {exc}"
                 ),
             )
-
         logs = project_root / ".minecraft_ai" / "logs"
         logs.mkdir(parents=True, exist_ok=True)
-
         gradle = self._ensure_gradle(gradle_version, gradle_sha256)
-        commands: list[CommandResult] = []
         environment = os.environ.copy()
         environment["GRADLE_USER_HOME"] = str(self.cache_dir / "gradle-user-home")
         environment["CI"] = "true"
@@ -130,105 +144,121 @@ class GradleRunner:
         path_key = next((key for key in environment if key.upper() == "PATH"), "PATH")
         current_path = environment.get(path_key, "")
         java_bin = str(java_home / "bin")
-        environment[path_key] = (
-            java_bin + os.pathsep + current_path if current_path else java_bin
+        environment[path_key] = java_bin + os.pathsep + current_path if current_path else java_bin
+        return _PreparedBuild(
+            project_root=project_root,
+            gradle_version=gradle_version,
+            gradle_sha256=gradle_sha256,
+            gradle=gradle,
+            logs=logs,
+            environment=environment,
         )
 
-        if not self._wrapper_is_current(project_root, gradle_version, gradle_sha256):
+    def _execute_prepared_build(
+        self,
+        prepared: _PreparedBuild,
+        *,
+        run_gametest: bool,
+    ) -> BuildReport:
+        commands: list[CommandResult] = []
+        if not self._wrapper_is_current(
+            prepared.project_root,
+            prepared.gradle_version,
+            prepared.gradle_sha256,
+        ):
             wrapper_result = self._run(
                 name="wrapper",
-                executable=gradle,
+                executable=prepared.gradle,
                 arguments=(
                     "--no-daemon",
                     "wrapper",
                     "--gradle-version",
-                    gradle_version,
+                    prepared.gradle_version,
                     "--gradle-distribution-sha256-sum",
-                    gradle_sha256,
+                    prepared.gradle_sha256,
                     "--stacktrace",
                 ),
-                cwd=project_root,
-                env=environment,
-                log_path=logs / "gradle-wrapper.log",
+                cwd=prepared.project_root,
+                env=prepared.environment,
+                log_path=prepared.logs / "gradle-wrapper.log",
             )
             commands.append(wrapper_result)
             if wrapper_result.exit_code != 0:
-                return BuildReport(
-                    status="FAIL",
-                    gradle_version=gradle_version,
-                    commands=tuple(commands),
-                    jar_path=None,
-                    gametest_report=None,
-                    error="Gradle wrapper generation failed.",
-                )
-
+                return self._failed_build(prepared, commands, "Gradle wrapper generation failed.")
         force_clean = os.environ.get("MMM_GRADLE_FORCE_CLEAN", "").strip().lower() in {
             "1",
             "true",
             "yes",
             "on",
         }
-        build_arguments = (
-            ("--no-daemon", "clean", "build", "--stacktrace")
-            if force_clean
-            else ("--no-daemon", "build", "--stacktrace")
-        )
         build_result = self._run(
             name="clean_build" if force_clean else "build",
-            executable=gradle,
-            arguments=build_arguments,
-            cwd=project_root,
-            env=environment,
-            log_path=logs / "gradle-build.log",
+            executable=prepared.gradle,
+            arguments=(
+                ("--no-daemon", "clean", "build", "--stacktrace")
+                if force_clean
+                else ("--no-daemon", "build", "--stacktrace")
+            ),
+            cwd=prepared.project_root,
+            env=prepared.environment,
+            log_path=prepared.logs / "gradle-build.log",
         )
         commands.append(build_result)
         if build_result.exit_code != 0:
-            return BuildReport(
-                status="FAIL",
-                gradle_version=gradle_version,
-                commands=tuple(commands),
-                jar_path=None,
-                gametest_report=None,
-                error="Gradle build failed.",
-            )
-
+            return self._failed_build(prepared, commands, "Gradle build failed.")
         if run_gametest:
             gametest_result = self._run(
                 name="gametest",
-                executable=gradle,
+                executable=prepared.gradle,
                 arguments=("--no-daemon", "runGameTestServer", "--stacktrace"),
-                cwd=project_root,
-                env=environment,
-                log_path=logs / "gradle-gametest.log",
+                cwd=prepared.project_root,
+                env=prepared.environment,
+                log_path=prepared.logs / "gradle-gametest.log",
             )
             commands.append(gametest_result)
             if gametest_result.exit_code != 0:
-                return BuildReport(
-                    status="FAIL",
-                    gradle_version=gradle_version,
-                    commands=tuple(commands),
-                    jar_path=self._find_release_jar(project_root),
-                    gametest_report=self._gametest_report(project_root),
-                    error="Headless Fabric GameTest failed.",
+                return self._failed_build(
+                    prepared,
+                    commands,
+                    "Headless Fabric GameTest failed.",
+                    include_artifacts=True,
                 )
-
-        jar_path = self._find_release_jar(project_root)
+        jar_path = self._find_release_jar(prepared.project_root)
         if jar_path is None:
-            return BuildReport(
-                status="FAIL",
-                gradle_version=gradle_version,
-                commands=tuple(commands),
-                jar_path=None,
-                gametest_report=self._gametest_report(project_root),
-                error="Gradle reported success but no remapped release JAR was found.",
+            return self._failed_build(
+                prepared,
+                commands,
+                "Gradle reported success but no remapped release JAR was found.",
+                include_artifacts=True,
             )
         return BuildReport(
             status="PASS",
-            gradle_version=gradle_version,
+            gradle_version=prepared.gradle_version,
             commands=tuple(commands),
             jar_path=jar_path,
-            gametest_report=self._gametest_report(project_root),
+            gametest_report=self._gametest_report(prepared.project_root),
             error=None,
+        )
+
+    def _failed_build(
+        self,
+        prepared: _PreparedBuild,
+        commands: list[CommandResult],
+        error: str,
+        *,
+        include_artifacts: bool = False,
+    ) -> BuildReport:
+        return BuildReport(
+            status="FAIL",
+            gradle_version=prepared.gradle_version,
+            commands=tuple(commands),
+            jar_path=(
+                self._find_release_jar(prepared.project_root) if include_artifacts else None
+            ),
+            gametest_report=(
+                self._gametest_report(prepared.project_root) if include_artifacts else None
+            ),
+            error=error,
         )
 
     @staticmethod
@@ -348,16 +378,13 @@ class GradleRunner:
         env: dict[str, str],
         log_path: Path,
     ) -> CommandResult:
-        from .agent_tool_runtime import _redact_text, _sanitize_observation
+        from .agent_tool_runtime import _sanitize_observation
         from .root_cause_trace import emit_root_cause
 
         command = (str(executable), *arguments)
         started = time.monotonic()
-        timed_out = False
         creation_flags = (
-            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-            if os.name == "nt"
-            else 0
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
         )
         emit_root_cause(
             "gradle_command_start",
@@ -388,75 +415,16 @@ class GradleRunner:
             start_new_session=(os.name != "nt"),
         )
         reader_errors: list[BaseException] = []
-
-        def read_output() -> None:
-            try:
-                with log_path.open("w", encoding="utf-8") as log:
-                    if process.stdout is None:
-                        raise BuildRunnerError("Gradle output pipe is unavailable")
-                    private_key = False
-                    for raw in process.stdout:
-                        if private_key:
-                            if "-----END " in raw and "PRIVATE KEY-----" in raw:
-                                private_key = False
-                            continue
-                        if "-----BEGIN " in raw and "PRIVATE KEY-----" in raw:
-                            private_key = "-----END " not in raw
-                            line = "[REDACTED_PRIVATE_KEY]\n"
-                        else:
-                            line = _redact_text(raw)
-                        log.write(line)
-                        log.flush()
-                        emit_root_cause(
-                            "gradle_command_output",
-                            stage="verify",
-                            operation=name,
-                            result="INFO",
-                            details={
-                                "pid": process.pid,
-                                "log_path": str(log_path),
-                                "line": line.rstrip(),
-                            },
-                        )
-            except Exception as exc:
-                reader_errors.append(exc)
-                emit_root_cause(
-                    "gradle_output_failure",
-                    stage="verify",
-                    operation=name,
-                    result="FAIL",
-                    reason=f"{type(exc).__name__}: {exc}",
-                    exc=exc,
-                )
-
         reader = threading.Thread(
             target=copy_context().run,
-            args=(read_output,),
+            args=(self._copy_command_output, process, log_path, name, reader_errors),
             daemon=True,
         )
         reader.start()
-        try:
-            process.wait(timeout=self.command_timeout_seconds)
-            exit_code = process.returncode
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            _terminate_process_tree(process)
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
-            exit_code = 124
-        except BaseException:
-            _terminate_process_tree(process)
-            if process.poll() is None:
-                process.kill()
-                process.wait(timeout=5)
-            raise
-        finally:
-            reader.join(timeout=15)
-            if not reader.is_alive() and process.stdout is not None:
-                process.stdout.close()
+        exit_code, timed_out = self._wait_for_process(process)
+        reader.join(timeout=15)
+        if not reader.is_alive() and process.stdout is not None:
+            process.stdout.close()
         if reader.is_alive() or reader_errors:
             raise BuildRunnerError("Gradle command log could not be fully drained") from (
                 reader_errors[0] if reader_errors else None
@@ -471,7 +439,7 @@ class GradleRunner:
             "gradle_command_result",
             stage="verify",
             operation=name,
-            result="TIMEOUT" if timed_out else "PASS" if exit_code == 0 else "FAIL",
+            result=self._command_status(exit_code, timed_out=timed_out),
             details={
                 "pid": process.pid,
                 "exit_code": exit_code,
@@ -487,6 +455,83 @@ class GradleRunner:
             log_path=str(log_path),
             timed_out=timed_out,
         )
+
+    @staticmethod
+    def _copy_command_output(
+        process: subprocess.Popen[str],
+        log_path: Path,
+        name: str,
+        reader_errors: list[BaseException],
+    ) -> None:
+        from .agent_tool_runtime import _redact_text
+        from .root_cause_trace import emit_root_cause
+
+        try:
+            with log_path.open("w", encoding="utf-8") as log:
+                if process.stdout is None:
+                    raise BuildRunnerError("Gradle output pipe is unavailable")
+                private_key = False
+                for raw in process.stdout:
+                    if private_key:
+                        if "-----END " in raw and "PRIVATE KEY-----" in raw:
+                            private_key = False
+                        continue
+                    if "-----BEGIN " in raw and "PRIVATE KEY-----" in raw:
+                        private_key = "-----END " not in raw
+                        line = "[REDACTED_PRIVATE_KEY]\n"
+                    else:
+                        line = _redact_text(raw)
+                    log.write(line)
+                    log.flush()
+                    emit_root_cause(
+                        "gradle_command_output",
+                        stage="verify",
+                        operation=name,
+                        result="INFO",
+                        details={
+                            "pid": process.pid,
+                            "log_path": str(log_path),
+                            "line": line.rstrip(),
+                        },
+                    )
+        except Exception as exc:
+            reader_errors.append(exc)
+            emit_root_cause(
+                "gradle_output_failure",
+                stage="verify",
+                operation=name,
+                result="FAIL",
+                reason=f"{type(exc).__name__}: {exc}",
+                exc=exc,
+            )
+
+    def _wait_for_process(
+        self,
+        process: subprocess.Popen[str],
+    ) -> tuple[int, bool]:
+        try:
+            process.wait(timeout=self.command_timeout_seconds)
+            return int(process.returncode or 0), False
+        except subprocess.TimeoutExpired:
+            _terminate_process_tree(process)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+            return 124, True
+        except BaseException:
+            _terminate_process_tree(process)
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+            raise
+
+    @staticmethod
+    def _command_status(exit_code: int, *, timed_out: bool) -> str:
+        if timed_out:
+            return "TIMEOUT"
+        return "PASS" if exit_code == 0 else "FAIL"
 
     @staticmethod
     def _find_release_jar(project_root: Path) -> str | None:
