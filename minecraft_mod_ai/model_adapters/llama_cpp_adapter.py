@@ -104,12 +104,23 @@ class LlamaCppAdapter(ModelAdapter):
         return None
 
 
+def _normalize_tool_schema(tool: Any) -> Mapping[str, Any]:
+    schema = tool.to_schema() if hasattr(tool, "to_schema") else tool
+    if not isinstance(schema, Mapping):
+        raise TypeError("tool definition must be a mapping or expose to_schema()")
+    return dict(schema)
+
+
 def _normalized_tool_request(request: GenerationRequest) -> GenerationRequest:
-    tools = tuple(
-        tool.to_schema() if hasattr(tool, "to_schema") else dict(tool)
-        for tool in request.tools
+    tools = tuple(_normalize_tool_schema(tool) for tool in request.tools)
+    validation = tuple(
+        _normalize_tool_schema(tool) for tool in request.tool_validation_schemas
     )
-    return replace(request, tools=tools)
+    return replace(
+        request,
+        tools=tools,
+        tool_validation_schemas=validation,
+    )
 
 
 def _plain_completion(
@@ -221,7 +232,17 @@ def _tool_server_payload(
 
 
 def _request_tool_schema_map(request: GenerationRequest) -> dict[str, Mapping[str, Any]]:
-    return _tool_schema_map(tuple(dict(tool) for tool in request.tools))
+    """Return the parse/validation surface without widening model visibility."""
+
+    from ..tool_validation_surface_contract import _validation_surface
+
+    visible = tuple(request.tools)
+    authorized = tuple(request.tool_validation_schemas)
+    validation_surface = _validation_surface(visible, authorized)
+    return _tool_schema_map(tuple(dict(tool) for tool in validation_surface))
+
+
+_request_tool_schema_map._mmm_core_validation_surface = True  # type: ignore[attr-defined]
 
 
 def _tool_schema_map(
