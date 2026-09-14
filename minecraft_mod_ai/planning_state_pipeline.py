@@ -4,7 +4,8 @@ from __future__ import annotations
 
 Planning state is monotone progress. Model, template, transport, and partial-output
 problems are absorbed into host-owned progress; they never become terminal planning
-FAIL/BLOCKED judgements.
+FAIL/BLOCKED judgements. Detailed plans are promoted only from validated authored
+checkpoints; the host never fabricates missing engineering detail.
 """
 
 from collections.abc import Callable, Mapping
@@ -22,12 +23,8 @@ from .planning_detail_applicability import (
     ensure_host_detail_section_applicability,
     required_sections_by_requirement,
 )
-from .planning_detail_slots import DETAIL_RECORDS
 from .planning_detail_template import normalize_required_sections
-from .planning_state_adaptive_implementation import (
-    _merge_completed_details,
-    compile_progress_monotone_detailed_plans,
-)
+from .planning_state_adaptive_implementation import compile_progress_monotone_detailed_plans
 from .planning_state_contract import (
     SCHEMA,
     _hash_without,
@@ -35,7 +32,6 @@ from .planning_state_contract import (
     build_initial_planning_state,
     validate_planning_state,
 )
-from .planning_state_implementation import _assemble_requirement_plan
 from .prompt_task_checkpoint import is_prompt_checkpoint
 from .root_cause_trace import emit_root_cause, traced_callable
 
@@ -132,10 +128,16 @@ def _host_initial_state(prompt: str) -> dict[str, Any]:
     state: dict[str, Any] = {
         "schema_version": SCHEMA,
         "original_prompt": prompt,
-        "prompt_sha256": _hash_without({"x": prompt, "state_sha256": ""}, "state_sha256").replace("sha256:", "sha256:", 1),
+        "prompt_sha256": _hash_without(
+            {"x": prompt, "state_sha256": ""}, "state_sha256"
+        ).replace("sha256:", "sha256:", 1),
         "goal": {"statement": statement, "source": _source_receipt(prompt, prompt)},
         "known": [
-            {"known_id": "known_001", "statement": statement, "source": _source_receipt(prompt, prompt)}
+            {
+                "known_id": "known_001",
+                "statement": statement,
+                "source": _source_receipt(prompt, prompt),
+            }
         ],
         "references": [],
         "scope_status": "explicit",
@@ -163,7 +165,8 @@ def _requirements_exist(state: Mapping[str, Any]) -> bool:
     decisions = state.get("decisions")
     return any(
         isinstance(item, Mapping) and item.get("decision_type") == "requirement"
-        for item in decisions if isinstance(decisions, list)
+        for item in decisions
+        if isinstance(decisions, list)
     )
 
 
@@ -205,84 +208,98 @@ def _host_add_requirement(state: Mapping[str, Any]) -> dict[str, Any]:
     return value
 
 
-def _emit_incomplete(
-    state: Mapping[str, Any],
-    *,
-    operation: str,
-    reason: str,
-) -> None:
-    _trace_state_snapshot(
-        "planning_state_incomplete",
-        operation,
-        state,
-        result="INCOMPLETE",
-        reason=reason,
-    )
+def _detail_progress_position(state: Mapping[str, Any]) -> tuple[
+    frozenset[str],
+    frozenset[tuple[str, int]],
+    frozenset[tuple[str, str, str]],
+    frozenset[str],
+]:
+    """Return durable completed-obligation markers used to prove resumable progress.
 
+    The marker sets are finite because every key belongs to a host-declared requirement,
+    acceptance criterion, artifact responsibility, or fixed-template binding. Content
+    changes alone never count as progress.
+    """
 
-def _host_record(requirement_text: str, section: str, concern: str, fields: str) -> dict[str, str]:
-    return {
-        field: f"{requirement_text} | {section} | {concern} | {field}"
-        for field in fields.split()
-    }
-
-
-def _host_complete_detailed_plans(
-    state: Mapping[str, Any],
-    section_selection: Mapping[str, Any],
-) -> dict[str, Any]:
-    requirements = [
-        item
+    completed_details = frozenset(
+        str(item.get("requirement_ref") or "")
         for item in state.get("decisions", [])
-        if isinstance(item, Mapping) and item.get("decision_type") == "requirement"
-    ]
-    requirement_order = tuple(str(item.get("requirement_id") or "") for item in requirements)
-    completed_details: dict[str, Mapping[str, Any]] = {}
-
-    for item in state.get("decisions", []):
-        if not isinstance(item, Mapping) or item.get("decision_type") != "detailed_implementation_plan":
-            continue
-        requirement_ref = str(item.get("requirement_ref") or "")
-        if requirement_ref in requirement_order:
-            completed_details[requirement_ref] = deepcopy(dict(item))
-
-    for requirement in requirements:
-        requirement_ref = str(requirement.get("requirement_id") or "")
-        if not requirement_ref or requirement_ref in completed_details:
-            continue
-        selected_sections = tuple(section_selection.get(requirement_ref) or normalize_required_sections())
-        statement = " ".join(str(requirement.get("statement") or requirement_ref).split())
-        worksheet: dict[str, Any] = {}
-        for section in selected_sections:
-            records = DETAIL_RECORDS[section]
-            specification = {
-                concern: [_host_record(statement, section, concern, fields)]
-                for concern, fields in records.items()
-            }
-            specification["inapplicable_concerns"] = []
-            worksheet[section] = {
-                "specification": specification,
-                "constraint_evidence_refs": [],
-            }
-        plan = _assemble_requirement_plan(
-            requirement,
-            requirement_ref,
-            selected_sections,
-            worksheet,
-            set(),
-        )
-        acceptance = requirement.get("acceptance")
-        plan["acceptance_criteria_complete"] = True
-        plan["acceptance_criteria_count"] = len(acceptance) if isinstance(acceptance, list) else 1
-        plan["artifact_kinds"] = []
-        plan["artifact_plans"] = {}
-        completed_details[requirement_ref] = plan
-
-    return _merge_completed_details(
-        state,
-        requirement_order=requirement_order,
-        completed_details=completed_details,
+        if isinstance(item, Mapping)
+        and item.get("decision_type") == "detailed_implementation_plan"
+        and item.get("requirement_ref")
     )
+
+    criterion_markers: set[tuple[str, int]] = set()
+    detail_progress = state.get("detail_progress", []) or []
+    if isinstance(detail_progress, list):
+        for row in detail_progress:
+            if not isinstance(row, Mapping):
+                continue
+            requirement_ref = str(row.get("requirement_ref") or "")
+            criterion_index = row.get("criterion_index")
+            if requirement_ref and type(criterion_index) is int and criterion_index >= 0:
+                criterion_markers.add((requirement_ref, criterion_index))
+
+    artifact_markers: set[tuple[str, str, str]] = set()
+    artifact_progress = state.get("artifact_progress", {}) or {}
+    if isinstance(artifact_progress, Mapping):
+        for requirement_ref, by_kind in artifact_progress.items():
+            if not isinstance(by_kind, Mapping):
+                continue
+            for artifact_kind, by_step in by_kind.items():
+                if not isinstance(by_step, Mapping):
+                    continue
+                for step_id in by_step:
+                    artifact_markers.add(
+                        (str(requirement_ref), str(artifact_kind), str(step_id))
+                    )
+
+    template_progress = state.get("template_progress", {}) or {}
+    template_bindings = frozenset(
+        str(binding)
+        for binding in template_progress
+    ) if isinstance(template_progress, Mapping) else frozenset()
+
+    return (
+        completed_details,
+        frozenset(criterion_markers),
+        frozenset(artifact_markers),
+        template_bindings,
+    )
+
+
+def _detail_progress_strictly_advanced(
+    before: tuple[
+        frozenset[str],
+        frozenset[tuple[str, int]],
+        frozenset[tuple[str, str, str]],
+        frozenset[str],
+    ],
+    after: tuple[
+        frozenset[str],
+        frozenset[tuple[str, int]],
+        frozenset[tuple[str, str, str]],
+        frozenset[str],
+    ],
+) -> bool:
+    before_details, before_criteria, before_artifacts, before_templates = before
+    after_details, after_criteria, after_artifacts, after_templates = after
+
+    if not before_details.issubset(after_details):
+        return False
+    if after_details != before_details:
+        # Completing a requirement intentionally clears its criterion checkpoints, so a
+        # newly completed detailed plan is itself the stronger monotone marker.
+        return True
+
+    monotone_pairs = (
+        (before_criteria, after_criteria),
+        (before_artifacts, after_artifacts),
+        (before_templates, after_templates),
+    )
+    if any(not old.issubset(new) for old, new in monotone_pairs):
+        return False
+    return any(old != new for old, new in monotone_pairs)
 
 
 def _compile_detailed_plans_resumable(
@@ -305,34 +322,75 @@ def _compile_detailed_plans_resumable(
         "compile_progress_monotone_detailed_plans",
         state,
     )
-    try:
-        result = compile_progress_monotone_detailed_plans(
-            router,
-            prompt,
-            state,
-            required_sections_by_requirement=section_selection,
-            checkpoint=save_detailed_state,
-        )
-    except Exception as exc:
-        result = _host_complete_detailed_plans(latest_state, section_selection)
-        _host_transition_notice("compile_progress_monotone_detailed_plans", result, exc)
-    else:
+
+    while True:
+        attempt_state = deepcopy(latest_state)
+        progress_before = _detail_progress_position(attempt_state)
+        try:
+            result = compile_progress_monotone_detailed_plans(
+                router,
+                prompt,
+                attempt_state,
+                required_sections_by_requirement=section_selection,
+                checkpoint=save_detailed_state,
+            )
+        except Exception as exc:
+            progress_after = _detail_progress_position(latest_state)
+            if _detail_progress_strictly_advanced(progress_before, progress_after):
+                _host_transition_notice(
+                    "compile_progress_monotone_detailed_plans",
+                    latest_state,
+                    exc,
+                )
+                emit_root_cause(
+                    "detailed_planning_resume_from_checkpoint",
+                    stage="planning_runtime",
+                    operation="compile_progress_monotone_detailed_plans",
+                    result="CONTINUE",
+                    reason=f"{type(exc).__name__}: {exc}",
+                    details={
+                        **_state_summary(latest_state),
+                        "policy": "resume_only_after_strict_durable_progress",
+                    },
+                )
+                continue
+
+            emit_root_cause(
+                "detailed_planning_runtime_stalled",
+                stage="planning_runtime",
+                operation="compile_progress_monotone_detailed_plans",
+                result="ERROR",
+                reason=f"{type(exc).__name__}: {exc}",
+                details={
+                    **_state_summary(latest_state),
+                    "policy": "runtime_defect_not_synthetic_plan",
+                },
+            )
+            raise RuntimeError(
+                "DETAILED_PLAN_RUNTIME_STALLED: detailed planning raised again without "
+                "completing any new durable obligation; refusing to synthesize plan_ready"
+            ) from exc
+
         if result.get("plan_ready") is not True:
-            result = _host_complete_detailed_plans(result, section_selection)
+            _trace_state_snapshot(
+                "detailed_planning_invariant_violation",
+                "compile_progress_monotone_detailed_plans",
+                result,
+                result="ERROR",
+                reason="compiler returned without a fully ready validated plan",
+            )
+            raise RuntimeError(
+                "DETAILED_PLAN_NOT_READY: detailed planner returned before every validated "
+                "requirement was complete; refusing host-authored placeholder completion"
+            )
+        break
 
     _trace_state_snapshot(
         "planning_state_transition_output",
         "compile_progress_monotone_detailed_plans",
         result,
     )
-    if result.get("plan_ready") is True:
-        emit_planning_goal_satisfied(result)
-    else:
-        _emit_incomplete(
-            result,
-            operation="final_readiness",
-            reason="detailed planning is materialized; non-detail state may still be resumable",
-        )
+    emit_planning_goal_satisfied(result)
     if checkpoint is not None:
         checkpoint(deepcopy(result))
     return result
@@ -347,7 +405,7 @@ def prepare_planning_state(
     checkpoint: Callable[[dict[str, Any]], None] | None = None,
     detail_section_applicability_resolver: DetailSectionApplicabilityResolver | None = None,
 ) -> dict[str, Any]:
-    """Resolve the request without exposing a terminal planning failure path."""
+    """Resolve the request without exposing a terminal planning failure state."""
 
     emit_root_cause(
         "planning_state_runtime_identity",
@@ -369,7 +427,10 @@ def prepare_planning_state(
                 deepcopy(dict(existing_state))
                 if existing_state is not None and not is_prompt_checkpoint(existing_state)
                 else build_initial_planning_state(
-                    router, prompt, existing_checkpoint=existing_state, checkpoint=checkpoint,
+                    router,
+                    prompt,
+                    existing_checkpoint=existing_state,
+                    checkpoint=checkpoint,
                 )
             ),
             input_state=existing_state,
