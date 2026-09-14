@@ -376,6 +376,58 @@ _REQUIRED_CI_TOKENS = (
     "verify_integrity_minecraft.py",
     "root_cause_audit_wrapper.py",
 )
+_REQUIRED_CI_GATE_DEPENDENCIES = frozenset(
+    {"audit", "tests", "python313", "model-realistic-replay"}
+)
+
+
+def _ci_gate_dependencies(text: str) -> set[str]:
+    lines = text.splitlines()
+    gate_index: int | None = None
+    gate_indent = -1
+    for index, line in enumerate(lines):
+        if line.strip() == "ci-gate:":
+            gate_index = index
+            gate_indent = len(line) - len(line.lstrip())
+            break
+    if gate_index is None:
+        return set()
+
+    for index in range(gate_index + 1, len(lines)):
+        line = lines[index]
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent <= gate_indent:
+            break
+        if not stripped.startswith("needs:"):
+            continue
+        payload = stripped.partition(":")[2].strip()
+        if payload.startswith("[") and payload.endswith("]"):
+            return {
+                item.strip().strip("'\"")
+                for item in payload[1:-1].split(",")
+                if item.strip()
+            }
+        if payload:
+            return {payload.strip().strip("'\"")}
+
+        dependencies: set[str] = set()
+        needs_indent = indent
+        for dependency_line in lines[index + 1 :]:
+            dependency = dependency_line.strip()
+            if not dependency or dependency.startswith("#"):
+                continue
+            dependency_indent = len(dependency_line) - len(dependency_line.lstrip())
+            if dependency_indent <= needs_indent:
+                break
+            if dependency.startswith("-"):
+                value = dependency[1:].strip().strip("'\"")
+                if value:
+                    dependencies.add(value)
+        return dependencies
+    return set()
 
 
 def audit_main_ci_text(text: str) -> list[dict[str, Any]]:
@@ -387,12 +439,15 @@ def audit_main_ci_text(text: str) -> list[dict[str, Any]]:
         violations.append(
             {"category": "ci_missing_authoritative_audit", "missing": missing}
         )
-    compact = " ".join(text.replace("\n", " ").split())
-    if "needs: [audit, tests, python313]" not in compact:
+    actual_dependencies = _ci_gate_dependencies(text)
+    missing_dependencies = sorted(_REQUIRED_CI_GATE_DEPENDENCIES - actual_dependencies)
+    if missing_dependencies:
         violations.append(
             {
                 "category": "ci_gate_dependency_gap",
-                "required": ["audit", "tests", "python313"],
+                "required": sorted(_REQUIRED_CI_GATE_DEPENDENCIES),
+                "missing": missing_dependencies,
+                "actual": sorted(actual_dependencies),
             }
         )
     return violations
