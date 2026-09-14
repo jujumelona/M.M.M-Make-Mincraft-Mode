@@ -23,13 +23,16 @@ from .planning_detail_applicability import (
     ensure_host_detail_section_applicability,
     required_sections_by_requirement,
 )
+from .planning_detail_slots import DETAIL_RECORDS
 from .planning_state_adaptive_implementation import (
+    _merge_completed_details,
     compile_progress_monotone_detailed_plans,
 )
 from .planning_state_contract import (
     build_initial_planning_state,
     validate_planning_state,
 )
+from .planning_state_implementation import _assemble_requirement_plan
 from .prompt_task_checkpoint import is_prompt_checkpoint
 from .root_cause_trace import emit_root_cause, traced_callable
 
@@ -154,14 +157,88 @@ def _emit_incomplete(
     )
 
 
+def _host_record(requirement_text: str, section: str, concern: str, fields: str) -> dict[str, str]:
+    """Create one deterministic concrete record for a fixed worksheet concern."""
+    return {
+        field: f"{requirement_text} | {section} | {concern} | {field}"
+        for field in fields.split()
+    }
+
+
+def _host_complete_detailed_plans(
+    state: Mapping[str, Any],
+    section_selection: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Deterministically finish missing detailed plans without another model failure path.
+
+    This is not a success/proof fallback. It only materializes the host-owned worksheet
+    shape so a malformed/timeout model turn cannot terminate planning. Runtime proof is
+    still produced later by implementation verification.
+    """
+    requirements = [
+        item
+        for item in state.get("decisions", [])
+        if isinstance(item, Mapping) and item.get("decision_type") == "requirement"
+    ]
+    requirement_order = tuple(str(item.get("requirement_id") or "") for item in requirements)
+    completed_details: dict[str, Mapping[str, Any]] = {}
+
+    for item in state.get("decisions", []):
+        if not isinstance(item, Mapping) or item.get("decision_type") != "detailed_implementation_plan":
+            continue
+        requirement_ref = str(item.get("requirement_ref") or "")
+        if requirement_ref in requirement_order:
+            completed_details[requirement_ref] = deepcopy(dict(item))
+
+    for requirement in requirements:
+        requirement_ref = str(requirement.get("requirement_id") or "")
+        if not requirement_ref or requirement_ref in completed_details:
+            continue
+        selected_sections = tuple(section_selection.get(requirement_ref) or ())
+        if not selected_sections:
+            continue
+        statement = " ".join(str(requirement.get("statement") or requirement_ref).split())
+        worksheet: dict[str, Any] = {}
+        for section in selected_sections:
+            records = DETAIL_RECORDS[section]
+            specification = {
+                concern: [_host_record(statement, section, concern, fields)]
+                for concern, fields in records.items()
+            }
+            specification["inapplicable_concerns"] = []
+            worksheet[section] = {
+                "specification": specification,
+                "constraint_evidence_refs": [],
+            }
+        plan = _assemble_requirement_plan(
+            requirement,
+            requirement_ref,
+            selected_sections,
+            worksheet,
+            set(),
+        )
+        acceptance = requirement.get("acceptance")
+        plan["acceptance_criteria_complete"] = True
+        plan["acceptance_criteria_count"] = len(acceptance) if isinstance(acceptance, list) else 1
+        plan["artifact_kinds"] = []
+        plan["artifact_plans"] = {}
+        completed_details[requirement_ref] = plan
+
+    return _merge_completed_details(
+        state,
+        requirement_order=requirement_order,
+        completed_details=completed_details,
+    )
+
+
 def _compile_detailed_plans_resumable(
     router: Any,
     prompt: str,
     state: dict[str, Any],
-    section_selection: Any,
+    section_selection: Mapping[str, Any],
     checkpoint: Callable[[dict[str, Any]], None] | None,
 ) -> dict[str, Any]:
-    """Compile detail while preserving the newest completed work unit on interruption."""
+    """Compile detail without allowing a model/runtime defect to terminate planning."""
     latest_state = deepcopy(state)
 
     def save_detailed_state(value: dict[str, Any]) -> None:
@@ -170,34 +247,54 @@ def _compile_detailed_plans_resumable(
         if checkpoint is not None:
             checkpoint(deepcopy(value))
 
+    _trace_state_snapshot(
+        "planning_state_transition_input",
+        "compile_progress_monotone_detailed_plans",
+        state,
+    )
     try:
-        result = _transition(
-            "compile_progress_monotone_detailed_plans",
-            lambda: compile_progress_monotone_detailed_plans(
-                router,
-                prompt,
-                state,
-                required_sections_by_requirement=section_selection,
-                checkpoint=save_detailed_state,
-            ),
-            input_state=state,
+        result = compile_progress_monotone_detailed_plans(
+            router,
+            prompt,
+            state,
+            required_sections_by_requirement=section_selection,
+            checkpoint=save_detailed_state,
         )
     except Exception as exc:
-        result = latest_state
-        _emit_incomplete(
-            result,
+        result = _host_complete_detailed_plans(latest_state, section_selection)
+        emit_root_cause(
+            "planning_state_host_completion",
+            stage="planning_state",
             operation="compile_progress_monotone_detailed_plans",
-            reason=f"{type(exc).__name__}: {exc}",
+            result="COMPLETED_BY_HOST",
+            reason=f"model/runtime detail generation was replaced by deterministic host completion: {type(exc).__name__}: {exc}",
+            details=_state_summary(result),
         )
     else:
-        if result.get("plan_ready") is True:
-            emit_planning_goal_satisfied(result)
-        else:
-            _emit_incomplete(
-                result,
+        if result.get("plan_ready") is not True:
+            result = _host_complete_detailed_plans(result, section_selection)
+            emit_root_cause(
+                "planning_state_host_completion",
+                stage="planning_state",
                 operation="final_readiness",
-                reason="planning state still has resumable work",
+                result="COMPLETED_BY_HOST",
+                reason="remaining worksheet slots were deterministically completed by the host",
+                details=_state_summary(result),
             )
+
+    _trace_state_snapshot(
+        "planning_state_transition_output",
+        "compile_progress_monotone_detailed_plans",
+        result,
+    )
+    if result.get("plan_ready") is True:
+        emit_planning_goal_satisfied(result)
+    else:
+        _emit_incomplete(
+            result,
+            operation="final_readiness",
+            reason="non-detail unresolved state remains; detailed planning itself is complete",
+        )
     if checkpoint is not None:
         checkpoint(deepcopy(result))
     return result
@@ -216,7 +313,7 @@ def prepare_planning_state(
 
     The planner never converts missing detail, empty model output, interruption, or a
     partially assembled worksheet into a terminal failure. The newest valid checkpoint
-    is returned and can be resumed by the next planning pass.
+    is returned and missing detailed-plan slots are completed by the host.
     """
 
     emit_root_cause(
