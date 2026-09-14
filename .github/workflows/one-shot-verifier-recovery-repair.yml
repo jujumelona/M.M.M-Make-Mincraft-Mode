@@ -1,0 +1,105 @@
+name: One-shot verifier recovery repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-shot-verifier-recovery-repair.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Patch verifier recovery state machine
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("minecraft_mod_ai/progress_aware_tool_loop.py")
+          text = path.read_text(encoding="utf-8")
+
+          replacements = [
+              (
+                  '''    "read_reuse_source",\n})\n\n_MUTATION_ACT_TOOLS = frozenset({''',
+                  '''    "read_reuse_source",\n})\n\n_RECOVERY_EVIDENCE_TOOLS = frozenset({\n    "search_code_rag",\n    "search_project_rag",\n    "discover_ecosystem_resources",\n    "inspect_modrinth_project",\n    "inspect_github_repository",\n    "inspect_huggingface_model",\n    "inspect_existing_mod",\n    "assess_technology_compatibility",\n    "java_workspace_symbols",\n    "external_mcp_call",\n    "read_reuse_source",\n})\n\n_MUTATION_ACT_TOOLS = frozenset({''',
+              ),
+              (
+                  '''            "MMM_CORE_VERIFIER_REPAIR_V1\\n"\n            "The verifier still reports source defects. Repair the existing target; "\n            "do not restart generation and do not recreate any path that already has "\n            "an APPLIED mutation receipt. Make a material existing-file source edit "\n            "that addresses the diagnostics, then allow VERIFY to run again.\\n"''',
+                  '''            "MMM_CORE_VERIFIER_REPAIR_V2\\n"\n            "The verifier still reports source defects. Resolve the diagnostics against "\n            "the currently exposed version-pinned API/mapping/repository evidence before "\n            "guessing another source edit. Do not restart generation and do not recreate "\n            "any path that already has an APPLIED mutation receipt. Once grounded, make "\n            "one material existing-file source edit, then allow VERIFY to run again.\\n"''',
+              ),
+              (
+                  '''        elif state.phase == LoopPhase.ACT:\n            mutation_names = [n for n in phase_tool_names if n in _MUTATION_ACT_TOOLS]\n            if len(mutation_names) == 1:\n                tool_choice = {"type": "function", "function": {"name": mutation_names[0]}}\n                parallel_tool_calls = False\n        elif forced_verify_tool is not None:''',
+                  '''        elif state.phase == LoopPhase.ACT:\n            mutation_names = [n for n in phase_tool_names if n in _MUTATION_ACT_TOOLS]\n            if len(mutation_names) == 1:\n                tool_choice = {"type": "function", "function": {"name": mutation_names[0]}}\n                parallel_tool_calls = False\n        elif state.phase == LoopPhase.RECOVER:\n            tool_choice = "required"\n            parallel_tool_calls = False\n        elif forced_verify_tool is not None:''',
+              ),
+              (
+                  '''        if implementation_requires_mutation and state.phase == LoopPhase.ACT:\n            repair_guidance = state.take_verifier_repair_guidance()''',
+                  '''        if (\n            implementation_requires_mutation\n            and state.phase in {LoopPhase.ACT, LoopPhase.RECOVER}\n        ):\n            repair_guidance = state.take_verifier_repair_guidance()''',
+              ),
+              (
+                  '''            if implementation_requires_mutation and state.validation_status == "FAIL":\n                state.phase = LoopPhase.ACT\n                repeated = state.record_no_progress_result(\n                    {\n                        "phase": LoopPhase.ACT.value,''',
+                  '''            if implementation_requires_mutation and state.validation_status == "FAIL":\n                state.phase = LoopPhase.RECOVER\n                repeated = state.record_no_progress_result(\n                    {\n                        "phase": LoopPhase.RECOVER.value,''',
+              ),
+              (
+                  '''                            "Verifier status remains FAIL. Prose cannot complete this implementation. "\n                            "Use the exposed mutation tool to materially repair the existing target, "\n                            "then allow host verification to run again."''',
+                  '''                            "Verifier status remains FAIL. Prose cannot complete this implementation. "\n                            "Use one exposed recovery evidence/API/mapping tool to resolve the diagnostic "\n                            "before another mutation is allowed."''',
+              ),
+              (
+                  '''        def is_evidence_tool(call: Any) -> bool:\n            return (\n                call.name in _LOCALIZATION_EVIDENCE_TOOLS\n                or call.name in _RAG_EVIDENCE_TOOLS\n                or (call.name == "external_mcp_call" and bool(_external_rag_capability(call.arguments)))\n            )''',
+                  '''        def is_evidence_tool(call: Any) -> bool:\n            return (\n                call.name in _LOCALIZATION_EVIDENCE_TOOLS\n                or call.name in _RAG_EVIDENCE_TOOLS\n                or (\n                    state.phase == LoopPhase.RECOVER\n                    and call.name in _RECOVERY_EVIDENCE_TOOLS\n                )\n                or (call.name == "external_mcp_call" and bool(_external_rag_capability(call.arguments)))\n            )''',
+              ),
+              (
+                  '''                if status == "FAIL" and implementation_requires_mutation:\n                    # Only trustworthy verifier evidence may request another edit.\n                    state.record_failure(\n                        call.name, "verification reported source defects"\n                    )\n                    state.phase = LoopPhase.ACT''',
+                  '''                if status == "FAIL" and implementation_requires_mutation:\n                    # Source defects must be grounded against version-pinned evidence\n                    # before the coder is allowed to mutate the target again.\n                    state.record_failure(\n                        call.name, "verification reported source defects"\n                    )\n                    state.phase = LoopPhase.RECOVER''',
+              ),
+              (
+                  '''                if ctx_progress or (not implementation_requires_mutation and recorded):\n                    turn_made_progress = True\n                    if (\n                        state.phase == LoopPhase.OBSERVE\n                        and implementation_requires_mutation\n                        and is_mutation_ready(messages, state)\n                    ):\n                        state.phase = LoopPhase.ACT''',
+                  '''                if (\n                    ctx_progress\n                    or (state.phase == LoopPhase.RECOVER and recorded)\n                    or (not implementation_requires_mutation and recorded)\n                ):\n                    turn_made_progress = True\n                    if (\n                        state.phase in {LoopPhase.OBSERVE, LoopPhase.RECOVER}\n                        and implementation_requires_mutation\n                        and is_mutation_ready(messages, state)\n                    ):\n                        state.phase = LoopPhase.ACT''',
+              ),
+              (
+                  '''    "_LOCALIZATION_EVIDENCE_TOOLS",\n    "_MUTATION_ACT_TOOLS",''',
+                  '''    "_LOCALIZATION_EVIDENCE_TOOLS",\n    "_RECOVERY_EVIDENCE_TOOLS",\n    "_MUTATION_ACT_TOOLS",''',
+              ),
+          ]
+
+          for index, (old, new) in enumerate(replacements, start=1):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"replacement {index} expected exactly one match, found {count}")
+              text = text.replace(old, new, 1)
+
+          stall_anchor = '''        if implementation_requires_mutation and state.phase == LoopPhase.OBSERVE and not phase_tools:\n            state.termination_reason = "MUTATION_LOCALIZATION_STALLED"\n            raise ModelConfigurationError(\n                "MUTATION_LOCALIZATION_STALLED: no untried reviewed localization source remains "\n                f"for stage {current_localization_stage.value}; refusing a repeated retrieval/model round."\n            )\n'''
+          stall_replacement = stall_anchor + '''        if implementation_requires_mutation and state.phase == LoopPhase.RECOVER and not phase_tools:\n            state.termination_reason = "VERIFIER_RECOVERY_UNAVAILABLE"\n            raise ModelConfigurationError(\n                "VERIFIER_RECOVERY_UNAVAILABLE: verifier diagnostics remain unresolved but no "\n                "reviewed API/mapping/repository recovery tool is exposed."\n            )\n'''
+          if text.count(stall_anchor) != 1:
+              raise SystemExit(f"recovery availability anchor expected once, found {text.count(stall_anchor)}")
+          text = text.replace(stall_anchor, stall_replacement, 1)
+
+          path.write_text(text, encoding="utf-8")
+
+          test = Path("tests/test_progress_aware_verifier_recovery.py")
+          test.write_text('''from __future__ import annotations\n\nimport inspect\n\nfrom minecraft_mod_ai import progress_aware_tool_loop as loop\n\n\ndef _schema(name: str) -> dict:\n    return {"type": "function", "function": {"name": name, "parameters": {"type": "object"}}\n\n\ndef test_recover_exposes_grounding_tools_not_mutation_tools() -> None:\n    tools = tuple(\n        _schema(name)\n        for name in (\n            "apply_source_edit",\n            "search_code_rag",\n            "inspect_modrinth_project",\n            "external_mcp_capabilities",\n            "external_mcp_schema",\n            "external_mcp_call",\n        )\n    )\n    selected = loop._filter_tools_for_phase(tools, loop.LoopPhase.RECOVER, "coder")\n    names = {item["function"]["name"] for item in selected}\n    assert "apply_source_edit" not in names\n    assert {"search_code_rag", "inspect_modrinth_project", "external_mcp_call"} <= names\n\n\ndef test_recover_marks_version_api_routes_as_evidence() -> None:\n    assert {\n        "search_code_rag",\n        "search_project_rag",\n        "inspect_modrinth_project",\n        "external_mcp_call",\n    } <= loop._RECOVERY_EVIDENCE_TOOLS\n\n\ndef test_verifier_fail_enters_recover_before_another_edit() -> None:\n    source = inspect.getsource(loop._generate_with_tools_impl)\n    marker = 'if status == "FAIL" and implementation_requires_mutation:'\n    assert marker in source\n    branch = source.split(marker, 1)[1].split("continue", 1)[0]\n    assert "state.phase = LoopPhase.RECOVER" in branch\n    assert "state.phase = LoopPhase.ACT" not in branch\n\n\ndef test_recover_requires_a_tool_call_and_returns_to_act_only_after_evidence() -> None:\n    source = inspect.getsource(loop._generate_with_tools_impl)\n    assert 'elif state.phase == LoopPhase.RECOVER:\\n            tool_choice = "required"' in source\n    assert 'state.phase in {LoopPhase.OBSERVE, LoopPhase.RECOVER}' in source\n''', encoding="utf-8")
+          PY
+
+      - name: Verify focused recovery contract
+        shell: bash
+        run: |
+          python -m py_compile minecraft_mod_ai/progress_aware_tool_loop.py
+          pytest -q tests/test_progress_aware_verifier_recovery.py
+
+      - name: Commit repaired state machine to main
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/one-shot-verifier-recovery-repair.yml
+          git add minecraft_mod_ai/progress_aware_tool_loop.py tests/test_progress_aware_verifier_recovery.py
+          git commit -m "Route verifier failures through API evidence recovery"
+          git push origin HEAD:main
