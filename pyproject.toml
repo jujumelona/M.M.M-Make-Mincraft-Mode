@@ -61,6 +61,7 @@ dev = [
   "Pillow>=10.4,<13",
   "pytest>=8,<10",
   "ruff>=0.16,<1",
+  "setuptools>=77.0.3",
   "vulture>=2.14,<3",
   "tomli>=2; python_version < '3.11'",
 ]
