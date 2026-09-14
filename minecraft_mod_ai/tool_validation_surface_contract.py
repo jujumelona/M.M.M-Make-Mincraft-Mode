@@ -1,31 +1,20 @@
 from __future__ import annotations
 
-"""Separate model-visible tool schemas from the host-authorized parse surface.
+"""Validation-surface helpers for the core-owned native tool path.
 
-A live causal frontier may legitimately hide a tool that appeared earlier in the same
-assistant transcript. Qwen can still emit that stale tool name because it is part of
-its context. Parsing such a call must not grant execution authority, but it also must
-not crash the backend before the host execution gate can reject it and return a normal
-tool observation.
+The model-visible tool frontier and the host-authorized validation surface are
+intentionally different capabilities. Hidden/stale schemas may be used to parse and
+validate a tool name that already exists in the transcript, but they never become
+model-visible and never grant execution authority. Execution remains guarded by the
+current HostRunState phase/tool allowlist.
 
-The current model-visible schema is authoritative for every tool that is visible on
-this turn. The broader authorized surface contributes only names that are absent from
-the visible frontier. This prevents a stale/raw host schema for the same tool name from
-replacing the exact schema that was shown to the model.
-
-Each individual surface must also have exactly one schema owner per tool name. Silent
-last-writer-wins behavior is unsafe here: a duplicate name can otherwise select a
-schema according to wrapper/dict order rather than according to the causal frontier.
+Native llama tool parsing now owns this distinction directly. This module therefore
+contains only deterministic schema-surface helpers plus a runtime assertion; it must
+not monkey-patch completion, continuation, parser, or retry functions.
 """
 
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
 from typing import Any
-
-from .runtime_contract_wrappers import contract_wraps, has_contract_marker
-
-_PARSE_MARKER = "_mmm_authorized_tool_validation_surface"
-_CONTINUATION_MARKER = "_mmm_tool_validation_continuation"
 
 
 def _tool_name(schema: Any) -> str:
@@ -79,37 +68,17 @@ def _validation_surface(
 
 
 def install() -> None:
+    """Assert native core ownership; never mutate the live adapter at finalization."""
+
     from .model_adapters import llama_cpp_adapter
 
-    # Continuation cloning is now core-owned: _reasoning_continuation_request uses
-    # dataclasses.replace(request, ...), so every current and future request field is
-    # preserved unless the core function explicitly changes it. Keep only the
-    # metadata marker consumed by runtime preflight; do not add another wrapper.
-    current_continuation = llama_cpp_adapter._reasoning_continuation_request
-    if not has_contract_marker(current_continuation, _CONTINUATION_MARKER):
-        setattr(current_continuation, _CONTINUATION_MARKER, True)
-
-    current_parse = llama_cpp_adapter._qwen_tool_generation_response
-    if has_contract_marker(current_parse, _PARSE_MARKER):
-        return
-
-    @contract_wraps(current_parse)
-    def parse_with_authorized_surface(message: Any, request: Any):
-        visible = tuple(getattr(request, "tools", ()) or ())
-        validation = tuple(
-            getattr(request, "tool_validation_schemas", ()) or ()
+    owner = getattr(llama_cpp_adapter, "_request_tool_schema_map", None)
+    if not callable(owner) or not getattr(
+        owner, "_mmm_core_validation_surface", False
+    ):
+        raise RuntimeError(
+            "native llama adapter does not own the authorized tool validation surface"
         )
-        if validation:
-            request = replace(
-                request,
-                tools=_validation_surface(visible, validation),
-            )
-        else:
-            _assert_unique_schema_names(visible, surface="model-visible")
-        return current_parse(message, request)
-
-    setattr(parse_with_authorized_surface, _PARSE_MARKER, True)
-    llama_cpp_adapter._qwen_tool_generation_response = parse_with_authorized_surface
 
 
 __all__ = [
