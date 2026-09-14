@@ -108,3 +108,9 @@ def test_one_shot_normalization_scaffolding_is_not_committed():
         / "workflows"
         / "cumulative-architecture-normalization.yml"
     ).exists()
+    assert not (
+        repository_root
+        / ".github"
+        / "workflows"
+        / "runner-efficiency-normalization.yml"
+    ).exists()
