@@ -54,6 +54,35 @@ def _blocked_repair_result(
     }
 
 
+def _run_source_repair(
+    *,
+    build: dict[str, Any],
+    project_root: Path,
+    cache: Path,
+    run_gametest: bool,
+    max_repair_attempts: int | None,
+    router: ModelRouter | None,
+    router_factory: Callable[[], ModelRouter],
+    policy: ScalePolicy,
+) -> tuple[dict[str, Any], ModelRouter]:
+    active_router = router or router_factory()
+    repair = RepairEngine(
+        router=active_router, gradle_cache=cache, policy=policy
+    ).repair(
+        project_root,
+        run_gametest=run_gametest,
+        max_attempts=max_repair_attempts,
+    )
+    attested = _attested_repair_build(repair)
+    if attested is not None:
+        build = dict(attested)
+    else:
+        build = GradleRunner(cache).build(
+            project_root, run_gametest=run_gametest
+        ).to_dict()
+    return {"build": build, "repair": repair}, active_router
+
+
 def run_build_with_repair(
     *,
     project_root: Path,
@@ -68,30 +97,26 @@ def run_build_with_repair(
     """Run build and repair only failures that are actionable source defects."""
 
     build = GradleRunner(cache).build(project_root, run_gametest=run_gametest).to_dict()
-    repair: dict[str, Any] | None = None
-    active_router = router
-    if build.get("status") != "PASS" and auto_repair:
-        blocked_reason = source_repair_block_reason(build=build)
-        if blocked_reason is not None:
-            repair = _blocked_repair_result(build, reason=blocked_reason)
-        else:
-            active_router = active_router or router_factory()
-            repair = RepairEngine(
-                router=active_router, gradle_cache=cache, policy=policy
-            ).repair(
-                project_root,
-                run_gametest=run_gametest,
-                max_attempts=max_repair_attempts,
-            )
-            attested = _attested_repair_build(repair)
-            build = (
-                dict(attested)
-                if attested is not None
-                else GradleRunner(cache).build(
-                    project_root, run_gametest=run_gametest
-                ).to_dict()
-            )
-    return {"build": build, "repair": repair}, active_router
+    if build.get("status") == "PASS" or not auto_repair:
+        return {"build": build, "repair": None}, router
+
+    blocked_reason = source_repair_block_reason(build=build)
+    if blocked_reason is not None:
+        return {
+            "build": build,
+            "repair": _blocked_repair_result(build, reason=blocked_reason),
+        }, router
+
+    return _run_source_repair(
+        build=build,
+        project_root=project_root,
+        cache=cache,
+        run_gametest=run_gametest,
+        max_repair_attempts=max_repair_attempts,
+        router=router,
+        router_factory=router_factory,
+        policy=policy,
+    )
 
 
 def run_build_repair_checkpoint(

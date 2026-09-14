@@ -84,21 +84,7 @@ def _non_source_code(value: Any) -> str | None:
     return None
 
 
-def source_repair_block_reason(
-    *,
-    build: Mapping[str, Any] | None,
-    diagnostics: Mapping[str, Any] | None = None,
-) -> str | None:
-    """Return why source mutation is forbidden, or ``None`` for a source failure.
-
-    The default is deliberately fail-closed for non-FAIL build states. Structured
-    status/classification fields take precedence; text checks only preserve safety for
-    legacy receipts that predate those fields.
-    """
-
-    if not isinstance(build, Mapping):
-        return "invalid_build_receipt"
-
+def _build_status_reason(build: Mapping[str, Any]) -> str | None:
     status = str(build.get("status") or "").strip().upper()
     if status == "PASS":
         return "build_already_passed"
@@ -106,39 +92,48 @@ def source_repair_block_reason(
         return f"build_status_{status.casefold()}"
     if status != "FAIL":
         return f"non_source_build_status_{status.casefold() or 'missing'}"
+    return None
 
+
+def _build_structure_reason(build: Mapping[str, Any]) -> str | None:
     if _explicitly_false(build.get("repairable")):
         return "build_marked_non_repairable"
-
     failure_class = str(build.get("failure_class") or "").strip().casefold()
     if failure_class in _NON_SOURCE_FAILURE_CLASSES:
         return f"failure_class_{failure_class}"
-
-    for command in build.get("commands", ()):
-        if isinstance(command, Mapping) and bool(command.get("timed_out")):
-            return "build_command_timed_out"
-
     code = _non_source_code(build)
     if code is not None:
         return f"non_source_code_{code.casefold()}"
+    return None
 
-    if diagnostics is not None:
-        for mapping in _walk_mappings(diagnostics):
-            diagnostic_status = str(mapping.get("status") or "").strip().upper()
-            if diagnostic_status in _NON_SOURCE_STATUSES:
-                return f"diagnostics_status_{diagnostic_status.casefold()}"
-            if _explicitly_false(mapping.get("repairable")):
-                return "diagnostics_marked_non_repairable"
-            diagnostic_class = str(
-                mapping.get("failure_class") or ""
-            ).strip().casefold()
-            if diagnostic_class in _NON_SOURCE_FAILURE_CLASSES:
-                return f"diagnostics_failure_class_{diagnostic_class}"
-        diagnostic_code = _non_source_code(diagnostics)
-        if diagnostic_code is not None:
-            return f"non_source_code_{diagnostic_code.casefold()}"
 
-    text = _normalized_text({"build": build, "diagnostics": diagnostics or {}})
+def _command_timeout_reason(build: Mapping[str, Any]) -> str | None:
+    commands = build.get("commands")
+    if not isinstance(commands, (list, tuple)):
+        return None
+    for command in commands:
+        if isinstance(command, Mapping) and bool(command.get("timed_out")):
+            return "build_command_timed_out"
+    return None
+
+
+def _diagnostics_reason(diagnostics: Mapping[str, Any]) -> str | None:
+    for mapping in _walk_mappings(diagnostics):
+        status = str(mapping.get("status") or "").strip().upper()
+        if status in _NON_SOURCE_STATUSES:
+            return f"diagnostics_status_{status.casefold()}"
+        if _explicitly_false(mapping.get("repairable")):
+            return "diagnostics_marked_non_repairable"
+        failure_class = str(mapping.get("failure_class") or "").strip().casefold()
+        if failure_class in _NON_SOURCE_FAILURE_CLASSES:
+            return f"diagnostics_failure_class_{failure_class}"
+    code = _non_source_code(diagnostics)
+    if code is not None:
+        return f"non_source_code_{code.casefold()}"
+    return None
+
+
+def _legacy_text_reason(text: str) -> str | None:
     if "release version" in text and "not supported" in text:
         return "java_release_not_supported"
     if "java" in text and "toolchain unavailable" in text:
@@ -155,8 +150,31 @@ def source_repair_block_reason(
         return "validation_not_certifiable"
     if "timeouterror" in text or "timed out" in text:
         return "infrastructure_timeout"
-
     return None
+
+
+def source_repair_block_reason(
+    *,
+    build: Mapping[str, Any] | None,
+    diagnostics: Mapping[str, Any] | None = None,
+) -> str | None:
+    """Return why source mutation is forbidden, or ``None`` for a source failure."""
+
+    if not isinstance(build, Mapping):
+        return "invalid_build_receipt"
+
+    for check in (_build_status_reason, _build_structure_reason, _command_timeout_reason):
+        reason = check(build)
+        if reason is not None:
+            return reason
+
+    if diagnostics is not None:
+        reason = _diagnostics_reason(diagnostics)
+        if reason is not None:
+            return reason
+
+    text = _normalized_text({"build": build, "diagnostics": diagnostics or {}})
+    return _legacy_text_reason(text)
 
 
 def source_repair_allowed(
