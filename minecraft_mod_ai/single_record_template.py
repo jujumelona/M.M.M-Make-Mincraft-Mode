@@ -9,7 +9,7 @@ from typing import Any, Callable
 
 from jsonschema import Draft202012Validator
 
-from .content_design_contract import CONTENT_KIND_TO_FACT_TYPE, CONTENT_KINDS
+from .design_generation_schema import context_bound_record_schema
 from .fixed_template_generation import generate_fixed_template_value
 from .model_output_atomicity_contract import MAX_MODEL_FIELDS, assert_atomic_model_schema
 from .task_template_catalog import load_record_template
@@ -23,12 +23,6 @@ _READ_ONLY_CONTEXT_CONTRACT = (
     "prompt text, or tool protocol into an output field."
 )
 
-_CONTEXT_ENUM_BINDINGS = {
-    "slot_id": "allowed_slots",
-    "property": "allowed_properties",
-    "relation_type": "allowed_relation_types",
-}
-
 
 class SingleRecordTemplateError(ValueError):
     pass
@@ -39,52 +33,8 @@ def _context_bound_record_schema(
     schema: dict[str, Any],
     context: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Bind host-owned closed vocabularies into the schema sent to the model.
-
-    Prompt prose is not a contract. Any host-owned closed set that is available in
-    context must become an actual JSON-Schema enum before generation so the model
-    cannot emit a value that the same host rejects immediately afterwards.
-    """
-    bound = deepcopy(schema)
-    properties = bound.get("properties")
-    if not isinstance(properties, dict):
-        return bound
-
-    for field, context_key in _CONTEXT_ENUM_BINDINGS.items():
-        field_schema = properties.get(field)
-        values = context.get(context_key)
-        if not isinstance(field_schema, dict) or not isinstance(values, (list, tuple)):
-            continue
-        normalized = list(dict.fromkeys(value for value in values if isinstance(value, str)))
-        if normalized:
-            field_schema["enum"] = normalized
-
-    if identifier == "design/content_entity":
-        kind_schema = properties.get("kind")
-        if not isinstance(kind_schema, dict):
-            raise SingleRecordTemplateError("CONTENT_KIND_SCHEMA_INVALID")
-        kind_schema["enum"] = list(CONTENT_KINDS)
-
-    if identifier == "design/content_capability":
-        fact_schema = properties.get("fact_type")
-        entity = context.get("entity")
-        kind = entity.get("kind") if isinstance(entity, Mapping) else None
-        if not isinstance(fact_schema, dict) or kind not in CONTENT_KIND_TO_FACT_TYPE:
-            raise SingleRecordTemplateError(
-                f"CONTENT_CAPABILITY_KIND_INVALID: {kind!r}"
-            )
-        # A content entity kind has exactly one legal base FactType. Constrain the
-        # generation call itself instead of asking the model to invent/recover it.
-        fact_schema["enum"] = [CONTENT_KIND_TO_FACT_TYPE[kind].value]
-
-    requested_property = context.get("requested_property")
-    if identifier == "design/content_property" and isinstance(requested_property, str):
-        property_schema = properties.get("property")
-        if isinstance(property_schema, dict):
-            property_schema["enum"] = [requested_property]
-
-    Draft202012Validator.check_schema(bound)
-    return bound
+    """Compatibility seam for tests and callers using the former private helper."""
+    return context_bound_record_schema(identifier, schema, context)
 
 
 def _contains_blank_string(value: Any, schema: dict[str, Any] | None = None) -> bool:
