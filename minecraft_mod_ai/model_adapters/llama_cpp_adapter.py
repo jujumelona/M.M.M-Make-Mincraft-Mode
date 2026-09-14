@@ -1,17 +1,14 @@
-"""Native llama.cpp server GGUF inference adapter.
+"""Direct OpenAI-compatible llama.cpp adapter.
 
-Local GGUF inference is server-only. Tool-aware Qwen turns accept either llama.cpp's
-structured OpenAI-compatible ``message.tool_calls`` or raw Qwen Jinja markup. MMM
-normalizes both forms into host ``ToolCall`` objects and validates every tool name and
-argument object against the exact visible schema before the agent loop can execute it.
-Incomplete structured tool actions remain non-executable.
+Tool turns use exactly one native ``/v1/chat/completions`` request and consume only
+``message.tool_calls``.  The adapter never regenerates arguments, parses Qwen markup,
+continues a failed tool turn, or retries a semantic response.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import os
-import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
@@ -25,32 +22,14 @@ from .base import (
     ModelBackendError,
     ToolCall,
 )
-from .qwen_tool_parser import (
-    ToolCallValidationError,
-)
-from .qwen_tool_parser import (
-    parse_qwen_tool_markup as _parse_qwen_tool_markup,
-)
+from .qwen_tool_parser import ToolCallValidationError
 
 _DEFAULT_HTTPX_POST = httpx.post
 _DEFAULT_COMPLETION_TIMEOUT_SECONDS = 120.0
-_REASONING_CONTINUATION = (
-    "Continue from the reasoning above and complete this same assistant turn now. "
-    "Call an available tool if evidence or an action is required; otherwise return "
-    "the requested final answer. Do not return another reasoning-only response."
-)
-_PREFILL_CALIBRATION_SENTINEL = "MMM_ASSISTANT_PREFILL_CALIBRATION_V1"
-_MAX_PREFILL_TEMPLATE_BYTES = 512
-_MAX_PREFILL_TEMPLATE_CACHE_ENTRIES = 8
-_PREFILL_TEMPLATE_CACHE_LOCK = threading.RLock()
 
 
 class LlamaCppAdapter(ModelAdapter):
     """OpenAI-compatible client for the managed native llama-server."""
-
-    # Cache is process/server-generation keyed, so request-local adapter instances can
-    # reuse the same calibrated Jinja suffix without stale cross-restart reuse.
-    _prefill_template_prefix_cache: dict[str, str] = {}
 
     def _server_url(self, request: GenerationRequest) -> str:
         try:
@@ -85,10 +64,7 @@ class LlamaCppAdapter(ModelAdapter):
         from ..llama_server_hardware_policy import _server_payload
 
         server_url = self._server_url(request)
-        return live_context_accounting(
-            server_url,
-            _server_payload(self, request),
-        )
+        return live_context_accounting(server_url, _server_payload(self, request))
 
     def generate(self, request: GenerationRequest) -> str:
         turn = self.generate_turn(request)
@@ -105,20 +81,19 @@ class LlamaCppAdapter(ModelAdapter):
         return turn.content
 
     def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
-        """Generate one semantic assistant turn."""
+        """Generate exactly one assistant turn from exactly one completion request."""
 
-        cfg = self.config
         server_url = self._server_url(request)
         try:
             if request.tools:
-                return _tool_semantic_completion(self, server_url, request)
-            return _plain_semantic_completion(self, server_url, request)
+                return _native_tool_completion(self, server_url, request)
+            return _plain_completion(self, server_url, request)
         except ModelBackendError:
             raise
         except Exception as exc:
             raise ModelBackendError(
-                role=cfg.role,
-                model_id=cfg.model_id,
+                role=self.config.role,
+                model_id=self.config.model_id,
                 cause=exc,
             ) from exc
 
@@ -126,107 +101,80 @@ class LlamaCppAdapter(ModelAdapter):
         return None
 
 
-def _plain_semantic_completion(
+def _normalized_tool_request(request: GenerationRequest) -> GenerationRequest:
+    tools = tuple(
+        tool.to_schema() if hasattr(tool, "to_schema") else dict(tool)
+        for tool in request.tools
+    )
+    return replace(request, tools=tools)
+
+
+def _plain_completion(
     adapter: LlamaCppAdapter,
     server_url: str,
     request: GenerationRequest,
 ) -> GenerationResponse:
+    from ..llama_exact_context import capacity_safe_payload
     from ..llama_server_hardware_policy import _server_payload
     from ..llama_stream_efficiency_contract import _report_server_connection
 
-    message = _completion_message_with_prefill(
-        adapter,
+    payload = capacity_safe_payload(
         server_url,
         _server_payload(adapter, request),
         structured_output=request.response_format == "json",
     )
+    message = _completion_message(server_url, payload)
     _report_server_connection(server_url)
-    turn = _plain_generation_response(message)
-    if _has_semantic_action(turn):
-        return turn
-    if not turn.reasoning_content:
-        raise RuntimeError(
-            "native llama-server returned neither visible content nor reasoning"
-        )
-
-    continuation_request = _reasoning_continuation_request(
-        request,
-        turn.reasoning_content,
-    )
-    continued_message = _completion_message_with_prefill(
-        adapter,
-        server_url,
-        _server_payload(adapter, continuation_request),
-        structured_output=continuation_request.response_format == "json",
-    )
-    continued = _plain_generation_response(continued_message)
-    if not _has_semantic_action(continued):
-        if continued.reasoning_content:
-            raise RuntimeError(
-                "native llama-server returned a reasoning-only continuation without "
-                "a semantic action"
-            )
-        raise RuntimeError(
-            "native llama-server returned no semantic action after a reasoning-only "
-            "continuation"
-        )
+    if message.get("tool_calls"):
+        raise RuntimeError("plain completion unexpectedly returned tool_calls")
+    content = message.get("content")
+    reasoning = message.get("reasoning_content", message.get("reasoning"))
+    content_text = content if isinstance(content, str) else ""
+    reasoning_text = reasoning if isinstance(reasoning, str) else ""
+    if not content_text.strip() and not reasoning_text.strip():
+        raise RuntimeError("native llama-server returned an empty assistant message")
     return GenerationResponse(
-        content=continued.content,
-        reasoning_content=_merge_reasoning(
-            turn.reasoning_content,
-            continued.reasoning_content,
-        ),
+        content=content_text.strip(),
+        reasoning_content=reasoning_text.strip(),
     )
 
 
-def _tool_semantic_completion(
+def _native_tool_completion(
     adapter: LlamaCppAdapter,
     server_url: str,
     request: GenerationRequest,
 ) -> GenerationResponse:
-    """Return one host-validated tool/content action, with one reasoning continuation."""
+    """Run one native tool completion. No semantic retry or recovery is permitted."""
 
+    from ..llama_exact_context import capacity_safe_payload
     from ..llama_stream_efficiency_contract import _report_server_connection
 
-    message = _completion_message_with_prefill(
-        adapter,
+    request = _normalized_tool_request(request)
+    payload = capacity_safe_payload(
         server_url,
         _tool_server_payload(adapter, request),
+        structured_output=False,
     )
+    message = _completion_message(server_url, payload)
     _report_server_connection(server_url)
-    turn = _qwen_tool_generation_response(message, request)
-    if _has_semantic_action(turn):
-        return turn
-    if not turn.reasoning_content:
-        raise RuntimeError(
-            "native llama-server returned neither visible content, reasoning, nor Qwen tool calls"
-        )
 
-    continuation_request = _reasoning_continuation_request(
-        request,
-        turn.reasoning_content,
-    )
-    continued_message = _completion_message_with_prefill(
-        adapter,
-        server_url,
-        _tool_server_payload(adapter, continuation_request),
-    )
-    continued = _qwen_tool_generation_response(continued_message, continuation_request)
-    if not _has_semantic_action(continued):
-        if continued.reasoning_content:
-            raise RuntimeError(
-                "native llama-server returned a reasoning-only tool continuation without a semantic action"
-            )
-        raise RuntimeError(
-            "native llama-server returned no semantic action after a reasoning-only tool continuation"
+    schemas = _request_tool_schema_map(request)
+    calls = _parse_native_tool_calls(message)
+    _validate_tool_calls_against_host_schema(calls, schemas)
+    _validate_tool_choice(request, calls)
+
+    content = message.get("content")
+    reasoning = message.get("reasoning_content", message.get("reasoning"))
+    content_text = content if isinstance(content, str) else ""
+    reasoning_text = reasoning if isinstance(reasoning, str) else ""
+    if not calls and not content_text.strip():
+        raise ToolCallValidationError(
+            "native tool completion returned neither message.tool_calls nor visible content"
         )
     return GenerationResponse(
-        content=continued.content,
-        tool_calls=continued.tool_calls,
-        reasoning_content=_merge_reasoning(
-            turn.reasoning_content,
-            continued.reasoning_content,
-        ),
+        content=content_text.strip(),
+        tool_calls=calls,
+        reasoning_content=reasoning_text.strip(),
     )
 
 
@@ -234,509 +182,53 @@ def _tool_server_payload(
     adapter: LlamaCppAdapter,
     request: GenerationRequest,
 ) -> dict[str, Any]:
-    """Assert the canonical hardware policy preserves native Jinja tool semantics."""
-
     from ..llama_server_hardware_policy import _server_payload, _server_tool_choice
 
     payload = _server_payload(adapter, request)
     if not payload.get("tools"):
         raise RuntimeError("native tool transport received no tool schemas")
-    expected_choice = _server_tool_choice(request)
-    if payload.get("tool_choice") != expected_choice:
+    expected = _server_tool_choice(request)
+    if payload.get("tool_choice") != expected:
         raise RuntimeError(
             "llama hardware policy violated native tool transport: "
-            f"tool_choice must be {expected_choice!r}"
+            f"tool_choice must be {expected!r}"
         )
     return payload
-
-
-def _merge_text_progress(previous: Any, current: Any) -> str:
-    first = previous if isinstance(previous, str) else ""
-    second = current if isinstance(current, str) else ""
-    return first + second
-
-
-def _merge_partial_messages(
-    previous: Mapping[str, Any] | None,
-    current: Mapping[str, Any] | None,
-) -> dict[str, Any]:
-    result = dict(previous or {})
-    incoming = dict(current or {})
-    result["role"] = "assistant"
-    for key in ("reasoning_content", "reasoning", "content"):
-        if key in result or key in incoming:
-            result[key] = _merge_text_progress(result.get(key), incoming.get(key))
-    for key, value in incoming.items():
-        if key not in {"role", "reasoning_content", "reasoning", "content"}:
-            result[key] = value
-    return result
-
-
-def _reject_partial_server_tool_calls(message: Mapping[str, Any]) -> None:
-    if message.get("tool_calls"):
-        raise RuntimeError(
-            "llama-server returned server-parsed tool_calls inside an incomplete response; "
-            "partial tool actions are never executable"
-        )
-
-
-def _assistant_prefill_payload(
-    original: Mapping[str, Any],
-    generated: Mapping[str, Any],
-) -> dict[str, Any]:
-    payload = dict(original)
-    messages = [dict(message) for message in original.get("messages", ())]
-    assistant = {
-        key: value
-        for key, value in generated.items()
-        if key in {"role", "content", "reasoning_content", "reasoning"}
-    }
-    assistant["role"] = "assistant"
-    if messages and messages[-1].get("role") == "assistant":
-        messages[-1] = _merge_partial_messages(messages[-1], assistant)
-    else:
-        messages.append(assistant)
-    payload["messages"] = messages
-    return payload
-
-
-def _normalize_assistant_prefill_suffix(
-    message: Mapping[str, Any],
-    *,
-    continuation_page: bool,
-    template_prefix: str,
-) -> dict[str, Any]:
-    result = dict(message)
-    content = result.get("content")
-    if not continuation_page or not template_prefix:
-        return result
-    if not isinstance(content, str) or not content.startswith(template_prefix):
-        raise RuntimeError(
-            "live llama-server assistant-prefill prefix changed after calibration"
-        )
-    result["content"] = content[len(template_prefix) :]
-    return result
-
-
-def _assistant_prefill_calibration_payload(
-    original: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Build a template-only request; calibration must never enter inference."""
-
-    payload: dict[str, Any] = {
-        "model": original.get("model", "local"),
-        "messages": [
-            {
-                "role": "user",
-                "content": "Calibrate the trailing-assistant template. Generate no tokens.",
-            },
-            {"role": "assistant", "content": _PREFILL_CALIBRATION_SENTINEL},
-        ],
-    }
-    for key in (
-        "chat_template_kwargs",
-        "reasoning_effort",
-        "tools",
-        "tool_choice",
-        "parallel_tool_calls",
-    ):
-        if key in original:
-            payload[key] = original[key]
-    return payload
-
-
-def _assistant_prefill_apply_template_url(server_url: str) -> str:
-    origin = server_url.rstrip("/")
-    if origin.endswith("/v1"):
-        origin = origin[:-3].rstrip("/")
-    return f"{origin}/apply-template"
-
-
-def _post_apply_template(
-    server_url: str,
-    payload: Mapping[str, Any],
-) -> Any:
-    """Render llama.cpp's chat template without running model inference."""
-
-    read_timeout = _positive_env_float(
-        "MMM_LLAMA_COMPLETION_TIMEOUT_SECONDS",
-        _DEFAULT_COMPLETION_TIMEOUT_SECONDS,
-    )
-    timeout = httpx.Timeout(
-        connect=30.0,
-        read=read_timeout,
-        write=30.0,
-        pool=30.0,
-    )
-    endpoint = _assistant_prefill_apply_template_url(server_url)
-    try:
-        if httpx.post is not _DEFAULT_HTTPX_POST:
-            return httpx.post(endpoint, json=dict(payload), timeout=timeout)
-        from ..llama_stream_efficiency_contract import _client
-
-        return _client(server_url).post(
-            endpoint,
-            json=dict(payload),
-            timeout=timeout,
-        )
-    except httpx.TimeoutException as exc:
-        raise RuntimeError(
-            "native llama-server apply-template made no readable progress for "
-            f"{read_timeout:.0f}s"
-        ) from exc
-
-
-def _calibrate_assistant_prefill_generation_prompt(
-    server_url: str,
-    original: Mapping[str, Any],
-) -> str:
-    response = _post_apply_template(
-        server_url,
-        _assistant_prefill_calibration_payload(original),
-    )
-    if response.status_code >= 400:
-        body = _bounded_response_body(response)
-        raise RuntimeError(
-            "assistant-prefill apply-template request was rejected"
-            + (f": {body}" if body else "")
-        )
-    data = response.json()
-    if not isinstance(data, Mapping):
-        raise TypeError("assistant-prefill apply-template returned invalid JSON")
-    prompt = data.get("prompt")
-    if not isinstance(prompt, str):
-        raise TypeError("assistant-prefill apply-template returned no rendered prompt")
-    if prompt.count(_PREFILL_CALIBRATION_SENTINEL) != 1:
-        raise RuntimeError(
-            "assistant-prefill apply-template sentinel is missing or ambiguous"
-        )
-    suffix = prompt.split(_PREFILL_CALIBRATION_SENTINEL, 1)[1]
-    if not suffix:
-        raise RuntimeError(
-            "assistant-prefill template suffix is empty or ambiguous"
-        )
-    if len(suffix.encode("utf-8")) > _MAX_PREFILL_TEMPLATE_BYTES:
-        raise RuntimeError(
-            "assistant-prefill template suffix is unexpectedly large"
-        )
-    return suffix
-
-
-def _assistant_prefill_server_identity(server_url: str) -> str:
-    """Return a cache-safe identity only for MMM's live managed llama-server."""
-
-    try:
-        from ..llama_server_autotune import managed_server_generation_identity
-
-        return managed_server_generation_identity(server_url)
-    except Exception:
-        # Externally managed servers do not expose a process generation that lets us
-        # prove a cached Jinja prefix is still current. Recalibrate instead of risking
-        # stale template bytes after an unseen server restart.
-        return ""
-
-
-def _assistant_prefill_cache_key(
-    server_url: str,
-    original: Mapping[str, Any],
-) -> str:
-    server_identity = _assistant_prefill_server_identity(server_url)
-    if not server_identity:
-        return ""
-    try:
-        encoded = json.dumps(
-            _assistant_prefill_calibration_payload(original),
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    except (TypeError, ValueError, RecursionError):
-        return ""
-    return f"{server_identity}\0{hashlib.sha256(encoded).hexdigest()}"
-
-
-def _cached_assistant_prefill_generation_prompt(
-    adapter: LlamaCppAdapter,
-    server_url: str,
-    original: Mapping[str, Any],
-    *,
-    refresh: bool = False,
-) -> str:
-    cache_key = _assistant_prefill_cache_key(server_url, original)
-    if not cache_key:
-        return _calibrate_assistant_prefill_generation_prompt(server_url, original)
-
-    # Managed-server calibration is single-flight. Holding this lock through the rare
-    # calibration request prevents parallel first-use callers from issuing duplicate
-    # apply-template requests for the same process/template identity.
-    with _PREFILL_TEMPLATE_CACHE_LOCK:
-        cache = getattr(adapter, "_prefill_template_prefix_cache", None)
-        if not refresh and isinstance(cache, dict):
-            cached = cache.get(cache_key)
-            if isinstance(cached, str) and cached:
-                return cached
-
-        calibrated = _calibrate_assistant_prefill_generation_prompt(server_url, original)
-        if not isinstance(cache, dict):
-            cache = {}
-            setattr(adapter, "_prefill_template_prefix_cache", cache)
-        cache[cache_key] = calibrated
-        while len(cache) > _MAX_PREFILL_TEMPLATE_CACHE_ENTRIES:
-            cache.pop(next(iter(cache)))
-        return calibrated
-
-
-def _completion_message_with_prefill(
-    adapter: LlamaCppAdapter,
-    server_url: str,
-    payload: Mapping[str, Any],
-    *,
-    structured_output: bool = False,
-) -> Mapping[str, Any]:
-    from ..llama_finish_reason_contract import (
-        _CONTEXT_ERROR,
-        _OUTPUT_ERROR,
-        CONTEXT_PRESSURE,
-        OUTPUT_EXHAUSTED,
-        LlamaCompletionBoundaryError,
-        completion_boundary_error,
-        partial_message_receipt,
-    )
-    from ..qwen_family_capabilities import qwen_family_capabilities
-
-    extra = getattr(getattr(adapter, "config", None), "extra", {})
-    qwen_thinking_page = False
-    qwen_nonthinking_page = False
-    if isinstance(extra, Mapping) and str(
-        extra.get("runtime_contract", "")
-    ).strip().casefold() == "qwen":
-        capabilities = qwen_family_capabilities(adapter.config, required=True)
-        if capabilities is None or not capabilities.assistant_prefill:
-            raise RuntimeError(
-                "registry Qwen family does not permit assistant-prefill continuation"
-            )
-        template_kwargs = payload.get("chat_template_kwargs")
-        qwen_thinking_page = not (
-            isinstance(template_kwargs, Mapping)
-            and template_kwargs.get("enable_thinking") is False
-        )
-        qwen_nonthinking_page = not qwen_thinking_page
-
-    original_payload = dict(payload)
-    current_payload = original_payload
-    accumulated: dict[str, Any] = {}
-    progress_bytes = 0
-    progress_sha256 = ""
-    calibrated_template_prefix = ""
-    prefill_refresh_used = False
-
-    def normalize_prefill_page(message: Mapping[str, Any]) -> dict[str, Any]:
-        nonlocal calibrated_template_prefix, prefill_refresh_used
-        try:
-            return _normalize_assistant_prefill_suffix(
-                message,
-                continuation_page=bool(accumulated),
-                template_prefix=calibrated_template_prefix,
-            )
-        except RuntimeError:
-            if (
-                not accumulated
-                or not qwen_nonthinking_page
-                or not calibrated_template_prefix
-                or prefill_refresh_used
-            ):
-                raise
-            prefill_refresh_used = True
-            calibrated_template_prefix = _cached_assistant_prefill_generation_prompt(
-                adapter, server_url, original_payload, refresh=True
-            )
-            return _normalize_assistant_prefill_suffix(
-                message,
-                continuation_page=True,
-                template_prefix=calibrated_template_prefix,
-            )
-
-    from ..llama_exact_context import capacity_safe_payload
-
-    while True:
-        current_payload = capacity_safe_payload(
-            server_url, current_payload, structured_output=structured_output,
-        )
-        try:
-            final_message = _completion_message(server_url, current_payload)
-        except RuntimeError as exc:
-            boundary = completion_boundary_error(exc)
-            if boundary is None:
-                raise
-            try:
-                partial = normalize_prefill_page(boundary.partial_message)
-            except RuntimeError as prefix_exc:
-                if not accumulated:
-                    raise
-                message = _CONTEXT_ERROR if boundary.kind == CONTEXT_PRESSURE else _OUTPUT_ERROR
-                raise LlamaCompletionBoundaryError(
-                    message
-                    + "; live assistant-prefill normalization changed;"
-                    + f" preserved_partial_bytes={partial_message_receipt(accumulated)[0]}",
-                    kind=boundary.kind,
-                    partial_message=accumulated,
-                    prompt_tokens=boundary.prompt_tokens,
-                    completion_tokens=boundary.completion_tokens,
-                    max_tokens=boundary.max_tokens,
-                ) from prefix_exc
-            _reject_partial_server_tool_calls(partial)
-            merged = _merge_partial_messages(accumulated, partial)
-            if boundary.kind == CONTEXT_PRESSURE:
-                raise LlamaCompletionBoundaryError(
-                    _CONTEXT_ERROR
-                    + "; assistant-prefill reached the live context boundary;"
-                    + f" partial_bytes={partial_message_receipt(merged)[0]}",
-                    kind=CONTEXT_PRESSURE,
-                    partial_message=merged,
-                    prompt_tokens=boundary.prompt_tokens,
-                    completion_tokens=boundary.completion_tokens,
-                    max_tokens=boundary.max_tokens,
-                ) from exc
-            if boundary.kind != OUTPUT_EXHAUSTED:
-                raise
-            if qwen_thinking_page:
-                raise
-            next_bytes, next_sha256 = partial_message_receipt(merged)
-            if next_bytes <= progress_bytes or next_sha256 == progress_sha256:
-                raise LlamaCompletionBoundaryError(
-                    _OUTPUT_ERROR
-                    + "; assistant-prefill made no additional byte progress;"
-                    + f" partial_bytes={next_bytes}",
-                    kind=OUTPUT_EXHAUSTED,
-                    partial_message=merged,
-                    prompt_tokens=boundary.prompt_tokens,
-                    completion_tokens=boundary.completion_tokens,
-                    max_tokens=boundary.max_tokens,
-                ) from exc
-            accumulated = merged
-            progress_bytes = next_bytes
-            progress_sha256 = next_sha256
-            if qwen_nonthinking_page and not calibrated_template_prefix:
-                try:
-                    calibrated_template_prefix = (
-                        _cached_assistant_prefill_generation_prompt(
-                            adapter, server_url, original_payload
-                        )
-                    )
-                except Exception as calibration_exc:
-                    raise LlamaCompletionBoundaryError(
-                        _OUTPUT_ERROR
-                        + "; live assistant-prefill calibration was unavailable;"
-                        + f" preserved_partial_bytes={next_bytes}",
-                        kind=OUTPUT_EXHAUSTED,
-                        partial_message=merged,
-                        prompt_tokens=boundary.prompt_tokens,
-                        completion_tokens=boundary.completion_tokens,
-                        max_tokens=boundary.max_tokens,
-                    ) from calibration_exc
-            current_payload = _assistant_prefill_payload(original_payload, accumulated)
-            continue
-
-        try:
-            normalized_final = normalize_prefill_page(final_message)
-        except RuntimeError as prefix_exc:
-            if not accumulated:
-                raise
-            raise LlamaCompletionBoundaryError(
-                _OUTPUT_ERROR
-                + "; live assistant-prefill normalization changed;"
-                + f" preserved_partial_bytes={partial_message_receipt(accumulated)[0]}",
-                kind=OUTPUT_EXHAUSTED,
-                partial_message=accumulated,
-                max_tokens=int(original_payload.get("max_tokens", 0) or 0),
-            ) from prefix_exc
-        if not accumulated:
-            return normalized_final
-        return _merge_partial_messages(accumulated, normalized_final)
-
-
-def _plain_generation_response(message: Mapping[str, Any]) -> GenerationResponse:
-    if message.get("tool_calls"):
-        raise RuntimeError("plain completion unexpectedly returned tool_calls")
-    content_value = message.get("content")
-    content_raw = content_value if isinstance(content_value, str) else ""
-    reasoning_value = message.get("reasoning_content", message.get("reasoning"))
-    server_reasoning = reasoning_value if isinstance(reasoning_value, str) else ""
-    embedded_reasoning, content = _split_qwen_reasoning_markup(content_raw)
-    reasoning = _merge_reasoning(server_reasoning, embedded_reasoning)
-    return GenerationResponse(
-        content=content.strip(),
-        reasoning_content=reasoning.strip(),
-    )
 
 
 def _request_tool_schema_map(request: GenerationRequest) -> dict[str, Mapping[str, Any]]:
-    tool_schemas = [
-        tool.to_schema() if hasattr(tool, "to_schema") else tool
-        for tool in request.tools
-    ]
-    return _tool_schema_map(tool_schemas)
+    return _tool_schema_map(tuple(dict(tool) for tool in request.tools))
 
 
-def _qwen_response_text(message: Mapping[str, Any]) -> tuple[str, str]:
-    content_value = message.get("content")
-    content_raw = content_value if isinstance(content_value, str) else ""
-    reasoning_value = message.get("reasoning_content", message.get("reasoning"))
-    server_reasoning = reasoning_value if isinstance(reasoning_value, str) else ""
-    embedded_reasoning, content_raw = _split_qwen_reasoning_markup(content_raw)
-    return _merge_reasoning(server_reasoning, embedded_reasoning), content_raw
+def _tool_schema_map(
+    schemas: Sequence[Mapping[str, Any]],
+) -> dict[str, Mapping[str, Any]]:
+    result: dict[str, Mapping[str, Any]] = {}
+    for schema in schemas:
+        function = schema.get("function")
+        if not isinstance(function, Mapping):
+            raise TypeError("tool schema lacks function metadata")
+        name = str(function.get("name", "")).strip()
+        if not name:
+            raise ToolCallValidationError("tool schema lacks a function name")
+        if name in result:
+            raise ToolCallValidationError(f"duplicate tool schema name {name!r}")
+        parameters = function.get("parameters", {})
+        if parameters is not None and not isinstance(parameters, Mapping):
+            raise ToolCallValidationError(
+                f"tool {name!r} parameters schema must be an object"
+            )
+        result[name] = dict(parameters or {})
+    return result
 
 
-def _select_qwen_tool_calls(
-    message: Mapping[str, Any],
-    markup_calls: Sequence[ToolCall],
-    schemas: Mapping[str, Mapping[str, Any]],
-    *,
-    parallel_tool_calls: bool,
-) -> tuple[ToolCall, ...]:
-    native_calls = _parse_native_tool_calls(message, schemas)
-    if native_calls and markup_calls:
-        raise ToolCallValidationError(
-            "llama-server returned both structured tool_calls and raw Qwen tool markup"
-        )
-    calls = tuple(native_calls or markup_calls)
-    if len(calls) > 1 and not parallel_tool_calls:
-        return calls[:1]
-    return calls
-
-
-def _qwen_tool_generation_response(
-    message: Mapping[str, Any],
-    request: GenerationRequest,
-) -> GenerationResponse:
-    schemas = _request_tool_schema_map(request)
-    reasoning_raw, content_raw = _qwen_response_text(message)
-    reasoning, reasoning_calls = _parse_qwen_tool_markup(reasoning_raw, schemas)
-    content, content_calls = _parse_qwen_tool_markup(content_raw, schemas)
-    calls = _select_qwen_tool_calls(
-        message,
-        (*reasoning_calls, *content_calls),
-        schemas,
-        parallel_tool_calls=request.parallel_tool_calls,
-    )
-    _validate_tool_calls_against_host_schema(calls, schemas)
-    _validate_tool_choice(request, calls)
-    return GenerationResponse(
-        content=content.strip(),
-        tool_calls=calls,
-        reasoning_content=reasoning.strip(),
-    )
-
-
-def _parse_native_tool_calls(
-    message: Mapping[str, Any],
-    schemas: Mapping[str, Mapping[str, Any]],
-) -> tuple[ToolCall, ...]:
+def _parse_native_tool_calls(message: Mapping[str, Any]) -> tuple[ToolCall, ...]:
     raw_calls = message.get("tool_calls")
     if raw_calls is None:
         return ()
     if not isinstance(raw_calls, list):
         raise ToolCallValidationError("llama-server returned tool_calls in a non-list shape")
+
     calls: list[ToolCall] = []
     for index, raw_call in enumerate(raw_calls):
         if not isinstance(raw_call, Mapping):
@@ -748,22 +240,24 @@ def _parse_native_tool_calls(
             )
         function = raw_call.get("function")
         if not isinstance(function, Mapping):
-            raise ToolCallValidationError("llama-server structured tool call lacks function metadata")
+            raise ToolCallValidationError(
+                "llama-server structured tool call lacks function metadata"
+            )
         name = str(function.get("name", "")).strip()
         if not name:
-            raise ToolCallValidationError("llama-server structured tool call has an empty function name")
-        raw_arguments_value = function.get("arguments", "{}")
-        if isinstance(raw_arguments_value, Mapping):
-            arguments = dict(raw_arguments_value)
-            raw_arguments = json.dumps(
-                arguments,
-                ensure_ascii=False,
-                separators=(",", ":"),
+            raise ToolCallValidationError(
+                "llama-server structured tool call has an empty function name"
             )
-        elif isinstance(raw_arguments_value, str):
-            raw_arguments = raw_arguments_value
+        raw_value = function.get("arguments", "{}")
+        if isinstance(raw_value, Mapping):
+            arguments = dict(raw_value)
+            raw_arguments = json.dumps(
+                arguments, ensure_ascii=False, separators=(",", ":")
+            )
+        elif isinstance(raw_value, str):
+            raw_arguments = raw_value
             try:
-                decoded = json.loads(raw_arguments.strip() or "{}")
+                decoded = json.loads(raw_value.strip() or "{}")
             except json.JSONDecodeError as exc:
                 raise ToolCallValidationError(
                     f"llama-server structured tool {name!r} returned invalid JSON arguments"
@@ -780,7 +274,7 @@ def _parse_native_tool_calls(
         call_id = str(raw_call.get("id", "")).strip()
         if not call_id:
             digest = hashlib.sha256(
-                f"{index}\0{name}\0{raw_arguments}".encode()
+                f"{index}\0{name}\0{raw_arguments}".encode("utf-8")
             ).hexdigest()[:16]
             call_id = f"call_{digest}"
         calls.append(
@@ -792,33 +286,6 @@ def _parse_native_tool_calls(
             )
         )
     return tuple(calls)
-
-
-def _source_edit_stream_length_overshoot_only(
-    call: ToolCall,
-    schema: Mapping[str, Any],
-    errors: Sequence[Any],
-) -> bool:
-    """Allow exactly one model-bound violation: an overlong source-edit stream chunk."""
-
-    if call.name != "apply_source_edit" or len(errors) != 1:
-        return False
-    properties = schema.get("properties")
-    if not isinstance(properties, Mapping) or set(properties) != {"chunk", "done"}:
-        return False
-    chunk_schema = properties.get("chunk")
-    if not isinstance(chunk_schema, Mapping) or chunk_schema.get("type") != "string":
-        return False
-    max_length = chunk_schema.get("maxLength")
-    chunk = call.arguments.get("chunk")
-    error = errors[0]
-    return bool(
-        isinstance(max_length, int)
-        and isinstance(chunk, str)
-        and len(chunk) > max_length
-        and getattr(error, "validator", None) == "maxLength"
-        and tuple(getattr(error, "absolute_path", ())) == ("chunk",)
-    )
 
 
 def _validate_tool_calls_against_host_schema(
@@ -833,9 +300,9 @@ def _validate_tool_calls_against_host_schema(
     for call in calls:
         schema = schemas.get(call.name)
         if schema is None:
-            # Preserve unexposed/out-of-phase tool calls for the host phase gate. The
-            # adapter must not borrow a schema from another visible capability.
-            continue
+            raise ToolCallValidationError(
+                f"model emitted non-visible tool {call.name!r}"
+            )
         try:
             validator_type = validator_for(schema)
             validator_type.check_schema(schema)
@@ -847,130 +314,58 @@ def _validate_tool_calls_against_host_schema(
             raise RuntimeError(
                 f"tool {call.name!r} has an invalid host validation schema"
             ) from exc
-        if "minecraft_version" in schema.get("properties", {}) and "minecraft_version" not in call.arguments:
-            env_ver = os.environ.get("MMM_MINECRAFT_VERSION", "").strip()
-            if env_ver:
-                call.arguments["minecraft_version"] = env_ver
-                errors = sorted(
-                    validator_type(schema).iter_errors(dict(call.arguments)),
-                    key=lambda error: tuple(str(part) for part in error.absolute_path),
-                )
-        if not errors or _source_edit_stream_length_overshoot_only(call, schema, errors):
+        if not errors:
             continue
         error = errors[0]
         path = ".".join(str(part) for part in error.absolute_path)
         detail = " ".join(str(error.message).split())[:240]
         location = f" at {path}" if path else ""
         raise ToolCallValidationError(
-            f"Qwen tool {call.name!r} emitted schema-invalid arguments{location}: {detail}"
+            f"tool {call.name!r} emitted schema-invalid arguments{location}: {detail}"
         )
 
 
-def _split_qwen_reasoning_markup(text: str) -> tuple[str, str]:
-    if not text:
-        return "", ""
-    stripped = text.lstrip()
-    if not stripped.startswith("<think>"):
-        return "", text
-    reasoning_start = len("<think>")
-    reasoning_end = stripped.find("</think>", reasoning_start)
-    if reasoning_end < 0:
-        raise RuntimeError("Qwen reasoning block is missing </think>")
-    reasoning = stripped[reasoning_start:reasoning_end].strip()
-    content = stripped[reasoning_end + len("</think>") :].lstrip()
-    return reasoning, content
-
-
-def _tool_schema_map(
-    schemas: Sequence[Mapping[str, Any]],
-) -> dict[str, Mapping[str, Any]]:
-    result: dict[str, Mapping[str, Any]] = {}
-    for schema in schemas:
-        function = schema.get("function")
-        if not isinstance(function, Mapping):
-            raise TypeError("tool schema lacks function metadata")
-        name = str(function.get("name", "")).strip()
-        if not name:
-            raise RuntimeError("tool schema lacks a function name")
-        if name in result:
-            raise RuntimeError(f"duplicate tool schema name {name!r}")
-        parameters = function.get("parameters", {})
-        if parameters is not None and not isinstance(parameters, Mapping):
-            raise RuntimeError(f"tool {name!r} parameters schema must be an object")
-        result[name] = dict(parameters or {})
-    return result
-
-
 def _named_tool_choice(choice: Any) -> str:
-    if isinstance(choice, str):
-        return choice.strip()
     if not isinstance(choice, Mapping):
-        raise RuntimeError(f"unsupported tool_choice contract: {choice!r}")
+        raise ToolCallValidationError(f"unsupported named tool_choice: {choice!r}")
     function = choice.get("function")
     if not isinstance(function, Mapping):
-        raise TypeError("named tool_choice lacks function metadata")
-    expected = str(function.get("name", "")).strip()
-    if not expected:
-        raise RuntimeError("named tool_choice lacks a function name")
-    return expected
+        raise ToolCallValidationError("named tool_choice lacks function metadata")
+    name = str(function.get("name", "")).strip()
+    if not name:
+        raise ToolCallValidationError("named tool_choice lacks a function name")
+    return name
 
 
-def _validate_named_tool_choice(expected: str, calls: Sequence[ToolCall]) -> None:
-    if len(calls) == 1 and calls[0].name == expected:
-        return
-    received = ", ".join(call.name for call in calls) or "<none>"
-    raise RuntimeError(
-        f"model violated named tool_choice {expected!r}; received {received}"
-    )
-
-
-def _validate_tool_choice(request: GenerationRequest, calls: Sequence[ToolCall]) -> None:
+def _validate_tool_choice(
+    request: GenerationRequest,
+    calls: Sequence[ToolCall],
+) -> None:
     if not request.parallel_tool_calls and len(calls) > 1:
-        raise RuntimeError("model emitted parallel tool calls when they are disabled")
+        raise ToolCallValidationError(
+            "model emitted parallel tool calls when they are disabled"
+        )
     choice = request.tool_choice
     if choice is None or choice == "auto":
         return
     if choice == "none":
         if calls:
-            raise RuntimeError("model emitted a tool call when tool_choice is none")
+            raise ToolCallValidationError(
+                "model emitted a tool call when tool_choice is none"
+            )
         return
     if choice == "required":
         if not calls:
-            raise RuntimeError("model did not emit a tool call when one is required")
+            raise ToolCallValidationError(
+                "model did not emit a native tool call when one is required"
+            )
         return
-    _validate_named_tool_choice(_named_tool_choice(choice), calls)
-
-
-def _has_semantic_action(turn: GenerationResponse) -> bool:
-    return bool(turn.content or turn.tool_calls)
-
-
-def _reasoning_continuation_request(
-    request: GenerationRequest,
-    reasoning: str,
-) -> GenerationRequest:
-    messages = [dict(message) for message in request.messages]
-    messages.extend(
-        [
-            {
-                "role": "assistant",
-                "content": None,
-                "reasoning_content": reasoning,
-            },
-            {"role": "user", "content": _REASONING_CONTINUATION},
-        ]
-    )
-    return replace(request, messages=tuple(messages), media_paths=())
-
-
-def _merge_reasoning(first: str, second: str) -> str:
-    first = first.strip()
-    second = second.strip()
-    if not first:
-        return second
-    if not second or second == first:
-        return first
-    return f"{first}\n{second}"
+    expected = _named_tool_choice(choice)
+    if len(calls) != 1 or calls[0].name != expected:
+        received = ", ".join(call.name for call in calls) or "<none>"
+        raise ToolCallValidationError(
+            f"model violated named tool_choice {expected!r}; received {received}"
+        )
 
 
 def _completion_message(server_url: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -1050,14 +445,13 @@ def _post_completion(server_url: str, payload: Mapping[str, Any]) -> Any:
         sep="",
         flush=True,
     )
-
     timeout = httpx.Timeout(connect=30.0, read=read_timeout, write=30.0, pool=30.0)
     try:
         if httpx.post is not _DEFAULT_HTTPX_POST:
-            return httpx.post(endpoint, json=payload, timeout=timeout)
+            return httpx.post(endpoint, json=dict(payload), timeout=timeout)
         from ..llama_stream_efficiency_contract import _client
 
-        return _client(server_url).post(endpoint, json=payload, timeout=timeout)
+        return _client(server_url).post(endpoint, json=dict(payload), timeout=timeout)
     except httpx.TimeoutException as exc:
         raise RuntimeError(
             "native llama-server completion made no readable progress for "

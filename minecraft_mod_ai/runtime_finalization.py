@@ -3,7 +3,8 @@ from __future__ import annotations
 """Single late-finalization owner for the fully composed runtime.
 
 Pre-design retrieval is a direct host-owned pipeline and is intentionally absent from
-this runtime mutation phase.
+this runtime mutation phase. Model completion transport is finalized during bootstrap;
+late finalization must not wrap or replay llama.cpp completion calls.
 """
 
 import threading
@@ -88,14 +89,11 @@ def finalize_runtime() -> None:
         )
         from .implementation_kind_boundary_contract import install as install_implementation_kind_boundary
         from .immutable_platform_execution_contract import install as install_immutable_platform_execution
-        from .llama_finish_reason_contract import install as install_llama_finish_reason
         from .llama_mtp_cache_policy import install as install_llama_mtp_cache_policy
         from .llama_native_context_authority_contract import install as install_llama_native_context_authority
-        from .llama_server_response_resilience import install as install_llama_server_response_resilience
         from .mcp_child_trace_contract import install as install_mcp_child_trace
         from .mcp_schema_integrity_contract import install as install_mcp_schema_integrity
         from .mcp_transport_pool import install_agent_mcp_transport_pool
-        from .model_adapters import llama_cpp_adapter
         from .model_output_atomicity_contract import assert_installed as assert_model_output_atomicity
         from .model_output_atomicity_contract import install as install_model_output_atomicity
         from .model_prefetch_resilience import install as install_prefetch_resilience
@@ -156,8 +154,6 @@ def finalize_runtime() -> None:
         install_llama_mtp_cache_policy(llama_server_autotune, llama_server_runtime_tuning)
         install_llama_native_context_authority(llama_server_autotune, llama_tuning_pipeline)
         install_tool_validation_surface()
-        install_llama_finish_reason(llama_cpp_adapter)
-        install_llama_server_response_resilience(llama_cpp_adapter)
         install_work_graph_receipt_integrity(work_graph)
         install_verifier_receipt_truth(work_graph)
         install_reference_query_parallelism(reference_source_research)
@@ -205,10 +201,6 @@ def finalize_runtime() -> None:
         install_model_output_atomicity(model_router_module=model_router)
         assert_model_output_atomicity(model_router_module=model_router)
 
-        # These contracts are intentionally finalized last. The direct-task bridge
-        # carries the task capsule authority out-of-band, repair recovery narrows only
-        # the already-existing target repair frontier, and the final guard then freezes
-        # the exact authority boundary around those inner wrappers.
         install_direct_task_mutation_authority(
             custom_module_generator_module=custom_module_generator,
             loop_module=progress_aware_tool_loop,

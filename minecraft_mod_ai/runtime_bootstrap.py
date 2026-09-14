@@ -71,7 +71,6 @@ def _install_model_runtime_contracts() -> None:
     )
     from .colab_gpu_handoff_contract import install as install_gpu_handoff
     from .colab_prefetch_bootstrap import start as start_colab_prefetch
-    from .forced_tool_execution_contract import install as install_forced_tool_execution
     from .gpu_resource_contract import install as install_gpu_resource
     from .llama_completion_liveness_contract import install as install_completion_liveness
     from .llama_context_safety_contract import install as install_context_safety
@@ -79,7 +78,7 @@ def _install_model_runtime_contracts() -> None:
     from .llama_stream_efficiency_contract import install as install_llama_stream_efficiency
     from .llama_tuning_pipeline import install_native_llama_tuning_pipeline
     from .managed_llama_reuse_contract import install as install_managed_llama_reuse
-    from .model_adapters import llama_cpp_adapter, openai_compatible
+    from .model_adapters import llama_cpp_adapter
     from .model_output_atomicity_contract import install as install_model_output_atomicity
     from .model_runtime_performance import install as install_model_runtime_performance
 
@@ -99,10 +98,6 @@ def _install_model_runtime_contracts() -> None:
     install_llama_stream_efficiency(llama_server_hardware_policy)
     install_completion_liveness(llama_stream_efficiency_contract, llama_cpp_adapter)
     install_context_safety(model_context_budget)
-    install_forced_tool_execution(
-        openai_compatible_module=openai_compatible,
-        llama_cpp_module=llama_cpp_adapter,
-    )
     install_model_output_atomicity()
     start_colab_prefetch(model_registry)
 
@@ -317,13 +312,12 @@ def _install_public_boundary_contracts() -> None:
 
 
 def _install_post_bootstrap_contracts() -> None:
-    """Install late policies without mutating the canonical pre-design research owner."""
+    """Install late policies without wrapping model tool generation."""
 
     from . import (
         agentic_optimization_contract,
         model_router,
         production_tools,
-        qwen_agent_family_contract,
         repair_engine,
         small_model_max_agent_contract,
         work_graph,
@@ -331,7 +325,6 @@ def _install_post_bootstrap_contracts() -> None:
     from .active_repair_verifier_contract import install as install_active_repair_verifier
     from .adaptive_retrieval_contract import install as install_adaptive_retrieval
     from .agent_security_contract import install as install_agent_security
-    from .long_run_resilience_contract import install as install_long_run_resilience
     from .minecraft_mcp_evidence_contract import install as install_minecraft_mcp_evidence
     from .research_bottleneck_runtime import install as install_research_bottleneck_runtime
     from .small_model_hybrid_search_contract import install as install_small_model_hybrid_search
@@ -361,8 +354,6 @@ def _install_post_bootstrap_contracts() -> None:
     install_active_repair_verifier(agentic_optimization_contract)
     install_minecraft_mcp_evidence()
     install_research_bottleneck_runtime()
-    install_long_run_resilience()
-    qwen_agent_family_contract.install()
     install_small_model_research_extensions()
     install_unified_trajectory_memory()
     install_adaptive_retrieval(model_router)
