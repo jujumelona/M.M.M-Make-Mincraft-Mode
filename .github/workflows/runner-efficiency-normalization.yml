@@ -1,0 +1,152 @@
+name: Runner efficiency normalization
+
+on:
+  push:
+    paths:
+      - ".github/workflows/runner-efficiency-normalization.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  normalize:
+    if: github.event.head_commit.message == 'install runner efficiency normalization'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Normalize process wait paths
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('minecraft_mod_ai/runner.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''    def _wait_for_process(
+        self,
+        process: subprocess.Popen[str],
+    ) -> tuple[int, bool]:
+        try:
+            process.wait(timeout=self.command_timeout_seconds)
+            return int(process.returncode or 0), False
+        except subprocess.TimeoutExpired:
+            _terminate_process_tree(process)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+            return 124, True
+        except BaseException:
+            _terminate_process_tree(process)
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+            raise
+
+'''
+          new = '''    def _wait_for_process(
+        self,
+        process: subprocess.Popen[str],
+    ) -> tuple[int, bool]:
+        try:
+            process.wait(timeout=self.command_timeout_seconds)
+        except subprocess.TimeoutExpired:
+            self._terminate_timed_out_process(process)
+            return 124, True
+        except BaseException:
+            self._terminate_interrupted_process(process)
+            raise
+        return int(process.returncode or 0), False
+
+    @staticmethod
+    def _terminate_timed_out_process(process: subprocess.Popen[str]) -> None:
+        _terminate_process_tree(process)
+        GradleRunner._wait_after_termination(process)
+
+    @staticmethod
+    def _wait_after_termination(process: subprocess.Popen[str]) -> None:
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            GradleRunner._kill_and_wait(process)
+
+    @staticmethod
+    def _terminate_interrupted_process(process: subprocess.Popen[str]) -> None:
+        _terminate_process_tree(process)
+        if process.poll() is None:
+            GradleRunner._kill_and_wait(process)
+
+    @staticmethod
+    def _kill_and_wait(process: subprocess.Popen[str]) -> None:
+        process.kill()
+        process.wait(timeout=5)
+
+'''
+          if old not in text:
+              raise SystemExit('expected _wait_for_process implementation not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          rm -f .github/workflows/runner-efficiency-normalization.yml
+
+      - name: Compile normalized Python tree
+        run: python -m compileall -q minecraft_mod_ai
+
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e ".[dev,ui]"
+
+      - name: Run runner and verifier regressions
+        run: >-
+          python -m pytest -q
+          tests/test_runner*.py
+          tests/test_generation_verifier_resilience.py
+          tests/test_planner_normalization_regression.py
+
+      - name: Run cumulative architecture gate
+        run: >-
+          python .github/scripts/audit_code_quality_regression.py
+          --base-ref ac47fe22dd672e1041d4ecc0f11b7564cf6f3933
+          --output audit/runner-efficiency-architecture.json
+
+      - name: Run cumulative runtime efficiency gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/scripts/audit_runtime_efficiency.py \
+            --output audit/runner-efficiency-current.json
+          BASE_DIR="$(mktemp -d)"
+          trap 'rm -rf "$BASE_DIR"' EXIT
+          git archive --format=tar ac47fe22dd672e1041d4ecc0f11b7564cf6f3933 -- \
+            .github/scripts/audit_runtime_efficiency.py minecraft_mod_ai tools \
+            | tar -xf - -C "$BASE_DIR"
+          (
+            cd "$BASE_DIR"
+            python .github/scripts/audit_runtime_efficiency.py \
+              --output /tmp/runner-efficiency-baseline.json
+          )
+          python .github/scripts/gate_runtime_efficiency.py \
+            --baseline /tmp/runner-efficiency-baseline.json \
+            --current audit/runner-efficiency-current.json
+
+      - name: Commit normalized runner and cleanup
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A -- minecraft_mod_ai/runner.py .github/workflows/runner-efficiency-normalization.yml
+          git diff --cached --check
+          git diff --cached --quiet && exit 0
+          git commit -m "normalize runner process wait efficiency"
+          git push origin HEAD:main
