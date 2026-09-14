@@ -45,31 +45,35 @@ class OwnerRPC:
         self._reader.start()
         self._errors.start()
 
+    def _decode_response_line(self, line: str) -> dict[str, Any] | OwnerRPCError | None:
+        candidate = line.strip()
+        if not candidate:
+            return None
+        # Eclipse/Equinox and the JVM may write startup diagnostics to the inherited
+        # stdout before OwnerApplication redirects System.out. Protocol replies are JSON objects.
+        if not candidate.startswith('{'):
+            self._stdout_noise.append(candidate[-2000:])
+            return None
+        try:
+            message = json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            return OwnerRPCError(
+                f'Owner protocol error: {exc}; stdout frame prefix={candidate[:200]!r}'
+            )
+        if not isinstance(message, dict):
+            return OwnerRPCError('Owner protocol error: response must be an object')
+        return message
+
     def _read(self) -> None:
         try:
             assert self.process.stdout is not None
             for line in self.process.stdout:
-                candidate = line.strip()
-                if not candidate:
+                message = self._decode_response_line(line)
+                if message is None:
                     continue
-                # Eclipse/Equinox and the JVM may write startup diagnostics to the
-                # inherited stdout before OwnerApplication redirects System.out.
-                # OwnerApplication protocol replies are always JSON objects, so
-                # non-object lines are transport noise rather than RPC frames.
-                if not candidate.startswith('{'):
-                    self._stdout_noise.append(candidate[-2000:])
-                    continue
-                try:
-                    message = json.loads(candidate)
-                except json.JSONDecodeError as exc:
-                    prefix = candidate[:200]
-                    self._responses.put(OwnerRPCError(
-                        f'Owner protocol error: {exc}; stdout frame prefix={prefix!r}'
-                    ))
-                    return
-                if not isinstance(message, dict):
-                    raise TypeError('response must be an object')
                 self._responses.put(message)
+                if isinstance(message, OwnerRPCError):
+                    return
         except (TypeError, ValueError, OSError, UnicodeError) as exc:
             self._responses.put(OwnerRPCError(f'Owner protocol error: {exc}'))
         finally:
@@ -83,6 +87,11 @@ class OwnerRPC:
         except (OSError, UnicodeError):
             return
 
+    def _timeout_error(self, method: str, timeout: float) -> OwnerRPCError:
+        noise = list(self._stdout_noise)
+        suffix = f'; non-protocol stdout tail={noise!r}' if noise else ''
+        return OwnerRPCError(f'Owner {method} timed out after {timeout}s{suffix}')
+
     def _raise_transport_failure(
         self,
         method: str,
@@ -91,9 +100,7 @@ class OwnerRPC:
     ) -> None:
         self.close()
         if isinstance(exc, queue.Empty):
-            noise = list(self._stdout_noise)
-            suffix = f'; non-protocol stdout tail={noise!r}' if noise else ''
-            raise OwnerRPCError(f'Owner {method} timed out after {timeout}s{suffix}') from exc
+            raise self._timeout_error(method, timeout) from exc
         if isinstance(exc, OwnerRPCError):
             raise exc
         raise OwnerRPCError(f'Owner transport failed: {exc}') from exc
