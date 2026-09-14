@@ -2,11 +2,12 @@ from __future__ import annotations
 
 """Real Gradle fallback support for generation-time JDT infrastructure outages.
 
-The generation verifier owns fallback selection directly.  This module only
+The generation verifier owns fallback selection directly. This module only
 contains the Gradle execution/receipt helper; ``install`` is intentionally a
 no-op retained for import compatibility and performs no runtime rebinding.
 """
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,13 @@ from .root_cause_trace import emit_root_cause
 
 _MAX_LOG_TAIL_CHARS = 16 * 1024
 _MAX_LOG_TAIL_LINES = 120
+_JAVA_TOOLCHAIN_PATTERNS = (
+    re.compile(r"\brelease version\s+\d+\s+not supported\b", re.IGNORECASE),
+    re.compile(r"\binvalid target release\s*:\s*\d+\b", re.IGNORECASE),
+    re.compile(r"\bunsupportedclassversionerror\b", re.IGNORECASE),
+    re.compile(r"\bno matching toolchains found\b", re.IGNORECASE),
+    re.compile(r"\bcannot find a java installation\b", re.IGNORECASE),
+)
 
 
 def _bounded_log_tail(path: str | None) -> str:
@@ -30,6 +38,11 @@ def _bounded_log_tail(path: str | None) -> str:
     if len(tail) > _MAX_LOG_TAIL_CHARS:
         tail = tail[-_MAX_LOG_TAIL_CHARS:]
     return tail
+
+
+def _is_java_toolchain_failure(*parts: str | None) -> bool:
+    text = "\n".join(str(part or "") for part in parts)
+    return any(pattern.search(text) is not None for pattern in _JAVA_TOOLCHAIN_PATTERNS)
 
 
 def _gradle_fallback_receipt(
@@ -50,13 +63,21 @@ def _gradle_fallback_receipt(
     report_dict = report.to_dict()
 
     diagnostics: list[dict[str, Any]] = []
+    last_log = ""
     if not report.passed:
         commands = report_dict.get("commands")
-        last_log = ""
         if isinstance(commands, list) and commands:
             final_command = commands[-1]
             if isinstance(final_command, dict):
                 last_log = _bounded_log_tail(str(final_command.get("log_path") or ""))
+
+    toolchain_unavailable = (
+        str(report.status).strip().upper() == "UNAVAILABLE"
+        or _is_java_toolchain_failure(report.error, last_log)
+    )
+    status = "PASS" if report.passed else "UNAVAILABLE" if toolchain_unavailable else "FAIL"
+
+    if not report.passed:
         message = str(report.error or "Gradle build failed.")
         if last_log:
             message += "\n\nGradle log tail:\n" + last_log
@@ -64,13 +85,17 @@ def _gradle_fallback_receipt(
             {
                 "severity": 1,
                 "source": "gradle",
-                "code": "GRADLE_BUILD_FAILED",
+                "code": (
+                    "JAVA_TOOLCHAIN_UNAVAILABLE"
+                    if toolchain_unavailable
+                    else "GRADLE_BUILD_FAILED"
+                ),
                 "message": message,
             }
         )
 
     receipt: dict[str, Any] = {
-        "status": "PASS" if report.passed else "FAIL",
+        "status": status,
         "complete": True,
         "session_id": "gradle-fallback",
         "model_id": f"gradle:{report.gradle_version}",
@@ -81,13 +106,22 @@ def _gradle_fallback_receipt(
         "jdt_unavailable_reason": f"{type(jdt_error).__name__}: {jdt_error}",
         "build": report_dict,
     }
+    if toolchain_unavailable:
+        receipt["failure_class"] = "environment"
+        receipt["repairable"] = False
+        receipt["code"] = "JAVA_TOOLCHAIN_UNAVAILABLE"
+
     emit_root_cause(
         "generation_verifier_gradle_fallback_result",
         stage="generation",
         operation="run_gradle_build",
         gate="target_compile",
-        result="PASS" if report.passed else "FAIL",
-        reason="JDT verifier unavailable; pinned Gradle build used as host verifier",
+        result=status,
+        reason=(
+            "JDT verifier unavailable and Gradle Java toolchain unavailable"
+            if toolchain_unavailable
+            else "JDT verifier unavailable; pinned Gradle build used as host verifier"
+        ),
         details={"result": receipt},
     )
     return runtime_module._bounded_result(receipt)
