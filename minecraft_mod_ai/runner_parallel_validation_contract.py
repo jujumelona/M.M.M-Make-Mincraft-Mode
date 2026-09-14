@@ -12,7 +12,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
-from .runner_target_java_contract import target_java_environment
+from .runner_target_java_contract import target_java_build_environment
 
 _PROJECT_BUILD_LOCKS_GUARD = threading.Lock()
 _PROJECT_BUILD_LOCKS: dict[str, threading.RLock] = {}
@@ -223,6 +223,11 @@ def _uncertifiable_report(runner_module: Any, report: Any, message: str) -> Any:
         gametest_report=report.gametest_report,
         error=message,
     )
+
+
+def _require_build_script(root: Path, runner_module: Any) -> None:
+    if _safe_regular_file(root, root / "build.gradle") is None:
+        raise runner_module.BuildRunnerError(f"Not a generated Gradle project: {root}")
 
 
 def _marker_path(cache_dir: Path, version: str, sha256: str) -> Path:
@@ -437,11 +442,7 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
             raise runner_module.BuildRunnerError(
                 "Validation project root is missing, not a directory, or a symbolic link."
             )
-        build_script = _safe_regular_file(root, root / "build.gradle")
-        if build_script is None:
-            raise runner_module.BuildRunnerError(
-                f"Not a generated Gradle project: {root}"
-            )
+        _require_build_script(root, runner_module)
         try:
             adapter = runner_module.adapter_from_project(root)
         except ValueError as exc:
@@ -450,20 +451,10 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
             ) from exc
         version = str(adapter.gradle)
         sha256 = str(adapter.gradle_sha256)
-        environment, java_error = target_java_environment(
-            runner_module=runner_module,
-            adapter=adapter,
-            environment=os.environ.copy(),
-        )
-        if java_error is not None:
-            return runner_module.BuildReport(
-                status="UNAVAILABLE",
-                gradle_version=version,
-                commands=(),
-                jar_path=None,
-                gametest_report=None,
-                error=java_error,
-            )
+        environment, unavailable = target_java_build_environment(
+            runner_module=runner_module, adapter=adapter, version=version)
+        if unavailable is not None:
+            return unavailable
 
         state = root / ".minecraft_ai"
         logs = state / "logs"

@@ -16,7 +16,7 @@ def target_java_environment(
     """Return a command environment bound to the project's declared Java toolchain.
 
     The helper is intentionally pure with respect to ``runner_module`` and process-global
-    ``os.environ``.  Runtime-owned Gradle methods remain installed by the existing parallel
+    ``os.environ``. Runtime-owned Gradle methods remain installed by the existing parallel
     validation contract; this function only resolves the target JDK and prepares the
     per-command environment consumed by that contract.
     """
@@ -50,4 +50,25 @@ def target_java_environment(
     return updated, None
 
 
-__all__ = ["target_java_environment"]
+def target_java_build_environment(
+    *, runner_module: Any, adapter: Any, version: str
+) -> tuple[dict[str, str], Any | None]:
+    """Prepare the target JDK environment or an UNAVAILABLE build report."""
+    environment, error = target_java_environment(
+        runner_module=runner_module,
+        adapter=adapter,
+        environment=os.environ.copy(),
+    )
+    if error is None:
+        return environment, None
+    return environment, runner_module.BuildReport(
+        status="UNAVAILABLE",
+        gradle_version=version,
+        commands=(),
+        jar_path=None,
+        gametest_report=None,
+        error=error,
+    )
+
+
+__all__ = ["target_java_build_environment", "target_java_environment"]
