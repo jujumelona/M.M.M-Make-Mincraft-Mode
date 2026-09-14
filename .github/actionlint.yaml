@@ -1,0 +1,11 @@
+self-hosted-runner:
+  labels:
+    - gpu
+    - t4
+    - minecraft-1201
+    - blockbench
+
+paths:
+  ".github/workflows/build-gradle-runtime-cache.yml":
+    ignore:
+      - 'shellcheck reported issue in this script: SC2129:.+'
