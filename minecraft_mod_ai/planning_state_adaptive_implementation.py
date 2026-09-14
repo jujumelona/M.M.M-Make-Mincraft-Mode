@@ -309,6 +309,14 @@ def _compile_artifact_step(
         return receipt
 
 
+def _progress_mapping(value: Any, *, error: str) -> dict[str, Any]:
+    if not value:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(error)
+    return dict(value)
+
+
 def _store_artifact_progress(
     working_state: Mapping[str, Any],
     *,
@@ -319,18 +327,18 @@ def _store_artifact_progress(
 ) -> dict[str, Any]:
     """Path-copy artifact progress instead of cloning the complete planning state."""
     value = dict(working_state)
-    raw_progress = working_state.get("artifact_progress", {}) or {}
-    if not isinstance(raw_progress, Mapping):
-        raise ValueError("ARTIFACT_PLAN_PROGRESS: artifact progress must be a mapping")
-    progress = dict(raw_progress)
-    raw_req = progress.get(requirement_ref, {}) or {}
-    if not isinstance(raw_req, Mapping):
-        raise ValueError("ARTIFACT_PLAN_PROGRESS: requirement progress must be a mapping")
-    req_progress = dict(raw_req)
-    raw_art = req_progress.get(artifact_kind, {}) or {}
-    if not isinstance(raw_art, Mapping):
-        raise ValueError("ARTIFACT_PLAN_PROGRESS: artifact-kind progress must be a mapping")
-    art_progress = dict(raw_art)
+    progress = _progress_mapping(
+        working_state.get("artifact_progress"),
+        error="ARTIFACT_PLAN_PROGRESS: artifact progress must be a mapping",
+    )
+    req_progress = _progress_mapping(
+        progress.get(requirement_ref),
+        error="ARTIFACT_PLAN_PROGRESS: requirement progress must be a mapping",
+    )
+    art_progress = _progress_mapping(
+        req_progress.get(artifact_kind),
+        error="ARTIFACT_PLAN_PROGRESS: artifact-kind progress must be a mapping",
+    )
     art_progress[step_id] = deepcopy(dict(receipt))
     req_progress[artifact_kind] = art_progress
     progress[requirement_ref] = req_progress
@@ -518,10 +526,8 @@ def _finish_requirement(
     if "translation_plan" in job and job["translation_plan"] is not None:
         plan["translation_receipts"] = list(job["translation_plan"].receipts)
 
-    requirement_ref = job["requirement_ref"]
-    completed_criteria = len(job.get("criteria", ()))
-    completed_details[requirement_ref] = plan
-    cleared = clear_requirement_progress(working_state, requirement_ref)
+    completed_details[job["requirement_ref"]] = plan
+    cleared = clear_requirement_progress(working_state, job["requirement_ref"])
     result = _merge_completed_details(
         cleared,
         requirement_order=requirement_order,
@@ -533,9 +539,9 @@ def _finish_requirement(
         operation="compile_progress_monotone_detailed_plans",
         result="OBSERVED",
         details={
-            "requirement_ref": requirement_ref,
+            "requirement_ref": job["requirement_ref"],
             "verification_status": "pending_runtime_validation",
-            "completed_acceptance_criteria": completed_criteria,
+            "completed_acceptance_criteria": len(job.get("criteria", ())),
             "completed_artifact_kinds": len(artifact_kinds),
             "completed_requirements": len(completed_details),
             "total_requirements": len(requirement_order),
@@ -546,6 +552,14 @@ def _finish_requirement(
         checkpoint(dict(result))
     _release_completed_job_payload(job)
     return result
+
+
+def _should_checkpoint_restored_details(
+    checkpoint: Checkpoint | None,
+    completed_count: int,
+    existing_count: int,
+) -> bool:
+    return checkpoint is not None and completed_count != existing_count
 
 
 def compile_progress_monotone_detailed_plans(
@@ -610,8 +624,6 @@ def compile_progress_monotone_detailed_plans(
         and _detail_matches_selection(detail, selections[requirement_ref])
     }
 
-    # One isolation copy at planner entry is sufficient. Subsequent progress/checkpoint
-    # updates are copy-on-write so completed payloads can be reclaimed incrementally.
     working_state: dict[str, Any] = deepcopy(dict(state))
     for requirement_ref in completed_details:
         working_state = clear_requirement_progress(working_state, requirement_ref)
@@ -620,7 +632,9 @@ def compile_progress_monotone_detailed_plans(
         requirement_order=requirement_order,
         completed_details=completed_details,
     )
-    if checkpoint is not None and len(completed_details) != len(existing):
+    if _should_checkpoint_restored_details(
+        checkpoint, len(completed_details), len(existing)
+    ):
         checkpoint(dict(working_state))
     if working_state.get("plan_ready") is True:
         return working_state
