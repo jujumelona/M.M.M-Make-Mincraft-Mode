@@ -13,19 +13,19 @@ record_schema:
       type: string
       minLength: 1
       maxLength: 256
-      pattern: '^(?!\s*(?:\{|\[)).+'
+      pattern: '^(?!.*[{}\[\]]).+$'
       description: Describe only the state change or changes that must occur atomically for this criterion. Use concise natural language. Never echo, quote, serialize, or embed the supplied input context or JSON.
     commit:
       type: string
       minLength: 1
       maxLength: 256
-      pattern: '^(?!\s*(?:\{|\[)).+'
+      pattern: '^(?!.*[{}\[\]]).+$'
       description: Describe only the commit boundary or condition that makes the atomic mutation authoritative and visible. Use concise natural language, not input-context JSON.
     rollback:
       type: string
       minLength: 1
       maxLength: 256
-      pattern: '^(?!\s*(?:\{|\[)).+'
+      pattern: '^(?!.*[{}\[\]]).+$'
       description: Describe only the rollback action or restoration rule when the atomic mutation cannot commit. Use concise natural language, not input-context JSON.
   required:
   - mutations
