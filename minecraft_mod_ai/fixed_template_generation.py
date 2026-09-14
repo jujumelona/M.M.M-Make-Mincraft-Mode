@@ -9,6 +9,7 @@ so fast tests can remain model-free.
 
 import json
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -207,6 +208,99 @@ def _validate_native_arguments(
     return value
 
 
+def _object_field_schemas(
+    parameters: Mapping[str, Any],
+) -> tuple[tuple[str, dict[str, Any]], ...]:
+    """Project a failed multi-field object into deterministic one-field repair schemas."""
+
+    properties = parameters.get("properties")
+    if parameters.get("type") != "object" or not isinstance(properties, Mapping):
+        return ()
+    if len(properties) <= 1:
+        return ()
+
+    required = parameters.get("required")
+    required_fields = {
+        str(item)
+        for item in required
+        if isinstance(required, list) and isinstance(item, str)
+    }
+    projected: list[tuple[str, dict[str, Any]]] = []
+    for raw_name, raw_schema in properties.items():
+        if not isinstance(raw_name, str) or not isinstance(raw_schema, Mapping):
+            return ()
+        field_schema: dict[str, Any] = {
+            "type": "object",
+            "properties": {raw_name: deepcopy(dict(raw_schema))},
+            "required": [raw_name] if raw_name in required_fields else [],
+            "additionalProperties": False,
+        }
+        for keyword in ("$defs", "definitions"):
+            definitions = parameters.get(keyword)
+            if isinstance(definitions, Mapping):
+                field_schema[keyword] = deepcopy(dict(definitions))
+        assert_atomic_model_schema(
+            field_schema,
+            surface=f"fixed-template isolated field {raw_name!r}",
+        )
+        projected.append((raw_name, field_schema))
+    return tuple(projected)
+
+
+def _safe_tool_component(value: str) -> str:
+    safe = "".join(character if character.isalnum() or character == "_" else "_" for character in value)
+    return safe.strip("_") or "field"
+
+
+def _generate_native_arguments_by_field(
+    router: Any,
+    role: str,
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    tool_name: str,
+    parameters: Mapping[str, Any],
+    description: str,
+    failure: BaseException,
+) -> Mapping[str, Any]:
+    """Recover a failed multi-field call without regenerating the same invalid object shape."""
+
+    field_schemas = _object_field_schemas(parameters)
+    if not field_schemas:
+        raise ValueError("fixed-template schema cannot be isolated by top-level field")
+
+    merged: dict[str, Any] = {}
+    for field_index, (field_name, field_schema) in enumerate(field_schemas, start=1):
+        field_messages = _schema_repair_messages(
+            messages,
+            failure=failure,
+            directive=(
+                f"recover only top-level field {field_name!r}; do not emit sibling fields"
+            ),
+        )
+        field_tool_name = (
+            f"{tool_name}_field_{field_index}_{_safe_tool_component(field_name)}"
+        )
+        arguments = router.generate_tool_decision(
+            role,
+            field_messages,
+            tool_name=field_tool_name,
+            parameters=field_schema,
+            description=(
+                description
+                + f" Isolated fixed-template recovery for field {field_name!r}. "
+                "Populate only the declared field."
+            ),
+        )
+        if not isinstance(arguments, Mapping):
+            raise ValueError(
+                f"fixed-template isolated field {field_name!r} did not return an argument mapping"
+            )
+        validated = _validate_native_arguments(arguments, field_schema)
+        merged.update(validated)
+
+    return _validate_native_arguments(merged, parameters)
+
+
 def _generate_native_template_arguments(
     router: Any,
     role: str,
@@ -216,47 +310,72 @@ def _generate_native_template_arguments(
     parameters: Mapping[str, Any],
     description: str,
 ) -> Mapping[str, Any]:
-    """Generate host-valid tool arguments using a schema-derived repair frontier."""
+    """Generate host-valid tool arguments using bounded, schema-derived recovery."""
 
-    directives = ("initial schema fill", *_schema_repair_directives(parameters))
-    current_messages = tuple(dict(message) for message in messages)
-    last_error: BaseException | None = None
-    for repair_index, directive in enumerate(directives):
-        current_tool_name = (
-            tool_name if repair_index == 0 else f"{tool_name}_repair_{repair_index}"
+    initial_messages = tuple(dict(message) for message in messages)
+    try:
+        arguments = router.generate_tool_decision(
+            role,
+            initial_messages,
+            tool_name=tool_name,
+            parameters=parameters,
+            description=description,
         )
-        current_description = description
-        if repair_index:
-            current_description = (
-                description
-                + " The prior function arguments failed host schema validation. "
-                + directive
-                + "."
-            )
-        try:
-            arguments = router.generate_tool_decision(
-                role,
-                current_messages,
-                tool_name=current_tool_name,
-                parameters=parameters,
-                description=current_description,
-            )
-            if not isinstance(arguments, Mapping):
-                raise ValueError(
-                    "fixed-template function call did not return an argument mapping"
+        if not isinstance(arguments, Mapping):
+            raise ValueError("fixed-template function call did not return an argument mapping")
+        return _validate_native_arguments(arguments, parameters)
+    except Exception as initial_error:
+        # A multi-field schema can enter a deterministic invalid attractor when one field is
+        # repeatedly malformed. Do not regenerate the same object again. Project the failed
+        # object into one-field forced calls, merge the host-validated fields, then validate
+        # the complete object exactly once.
+        if _object_field_schemas(parameters):
+            try:
+                return _generate_native_arguments_by_field(
+                    router,
+                    role,
+                    initial_messages,
+                    tool_name=tool_name,
+                    parameters=parameters,
+                    description=description,
+                    failure=initial_error,
                 )
-            return _validate_native_arguments(arguments, parameters)
-        except Exception as exc:
-            last_error = exc
-            next_index = repair_index + 1
-            if next_index < len(directives):
-                current_messages = _schema_repair_messages(
-                    messages,
-                    failure=exc,
-                    directive=directives[next_index],
-                )
+            except Exception as field_error:
+                raise RuntimeError(
+                    "FIXED_TEMPLATE_SCHEMA_REPAIR_FRONTIER_EXHAUSTED: model could not satisfy "
+                    "the host schema after deterministic field-isolated recovery"
+                ) from field_error
 
-    assert last_error is not None
+        last_error: BaseException = initial_error
+        current_messages = initial_messages
+        directives = _schema_repair_directives(parameters)
+        for repair_index, directive in enumerate(directives, start=1):
+            current_messages = _schema_repair_messages(
+                messages,
+                failure=last_error,
+                directive=directive,
+            )
+            try:
+                arguments = router.generate_tool_decision(
+                    role,
+                    current_messages,
+                    tool_name=f"{tool_name}_repair_{repair_index}",
+                    parameters=parameters,
+                    description=(
+                        description
+                        + " The prior function arguments failed host schema validation. "
+                        + directive
+                        + "."
+                    ),
+                )
+                if not isinstance(arguments, Mapping):
+                    raise ValueError(
+                        "fixed-template function call did not return an argument mapping"
+                    )
+                return _validate_native_arguments(arguments, parameters)
+            except Exception as exc:
+                last_error = exc
+
     raise RuntimeError(
         "FIXED_TEMPLATE_SCHEMA_REPAIR_FRONTIER_EXHAUSTED: model could not satisfy every "
         "host-schema obligation across the schema-derived repair frontier"
