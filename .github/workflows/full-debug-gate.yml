@@ -103,6 +103,24 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           path: audit/upstream
 
+      - name: Preserve upstream failed job logs
+        if: ${{ github.event_name == 'workflow_run' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          mkdir -p audit/debug
+          gh api \
+            --paginate \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$UPSTREAM_RUN_ID/jobs?per_page=100" \
+            > audit/debug/upstream-jobs.json
+          gh run view "$UPSTREAM_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --log-failed \
+            > audit/debug/upstream-failed-jobs.log 2>&1
+
       - name: Catch stale or missing internal imports
         continue-on-error: true
         run: python .github/scripts/debug_repo_audit.py
