@@ -3,8 +3,9 @@ from __future__ import annotations
 """Authoritative request catalog boundary for prompt-first grounded planning.
 
 The old deterministic clause/capability/query compiler was removed because it converted
-raw prompt wording into implementation/search decisions before research.  Authority now
-comes from the plan-ready planning-state SSOT and its grounded detailed plan.
+raw prompt wording into implementation/search decisions before research. Authority now
+comes from the planning-state SSOT. Planning readiness is progress metadata, not a
+terminal gate: lowering consumes whatever canonical requirements/details are present.
 """
 
 from collections.abc import Iterator, Mapping
@@ -34,11 +35,11 @@ def build_authoritative_request_catalog(
     *,
     planning_state: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return a researched, provenance-checked request catalog.
+    """Return the canonical request catalog without a terminal readiness judgement.
 
-    A caller may supply the already prepared state to avoid repeating research.  Without
-    one, a real model/router is mandatory and the complete prompt-first state machine is
-    run.  There is deliberately no deterministic raw-prompt fallback.
+    A caller may supply the already prepared state to avoid repeating research. Without
+    one, a real model/router runs the prompt-first state machine. ``plan_ready`` never
+    causes this boundary to raise; it is only progress metadata owned by the state.
     """
 
     authored = str(prompt or "")
@@ -60,17 +61,12 @@ def build_authoritative_request_catalog(
         if planning_state is None:
             if router is None:
                 raise ValueError(
-                    "PLANNING_AUTHORITY_STATE_REQUIRED: no raw-prompt deterministic fallback exists; "
-                    "supply a model router or a plan-ready planning_state"
+                    "PLANNING_AUTHORITY_STATE_REQUIRED: supply a model router or planning_state"
                 )
             state = prepare_planning_state(router, authored)
         else:
             state = deepcopy(dict(planning_state))
         validate_planning_state(state, prompt=authored)
-        if state.get("plan_ready") is not True:
-            raise ValueError(
-                "PLANNING_AUTHORITY_NOT_READY: request catalog cannot be emitted before grounded plan coverage"
-            )
         catalog = build_request_catalog_from_planning_state(authored, state)
         emit_root_cause(
             "pipeline_boundary_result",
@@ -81,6 +77,7 @@ def build_authoritative_request_catalog(
             details={
                 "catalog": catalog,
                 "planning_state_sha256": state.get("state_sha256"),
+                "planning_state_ready": state.get("plan_ready") is True,
             },
         )
         return catalog
