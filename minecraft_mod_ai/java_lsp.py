@@ -453,6 +453,51 @@ def _respond_to_server_request(rpc: _JsonRpcProcess, message: dict[str, Any]) ->
     return True
 
 
+def _initialize_rpc_session(
+    rpc: _JsonRpcProcess,
+    root: Path,
+    configuration: dict[str, Any],
+    *,
+    timeout_seconds: int,
+    quiet_seconds: float,
+    deadline: float,
+) -> None:
+    try:
+        rpc.request(
+            "initialize",
+            {
+                "processId": os.getpid(),
+                "rootUri": root.as_uri(),
+                "capabilities": {
+                    "textDocument": {"publishDiagnostics": {"relatedInformation": True}},
+                    "workspace": {
+                        "configuration": True,
+                        "workspaceFolders": True,
+                        "symbol": {},
+                    },
+                },
+                "initializationOptions": {
+                    "settings": configuration,
+                    "extendedClientCapabilities": {"progressReportProvider": True},
+                },
+                "workspaceFolders": list(rpc.workspace_folders),
+            },
+            timeout=min(_remaining_jdt_deadline(deadline, operation="initialize"), 45.0),
+        )
+        rpc.notify("initialized", {})
+        rpc.notify("workspace/didChangeConfiguration", {"settings": configuration})
+        _await_java_core_ready(
+            rpc,
+            root,
+            timeout_seconds=timeout_seconds,
+            quiet_seconds=quiet_seconds,
+            deadline=deadline,
+        )
+    except BaseException:
+        rpc.close()
+        raise
+
+
 class JavaLanguageService:
     """Bounded Eclipse JDT LS client with fail-closed project-JDK readiness."""
 
@@ -519,50 +564,20 @@ class JavaLanguageService:
 
         project_java_home = _resolve_project_java_home()
         configuration = _jdt_configuration(project_java_home)
-        environment = _jdtls_environment()
-
         rpc = _JsonRpcProcess(
             self.command,
             root,
             configuration=configuration,
-            environment=environment,
+            environment=_jdtls_environment(),
         )
-        try:
-            rpc.request(
-                "initialize",
-                {
-                    "processId": os.getpid(),
-                    "rootUri": root.as_uri(),
-                    "capabilities": {
-                        "textDocument": {
-                            "publishDiagnostics": {"relatedInformation": True},
-                        },
-                        "workspace": {
-                            "configuration": True,
-                            "workspaceFolders": True,
-                            "symbol": {},
-                        },
-                    },
-                    "initializationOptions": {
-                        "settings": configuration,
-                        "extendedClientCapabilities": {"progressReportProvider": True},
-                    },
-                    "workspaceFolders": list(rpc.workspace_folders),
-                },
-                timeout=min(_remaining_jdt_deadline(deadline, operation="initialize"), 45.0),
-            )
-            rpc.notify("initialized", {})
-            rpc.notify("workspace/didChangeConfiguration", {"settings": configuration})
-            _await_java_core_ready(
-                rpc,
-                root,
-                timeout_seconds=timeout_seconds,
-                quiet_seconds=min(self.diagnostic_quiet_seconds, 0.25),
-                deadline=deadline,
-            )
-        except BaseException:
-            rpc.close()
-            raise
+        _initialize_rpc_session(
+            rpc,
+            root,
+            configuration,
+            timeout_seconds=timeout_seconds,
+            quiet_seconds=min(self.diagnostic_quiet_seconds, 0.25),
+            deadline=deadline,
+        )
         self._rpc = rpc
         self._project_root = root
         self._project_java_home = project_java_home
@@ -909,6 +924,82 @@ def _await_java_core_ready(
     )
 
 
+def _raise_diagnostic_transport_failure(rpc: _JsonRpcProcess) -> None:
+    reader_failure = getattr(rpc, "_mmm_reader_failure", None)
+    if reader_failure is not None:
+        raise JDTLanguageServerError(
+            "JDT LS stdout reader failed while collecting diagnostics: "
+            f"{type(reader_failure).__name__}: {reader_failure}"
+        ) from reader_failure
+    process = getattr(rpc, "process", None)
+    poll = getattr(process, "poll", None)
+    if not callable(poll):
+        return
+    returncode = poll()
+    if returncode is None:
+        return
+    stderr = "\n".join(list(getattr(rpc, "stderr", ()))[-8:])
+    detail = f"; stderr={stderr}" if stderr else ""
+    raise JDTLanguageServerError(
+        "JDT LS exited before publishing complete diagnostics: "
+        f"returncode={returncode}{detail}"
+    )
+
+
+def _diagnostic_wait_seconds(
+    *,
+    deadline: float,
+    now: float,
+    complete: bool,
+    settled_since: float | None,
+    quiet_seconds: float,
+) -> float | None:
+    remaining = deadline - now
+    if remaining <= 0:
+        return None
+    wait_seconds = min(0.25, remaining)
+    if complete and settled_since is not None:
+        settle_remaining = quiet_seconds - (now - settled_since)
+        return min(wait_seconds, max(0.001, settle_remaining))
+    return wait_seconds
+
+
+def _published_diagnostics(
+    message: dict[str, Any],
+    expected_uris: set[str],
+) -> tuple[str, list[dict[str, Any]]] | None:
+    if message.get("method") != "textDocument/publishDiagnostics":
+        return None
+    params = message.get("params", {})
+    if not isinstance(params, dict):
+        return None
+    uri = str(params.get("uri", ""))
+    if uri not in expected_uris:
+        return None
+    values = params.get("diagnostics")
+    if not isinstance(values, list) or any(not isinstance(item, dict) for item in values):
+        raise JDTLanguageServerError(
+            "JDT LS published a malformed diagnostics payload for an opened Java file."
+        )
+    return uri, _sorted_diagnostics(values)
+
+
+def _raise_diagnostic_deadline(
+    expected_uris: set[str],
+    diagnostics: dict[str, list[dict[str, Any]]],
+) -> None:
+    missing_count = len(expected_uris.difference(diagnostics))
+    if missing_count:
+        raise JDTLanguageServerError(
+            "JDT LS did not publish diagnostics for every opened Java file before the validation deadline: "
+            f"observed={len(diagnostics)}, expected={len(expected_uris)}, missing={missing_count}."
+        )
+    raise JDTLanguageServerError(
+        "JDT LS diagnostics did not become quiescent before the validation deadline "
+        f"after all {len(expected_uris)} opened Java files were observed."
+    )
+
+
 def _collect_diagnostics(
     rpc: _JsonRpcProcess,
     *,
@@ -932,65 +1023,31 @@ def _collect_diagnostics(
         complete = expected_uris.issubset(diagnostics)
         if complete and settled_since is not None and now - settled_since >= quiet_seconds:
             return dict(sorted(diagnostics.items()))
-
-        reader_failure = getattr(rpc, "_mmm_reader_failure", None)
-        if reader_failure is not None:
-            raise JDTLanguageServerError(
-                "JDT LS stdout reader failed while collecting diagnostics: "
-                f"{type(reader_failure).__name__}: {reader_failure}"
-            ) from reader_failure
-
-        process = getattr(rpc, "process", None)
-        poll = getattr(process, "poll", None)
-        if callable(poll):
-            returncode = poll()
-            if returncode is not None:
-                stderr = "\n".join(list(getattr(rpc, "stderr", ()))[-8:])
-                detail = f"; stderr={stderr}" if stderr else ""
-                raise JDTLanguageServerError(
-                    "JDT LS exited before publishing complete diagnostics: "
-                    f"returncode={returncode}{detail}"
-                )
-
-        remaining = deadline - now
-        if remaining <= 0:
+        _raise_diagnostic_transport_failure(rpc)
+        wait_seconds = _diagnostic_wait_seconds(
+            deadline=deadline,
+            now=now,
+            complete=complete,
+            settled_since=settled_since,
+            quiet_seconds=quiet_seconds,
+        )
+        if wait_seconds is None:
             break
-        wait_seconds = min(0.25, remaining)
-        if complete and settled_since is not None:
-            settle_remaining = quiet_seconds - (now - settled_since)
-            wait_seconds = min(wait_seconds, max(0.001, settle_remaining))
         try:
             message = rpc.messages.get(timeout=wait_seconds)
         except queue.Empty:
             continue
         if _respond_to_server_request(rpc, message):
             continue
-        if message.get("method") != "textDocument/publishDiagnostics":
+        published = _published_diagnostics(message, expected_uris)
+        if published is None:
             continue
-        params = message.get("params", {})
-        if not isinstance(params, dict):
-            continue
-        uri = str(params.get("uri", ""))
-        if uri not in expected_uris:
-            continue
-        values = params.get("diagnostics")
-        if not isinstance(values, list) or any(not isinstance(item, dict) for item in values):
-            raise JDTLanguageServerError(
-                "JDT LS published a malformed diagnostics payload for an opened Java file."
-            )
-        diagnostics[uri] = _sorted_diagnostics(values)
+        uri, values = published
+        diagnostics[uri] = values
         settled_since = time.monotonic()
 
-    missing_count = len(expected_uris.difference(diagnostics))
-    if missing_count:
-        raise JDTLanguageServerError(
-            "JDT LS did not publish diagnostics for every opened Java file before the validation deadline: "
-            f"observed={len(diagnostics)}, expected={len(expected_uris)}, missing={missing_count}."
-        )
-    raise JDTLanguageServerError(
-        "JDT LS diagnostics did not become quiescent before the validation deadline "
-        f"after all {len(expected_uris)} opened Java files were observed."
-    )
+    _raise_diagnostic_deadline(expected_uris, diagnostics)
+    raise AssertionError("unreachable")
 
 
 def _sorted_diagnostics(values: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
