@@ -6,10 +6,15 @@ import hashlib
 import io
 import json
 import subprocess
+import sys
 import tarfile
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
 
 from ci_duplicate_pairs import introduced_duplicate_pairs
 
