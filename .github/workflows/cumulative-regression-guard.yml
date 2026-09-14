@@ -75,6 +75,8 @@ jobs:
           echo "Resolved cumulative regression baseline: $BASE_SHA"
 
       - name: Run fast diagnostic contracts
+        id: diagnostics
+        continue-on-error: true
         run: |
           mkdir -p audit/cumulative
           python tools/pytest_diagnostics.py \
@@ -89,6 +91,8 @@ jobs:
             tests/test_root_cause_audit_wrapper.py
 
       - name: Run cumulative architecture regression audit
+        id: architecture
+        continue-on-error: true
         env:
           BASE_SHA: ${{ steps.baseline.outputs.base_sha }}
         run: |
@@ -98,6 +102,8 @@ jobs:
             --output audit/cumulative/code-quality-regression.json
 
       - name: Run cumulative runtime efficiency regression audit
+        id: runtime_efficiency
+        continue-on-error: true
         shell: bash
         env:
           BASE_SHA: ${{ steps.baseline.outputs.base_sha }}
@@ -123,6 +129,8 @@ jobs:
             --current audit/cumulative/runtime-efficiency.json
 
       - name: Run cumulative runtime mutation regression audit
+        id: runtime_mutation
+        continue-on-error: true
         shell: bash
         env:
           BASE_SHA: ${{ steps.baseline.outputs.base_sha }}
@@ -149,3 +157,25 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
           path: audit/cumulative/
+
+      - name: Fail on any cumulative regression
+        if: ${{ always() }}
+        shell: bash
+        env:
+          DIAGNOSTICS: ${{ steps.diagnostics.outcome }}
+          ARCHITECTURE: ${{ steps.architecture.outcome }}
+          RUNTIME_EFFICIENCY: ${{ steps.runtime_efficiency.outcome }}
+          RUNTIME_MUTATION: ${{ steps.runtime_mutation.outcome }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' \
+            "diagnostics=$DIAGNOSTICS" \
+            "architecture=$ARCHITECTURE" \
+            "runtime_efficiency=$RUNTIME_EFFICIENCY" \
+            "runtime_mutation=$RUNTIME_MUTATION"
+          if [[ "$DIAGNOSTICS" != "success" || \
+                "$ARCHITECTURE" != "success" || \
+                "$RUNTIME_EFFICIENCY" != "success" || \
+                "$RUNTIME_MUTATION" != "success" ]]; then
+            exit 1
+          fi
