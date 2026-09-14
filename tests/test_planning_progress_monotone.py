@@ -548,3 +548,83 @@ def test_concurrent_record_checkpoints_do_not_overwrite_sibling_progress(monkeyp
     assert result["plan_ready"]
     sizes = [len(s.get("template_progress", {})) for s in checkpoints]
     assert sizes == sorted(sizes)
+
+
+def test_checkpointed_atomic_results_are_not_regenerated_after_scheduler_interrupt(monkeypatch):
+    requirements = _requirements(1, acceptance_count=2)
+    _patch_compile_boundaries(monkeypatch, requirements)
+    monkeypatch.setattr(adaptive, "router_native_model_parallelism", lambda _router: 1)
+    checkpoints: list[dict[str, object]] = []
+    generated: list[int] = []
+
+    def compile_criterion(_router, *, requirement_ref, criterion_index, **_kwargs):
+        generated.append(criterion_index)
+        return _real_fragment()
+
+    monkeypatch.setattr(adaptive, "_compile_criterion", compile_criterion)
+
+    def interrupt_after_persisting_all(
+        items,
+        worker,
+        *,
+        max_workers,
+        stage,
+        sort_key=None,
+        on_result=None,
+    ):
+        del max_workers, sort_key
+        pending = list(items)
+        for item in pending:
+            receipt = worker(item)
+            assert on_result is not None
+            on_result(item, receipt)
+        raise adaptive.ParallelTaskError(
+            stage=stage,
+            item=pending[-1],
+            cause=ValueError("forced interruption after durable checkpoint"),
+        )
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(
+        adaptive,
+        "iter_completed_with_deadlines",
+        interrupt_after_persisting_all,
+    )
+
+    with pytest.raises(ValueError, match="forced interruption after durable checkpoint"):
+        adaptive.compile_progress_monotone_detailed_plans(
+            _Router(),
+            "prompt",
+            _base_state(),
+            required_sections_by_requirement={"req_1": WORKSHEET_SECTIONS},
+            checkpoint=lambda state: checkpoints.append(deepcopy(state)),
+        )
+
+    assert sorted(generated) == [0, 1]
+    assert checkpoints
+    resume_state = deepcopy(checkpoints[-1])
+    assert len(resume_state.get("detail_progress", [])) == 2
+
+    monkeypatch.setattr(
+        adaptive,
+        "_compile_criterion",
+        lambda *_args, **_kwargs: pytest.fail(
+            "checkpointed criterion must not be regenerated on resume"
+        ),
+    )
+
+    def forbidden_scheduler(*_args, **_kwargs):
+        pytest.fail("resume must assemble fully checkpointed work before scheduling")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(adaptive, "iter_completed_with_deadlines", forbidden_scheduler)
+
+    result = adaptive.compile_progress_monotone_detailed_plans(
+        _Router(),
+        "prompt",
+        resume_state,
+        required_sections_by_requirement={"req_1": WORKSHEET_SECTIONS},
+    )
+
+    assert result["plan_ready"] is True
+    assert result["detail_progress"] == []

@@ -11,6 +11,7 @@ from minecraft_mod_ai.planning_detail_applicability import (
 )
 from minecraft_mod_ai.planning_detail_template import (
     CORE_WORKSHEET_SECTIONS,
+    CONDITIONAL_WORKSHEET_SECTIONS,
     WORKSHEET_SECTIONS,
 )
 
@@ -62,11 +63,11 @@ def _patch_pipeline_shell(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_missing_applicability_keeps_full_fail_safe_contract() -> None:
-    assert required_detail_sections_for_requirement(_requirement()) == WORKSHEET_SECTIONS
+def test_missing_applicability_uses_minimal_core_without_speculative_work() -> None:
+    assert required_detail_sections_for_requirement(_requirement()) == CORE_WORKSHEET_SECTIONS
 
 
-def test_unknown_applicability_keeps_conditional_sections() -> None:
+def test_unknown_applicability_does_not_schedule_conditional_sections() -> None:
     selected = required_detail_sections_for_requirement(
         _requirement(
             applicability={
@@ -77,7 +78,7 @@ def test_unknown_applicability_keeps_conditional_sections() -> None:
         )
     )
 
-    assert selected == WORKSHEET_SECTIONS
+    assert selected == CORE_WORKSHEET_SECTIONS
 
 
 def test_only_explicit_not_applicable_omits_conditional_sections() -> None:
@@ -94,7 +95,7 @@ def test_only_explicit_not_applicable_omits_conditional_sections() -> None:
     assert selected == CORE_WORKSHEET_SECTIONS
 
 
-def test_required_and_unknown_conditionals_are_retained() -> None:
+def test_only_required_conditionals_are_retained() -> None:
     selected = required_detail_sections_for_requirement(
         _requirement(
             applicability={
@@ -106,19 +107,19 @@ def test_required_and_unknown_conditionals_are_retained() -> None:
     )
 
     assert "authority_and_network" in selected
-    assert "resources_and_ui" in selected
+    assert "resources_and_ui" not in selected
     assert "persistence" not in selected
     assert all(section in selected for section in CORE_WORKSHEET_SECTIONS)
 
 
-def test_prompt_wording_never_omits_a_section() -> None:
+def test_prompt_wording_never_expands_section_selection() -> None:
     requirement = _requirement(
         statement=(
             "This is local-only, has no networking, never persists, and needs no UI or resources."
         )
     )
 
-    assert required_detail_sections_for_requirement(requirement) == WORKSHEET_SECTIONS
+    assert required_detail_sections_for_requirement(requirement) == CORE_WORKSHEET_SECTIONS
 
 
 def test_state_projection_uses_each_requirement_owned_applicability() -> None:
@@ -138,7 +139,7 @@ def test_state_projection_uses_each_requirement_owned_applicability() -> None:
 
     assert required_sections_by_requirement(state) == {
         "REQ-1": CORE_WORKSHEET_SECTIONS,
-        "REQ-2": WORKSHEET_SECTIONS,
+        "REQ-2": CORE_WORKSHEET_SECTIONS,
     }
 
 
@@ -193,7 +194,7 @@ def test_pipeline_passes_requirement_owned_selection_to_detailed_planner(
 
     assert captured["selection"] == {
         "REQ-1": CORE_WORKSHEET_SECTIONS,
-        "REQ-2": WORKSHEET_SECTIONS,
+        "REQ-2": CORE_WORKSHEET_SECTIONS,
     }
     assert result["plan_ready"] is True
 
@@ -266,7 +267,7 @@ def test_host_resolver_receives_only_requirement_ids_and_drives_selection(
     assert captured["resolver_input"] == ("REQ-1", "REQ-2")
     assert captured["selection"] == {
         "REQ-1": CORE_WORKSHEET_SECTIONS,
-        "REQ-2": WORKSHEET_SECTIONS,
+        "REQ-2": CORE_WORKSHEET_SECTIONS,
     }
     assert result["plan_ready"] is True
 
@@ -277,9 +278,8 @@ def test_missing_status_keys_fail_closed_to_unknown() -> None:
     )
 
     assert normalized == {
-        "authority_and_network": "unknown",
-        "persistence": "not_applicable",
-        "resources_and_ui": "unknown",
+        section: ("not_applicable" if section == "persistence" else "unknown")
+        for section in CONDITIONAL_WORKSHEET_SECTIONS
     }
 
 

@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-import queue
-import threading
-import time
-from collections import deque
 from types import SimpleNamespace
 
 import pytest
 
 from minecraft_mod_ai import agent_tool_runtime, java_lsp
 from minecraft_mod_ai.generation_verifier_resilience import (
-    _collect_diagnostics_progress_aware,
     install,
     run_generation_verifier,
     synthesized_verifier_turn,
@@ -87,7 +82,7 @@ def test_generation_verifier_rejects_unbound_owner_result(tmp_path):
     assert closed == [True]
 
 
-def test_jdt_failure_is_fail_closed_without_gradle_fallback(tmp_path):
+def test_jdt_failure_fails_closed_when_no_verification_backend_is_healthy(tmp_path):
     project, _source = _project(tmp_path)
     closed = []
 
@@ -99,7 +94,10 @@ def test_jdt_failure_is_fail_closed_without_gradle_fallback(tmp_path):
             closed.append(True)
 
     runtime = SimpleNamespace(workspace_root=str(project))
-    with pytest.raises(agent_tool_runtime.AgentToolRuntimeError, match="JDT is unavailable"):
+    with pytest.raises(
+        agent_tool_runtime.AgentToolRuntimeError,
+        match="Generation verification has no healthy backend",
+    ):
         run_generation_verifier(
             runtime,
             {},
@@ -123,7 +121,9 @@ def test_jdt_readiness_uses_diagnostics_and_never_hover(monkeypatch, tmp_path):
         def request(self, method, params, timeout):
             raise AssertionError(f"readiness must not call {method}")
 
-    def diagnostics(_rpc, *, expected_uris, timeout_seconds, quiet_seconds):
+    def diagnostics(
+        _rpc, *, expected_uris, timeout_seconds, quiet_seconds, deadline=None
+    ):
         return {next(iter(expected_uris)): []}
 
     monkeypatch.setattr(java_lsp, "_collect_diagnostics", diagnostics)
@@ -174,51 +174,3 @@ def test_install_elides_forced_verifier_model_turn():
         parallel_tool_calls=False,
     )
     assert response.tool_calls[0].name == "java_diagnostics"
-
-
-def test_jdt_progress_refreshes_idle_deadline():
-    expected_uri = "file:///workspace/Example.java"
-
-    class Process:
-        pid = 123
-
-        @staticmethod
-        def poll():
-            return None
-
-    class Reader:
-        @staticmethod
-        def is_alive():
-            return True
-
-    rpc = SimpleNamespace(
-        messages=queue.Queue(),
-        process=Process(),
-        stderr=deque(),
-        _reader=Reader(),
-        reader_failure=None,
-        stdout_eof=False,
-        protocol_counts={},
-        server_progress_tail=deque(maxlen=30),
-    )
-
-    def producer():
-        time.sleep(0.06)
-        rpc.messages.put({"method": "$/progress", "params": {"value": {"kind": "report"}}})
-        time.sleep(0.06)
-        rpc.messages.put({
-            "method": "textDocument/publishDiagnostics",
-            "params": {"uri": expected_uri, "diagnostics": []},
-        })
-
-    thread = threading.Thread(target=producer, daemon=True)
-    thread.start()
-    result = _collect_diagnostics_progress_aware(
-        rpc,
-        expected_uris={expected_uri},
-        timeout_seconds=0.10,
-        quiet_seconds=0.01,
-        page_index=0,
-    )
-    thread.join(timeout=1.0)
-    assert result == {expected_uri: []}

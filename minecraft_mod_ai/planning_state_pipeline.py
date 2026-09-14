@@ -237,6 +237,25 @@ def _host_add_requirement(state: Mapping[str, Any]) -> dict[str, Any]:
     return value
 
 
+
+def _research_stage_needed(state: Mapping[str, Any]) -> bool:
+    """Enter research only when an explicit unresolved obligation needs it."""
+
+    queue = state.get("research_queue")
+    if isinstance(queue, list) and any(
+        isinstance(row, Mapping) and row.get("status") == "pending"
+        for row in queue
+    ):
+        return True
+
+    unresolved = state.get("unresolved")
+    return isinstance(unresolved, list) and any(
+        isinstance(row, Mapping)
+        and row.get("status") == "open"
+        and row.get("resolution_route") == "default_policy"
+        for row in unresolved
+    )
+
 def _resolve_requirements_or_wait(
     router: Any,
     prompt: str,
@@ -250,20 +269,21 @@ def _resolve_requirements_or_wait(
     if _requirements_exist(state):
         return state, False
 
-    try:
-        state = _transition(
-            "collect_prompt_research",
-            lambda: collect_planning_state_research_convergent(
-                router,
-                prompt,
-                state,
-                trace_metadata=trace_metadata,
-            ),
-            input_state=state,
-        )
-    except Exception as exc:
-        _host_transition_notice("collect_prompt_research", state, exc)
-    _checkpoint_state(checkpoint, state)
+    if _research_stage_needed(state):
+        try:
+            state = _transition(
+                "collect_prompt_research",
+                lambda: collect_planning_state_research_convergent(
+                    router,
+                    prompt,
+                    state,
+                    trace_metadata=trace_metadata,
+                ),
+                input_state=state,
+            )
+        except Exception as exc:
+            _host_transition_notice("collect_prompt_research", state, exc)
+        _checkpoint_state(checkpoint, state)
 
     try:
         state = _transition(
