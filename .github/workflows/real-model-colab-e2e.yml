@@ -9,7 +9,16 @@ on:
         default: t4_quality
         type: string
   push:
+    branches: [main]
     paths:
+      - 'minecraft_mod_ai/model_adapters/**'
+      - 'minecraft_mod_ai/model_router.py'
+      - 'minecraft_mod_ai/progress_aware_tool_loop.py'
+      - 'minecraft_mod_ai/planning_pipeline.py'
+      - 'minecraft_mod_ai/fixed_template_generation.py'
+      - 'minecraft_mod_ai/planner.py'
+      - 'minecraft_mod_ai/routed_planner.py'
+      - 'config/model_registry.yaml'
       - '.github/workflows/real-model-colab-e2e.yml'
 
 permissions:
