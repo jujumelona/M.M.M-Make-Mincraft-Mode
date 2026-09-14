@@ -12,7 +12,7 @@ from .project_mutation import is_model_input
 
 
 def _digest(value: bytes) -> str:
-    return 'sha256:' + hashlib.sha256(value).hexdigest()
+    return f"sha256:{hashlib.sha256(memoryview(value)).hexdigest()}"
 
 
 def _text(raw: dict[str, Any], key: str) -> str:
