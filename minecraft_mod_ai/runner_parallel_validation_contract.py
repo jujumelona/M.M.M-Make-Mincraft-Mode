@@ -12,6 +12,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from .runner_target_java_contract import target_java_environment
+
 _PROJECT_BUILD_LOCKS_GUARD = threading.Lock()
 _PROJECT_BUILD_LOCKS: dict[str, threading.RLock] = {}
 _BUILD_POLICY_ENV = (
@@ -448,6 +450,21 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
             ) from exc
         version = str(adapter.gradle)
         sha256 = str(adapter.gradle_sha256)
+        environment, java_error = target_java_environment(
+            runner_module=runner_module,
+            adapter=adapter,
+            environment=os.environ.copy(),
+        )
+        if java_error is not None:
+            return runner_module.BuildReport(
+                status="UNAVAILABLE",
+                gradle_version=version,
+                commands=(),
+                jar_path=None,
+                gametest_report=None,
+                error=java_error,
+            )
+
         state = root / ".minecraft_ai"
         logs = state / "logs"
         if state.is_symlink() or logs.is_symlink():
@@ -457,7 +474,6 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
         logs.mkdir(parents=True, exist_ok=True)
 
         gradle = self._ensure_gradle(version, sha256)
-        environment = os.environ.copy()
         environment["GRADLE_USER_HOME"] = str(self.cache_dir / "gradle-user-home")
         environment["CI"] = "true"
         commands: list[Any] = []

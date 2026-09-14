@@ -126,14 +126,6 @@ from .technology_radar import (
 
 install_source_observation_budget()
 
-# Runtime finalization installs the target-aware parallel Gradle runner after the base
-# runner has already defined its Java preflight. Re-bind that final runner path to the
-# project-selected JDK so the validation overlay cannot fall back to host JAVA_HOME.
-from . import runner as _runner_module
-from .runner_target_java_contract import install as _install_runner_target_java_contract
-
-_install_runner_target_java_contract(_runner_module)
-
 MinecraftModPipeline = ScalableMinecraftModPipeline
 
 __all__ = [
