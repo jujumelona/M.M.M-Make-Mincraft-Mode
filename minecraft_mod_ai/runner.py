@@ -15,6 +15,7 @@ from contextvars import copy_context
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from .java_lsp import JDTWorkspaceBootstrapError, _resolve_project_java_home
 from .platform_catalog import adapter_from_project
 
 
@@ -91,8 +92,32 @@ class GradleRunner:
             raise BuildRunnerError(
                 f"Project platform lock is missing, mixed, or unsupported: {exc}"
             ) from exc
+
         gradle_version = adapter.gradle
         gradle_sha256 = adapter.gradle_sha256
+        try:
+            required_java = int(str(adapter.java_version).strip())
+            if required_java <= 0:
+                raise ValueError
+        except (TypeError, ValueError) as exc:
+            raise BuildRunnerError(
+                f"Project target has an invalid Java version: {adapter.java_version!r}"
+            ) from exc
+        try:
+            java_home = _resolve_project_java_home(required_java)
+        except JDTWorkspaceBootstrapError as exc:
+            return BuildReport(
+                status="UNAVAILABLE",
+                gradle_version=gradle_version,
+                commands=(),
+                jar_path=None,
+                gametest_report=None,
+                error=(
+                    f"Java {required_java} toolchain unavailable for target "
+                    f"{adapter.minecraft_version}: {exc}"
+                ),
+            )
+
         logs = project_root / ".minecraft_ai" / "logs"
         logs.mkdir(parents=True, exist_ok=True)
 
@@ -101,6 +126,13 @@ class GradleRunner:
         environment = os.environ.copy()
         environment["GRADLE_USER_HOME"] = str(self.cache_dir / "gradle-user-home")
         environment["CI"] = "true"
+        environment["JAVA_HOME"] = str(java_home)
+        path_key = next((key for key in environment if key.upper() == "PATH"), "PATH")
+        current_path = environment.get(path_key, "")
+        java_bin = str(java_home / "bin")
+        environment[path_key] = (
+            java_bin + os.pathsep + current_path if current_path else java_bin
+        )
 
         if not self._wrapper_is_current(project_root, gradle_version, gradle_sha256):
             wrapper_result = self._run(
@@ -221,8 +253,17 @@ class GradleRunner:
     def _ensure_gradle(self, gradle_version: str, gradle_sha256: str) -> Path:
         from .root_cause_trace import emit_root_cause
 
-        emit_root_cause("gradle_distribution_start", stage="verify", operation="prepare_gradle", result="START",
-                        details={"version": gradle_version, "sha256": gradle_sha256, "cache_dir": str(self.cache_dir)})
+        emit_root_cause(
+            "gradle_distribution_start",
+            stage="verify",
+            operation="prepare_gradle",
+            result="START",
+            details={
+                "version": gradle_version,
+                "sha256": gradle_sha256,
+                "cache_dir": str(self.cache_dir),
+            },
+        )
         distribution_dir = self.cache_dir / f"gradle-{gradle_version}"
         executable = distribution_dir / "bin" / (
             "gradle.bat" if os.name == "nt" else "gradle"
@@ -278,7 +319,9 @@ class GradleRunner:
                 _safe_extract(zipped, extraction_root)
             extracted = extraction_root / f"gradle-{gradle_version}"
             if not extracted.is_dir():
-                raise BuildRunnerError("Gradle archive did not contain the expected directory.")
+                raise BuildRunnerError(
+                    "Gradle archive did not contain the expected directory."
+                )
             if distribution_dir.exists():
                 shutil.rmtree(distribution_dir)
             extracted.replace(distribution_dir)
@@ -317,10 +360,18 @@ class GradleRunner:
             else 0
         )
         emit_root_cause(
-            "gradle_command_start", stage="verify", operation=name, result="START",
-            details={"command": _sanitize_observation(command), "cwd": str(cwd),
-                     "log_path": str(log_path), "timeout_seconds": self.command_timeout_seconds,
-                     "java_home": env.get("JAVA_HOME", ""), "gradle_user_home": env.get("GRADLE_USER_HOME", "")},
+            "gradle_command_start",
+            stage="verify",
+            operation=name,
+            result="START",
+            details={
+                "command": _sanitize_observation(command),
+                "cwd": str(cwd),
+                "log_path": str(log_path),
+                "timeout_seconds": self.command_timeout_seconds,
+                "java_home": env.get("JAVA_HOME", ""),
+                "gradle_user_home": env.get("GRADLE_USER_HOME", ""),
+            },
         )
         process = subprocess.Popen(
             command,
@@ -357,15 +408,32 @@ class GradleRunner:
                         log.write(line)
                         log.flush()
                         emit_root_cause(
-                            "gradle_command_output", stage="verify", operation=name, result="INFO",
-                            details={"pid": process.pid, "log_path": str(log_path), "line": line.rstrip()},
+                            "gradle_command_output",
+                            stage="verify",
+                            operation=name,
+                            result="INFO",
+                            details={
+                                "pid": process.pid,
+                                "log_path": str(log_path),
+                                "line": line.rstrip(),
+                            },
                         )
             except Exception as exc:
                 reader_errors.append(exc)
-                emit_root_cause("gradle_output_failure", stage="verify", operation=name,
-                                result="FAIL", reason=f"{type(exc).__name__}: {exc}", exc=exc)
+                emit_root_cause(
+                    "gradle_output_failure",
+                    stage="verify",
+                    operation=name,
+                    result="FAIL",
+                    reason=f"{type(exc).__name__}: {exc}",
+                    exc=exc,
+                )
 
-        reader = threading.Thread(target=copy_context().run, args=(read_output,), daemon=True)
+        reader = threading.Thread(
+            target=copy_context().run,
+            args=(read_output,),
+            daemon=True,
+        )
         reader.start()
         try:
             process.wait(timeout=self.command_timeout_seconds)
@@ -395,13 +463,21 @@ class GradleRunner:
             )
         if timed_out:
             with log_path.open("a", encoding="utf-8") as log:
-                log.write("\n[ M.M.M Make Mincraft Mode: command timed out; process tree terminated ]\n")
+                log.write(
+                    "\n[ M.M.M Make Mincraft Mode: command timed out; process tree terminated ]\n"
+                )
         duration = time.monotonic() - started
         emit_root_cause(
-            "gradle_command_result", stage="verify", operation=name,
+            "gradle_command_result",
+            stage="verify",
+            operation=name,
             result="TIMEOUT" if timed_out else "PASS" if exit_code == 0 else "FAIL",
-            details={"pid": process.pid, "exit_code": exit_code, "duration_seconds": round(duration, 3),
-                     "log_path": str(log_path)},
+            details={
+                "pid": process.pid,
+                "exit_code": exit_code,
+                "duration_seconds": round(duration, 3),
+                "log_path": str(log_path),
+            },
         )
         return CommandResult(
             name=name,
@@ -492,8 +568,13 @@ def _exclusive_cache_lock(
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
     acquired = False
     deadline = time.monotonic() + timeout_seconds
-    emit_root_cause("gradle_cache_lock_wait", stage="verify", operation="cache_lock", result="START",
-                    details={"lock_path": str(lock_path), "timeout_seconds": timeout_seconds})
+    emit_root_cause(
+        "gradle_cache_lock_wait",
+        stage="verify",
+        operation="cache_lock",
+        result="START",
+        details={"lock_path": str(lock_path), "timeout_seconds": timeout_seconds},
+    )
     try:
         while not acquired:
             try:
@@ -513,8 +594,13 @@ def _exclusive_cache_lock(
             f"pid={os.getpid()}\nacquired={time.time()}\n".encode("ascii"),
         )
         os.fsync(fd)
-        emit_root_cause("gradle_cache_lock_acquired", stage="verify", operation="cache_lock", result="PASS",
-                        details={"lock_path": str(lock_path), "pid": os.getpid()})
+        emit_root_cause(
+            "gradle_cache_lock_acquired",
+            stage="verify",
+            operation="cache_lock",
+            result="PASS",
+            details={"lock_path": str(lock_path), "pid": os.getpid()},
+        )
         yield
     finally:
         if acquired:
