@@ -95,6 +95,10 @@ minecraft_mod_ai = [
   "integrations/mineflayer/*",
   "data/host_version_catalog.json",
   "data/official_version_evidence.json",
+  "jvm_owner/*.gradle",
+  "jvm_owner/gradle.lockfile",
+  "jvm_owner/src/main/java/mmm/owner/*.java",
+  "jvm_owner/src/main/resources/*.xml",
 ]
 
 [tool.pytest.ini_options]

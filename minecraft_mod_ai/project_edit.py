@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from functools import wraps
@@ -9,10 +8,25 @@ from typing import Any
 
 from .project_write_lock import project_path_write_locks, project_write_lock
 from .source_patch import TransactionalSourcePatcher, sha256_bytes
+from .typed_resources import JsonResource, ResourceValidationError, resource_kind
 
 
 class ProjectEditError(RuntimeError):
     pass
+
+
+def _json_resource(text: str, path: str) -> JsonResource:
+    try:
+        return JsonResource.parse(text, kind=resource_kind(path))
+    except ResourceValidationError as exc:
+        raise ProjectEditError(f"Invalid resource {path}: {exc}") from exc
+
+
+def _serialize_resource(resource: JsonResource) -> str:
+    try:
+        return resource.serialize()
+    except ResourceValidationError as exc:
+        raise ProjectEditError(str(exc)) from exc
 
 
 @dataclass(frozen=True)
@@ -57,7 +71,7 @@ def inspect_fabric_project(project_root: str | Path) -> FabricProjectInfo:
         raise ProjectEditError(
             "fabric.mod.json is missing from the generated project."
         )
-    raw = json.loads(metadata.read_text(encoding="utf-8"))
+    raw = _json_resource(metadata.read_text(encoding="utf-8"), metadata.name).value
     mod_id = raw.get("id")
     entrypoints = raw.get("entrypoints", {})
     main_raw = (
@@ -280,7 +294,8 @@ public final class MmmGeneratedInitializer implements ModInitializer {{
         )
 
     metadata_text, metadata_sha256 = _read_utf8_with_digest(info.fabric_mod_json)
-    metadata = json.loads(metadata_text)
+    metadata_resource = _json_resource(metadata_text, "fabric.mod.json")
+    metadata = metadata_resource.value
     entrypoints = metadata.setdefault("entrypoints", {})
     if not isinstance(entrypoints, dict):
         raise ProjectEditError(
@@ -303,12 +318,7 @@ public final class MmmGeneratedInitializer implements ModInitializer {{
                 "operation": "replace",
                 "path": "src/main/resources/fabric.mod.json",
                 "expected_sha256": metadata_sha256,
-                "content": json.dumps(
-                    metadata,
-                    ensure_ascii=False,
-                    indent=2,
-                )
-                + "\n",
+                "content": _serialize_resource(metadata_resource),
             }
         )
     if not operations:
@@ -327,7 +337,8 @@ def ensure_client_entrypoint(
     relative = "src/main/resources/fabric.mod.json"
     with project_path_write_locks(info.root, (relative,)):
         metadata_text, metadata_sha256 = _read_utf8_with_digest(info.fabric_mod_json)
-        raw = json.loads(metadata_text)
+        metadata_resource = _json_resource(metadata_text, "fabric.mod.json")
+        raw = metadata_resource.value
         entrypoints = raw.setdefault("entrypoints", {})
         if not isinstance(entrypoints, dict):
             raise ProjectEditError(
@@ -355,12 +366,7 @@ def ensure_client_entrypoint(
                     "operation": "replace",
                     "path": relative,
                     "expected_sha256": metadata_sha256,
-                    "content": json.dumps(
-                        raw,
-                        ensure_ascii=False,
-                        indent=2,
-                    )
-                    + "\n",
+                    "content": _serialize_resource(metadata_resource),
                 }
             ]
         )
@@ -373,65 +379,39 @@ def ensure_dependency(
     dependency_line: str,
     marker: str,
 ) -> dict[str, Any]:
-    relative = "build.gradle"
-    build = info.root / relative
-    with project_path_write_locks(info.root, (relative,)):
+    from .typed_resources import GradleDependency, validate_gradle_append
+
+    try:
+        dependency = GradleDependency.parse_legacy(repository_block, dependency_line)
+    except ResourceValidationError as exc:
+        raise ProjectEditError(str(exc)) from exc
+    fragment = "gradle/mmm-dependencies/" + sha256_bytes(marker.encode()).split(":")[1][:24] + ".gradle"
+    with project_path_write_locks(info.root, ("build.gradle", fragment)):
+        build = info.root / "build.gradle"
         if not build.is_file() or build.is_symlink():
-            raise ProjectEditError("build.gradle is missing.")
-        text, text_sha256 = _read_utf8_with_digest(build)
-        changed = text
-        repository_marker = f"// MMM:{marker}:repository"
-        if repository_block.strip() and repository_marker not in changed:
-            match = re.search(r"repositories\s*\{", changed)
-            if not match:
-                changed += (
-                    "\nrepositories {\n    "
-                    + repository_marker
-                    + "\n"
-                    + _indent(repository_block.strip(), 4)
-                    + "\n}\n"
-                )
-            else:
-                position = match.end()
-                changed = (
-                    changed[:position]
-                    + "\n    "
-                    + repository_marker
-                    + "\n"
-                    + _indent(repository_block.strip(), 4)
-                    + changed[position:]
-                )
-        dependency_marker = f"// MMM:{marker}:dependency"
-        if dependency_marker not in changed:
-            match = re.search(r"dependencies\s*\{", changed)
-            if not match:
-                raise ProjectEditError(
-                    "Could not locate dependencies block."
-                )
-            position = match.end()
-            changed = (
-                changed[:position]
-                + "\n    "
-                + dependency_marker
-                + "\n    "
-                + dependency_line.strip()
-                + changed[position:]
-            )
-        if changed == text:
-            return {
-                "status": "UNCHANGED",
-                "path": str(build),
-            }
-        return TransactionalSourcePatcher(info.root).apply(
-            [
-                {
-                    "operation": "replace",
-                    "path": relative,
-                    "expected_sha256": text_sha256,
-                    "content": changed,
-                }
-            ]
-        )
+            raise ProjectEditError("build.gradle is missing")
+        text, digest = _read_utf8_with_digest(build)
+        try:
+            validate_gradle_append(text)
+        except ResourceValidationError as exc:
+            raise ProjectEditError(str(exc)) from exc
+        directive = "apply from: " + repr(fragment)
+        operations = []
+        if directive not in text.splitlines():
+            operations.append({"operation": "replace", "path": "build.gradle",
+                               "expected_sha256": digest, "content": text + "\n" + directive + "\n"})
+        target = info.root / fragment
+        content = dependency.serialize()
+        if target.exists():
+            previous, previous_digest = _read_utf8_with_digest(target)
+            if previous != content:
+                operations.append({"operation": "replace", "path": fragment,
+                                   "expected_sha256": previous_digest, "content": content})
+        else:
+            operations.append({"operation": "create", "path": fragment, "content": content})
+        if not operations:
+            return {"status": "UNCHANGED", "path": str(build)}
+        return TransactionalSourcePatcher(info.root).apply(operations)
 
 
 def write_text_files(
@@ -453,6 +433,8 @@ def write_text_files(
     with project_path_write_locks(info.root, files):
         operations: list[dict[str, Any]] = []
         for relative, content in sorted(files.items()):
+            if relative.lower().endswith(".json"):
+                content = _serialize_resource(_json_resource(content, relative))
             path = info.root / relative
             if path.exists():
                 if not path.is_file() or path.is_symlink():

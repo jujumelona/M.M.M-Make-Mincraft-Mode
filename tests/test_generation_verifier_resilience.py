@@ -49,146 +49,42 @@ def test_synthesized_verifier_turn_is_host_owned(monkeypatch):
     assert call.id.startswith("host_verify_")
 
 
-def test_generation_verifier_baselines_then_only_checks_changed_java(tmp_path):
-    project, source = _project(tmp_path)
-    calls = []
-
-    class FakeJava:
-        def diagnostics(self, root, *, relative_files=None, timeout_seconds=0):
-            calls.append(relative_files)
-            return _ok_result(root)
-
-        def close(self):
-            raise AssertionError("Java-only edits must reuse the persistent JDT session")
-
-    runtime = SimpleNamespace(workspace_root=str(project))
-    factory_calls = []
-
-    def factory():
-        factory_calls.append(1)
-        return FakeJava()
-
-    first = run_generation_verifier(
-        runtime,
-        {},
-        runtime_module=agent_tool_runtime,
-        java_service_factory=factory,
-    )
-    second = run_generation_verifier(
-        runtime,
-        {},
-        runtime_module=agent_tool_runtime,
-        java_service_factory=factory,
-    )
-    source.write_text("final class Example { int value; }\n", encoding="utf-8")
-    third = run_generation_verifier(
-        runtime,
-        {},
-        runtime_module=agent_tool_runtime,
-        java_service_factory=factory,
-    )
-
-    assert first["verification_scope"] == "full"
-    assert second["verification_scope"] == "unchanged"
-    assert second["skipped"] is True
-    assert third["verification_scope"] == "incremental"
-    assert third["verified_files"] == ["src/main/java/Example.java"]
-    assert calls == [None, ["src/main/java/Example.java"]]
-    assert len(factory_calls) == 1
-
-
-def test_model_change_restarts_jdt_and_forces_full_scan(tmp_path):
+def test_generation_verifier_preserves_completed_owner_diagnostics(tmp_path):
     project, _source = _project(tmp_path)
     calls = []
+
+    class JavaOwner:
+        def diagnostics(self, root, *, timeout_seconds, full_scan=False):
+            calls.append(full_scan)
+            return {"complete": True, "session_id": "owner", "model_id": "model",
+                    "error_count": 1, "warning_count": 0,
+                    "diagnostics": {"B.java": [{"severity": 1, "message": "A.method unresolved"}]}}
+
+    runtime = SimpleNamespace(workspace_root=str(project))
+    for _ in range(2):
+        result = run_generation_verifier(runtime, {}, runtime_module=agent_tool_runtime,
+                                         java_service_factory=JavaOwner)
+        assert result["error_count"] == 1
+        assert result["diagnostics"]["B.java"][0]["message"] == "A.method unresolved"
+    assert calls == [False, False]
+
+
+def test_generation_verifier_rejects_unbound_owner_result(tmp_path):
+    project, _source = _project(tmp_path)
     closed = []
 
-    class FakeJava:
-        def diagnostics(self, root, *, relative_files=None, timeout_seconds=0):
-            calls.append(relative_files)
-            return _ok_result(root)
+    class IncompleteOwner:
+        def diagnostics(self, root, *, timeout_seconds, full_scan=False):
+            return {"error_count": 0, "diagnostics": {}}
 
         def close(self):
             closed.append(True)
 
     runtime = SimpleNamespace(workspace_root=str(project))
-    run_generation_verifier(
-        runtime,
-        {},
-        runtime_module=agent_tool_runtime,
-        java_service_factory=FakeJava,
-    )
-    (project / "build.gradle").write_text("plugins { id 'java' }\n", encoding="utf-8")
-    result = run_generation_verifier(
-        runtime,
-        {},
-        runtime_module=agent_tool_runtime,
-        java_service_factory=FakeJava,
-    )
-
+    with pytest.raises(agent_tool_runtime.AgentToolRuntimeError, match="unbound"):
+        run_generation_verifier(runtime, {}, runtime_module=agent_tool_runtime,
+                                java_service_factory=IncompleteOwner)
     assert closed == [True]
-    assert calls == [None, None]
-    assert result["verification_scope"] == "full"
-
-
-def test_java_deletion_restarts_jdt_and_forces_full_scan(tmp_path):
-    project, source = _project(tmp_path)
-    other = source.with_name("Other.java")
-    other.write_text("final class Other {}\n", encoding="utf-8")
-    calls = []
-    closed = []
-
-    class FakeJava:
-        def diagnostics(self, root, *, relative_files=None, timeout_seconds=0):
-            calls.append(relative_files)
-            return _ok_result(root)
-
-        def close(self):
-            closed.append(True)
-
-    runtime = SimpleNamespace(workspace_root=str(project))
-    run_generation_verifier(
-        runtime,
-        {},
-        runtime_module=agent_tool_runtime,
-        java_service_factory=FakeJava,
-    )
-    other.unlink()
-    result = run_generation_verifier(
-        runtime,
-        {},
-        runtime_module=agent_tool_runtime,
-        java_service_factory=FakeJava,
-    )
-
-    assert closed == [True]
-    assert calls == [None, None]
-    assert result["verification_scope"] == "full"
-
-
-def test_explicit_full_scan_rechecks_unchanged_project(tmp_path):
-    project, _source = _project(tmp_path)
-    calls = []
-
-    class FakeJava:
-        def diagnostics(self, root, *, relative_files=None, timeout_seconds=0):
-            calls.append(relative_files)
-            return _ok_result(root)
-
-    runtime = SimpleNamespace(workspace_root=str(project))
-    run_generation_verifier(
-        runtime,
-        {},
-        runtime_module=agent_tool_runtime,
-        java_service_factory=FakeJava,
-    )
-    result = run_generation_verifier(
-        runtime,
-        {"full_scan": True},
-        runtime_module=agent_tool_runtime,
-        java_service_factory=FakeJava,
-    )
-    assert calls == [None, None]
-    assert result["verification_scope"] == "full"
 
 
 def test_jdt_failure_is_fail_closed_without_gradle_fallback(tmp_path):
@@ -196,7 +92,7 @@ def test_jdt_failure_is_fail_closed_without_gradle_fallback(tmp_path):
     closed = []
 
     class FailingJava:
-        def diagnostics(self, root, *, relative_files=None, timeout_seconds=0):
+        def diagnostics(self, root, *, relative_files=None, timeout_seconds=0, full_scan=False):
             raise JDTLanguageServerError("workspace import failed")
 
         def close(self):

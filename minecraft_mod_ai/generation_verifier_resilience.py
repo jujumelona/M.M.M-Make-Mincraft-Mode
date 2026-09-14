@@ -2,11 +2,9 @@ from __future__ import annotations
 
 """Host-owned incremental Java generation verification.
 
-The host owns verifier scope and deadlines. A persistent JDT session establishes the
-baseline once, then only changed/new Java sources are diagnosed. Java deletions and
-project-model changes invalidate the session and force a fresh full scan. JDT failure
-is a verifier infrastructure failure; there is deliberately no alternate Gradle
-verification backend or run-local circuit breaker.
+JDT Core owns incremental dependency analysis and completed-build diagnostics.
+The host owns deadlines and mutation/model identity. No inferred unchanged PASS,
+source hash scans, alternate backend, or run-local circuit breaker is used.
 """
 
 import hashlib
@@ -15,9 +13,10 @@ import os
 import queue
 import time
 from collections import Counter
+from collections.abc import Mapping
 from functools import wraps
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from .root_cause_trace import emit_root_cause
 
@@ -25,19 +24,6 @@ _MARKER = "_mmm_host_owned_generation_verifier"
 _JDT_COLLECTOR_MARKER = "_mmm_progress_aware_jdt_collector"
 _VERIFIER_NAME = "java_diagnostics"
 _JDT_SERVICE_ATTR = "_mmm_generation_java_service"
-_JAVA_SNAPSHOT_ATTR = "_mmm_generation_java_snapshot"
-_MODEL_SNAPSHOT_ATTR = "_mmm_generation_model_snapshot"
-_MODEL_FILES = (
-    "build.gradle",
-    "build.gradle.kts",
-    "settings.gradle",
-    "settings.gradle.kts",
-    "gradle.properties",
-    "gradle/libs.versions.toml",
-    "pom.xml",
-    ".classpath",
-    ".project",
-)
 
 
 def _bounded_int_env(name: str, *, default: int, minimum: int, maximum: int) -> int:
@@ -89,7 +75,7 @@ def synthesized_verifier_turn(messages: list[dict[str, Any]]) -> Any:
 
     arguments = {"timeout_seconds": host_jdt_idle_timeout_seconds()}
     raw_arguments = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
-    identity_material = f"{len(messages)}:{raw_arguments}".encode("utf-8")
+    identity_material = f"{len(messages)}:{raw_arguments}".encode()
     call_id = "host_verify_" + hashlib.sha256(identity_material).hexdigest()[:16]
     return GenerationResponse(
         content="",
@@ -126,67 +112,14 @@ def _normalize_relative_files(raw_files: Any) -> list[str] | None:
     return list(dict.fromkeys(normalized))
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _java_snapshot(project_root: Path) -> dict[str, str]:
-    snapshot: dict[str, str] = {}
-    for path in sorted(project_root.rglob("*.java"), key=lambda item: item.as_posix()):
-        if not path.is_file() or path.is_symlink():
-            continue
-        relative = path.relative_to(project_root).as_posix()
-        snapshot[relative] = _sha256_file(path)
-    return snapshot
-
-
-def _model_snapshot(project_root: Path) -> tuple[tuple[str, str], ...]:
-    candidates = [project_root / relative for relative in _MODEL_FILES]
-    settings = project_root / ".settings"
-    if settings.is_dir() and not settings.is_symlink():
-        candidates.extend(sorted(settings.glob("*.prefs"), key=lambda item: item.as_posix()))
-    snapshot: list[tuple[str, str]] = []
-    for path in candidates:
-        if path.is_file() and not path.is_symlink():
-            snapshot.append((path.relative_to(project_root).as_posix(), _sha256_file(path)))
-    return tuple(snapshot)
-
-
 def _close_generation_jdt(runtime: Any) -> None:
     service = getattr(runtime, _JDT_SERVICE_ATTR, None)
     try:
         if service is not None:
-            close = getattr(service, "close", None)
-            if callable(close):
-                close()
+            service.close()
     finally:
-        try:
+        if hasattr(runtime, _JDT_SERVICE_ATTR):
             delattr(runtime, _JDT_SERVICE_ATTR)
-        except AttributeError:
-            pass
-
-
-def _unchanged_receipt(project_root: Path) -> dict[str, Any]:
-    return {
-        "schema_version": "mmm/java-diagnostics-v2",
-        "project_root": str(project_root),
-        "files_opened": 0,
-        "total_source_bytes": 0,
-        "page_count": 0,
-        "pages": [],
-        "error_count": 0,
-        "warning_count": 0,
-        "diagnostics": {},
-        "server_stderr_tail": [],
-        "verification_backend": "jdt_host",
-        "verification_scope": "unchanged",
-        "verified_files": [],
-        "skipped": True,
-    }
 
 
 def run_generation_verifier(
@@ -196,142 +129,35 @@ def run_generation_verifier(
     runtime_module: Any,
     java_service_factory: Any | None = None,
 ) -> dict[str, Any]:
-    """Run fail-closed incremental JDT verification under host-owned scope."""
-
+    """Return one completed JDT Core build's current project-wide diagnostics."""
+    from .java_core import JavaCoreService
     from .java_lsp import JDTLanguageServerError
-    from .java_lsp_trace import TracedJavaLanguageService
+    from .owner_rpc import OwnerRPCError
 
     payload = dict(arguments or {})
-    raw_payload = dict(payload)
-    project_root, _project_argument = runtime_module._discover_model_project_root(
-        runtime.workspace_root
-    )
+    root, _ = runtime_module._discover_model_project_root(runtime.workspace_root)
     try:
-        requested_files = _normalize_relative_files(payload.get("relative_files"))
-    except ValueError as exc:
-        raise runtime_module.AgentToolRuntimeError(str(exc)) from exc
-
-    full_scan = bool(payload.get("full_scan", False))
-    idle_timeout = host_jdt_idle_timeout_seconds()
-    current_java = _java_snapshot(project_root)
-    current_model = _model_snapshot(project_root)
-    previous_java = getattr(runtime, _JAVA_SNAPSHOT_ATTR, None)
-    previous_model = getattr(runtime, _MODEL_SNAPSHOT_ATTR, None)
-
-    first_scan = previous_java is None
-    model_changed = previous_model is not None and previous_model != current_model
-    deleted_files = (
-        sorted(set(previous_java).difference(current_java))
-        if isinstance(previous_java, dict)
-        else []
-    )
-    changed_files = (
-        sorted(
-            path
-            for path, digest in current_java.items()
-            if not isinstance(previous_java, dict) or previous_java.get(path) != digest
-        )
-        if not first_scan
-        else sorted(current_java)
-    )
-
-    reset_session = bool(model_changed or deleted_files)
-    if reset_session:
-        _close_generation_jdt(runtime)
-
-    force_full = bool(full_scan or first_scan or reset_session)
-    if force_full:
-        relative_files: list[str] | None = None
-        scope = "full"
-    else:
-        targets = set(changed_files)
-        if requested_files is not None:
-            targets.update(path for path in requested_files if path in current_java)
-        relative_files = sorted(targets)
-        scope = "incremental"
-
-    normalized: dict[str, Any] = {
-        "project_root": str(project_root),
-        "timeout_seconds": idle_timeout,
-        "verification_scope": scope if relative_files or force_full else "unchanged",
-    }
-    if relative_files is not None:
-        normalized["relative_files"] = relative_files
-
-    emit_root_cause(
-        "generation_verifier_host_dispatch",
-        stage="generation",
-        operation=_VERIFIER_NAME,
-        gate="host_verifier_authority",
-        result="START",
-        reason="host selected full/incremental Java verification scope from filesystem state",
-        details={
-            "raw_arguments": raw_payload,
-            "normalized_arguments": normalized,
-            "workspace_root": runtime.workspace_root,
-            "model_changed": model_changed,
-            "deleted_files": deleted_files,
-            "changed_files": changed_files,
-        },
-    )
-
-    if relative_files == []:
-        result = _unchanged_receipt(project_root)
-        setattr(runtime, _JAVA_SNAPSHOT_ATTR, current_java)
-        setattr(runtime, _MODEL_SNAPSHOT_ATTR, current_model)
-        emit_root_cause(
-            "generation_verifier_unchanged_skip",
-            stage="generation",
-            operation=_VERIFIER_NAME,
-            gate="incremental_scope",
-            result="SKIP",
-            reason="no Java source or project-model changes since the last successful verification",
-        )
-        return runtime_module._bounded_result(result)
-
-    try:
+        # Preserve input validation, but Java dependency scope belongs to JDT.
+        _normalize_relative_files(payload.get("relative_files"))
         service = getattr(runtime, _JDT_SERVICE_ATTR, None)
         if service is None:
-            factory = java_service_factory or TracedJavaLanguageService
-            service = factory()
+            service = (java_service_factory or JavaCoreService)()
             setattr(runtime, _JDT_SERVICE_ATTR, service)
-        result = dict(
-            service.diagnostics(
-                project_root,
-                relative_files=relative_files,
-                timeout_seconds=idle_timeout,
-            )
+        result = service.diagnostics(
+            root, timeout_seconds=host_jdt_hard_timeout_seconds(host_jdt_idle_timeout_seconds()),
+            full_scan=bool(payload.get("full_scan", False)),
         )
-    except (OSError, TimeoutError, JDTLanguageServerError) as jdt_exc:
+        if result.get("complete") is not True or not result.get("session_id") or not result.get("model_id"):
+            raise OwnerRPCError("JDT Core returned incomplete or unbound verification")
+    except (OSError, ValueError, TypeError, TimeoutError, JDTLanguageServerError, OwnerRPCError) as exc:
         _close_generation_jdt(runtime)
-        emit_root_cause(
-            "generation_verifier_jdt_unavailable",
-            stage="generation",
-            operation=_VERIFIER_NAME,
-            gate="jdt_host_verifier",
-            result="FAIL",
-            reason=f"{type(jdt_exc).__name__}: {jdt_exc}",
-            exc=jdt_exc,
-        )
+        emit_root_cause("generation_verifier_jdt_unavailable", stage="generation",
+                        operation=_VERIFIER_NAME, result="FAIL", reason=str(exc), exc=exc)
         raise runtime_module.AgentToolRuntimeError(
-            "Generation verification failed because JDT is unavailable: "
-            f"{type(jdt_exc).__name__}: {jdt_exc}"
-        ) from jdt_exc
-
-    result.setdefault("verification_backend", "jdt_host")
-    result["verification_scope"] = scope
-    result["verified_files"] = sorted(current_java) if force_full else list(relative_files or ())
-    result["skipped"] = False
-    setattr(runtime, _JAVA_SNAPSHOT_ATTR, current_java)
-    setattr(runtime, _MODEL_SNAPSHOT_ATTR, current_model)
-    emit_root_cause(
-        "generation_verifier_jdt_result",
-        stage="generation",
-        operation=_VERIFIER_NAME,
-        gate="jdt_host_verifier",
-        result="PASS",
-        details={"result": result},
-    )
+            f"Generation verification failed because JDT is unavailable: {exc}"
+        ) from exc
+    emit_root_cause("generation_verifier_jdt_result", stage="generation", operation=_VERIFIER_NAME,
+                    result="FAIL" if result.get("error_count") else "PASS", details={"result": result})
     return runtime_module._bounded_result(result)
 
 
@@ -346,7 +172,11 @@ def _collect_diagnostics_progress_aware(
     """Wait on JDT silence, not total import duration, with an independent hard cap."""
 
     from . import java_lsp_trace as trace_module
-    from .java_lsp import JDTLanguageServerError, _respond_to_server_request, _sorted_diagnostics
+    from .java_lsp import (
+        JDTLanguageServerError,
+        _respond_to_server_request,
+        _sorted_diagnostics,
+    )
 
     if timeout_seconds <= 0:
         raise ValueError("JDT diagnostics timeout must be positive.")

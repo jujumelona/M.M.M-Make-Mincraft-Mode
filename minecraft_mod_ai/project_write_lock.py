@@ -6,8 +6,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
-_LOCKS_GUARD = threading.RLock()
-
 
 @dataclass
 class _ProjectLockState:
@@ -22,21 +20,14 @@ class _ProjectLockState:
     path_locks: dict[str, threading.RLock] = field(default_factory=dict)
 
 
-_PROJECT_STATES: dict[str, _ProjectLockState] = {}
-
-
 def _project_key(project_root: str | Path) -> str:
     return str(Path(project_root).expanduser().resolve())
 
 
 def _state_for(project_root: str | Path) -> _ProjectLockState:
-    key = _project_key(project_root)
-    with _LOCKS_GUARD:
-        state = _PROJECT_STATES.get(key)
-        if state is None:
-            state = _ProjectLockState()
-            _PROJECT_STATES[key] = state
-        return state
+    from .project_mutation import mutation_owner
+
+    return mutation_owner(project_root).lock_state
 
 
 def _path_key(value: str | Path) -> str:

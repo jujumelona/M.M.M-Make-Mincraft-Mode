@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .mod_output_scope import ModOutputScopeError, validate_mod_output_path
-from .project_write_lock import project_path_write_locks
+from .project_mutation import FileChange, mutation_owner
 from .residual_generation_contract import (
     ResidualContractLoadError,
     ResidualGenerationContract,
@@ -175,8 +175,14 @@ class TransactionalSourcePatcher:
         paths = [item["path"] for item in normalized]
         if len(paths) != len(set(paths)):
             raise SourcePatchError("A patch transaction may touch each path only once.")
-        with project_path_write_locks(self.project_root, paths):
-            return self._apply_locked(normalized)
+        owner = mutation_owner(self.project_root)
+        with owner.transaction(paths):
+            try:
+                return self._apply_locked(normalized)
+            except SourcePatchError as exc:
+                if exc.workspace_impact in {'drift', 'uncertain'}:
+                    owner.invalidate()
+                raise
 
     def _apply_locked(self, operations: Iterable[dict[str, Any]]) -> dict[str, Any]:
         normalized = [self._normalize(item) for item in operations]
@@ -238,6 +244,17 @@ class TransactionalSourcePatcher:
                     after = None
                 else:  # pragma: no cover - normalized above
                     raise SourcePatchError(f"Unsupported operation: {item['operation']}")
+            if after is not None and path.suffix == '.json':
+                from .typed_resources import (
+                    JsonResource,
+                    ResourceValidationError,
+                    resource_kind,
+                )
+
+                try:
+                    JsonResource.parse(after.decode('utf-8'), kind=resource_kind(item['path']))
+                except (UnicodeError, ResourceValidationError) as exc:
+                    raise SourcePatchError(f"Invalid JSON output {item['path']}: {exc}") from exc
             if before == after or (
                 before is not None
                 and after is not None
@@ -324,12 +341,17 @@ class TransactionalSourcePatcher:
             ) from first_error
 
         changed_paths = [receipt.path for receipt in receipts if receipt.changed]
+        changes = mutation_owner(self.project_root).committed(
+            FileChange(receipt.path, receipt.operation, receipt.before_sha256,
+                       receipt.after_sha256) for receipt in receipts
+        )
         return {
             "schema_version": "mmm/source-patch-receipt-v1",
             "status": "APPLIED" if changed_paths else "UNCHANGED",
             "project_root": str(self.project_root),
             "changed_paths": changed_paths,
             "operations": [receipt.to_dict() for receipt in receipts],
+            "change_set": changes.to_dict(),
         }
 
     def snapshot(self, relative_paths: Iterable[str]) -> dict[str, Any]:

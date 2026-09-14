@@ -2,8 +2,8 @@ from __future__ import annotations
 
 """Lifecycle contract for the persistent host-owned generation JDT verifier.
 
-Incremental targeting now belongs entirely to generation_verifier_resilience, which
-computes it from filesystem snapshots. This module owns only runtime shutdown so the
+Incremental targeting belongs to the persistent JDT Core workspace builder.
+This module owns only runtime shutdown so the
 persistent JDT process cannot leak beyond the runtime that created it.
 """
 
