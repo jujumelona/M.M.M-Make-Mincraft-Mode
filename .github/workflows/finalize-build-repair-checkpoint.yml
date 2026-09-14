@@ -1,4 +1,5 @@
 name: Finalize Build Repair Checkpoint Split
+# Existing workflow activation commit; the apply job deletes this file after success.
 
 on:
   push:
