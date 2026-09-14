@@ -9,13 +9,23 @@ from typing import Any
 import httpx
 
 from minecraft_mod_ai.model_adapters.base import GenerationRequest
-from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
+from minecraft_mod_ai.model_adapters.llama_cpp_adapter import (
+    LlamaCppAdapter,
+    _plain_generation_response,
+)
 from minecraft_mod_ai.model_registry import ModelRegistry
+from minecraft_mod_ai.structured_output import validate_structured_output
 
 PROMPT = (
     'Return exactly one JSON object matching this schema: '
     '{"answer": "string"}. Do not add markdown or explanation.'
 )
+RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {"answer": {"type": "string"}},
+    "required": ["answer"],
+    "additionalProperties": False,
+}
 
 
 def _chat_url(server_url: str) -> str:
@@ -35,6 +45,22 @@ def _raw_assistant_message(data: Any) -> dict[str, Any]:
     if not isinstance(first, dict) or not isinstance(first.get("message"), dict):
         raise TypeError("llama-server response has no assistant message")
     return dict(first["message"])
+
+
+def _production_validation(message: dict[str, Any]) -> tuple[bool, str | None, str]:
+    turn = _plain_generation_response(message)
+    content = turn.content
+    if not isinstance(content, str) or not content:
+        return False, "production response seam returned no visible content", content or ""
+    try:
+        validate_structured_output(
+            content,
+            response_format="json",
+            response_schema=RESPONSE_SCHEMA,
+        )
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}", content
+    return True, None, content
 
 
 def run_capture(
@@ -74,6 +100,7 @@ def run_capture(
         body = response.json()
 
     message = _raw_assistant_message(body)
+    accepted, validation_error, production_content = _production_validation(message)
     return {
         "schema": "mmm/qwen-live-capture",
         "provenance": "real_capture",
@@ -89,12 +116,20 @@ def run_capture(
         },
         "request": {"messages": payload["messages"]},
         "raw_assistant_message": message,
+        "production_content": production_content,
+        "production_validation": {
+            "accepted": accepted,
+            "error": validation_error,
+        },
     }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run one real Qwen/llama.cpp inference condition and preserve raw output."
+        description=(
+            "Run one real Qwen/llama.cpp inference condition, preserve raw output, and "
+            "judge it through the production response/schema boundary."
+        )
     )
     parser.add_argument("--profile", default="t4_local")
     parser.add_argument("--role", default="planner")
@@ -117,6 +152,9 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(capture, ensure_ascii=False, indent=2), encoding="utf-8")
     print(args.output)
+    if not capture["production_validation"]["accepted"]:
+        print(capture["production_validation"]["error"])
+        return 2
     return 0
 
 
