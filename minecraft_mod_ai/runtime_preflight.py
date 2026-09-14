@@ -132,14 +132,9 @@ def _assert_tool_schema_contracts() -> None:
             "_mmm_external_mcp_bound_schema_v1",
         ),
         (
-            "Qwen visible/authorized validation surface",
-            llama_cpp_adapter._qwen_tool_generation_response,
-            "_mmm_authorized_tool_validation_surface",
-        ),
-        (
-            "reasoning continuation request preservation",
-            llama_cpp_adapter._reasoning_continuation_request,
-            "_mmm_tool_validation_continuation",
+            "native visible/authorized validation surface",
+            llama_cpp_adapter._request_tool_schema_map,
+            "_mmm_core_validation_surface",
         ),
     )
     missing = [
