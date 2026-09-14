@@ -33,7 +33,8 @@ def test_gradle_build_does_not_hold_mmm_distribution_lock(
     )
 
     project = tmp_path / "project"
+    project.mkdir()
     assert runner.build(project, run_gametest=False) is sentinel
-    assert calls == [(project, False)]
-    assert getattr(GradleRunner.build, "_mmm_narrow_gradle_cache_lock", False)
-    assert getattr(GradleRunner._ensure_gradle, "_mmm_distribution_lock_owner", False)
+    assert calls == [(project.resolve(), False)]
+    assert getattr(GradleRunner.build, "_mmm_project_parallel_validation", False)
+    assert getattr(GradleRunner._ensure_gradle, "_mmm_target_parallel_distribution", False)
