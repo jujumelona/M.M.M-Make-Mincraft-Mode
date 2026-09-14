@@ -12,6 +12,7 @@ from .generation_accuracy_contract import (
 )
 from .generation_accuracy_contract import install_inner as install_generation_accuracy_inner
 from .generation_accuracy_contract import install_outer as install_generation_accuracy_outer
+from .generation_verifier_fallback_installation import install as install_generation_verifier_fallback
 from .hardware_concurrency_installation import install as install_hardware_concurrency
 from . import jdtls_bootstrap as _jdtls_bootstrap
 from .runtime_bootstrap import initialize_runtime
@@ -56,6 +57,9 @@ assert_generation_accuracy_inner(_model_router)
 # termination rule before runtime_finalization installs the durable feedback wrapper.
 install_execution_feedback_semantic_convergence(_execution_feedback_replan_contract)
 finalize_runtime()
+# The generation verifier is finalized above. Wrap only its infrastructure-unavailable
+# path with a real pinned Gradle build; source failures remain ordinary verifier FAILs.
+install_generation_verifier_fallback()
 # The outer normalizer runs after atomic aggregation so multi-obligation text summaries
 # retain the fixed {"summary": ...} contract consumed by CustomModuleGenerator.
 install_generation_accuracy_outer(_model_router)
