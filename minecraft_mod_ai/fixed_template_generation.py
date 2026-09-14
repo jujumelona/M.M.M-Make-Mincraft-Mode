@@ -112,6 +112,92 @@ def _template_messages(
     )
 
 
+def _schema_repair_messages(
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    failure: BaseException,
+    repair_index: int,
+) -> tuple[dict[str, Any], ...]:
+    """Feed a rejected schema call back to the model without inventing semantic content."""
+
+    copied = tuple(dict(message) for message in messages)
+    return (
+        *copied,
+        {
+            "role": "system",
+            "content": (
+                "The previous fixed-template function call was rejected by the host schema. "
+                "Regenerate the function arguments from the declared schema instead of "
+                "repeating the rejected argument shape. Populate every required field, use "
+                "only declared fields, and preserve the requested semantics. "
+                f"Repair pass {repair_index}. Host validation error: {type(failure).__name__}: {failure}"
+            ),
+        },
+    )
+
+
+def _schema_repair_budget(parameters: Mapping[str, Any]) -> int:
+    """Derive repair opportunities from schema obligations, not a planner-wide retry cap."""
+
+    required = parameters.get("required")
+    if isinstance(required, list):
+        obligations = sum(1 for item in required if isinstance(item, str) and item)
+    else:
+        obligations = 0
+    # One initial call plus at least two schema-informed reconstructions. Wider records get
+    # one repair opportunity per required obligation, which scales with the actual contract.
+    return max(3, obligations + 1)
+
+
+def _generate_native_template_arguments(
+    router: Any,
+    role: str,
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    tool_name: str,
+    parameters: Mapping[str, Any],
+    description: str,
+) -> Mapping[str, Any]:
+    """Generate valid tool arguments, feeding schema failures back into fresh model calls."""
+
+    current_messages = tuple(dict(message) for message in messages)
+    last_error: BaseException | None = None
+    budget = _schema_repair_budget(parameters)
+    for repair_index in range(budget):
+        current_tool_name = tool_name if repair_index == 0 else f"{tool_name}_repair_{repair_index}"
+        current_description = description
+        if repair_index:
+            current_description = (
+                description
+                + " The prior function arguments failed host schema validation; reconstruct "
+                "the complete argument object from the schema rather than repeating them."
+            )
+        try:
+            arguments = router.generate_tool_decision(
+                role,
+                current_messages,
+                tool_name=current_tool_name,
+                parameters=parameters,
+                description=current_description,
+            )
+            if not isinstance(arguments, Mapping):
+                raise ValueError("fixed-template function call did not return an argument mapping")
+            return arguments
+        except Exception as exc:
+            last_error = exc
+            current_messages = _schema_repair_messages(
+                messages,
+                failure=exc,
+                repair_index=repair_index + 1,
+            )
+
+    assert last_error is not None
+    raise RuntimeError(
+        "FIXED_TEMPLATE_SCHEMA_REPAIR_EXHAUSTED: model could not satisfy the host schema "
+        f"after {budget} schema-derived generation passes"
+    ) from last_error
+
+
 def generate_fixed_template_value(
     router: Any,
     role: str,
@@ -185,15 +271,18 @@ def generate_fixed_template_value(
         )
 
     parameters, unwrap_value = _tool_parameters(response_schema)
-    arguments = router.generate_tool_decision(
+    base_messages = _template_messages(messages, semantic_output=semantic_output)
+    resolved_description = (
+        description.strip()
+        or "Fill the host-supplied fixed response template exactly once. Populate only declared fields."
+    )
+    arguments = _generate_native_template_arguments(
+        router,
         role,
-        _template_messages(messages, semantic_output=semantic_output),
+        base_messages,
         tool_name=str(tool_name or _DEFAULT_TOOL_NAME),
         parameters=parameters,
-        description=(
-            description.strip()
-            or "Fill the host-supplied fixed response template exactly once. Populate only declared fields."
-        ),
+        description=resolved_description,
     )
     value: Any
     if unwrap_value:
