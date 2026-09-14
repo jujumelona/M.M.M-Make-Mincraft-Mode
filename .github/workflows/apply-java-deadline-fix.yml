@@ -1,0 +1,224 @@
+name: Apply JDT deadline fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-java-deadline-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Rebase onto current main
+        shell: bash
+        run: |
+          git fetch origin main
+          git rebase origin/main
+      - name: Patch JDT end-to-end deadline and add regression tests
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("minecraft_mod_ai/java_lsp.py")
+          text = path.read_text(encoding="utf-8")
+
+          def replace_once(old: str, new: str) -> None:
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected exactly one match, got {count}: {old[:120]!r}")
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              '''class JDTWorkspaceBootstrapError(JDTLanguageServerError):
+              """JDT LS started or configured without a usable Java project bootstrap."""
+
+
+          def _configuration_value'''.replace("          ", ""),
+              '''class JDTWorkspaceBootstrapError(JDTLanguageServerError):
+              """JDT LS started or configured without a usable Java project bootstrap."""
+
+
+          def _remaining_jdt_deadline(deadline: float, *, operation: str) -> float:
+              remaining = float(deadline) - time.monotonic()
+              if remaining <= 0:
+                  raise JDTLanguageServerError(f"JDT LS {operation} deadline exceeded.")
+              return remaining
+
+
+          def _configuration_value'''.replace("          ", ""),
+          )
+
+          replace_once(
+              "    def _ensure_rpc_locked(self, root: Path, *, timeout_seconds: int) -> _JsonRpcProcess:\n        rpc = self._rpc\n",
+              "    def _ensure_rpc_locked(\n        self,\n        root: Path,\n        *,\n        timeout_seconds: int,\n        deadline: float | None = None,\n    ) -> _JsonRpcProcess:\n        deadline = deadline if deadline is not None else time.monotonic() + float(timeout_seconds)\n        _remaining_jdt_deadline(deadline, operation=\"session initialization\")\n        rpc = self._rpc\n",
+          )
+          replace_once(
+              "                timeout=min(timeout_seconds, 45),\n",
+              "                timeout=min(_remaining_jdt_deadline(deadline, operation=\"initialize\"), 45.0),\n",
+          )
+          replace_once(
+              "                timeout_seconds=timeout_seconds,\n                quiet_seconds=min(self.diagnostic_quiet_seconds, 0.25),\n            )\n",
+              "                timeout_seconds=timeout_seconds,\n                quiet_seconds=min(self.diagnostic_quiet_seconds, 0.25),\n                deadline=deadline,\n            )\n",
+          )
+
+          replace_once(
+              "        if timeout_seconds <= 0:\n            raise ValueError(\"timeout_seconds must be positive.\")\n        try:\n            assert_server_safe_source_sets(root)\n",
+              "        if timeout_seconds <= 0:\n            raise ValueError(\"timeout_seconds must be positive.\")\n        deadline = time.monotonic() + float(timeout_seconds)\n        try:\n            assert_server_safe_source_sets(root)\n",
+          )
+          replace_once(
+              "            rpc = self._ensure_rpc_locked(root, timeout_seconds=timeout_seconds)\n            diagnostics: dict[str, list[dict[str, Any]]] = {}\n",
+              "            _remaining_jdt_deadline(deadline, operation=\"diagnostics\")\n            rpc = self._ensure_rpc_locked(\n                root,\n                timeout_seconds=timeout_seconds,\n                deadline=deadline,\n            )\n            diagnostics: dict[str, list[dict[str, Any]]] = {}\n",
+          )
+          replace_once(
+              "            for page_index, page in enumerate(pages):\n                sources, source_bytes = _read_source_page(\n",
+              "            for page_index, page in enumerate(pages):\n                _remaining_jdt_deadline(deadline, operation=\"diagnostics\")\n                sources, source_bytes = _read_source_page(\n",
+          )
+          replace_once(
+              "                        timeout_seconds=timeout_seconds,\n                        quiet_seconds=self.diagnostic_quiet_seconds,\n                    )\n",
+              "                        timeout_seconds=_remaining_jdt_deadline(\n                            deadline, operation=\"diagnostics\"\n                        ),\n                        quiet_seconds=self.diagnostic_quiet_seconds,\n                        deadline=deadline,\n                    )\n",
+          )
+
+          old_workspace = '''        if timeout_seconds <= 0:
+              raise ValueError("timeout_seconds must be positive.")
+          with self._session_lock:
+              rpc = self._ensure_rpc_locked(root, timeout_seconds=timeout_seconds)
+              result = rpc.request("workspace/symbol", {"query": query}, timeout=timeout_seconds)
+          '''.replace("      ", "")
+          new_workspace = '''        if timeout_seconds <= 0:
+              raise ValueError("timeout_seconds must be positive.")
+          deadline = time.monotonic() + float(timeout_seconds)
+          with self._session_lock:
+              _remaining_jdt_deadline(deadline, operation="workspace symbols")
+              rpc = self._ensure_rpc_locked(
+                  root,
+                  timeout_seconds=timeout_seconds,
+                  deadline=deadline,
+              )
+              result = rpc.request(
+                  "workspace/symbol",
+                  {"query": query},
+                  timeout=_remaining_jdt_deadline(deadline, operation="workspace symbols"),
+              )
+          '''.replace("      ", "")
+          replace_once(old_workspace, new_workspace)
+
+          replace_once(
+              "def _await_java_core_ready(\n    rpc: _JsonRpcProcess,\n    root: Path,\n    *,\n    timeout_seconds: float,\n    quiet_seconds: float,\n) -> None:\n",
+              "def _await_java_core_ready(\n    rpc: _JsonRpcProcess,\n    root: Path,\n    *,\n    timeout_seconds: float,\n    quiet_seconds: float,\n    deadline: float | None = None,\n) -> None:\n",
+          )
+          replace_once(
+              "    deadline = time.monotonic() + float(timeout_seconds)\n    version = 1\n",
+              "    deadline = deadline if deadline is not None else time.monotonic() + float(timeout_seconds)\n    version = 1\n",
+          )
+          replace_once(
+              "            remaining = max(0.001, deadline - time.monotonic())\n            diagnostics = _collect_diagnostics(\n                rpc,\n                expected_uris={uri},\n                timeout_seconds=remaining,\n                quiet_seconds=quiet_seconds,\n            )\n",
+              "            remaining = _remaining_jdt_deadline(deadline, operation=\"semantic readiness\")\n            diagnostics = _collect_diagnostics(\n                rpc,\n                expected_uris={uri},\n                timeout_seconds=remaining,\n                quiet_seconds=quiet_seconds,\n                deadline=deadline,\n            )\n",
+          )
+
+          replace_once(
+              "def _collect_diagnostics(\n    rpc: _JsonRpcProcess,\n    *,\n    expected_uris: set[str],\n    timeout_seconds: float,\n    quiet_seconds: float,\n) -> dict[str, list[dict[str, Any]]]:\n",
+              "def _collect_diagnostics(\n    rpc: _JsonRpcProcess,\n    *,\n    expected_uris: set[str],\n    timeout_seconds: float,\n    quiet_seconds: float,\n    deadline: float | None = None,\n) -> dict[str, list[dict[str, Any]]]:\n",
+          )
+          replace_once(
+              "    diagnostics: dict[str, list[dict[str, Any]]] = {}\n    deadline = time.monotonic() + float(timeout_seconds)\n",
+              "    diagnostics: dict[str, list[dict[str, Any]]] = {}\n    deadline = deadline if deadline is not None else time.monotonic() + float(timeout_seconds)\n",
+          )
+          replace_once(
+              "            message = rpc.messages.get(timeout=max(0.001, wait_seconds))\n",
+              "            message = rpc.messages.get(timeout=wait_seconds)\n",
+          )
+
+          path.write_text(text, encoding="utf-8")
+
+          test = Path("tests/test_java_lsp_deadline_budget.py")
+          test.write_text('''from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from minecraft_mod_ai import java_lsp
+
+
+class _FakeRpc:
+    def __init__(self) -> None:
+        self.stderr: list[str] = []
+        self.notifications: list[tuple[str, dict[str, object]]] = []
+
+    def notify(self, method: str, params: dict[str, object]) -> None:
+        self.notifications.append((method, params))
+
+
+def test_diagnostics_reuses_one_absolute_deadline_across_pages(tmp_path, monkeypatch):
+    source_root = tmp_path / "src" / "main" / "java"
+    source_root.mkdir(parents=True)
+    (source_root / "A.java").write_text("final class A {}\\n", encoding="utf-8")
+    (source_root / "B.java").write_text("final class B {}\\n", encoding="utf-8")
+
+    service = java_lsp.JavaLanguageService(
+        diagnostic_page_max_files=1,
+        diagnostic_quiet_seconds=0.0,
+    )
+    rpc = _FakeRpc()
+    seen: list[tuple[str, float]] = []
+
+    monkeypatch.setattr(java_lsp, "assert_server_safe_source_sets", lambda _root: None)
+
+    def fake_ensure(root, *, timeout_seconds, deadline=None):
+        del root, timeout_seconds
+        assert deadline is not None
+        seen.append(("ensure", deadline))
+        return rpc
+
+    def fake_collect(
+        _rpc,
+        *,
+        expected_uris,
+        timeout_seconds,
+        quiet_seconds,
+        deadline=None,
+    ):
+        del _rpc, timeout_seconds, quiet_seconds
+        assert deadline is not None
+        seen.append(("collect", deadline))
+        return {uri: [] for uri in expected_uris}
+
+    monkeypatch.setattr(service, "_ensure_rpc_locked", fake_ensure)
+    monkeypatch.setattr(java_lsp, "_collect_diagnostics", fake_collect)
+
+    result = service.diagnostics(tmp_path, timeout_seconds=90)
+
+    assert result["page_count"] == 2
+    assert [phase for phase, _deadline in seen] == ["ensure", "collect", "collect"]
+    assert len({deadline for _phase, deadline in seen}) == 1
+
+
+def test_expired_absolute_deadline_fails_closed(monkeypatch):
+    monkeypatch.setattr(java_lsp.time, "monotonic", lambda: 10.0)
+    with pytest.raises(java_lsp.JDTLanguageServerError, match="deadline exceeded"):
+        java_lsp._remaining_jdt_deadline(9.0, operation="diagnostics")
+''', encoding="utf-8")
+          PY
+      - name: Validate patch
+        shell: bash
+        run: |
+          python -m compileall -q minecraft_mod_ai/java_lsp.py tests/test_java_lsp_deadline_budget.py
+          python -m pytest -q tests/test_java_lsp_deadline_budget.py
+      - name: Commit fix to main
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add minecraft_mod_ai/java_lsp.py tests/test_java_lsp_deadline_budget.py
+          git commit -m "fix(jdt): enforce end-to-end diagnostics deadline"
+          git pull --rebase origin main
+          git push origin HEAD:main
