@@ -353,14 +353,14 @@ def _page_owned_arguments(
     page_schema: Mapping[str, Any],
     parameters: Mapping[str, Any],
 ) -> dict[str, Any]:
+    del parameters
     page_properties = page_schema.get("properties")
-    all_properties = parameters.get("properties")
-    if not isinstance(page_properties, Mapping) or not isinstance(all_properties, Mapping):
+    if not isinstance(page_properties, Mapping):
         return dict(arguments)
     return {
         str(name): value
         for name, value in arguments.items()
-        if name in page_properties or name not in all_properties
+        if name in page_properties
     }
 
 
