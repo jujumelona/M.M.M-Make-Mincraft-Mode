@@ -3,31 +3,13 @@ from __future__ import annotations
 import threading
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
-
-@dataclass
-class _ProjectLockState:
-    condition: threading.Condition = field(
-        default_factory=lambda: threading.Condition(threading.RLock())
-    )
-    writer_owner: int | None = None
-    writer_depth: int = 0
-    waiting_writers: int = 0
-    scoped_total: int = 0
-    scoped_depth: dict[int, int] = field(default_factory=dict)
-    path_locks: dict[str, threading.RLock] = field(default_factory=dict)
+from .project_lock_state import ProjectLockState, project_lock_state
 
 
-def _project_key(project_root: str | Path) -> str:
-    return str(Path(project_root).expanduser().resolve())
-
-
-def _state_for(project_root: str | Path) -> _ProjectLockState:
-    from .project_mutation import mutation_owner
-
-    return mutation_owner(project_root).lock_state
+def _state_for(project_root: str | Path) -> ProjectLockState:
+    return project_lock_state(project_root)
 
 
 def _path_key(value: str | Path) -> str:
