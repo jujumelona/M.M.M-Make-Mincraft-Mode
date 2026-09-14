@@ -96,16 +96,18 @@ def test_user_only_unknown_remains_a_requirement_blocker_without_fake_research()
     validate_planning_state(state, prompt=prompt)
 
 
-def test_pipeline_stops_at_original_user_only_blocker_before_detail_planning():
-    with pytest.raises(
-        ValueError,
-        match="PLANNING_REQUIREMENT_SELECTION_BLOCKED:.*user_only",
-    ):
-        prepare_planning_state(
-            None,
-            "Keep the weather compass.",
-            existing_state=_user_only_state(),
-        )
+def test_pipeline_preserves_original_user_only_unknown_as_resumable_state():
+    state = prepare_planning_state(
+        None,
+        "Keep the weather compass.",
+        existing_state=_user_only_state(),
+    )
+
+    assert state["plan_ready"] is False
+    assert state["unresolved"][0]["status"] == "open"
+    assert state["unresolved"][0]["resolution_route"] == "user_only"
+    assert state["research_queue"] == []
+    validate_planning_state(state, prompt="Keep the weather compass.")
 
 
 def test_requirement_selection_does_not_create_implementation_research_obligations():
