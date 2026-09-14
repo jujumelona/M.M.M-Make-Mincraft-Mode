@@ -131,7 +131,7 @@ def test_main_ci_topology_requires_full_suite_and_authoritative_audits():
     python tools/verify_integrity_minecraft.py --output .mmm/integrity-validation
     python tools/root_cause_audit_wrapper.py
     python tools/pytest_diagnostics.py tests
-    needs: [audit, tests, python313]
+    needs: [audit, tests, python313, model-realistic-replay]
     """
     assert audit.audit_main_ci_text(good) == []
 
