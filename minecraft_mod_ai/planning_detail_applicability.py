@@ -2,9 +2,11 @@ from __future__ import annotations
 
 """Host-owned applicability contract for selective detailed-planning sections.
 
-Only structured host state may omit conditional worksheet branches. Prompt wording,
-research facet hints, and model-authored prose are deliberately absent from this module.
-Missing or unknown applicability fails closed by retaining the section.
+Detailed planning is intentionally sparse: the baseline core is always planned, while
+optional sections are scheduled only when host state explicitly marks them ``required``.
+``unknown`` means that no obligation has established the section yet; it is not a reason
+to manufacture work. Prompt wording and model-authored prose never gain omission or
+inclusion authority here.
 """
 
 from collections.abc import Mapping
@@ -13,7 +15,7 @@ from typing import Any
 
 from .planning_detail_template import (
     CONDITIONAL_WORKSHEET_SECTIONS,
-    WORKSHEET_SECTIONS,
+    CORE_WORKSHEET_SECTIONS,
     normalize_required_sections,
 )
 
@@ -22,7 +24,7 @@ APPLICABILITY_STATUSES = ("required", "not_applicable", "unknown")
 
 
 def default_detail_section_applicability() -> dict[str, str]:
-    """Return the fail-safe host state: every conditional branch is unknown."""
+    """Return undecided optional branches without scheduling speculative work."""
 
     return {section: "unknown" for section in CONDITIONAL_WORKSHEET_SECTIONS}
 
@@ -62,16 +64,15 @@ def normalize_detail_section_applicability(value: Any) -> dict[str, str]:
 def required_detail_sections_for_requirement(
     requirement: Mapping[str, Any],
 ) -> tuple[str, ...]:
-    """Project one structured host requirement into its worksheet section set."""
+    """Project one requirement into only its established planning obligations."""
 
     applicability = normalize_detail_section_applicability(
         requirement.get(APPLICABILITY_FIELD)
     )
-    selected = tuple(
+    selected = tuple(CORE_WORKSHEET_SECTIONS) + tuple(
         section
-        for section in WORKSHEET_SECTIONS
-        if section not in CONDITIONAL_WORKSHEET_SECTIONS
-        or applicability[section] != "not_applicable"
+        for section in CONDITIONAL_WORKSHEET_SECTIONS
+        if applicability[section] == "required"
     )
     return normalize_required_sections(selected)
 
@@ -79,7 +80,7 @@ def required_detail_sections_for_requirement(
 def required_sections_by_requirement(
     state: Mapping[str, Any],
 ) -> dict[str, tuple[str, ...]]:
-    """Project requirement-owned applicability into the existing planner selection API."""
+    """Project requirement-owned applicability into the planner selection API."""
 
     decisions = state.get("decisions")
     if not isinstance(decisions, list):
@@ -114,7 +115,7 @@ def _rehash(state: dict[str, Any]) -> dict[str, Any]:
 def ensure_host_detail_section_applicability(
     state: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Canonicalize requirement applicability without granting omission authority."""
+    """Canonicalize requirement applicability without inventing optional obligations."""
 
     from .planning_state_contract import validate_planning_state
 
