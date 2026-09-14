@@ -9,7 +9,7 @@ from minecraft_mod_ai.fixed_template_generation import generate_fixed_template_v
 
 SCHEMA = {
     "type": "object",
-    "properties": {"answer": {"type": "string"}},
+    "properties": {"answer": {"type": "string", "maxLength": 256}},
     "required": ["answer"],
     "additionalProperties": False,
 }
