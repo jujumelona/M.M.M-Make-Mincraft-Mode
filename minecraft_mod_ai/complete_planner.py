@@ -145,7 +145,10 @@ class CompleteGameDesignPlanner:
             if isinstance(item, ProductionModule) and item.module_id not in existing_module_ids:
                 all_modules.append(item)
                 existing_module_ids.add(item.module_id)
-            elif isinstance(item, Mapping) and item.get("module_id") not in existing_module_ids:
+            elif isinstance(item, Mapping):
+                module_id = str(item.get("module_id") or "").strip()
+                if not module_id or module_id in existing_module_ids:
+                    continue
                 mod_obj = _module(item)
                 all_modules.append(mod_obj)
                 existing_module_ids.add(mod_obj.module_id)
@@ -162,7 +165,13 @@ class CompleteGameDesignPlanner:
             if isinstance(item, AssetRequest) and item.asset_id not in existing_asset_ids:
                 all_assets.append(item)
                 existing_asset_ids.add(item.asset_id)
-            elif isinstance(item, Mapping) and item.get("asset_id") not in existing_asset_ids:
+            elif isinstance(item, Mapping):
+                asset_id = str(item.get("asset_id") or "").strip()
+                if not asset_id or asset_id in existing_asset_ids:
+                    continue
+                required_asset_fields = ("kind", "prompt", "target_path")
+                if any(not str(item.get(field) or "").strip() for field in required_asset_fields):
+                    continue
                 asset_obj = _asset(item)
                 all_assets.append(asset_obj)
                 existing_asset_ids.add(asset_obj.asset_id)
