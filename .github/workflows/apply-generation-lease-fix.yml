@@ -1,0 +1,143 @@
+name: Apply generation lease separation fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-generation-lease-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: true
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Separate generation ownership leases from execution lifetime
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('minecraft_mod_ai/complete_orchestrator.py')
+          text = path.read_text(encoding='utf-8')
+
+          replacements = [
+              (
+                  "        node_futures: dict[str, Future[Any]] = {}\n"
+                  "        node_deadlines: dict[str, float] = {}\n"
+                  "        idle_wait = threading.Event()\n",
+                  "        node_futures: dict[str, Future[Any]] = {}\n"
+                  "        idle_wait = threading.Event()\n",
+              ),
+              (
+                  "        def dispatch_node(node: WorkNode, *, deadline_monotonic: float) -> Future[Any]:\n",
+                  "        def dispatch_node(node: WorkNode) -> Future[Any]:\n",
+              ),
+              (
+                  "            args = (run_with_model_execution_deadline, deadline_monotonic, process_node, node)\n",
+                  "            args = (process_node, node)\n",
+              ),
+              (
+                  "                    node_deadlines.pop(node_id, None)\n",
+                  "",
+              ),
+              (
+                  "                    lease_until = claimed.get('lease_until')\n"
+                  "                    remaining_lease = float(lease_seconds)\n"
+                  "                    if lease_until is not None:\n"
+                  "                        remaining_lease = max(0.05, float(lease_until) - time.time())\n"
+                  "                    deadline_monotonic = time.monotonic() + remaining_lease\n"
+                  "                    node_deadlines[node_id] = deadline_monotonic\n"
+                  "                    node_futures[node_id] = dispatch_node(\n"
+                  "                        node, deadline_monotonic=deadline_monotonic\n"
+                  "                    )\n",
+                  "                    node_futures[node_id] = dispatch_node(node)\n",
+              ),
+              (
+                  "                if node_futures:\n"
+                  "                    nearest_deadline = min(node_deadlines.values())\n"
+                  "                    wait_timeout = min(\n"
+                  "                        heartbeat_seconds,\n"
+                  "                        max(0.0, nearest_deadline - time.monotonic()),\n"
+                  "                    )\n"
+                  "                    wait(tuple(node_futures.values()), timeout=wait_timeout, return_when=FIRST_COMPLETED)\n"
+                  "                    continue\n",
+                  "                if node_futures:\n"
+                  "                    wait(\n"
+                  "                        tuple(node_futures.values()),\n"
+                  "                        timeout=heartbeat_seconds,\n"
+                  "                        return_when=FIRST_COMPLETED,\n"
+                  "                    )\n"
+                  "                    continue\n",
+              ),
+          ]
+
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one replacement target, found {count}: {old[:100]!r}')
+              text = text.replace(old, new, 1)
+
+          expiry_pattern = re.compile(
+              r"\n                now_monotonic = time\.monotonic\(\)\n"
+              r"                expired_ids = \[.*?"
+              r"\n                while True:\n                    claimed =",
+              re.DOTALL,
+          )
+          text, count = expiry_pattern.subn(
+              "\n                while True:\n                    claimed =",
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit(f'expected exactly one fixed lease expiry block, found {count}')
+
+          if 'node_deadlines' in text:
+              raise SystemExit('node_deadlines survived generation lease separation')
+          if 'Pipeline generation lease deadline exceeded' in text:
+              raise SystemExit('fixed generation lease deadline failure survived')
+
+          path.write_text(text, encoding='utf-8')
+
+          test_path = Path('tests/test_generation_lease_execution_separation.py')
+          test_path.write_text(
+              "import inspect\n\n"
+              "from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator\n\n\n"
+              "def test_generation_ownership_lease_does_not_cap_node_execution_lifetime() -> None:\n"
+              "    source = inspect.getsource(CompleteProductionOrchestrator._execute_generation_work)\n"
+              "    assert 'node_deadlines' not in source\n"
+              "    assert 'Pipeline generation lease deadline exceeded' not in source\n"
+              "    assert 'args = (process_node, node)' in source\n"
+              "    assert 'timeout=heartbeat_seconds' in source\n\n\n"
+              "def test_generation_scheduler_still_uses_renewable_ownership_lease() -> None:\n"
+              "    source = inspect.getsource(CompleteProductionOrchestrator._execute_generation_work)\n"
+              "    assert \"lease_seconds = 900\" in source\n"
+              "    assert \"ledger.claim_ready(worker_id='mmm-orchestrator'\" in source\n"
+              "    assert 'lease_seconds=lease_seconds' in source\n",
+              encoding='utf-8',
+          )
+          PY
+          python -m py_compile minecraft_mod_ai/complete_orchestrator.py tests/test_generation_lease_execution_separation.py
+          git diff --check
+      - name: Commit fix to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/complete_orchestrator.py tests/test_generation_lease_execution_separation.py
+          git diff --cached --check
+          git commit -m 'fix: decouple generation leases from execution deadlines'
+          git push origin HEAD:main
