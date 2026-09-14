@@ -41,10 +41,24 @@ def test_rpc_timeout_retires_process_and_rejects_late_reply(tmp_path):
             rpc.request('build', {}, timeout=1)
 
 
+def test_rpc_ignores_non_protocol_stdout_noise(tmp_path):
+    from minecraft_mod_ai.owner_rpc import OwnerRPC
+
+    server = tmp_path / 'noisy.py'
+    server.write_text('''import json, sys
+print('[0.006s][warning][os,thread] JVM startup noise', flush=True)
+for line in sys.stdin:
+    request = json.loads(line)
+    print(json.dumps({'id': request['id'], 'result': {'ok': True}}), flush=True)
+''')
+    with OwnerRPC([sys.executable, '-u', str(server)]) as rpc:
+        assert rpc.request('build', {}, timeout=5) == {'ok': True}
+
+
 def test_rpc_malformed_response_fails_closed(tmp_path):
     from minecraft_mod_ai.owner_rpc import OwnerRPC, OwnerRPCError
 
     server = tmp_path / 'malformed.py'
-    server.write_text("import sys\nsys.stdin.readline()\nprint('not json', flush=True)\nsys.stdin.read()\n")
+    server.write_text("import sys\nsys.stdin.readline()\nprint('{not json', flush=True)\nsys.stdin.read()\n")
     with OwnerRPC([sys.executable, '-u', str(server)]) as rpc, pytest.raises(OwnerRPCError, match='protocol|JSON'):
         rpc.request('build', {}, timeout=3)
