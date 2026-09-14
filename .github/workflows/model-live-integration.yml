@@ -1,0 +1,55 @@
+name: Model live integration
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qwen-live:
+    name: Qwen live / ${{ matrix.id }}
+    runs-on: [self-hosted, linux, x64, t4]
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {id: deterministic-long, seed: 7, temperature: 0.0, max_tokens: 128, stop: ''}
+          - {id: low-temp-long, seed: 11, temperature: 0.2, max_tokens: 128, stop: ''}
+          - {id: sampled-short, seed: 13, temperature: 0.7, max_tokens: 16, stop: ''}
+          - {id: sampled-stop, seed: 17, temperature: 0.8, max_tokens: 128, stop: '</think>'}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.11', cache: pip}
+      - run: python -m pip install --prefer-binary -e '.[dev,ui]'
+      - name: Run one real inference condition
+        env:
+          MMM_MODEL_AUTO_DOWNLOAD: '1'
+        run: >-
+          python -m tools.qwen_live_integration_capture
+          --profile t4_local
+          --role planner
+          --seed "${{ matrix.seed }}"
+          --temperature "${{ matrix.temperature }}"
+          --max-tokens "${{ matrix.max_tokens }}"
+          --stop "${{ matrix.stop }}"
+          --timeout 180
+          --output "audit/model-live/${{ matrix.id }}.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: model-live-${{ matrix.id }}-${{ github.sha }}
+          path: audit/model-live/${{ matrix.id }}.json
+          if-no-files-found: error
+
+  gate:
+    name: Model live integration gate
+    if: ${{ always() }}
+    needs: [qwen-live]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          LIVE: ${{ needs.qwen-live.result }}
+        run: test "$LIVE" = success
