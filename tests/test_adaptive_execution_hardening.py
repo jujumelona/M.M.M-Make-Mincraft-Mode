@@ -147,12 +147,13 @@ def test_research_metric_vector_always_preserves_plan_alignment() -> None:
     assert abs(sum(weights.values()) - 1.0) < 1e-9
 
 
-def test_deadline_executor_detaches_pool_before_iterator_is_returned(monkeypatch) -> None:
+def test_deadline_executor_streams_with_bounded_submission_window(monkeypatch) -> None:
     from concurrent.futures import Future
 
     from minecraft_mod_ai import deadline_executor as deadline
 
     instances = []
+    consumed = []
 
     class ImmediateExecutor:
         def __init__(self, *args, **kwargs) -> None:
@@ -170,18 +171,74 @@ def test_deadline_executor_detaches_pool_before_iterator_is_returned(monkeypatch
         def shutdown(self, *, wait=True, cancel_futures=False) -> None:
             self.shutdown_calls.append((wait, cancel_futures))
 
+    def source():
+        for value in range(5):
+            consumed.append(value)
+            yield value
+
     monkeypatch.setattr(deadline, "ThreadPoolExecutor", ImmediateExecutor)
 
     results = deadline.iter_completed_with_deadlines(
-        [1, 2],
+        source(),
         lambda value: value * 10,
         max_workers=2,
         stage="test-stage",
     )
 
-    assert instances
+    assert instances == []
+    assert next(results) == (0, 0)
+    assert consumed == [0, 1]
+    assert instances[0].shutdown_calls == []
+
+    results.close()
     assert instances[0].shutdown_calls == [(False, True)]
-    assert list(results) == [(1, 10), (2, 20)]
+
+
+def test_deadline_executor_does_not_retain_completed_payload_history(monkeypatch) -> None:
+    from concurrent.futures import Future
+    import gc
+    import weakref
+
+    from minecraft_mod_ai import deadline_executor as deadline
+
+    class Payload:
+        def __init__(self, value: int) -> None:
+            self.value = value
+
+    class ImmediateExecutor:
+        def __init__(self, *args, **kwargs) -> None:
+            self.shutdown_calls = []
+
+        def submit(self, function, *args, **kwargs):
+            future = Future()
+            try:
+                future.set_result(function(*args, **kwargs))
+            except BaseException as exc:
+                future.set_exception(exc)
+            return future
+
+        def shutdown(self, *, wait=True, cancel_futures=False) -> None:
+            self.shutdown_calls.append((wait, cancel_futures))
+
+    monkeypatch.setattr(deadline, "ThreadPoolExecutor", ImmediateExecutor)
+
+    results = deadline.iter_completed_with_deadlines(
+        [1, 2],
+        Payload,
+        max_workers=1,
+        stage="memory-release-stage",
+    )
+    first = next(results)
+    first_payload = weakref.ref(first[1])
+    del first
+
+    second = next(results)
+    gc.collect()
+    assert first_payload() is None
+    assert second[0] == 2
+    assert second[1].value == 2
+
+    results.close()
 
 
 def test_deadline_executor_timeout_cancels_before_nonblocking_shutdown(monkeypatch) -> None:
