@@ -27,11 +27,16 @@ def _core_value() -> dict[str, dict[str, object]]:
     return {key: _row(key) for key in CORE_WORKSHEET_SECTIONS}
 
 
-def test_default_selection_remains_fail_safe_full_worksheet() -> None:
-    assert normalize_required_sections() == WORKSHEET_SECTIONS
-    assert tuple(WORKSHEET_SCHEMA["required"]) == WORKSHEET_SECTIONS
-    assert set(WORKSHEET_SCHEMA["properties"]) == set(WORKSHEET_SECTIONS)
-    assert "Fill all ten sections" in worksheet_prompt()
+def test_default_selection_is_sparse_baseline_worksheet() -> None:
+    assert normalize_required_sections() == CORE_WORKSHEET_SECTIONS
+    assert tuple(WORKSHEET_SCHEMA["required"]) == CORE_WORKSHEET_SECTIONS
+    assert tuple(WORKSHEET_SCHEMA["properties"]) == CORE_WORKSHEET_SECTIONS
+    prompt = worksheet_prompt()
+    assert f"exactly the {len(CORE_WORKSHEET_SECTIONS)} host-required sections" in prompt
+    for key in CORE_WORKSHEET_SECTIONS:
+        assert f"- {key}:" in prompt
+    for key in CONDITIONAL_WORKSHEET_SECTIONS:
+        assert f"- {key}:" not in prompt
 
 
 def test_only_conditional_sections_can_be_omitted() -> None:
@@ -77,10 +82,10 @@ def test_subset_validator_rejects_unrequested_conditional_section() -> None:
         validate_worksheet(value, {"EVD-1"}, CORE_WORKSHEET_SECTIONS)
 
 
-def test_core_section_cannot_be_omitted_by_any_explicit_selection() -> None:
+def test_baseline_section_cannot_be_omitted_by_any_explicit_selection() -> None:
     for omitted in CORE_WORKSHEET_SECTIONS:
         selection = tuple(key for key in WORKSHEET_SECTIONS if key != omitted)
-        with pytest.raises(ValueError, match="core section.*cannot be omitted"):
+        with pytest.raises(ValueError, match="baseline section.*cannot be omitted"):
             normalize_required_sections(selection)
 
 
@@ -104,6 +109,12 @@ def test_string_is_not_treated_as_iterable_section_selection() -> None:
         normalize_required_sections("verification")
 
 
-def test_default_validator_still_rejects_partial_worksheet() -> None:
+def test_default_validator_accepts_sparse_baseline_worksheet() -> None:
+    validated = validate_worksheet(_core_value(), {"EVD-1"})
+
+    assert tuple(validated) == CORE_WORKSHEET_SECTIONS
+
+
+def test_explicit_full_selection_still_rejects_partial_worksheet() -> None:
     with pytest.raises(ValueError, match="host-required engineering sections"):
-        validate_worksheet(_core_value(), {"EVD-1"})
+        validate_worksheet(_core_value(), {"EVD-1"}, WORKSHEET_SECTIONS)
