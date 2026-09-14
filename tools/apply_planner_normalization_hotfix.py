@@ -206,7 +206,7 @@ def test_checkpointed_atomic_results_are_not_regenerated_after_scheduler_interru
     assert result["plan_ready"] is True
     assert result["detail_progress"] == []
 '''
-    path.write_text(text.rstrip() + test + "\n", encoding="utf-8")
+    path.write_text(text.rstrip() + test.rstrip() + "\n", encoding="utf-8")
 
 
 def main() -> None:
