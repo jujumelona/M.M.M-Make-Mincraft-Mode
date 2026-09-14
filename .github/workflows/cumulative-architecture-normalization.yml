@@ -66,20 +66,28 @@ jobs:
           tests/test_generation_verifier_resilience.py
           tests/test_runner*.py
 
+      - name: Remove one-shot normalization scaffolding
+        run: |
+          rm -f tools/apply_cumulative_architecture_normalization.py
+          rm -f .github/workflows/cumulative-architecture-normalization.yml
+
       - name: Run cumulative architecture gate against last good baseline
         run: >-
           python .github/scripts/audit_code_quality_regression.py
           --base-ref ac47fe22dd672e1041d4ecc0f11b7564cf6f3933
           --output audit/cumulative-architecture-normalization.json
 
-      - name: Commit normalized architecture
+      - name: Commit normalized architecture and cleanup
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add minecraft_mod_ai/planning_state_pipeline.py \
-                  minecraft_mod_ai/generation_verifier_fallback_installation.py \
-                  minecraft_mod_ai/runner.py
+          git add -A -- \
+            minecraft_mod_ai/planning_state_pipeline.py \
+            minecraft_mod_ai/generation_verifier_fallback_installation.py \
+            minecraft_mod_ai/runner.py \
+            tools/apply_cumulative_architecture_normalization.py \
+            .github/workflows/cumulative-architecture-normalization.yml
           git diff --cached --check
           git diff --cached --quiet && exit 0
           git commit -m "normalize cumulative architecture regressions"
