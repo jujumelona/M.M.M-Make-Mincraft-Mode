@@ -93,6 +93,20 @@ _READ_OBSERVE_TOOLS = frozenset({
     "read_reuse_source",
 })
 
+_RECOVERY_EVIDENCE_TOOLS = frozenset({
+    "search_code_rag",
+    "search_project_rag",
+    "discover_ecosystem_resources",
+    "inspect_modrinth_project",
+    "inspect_github_repository",
+    "inspect_huggingface_model",
+    "inspect_existing_mod",
+    "assess_technology_compatibility",
+    "java_workspace_symbols",
+    "external_mcp_call",
+    "read_reuse_source",
+})
+
 _MUTATION_ACT_TOOLS = frozenset({
     "apply_source_edit",
     "apply_source_patch",
@@ -747,11 +761,12 @@ class HostRunState:
             }
 
         return (
-            "MMM_CORE_VERIFIER_REPAIR_V1\n"
-            "The verifier still reports source defects. Repair the existing target; "
-            "do not restart generation and do not recreate any path that already has "
-            "an APPLIED mutation receipt. Make a material existing-file source edit "
-            "that addresses the diagnostics, then allow VERIFY to run again.\n"
+            "MMM_CORE_VERIFIER_REPAIR_V2\n"
+            "The verifier still reports source defects. Resolve the diagnostics against "
+            "the currently exposed version-pinned API/mapping/repository evidence before "
+            "guessing another source edit. Do not restart generation and do not recreate "
+            "any path that already has an APPLIED mutation receipt. Once grounded, make "
+            "one material existing-file source edit, then allow VERIFY to run again.\n"
             + json.dumps(evidence, ensure_ascii=False, sort_keys=True, default=str)
         )
 
@@ -1978,6 +1993,12 @@ def _generate_with_tools_impl(
                 "MUTATION_LOCALIZATION_STALLED: no untried reviewed localization source remains "
                 f"for stage {current_localization_stage.value}; refusing a repeated retrieval/model round."
             )
+        if implementation_requires_mutation and state.phase == LoopPhase.RECOVER and not phase_tools:
+            state.termination_reason = "VERIFIER_RECOVERY_UNAVAILABLE"
+            raise ModelConfigurationError(
+                "VERIFIER_RECOVERY_UNAVAILABLE: verifier diagnostics remain unresolved but no "
+                "reviewed API/mapping/repository recovery tool is exposed."
+            )
 
         tool_choice = request.tool_choice
         parallel_tool_calls = request.parallel_tool_calls
@@ -1993,6 +2014,9 @@ def _generate_with_tools_impl(
             if len(mutation_names) == 1:
                 tool_choice = {"type": "function", "function": {"name": mutation_names[0]}}
                 parallel_tool_calls = False
+        elif state.phase == LoopPhase.RECOVER:
+            tool_choice = "required"
+            parallel_tool_calls = False
         elif forced_verify_tool is not None:
             tool_choice = {"type": "function", "function": {"name": forced_verify_tool}}
             parallel_tool_calls = False
@@ -2008,7 +2032,10 @@ def _generate_with_tools_impl(
             flush=True,
         )
 
-        if implementation_requires_mutation and state.phase == LoopPhase.ACT:
+        if (
+            implementation_requires_mutation
+            and state.phase in {LoopPhase.ACT, LoopPhase.RECOVER}
+        ):
             repair_guidance = state.take_verifier_repair_guidance()
             if repair_guidance is not None:
                 messages.append({"role": "system", "content": repair_guidance})
@@ -2141,10 +2168,10 @@ def _generate_with_tools_impl(
                 state.trajectory.append(trace_entry)
                 continue
             if implementation_requires_mutation and state.validation_status == "FAIL":
-                state.phase = LoopPhase.ACT
+                state.phase = LoopPhase.RECOVER
                 repeated = state.record_no_progress_result(
                     {
-                        "phase": LoopPhase.ACT.value,
+                        "phase": LoopPhase.RECOVER.value,
                         "validation_status": "FAIL",
                         "verifier_fingerprint": state.latest_verifier_fingerprint,
                         "prose": content,
@@ -2161,8 +2188,8 @@ def _generate_with_tools_impl(
                         "role": "system",
                         "content": (
                             "Verifier status remains FAIL. Prose cannot complete this implementation. "
-                            "Use the exposed mutation tool to materially repair the existing target, "
-                            "then allow host verification to run again."
+                            "Use one exposed recovery evidence/API/mapping tool to resolve the diagnostic "
+                            "before another mutation is allowed."
                         ),
                     },
                 ])
@@ -2321,6 +2348,10 @@ def _generate_with_tools_impl(
             return (
                 call.name in _LOCALIZATION_EVIDENCE_TOOLS
                 or call.name in _RAG_EVIDENCE_TOOLS
+                or (
+                    state.phase == LoopPhase.RECOVER
+                    and call.name in _RECOVERY_EVIDENCE_TOOLS
+                )
                 or (call.name == "external_mcp_call" and bool(_external_rag_capability(call.arguments)))
             )
 
@@ -2637,11 +2668,12 @@ def _generate_with_tools_impl(
                 if state.record_verification(call.name, payload, status):
                     turn_made_progress = True
                 if status == "FAIL" and implementation_requires_mutation:
-                    # Only trustworthy verifier evidence may request another edit.
+                    # Source defects must be grounded against version-pinned evidence
+                    # before the coder is allowed to mutate the target again.
                     state.record_failure(
                         call.name, "verification reported source defects"
                     )
-                    state.phase = LoopPhase.ACT
+                    state.phase = LoopPhase.RECOVER
                 continue
 
             if is_evidence_tool(call):
@@ -2675,10 +2707,14 @@ def _generate_with_tools_impl(
                 # For implementation, novelty alone is not progress: evidence must
                 # advance file/symbol/body localization. This prevents an unrelated
                 # first RAG hit from resetting a blocked mutation retry.
-                if ctx_progress or (not implementation_requires_mutation and recorded):
+                if (
+                    ctx_progress
+                    or (state.phase == LoopPhase.RECOVER and recorded)
+                    or (not implementation_requires_mutation and recorded)
+                ):
                     turn_made_progress = True
                     if (
-                        state.phase == LoopPhase.OBSERVE
+                        state.phase in {LoopPhase.OBSERVE, LoopPhase.RECOVER}
                         and implementation_requires_mutation
                         and is_mutation_ready(messages, state)
                     ):
@@ -2869,6 +2905,7 @@ def generate_with_tools(
 
 __all__ = [
     "_LOCALIZATION_EVIDENCE_TOOLS",
+    "_RECOVERY_EVIDENCE_TOOLS",
     "_MUTATION_ACT_TOOLS",
     "_READ_OBSERVE_TOOLS",
     "_VERIFY_TOOLS",
