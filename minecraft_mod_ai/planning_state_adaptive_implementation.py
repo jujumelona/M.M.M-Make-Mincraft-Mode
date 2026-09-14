@@ -570,14 +570,11 @@ def compile_progress_monotone_detailed_plans(
     required_sections_by_requirement: Mapping[str, Iterable[str]] | None = None,
     checkpoint: Checkpoint | None = None,
 ) -> dict[str, Any]:
-    """Compile all artifact responsibilities and acceptance criteria for each requirement.
+    """Compile artifact responsibilities and acceptance criteria for each requirement.
 
-    Every completed work unit removes exactly one element from the pending set and is
-    checkpointed immediately. Artifact responsibility work is structural planning only;
-    it never substitutes for public acceptance-detail planning. Planning quality gaps
-    are refined by the template/section generators and are never checkpointed as a
-    terminal planning blocker. Completed requirements are restored only when they carry
-    the post-fix acceptance-completion marker.
+    Each completed unit is checkpointed immediately. Artifact planning never replaces
+    acceptance-detail planning; quality gaps remain refinable rather than terminal.
+    Completed requirements are restored only with the acceptance-completion marker.
     """
     validate_planning_state(state, prompt=prompt)
 
