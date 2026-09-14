@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,9 @@ else:
 
 _OUTPUT_CHUNK_CHARS = 64 * 1024
 _DEFAULT_TIMEOUT_SECONDS = 2400
+_DEFAULT_FAULTHANDLER_TIMEOUT_SECONDS = 300
+_PROCESS_EXIT_GRACE_SECONDS = 5
+_PROCESS_SNAPSHOT_TIMEOUT_SECONDS = 15
 _XML_REDACTION_MARKER = "&lt;redacted&gt;"
 
 
@@ -177,6 +181,12 @@ def _parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--maxfail", type=int, default=25)
     parser.add_argument("--durations", type=int, default=15)
     parser.add_argument("--timeout-seconds", type=int, default=_DEFAULT_TIMEOUT_SECONDS)
+    parser.add_argument(
+        "--faulthandler-timeout-seconds",
+        type=int,
+        default=_DEFAULT_FAULTHANDLER_TIMEOUT_SECONDS,
+        help="Dump all Python thread stacks if a single pytest process makes no progress for this many seconds.",
+    )
     parser.add_argument("tests", nargs="+")
     return parser.parse_args(argv)
 
@@ -316,6 +326,86 @@ def _redact_file_in_place(
             temporary_path.unlink(missing_ok=True)
 
 
+def _popen_group_kwargs() -> dict[str, object]:
+    if os.name == "nt":
+        return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+    return {"start_new_session": True}
+
+
+def _append_process_snapshot(raw_handle: object, *, pytest_pid: int) -> None:
+    raw_handle.write("\n\n=== PYTEST TIMEOUT PROCESS SNAPSHOT ===\n")
+    raw_handle.write(f"pytest_pid={pytest_pid} platform={sys.platform} os_name={os.name}\n")
+    raw_handle.flush()
+
+    commands = (
+        (["tasklist", "/V"],)
+        if os.name == "nt"
+        else (
+            ["ps", "-eo", "pid,ppid,pgid,sid,stat,etime,pcpu,pmem,args", "--forest"],
+            ["ps", "-eo", "pid,ppid,pgid,sid,stat,etime,pcpu,pmem,args"],
+        )
+    )
+    for command in commands:
+        try:
+            snapshot = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                check=False,
+                text=True,
+                errors="replace",
+                timeout=_PROCESS_SNAPSHOT_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raw_handle.write(f"snapshot command failed: {command!r}: {type(exc).__name__}: {exc}\n")
+            raw_handle.flush()
+            continue
+        raw_handle.write(f"$ {' '.join(command)}\n")
+        raw_handle.write(snapshot.stdout or "<no process snapshot output>\n")
+        raw_handle.flush()
+        if snapshot.returncode == 0:
+            break
+
+
+def _terminate_process_tree(process: subprocess.Popen[object]) -> None:
+    if process.poll() is not None:
+        return
+
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=_PROCESS_SNAPSHOT_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            process.kill()
+        try:
+            process.wait(timeout=_PROCESS_EXIT_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        return
+
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except (OSError, ProcessLookupError):
+        process.terminate()
+    try:
+        process.wait(timeout=_PROCESS_EXIT_GRACE_SECONDS)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except (OSError, ProcessLookupError):
+        process.kill()
+    process.wait()
+
+
 def _capture_pytest(
     command: list[str],
     log_path: Path,
@@ -335,19 +425,27 @@ def _capture_pytest(
             delete=False,
         ) as raw_handle:
             temporary_path = Path(raw_handle.name)
+            process: subprocess.Popen[object] | None = None
             try:
-                process = subprocess.run(
+                process = subprocess.Popen(
                     command,
                     stdout=raw_handle,
                     stderr=subprocess.STDOUT,
-                    check=False,
-                    timeout=timeout_seconds,
+                    **_popen_group_kwargs(),
                 )
-                returncode: int | None = process.returncode
+                returncode = process.wait(timeout=timeout_seconds)
                 failure: BaseException | None = None
-            except (OSError, subprocess.TimeoutExpired) as exc:
+            except subprocess.TimeoutExpired as exc:
                 returncode = None
                 failure = exc
+                if process is not None:
+                    _append_process_snapshot(raw_handle, pytest_pid=process.pid)
+                    _terminate_process_tree(process)
+            except OSError as exc:
+                returncode = None
+                failure = exc
+                if process is not None:
+                    _terminate_process_tree(process)
         _redact_file(temporary_path, log_path)
         return returncode, failure
     finally:
@@ -379,12 +477,30 @@ def main(argv: Iterable[str] | None = None) -> int:
             )
         )
         return 2
+    if args.faulthandler_timeout_seconds <= 0:
+        print(
+            _render_internal_failure(
+                operation="validate faulthandler timeout",
+                cause_type="InvalidFaulthandlerTimeout",
+                cause=(
+                    "--faulthandler-timeout-seconds must be positive, got "
+                    f"{args.faulthandler_timeout_seconds}"
+                ),
+                fallback="pytest was not started",
+                category=FailureCategory.INPUT,
+            )
+        )
+        return 2
 
     if not _prepare_output_directories(args.log, args.junit):
         return 1
     if not _remove_stale_outputs(args.log, args.junit):
         return 1
 
+    stack_timeout_seconds = min(
+        args.faulthandler_timeout_seconds,
+        max(1, args.timeout_seconds - 1),
+    )
     command = [
         sys.executable,
         "-m",
@@ -393,6 +509,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         "--tb=short",
         f"--maxfail={max(1, args.maxfail)}",
         f"--junitxml={args.junit}",
+        "-o",
+        f"faulthandler_timeout={stack_timeout_seconds}",
     ]
     if args.durations > 0:
         command.append(f"--durations={args.durations}")
@@ -422,7 +540,9 @@ def main(argv: Iterable[str] | None = None) -> int:
                     operation="run pytest",
                     cause_type="TimeoutExpired",
                     cause=f"pytest exceeded timeout={args.timeout_seconds}s",
-                    fallback=f"redacted pytest output preserved at {args.log}",
+                    fallback=(
+                        f"redacted pytest output, thread dumps, and process snapshot preserved at {args.log}"
+                    ),
                     category=FailureCategory.TRANSIENT,
                 )
             )
