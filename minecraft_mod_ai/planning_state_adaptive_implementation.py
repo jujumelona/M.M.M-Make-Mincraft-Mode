@@ -110,7 +110,8 @@ def _merge_completed_details(
     requirement_order: tuple[str, ...],
     completed_details: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
-    value = deepcopy(dict(state))
+    """Merge completed plans without cloning unrelated research/progress payloads."""
+    value = dict(state)
     non_detail = [
         item
         for item in value.get("decisions", [])
@@ -125,7 +126,9 @@ def _merge_completed_details(
         raw = completed_details.get(requirement_ref)
         if raw is None:
             continue
-        detail = deepcopy(dict(raw))
+        # A top-level copy is sufficient: completed plan internals are immutable from
+        # this point and later planning updates path-copy their own mutable branches.
+        detail = dict(raw)
         decision_id = f"detail_{index:03d}"
         detail["decision_id"] = decision_id
         detail["decision_type"] = "detailed_implementation_plan"
@@ -169,10 +172,29 @@ def _checkpoint_state(
     state: Mapping[str, Any],
     checkpoint: Checkpoint | None,
 ) -> dict[str, Any]:
-    value = _rehash(deepcopy(dict(state)))
+    """Checkpoint a stable copy-on-write snapshot without full-state amplification."""
+    value = _rehash(dict(state))
     validate_planning_state(value)
     if checkpoint is not None:
-        checkpoint(deepcopy(value))
+        # Callers receive their own top-level snapshot. Nested planning structures are
+        # treated as immutable; all mutations below path-copy the touched branch.
+        checkpoint(dict(value))
+    return value
+
+
+def _copy_template_progress_update(
+    state: Mapping[str, Any],
+    binding: Any,
+    responses: Any,
+) -> dict[str, Any]:
+    """Path-copy template progress so a single record never clones the whole state."""
+    value = dict(state)
+    raw_progress = state.get("template_progress", {}) or {}
+    if not isinstance(raw_progress, Mapping):
+        raise ValueError("TEMPLATE_PROGRESS: expected checkpoint mapping")
+    progress = dict(raw_progress)
+    progress[binding] = deepcopy(responses)
+    value["template_progress"] = progress
     return value
 
 
@@ -295,11 +317,24 @@ def _store_artifact_progress(
     step_id: str,
     receipt: Mapping[str, Any],
 ) -> dict[str, Any]:
-    value = deepcopy(dict(working_state))
-    progress = value.setdefault("artifact_progress", {})
-    req_progress = progress.setdefault(requirement_ref, {})
-    art_progress = req_progress.setdefault(artifact_kind, {})
+    """Path-copy artifact progress instead of cloning the complete planning state."""
+    value = dict(working_state)
+    raw_progress = working_state.get("artifact_progress", {}) or {}
+    if not isinstance(raw_progress, Mapping):
+        raise ValueError("ARTIFACT_PLAN_PROGRESS: artifact progress must be a mapping")
+    progress = dict(raw_progress)
+    raw_req = progress.get(requirement_ref, {}) or {}
+    if not isinstance(raw_req, Mapping):
+        raise ValueError("ARTIFACT_PLAN_PROGRESS: requirement progress must be a mapping")
+    req_progress = dict(raw_req)
+    raw_art = req_progress.get(artifact_kind, {}) or {}
+    if not isinstance(raw_art, Mapping):
+        raise ValueError("ARTIFACT_PLAN_PROGRESS: artifact-kind progress must be a mapping")
+    art_progress = dict(raw_art)
     art_progress[step_id] = deepcopy(dict(receipt))
+    req_progress[artifact_kind] = art_progress
+    progress[requirement_ref] = req_progress
+    value["artifact_progress"] = progress
     return value
 
 
@@ -312,7 +347,7 @@ def _load_artifact_progress(
     progress = working_state.get("artifact_progress", {})
     raw = progress.get(requirement_ref, {}).get(artifact_kind, {})
     if not isinstance(raw, Mapping):
-        raise ValueError("ARTIFACT_PLAN_PROGRESS: artifact progress must be a mapping")
+        raise ValueError("ARTIFACT_PLAN_PROGRESS: artifact receipt must be a mapping")
     normalized: dict[str, dict[str, Any]] = {}
     for step_id, receipt in raw.items():
         if not isinstance(receipt, Mapping):
@@ -339,6 +374,13 @@ def _artifacts_complete(job: Mapping[str, Any]) -> bool:
 def _requirement_work_complete(job: Mapping[str, Any]) -> bool:
     """Require public acceptance detail and artifact responsibilities independently."""
     return _criteria_complete(job) and _artifacts_complete(job)
+
+
+def _release_completed_job_payload(job: dict[str, Any]) -> None:
+    """Release evidence/fragments immediately after their requirement is assembled."""
+    requirement_ref = job["requirement_ref"]
+    job.clear()
+    job["requirement_ref"] = requirement_ref
 
 
 def _pending_work_items(
@@ -385,8 +427,7 @@ def _finish_requirement(
 
     def save_repair_record(binding, responses):
         nonlocal working_state
-        candidate = deepcopy(dict(working_state))
-        candidate.setdefault("template_progress", {})[binding] = deepcopy(responses)
+        candidate = _copy_template_progress_update(working_state, binding, responses)
         working_state = _checkpoint_state(candidate, checkpoint)
 
     try:
@@ -477,8 +518,10 @@ def _finish_requirement(
     if "translation_plan" in job and job["translation_plan"] is not None:
         plan["translation_receipts"] = list(job["translation_plan"].receipts)
 
-    completed_details[job["requirement_ref"]] = plan
-    cleared = clear_requirement_progress(working_state, job["requirement_ref"])
+    requirement_ref = job["requirement_ref"]
+    completed_criteria = len(job.get("criteria", ()))
+    completed_details[requirement_ref] = plan
+    cleared = clear_requirement_progress(working_state, requirement_ref)
     result = _merge_completed_details(
         cleared,
         requirement_order=requirement_order,
@@ -490,9 +533,9 @@ def _finish_requirement(
         operation="compile_progress_monotone_detailed_plans",
         result="OBSERVED",
         details={
-            "requirement_ref": job["requirement_ref"],
+            "requirement_ref": requirement_ref,
             "verification_status": "pending_runtime_validation",
-            "completed_acceptance_criteria": len(job.get("criteria", ())),
+            "completed_acceptance_criteria": completed_criteria,
             "completed_artifact_kinds": len(artifact_kinds),
             "completed_requirements": len(completed_details),
             "total_requirements": len(requirement_order),
@@ -500,7 +543,8 @@ def _finish_requirement(
         },
     )
     if checkpoint is not None:
-        checkpoint(deepcopy(result))
+        checkpoint(dict(result))
+    _release_completed_job_payload(job)
     return result
 
 
@@ -566,6 +610,8 @@ def compile_progress_monotone_detailed_plans(
         and _detail_matches_selection(detail, selections[requirement_ref])
     }
 
+    # One isolation copy at planner entry is sufficient. Subsequent progress/checkpoint
+    # updates are copy-on-write so completed payloads can be reclaimed incrementally.
     working_state: dict[str, Any] = deepcopy(dict(state))
     for requirement_ref in completed_details:
         working_state = clear_requirement_progress(working_state, requirement_ref)
@@ -575,7 +621,7 @@ def compile_progress_monotone_detailed_plans(
         completed_details=completed_details,
     )
     if checkpoint is not None and len(completed_details) != len(existing):
-        checkpoint(deepcopy(working_state))
+        checkpoint(dict(working_state))
     if working_state.get("plan_ready") is True:
         return working_state
 
@@ -648,15 +694,15 @@ def compile_progress_monotone_detailed_plans(
             )
 
     state_lock = RLock()
-    record_progress = deepcopy(working_state.get("template_progress", {}))
-    if not isinstance(record_progress, dict):
+    raw_record_progress = working_state.get("template_progress", {}) or {}
+    if not isinstance(raw_record_progress, Mapping):
         raise ValueError("TEMPLATE_PROGRESS: expected checkpoint mapping")
+    record_progress = dict(raw_record_progress)
 
     def save_record(binding, responses):
         nonlocal working_state
         with state_lock:
-            candidate = deepcopy(working_state)
-            candidate.setdefault("template_progress", {})[binding] = deepcopy(responses)
+            candidate = _copy_template_progress_update(working_state, binding, responses)
             working_state = _checkpoint_state(candidate, checkpoint)
 
     pending_items = list(_pending_work_items(jobs, completed_details))
