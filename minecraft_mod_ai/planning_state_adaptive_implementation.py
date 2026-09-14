@@ -50,7 +50,6 @@ from .task_template_catalog import load_template
 from .translation_runtime import _raw_structural_kinds, translate_requirement
 
 Checkpoint = Callable[[dict[str, Any]], None]
-_TERMINAL_DETAIL_STAGE = "detailed_planning"
 
 
 def _text(value: Any) -> str:
@@ -142,32 +141,28 @@ def _merge_completed_details(
 
     value["decisions"] = non_detail + details
     value["coverage"] = coverage
+    # Legacy detailed-planning terminal blockers are obsolete state. Planning quality
+    # may require more work, but it must never become a terminal control-flow gate.
+    value["blockers"] = [
+        item
+        for item in value.get("blockers", [])
+        if not (
+            isinstance(item, Mapping)
+            and item.get("stage") == "detailed_planning"
+        )
+    ]
     active_unknowns = [
         item
         for item in value.get("unresolved", [])
         if isinstance(item, Mapping) and item.get("status") != "resolved"
     ]
-    active_blockers = [
-        item for item in value.get("blockers", []) if isinstance(item, Mapping)
-    ]
     value["plan_ready"] = (
         len(completed_details) == len(requirement_order)
         and not active_unknowns
-        and not active_blockers
     )
     result = _rehash(value)
     validate_planning_state(result)
     return result
-
-
-def _terminal_detail_blockers(state: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    return [
-        row
-        for row in state.get("blockers", [])
-        if isinstance(row, Mapping)
-        and row.get("stage") == _TERMINAL_DETAIL_STAGE
-        and row.get("terminal") is True
-    ]
 
 
 def _checkpoint_state(
@@ -178,43 +173,6 @@ def _checkpoint_state(
     validate_planning_state(value)
     if checkpoint is not None:
         checkpoint(deepcopy(value))
-    return value
-
-
-def _checkpoint_terminal_blocker(
-    state: Mapping[str, Any],
-    *,
-    requirement_ref: str,
-    work_unit: str,
-    reason: str,
-    checkpoint: Checkpoint | None,
-) -> dict[str, Any]:
-    value = deepcopy(dict(state))
-    blockers = value.setdefault("blockers", [])
-    blockers.append(
-        {
-            "blocker_id": f"b_{len(blockers) + 1:03d}",
-            "stage": _TERMINAL_DETAIL_STAGE,
-            "terminal": True,
-            "requirement_ref": requirement_ref,
-            "section": work_unit,
-            "statement": reason,
-        }
-    )
-    value["plan_ready"] = False
-    value = _checkpoint_state(value, checkpoint)
-    emit_root_cause(
-        "detailed_planning_terminal_blocker",
-        stage="planning_state",
-        operation="compile_progress_monotone_detailed_plans",
-        result="FAIL",
-        reason=reason,
-        details={
-            "requirement_ref": requirement_ref,
-            "work_unit": work_unit,
-            "terminal": True,
-        },
-    )
     return value
 
 
@@ -558,17 +516,12 @@ def compile_progress_monotone_detailed_plans(
 
     Every completed work unit removes exactly one element from the pending set and is
     checkpointed immediately. Artifact responsibility work is structural planning only;
-    it never substitutes for public acceptance-detail planning. Failed work is terminal
-    rather than re-enqueued. Completed requirements are restored only when they carry
+    it never substitutes for public acceptance-detail planning. Planning quality gaps
+    are refined by the template/section generators and are never checkpointed as a
+    terminal planning blocker. Completed requirements are restored only when they carry
     the post-fix acceptance-completion marker.
     """
     validate_planning_state(state, prompt=prompt)
-    prior_terminal = _terminal_detail_blockers(state)
-    if prior_terminal:
-        raise RuntimeError(
-            "DETAILED_PLAN_BLOCKED: terminal detailed-planning blocker already checkpointed; "
-            + "; ".join(_text(row.get("statement")) for row in prior_terminal)
-        )
 
     requirements = _requirement_decisions(state)
     if not requirements:
@@ -834,14 +787,14 @@ def compile_progress_monotone_detailed_plans(
                 else f"criterion_{idx + 1}"
             )
             reason = (
-                "DETAILED_PLAN_TIMEOUT: bounded atomic work deadline expired for "
+                "DETAILED_PLAN_TIMEOUT: atomic planning transport deadline expired for "
                 f"{job['requirement_ref']}/{work_unit_name}: {exc}"
             )
             emit_root_cause(
                 "detailed_planning_timeout",
-                stage="planning_state",
+                stage="planning_transport",
                 operation="compile_progress_monotone_detailed_plans",
-                result="FAIL",
+                result="INTERRUPTED",
                 reason=reason,
                 details={
                     "requirement_ref": job["requirement_ref"],
@@ -851,7 +804,7 @@ def compile_progress_monotone_detailed_plans(
                     "deadline_kind": exc.deadline_kind,
                     "elapsed_seconds": exc.elapsed_seconds,
                     "work_unit_timeout_seconds": exc.work_unit_timeout_seconds,
-                    "policy": "retryable_abort_current_stage",
+                    "policy": "transport_interruption_not_plan_failure",
                 },
             )
             raise TimeoutError(reason) from exc
@@ -866,47 +819,48 @@ def compile_progress_monotone_detailed_plans(
             )
             if isinstance(cause, (TimeoutError, ConnectionError, InterruptedError)):
                 reason = (
-                    "DETAILED_PLAN_TRANSPORT_INTERRUPTED: retryable atomic work interruption for "
+                    "DETAILED_PLAN_TRANSPORT_INTERRUPTED: atomic planning transport interruption for "
                     f"{job['requirement_ref']}/{work_unit_name}: "
                     f"{type(cause).__name__}: {cause}"
                 )
                 emit_root_cause(
                     "detailed_planning_transport_interrupted",
-                    stage="planning_state",
+                    stage="planning_transport",
                     operation="compile_progress_monotone_detailed_plans",
-                    result="FAIL",
+                    result="INTERRUPTED",
                     reason=reason,
                     details={
                         "requirement_ref": job["requirement_ref"],
                         "work_type": kind_tag,
                         "artifact_kind": artifact_kind,
                         "work_index": idx,
-                        "policy": "retryable_abort_current_stage",
+                        "policy": "transport_interruption_not_plan_failure",
                     },
                 )
                 raise cause
 
-            blocker_unit = (
-                f"artifact:{artifact_kind}:{step_id}"
-                if kind_tag == "artifact"
-                else f"acceptance_criterion:{idx + 1}"
+            # A generator/runtime defect is not converted into a planning blocker.
+            # Preserve all checkpointed progress and surface the original technical
+            # exception so orchestration can repair the defect without poisoning the
+            # planning state with a terminal FAIL/BLOCKED decision.
+            emit_root_cause(
+                "detailed_planning_generation_interrupted",
+                stage="planning_runtime",
+                operation="compile_progress_monotone_detailed_plans",
+                result="INTERRUPTED",
+                reason=f"{type(cause).__name__}: {cause}",
+                details={
+                    "requirement_ref": job["requirement_ref"],
+                    "work_type": kind_tag,
+                    "artifact_kind": artifact_kind,
+                    "work_index": idx,
+                    "policy": "preserve_progress_no_terminal_planning_blocker",
+                },
             )
-            reason = (
-                "DETAILED_PLAN_BLOCKED: atomic work item failed without valid progress for "
-                f"{job['requirement_ref']}/{work_unit_name}: "
-                f"{type(cause).__name__}: {cause}"
-            )
-            working_state = _checkpoint_terminal_blocker(
-                working_state,
-                requirement_ref=job["requirement_ref"],
-                work_unit=blocker_unit,
-                reason=reason,
-                checkpoint=checkpoint,
-            )
-            raise RuntimeError(reason) from cause
+            raise cause
     if len(completed_details) != len(requirement_order):
         raise RuntimeError(
-            "DETAILED_PLAN_NO_PROGRESS: scheduler exited with unfinished requirements"
+            "DETAILED_PLAN_INTERNAL_INCOMPLETE: scheduler exited before all requirements were assembled"
         )
 
     final_state = _merge_completed_details(
