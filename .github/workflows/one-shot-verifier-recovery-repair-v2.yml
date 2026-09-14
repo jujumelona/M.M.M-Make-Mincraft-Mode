@@ -1,0 +1,64 @@
+name: One-shot verifier recovery repair v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-shot-verifier-recovery-repair-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Reuse exact validated patch script
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          workflow = Path('.github/workflows/one-shot-verifier-recovery-repair.yml').read_text(encoding='utf-8')
+          start_marker = '      - name: Patch verifier recovery state machine\n        shell: bash\n        run: |\n'
+          end_marker = '\n      - name: Verify focused recovery contract'
+          if workflow.count(start_marker) != 1 or workflow.count(end_marker) != 1:
+              raise SystemExit('unable to extract prior exact patch script')
+          block = workflow.split(start_marker, 1)[1].split(end_marker, 1)[0]
+          Path('/tmp/recovery_patch.sh').write_text(dedent(block), encoding='utf-8')
+          PY
+          bash /tmp/recovery_patch.sh
+
+      - name: Correct and verify regression contract
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          test = Path('tests/test_progress_aware_verifier_recovery.py')
+          text = test.read_text(encoding='utf-8')
+          broken = '    return {"type": "function", "function": {"name": name, "parameters": {"type": "object"}}\n'
+          fixed = '    return {"type": "function", "function": {"name": name, "parameters": {"type": "object"}}}\n'
+          if text.count(broken) != 1:
+              raise SystemExit(f'expected one regression-test syntax anchor, found {text.count(broken)}')
+          test.write_text(text.replace(broken, fixed, 1), encoding='utf-8')
+          PY
+          python -m pip install --disable-pip-version-check -e ".[dev]"
+          python -m py_compile minecraft_mod_ai/progress_aware_tool_loop.py tests/test_progress_aware_verifier_recovery.py
+          pytest -q tests/test_progress_aware_verifier_recovery.py
+
+      - name: Commit repaired state machine to main
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/one-shot-verifier-recovery-repair.yml
+          git rm .github/workflows/one-shot-verifier-recovery-repair-v2.yml
+          git add minecraft_mod_ai/progress_aware_tool_loop.py tests/test_progress_aware_verifier_recovery.py
+          git commit -m "Route verifier failures through API evidence recovery"
+          git push origin HEAD:main
