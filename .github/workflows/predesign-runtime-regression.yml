@@ -12,6 +12,8 @@ on:
       - 'tests/test_planning_research_relevance_guards.py'
       - 'tests/test_research_evidence_handoff_contract.py'
       - 'tests/test_public_acceptance_runtime_boundary.py'
+      - 'tests/test_planning_detail_no_synthetic_fallback.py'
+      - 'tests/test_fixed_template_schema_repair.py'
       - '.github/workflows/predesign-runtime-regression.yml'
   workflow_dispatch:
 
@@ -42,7 +44,9 @@ jobs:
             tests/test_planning_ssot_invariants.py \
             tests/test_planning_research_relevance_guards.py \
             tests/test_research_evidence_handoff_contract.py \
-            tests/test_public_acceptance_runtime_boundary.py
+            tests/test_public_acceptance_runtime_boundary.py \
+            tests/test_planning_detail_no_synthetic_fallback.py \
+            tests/test_fixed_template_schema_repair.py
       - name: Ban retired pre-design owner
         run: |
           python - <<'PY'
