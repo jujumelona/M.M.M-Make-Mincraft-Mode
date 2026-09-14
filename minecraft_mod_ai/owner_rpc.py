@@ -64,15 +64,18 @@ class OwnerRPC:
             return OwnerRPCError('Owner protocol error: response must be an object')
         return message
 
+    def _queue_response_line(self, line: str) -> bool:
+        message = self._decode_response_line(line)
+        if message is None:
+            return False
+        self._responses.put(message)
+        return isinstance(message, OwnerRPCError)
+
     def _read(self) -> None:
         try:
             assert self.process.stdout is not None
             for line in self.process.stdout:
-                message = self._decode_response_line(line)
-                if message is None:
-                    continue
-                self._responses.put(message)
-                if isinstance(message, OwnerRPCError):
+                if self._queue_response_line(line):
                     return
         except (TypeError, ValueError, OSError, UnicodeError) as exc:
             self._responses.put(OwnerRPCError(f'Owner protocol error: {exc}'))
