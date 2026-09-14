@@ -1,0 +1,122 @@
+name: Windows Debug
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-debug-${{ github.ref }}-${{ matrix.python-version }}
+  cancel-in-progress: true
+
+jobs:
+  windows-debug:
+    name: Windows Python ${{ matrix.python-version }}
+    runs-on: windows-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    env:
+      PYTHONUTF8: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install debug dependencies
+        run: python -m pip install --prefer-binary "build>=1,<2" -e ".[dev,ui]"
+
+      - name: Capture Windows environment
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force audit/windows | Out-Null
+          @(
+            "=== git ==="
+            (git rev-parse HEAD)
+            (git status --short)
+            "=== platform ==="
+            "OS=$([System.Environment]::OSVersion.VersionString)"
+            "PROCESS_ARCH=$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture)"
+            "POWERSHELL=$($PSVersionTable.PSVersion)"
+            "=== python ==="
+            (python --version 2>&1)
+            (python -m pip --version 2>&1)
+            "=== java ==="
+            (java -version 2>&1)
+            "=== node ==="
+            (node --version 2>&1)
+            (npm --version 2>&1)
+            "=== filesystem ==="
+            (Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize | Out-String)
+          ) | Out-File -FilePath "audit/windows/environment-${{ matrix.python-version }}.log" -Encoding utf8
+          python -m pip freeze | Out-File -FilePath "audit/windows/pip-freeze-${{ matrix.python-version }}.txt" -Encoding utf8
+
+      - name: Compile Python tree
+        run: python -m compileall -q src tests tools
+
+      - name: Import package bootstrap
+        run: python -c "import minecraft_mod_ai"
+
+      - name: Run internal repository audit
+        run: python .github/scripts/debug_repo_audit.py
+
+      - name: Collect complete pytest graph
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force audit/windows | Out-Null
+          python -m pytest --collect-only -q 2>&1 | Tee-Object -FilePath "audit/windows/pytest-collect-${{ matrix.python-version }}.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run full Windows regression suite with causal diagnostics
+        if: ${{ matrix.python-version == '3.11' }}
+        run: >-
+          python tools/pytest_diagnostics.py
+          --log audit/windows/pytest-3.11.log
+          --junit audit/windows/pytest-3.11.xml
+          --durations 100
+          --maxfail 100
+          tests
+
+      - name: Run Python 3.13 compatibility regressions with causal diagnostics
+        if: ${{ matrix.python-version == '3.13' }}
+        run: >-
+          python tools/pytest_diagnostics.py
+          --log audit/windows/pytest-3.13.log
+          --junit audit/windows/pytest-3.13.xml
+          --durations 50
+          --maxfail 100
+          tests/test_colab_debug_fixture_path.py
+          tests/test_record_cardinality_blocking_contract.py
+          tests/test_worksheet_atomic_chunker.py
+          tests/test_root_cause_audit_wrapper.py
+
+      - name: Upload Windows diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-debug-py${{ matrix.python-version }}-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 30
+          path: audit/windows/
