@@ -3,8 +3,9 @@ from __future__ import annotations
 """Single prompt-first planning state machine with durable transition snapshots.
 
 No requirement catalog, implementation plan, or retrieval query exists before the
-preceding state is available. Every transition persists its complete input/output state
-as a trace artifact, so a downstream failure cannot erase the state that caused it.
+preceding state is available. Every transition persists its complete input/output state.
+Planning state is monotone progress: it is either still being assembled or ready. It has
+no terminal FAIL/BLOCKED judgement.
 """
 
 from collections.abc import Callable, Mapping
@@ -70,13 +71,7 @@ def _trace_state_snapshot(
     result: str = "SNAPSHOT",
     reason: str = "",
 ) -> None:
-    """Persist the complete state synchronously without first cloning the whole graph.
-
-    ``emit_root_cause`` serializes both the bounded event and its unabridged artifact
-    before returning, so the caller cannot mutate ``state`` before the snapshot is
-    captured. Avoiding a defensive deepcopy here removes a full-state allocation from
-    every transition while preserving the exact durable trace semantics.
-    """
+    """Persist the complete state synchronously without first cloning the whole graph."""
     emit_root_cause(
         event,
         stage="planning_state",
@@ -143,87 +138,20 @@ def _requirement_ids(state: Mapping[str, Any]) -> tuple[str, ...]:
     )
 
 
-def _stage_unknowns(state: Mapping[str, Any], stage: str) -> list[Mapping[str, Any]]:
-    rows = state.get("unresolved")
-    if not isinstance(rows, list):
-        return []
-    return [
-        item
-        for item in rows
-        if isinstance(item, Mapping)
-        and item.get("status") != "resolved"
-        and isinstance(item.get("blocks"), list)
-        and stage in item.get("blocks", [])
-    ]
-
-
-def _block_summary(state: Mapping[str, Any], *, stage: str) -> str:
-    stage_unknowns = _stage_unknowns(state, stage)
-    unresolved = [
-        (
-            str(item.get("unresolved_id") or "?"),
-            str(item.get("reason") or "unknown"),
-            str(item.get("resolution_route") or "unknown"),
-            str(item.get("status") or "unknown"),
-        )
-        for item in stage_unknowns
-    ]
-    relevant_research_refs = {
-        str(item.get("research_ref") or "") for item in stage_unknowns
-    }
-    research = [
-        (
-            str(item.get("research_id") or "?"),
-            str(item.get("status") or "unknown"),
-            str(item.get("requirement_ref") or ""),
-        )
-        for item in state.get("research_queue", [])
-        if isinstance(item, Mapping)
-        and item.get("status") != "complete"
-        and (
-            not relevant_research_refs
-            or str(item.get("research_id") or "") in relevant_research_refs
-        )
-    ]
-    blockers = [
-        str(item.get("statement") or item.get("stage") or item.get("blocker_id") or "unknown")
-        for item in state.get("blockers", [])
-        if isinstance(item, Mapping)
-        and (
-            not stage_unknowns
-            or not item.get("unresolved_id")
-            or str(item.get("unresolved_id") or "")
-            in {str(row.get("unresolved_id") or "") for row in stage_unknowns}
-        )
-    ]
-    diagnostics = [
-        (
-            str(item.get("research_ref") or "?"),
-            dict(item.get("diagnostics") or {}),
-        )
-        for item in state.get("evidence", [])
-        if isinstance(item, Mapping)
-        and item.get("sufficient") is not True
-        and (
-            not relevant_research_refs
-            or str(item.get("research_ref") or "") in relevant_research_refs
-        )
-    ]
-    return (
-        f"stage={stage}; unresolved={unresolved}; research={research}; "
-        f"blockers={blockers}; diagnostics={diagnostics}"
-    )
-
-
-def _raise_blocked(state: Mapping[str, Any], *, operation: str, message: str) -> None:
+def _emit_incomplete(
+    state: Mapping[str, Any],
+    *,
+    operation: str,
+    reason: str,
+) -> None:
+    """Record resumable progress without creating a planner failure state."""
     _trace_state_snapshot(
-        "planning_state_blocked",
+        "planning_state_incomplete",
         operation,
         state,
-        result="FAIL",
-        reason=message,
+        result="INCOMPLETE",
+        reason=reason,
     )
-    raise ValueError(message)
 
 
 def prepare_planning_state(
@@ -237,10 +165,9 @@ def prepare_planning_state(
 ) -> dict[str, Any]:
     """Resolve prompt meaning, reference scope, requirements, and plan detail.
 
-    The optional applicability resolver is a trusted host boundary. It receives only
-    opaque requirement IDs, never prompt text, requirement prose, model output, or
-    evidence. Any omitted requirement/facet therefore remains unknown and keeps the
-    full fail-safe worksheet branch.
+    The planner never converts missing detail, empty model output, interruption, or a
+    partially assembled worksheet into a terminal failure. The newest valid checkpoint
+    is returned and can be resumed by the next planning pass.
     """
 
     emit_root_cause(
@@ -267,8 +194,6 @@ def prepare_planning_state(
         ),
         input_state=existing_state,
     )
-    # Fresh states are already validated inside build_initial_planning_state(). Only a
-    # restored checkpoint needs another entry-boundary validation here.
     if existing_state is not None:
         from .planning_detail_checkpoint import refresh_worksheet_checkpoint
 
@@ -311,14 +236,12 @@ def prepare_planning_state(
             checkpoint(deepcopy(state))
 
         if not _requirements_exist(state):
-            _raise_blocked(
+            _emit_incomplete(
                 state,
                 operation="requirement_selection",
-                message=(
-                    "PLANNING_REQUIREMENT_SELECTION_BLOCKED: "
-                    + _block_summary(state, stage="requirement_selection")
-                ),
+                reason="no requirement records were produced; preserve and resume",
             )
+            return state
 
     if detail_section_applicability_resolver is None:
         state = _transition(
@@ -348,29 +271,49 @@ def prepare_planning_state(
         lambda: required_sections_by_requirement(state),
         input_state=state,
     )
-    state = _transition(
-        "compile_progress_monotone_detailed_plans",
-        lambda: compile_progress_monotone_detailed_plans(
-            router,
-            prompt,
+
+    # Keep the most recent completed work unit locally as well as in the caller's
+    # checkpoint. If a worker is interrupted, return this state instead of turning the
+    # interruption into a planner FAIL/BLOCKED result.
+    latest_state = deepcopy(state)
+
+    def save_detailed_state(value: dict[str, Any]) -> None:
+        nonlocal latest_state
+        latest_state = deepcopy(value)
+        if checkpoint is not None:
+            checkpoint(deepcopy(value))
+
+    try:
+        state = _transition(
+            "compile_progress_monotone_detailed_plans",
+            lambda: compile_progress_monotone_detailed_plans(
+                router,
+                prompt,
+                state,
+                required_sections_by_requirement=section_selection,
+                checkpoint=save_detailed_state,
+            ),
+            input_state=state,
+        )
+    except Exception as exc:
+        state = latest_state
+        _emit_incomplete(
             state,
-            required_sections_by_requirement=section_selection,
-            checkpoint=checkpoint,
-        ),
-        input_state=state,
-    )
-    _transition(
-        "validate_final",
-        lambda: validate_planning_state(state, prompt=prompt),
-        input_state=state,
-    )
-    if state.get("plan_ready") is not True:
-        _raise_blocked(
+            operation="compile_progress_monotone_detailed_plans",
+            reason=f"{type(exc).__name__}: {exc}",
+        )
+        if checkpoint is not None:
+            checkpoint(deepcopy(state))
+        return state
+
+    if state.get("plan_ready") is True:
+        emit_planning_goal_satisfied(state)
+    else:
+        _emit_incomplete(
             state,
             operation="final_readiness",
-            message="PLANNING_STATE_NOT_READY: planning state did not reach code-ready coverage",
+            reason="planning state still has resumable work",
         )
-    emit_planning_goal_satisfied(state)
     if checkpoint is not None:
         checkpoint(deepcopy(state))
     return state
