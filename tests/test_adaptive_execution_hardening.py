@@ -155,7 +155,7 @@ def test_criterion_progress_path_copy_preserves_unrelated_payload_identity() -> 
     result = store_criterion_progress(
         state,
         requirement_ref="REQ-1",
-        selected_sections=("behavior",),
+        selected_sections=None,
         criterion_index=0,
         criterion="works",
         fragment={"section_updates": []},
