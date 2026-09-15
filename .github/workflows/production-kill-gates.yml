@@ -1,0 +1,186 @@
+name: Production Kill Gates
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-kill-gates-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUTF8: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  file-plan:
+    name: Discover every test file
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      lane1: ${{ steps.plan.outputs.lane1 }}
+      lane2: ${{ steps.plan.outputs.lane2 }}
+      lane3: ${{ steps.plan.outputs.lane3 }}
+      lane4: ${{ steps.plan.outputs.lane4 }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          for lane in 1 2 3 4; do
+            matrix="$(python -m tools.ci_test_matrix --file-cells --lane "$lane" --lane-count 4 --max-jobs 256)"
+            test "$matrix" != '{"include":[]}'
+            echo "lane${lane}=$matrix" >> "$GITHUB_OUTPUT"
+          done
+          python - <<'PY'
+          from pathlib import Path
+          from tools.ci_test_matrix import build_file_lanes
+
+          expected = sorted(path.as_posix() for path in Path("tests").glob("test_*.py"))
+          lanes = build_file_lanes(expected, lane_count=4, max_jobs_per_lane=256)
+          cells = [cell for lane in lanes for cell in lane]
+          actual = [cell["files"][0] for cell in cells]
+          assert expected, "no test files discovered"
+          assert len(cells) == len(expected), (len(cells), len(expected))
+          assert len(actual) == len(set(actual)), "duplicate test files in CI matrix"
+          assert sorted(actual) == expected, "CI matrix omitted or invented test files"
+          assert all(len(cell["files"]) == 1 for cell in cells), "a CI cell contains multiple files"
+          assert all(len(lane) <= 256 for lane in lanes), "GitHub matrix capacity exceeded"
+          print(f"production kill gates: files={len(expected)} lanes={[len(lane) for lane in lanes]}")
+          PY
+
+  collection-contract:
+    name: Whole-suite collection contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install --prefer-binary -e '.[dev,ui]'
+      - name: Collect every test without import errors
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p audit/kill-gates
+          python -m pytest --collect-only -q 2>&1 | tee audit/kill-gates/collection.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kill-gate-collection-${{ github.sha }}
+          path: audit/kill-gates/collection.log
+          if-no-files-found: warn
+
+  lane1:
+    name: Kill gate L1 / ${{ matrix.id }}
+    needs: file-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.file-plan.outputs.lane1) }}
+    steps: &test_steps
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: python -m pip install --prefer-binary -e '.[dev,ui]'
+      - name: Run exactly one test file
+        shell: bash
+        env:
+          TEST_FILES_JSON: ${{ toJSON(matrix.files) }}
+          CELL_ID: ${{ matrix.id }}
+        run: |
+          set -euo pipefail
+          mkdir -p audit/kill-gates
+          python - <<'PY' > /tmp/test-file.txt
+          import json
+          import os
+          files = json.loads(os.environ["TEST_FILES_JSON"])
+          assert len(files) == 1, f"kill gate must own exactly one test file, got {files!r}"
+          print(files[0])
+          PY
+          test_file="$(cat /tmp/test-file.txt)"
+          python tools/pytest_diagnostics.py \
+            --log "audit/kill-gates/${CELL_ID}.log" \
+            --junit "audit/kill-gates/${CELL_ID}.xml" \
+            --durations 25 \
+            --maxfail 100 \
+            "$test_file"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kill-gate-${{ matrix.id }}-${{ github.sha }}
+          path: |
+            audit/kill-gates/${{ matrix.id }}.log
+            audit/kill-gates/${{ matrix.id }}.xml
+          if-no-files-found: warn
+
+  lane2:
+    name: Kill gate L2 / ${{ matrix.id }}
+    needs: file-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.file-plan.outputs.lane2) }}
+    steps: *test_steps
+
+  lane3:
+    name: Kill gate L3 / ${{ matrix.id }}
+    needs: file-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.file-plan.outputs.lane3) }}
+    steps: *test_steps
+
+  lane4:
+    name: Kill gate L4 / ${{ matrix.id }}
+    needs: file-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.file-plan.outputs.lane4) }}
+    steps: *test_steps
+
+  gate:
+    name: Production Kill Gate
+    if: ${{ always() }}
+    needs: [file-plan, collection-contract, lane1, lane2, lane3, lane4]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail closed on every mandatory result
+        env:
+          PLAN: ${{ needs.file-plan.result }}
+          COLLECTION: ${{ needs.collection-contract.result }}
+          LANE1: ${{ needs.lane1.result }}
+          LANE2: ${{ needs.lane2.result }}
+          LANE3: ${{ needs.lane3.result }}
+          LANE4: ${{ needs.lane4.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'plan=%s collection=%s lanes=%s,%s,%s,%s\n' \
+            "$PLAN" "$COLLECTION" "$LANE1" "$LANE2" "$LANE3" "$LANE4"
+          test "$PLAN" = success
+          test "$COLLECTION" = success
+          test "$LANE1" = success
+          test "$LANE2" = success
+          test "$LANE3" = success
+          test "$LANE4" = success
