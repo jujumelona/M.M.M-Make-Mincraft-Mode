@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Mapping
 from functools import wraps
 from typing import Any, Callable
 
@@ -74,136 +73,14 @@ def _with_required_target(
     )
 
 
-def _canonical_research_target(central_module: Any, research_brief: dict[str, Any]) -> Any:
-    raw_target = research_brief.get("_mmm_platform_target")
-    if not isinstance(raw_target, Mapping):
-        raise PlatformTargetContractError(
-            "Central research requires _mmm_platform_target before RAG starts. "
-            "Serial/deferred research fallback is disabled."
-        )
-
-    version = str(
-        raw_target.get("minecraft_version") or raw_target.get("game_version") or ""
-    ).strip()
-    loader = str(raw_target.get("loader") or "").strip().casefold()
-    if not version or not loader:
-        raise PlatformTargetContractError(
-            "Central research platform target requires minecraft_version and loader. "
-            "Serial/deferred research fallback is disabled."
-        )
-
-    try:
-        adapter = central_module.adapter_for_target(version, loader)
-    except Exception as exc:  # target resolution is part of the boundary contract
-        raise PlatformTargetContractError(
-            f"Central research platform target is not executable: {loader}/{version}: {exc}"
-        ) from exc
-
-    research_brief["_mmm_platform_target"] = {
-        "minecraft_version": adapter.minecraft_version,
-        "loader": adapter.loader,
-        "mappings": adapter.yarn_mappings,
-    }
-    return adapter
-
-
-def _assert_parallel_research_ready(
-    central_module: Any,
-    parallel_module: Any,
-    research_brief: dict[str, Any],
-) -> None:
-    _canonical_research_target(central_module, research_brief)
-
-    raw_domains = research_brief.get("domains")
-    if not isinstance(raw_domains, list) or not raw_domains:
-        raise PlatformTargetContractError(
-            "Central research requires a non-empty domains list before RAG starts."
-        )
-
-    try:
-        domains = [central_module._research_domain(raw) for raw in raw_domains]
-    except Exception as exc:
-        raise PlatformTargetContractError(
-            f"Central research contains an invalid domain: {exc}"
-        ) from exc
-
-    _query_criteria, domain_queries, _domain_criteria = parallel_module._coverage_query_plan(
-        central_module,
-        domains,
-    )
-    official_domains = [domain for domain in domains if "official_docs" in domain.providers]
-    if not official_domains:
-        return
-
-    primary_queries = list(
-        dict.fromkeys(
-            query
-            for domain in official_domains
-            for query in domain_queries[domain.domain_id]
-            if str(query).strip()
-        )
-    )
-    if not primary_queries:
-        raise PlatformTargetContractError(
-            "Official-doc research produced no primary queries. "
-            "Serial fallback is disabled; the research graph must supply a real query."
-        )
-
-
-def _research_brief_argument(
-    args: tuple[Any, ...],
-    kwargs: Mapping[str, Any],
-) -> dict[str, Any]:
-    research_brief = args[0] if args else kwargs.get("research_brief")
-    if not isinstance(research_brief, dict):
-        raise PlatformTargetContractError(
-            "Parallel research requires a mapping research_brief before RAG starts."
-        )
-    return research_brief
-
-
-def _install_strict_research_boundary(central_module: Any) -> None:
-    """Make fallback-only branches unreachable from the production research entrypoint."""
-    from . import parallel_runtime_contract as parallel_module
-
-    current_normalize = central_module.normalize_research_brief
-    if not getattr(current_normalize, "_mmm_strict_platform_target", False):
-
-        @wraps(current_normalize)
-        def strict_normalize(*args: Any, **kwargs: Any) -> dict[str, Any]:
-            brief = current_normalize(*args, **kwargs)
-            _canonical_research_target(central_module, brief)
-            brief["brief_sha256"] = central_module._sha256(
-                central_module.canonical_json(brief)
-            )
-            return brief
-
-        strict_normalize._mmm_strict_platform_target = True
-        central_module.normalize_research_brief = strict_normalize
-
-    current_parallel = parallel_module.retrieve_domain_evidence
-    if not getattr(current_parallel, "_mmm_no_rag_fallback", False):
-
-        @wraps(current_parallel)
-        def strict_parallel_retrieve(*args: Any, **kwargs: Any) -> dict[str, Any]:
-            research_brief = _research_brief_argument(args, kwargs)
-            _assert_parallel_research_ready(
-                central_module,
-                parallel_module,
-                research_brief,
-            )
-            return current_parallel(*args, **kwargs)
-
-        strict_parallel_retrieve._mmm_no_rag_fallback = True
-        parallel_module.retrieve_domain_evidence = strict_parallel_retrieve
-
-
 def install(*, retrieval_module: Any) -> None:
-    """Require one exact target at every production RAG boundary.
+    """Require one exact target at every production RAG retrieval boundary.
 
     Target applicability, mapping identity, scoring, graph expansion and receipt creation remain
     owned by ``OfficialCorpusIndex.retrieve``. Missing or invalid targets are contract failures;
     this module never converts them into empty evidence or serial/deferred fallback execution.
+    The central research graph contract is enforced natively by ``parallel_runtime_contract``;
+    this installer does not replace central-research entrypoints at runtime.
     """
 
     cls = retrieval_module.OfficialCorpusIndex
@@ -279,7 +156,6 @@ def install(*, retrieval_module: Any) -> None:
         "retrieve",
         shared_retrieve,
     )
-    _install_strict_research_boundary(central_module)
 
 
 __all__ = ["PlatformTargetContractError", "install"]
