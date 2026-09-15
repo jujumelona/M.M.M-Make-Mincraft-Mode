@@ -48,7 +48,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
 
       - name: Install debug dependencies
         run: python -m pip install --prefer-binary "build>=1,<2" -e ".[dev,ui]"
@@ -161,7 +161,8 @@ jobs:
             tests/test_ci_quality_regression_audit.py \
             tests/test_pytest_diagnostics.py \
             tests/test_pytest_diagnostics_timeout_evidence.py \
-            tests/test_ci_test_matrix_file_cells.py
+            tests/test_ci_test_matrix_file_cells.py \
+            tests/test_full_debug_gate_java_contract.py
 
       - name: Run exhaustive project Debug audit with compact root-cause output
         if: ${{ always() }}
