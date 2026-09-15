@@ -26,6 +26,13 @@ _VALIDATION_INPUT_CHANGE_PATTERNS = (
     re.compile(r"\bproject inputs changed during validation\b", re.IGNORECASE),
     re.compile(r"\bresult is not certifiable\b", re.IGNORECASE),
 )
+_FALLBACK_REASONS = {
+    "JAVA_TOOLCHAIN_UNAVAILABLE": "JDT verifier unavailable and Gradle Java toolchain unavailable",
+    "VALIDATION_INPUTS_CHANGED": (
+        "JDT verifier unavailable and Gradle validation inputs changed before certification"
+    ),
+}
+_DEFAULT_FALLBACK_REASON = "JDT verifier unavailable; pinned Gradle build used as host verifier"
 
 
 def _bounded_log_tail(path: str | None) -> str:
@@ -68,13 +75,17 @@ def _last_gradle_log(report: Any, report_dict: dict[str, Any]) -> str:
     return _bounded_log_tail(str(final_command.get("log_path") or ""))
 
 
+def _is_gradle_environment_unavailable(report: Any, last_log: str) -> bool:
+    return (
+        str(report.status).strip().upper() == "UNAVAILABLE"
+        or _is_java_toolchain_failure(report.error, last_log)
+    )
+
+
 def _fallback_status(report: Any, last_log: str) -> tuple[str, str | None]:
     if report.passed:
         return "PASS", None
-    if (
-        str(report.status).strip().upper() == "UNAVAILABLE"
-        or _is_java_toolchain_failure(report.error, last_log)
-    ):
+    if _is_gradle_environment_unavailable(report, last_log):
         return "UNAVAILABLE", "JAVA_TOOLCHAIN_UNAVAILABLE"
     if _is_validation_input_change(report.error, last_log):
         return "UNAVAILABLE", "VALIDATION_INPUTS_CHANGED"
@@ -119,11 +130,7 @@ def _failure_fields(failure_code: str | None) -> dict[str, Any]:
 
 
 def _fallback_reason(failure_code: str | None) -> str:
-    if failure_code == "JAVA_TOOLCHAIN_UNAVAILABLE":
-        return "JDT verifier unavailable and Gradle Java toolchain unavailable"
-    if failure_code == "VALIDATION_INPUTS_CHANGED":
-        return "JDT verifier unavailable and Gradle validation inputs changed before certification"
-    return "JDT verifier unavailable; pinned Gradle build used as host verifier"
+    return _FALLBACK_REASONS.get(failure_code, _DEFAULT_FALLBACK_REASON)
 
 
 def _gradle_fallback_receipt(
