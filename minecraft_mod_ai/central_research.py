@@ -178,10 +178,17 @@ def normalize_research_brief(
         ),
     }
     selection = game_design.get("_platform_selection")
-    if isinstance(selection, Mapping):
-        target = selection.get("target")
-        if target is not None:
-            payload["_mmm_platform_target"] = _canonical_platform_target(target)
+    target = selection.get("target") if isinstance(selection, Mapping) else None
+    if target is None:
+        direct_target = {
+            "minecraft_version": game_design.get("minecraft_version"),
+            "loader": game_design.get("loader"),
+            "mappings": game_design.get("mappings"),
+        }
+        if any(value not in (None, "") for value in direct_target.values()):
+            target = direct_target
+    if target is not None:
+        payload["_mmm_platform_target"] = _canonical_platform_target(target)
     payload["brief_sha256"] = _sha256(canonical_json(payload))
     return payload
 
@@ -195,11 +202,17 @@ def _build_research_graph(
     if not isinstance(domains, list) or not domains:
         raise SpecValidationError("Central research brief has no domains.")
 
-    target = _canonical_platform_target(research_brief.get("_mmm_platform_target"))
-    adapter = adapter_for_target(target["minecraft_version"], target["loader"])
+    raw_target = research_brief.get("_mmm_platform_target")
+    target = _canonical_platform_target(raw_target) if raw_target is not None else None
+    adapter = (
+        adapter_for_target(target["minecraft_version"], target["loader"])
+        if target is not None
+        else None
+    )
 
     results: list[dict[str, Any]] = []
     unresolved: list[str] = []
+    deferred: list[str] = []
     for raw_domain in domains:
         domain = _research_domain(raw_domain)
         if "official_docs" not in domain.providers:
@@ -207,6 +220,16 @@ def _build_research_graph(
                 {
                     "domain_id": domain.domain_id,
                     "strategy": "routed_to_other_providers",
+                    "queries": [],
+                }
+            )
+            continue
+        if adapter is None:
+            deferred.append(domain.domain_id)
+            results.append(
+                {
+                    "domain_id": domain.domain_id,
+                    "strategy": "deferred_until_platform_selected",
                     "queries": [],
                 }
             )
@@ -261,7 +284,7 @@ def _build_research_graph(
         "brief_sha256": research_brief.get("brief_sha256", ""),
         "target": target,
         "domains": results,
-        "deferred_official_domains": [],
+        "deferred_official_domains": deferred,
         "unresolved_official_domains": unresolved,
         "authorization": "none",
         "retrieval_is_authority": False,

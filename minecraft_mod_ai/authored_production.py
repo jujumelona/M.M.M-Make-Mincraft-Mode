@@ -14,13 +14,12 @@ from .spec import ModSpec, Proposal, ProposalStatus
 _TARGET_KEYS = ("minecraft_version", "loader", "mappings")
 
 
-def _require_bound_target(design: Mapping[str, Any]) -> dict[str, str]:
-    """Return the host-selected platform triple produced by ``_bind_platform``.
+def _bound_target(design: Mapping[str, Any]) -> dict[str, str]:
+    """Return the complete host-selected target, or no target when none exists.
 
-    Saved authored designs bypass the normal planning path, so the production module
-    must carry the same host-selected target contract that normal production receives.
-    Do not infer or default any of these values here: an incomplete binding is an
-    upstream contract violation and must fail before an RAG worker is submitted.
+    Saved authored production may be target-agnostic. Complete absence must not abort
+    production; Official RAG is skipped later before a worker is created. A partial
+    target is never accepted because it would make the host contract ambiguous.
     """
     candidates: list[Mapping[str, Any]] = [design]
     for key in ("platform", "target", "toolchain", "build", "existing_project"):
@@ -28,14 +27,26 @@ def _require_bound_target(design: Mapping[str, Any]) -> dict[str, str]:
         if isinstance(value, Mapping):
             candidates.append(value)
 
-    for candidate in candidates:
-        if all(candidate.get(key) not in (None, "") for key in _TARGET_KEYS):
-            return {key: str(candidate[key]) for key in _TARGET_KEYS}
+    selection = design.get("_platform_selection")
+    if isinstance(selection, Mapping):
+        candidates.append(selection)
+        selected_target = selection.get("target")
+        if isinstance(selected_target, Mapping):
+            candidates.append(selected_target)
 
-    raise ValueError(
-        "Saved authored production requires the host-selected minecraft_version, "
-        "loader and mappings returned by platform binding."
-    )
+    saw_partial = False
+    for candidate in candidates:
+        present = [candidate.get(key) not in (None, "") for key in _TARGET_KEYS]
+        if all(present):
+            return {key: str(candidate[key]) for key in _TARGET_KEYS}
+        saw_partial = saw_partial or any(present)
+
+    if saw_partial:
+        raise ValueError(
+            "Saved authored production received an incomplete platform target; "
+            "minecraft_version, loader and mappings must be provided together."
+        )
+    return {}
 
 
 def compile_authored_design(
@@ -73,7 +84,7 @@ def compile_authored_design(
     # The saved-plan route previously preserved the binding only in game_design while
     # its production module dropped the target triple. Official RAG validates the
     # production-side host contract, so make the bound target explicit at that boundary.
-    target = _require_bound_target(design)
+    target = _bound_target(design)
     design = {**design, **target}
 
     return complete_proposal_from_parts(

@@ -668,11 +668,21 @@ def _parallel_retrieve_domain_evidence_factory(
             raise ParallelResearchContractError("research_brief must be a mapping")
 
         selected_retrieve = retrieve or original_default_retrieve
-        adapter, domains = _require_parallel_research_contract(
-            central_module,
-            research_brief,
-        )
-        raw_domains = research_brief["domains"]
+        raw_domains = research_brief.get("domains")
+        if not isinstance(raw_domains, list) or not raw_domains:
+            raise ParallelResearchContractError(
+                "official-doc research requires at least one research domain"
+            )
+
+        domains: list[Any] = []
+        for index, raw_domain in enumerate(raw_domains):
+            try:
+                domain = central_module._research_domain(raw_domain)
+            except Exception as exc:  # noqa: BLE001 - contract boundary
+                raise ParallelResearchContractError(
+                    f"invalid research domain at index {index}"
+                ) from exc
+            domains.append(domain)
 
         official_domains = [
             domain for domain in domains if "official_docs" in domain.providers
@@ -682,6 +692,21 @@ def _parallel_retrieve_domain_evidence_factory(
                 research_brief,
                 retrieve=selected_retrieve,
             )
+
+        # No target means Official RAG is inapplicable, not that the whole production
+        # request is invalid. Exit through the canonical graph before pool/index/prefetch
+        # creation. A present but malformed target still enters the strict contract.
+        if research_brief.get("_mmm_platform_target") is None:
+            return build_research_graph(
+                research_brief,
+                retrieve=selected_retrieve,
+            )
+
+        adapter, verified_domains = _require_parallel_research_contract(
+            central_module,
+            research_brief,
+        )
+        domains = verified_domains
 
         query_criteria, domain_queries, domain_criteria = _coverage_query_plan(
             central_module,
