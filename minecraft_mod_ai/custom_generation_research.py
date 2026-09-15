@@ -45,39 +45,7 @@ def _target_values(kwargs: Mapping[str, Any], *, project_root: str | Path | None
 
 
 def _sanitized_messages(messages: Sequence[Mapping[str, Any]], *, minecraft_version: str, loader: str, mappings: str) -> list[dict[str, Any]]:
-    adapter = adapter_for_target(minecraft_version, loader)
-    result: list[dict[str, Any]] = []
-    replacements = (('Minecraft Fabric', f'Minecraft {loader}'), ('Fabric Java', f'{loader} Java'))
-    for raw in messages:
-        message = dict(raw)
-        content = message.get('content')
-        if not isinstance(content, str):
-            result.append(message)
-            continue
-        updated = re.sub('Minecraft(?: Java)? \\d+(?:\\.\\d+){1,2}(?: Fabric)?', f'Minecraft Java {minecraft_version} {loader}', content)
-        for old, new in replacements:
-            updated = updated.replace(old, new)
-        if message.get('role') == 'user' and updated.lstrip().startswith('{'):
-            try:
-                payload = json.loads(updated)
-                original_payload = json.loads(content)
-            except json.JSONDecodeError:
-                payload = None
-            if isinstance(payload, dict):
-                # Target normalization must not rewrite the saved design document.
-                original_module = original_payload.get('module', {})
-                if isinstance(original_module, dict) and 'authored_plan' in original_module:
-                    payload['module']['authored_plan'] = original_module['authored_plan']
-                target = payload.get('target')
-                if isinstance(target, dict):
-                    payload['target'] = {**target, 'minecraft_version': minecraft_version, 'loader': loader, 'mappings': mappings, 'java': adapter.java_version}
-                task = payload.get('task')
-                if isinstance(task, str):
-                    payload['task'] = task.replace('Fabric module', 'Minecraft module').replace('Fabric Java', 'Minecraft Java')
-                updated = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
-        message['content'] = updated
-        result.append(message)
-    return result
+    return _architecture_impl__sanitized_messages((messages, minecraft_version, loader, mappings))
 
 
 def _inject_research_context(messages: Sequence[Mapping[str, Any]], bundle: Mapping[str, Any], *, reason: str, dependency_violations: Sequence[Mapping[str, Any]]=()) -> list[dict[str, Any]]:
@@ -270,3 +238,40 @@ __all__ = [
     "_run_single_with_research",
     "_target_values",
 ]
+
+def _architecture_impl__sanitized_messages(_ctx):
+    (messages, minecraft_version, loader, mappings) = _ctx
+    adapter = adapter_for_target(minecraft_version, loader)
+    result: list[dict[str, Any]] = []
+    replacements = (('Minecraft Fabric', f'Minecraft {loader}'), ('Fabric Java', f'{loader} Java'))
+    for raw in messages:
+        message = dict(raw)
+        content = message.get('content')
+        if not isinstance(content, str):
+            result.append(message)
+            continue
+        updated = re.sub('Minecraft(?: Java)? \\d+(?:\\.\\d+){1,2}(?: Fabric)?', f'Minecraft Java {minecraft_version} {loader}', content)
+        for old, new in replacements:
+            updated = updated.replace(old, new)
+        if message.get('role') == 'user' and updated.lstrip().startswith('{'):
+            try:
+                payload = json.loads(updated)
+                original_payload = json.loads(content)
+            except json.JSONDecodeError:
+                payload = None
+            if isinstance(payload, dict):
+                # Target normalization must not rewrite the saved design document.
+                original_module = original_payload.get('module', {})
+                if isinstance(original_module, dict) and 'authored_plan' in original_module:
+                    payload['module']['authored_plan'] = original_module['authored_plan']
+                target = payload.get('target')
+                if isinstance(target, dict):
+                    payload['target'] = {**target, 'minecraft_version': minecraft_version, 'loader': loader, 'mappings': mappings, 'java': adapter.java_version}
+                task = payload.get('task')
+                if isinstance(task, str):
+                    payload['task'] = task.replace('Fabric module', 'Minecraft module').replace('Fabric Java', 'Minecraft Java')
+                updated = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+        message['content'] = updated
+        result.append(message)
+    return result
+

@@ -35,11 +35,7 @@ def _adapter_name(router: Any, role: str) -> str:
 
 
 def _structured_text_transport_required(router: Any, role: str) -> bool:
-    return (
-        (role == "planner" and callable(getattr(router, "generate_text", None)))
-        or _adapter_name(router, role) == "mock"
-        or not callable(getattr(router, "generate_tool_decision", None))
-    )
+    return _architecture_impl__structured_text_transport_required((router, role))
 
 
 def _structured_text_generator(router: Any):
@@ -310,78 +306,8 @@ def _generate_native_template_arguments(
     parameters: Mapping[str, Any],
     description: str,
 ) -> Mapping[str, Any]:
-    """Generate host-valid tool arguments using bounded, schema-derived recovery."""
-
-    initial_messages = tuple(dict(message) for message in messages)
-    try:
-        arguments = router.generate_tool_decision(
-            role,
-            initial_messages,
-            tool_name=tool_name,
-            parameters=parameters,
-            description=description,
-        )
-        if not isinstance(arguments, Mapping):
-            raise ValueError("fixed-template function call did not return an argument mapping")
-        return _validate_native_arguments(arguments, parameters)
-    except Exception as initial_error:
-        if role == "planner":
-            raise
-        # A multi-field schema can enter a deterministic invalid attractor when one field is
-        # repeatedly malformed. Do not regenerate the same object again. Project the failed
-        # object into one-field forced calls, merge the host-validated fields, then validate
-        # the complete object exactly once.
-        if _object_field_schemas(parameters):
-            try:
-                return _generate_native_arguments_by_field(
-                    router,
-                    role,
-                    initial_messages,
-                    tool_name=tool_name,
-                    parameters=parameters,
-                    description=description,
-                    failure=initial_error,
-                )
-            except Exception as field_error:
-                raise RuntimeError(
-                    "FIXED_TEMPLATE_SCHEMA_REPAIR_FRONTIER_EXHAUSTED: model could not satisfy "
-                    "the host schema after deterministic field-isolated recovery"
-                ) from field_error
-
-        last_error: BaseException = initial_error
-        current_messages = initial_messages
-        directives = _schema_repair_directives(parameters)
-        for repair_index, directive in enumerate(directives, start=1):
-            current_messages = _schema_repair_messages(
-                messages,
-                failure=last_error,
-                directive=directive,
-            )
-            try:
-                arguments = router.generate_tool_decision(
-                    role,
-                    current_messages,
-                    tool_name=f"{tool_name}_repair_{repair_index}",
-                    parameters=parameters,
-                    description=(
-                        description
-                        + " The prior function arguments failed host schema validation. "
-                        + directive
-                        + "."
-                    ),
-                )
-                if not isinstance(arguments, Mapping):
-                    raise ValueError(
-                        "fixed-template function call did not return an argument mapping"
-                    )
-                return _validate_native_arguments(arguments, parameters)
-            except Exception as exc:
-                last_error = exc
-
-    raise RuntimeError(
-        "FIXED_TEMPLATE_SCHEMA_REPAIR_FRONTIER_EXHAUSTED: model could not satisfy every "
-        "host-schema obligation across the schema-derived repair frontier"
-    ) from last_error
+    'Generate host-valid tool arguments using bounded, schema-derived recovery.'
+    return _architecture_impl__generate_native_template_arguments((router, role, messages, tool_name, parameters, description))
 
 
 def generate_fixed_template_value(
@@ -515,3 +441,88 @@ def generate_fixed_template_text(
 
 
 __all__ = ["generate_fixed_template_text", "generate_fixed_template_value"]
+
+def _architecture_impl__structured_text_transport_required(_ctx):
+    (router, role) = _ctx
+    return (
+        (role == "planner" and callable(getattr(router, "generate_text", None)))
+        or _adapter_name(router, role) == "mock"
+        or not callable(getattr(router, "generate_tool_decision", None))
+    )
+
+
+def _architecture_impl__generate_native_template_arguments(_ctx):
+    (router, role, messages, tool_name, parameters, description) = _ctx
+    """Generate host-valid tool arguments using bounded, schema-derived recovery."""
+
+    initial_messages = tuple(dict(message) for message in messages)
+    try:
+        arguments = router.generate_tool_decision(
+            role,
+            initial_messages,
+            tool_name=tool_name,
+            parameters=parameters,
+            description=description,
+        )
+        if not isinstance(arguments, Mapping):
+            raise ValueError("fixed-template function call did not return an argument mapping")
+        return _validate_native_arguments(arguments, parameters)
+    except Exception as initial_error:
+        if role == "planner":
+            raise
+        # A multi-field schema can enter a deterministic invalid attractor when one field is
+        # repeatedly malformed. Do not regenerate the same object again. Project the failed
+        # object into one-field forced calls, merge the host-validated fields, then validate
+        # the complete object exactly once.
+        if _object_field_schemas(parameters):
+            try:
+                return _generate_native_arguments_by_field(
+                    router,
+                    role,
+                    initial_messages,
+                    tool_name=tool_name,
+                    parameters=parameters,
+                    description=description,
+                    failure=initial_error,
+                )
+            except Exception as field_error:
+                raise RuntimeError(
+                    "FIXED_TEMPLATE_SCHEMA_REPAIR_FRONTIER_EXHAUSTED: model could not satisfy "
+                    "the host schema after deterministic field-isolated recovery"
+                ) from field_error
+
+        last_error: BaseException = initial_error
+        current_messages = initial_messages
+        directives = _schema_repair_directives(parameters)
+        for repair_index, directive in enumerate(directives, start=1):
+            current_messages = _schema_repair_messages(
+                messages,
+                failure=last_error,
+                directive=directive,
+            )
+            try:
+                arguments = router.generate_tool_decision(
+                    role,
+                    current_messages,
+                    tool_name=f"{tool_name}_repair_{repair_index}",
+                    parameters=parameters,
+                    description=(
+                        description
+                        + " The prior function arguments failed host schema validation. "
+                        + directive
+                        + "."
+                    ),
+                )
+                if not isinstance(arguments, Mapping):
+                    raise ValueError(
+                        "fixed-template function call did not return an argument mapping"
+                    )
+                return _validate_native_arguments(arguments, parameters)
+            except Exception as exc:
+                last_error = exc
+
+    raise RuntimeError(
+        "FIXED_TEMPLATE_SCHEMA_REPAIR_FRONTIER_EXHAUSTED: model could not satisfy every "
+        "host-schema obligation across the schema-derived repair frontier"
+    ) from last_error
+

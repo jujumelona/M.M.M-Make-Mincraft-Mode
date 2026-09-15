@@ -120,41 +120,7 @@ def _runtime_cardinality_blocking(identifier: str) -> bool:
 
 
 def _apply_record_host_policy(identifier: str, value: dict):
-    if _runtime_concern_section(identifier) is None:
-        return value
-
-    expected_blocking = _runtime_cardinality_blocking(identifier)
-    declared_blocking = value.get("cardinality_blocking")
-    if declared_blocking is not None:
-        if not isinstance(declared_blocking, bool):
-            raise ValueError(f"TEMPLATE_CARDINALITY_POLICY: {identifier} must declare a boolean")
-        if declared_blocking is not expected_blocking:
-            raise ValueError(
-                f"TEMPLATE_CARDINALITY_POLICY: {identifier} declares "
-                f"{declared_blocking!r}, host taxonomy requires {expected_blocking!r}"
-            )
-    value["cardinality_blocking"] = expected_blocking
-
-    rules = []
-    for rule in value.get("rules", ()):
-        text = str(rule)
-        lowered = text.strip().lower()
-        if lowered.startswith(_POSITIVE_HOST_CONTROL_PREFIXES):
-            continue
-        if lowered.startswith("return only the next record"):
-            text = text.replace("the next record", "the host-requested ordinal record", 1)
-        rules.append(text)
-    if not any("host owns cardinality and iteration" in rule.lower() for rule in rules):
-        rules.append(_HOST_CONTROL_RULE)
-    if not expected_blocking:
-        rules.append(
-            "You are the designer of this gameplay record. Choose unspecified mechanics, "
-            "actors, values and interactions coherently with the requirement. Authored "
-            "design choices need no external evidence or approval. Keep externally "
-            "verifiable API and repository facts separate from those choices."
-        )
-    value["rules"] = rules
-    return value
+    return _architecture_impl__apply_record_host_policy((identifier, value))
 
 
 def _materialize_atomic_record_schema(schema: dict) -> dict:
@@ -266,3 +232,42 @@ def detail_records():
             fields = _required_leaf_fields(schema, identifier=identifier)
             records[section][identifier.rsplit("/", 1)[1]] = " ".join(fields)
     return records
+
+def _architecture_impl__apply_record_host_policy(_ctx):
+    (identifier, value) = _ctx
+    if _runtime_concern_section(identifier) is None:
+        return value
+
+    expected_blocking = _runtime_cardinality_blocking(identifier)
+    declared_blocking = value.get("cardinality_blocking")
+    if declared_blocking is not None:
+        if not isinstance(declared_blocking, bool):
+            raise ValueError(f"TEMPLATE_CARDINALITY_POLICY: {identifier} must declare a boolean")
+        if declared_blocking is not expected_blocking:
+            raise ValueError(
+                f"TEMPLATE_CARDINALITY_POLICY: {identifier} declares "
+                f"{declared_blocking!r}, host taxonomy requires {expected_blocking!r}"
+            )
+    value["cardinality_blocking"] = expected_blocking
+
+    rules = []
+    for rule in value.get("rules", ()):
+        text = str(rule)
+        lowered = text.strip().lower()
+        if lowered.startswith(_POSITIVE_HOST_CONTROL_PREFIXES):
+            continue
+        if lowered.startswith("return only the next record"):
+            text = text.replace("the next record", "the host-requested ordinal record", 1)
+        rules.append(text)
+    if not any("host owns cardinality and iteration" in rule.lower() for rule in rules):
+        rules.append(_HOST_CONTROL_RULE)
+    if not expected_blocking:
+        rules.append(
+            "You are the designer of this gameplay record. Choose unspecified mechanics, "
+            "actors, values and interactions coherently with the requirement. Authored "
+            "design choices need no external evidence or approval. Keep externally "
+            "verifiable API and repository facts separate from those choices."
+        )
+    value["rules"] = rules
+    return value
+
