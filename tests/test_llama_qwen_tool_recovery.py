@@ -8,7 +8,7 @@ from minecraft_mod_ai.model_adapters.qwen_tool_parser import ToolCallValidationE
 from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
 
 
-def _request(*, parallel: bool = True) -> GenerationRequest:
+def _request(*, parallel: bool = True, choice=None) -> GenerationRequest:
     tool = {
         "type": "function",
         "function": {
@@ -17,13 +17,21 @@ def _request(*, parallel: bool = True) -> GenerationRequest:
             "parameters": SOURCE_EDIT_SCHEMA,
         },
     }
-    return GenerationRequest(tools=(tool,), parallel_tool_calls=parallel)
+    return GenerationRequest(
+        tools=(tool,),
+        tool_choice=choice,
+        parallel_tool_calls=parallel,
+    )
 
 
-def test_recovers_qwen_tool_markup_when_native_tool_calls_are_empty() -> None:
+def test_recovers_observed_qwen_payload_markup_when_native_calls_are_empty() -> None:
     message = {
         "tool_calls": [],
-        "content": """<tool_call>\n<function=apply_source_edit>\n<parameter=mode>\ncreate\n</parameter>\n<parameter=path>\nsrc/main/resources/debug-token.txt\n</parameter>\n<parameter=text>\ndeterministic-debug-token\n</parameter>\n</function>\n</tool_call>""",
+        "content": """<tool_call>
+<function=apply_source_edit>
+<parameter=payload>{"operation":"create_file","path":"src/main/resources/debug-token.txt","content":"deterministic-debug-token"}</parameter>
+</function>
+</tool_call>""",
     }
 
     response = llama._native_tool_generation_response(message, _request())
@@ -32,9 +40,11 @@ def test_recovers_qwen_tool_markup_when_native_tool_calls_are_empty() -> None:
     assert len(response.tool_calls) == 1
     call = response.tool_calls[0]
     assert call.name == "apply_source_edit"
-    assert call.arguments["operation"] == "create"
-    assert call.arguments["path"] == "src/main/resources/debug-token.txt"
-    assert call.arguments["text"] == "deterministic-debug-token"
+    assert call.arguments == {
+        "operation": "create_file",
+        "path": "src/main/resources/debug-token.txt",
+        "content": "deterministic-debug-token",
+    }
 
 
 def test_native_tool_calls_remain_authoritative_over_content_markup() -> None:
@@ -53,7 +63,11 @@ def test_native_tool_calls_remain_authoritative_over_content_markup() -> None:
                 },
             }
         ],
-        "content": """<tool_call>\n<function=apply_source_edit>\n<parameter=operation>\ncreate\n</parameter>\n<parameter=path>\nsrc/main/resources/fallback.txt\n</parameter>\n<parameter=text>\nfallback\n</parameter>\n</function>\n</tool_call>""",
+        "content": """<tool_call>
+<function=apply_source_edit>
+<parameter=payload>{"operation":"create_file","path":"src/main/resources/fallback.txt","content":"fallback"}</parameter>
+</function>
+</tool_call>""",
     }
 
     response = llama._native_tool_generation_response(message, _request())
@@ -62,19 +76,30 @@ def test_native_tool_calls_remain_authoritative_over_content_markup() -> None:
     assert response.tool_calls[0].arguments["path"] == "src/main/resources/native.txt"
 
 
-def test_plain_prose_is_not_reconstructed_as_a_tool_call() -> None:
+def test_plain_prose_is_not_reconstructed_as_a_tool_call_for_auto_choice() -> None:
     message = {"tool_calls": [], "content": "I would edit the file next."}
 
-    response = llama._native_tool_generation_response(message, _request())
+    response = llama._native_tool_generation_response(message, _request(choice="auto"))
 
     assert response.tool_calls == ()
     assert response.content == "I would edit the file next."
 
 
-def test_observed_append_markup_is_not_silently_downgraded_to_prose() -> None:
+def test_required_choice_rejects_plain_prose_without_tool_call() -> None:
+    message = {"tool_calls": [], "content": "I would edit the file next."}
+
+    with pytest.raises(ToolCallValidationError, match="required"):
+        llama._native_tool_generation_response(message, _request(choice="required"))
+
+
+def test_schema_invalid_markup_is_not_silently_downgraded_to_prose() -> None:
     message = {
         "tool_calls": [],
-        "content": """<tool_call>\n<function=apply_source_edit>\n<parameter=path>\nminecraft_mod_ai/complete_planner.py\n</parameter>\n<parameter=mode>\nappend\n</parameter>\n<parameter=text>\n\n# Hardening marker: progress-aware tool application verified\n</parameter>\n</function>\n</tool_call>""",
+        "content": """<tool_call>
+<function=apply_source_edit>
+<parameter=payload>{"operation":"append","path":"src/main/resources/debug-token.txt","content":"bad"}</parameter>
+</function>
+</tool_call>""",
     }
 
     with pytest.raises(ToolCallValidationError, match="outside enum"):
