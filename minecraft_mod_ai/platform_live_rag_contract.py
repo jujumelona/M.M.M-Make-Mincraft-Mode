@@ -35,12 +35,12 @@ def _required_target(
     minecraft_version: str | None,
     loader: str | None,
     mappings: str | None,
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str] | None:
     version = str(minecraft_version or "").strip()
     loader_id = str(loader or "").strip().casefold()
     mapping_id = str(mappings or "").strip()
     if not version or not loader_id or not mapping_id:
-        return []
+        return None
     return version, loader_id, mapping_id
 
 
@@ -68,12 +68,15 @@ def install(*, retrieval_module: Any) -> None:
             mappings: str | None = None,
             limit: int = 6,
         ):
-            version, loader_id, mapping_id = _required_target(
+            target = _required_target(
                 retrieval_module,
                 minecraft_version,
                 loader,
                 mappings,
             )
+            if target is None:
+                return []
+            version, loader_id, mapping_id = target
             return original(
                 self,
                 query,
@@ -100,12 +103,15 @@ def install(*, retrieval_module: Any) -> None:
             mappings: str | None = None,
             limit: int = 6,
         ):
-            version, loader_id, mapping_id = _required_target(
+            target = _required_target(
                 retrieval_module,
                 minecraft_version,
                 loader,
                 mappings,
             )
+            if target is None:
+                return []
+            version, loader_id, mapping_id = target
             return _thread_index(retrieval_module).retrieve(
                 query,
                 minecraft_version=version,
