@@ -173,17 +173,18 @@ def _install_strict_research_boundary(central_module: Any) -> None:
     if not getattr(current_parallel, "_mmm_no_rag_fallback", False):
 
         @wraps(current_parallel)
-        def strict_parallel_retrieve(
-            research_brief: dict[str, Any],
-            *args: Any,
-            **kwargs: Any,
-        ) -> dict[str, Any]:
+        def strict_parallel_retrieve(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            research_brief = args[0] if args else kwargs.get("research_brief")
+            if not isinstance(research_brief, dict):
+                raise PlatformTargetContractError(
+                    "Parallel research requires a mapping research_brief before RAG starts."
+                )
             _assert_parallel_research_ready(
                 central_module,
                 parallel_module,
                 research_brief,
             )
-            return current_parallel(research_brief, *args, **kwargs)
+            return current_parallel(*args, **kwargs)
 
         strict_parallel_retrieve._mmm_no_rag_fallback = True
         parallel_module.retrieve_domain_evidence = strict_parallel_retrieve
