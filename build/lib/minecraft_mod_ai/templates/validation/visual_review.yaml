@@ -1,0 +1,13 @@
+id: validation/visual_review
+standalone: true
+input:
+  game_design:
+  acceptance_tests:
+  runtime_screenshots:
+task: Review only visible runtime evidence against the approved game design and supplied acceptance tests.
+rules:
+  - Evaluate every supplied acceptance test exactly once and preserve its original order and text.
+  - Fail visible missing textures, broken models, unreadable GUI, animation clipping, or visible deviations from the approved design.
+  - Do not mark non-visual behavior as PASS unless the runtime screenshot visibly proves that behavior.
+  - Keep findings and evidence grounded in what is actually visible; do not invent hidden state or unseen behavior.
+response_contract: visual_review

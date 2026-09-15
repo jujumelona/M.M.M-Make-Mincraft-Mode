@@ -1,0 +1,7 @@
+id: minecraft/resource/item/model_handheld
+artifact: json_resource
+target: {operation: CREATE_FILE, file: "src/main/resources/assets/{{mod_id}}/models/item/{{registry_path}}.json"}
+requires: [mod_id, registry_path]
+ai_slots: []
+render: {language: json, body: {parent: "minecraft:item/handheld", textures: {layer0: "{{mod_id}}:item/{{registry_path}}"}}}
+validators: [json_parse]

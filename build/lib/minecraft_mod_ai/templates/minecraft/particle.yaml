@@ -1,0 +1,14 @@
+id: minecraft/particle
+execution: sequence
+steps:
+- minecraft/particle/requirement
+- minecraft/particle/registry
+- minecraft/particle/option
+- minecraft/particle/codec
+- minecraft/particle/provider
+- minecraft/particle/lifetime
+- minecraft/particle/motion
+- minecraft/particle/rendering
+- minecraft/particle/texture
+- minecraft/particle/integration
+- minecraft/particle/validation

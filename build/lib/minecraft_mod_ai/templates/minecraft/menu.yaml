@@ -1,0 +1,12 @@
+id: minecraft/menu
+execution: sequence
+steps:
+- minecraft/menu/requirement
+- minecraft/menu/registry
+- minecraft/menu/slots
+- minecraft/menu/validity
+- minecraft/menu/quick_move
+- minecraft/menu/synchronization
+- minecraft/menu/opening
+- minecraft/menu/integration
+- minecraft/menu/validation

@@ -1,0 +1,25 @@
+id: feature/behavior_contract/entry_conditions
+task: Resolve exactly one host-requested entry conditions record for the supplied feature and acceptance criterion.
+cardinality_blocking: false
+input_fields:
+- requirement
+- criterion
+- evidence
+record_schema:
+  type: object
+  properties:
+    trigger:
+      type: string
+      minLength: 1
+    owner:
+      type: string
+      minLength: 1
+  required:
+  - trigger
+  - owner
+  additionalProperties: false
+rules:
+- Return only the host-requested ordinal record for this concern; do not plan neighboring concerns.
+- Preserve supplied evidence identifiers. Never invent external APIs, paths or facts.
+- Do not emit continuation, completion, applicability, retry, or loop-control decisions; the host owns cardinality and iteration.
+- If the supplied facts cannot support the requested ordinal record, fail rather than inventing a fallback record.

@@ -306,6 +306,13 @@ def _task_local_module_contract(module: ProductionModule) -> dict[str, Any]:
     """
 
     config = module.config if isinstance(module.config, dict) else {}
+    authored = config.get("authored_plan")
+    if isinstance(authored, dict):
+        return {
+            "module_id": module.module_id,
+            "kind": module.kind,
+            "authored_plan": dict(authored),
+        }
     evidence_task = config.get("evidence_task")
     if not isinstance(evidence_task, dict):
         raise CustomModuleGenerationError(
@@ -682,7 +689,10 @@ class CustomModuleGenerator:
 
         self.router.bind_agent_workspace(staged_root, require_fresh_evidence=True)
         request = {
-            "phase": "implement_module",
+            "phase": (
+                "implement_authored_design" if "authored_plan" in module_contract
+                else "implement_module"
+            ),
             "task": "Implement the approved Minecraft/Fabric mod feature in the current project.",
             "workspace_project_root": ".",
             "target": {
@@ -712,6 +722,14 @@ class CustomModuleGenerator:
                 "Use only the selected Minecraft/loader/mappings/Java target and preserve project conventions.",
             ],
         }
+        if "authored_plan" in module_contract:
+            request["task"] = (
+                "Implement the saved authored_plan in this project. Read its requested_prompt "
+                "and text in full, preserve the design, and choose the source files and resources "
+                "needed to realize it. Work through the design with workspace tools until the "
+                "implementation is complete. Do not request a new plan, requirement JSON, "
+                "cardinality decision, coverage approval, or a fixed list of pre-owned files."
+            )
         if approved_reuse_context is not None:
             request["approved_reuse_context"] = approved_reuse_context
             request["rules"][2:2] = [
@@ -1329,7 +1347,10 @@ def _output_exhaustion_continuation_messages(
     touched = sorted({str(path) for path in touched_paths})
     discarded = sorted({str(path) for path in discarded_paths})
     request = {
-        "phase": "implement_module",
+        "phase": (
+            "implement_authored_design" if "authored_plan" in module.config
+            else "implement_module"
+        ),
         "task": "Continue the approved module from the preserved staged workspace; do not restart completed work.",
         "workspace_project_root": ".",
         "target": {

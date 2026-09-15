@@ -1,0 +1,10 @@
+id: code/import_plan
+execution: host
+input:
+  code_unit:
+  referenced_symbols:
+output:
+  imports:
+  unresolved_symbols:
+proof:
+  predicate: every import maps to one referenced verified symbol

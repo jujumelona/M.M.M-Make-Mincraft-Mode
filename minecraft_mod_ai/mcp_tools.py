@@ -133,7 +133,7 @@ class MMMToolService:
         scoped_existing = str(self._existing_file(existing_input)) if existing_input is not None else None
         if isinstance(parsed, AuthoredPlan):
             parsed = CompleteGameDesignPlanner(self.router_factory()).compile_for_production(
-                parsed.production_prompt(), media_paths=parsed.media_paths,
+                parsed, media_paths=parsed.media_paths,
                 existing_input_sha256=_sha256(Path(scoped_existing)) if scoped_existing else '',
             )
             approval_hash = parsed.calculate_hash()

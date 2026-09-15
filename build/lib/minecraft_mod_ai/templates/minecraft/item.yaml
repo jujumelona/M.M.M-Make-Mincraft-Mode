@@ -1,0 +1,17 @@
+id: minecraft/item
+execution: sequence
+steps:
+- minecraft/item/requirement
+- minecraft/item/registry
+- minecraft/item/properties
+- minecraft/item/component
+- minecraft/item/interaction
+- minecraft/item/durability
+- minecraft/item/use
+- minecraft/item/inventory
+- minecraft/item/model
+- minecraft/item/texture
+- minecraft/item/language
+- minecraft/item/datagen
+- minecraft/item/integration
+- minecraft/item/validation

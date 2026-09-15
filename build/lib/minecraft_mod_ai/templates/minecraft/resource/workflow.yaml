@@ -1,0 +1,16 @@
+id: minecraft/resource/workflow
+execution: sequence
+steps:
+  - minecraft/resource/block/blockstate_simple
+  - minecraft/resource/block/blockstate_crop
+  - minecraft/resource/block/model_cube_all
+  - minecraft/resource/block/model_cube_column
+  - minecraft/resource/block/model_cube_bottom_top
+  - minecraft/resource/block/model_orientable
+  - minecraft/resource/block/model_cross
+  - minecraft/resource/block/model_crop_stage
+  - minecraft/resource/item/model_generated
+  - minecraft/resource/item/model_handheld
+  - minecraft/resource/item/model_block_reuse
+  - minecraft/resource/item/client_item
+  - minecraft/resource/item/client_block_item

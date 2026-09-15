@@ -1,0 +1,10 @@
+id: validation/unit_test
+execution: host
+input:
+  unit_tests:
+  target_cell:
+output:
+  passed:
+  failures:
+proof:
+  predicate: passed is true only when every required unit test passes

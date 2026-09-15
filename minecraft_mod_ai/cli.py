@@ -199,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
             if data.get("schema_version") == "mmm/authored-plan-v1":
                 design = AuthoredPlan.from_dict(data)
                 proposal = CompleteGameDesignPlanner(ModelRouter(profile=args.profile)).compile_for_production(
-                    design.production_prompt(), media_paths=design.media_paths,
+                    design, media_paths=design.media_paths,
                     existing_input_sha256=_sha256_file(args.existing_zip) if args.existing_zip else "",
                 )
             else:

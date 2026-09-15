@@ -60,9 +60,14 @@ def _sanitized_messages(messages: Sequence[Mapping[str, Any]], *, minecraft_vers
         if message.get('role') == 'user' and updated.lstrip().startswith('{'):
             try:
                 payload = json.loads(updated)
+                original_payload = json.loads(content)
             except json.JSONDecodeError:
                 payload = None
             if isinstance(payload, dict):
+                # Target normalization must not rewrite the saved design document.
+                original_module = original_payload.get('module', {})
+                if isinstance(original_module, dict) and 'authored_plan' in original_module:
+                    payload['module']['authored_plan'] = original_module['authored_plan']
                 target = payload.get('target')
                 if isinstance(target, dict):
                     payload['target'] = {**target, 'minecraft_version': minecraft_version, 'loader': loader, 'mappings': mappings, 'java': adapter.java_version}

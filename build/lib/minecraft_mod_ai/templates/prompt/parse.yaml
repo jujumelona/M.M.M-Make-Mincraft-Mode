@@ -1,0 +1,30 @@
+id: prompt/parse
+execution: records
+cardinality_blocking: false
+task: Extract every explicitly authored fact or requested behavior supported by the original prompt. Keep independent statements as independent records and do not infer additional features. Explicit restrictions and delivery requirements have separate tasks.
+record_schema:
+  type: object
+  properties:
+    statement:
+      type: string
+      minLength: 1
+      maxLength: 256
+    source_quote:
+      type: string
+      minLength: 0
+      maxLength: 256
+  required:
+  - statement
+  additionalProperties: false
+input_schema:
+  type: object
+  properties:
+    original_prompt:
+      type: string
+      minLength: 1
+  required:
+  - original_prompt
+  additionalProperties: false
+rules:
+- Missing implementation choices are not prompt ambiguity and never make prompt cardinality unknowable; only explicitly authored prompt facts belong here.
+- Count explicit action requests in the original prompt as requested behaviors even when their implementation details are omitted.

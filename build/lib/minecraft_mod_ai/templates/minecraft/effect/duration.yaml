@@ -1,0 +1,58 @@
+id: minecraft/effect/duration
+task: Implement only the duration responsibility of the supplied effect artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: effect_identity
+  type: identifier
+  required: true
+- name: effect_duration_input
+  type: specification
+  required: true
+outputs:
+- name: effect_duration_receipt
+  type: receipt
+- name: effect_duration_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - STATUS_EFFECT
+  symbols:
+  - StatusEffect
+  schemas: []
+implementation_key: fabric/effect/duration
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - effect_properties
+repair:
+  scope:
+  - minecraft/effect/duration
+  writable_anchors:
+  - /* MMM:effect_duration */
+consumes:
+- artifact_requirement
+- target_cell
+- verified_bindings
+- owned_anchor
+- prerequisite_receipts
+provides:
+- duration
+anchor_kinds:
+- symbol
+- test
+rules:
+- Implement duration responsibility for effect strictly within declared STATUS_EFFECT
+  capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required effect prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.
+postconditions:
+- effect duration matches host version contract
+- effect duration receipts emitted with verified context

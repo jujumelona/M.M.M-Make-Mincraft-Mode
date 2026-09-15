@@ -1,0 +1,12 @@
+id: minecraft/worldgen
+execution: sequence
+steps:
+- minecraft/worldgen/requirement
+- minecraft/worldgen/codec
+- minecraft/worldgen/configured_feature
+- minecraft/worldgen/placed_feature
+- minecraft/worldgen/placement
+- minecraft/worldgen/biome_binding
+- minecraft/worldgen/datagen
+- minecraft/worldgen/integration
+- minecraft/worldgen/validation

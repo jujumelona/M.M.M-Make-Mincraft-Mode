@@ -1,0 +1,10 @@
+id: validation/gameplay_test
+execution: host
+input:
+  atomic_feature_acceptance:
+  runtime_observations:
+output:
+  passed:
+  failed_acceptance:
+proof:
+  predicate: passed is true only when every required gameplay acceptance condition is observed

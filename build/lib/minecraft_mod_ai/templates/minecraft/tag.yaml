@@ -1,0 +1,12 @@
+id: minecraft/tag
+execution: sequence
+steps:
+- minecraft/tag/requirement
+- minecraft/tag/identifier
+- minecraft/tag/registry
+- minecraft/tag/entries
+- minecraft/tag/optional
+- minecraft/tag/replace
+- minecraft/tag/datagen
+- minecraft/tag/integration
+- minecraft/tag/validation

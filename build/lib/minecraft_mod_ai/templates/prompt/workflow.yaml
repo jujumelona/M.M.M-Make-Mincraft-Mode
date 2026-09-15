@@ -1,0 +1,11 @@
+id: prompt/workflow
+execution: sequence
+steps:
+- prompt/capture
+- prompt/intent
+- prompt/parse
+- prompt/entity_resolution
+- prompt/constraints
+- prompt/ambiguities
+- prompt/output_requirements
+- prompt/scope

@@ -1,0 +1,58 @@
+id: minecraft/sound/subtitle
+task: Implement only the subtitle responsibility of the supplied sound artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: sound_identity
+  type: identifier
+  required: true
+- name: sound_subtitle_input
+  type: specification
+  required: true
+outputs:
+- name: sound_subtitle_receipt
+  type: receipt
+- name: sound_subtitle_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - SOUND_EVENT
+  symbols:
+  - SoundEvent
+  schemas: []
+implementation_key: fabric/sound/subtitle
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - sound_properties
+repair:
+  scope:
+  - minecraft/sound/subtitle
+  writable_anchors:
+  - /* MMM:sound_subtitle */
+consumes:
+- artifact_requirement
+- target_cell
+- verified_bindings
+- owned_anchor
+- prerequisite_receipts
+provides:
+- subtitle
+anchor_kinds:
+- resource
+- test
+rules:
+- Implement subtitle responsibility for sound strictly within declared SOUND_EVENT
+  capability.
+- Target side must remain client; reject cross-side symbol leakage.
+- Fail closed if required sound prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.
+postconditions:
+- sound subtitle matches host version contract
+- sound subtitle receipts emitted with verified context

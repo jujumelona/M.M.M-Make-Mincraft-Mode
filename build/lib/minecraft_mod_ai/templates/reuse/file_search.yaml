@@ -1,0 +1,9 @@
+id: reuse/file_search
+execution: host
+input:
+  repository_hit:
+  file_need:
+output:
+  file_hits:
+proof:
+  predicate: every hit includes a concrete file locator and match reason

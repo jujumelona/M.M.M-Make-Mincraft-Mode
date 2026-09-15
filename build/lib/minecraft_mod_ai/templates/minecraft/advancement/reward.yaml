@@ -1,0 +1,58 @@
+id: minecraft/advancement/reward
+task: Implement only the reward responsibility of the supplied advancement artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: advancement_identity
+  type: identifier
+  required: true
+- name: advancement_reward_input
+  type: specification
+  required: true
+outputs:
+- name: advancement_reward_receipt
+  type: receipt
+- name: advancement_reward_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - ADVANCEMENT
+  symbols: []
+  schemas: []
+implementation_key: fabric/advancement/reward
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - advancement_properties
+repair:
+  scope:
+  - minecraft/advancement/reward
+  writable_anchors:
+  - /* MMM:advancement_reward */
+consumes:
+- artifact_requirement
+- target_cell
+- verified_bindings
+- owned_anchor
+- prerequisite_receipts
+provides:
+- reward
+anchor_kinds:
+- resource
+- test
+rules:
+- Implement reward responsibility for advancement strictly within declared ADVANCEMENT
+  capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required advancement prerequisite receipt is missing; never invent
+  defaults.
+- Output must satisfy java_parse validator before completion.
+postconditions:
+- advancement reward matches host version contract
+- advancement reward receipts emitted with verified context

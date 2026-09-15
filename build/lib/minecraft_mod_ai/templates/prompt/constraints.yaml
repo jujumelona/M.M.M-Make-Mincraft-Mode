@@ -1,0 +1,26 @@
+id: prompt/constraints
+execution: records
+cardinality_blocking: false
+task: Extract every explicit user-stated limit, exclusion, target requirement or invariant. Keep independent constraints as independent records. Do not infer defaults or convert implementation choices into constraints.
+record_schema:
+  type: object
+  properties:
+    statement: &text
+      type: string
+      minLength: 1
+      maxLength: 256
+    source_quote:
+      type: string
+      minLength: 0
+      maxLength: 256
+  required:
+  - statement
+  additionalProperties: false
+input_schema:
+  type: object
+  properties:
+    original_prompt: *text
+  required:
+  - original_prompt
+  additionalProperties: false
+rules: []

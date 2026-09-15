@@ -1,0 +1,12 @@
+id: validation/resource_trace
+execution: host
+input:
+  resource_requirements:
+  generated_resources:
+  resource_validation_receipts:
+output:
+  traces:
+  missing_resources:
+  unowned_resources:
+proof:
+  predicate: every required resource is validated and every emitted resource has an owner

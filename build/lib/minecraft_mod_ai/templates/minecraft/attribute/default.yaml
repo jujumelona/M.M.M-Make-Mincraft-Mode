@@ -1,0 +1,59 @@
+id: minecraft/attribute/default
+task: Implement only the default responsibility of the supplied attribute artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: attribute_identity
+  type: identifier
+  required: true
+- name: attribute_default_input
+  type: specification
+  required: true
+outputs:
+- name: attribute_default_receipt
+  type: receipt
+- name: attribute_default_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - REGISTER_ITEM
+  symbols:
+  - register_item
+  schemas: []
+implementation_key: fabric/attribute/default
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - attribute_properties
+repair:
+  scope:
+  - minecraft/attribute/default
+  writable_anchors:
+  - /* MMM:attribute_default */
+consumes:
+- artifact_requirement
+- target_cell
+- verified_bindings
+- owned_anchor
+- prerequisite_receipts
+provides:
+- default
+anchor_kinds:
+- symbol
+- test
+rules:
+- Implement default responsibility for attribute strictly within declared ENTITY_ATTRIBUTES
+  capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required attribute prerequisite receipt is missing; never invent
+  defaults.
+- Output must satisfy json_schema validator before completion.
+postconditions:
+- attribute default matches host version contract
+- attribute default receipts emitted with verified context

@@ -1,0 +1,6 @@
+id: prompt/policy
+execution: policy
+standalone: true
+rules:
+- Use only the original user prompt as evidence. Do not invent behavior, parameters, APIs, versions, files, defaults or implementation details.
+- Game and feature names are input data, never template categories. Preserve the authored meaning and exclusions.

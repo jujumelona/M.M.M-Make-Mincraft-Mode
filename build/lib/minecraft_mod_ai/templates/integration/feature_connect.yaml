@@ -1,0 +1,10 @@
+id: integration/feature_connect
+execution: host
+input:
+  atomic_features:
+  feature_connections:
+output:
+  feature_edges:
+  unresolved_connections:
+proof:
+  predicate: every feature edge matches an explicit connection contract

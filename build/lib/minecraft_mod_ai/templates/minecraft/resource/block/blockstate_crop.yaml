@@ -1,0 +1,10 @@
+id: minecraft/resource/block/blockstate_crop
+execution: host
+input:
+  namespace: string
+  subject: string
+  stage_models: array
+output:
+  blockstate: object
+proof:
+  predicate: Deterministic host code maps every declared crop age to the same-index stage model.

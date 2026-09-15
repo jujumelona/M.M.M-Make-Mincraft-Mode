@@ -1,0 +1,10 @@
+id: validation/compile
+execution: host
+input:
+  generated_project:
+  target_cell:
+output:
+  passed:
+  diagnostics:
+proof:
+  predicate: passed is true only when target compilation exits successfully

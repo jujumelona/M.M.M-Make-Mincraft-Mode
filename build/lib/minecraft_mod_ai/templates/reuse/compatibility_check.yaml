@@ -1,0 +1,12 @@
+id: reuse/compatibility_check
+execution: host
+input:
+  candidate:
+  target_cell:
+  dependency_receipt:
+output:
+  compatible:
+  failed_checks:
+  unresolved_checks:
+proof:
+  predicate: compatible is true only when every required compatibility check passes

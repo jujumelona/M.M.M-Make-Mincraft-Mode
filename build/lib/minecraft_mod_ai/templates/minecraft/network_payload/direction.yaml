@@ -1,0 +1,60 @@
+id: minecraft/network_payload/direction
+task: Implement only the direction responsibility of the supplied network payload
+  artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: network_payload_identity
+  type: identifier
+  required: true
+- name: network_payload_direction_input
+  type: specification
+  required: true
+outputs:
+- name: network_payload_direction_receipt
+  type: receipt
+- name: network_payload_direction_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - NETWORK_PACKET
+  symbols:
+  - register_item
+  schemas: []
+implementation_key: fabric/network_payload/direction
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - network_payload_properties
+repair:
+  scope:
+  - minecraft/network_payload/direction
+  writable_anchors:
+  - /* MMM:network_payload_direction */
+consumes:
+- artifact_requirement
+- target_cell
+- verified_bindings
+- owned_anchor
+- prerequisite_receipts
+provides:
+- direction
+anchor_kinds:
+- symbol
+- test
+rules:
+- Implement direction responsibility for network_payload strictly within declared
+  NETWORKING capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required network_payload prerequisite receipt is missing; never invent
+  defaults.
+- Output must satisfy java_parse validator before completion.
+postconditions:
+- network_payload direction matches host version contract
+- network_payload direction receipts emitted with verified context

@@ -1,0 +1,52 @@
+id: fabric/recipe/smelting
+artifact: json_resource
+target:
+  operation: CREATE_FILE
+  file: src/main/resources/data/{{mod_id}}/recipe/{{registry_path}}.json
+requires:
+- cooking_type
+- ingredient
+- result_id
+- experience
+- cookingtime
+- mod_id
+- registry_path
+dependencies: []
+produces:
+- name: resource_ref
+  binding: '{{subject}}.resource_ref'
+  kind: GENERIC
+  target_type: Recipe
+  value: '{{mod_id}}:{{registry_path}}'
+ai_slots: []
+render:
+  language: json
+  body:
+    type: minecraft:{{cooking_type}}
+    ingredient: '{{ingredient}}'
+    result:
+      id: '{{result_id}}'
+      count: 1
+    experience: '{{experience}}'
+    cookingtime: '{{cookingtime}}'
+validators:
+- json_parse
+- resource_references
+ownership: manual
+conflict_policy: reject
+fixture:
+  input:
+    mod_id: demo
+    registry_path: sample
+    cooking_type: smelting
+    ingredient: demo:ore
+    result_id: demo:gem
+    experience: 0.1
+    cookingtime: 200
+    minecraft_version: 1.21.2
+  expected_contains:
+  - 'minecraft:'
+target_contract:
+  minimum_minecraft: 1.21.2
+  maximum_minecraft: '26.2'
+  source: https://www.minecraft.net/en-us/article/minecraft-java-edition-1-21-2

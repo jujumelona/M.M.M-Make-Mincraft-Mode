@@ -1,0 +1,60 @@
+id: minecraft/block/registry
+task: Implement only the registry responsibility of the supplied block artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: block_identity
+  type: identifier
+  required: true
+- name: block_registry_input
+  type: specification
+  required: true
+outputs:
+- name: block_registry_receipt
+  type: receipt
+- name: block_registry_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - REGISTER_BLOCK
+  symbols:
+  - register_block
+  - resource_key_create
+  schemas: []
+implementation_key: fabric/block/registry
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - block_properties
+repair:
+  scope:
+  - minecraft/block/registry
+  writable_anchors:
+  - /* MMM:block_registry */
+consumes:
+- artifact_requirement
+- target_cell
+- verified_bindings
+- owned_anchor
+- prerequisite_receipts
+provides:
+- registry
+anchor_kinds:
+- registry_id
+- symbol
+- test
+rules:
+- Implement registry responsibility for block strictly within declared REGISTER_BLOCK
+  capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required block prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.
+postconditions:
+- block registry matches host version contract
+- block registry receipts emitted with verified context

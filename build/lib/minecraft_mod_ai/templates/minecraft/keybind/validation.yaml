@@ -1,0 +1,58 @@
+id: minecraft/keybind/validation
+task: Implement only the validation responsibility of the supplied keybind artifact.
+execution_mode: deterministic
+side:
+- common
+inputs:
+- name: keybind_identity
+  type: identifier
+  required: true
+- name: keybind_validation_input
+  type: specification
+  required: true
+outputs:
+- name: keybind_validation_receipt
+  type: receipt
+- name: keybind_validation_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - GUI_EXISTS
+  symbols:
+  - ScreenHandlerType
+  schemas: []
+implementation_key: fabric/keybind/validation
+validators:
+- mod_integration_test
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - keybind_properties
+repair:
+  scope:
+  - minecraft/keybind/validation
+  writable_anchors:
+  - /* MMM:keybind_validation */
+consumes:
+- artifact_requirement
+- target_cell
+- verified_bindings
+- owned_anchor
+- prerequisite_receipts
+provides:
+- validation
+anchor_kinds:
+- symbol
+- test
+rules:
+- Implement validation responsibility for keybind strictly within declared KEYBIND_REGISTRATION
+  capability.
+- Target side must remain client; reject cross-side symbol leakage.
+- Fail closed if required keybind prerequisite receipt is missing; never invent defaults.
+- Output must satisfy mod_integration_test validator before completion.
+postconditions:
+- keybind validation matches host version contract
+- keybind validation receipts emitted with verified context

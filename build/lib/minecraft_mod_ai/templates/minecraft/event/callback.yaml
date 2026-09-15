@@ -1,0 +1,58 @@
+id: minecraft/event/callback
+task: Implement only the callback responsibility of the supplied event artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: event_identity
+  type: identifier
+  required: true
+- name: event_callback_input
+  type: specification
+  required: true
+outputs:
+- name: event_callback_receipt
+  type: receipt
+- name: event_callback_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - REGISTER_ITEM
+  symbols:
+  - register_item
+  schemas: []
+implementation_key: fabric/event/callback
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - event_properties
+repair:
+  scope:
+  - minecraft/event/callback
+  writable_anchors:
+  - /* MMM:event_callback */
+consumes:
+- artifact_requirement
+- target_cell
+- verified_bindings
+- owned_anchor
+- prerequisite_receipts
+provides:
+- callback
+anchor_kinds:
+- symbol
+- test
+rules:
+- Implement callback responsibility for event strictly within declared EVENT_LISTENER
+  capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required event prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.
+postconditions:
+- event callback matches host version contract
+- event callback receipts emitted with verified context

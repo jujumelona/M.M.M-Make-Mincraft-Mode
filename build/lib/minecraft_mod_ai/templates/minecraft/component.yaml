@@ -1,0 +1,12 @@
+id: minecraft/component
+execution: sequence
+steps:
+- minecraft/component/requirement
+- minecraft/component/registry
+- minecraft/component/type
+- minecraft/component/default
+- minecraft/component/codec
+- minecraft/component/stream_codec
+- minecraft/component/copy
+- minecraft/component/validation
+- minecraft/component/integration

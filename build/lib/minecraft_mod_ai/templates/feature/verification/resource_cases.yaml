@@ -1,0 +1,36 @@
+id: feature/verification/resource_cases
+task: Resolve exactly one resource cases record for the supplied feature and acceptance
+  criterion.
+input_fields:
+- requirement
+- criterion
+- evidence
+- accepted_records
+record_schema:
+  type: object
+  properties:
+    given:
+      type: string
+      minLength: 1
+    when:
+      type: string
+      minLength: 1
+    then:
+      type: string
+      minLength: 1
+    measurement:
+      type: string
+      minLength: 1
+  required:
+  - given
+  - when
+  - then
+  - measurement
+  additionalProperties: false
+rules:
+- Return only the next record for this concern; do not plan neighboring concerns.
+- Preserve supplied evidence identifiers. Never invent external APIs, paths or facts.
+- Return done only after all records for this concern are supplied.
+- Return not_applicable with a concrete reason only when this concern does not apply.
+- Return blocked with the missing information when it cannot be resolved.
+- Do not turn missing information into an inapplicability claim.

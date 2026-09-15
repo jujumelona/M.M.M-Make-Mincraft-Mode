@@ -1,0 +1,58 @@
+id: minecraft/model/resource_path
+task: Implement only the resource path responsibility of the supplied model artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: model_identity
+  type: identifier
+  required: true
+- name: model_resource_path_input
+  type: specification
+  required: true
+outputs:
+- name: model_resource_path_receipt
+  type: receipt
+- name: model_resource_path_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - REGISTER_ITEM
+  symbols: []
+  schemas:
+  - minecraft/resource/item/model_generated
+implementation_key: fabric/model/resource_path
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - model_properties
+repair:
+  scope:
+  - minecraft/model/resource_path
+  writable_anchors:
+  - /* MMM:model_resource_path */
+consumes:
+- artifact_requirement
+- target_cell
+- verified_bindings
+- owned_anchor
+- prerequisite_receipts
+provides:
+- resource_path
+anchor_kinds:
+- resource
+- test
+rules:
+- Implement resource_path responsibility for model strictly within declared MODEL_DEFINITION
+  capability.
+- Target side must remain client; reject cross-side symbol leakage.
+- Fail closed if required model prerequisite receipt is missing; never invent defaults.
+- Output must satisfy json_schema validator before completion.
+postconditions:
+- model resource_path matches host version contract
+- model resource_path receipts emitted with verified context

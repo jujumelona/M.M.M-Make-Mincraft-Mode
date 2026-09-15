@@ -1,0 +1,570 @@
+from __future__ import annotations
+
+"""Compile player-visible requirements without model-authored identity contracts.
+
+The planner model describes behavior. Host code owns bookkeeping. Model output is never
+required to reproduce prompt IDs, evidence IDs, hashes, receipts, or any other internal
+identifier, so a harmless metadata mismatch cannot abort planning.
+"""
+
+import json
+from collections.abc import Mapping, Sequence
+from copy import deepcopy
+from typing import Any
+
+CUSTOM_CAPABILITY_SENTINEL = "custom"
+
+from .planner_operation import planner_operation
+from .planning_contract_ssot import SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA
+from .planning_state_contract import validate_planning_state
+from .root_cause_trace import emit_root_cause
+
+_REQUIREMENT_TOOL = "submit_researched_requirements"
+_REQUIREMENT_PARAMETERS: dict[str, Any] = SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA
+
+
+def _text(value: Any) -> str:
+    return " ".join(str(value or "").split()).strip()
+
+
+def _strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        text = _text(value)
+        return [text] if text else []
+    if not isinstance(value, Sequence) or isinstance(value, (bytes, bytearray)):
+        return []
+    return list(dict.fromkeys(text for item in value if (text := _text(item))))
+
+
+def _resolution_prose(value: Any) -> str:
+    if isinstance(value, str):
+        return _text(value)
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        texts: list[str] = []
+        for elem in value:
+            if isinstance(elem, Mapping):
+                elem_text = _text(
+                    elem.get("claim")
+                    or elem.get("statement")
+                    or elem.get("fact")
+                    or elem.get("text")
+                )
+            else:
+                elem_text = _text(elem)
+            if elem_text:
+                texts.append(elem_text)
+        return " ".join(dict.fromkeys(texts))
+    return _text(value)
+
+
+def _planner_context_budget(router: Any) -> int:
+    registry = getattr(router, "registry", None)
+    resolve = getattr(registry, "role", None)
+    profile = str(getattr(router, "profile", "") or "").strip()
+    if callable(resolve) and profile:
+        try:
+            config = resolve(profile, "planner")
+            from .model_context_budget import request_message_budget
+
+            return int(request_message_budget(config, (_REQUIREMENT_PARAMETERS,)))
+        except Exception:
+            pass
+    from .model_context_budget import _default_context_bytes
+
+    return int(_default_context_bytes())
+
+
+def _fit_context_to_budget(
+    context: dict[str, Any],
+    *,
+    byte_budget: int,
+    catalog_and_system_bytes: int,
+) -> dict[str, Any]:
+    """Ensure serialized user task payload strictly respects the active runtime context budget."""
+    target_budget = max(4096, byte_budget - catalog_and_system_bytes - 1024)
+    fitted = deepcopy(context)
+
+    def _size() -> int:
+        return len(
+            json.dumps(
+                fitted,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+
+    if _size() <= target_budget:
+        return fitted
+
+    claims = fitted.get("research_claims", [])
+    while claims and _size() > target_budget:
+        claims.pop()
+    if not claims:
+        fitted.pop("research_claims", None)
+
+    if _size() <= target_budget:
+        return fitted
+
+    resolved = fitted.get("resolved", [])
+    while len(resolved) > 1 and _size() > target_budget:
+        resolved.pop()
+
+    if _size() <= target_budget:
+        return fitted
+
+    if resolved:
+        res = str(resolved[0].get("resolution") or "")
+        if len(res) > 200:
+            resolved[0]["resolution"] = res[:200] + "..."
+
+    if _size() <= target_budget:
+        return fitted
+
+    if "original_prompt" in fitted and _size() > target_budget:
+        orig = str(fitted["original_prompt"])
+        if len(orig) > 1000:
+            fitted["original_prompt"] = orig[:1000] + "..."
+
+    return fitted
+
+
+def _resolved_context(state: Mapping[str, Any], prompt: str = "") -> dict[str, Any]:
+    """Give the model semantic facts, never host receipts or identity bookkeeping."""
+    known = [
+        {"statement": _text(item.get("statement"))}
+        for item in state.get("known", [])
+        if isinstance(item, Mapping) and _text(item.get("statement"))
+    ] if isinstance(state.get("known"), list) else []
+    goal = state.get("goal")
+    goal_statement = _text(goal.get("statement")) if isinstance(goal, Mapping) else ""
+    original_prompt = _text(prompt or state.get("original_prompt"))
+
+    unresolved_questions: dict[str, str] = {}
+    if isinstance(state.get("unresolved"), list):
+        for item in state.get("unresolved", []):
+            if isinstance(item, Mapping):
+                uid = str(item.get("unresolved_id") or "")
+                q = _text(item.get("question"))
+                if uid and q:
+                    unresolved_questions[uid] = q
+
+    resolved: list[dict[str, Any]] = []
+    seen_resolutions: set[str] = set()
+    if isinstance(state.get("resolved"), list):
+        for item in state.get("resolved", []):
+            if not isinstance(item, Mapping):
+                continue
+            prose = _resolution_prose(item.get("resolution"))
+            if not prose or prose in seen_resolutions:
+                continue
+            seen_resolutions.add(prose)
+            question = unresolved_questions.get(str(item.get("unresolved_id") or ""))
+            entry: dict[str, Any] = {}
+            if question:
+                entry["question"] = question
+            entry["resolution"] = prose
+            resolved.append(entry)
+
+    evidence_claims: list[str] = []
+    for item in state.get("evidence", []) if isinstance(state.get("evidence"), list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        claims = item.get("claims")
+        if isinstance(claims, list):
+            for claim in claims:
+                if isinstance(claim, Mapping):
+                    text = _text(claim.get("claim") or claim.get("statement") or claim.get("text"))
+                else:
+                    text = _text(claim)
+                if text and text not in seen_resolutions:
+                    evidence_claims.append(text)
+                    seen_resolutions.add(text)
+
+    res: dict[str, Any] = {}
+    if original_prompt:
+        res["original_prompt"] = original_prompt
+    res["goal"] = goal_statement
+    res["known"] = known
+    res["resolved"] = resolved
+    res["research_claims"] = list(dict.fromkeys(evidence_claims))[:8]
+    return res
+
+
+def _rehash(state: dict[str, Any]) -> dict[str, Any]:
+    from .planning_state_contract import _hash_without
+
+    state["state_sha256"] = ""
+    state["state_sha256"] = _hash_without(state, "state_sha256")
+    return state
+
+
+def _fallback_requirement_rows(state: Mapping[str, Any], prompt: str) -> list[dict[str, Any]]:
+    """Deterministically preserve authored behavior if model output is absent or unusable."""
+    statements: list[str] = []
+    rows = state.get("known")
+    if isinstance(rows, list):
+        for item in rows:
+            if isinstance(item, Mapping):
+                statement = _text(item.get("statement"))
+                if statement:
+                    statements.append(statement)
+    if not statements:
+        goal = state.get("goal")
+        if isinstance(goal, Mapping):
+            statement = _text(goal.get("statement"))
+            if statement:
+                statements.append(statement)
+    if not statements and _text(prompt):
+        statements.append(_text(prompt))
+
+    return [
+        {
+            "statement": statement,
+            "semantic_capability": CUSTOM_CAPABILITY_SENTINEL,
+            "acceptance": [f"Observe the requested behavior: {statement}"],
+        }
+        for statement in dict.fromkeys(statements)
+    ]
+
+
+def _normalize_requirement_rows(
+    raw: Any,
+    state: Mapping[str, Any],
+    prompt: str,
+) -> list[dict[str, Any]]:
+    raw_rows = raw.get("requirements") if isinstance(raw, Mapping) else None
+    normalized: list[dict[str, Any]] = []
+    if isinstance(raw_rows, list):
+        for item in raw_rows:
+            if not isinstance(item, Mapping):
+                continue
+            statement = _text(item.get("statement"))
+            if not statement:
+                continue
+            semantic_capability = _text(item.get("semantic_capability")).casefold()
+            if not semantic_capability:
+                semantic_capability = CUSTOM_CAPABILITY_SENTINEL
+            acceptance = _strings(item.get("acceptance"))
+            if not acceptance:
+                acceptance = [f"Observe the requested behavior: {statement}"]
+            normalized.append(
+                {
+                    "statement": statement,
+                    "semantic_capability": semantic_capability,
+                    "acceptance": acceptance,
+                }
+            )
+
+    if not normalized:
+        normalized = _fallback_requirement_rows(state, prompt)
+
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, tuple[str, ...]]] = set()
+    for row in normalized:
+        key = (
+            _text(row.get("statement")).casefold(),
+            _text(row.get("semantic_capability")).casefold(),
+            tuple(text.casefold() for text in _strings(row.get("acceptance"))),
+        )
+        if key not in seen:
+            seen.add(key)
+            deduped.append(row)
+    return deduped
+
+
+def _blocking_unknowns(
+    state: Mapping[str, Any],
+    *,
+    stage: str = "requirement_selection",
+) -> list[Mapping[str, Any]]:
+    """Return only unresolved rows that explicitly block the requested host stage."""
+    rows = state.get("unresolved", [])
+    if not isinstance(rows, list):
+        return []
+    return [
+        item
+        for item in rows
+        if isinstance(item, Mapping)
+        and item.get("status") != "resolved"
+        and stage in _strings(item.get("blocks"))
+    ]
+
+
+def _preserve_blocked_state(state: Mapping[str, Any]) -> dict[str, Any]:
+    """Represent incomplete requirement knowledge in state instead of throwing it away."""
+    value = deepcopy(dict(state))
+    blocking = _blocking_unknowns(value, stage="requirement_selection")
+    existing = [
+        item
+        for item in value.get("blockers", [])
+        if isinstance(item, Mapping) and item.get("stage") != "requirement_selection"
+    ]
+    if blocking:
+        existing.append(
+            {
+                "blocker_id": "blocker_requirement_selection",
+                "stage": "requirement_selection",
+                "statement": "Requirement selection is waiting for unresolved task-state knowledge.",
+                "caused_by": [str(item.get("unresolved_id") or "") for item in blocking],
+            }
+        )
+    value["blockers"] = existing
+    value["plan_ready"] = False
+    return _rehash(value)
+
+
+def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], budget: int) -> Any:
+    """Page requirements until the authored semantic frontier stops advancing."""
+    from .model_adapters import ModelConfigurationError
+
+    page_size = int(_REQUIREMENT_PARAMETERS["properties"]["requirements"]["maxItems"])
+    collected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    payload = json.loads(messages[1]["content"])
+    page_index = 0
+    while True:
+        current_messages = deepcopy(messages)
+        if collected:
+            current_messages[1]["content"] = json.dumps(
+                {**payload, "already_compiled_requirements": collected},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            if sum(len(row["content"].encode("utf-8")) for row in current_messages) > budget:
+                raise ModelConfigurationError(
+                    "REQUIREMENT_PAGINATION_CONTEXT_EXHAUSTED: continuation cannot fit "
+                    "without losing authored task or prior requirement coverage"
+                )
+        try:
+            with planner_operation("researched_requirement_compile", output_tokens=2048):
+                raw = router.generate_tool_decision(
+                    "planner",
+                    current_messages,
+                    tool_name=_REQUIREMENT_TOOL,
+                    parameters=_REQUIREMENT_PARAMETERS,
+                    description="Submit the next page of independently testable player-visible requirements.",
+                )
+        except Exception as exc:
+            if not collected:
+                raise
+            raise ModelConfigurationError(
+                "REQUIREMENT_PAGINATION_FAILED: continuation failed; partial requirements are not complete"
+            ) from exc
+        rows = raw.get("requirements") if isinstance(raw, Mapping) else None
+        if not isinstance(rows, list):
+            if not collected:
+                return raw
+            raise ModelConfigurationError("REQUIREMENT_PAGINATION_FAILED: invalid continuation page")
+        emit_root_cause(
+            "planner_requirement_page_received",
+            stage="planning_state",
+            operation="researched_requirement_compile",
+            result="INFO",
+            details={"page_index": page_index + 1, "requirements": rows},
+        )
+
+        page_rows: list[dict[str, Any]] = []
+        page_seen: set[str] = set()
+        repeated_prior: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, Mapping) or not _text(row.get("statement")):
+                raise ModelConfigurationError("REQUIREMENT_PAGINATION_FAILED: invalid requirement row")
+            identity = json.dumps(
+                [
+                    _text(row.get("statement")).casefold(),
+                    _text(row.get("semantic_capability")).casefold(),
+                    [value.casefold() for value in _strings(row.get("acceptance"))],
+                ],
+                ensure_ascii=False,
+            )
+            if identity in seen or identity in page_seen:
+                repeated_prior.append(dict(row))
+                continue
+            page_seen.add(identity)
+            page_rows.append(dict(row))
+
+        page_index += 1
+        if not page_rows:
+            emit_root_cause(
+                "planner_requirement_page",
+                stage="planning_state",
+                operation="researched_requirement_compile",
+                result="COMPLETE",
+                reason="REQUIREMENT_SEMANTIC_FRONTIER_EXHAUSTED",
+                details={
+                    "page_index": page_index,
+                    "page_requirement_count": len(rows),
+                    "accepted_requirement_count": 0,
+                    "discarded_repeat_count": len(repeated_prior),
+                    "repeated_prior_requirements": repeated_prior,
+                    "total_requirement_count": len(collected),
+                    "requirements": rows,
+                },
+            )
+            return {"requirements": collected}
+
+        seen.update(page_seen)
+        collected.extend(page_rows)
+        page_full = len(rows) >= page_size
+        emit_root_cause(
+            "planner_requirement_page",
+            stage="planning_state",
+            operation="researched_requirement_compile",
+            result="CONTINUE" if page_full else "COMPLETE",
+            reason="REQUIREMENT_PAGE_FULL_CONTINUE" if page_full else "REQUIREMENT_PAGE_PARTIAL_COMPLETE",
+            details={
+                "page_index": page_index,
+                "page_requirement_count": len(rows),
+                "accepted_requirement_count": len(page_rows),
+                "discarded_repeat_count": len(repeated_prior),
+                "total_requirement_count": len(collected),
+                "requirements": rows,
+            },
+        )
+        if not page_full:
+            return {"requirements": collected}
+
+def compile_researched_requirements(
+    router: Any,
+    prompt: str,
+    state: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Add behavior requirements; semantic model mistakes never become planner invariants."""
+    validate_planning_state(state, prompt=prompt)
+    if _blocking_unknowns(state, stage="requirement_selection"):
+        return _preserve_blocked_state(state)
+
+    raw_context = _resolved_context(state, prompt=prompt)
+    budget = _planner_context_budget(router)
+    system_content = (
+        "Compile independently testable, player-visible requirements from the supplied "
+        "task semantics. Do not output or reason about host IDs, evidence IDs, hashes, "
+        "receipts, provenance keys, files, classes, registrations, or invented APIs. "
+        "Use a short descriptive semantic capability label for bookkeeping only; "
+        "it must not choose Minecraft artifacts or architecture. Missing balance values or detailed "
+        "mechanics are later design work. Return the next page of at most four requirements. "
+        "Each requirement must express one independently testable behavior. Never combine separate "
+        "behaviors to fit the page: the host will request further pages. Exclude behaviors in "
+        "already_compiled_requirements. Return four new requirements while at least four remain; "
+        "When uncovered_authored_behavior is supplied, address that specific missing behavior first. "
+        "return fewer only when every remaining user-stated behavior is covered, or an empty array "
+        "when none remain. Preserve dependencies and qualifiers in each behavior. Return behavior "
+        "statements and observable acceptance conditions only."
+    )
+    catalog = {}
+    overhead_bytes = len(system_content.encode("utf-8")) + len(
+        json.dumps(catalog, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    )
+    context = _fit_context_to_budget(
+        raw_context,
+        byte_budget=budget,
+        catalog_and_system_bytes=overhead_bytes,
+    )
+    user_payload = {
+        "task": context,
+        "custom_capability": CUSTOM_CAPABILITY_SENTINEL,
+    }
+    messages = [
+        {"role": "system", "content": system_content},
+        {
+            "role": "user",
+            "content": json.dumps(
+                user_payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        },
+    ]
+
+    raw: Any = None
+    generation_error: BaseException | None = None
+    try:
+        raw = _generate_requirement_pages(router, messages, budget)
+    except BaseException as exc:
+        from .model_adapters import ModelConfigurationError
+
+        if isinstance(exc, ModelConfigurationError):
+            raise
+        generation_error = exc
+        emit_root_cause(
+            "planner_model_decision_failure",
+            stage="planning_state",
+            operation="researched_requirement_compile",
+            result="FALLBACK",
+            reason=f"{type(exc).__name__}: {exc}",
+            details={
+                "messages": messages,
+                "tool_name": _REQUIREMENT_TOOL,
+                "parameters": _REQUIREMENT_PARAMETERS,
+            },
+            exc=exc,
+        )
+    else:
+        emit_root_cause(
+            "planner_model_decision",
+            stage="planning_state",
+            operation="researched_requirement_compile",
+            result="PASS",
+            details={
+                "messages": messages,
+                "tool_name": _REQUIREMENT_TOOL,
+                "parameters": _REQUIREMENT_PARAMETERS,
+                "raw_output": raw,
+            },
+        )
+
+    requirement_rows = _normalize_requirement_rows(raw, state, prompt)
+    raw_requirement_count = (
+        len(raw.get("requirements", []))
+        if isinstance(raw, Mapping) and isinstance(raw.get("requirements"), list)
+        else 0
+    )
+    emit_root_cause(
+        "planner_requirement_normalization",
+        stage="planning_state",
+        operation="researched_requirement_compile",
+        result="FALLBACK" if generation_error is not None or raw is None else "PASS",
+        details={
+            "raw_output": raw,
+            "raw_requirement_count": raw_requirement_count,
+            "normalized_requirement_count": len(requirement_rows),
+            "normalized_requirements": requirement_rows,
+            "generation_error": (
+                f"{type(generation_error).__name__}: {generation_error}"
+                if generation_error is not None
+                else None
+            ),
+        },
+    )
+
+    value = deepcopy(dict(state))
+    value.setdefault("decisions", [])
+    value.setdefault("blockers", [])
+    value["blockers"] = [
+        item
+        for item in value["blockers"]
+        if not (isinstance(item, Mapping) and item.get("stage") == "requirement_selection")
+    ]
+    value["decisions"] = [
+        item
+        for item in value["decisions"]
+        if not (isinstance(item, Mapping) and item.get("decision_type") == "requirement")
+    ]
+
+    for index, row in enumerate(requirement_rows, start=1):
+        value["decisions"].append(
+            {
+                "decision_id": f"d_{len(value['decisions']) + 1:03d}",
+                "decision_type": "requirement",
+                "requirement_id": f"req_{index:03d}",
+                "statement": row["statement"],
+                "semantic_capability": row["semantic_capability"],
+                "acceptance": row["acceptance"],
+            }
+        )
+
+    value["plan_ready"] = False
+    return _rehash(value)
+
+
+__all__ = ["compile_researched_requirements"]

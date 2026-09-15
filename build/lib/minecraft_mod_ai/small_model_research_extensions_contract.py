@@ -1,0 +1,304 @@
+from __future__ import annotations
+
+"""Late inference-time extensions for maximizing one frozen small agent.
+
+This contract reuses production owners without rewrapping pre-design collection:
+trajectory memory owns durable experience, ProjectRAGIndex owns code retrieval,
+causal_tool_frontier owns the action surface, and deterministic validators remain
+authoritative over model self-judgement.
+"""
+
+import json
+import os
+import re
+from collections import Counter
+from collections.abc import Mapping, Sequence
+from functools import wraps
+from pathlib import Path
+from typing import Any
+
+_INSTALLED = False
+_CAPABILITY_PREFIX = "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n"
+_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_.:$<>/-]{1,127}|[가-힣]{2,}")
+_COMPLEX_MEMORY_MARKERS = (
+    "multi-file",
+    "multi file",
+    "cross-file",
+    "cross file",
+    "stack trace",
+    "migration",
+    "integration",
+    "dependency chain",
+    "call graph",
+    "regression",
+    "multiple errors",
+    "여러 파일",
+    "의존성",
+    "마이그레이션",
+    "통합",
+)
+
+
+def _tokens(value: str) -> set[str]:
+    return {item.casefold() for item in _TOKEN.findall(value)}
+
+
+def _memory_route(query: str, task_class: str, requested_limit: int) -> tuple[str, int]:
+    """Choose retrieval depth with cheap host features, never another model call."""
+
+    limit = max(2, min(12, int(requested_limit)))
+    terms = _tokens(query)
+    lowered = query.casefold()
+    high_risk = task_class in {"repair", "build", "runtime", "release", "quality"}
+    complex_query = (
+        len(terms) >= 72
+        or sum(marker in lowered for marker in _COMPLEX_MEMORY_MARKERS) >= 2
+        or query.count("\n") >= 12
+    )
+    if complex_query:
+        return "deep", max(limit, 8)
+    if high_risk or len(terms) >= 28:
+        return "targeted", limit
+    return "exact", min(limit, 3)
+
+
+def _explicit_legacy_workflow_path() -> Path | None:
+    explicit = os.environ.get("MMM_AGENT_WORKFLOW_MEMORY_PATH", "").strip()
+    return Path(explicit).expanduser() if explicit else None
+
+
+def _schema_tool_names(tool_schemas: Sequence[Mapping[str, Any]]) -> frozenset[str]:
+    result: set[str] = set()
+    for schema in tool_schemas:
+        function = schema.get("function")
+        if not isinstance(function, Mapping):
+            continue
+        name = str(function.get("name", "")).strip()
+        if name:
+            result.add(name)
+    return frozenset(result)
+
+
+def _project_capability_payload(
+    payload: Mapping[str, Any],
+    *,
+    exposed_tools: frozenset[str],
+) -> dict[str, Any]:
+    projected = dict(payload)
+    raw_skills = payload.get("eligible_skills")
+    skills = list(raw_skills) if isinstance(raw_skills, list) else []
+    if not exposed_tools or not skills:
+        return projected
+
+    relevant: list[dict[str, Any]] = []
+    for raw in skills:
+        if not isinstance(raw, Mapping):
+            continue
+        model_tools = {
+            str(item).strip()
+            for item in raw.get("model_tools", ())
+            if str(item).strip()
+        }
+        if model_tools & exposed_tools:
+            relevant.append(dict(raw))
+
+    projected["eligible_skills"] = relevant
+    projected["instruction_projection"] = {
+        "schema_version": "mmm/instruction-projection-v1",
+        "source": "authorized_tool_frontier",
+        "candidate_skill_count": len(skills),
+        "selected_skill_count": len(relevant),
+        "exposed_tool_count": len(exposed_tools),
+        "policy": "prompt_projection_only_authorization_unchanged",
+    }
+    return projected
+
+
+def _install_instruction_projection(agent_capability_context: Any) -> None:
+    current = agent_capability_context.build_agent_capability_context
+    if getattr(current, "_mmm_instruction_projection_v1", False):
+        return
+
+    @wraps(current)
+    def projected(
+        stage: str,
+        tool_schemas: Sequence[Mapping[str, Any]],
+        *,
+        model_role: str = "",
+    ) -> str:
+        rendered = current(stage, tool_schemas, model_role=model_role)
+        if not rendered.startswith(_CAPABILITY_PREFIX):
+            return rendered
+        try:
+            payload = json.loads(rendered[len(_CAPABILITY_PREFIX) :])
+        except (TypeError, json.JSONDecodeError):
+            return rendered
+        if not isinstance(payload, Mapping):
+            return rendered
+        compact = _project_capability_payload(
+            payload,
+            exposed_tools=_schema_tool_names(tool_schemas),
+        )
+        return _CAPABILITY_PREFIX + json.dumps(
+            compact,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+    projected._mmm_instruction_projection_v1 = True  # type: ignore[attr-defined]
+    projected.__wrapped__ = current  # type: ignore[attr-defined]
+    agent_capability_context.build_agent_capability_context = projected
+
+
+def _install_intent_routed_memory(trajectory_memory: Any) -> None:
+    current = trajectory_memory.relevant_trajectories
+    if getattr(current, "_mmm_intent_routed_memory_v1", False):
+        return
+
+    @wraps(current)
+    def routed(
+        base: str | Path,
+        query: str,
+        *,
+        task_class: str,
+        router: Any | None = None,
+        limit: int = 6,
+        current_context: Mapping[str, Any] | None = None,
+    ):
+        _tier, routed_limit = _memory_route(query, task_class, limit)
+        return current(
+            base,
+            query,
+            task_class=task_class,
+            router=router,
+            limit=routed_limit,
+            current_context=current_context,
+        )
+
+    routed._mmm_intent_routed_memory_v1 = True  # type: ignore[attr-defined]
+    routed.__wrapped__ = current  # type: ignore[attr-defined]
+    trajectory_memory.relevant_trajectories = routed
+
+
+def _verified_failure(record: Mapping[str, Any]) -> bool:
+    from .trajectory_record_integrity import derive_levels, validate_trajectory_record
+
+    derived = derive_levels(record)
+    return bool(
+        derived
+        and validate_trajectory_record(record)
+        and derived.get("verified_failure") is True
+    )
+
+
+def _skill_relations(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    from .procedure_trace import sequence_actions
+    from .trajectory_record_integrity import record_strong_skill_eligible
+
+    proven: Counter[tuple[str, str]] = Counter()
+    avoid: Counter[tuple[str, str]] = Counter()
+    for record in records[:16]:
+        strong = record_strong_skill_eligible(record)
+        failed = _verified_failure(record)
+        if not strong and not failed:
+            continue
+        procedure = record.get("procedure")
+        actions = sequence_actions(procedure if isinstance(procedure, Mapping) else None)
+        target = proven if strong else avoid
+        for left, right in zip(actions[:16], actions[1:17]):
+            if left and right and left != right:
+                target[(left, right)] += 1
+
+    def rows(counter: Counter[tuple[str, str]], limit: int) -> list[dict[str, Any]]:
+        return [
+            {"from": left, "to": right, "support": count}
+            for (left, right), count in counter.most_common(limit)
+        ]
+
+    return {
+        "schema_version": "mmm/procedural-relation-graph-v1",
+        "proven_transitions": rows(proven, 8),
+        "avoid_transitions": rows(avoid, 6),
+    }
+
+
+def _evolve_skill(
+    base_skill: Mapping[str, Any],
+    query: str,
+    records: Sequence[Mapping[str, Any]],
+    *,
+    task_class: str,
+) -> dict[str, Any]:
+    skill = dict(base_skill)
+    relations = _skill_relations(records)
+    tier, _limit = _memory_route(query, task_class, 6)
+    skill["memory_route"] = {
+        "schema_version": "mmm/intent-routed-memory-v1",
+        "tier": tier,
+        "task_class": task_class,
+    }
+    skill["skill_relations"] = relations
+    skill["evolving_playbook"] = {
+        "schema_version": "mmm/evolving-playbook-v1",
+        "activation_terms": sorted(_tokens(query))[:24],
+        "proven_transitions": relations["proven_transitions"][:6],
+        "avoid_transitions": relations["avoid_transitions"][:4],
+        "verification_contract": (
+            "Replay only transitions supported by verifier-qualified trajectories; "
+            "re-check current preconditions and let current compiler/test/runtime "
+            "evidence override remembered procedure."
+        ),
+        "persistence": "derived_from_v3_trajectory_corpus_not_separate_memory",
+    }
+    return skill
+
+
+def _install_skill_evolution(trajectory_memory: Any, temporary_skill_contract: Any) -> None:
+    current = trajectory_memory.synthesize_temporary_skill
+    if getattr(current, "_mmm_evolving_skill_v1", False):
+        temporary_skill_contract.synthesize_temporary_skill = current
+        return
+
+    @wraps(current)
+    def evolved(
+        query: str,
+        records: Sequence[Mapping[str, Any]],
+        *,
+        task_class: str,
+    ):
+        skill = current(query, records, task_class=task_class)
+        if not isinstance(skill, Mapping):
+            return skill
+        return _evolve_skill(
+            skill,
+            query,
+            records,
+            task_class=task_class,
+        )
+
+    evolved._mmm_evolving_skill_v1 = True  # type: ignore[attr-defined]
+    evolved.__wrapped__ = current  # type: ignore[attr-defined]
+    trajectory_memory.synthesize_temporary_skill = evolved
+    temporary_skill_contract.synthesize_temporary_skill = evolved
+
+
+def install() -> None:
+    global _INSTALLED
+    if _INSTALLED:
+        return
+
+    from . import (
+        agent_capability_context,
+        small_model_agent_policy,
+        temporary_skill_contract,
+        trajectory_memory,
+    )
+
+    small_model_agent_policy._memory_path = _explicit_legacy_workflow_path
+    _install_instruction_projection(agent_capability_context)
+    _install_intent_routed_memory(trajectory_memory)
+    _install_skill_evolution(trajectory_memory, temporary_skill_contract)
+    _INSTALLED = True
+
+
+__all__ = ["install"]

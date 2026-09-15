@@ -1,0 +1,28 @@
+id: feature/reuse_assessment/evidence_gaps
+task: Resolve exactly one evidence gaps record for the supplied feature and acceptance
+  criterion.
+input_fields:
+- requirement
+- criterion
+- evidence
+- accepted_records
+record_schema:
+  type: object
+  properties:
+    missing_fact:
+      type: string
+      minLength: 1
+    blocked_reuse:
+      type: string
+      minLength: 1
+  required:
+  - missing_fact
+  - blocked_reuse
+  additionalProperties: false
+rules:
+- Return only the next record for this concern; do not plan neighboring concerns.
+- Preserve supplied evidence identifiers. Never invent external APIs, paths or facts.
+- Return done only after all records for this concern are supplied.
+- Return not_applicable with a concrete reason only when this concern does not apply.
+- Return blocked with the missing information when it cannot be resolved.
+- Do not turn missing information into an inapplicability claim.

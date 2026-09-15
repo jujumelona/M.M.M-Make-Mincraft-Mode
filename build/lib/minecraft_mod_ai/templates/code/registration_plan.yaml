@@ -1,0 +1,11 @@
+id: code/registration_plan
+execution: host
+input:
+  artifact:
+  registry_requirement:
+  target_bindings:
+output:
+  registration_operation:
+  blocked_reason:
+proof:
+  predicate: registration has a verified registry surface, owned identifier, and initialization point

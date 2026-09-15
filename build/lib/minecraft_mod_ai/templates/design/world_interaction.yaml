@@ -1,0 +1,15 @@
+id: design/world_interaction
+slot_id: world_interaction
+task: "Define explicitly required physics, environmental hazards, or world interactions."
+rules:
+  - "Use only explicit requirements and supplied context; do not invent physics, hazards, structures, or world mechanics."
+record_schema:
+  type: object
+  properties:
+    world_interaction:
+      type: string
+      minLength: 1
+      maxLength: 256
+  required:
+    - world_interaction
+  additionalProperties: false

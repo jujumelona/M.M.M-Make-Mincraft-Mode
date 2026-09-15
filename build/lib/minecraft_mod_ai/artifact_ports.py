@@ -1,0 +1,147 @@
+from __future__ import annotations
+
+"""Typed artifact ports used to connect leaf jobs without semantic guessing."""
+
+from dataclasses import dataclass
+from enum import Enum
+from threading import RLock
+from typing import Any
+
+
+class PortKind(str, Enum):
+    REGISTRY_ID = "REGISTRY_ID"
+    JAVA_SYMBOL = "JAVA_SYMBOL"
+    TEXTURE_REF = "TEXTURE_REF"
+    MODEL_REF = "MODEL_REF"
+    CLIENT_ITEM_REF = "CLIENT_ITEM_REF"
+    SCREEN_HANDLER_TYPE = "SCREEN_HANDLER_TYPE"
+    PAYLOAD_TYPE = "PAYLOAD_TYPE"
+    TRANSLATION_KEY = "TRANSLATION_KEY"
+    GENERIC = "GENERIC"
+
+
+class PortConnectionError(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class TypedPort:
+    name: str
+    port_kind: PortKind
+    target_type: str
+    value: str
+    context_id: str = ""
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "name": self.name,
+            "port_kind": self.port_kind.value,
+            "target_type": self.target_type,
+            "value": self.value,
+            "context_id": self.context_id,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "TypedPort":
+        return cls(
+            name=str(data["name"]),
+            port_kind=PortKind(data["port_kind"]),
+            target_type=str(data["target_type"]),
+            value=str(data["value"]),
+            context_id=str(data.get("context_id", "")),
+        )
+
+    def matches(self, expected_kind: PortKind | str, expected_target_type: str) -> bool:
+        kind = PortKind(expected_kind) if isinstance(expected_kind, str) else expected_kind
+        return (
+            self.port_kind == kind
+            and self.target_type.casefold() == expected_target_type.casefold()
+        )
+
+
+def validate_port_compatibility(
+    port: TypedPort,
+    expected_kind: PortKind | str,
+    expected_target_type: str,
+) -> None:
+    expected = PortKind(expected_kind) if isinstance(expected_kind, str) else expected_kind
+    if port.port_kind != expected:
+        raise PortConnectionError(
+            f"PORT_KIND_MISMATCH: Port {port.name} has kind {port.port_kind.value}, "
+            f"but consumer expected {expected.value}"
+        )
+    if port.target_type.casefold() != expected_target_type.casefold():
+        raise PortConnectionError(
+            f"PORT_TARGET_TYPE_MISMATCH: Port {port.name} targets {port.target_type}, "
+            f"but consumer expected {expected_target_type}"
+        )
+
+
+class PortRegistry:
+    """Session-local immutable-by-name port table safe for parallel job execution."""
+
+    def __init__(self) -> None:
+        self._ports: dict[str, TypedPort] = {}
+        self._lock = RLock()
+        self._context_id = ""
+
+    def bind_context(self, context_id: str) -> None:
+        with self._lock:
+            if not context_id or (self._context_id and self._context_id != context_id):
+                raise PortConnectionError("VERSION_CONTEXT_MISMATCH")
+            if any(port.context_id != context_id for port in self._ports.values()):
+                raise PortConnectionError("VERSION_CONTEXT_MISMATCH: existing port belongs to another context")
+            self._context_id = context_id
+
+    def publish(self, port: TypedPort) -> None:
+        if not port.name or not port.value:
+            raise PortConnectionError("PORT_EMPTY: published ports need non-empty name and value")
+        with self._lock:
+            if self._context_id and port.context_id != self._context_id:
+                raise PortConnectionError("VERSION_CONTEXT_MISMATCH: cannot publish a foreign port")
+            existing = self._ports.get(port.name)
+            if existing is not None and existing != port:
+                raise PortConnectionError(
+                    f"PORT_DUPLICATE: Port {port.name} already has {existing.to_dict()}, "
+                    f"conflicting with {port.to_dict()}"
+                )
+            self._ports[port.name] = port
+
+    def register(
+        self,
+        name: str,
+        value: Any,
+        kind: PortKind | str = PortKind.GENERIC,
+        target_type: str = "Any",
+    ) -> TypedPort:
+        port_kind = PortKind(kind) if isinstance(kind, str) else kind
+        port = TypedPort(name=name, port_kind=port_kind, target_type=target_type, value=value)
+        self.publish(port)
+        return port
+
+    def resolve(
+        self,
+        name: str,
+        expected_kind: PortKind | str,
+        expected_target_type: str,
+    ) -> TypedPort:
+        with self._lock:
+            port = self._ports.get(name)
+        if port is None:
+            raise PortConnectionError(
+                f"PORT_MISSING: Required port {name!r} has not been published"
+            )
+        validate_port_compatibility(port, expected_kind, expected_target_type)
+        return port
+
+    def get(self, name: str) -> TypedPort | None:
+        with self._lock:
+            return self._ports.get(name)
+
+    def has(self, name: str) -> bool:
+        with self._lock:
+            return name in self._ports
+
+    def all_ports(self) -> dict[str, TypedPort]:
+        with self._lock:
+            return dict(self._ports)

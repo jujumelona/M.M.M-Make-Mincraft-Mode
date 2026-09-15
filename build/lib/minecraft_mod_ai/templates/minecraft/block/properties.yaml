@@ -1,0 +1,59 @@
+id: minecraft/block/properties
+task: Implement only the properties responsibility of the supplied block artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: block_identity
+  type: identifier
+  required: true
+- name: block_properties_input
+  type: specification
+  required: true
+outputs:
+- name: block_properties_receipt
+  type: receipt
+- name: block_properties_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - REGISTER_BLOCK
+  symbols:
+  - register_block
+  - resource_key_create
+  schemas: []
+implementation_key: fabric/block/properties
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - block_properties
+repair:
+  scope:
+  - minecraft/block/properties
+  writable_anchors:
+  - /* MMM:block_properties */
+consumes:
+- artifact_requirement
+- target_cell
+- verified_bindings
+- owned_anchor
+- prerequisite_receipts
+provides:
+- properties
+anchor_kinds:
+- symbol
+- test
+rules:
+- Implement properties responsibility for block strictly within declared REGISTER_BLOCK
+  capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required block prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.
+postconditions:
+- block properties matches host version contract
+- block properties receipts emitted with verified context

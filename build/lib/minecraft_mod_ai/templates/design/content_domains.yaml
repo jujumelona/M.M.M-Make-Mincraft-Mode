@@ -1,0 +1,27 @@
+id: design/content_domains
+task: Select the directly required Minecraft content domains.
+standalone: true
+# Retained for standalone use; production derives domains from the content graph.
+record_schema:
+  type: object
+  properties:
+    domains:
+      type: array
+      minItems: 1
+      maxItems: 3
+      uniqueItems: true
+      items:
+        type: string
+        enum:
+          - item
+          - block
+          - entity
+          - machine
+          - combat
+          - worldgen
+          - gui
+  required:
+    - domains
+  additionalProperties: false
+rules:
+  - Select only domains directly required by the requested gameplay; the host must skip this template when none are required.

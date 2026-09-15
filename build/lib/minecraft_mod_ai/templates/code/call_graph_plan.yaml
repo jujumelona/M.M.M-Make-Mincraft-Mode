@@ -1,0 +1,10 @@
+id: code/call_graph_plan
+execution: host
+input:
+  producer:
+  consumer:
+  behavior_contract:
+output:
+  call_edge:
+proof:
+  predicate: the edge has one verified producer, consumer, and reason

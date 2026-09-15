@@ -1,0 +1,10 @@
+id: asset/sound_plan
+execution: host
+input:
+  sound_requirement:
+  audio_evidence:
+output:
+  sound_contract:
+  unresolved_properties:
+proof:
+  predicate: every fixed sound property is evidence-backed or explicitly authored

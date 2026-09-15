@@ -1,0 +1,3 @@
+id: criterion/failure_and_limits
+execution: sequence
+steps: [feature/failure_and_limits/invalid_inputs, feature/failure_and_limits/missing_dependencies, feature/failure_and_limits/repeated_calls, feature/failure_and_limits/partial_failures, feature/failure_and_limits/interruptions, feature/failure_and_limits/concurrency_hazards, feature/failure_and_limits/bounds, feature/failure_and_limits/diagnostics, feature/failure_and_limits/fail_closed]

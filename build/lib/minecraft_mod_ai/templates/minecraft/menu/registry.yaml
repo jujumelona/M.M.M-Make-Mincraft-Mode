@@ -1,0 +1,59 @@
+id: minecraft/menu/registry
+task: Implement only the registry responsibility of the supplied menu artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: menu_identity
+  type: identifier
+  required: true
+- name: menu_registry_input
+  type: specification
+  required: true
+outputs:
+- name: menu_registry_receipt
+  type: receipt
+- name: menu_registry_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - GUI_EXISTS
+  symbols:
+  - ScreenHandlerType
+  schemas: []
+implementation_key: fabric/menu/registry
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - menu_properties
+repair:
+  scope:
+  - minecraft/menu/registry
+  writable_anchors:
+  - /* MMM:menu_registry */
+consumes:
+- artifact_requirement
+- target_cell
+- verified_bindings
+- owned_anchor
+- prerequisite_receipts
+provides:
+- registry
+anchor_kinds:
+- registry_id
+- symbol
+- test
+rules:
+- Implement registry responsibility for menu strictly within declared SCREEN_HANDLER
+  capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required menu prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.
+postconditions:
+- menu registry matches host version contract
+- menu registry receipts emitted with verified context

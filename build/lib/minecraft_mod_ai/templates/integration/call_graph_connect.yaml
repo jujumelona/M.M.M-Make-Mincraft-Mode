@@ -1,0 +1,10 @@
+id: integration/call_graph_connect
+execution: host
+input:
+  call_edges:
+  generation_units:
+output:
+  call_graph:
+  invalid_edges:
+proof:
+  predicate: every call edge resolves to existing owned units and graph constraints pass

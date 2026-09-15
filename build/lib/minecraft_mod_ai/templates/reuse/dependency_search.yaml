@@ -1,0 +1,10 @@
+id: reuse/dependency_search
+execution: host
+input:
+  candidate:
+  target_cell:
+output:
+  dependencies:
+  unresolved_dependencies:
+proof:
+  predicate: every resolved dependency has an evidence locator and target relevance

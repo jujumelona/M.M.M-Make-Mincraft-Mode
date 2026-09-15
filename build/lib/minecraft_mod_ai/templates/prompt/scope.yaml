@@ -1,0 +1,25 @@
+id: prompt/scope
+execution: value
+task: 'Classify only how explicitly the original prompt defines scope: explicit when it specifies the intended scope, partial when it leaves some scope open, unspecified when it leaves scope selection open. Do not choose or enlarge the scope.'
+output_schema:
+  type: object
+  properties:
+    scope_status:
+      type: string
+      enum:
+      - explicit
+      - partial
+      - unspecified
+  required:
+  - scope_status
+  additionalProperties: false
+input_schema:
+  type: object
+  properties:
+    original_prompt:
+      type: string
+      minLength: 1
+  required:
+  - original_prompt
+  additionalProperties: false
+rules: []

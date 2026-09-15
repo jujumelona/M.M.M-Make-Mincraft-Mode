@@ -1,0 +1,9 @@
+id: code/class_plan
+execution: host
+input:
+  file_target:
+  responsibility:
+output:
+  class_contract:
+proof:
+  predicate: the class contract has one primary responsibility and a verified file owner

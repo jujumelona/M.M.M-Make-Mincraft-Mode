@@ -1,0 +1,14 @@
+id: minecraft/inventory
+execution: sequence
+steps:
+- minecraft/inventory/requirement
+- minecraft/inventory/slots
+- minecraft/inventory/insertion
+- minecraft/inventory/extraction
+- minecraft/inventory/transfer
+- minecraft/inventory/transaction
+- minecraft/inventory/limits
+- minecraft/inventory/persistence
+- minecraft/inventory/synchronization
+- minecraft/inventory/integration
+- minecraft/inventory/validation

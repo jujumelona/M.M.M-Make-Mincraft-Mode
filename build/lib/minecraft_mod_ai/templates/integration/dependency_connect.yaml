@@ -1,0 +1,10 @@
+id: integration/dependency_connect
+execution: host
+input:
+  dependency_plan:
+  generation_units:
+output:
+  dependency_edges:
+  cycles:
+proof:
+  predicate: every edge has one provider and consumer and the resulting graph is valid

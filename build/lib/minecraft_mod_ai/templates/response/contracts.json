@@ -1,0 +1,116 @@
+{
+  "repair": {
+    "type": "object",
+    "properties": {
+      "operations": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 4,
+        "items": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "operation": {"type": "string", "enum": ["create"]},
+                "path": {"type": "string", "minLength": 1, "maxLength": 256},
+                "content": {"type": "string", "maxLength": 256}
+              },
+              "required": ["operation", "path", "content"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "operation": {"type": "string", "enum": ["replace"]},
+                "path": {"type": "string", "minLength": 1, "maxLength": 256},
+                "expected_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "maxLength": 71},
+                "content": {"type": "string", "maxLength": 256}
+              },
+              "required": ["operation", "path", "expected_sha256", "content"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "operation": {"type": "string", "enum": ["edit"]},
+                "path": {"type": "string", "minLength": 1, "maxLength": 256},
+                "expected_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "maxLength": 71},
+                "replacements": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 4,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "old": {"type": "string", "minLength": 1, "maxLength": 256},
+                      "new": {"type": "string", "maxLength": 256},
+                      "count": {"type": "integer", "minimum": 1}
+                    },
+                    "required": ["old", "new", "count"],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": ["operation", "path", "expected_sha256", "replacements"],
+              "additionalProperties": false
+            }
+          ]
+        }
+      }
+    },
+    "required": ["operations"],
+    "additionalProperties": false
+  },
+  "visual_review": {
+    "type": "object",
+    "properties": {
+      "status": {"type": "string", "enum": ["PASS", "FAIL"]},
+      "findings": {"type": "array", "maxItems": 4, "items": {"type": "string", "maxLength": 256}},
+      "acceptance_test_results": {
+        "type": "array",
+        "maxItems": 4,
+        "items": {
+          "type": "object",
+          "properties": {
+            "test": {"type": "string", "minLength": 1, "maxLength": 256},
+            "status": {"type": "string", "enum": ["PASS", "FAIL"]},
+            "evidence": {"type": "string", "minLength": 1, "maxLength": 256}
+          },
+          "required": ["test", "status", "evidence"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["status", "findings", "acceptance_test_results"],
+    "additionalProperties": false
+  },
+  "capabilities": {
+    "type": "object",
+    "properties": {
+      "capabilities": {
+        "type": "array",
+        "maxItems": 4,
+        "items": {
+          "type": "object",
+          "properties": {
+            "capability_id": {"type": "string", "minLength": 1, "maxLength": 256},
+            "source_span": {"type": "string", "minLength": 1, "maxLength": 256},
+            "description": {"type": "string", "minLength": 1, "maxLength": 256},
+            "category": {"type": "string", "minLength": 1, "maxLength": 256},
+            "dependencies": {"type": "array", "maxItems": 4, "items": {"type": "string", "minLength": 1, "maxLength": 256}}
+          },
+          "required": ["capability_id", "source_span", "description", "category", "dependencies"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["capabilities"],
+    "additionalProperties": false
+  },
+  "coder_summary": {
+    "type": "object",
+    "properties": {"summary": {"type": "string", "maxLength": 256}},
+    "required": ["summary"],
+    "additionalProperties": false
+  }
+}

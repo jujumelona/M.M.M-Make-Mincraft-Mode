@@ -1,0 +1,14 @@
+id: minecraft/screen
+execution: sequence
+steps:
+- minecraft/screen/requirement
+- minecraft/screen/layout
+- minecraft/screen/widget
+- minecraft/screen/input
+- minecraft/screen/state
+- minecraft/screen/texture
+- minecraft/screen/tooltip
+- minecraft/screen/accessibility
+- minecraft/screen/registration
+- minecraft/screen/integration
+- minecraft/screen/validation

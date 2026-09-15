@@ -1,0 +1,11 @@
+id: validation/requirement_trace
+execution: host
+input:
+  requirements:
+  implementation_receipts:
+  test_receipts:
+output:
+  traces:
+  unproven_requirements:
+proof:
+  predicate: no mandatory requirement lacks an implementation and verification trace

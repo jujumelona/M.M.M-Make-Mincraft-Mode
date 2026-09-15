@@ -1,0 +1,16 @@
+id: minecraft/saved_data
+execution: sequence
+steps:
+- minecraft/saved_data/requirement
+- minecraft/saved_data/scope
+- minecraft/saved_data/owner
+- minecraft/saved_data/default
+- minecraft/saved_data/codec
+- minecraft/saved_data/load
+- minecraft/saved_data/save
+- minecraft/saved_data/dirty
+- minecraft/saved_data/migration
+- minecraft/saved_data/malformed
+- minecraft/saved_data/transfer
+- minecraft/saved_data/integration
+- minecraft/saved_data/validation

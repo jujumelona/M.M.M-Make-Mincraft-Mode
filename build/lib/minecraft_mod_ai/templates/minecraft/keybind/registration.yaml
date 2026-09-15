@@ -1,0 +1,58 @@
+id: minecraft/keybind/registration
+task: Implement only the registration responsibility of the supplied keybind artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: keybind_identity
+  type: identifier
+  required: true
+- name: keybind_registration_input
+  type: specification
+  required: true
+outputs:
+- name: keybind_registration_receipt
+  type: receipt
+- name: keybind_registration_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - GUI_EXISTS
+  symbols:
+  - ScreenHandlerType
+  schemas: []
+implementation_key: fabric/keybind/registration
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - keybind_properties
+repair:
+  scope:
+  - minecraft/keybind/registration
+  writable_anchors:
+  - /* MMM:keybind_registration */
+consumes:
+- artifact_requirement
+- target_cell
+- verified_bindings
+- owned_anchor
+- prerequisite_receipts
+provides:
+- registration
+anchor_kinds:
+- symbol
+- test
+rules:
+- Implement registration responsibility for keybind strictly within declared KEYBIND_REGISTRATION
+  capability.
+- Target side must remain client; reject cross-side symbol leakage.
+- Fail closed if required keybind prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.
+postconditions:
+- keybind registration matches host version contract
+- keybind registration receipts emitted with verified context

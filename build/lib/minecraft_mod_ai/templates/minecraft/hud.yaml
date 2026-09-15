@@ -1,0 +1,12 @@
+id: minecraft/hud
+execution: sequence
+steps:
+- minecraft/hud/requirement
+- minecraft/hud/registration
+- minecraft/hud/visibility
+- minecraft/hud/layout
+- minecraft/hud/state
+- minecraft/hud/rendering
+- minecraft/hud/accessibility
+- minecraft/hud/integration
+- minecraft/hud/validation

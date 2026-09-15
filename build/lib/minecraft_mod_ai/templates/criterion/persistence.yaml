@@ -1,0 +1,3 @@
+id: criterion/persistence
+execution: sequence
+steps: [feature/persistence/stored_state, feature/persistence/serialization, feature/persistence/missing_defaults, feature/persistence/save_triggers, feature/persistence/load_behavior, feature/persistence/migration, feature/persistence/malformed_data, feature/persistence/transfers]

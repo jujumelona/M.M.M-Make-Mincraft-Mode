@@ -1,0 +1,27 @@
+id: prompt/intent
+execution: value
+task: State only the primary user goal. Preserve requested behavior and do not plan how to implement it.
+output_schema:
+  type: object
+  properties:
+    statement:
+      type: string
+      minLength: 1
+      maxLength: 256
+    source_quote:
+      type: string
+      minLength: 0
+      maxLength: 256
+  required:
+  - statement
+  additionalProperties: false
+input_schema:
+  type: object
+  properties:
+    original_prompt:
+      type: string
+      minLength: 1
+  required:
+  - original_prompt
+  additionalProperties: false
+rules: []

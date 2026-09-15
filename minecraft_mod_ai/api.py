@@ -664,7 +664,7 @@ class CompleteModAISession:
             # Compile only after build is requested. Keep the saved design intact
             # even if platform binding or executable-contract compilation stops.
             proposal = self.planner.compile_for_production(
-                proposal.production_prompt(),
+                proposal,
                 media_paths=proposal.media_paths,
                 existing_input_sha256=existing_hash,
             )

@@ -1,0 +1,16 @@
+id: code/generation_unit
+execution: host
+input:
+  file_target:
+  class_contract:
+  method_contract:
+  field_contract:
+  registration_operation:
+  call_edges:
+  dependencies:
+  imports:
+output:
+  generation_unit:
+  blocked_reasons:
+proof:
+  predicate: the unit is bounded to one owned anchor and all required inputs are resolved

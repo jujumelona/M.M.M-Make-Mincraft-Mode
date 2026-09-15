@@ -1,0 +1,10 @@
+id: reuse/official_examples
+execution: host
+input:
+  queries:
+  target_cell:
+output:
+  candidates:
+  unresolved_queries:
+proof:
+  predicate: every example has a source locator and target applicability record

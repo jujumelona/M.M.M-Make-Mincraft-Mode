@@ -1,0 +1,15 @@
+id: design/machine_role
+slot_id: machine_role
+task: "Define automated machines, processing units, or energy systems."
+rules:
+  - "Use only explicit requirements and supplied context; do not invent machines or energy systems."
+record_schema:
+  type: object
+  properties:
+    machine_role:
+      type: string
+      minLength: 1
+      maxLength: 256
+  required:
+    - machine_role
+  additionalProperties: false

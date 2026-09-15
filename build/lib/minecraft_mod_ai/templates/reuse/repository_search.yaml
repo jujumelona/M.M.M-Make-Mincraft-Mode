@@ -1,0 +1,9 @@
+id: reuse/repository_search
+execution: host
+input:
+  query:
+  repositories:
+output:
+  repository_hits:
+proof:
+  predicate: every hit identifies its repository and concrete locator

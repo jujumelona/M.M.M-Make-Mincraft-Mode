@@ -155,28 +155,25 @@ class CompleteGameDesignPlanner:
 
     def compile_for_production(
         self,
-        prompt: str,
+        prompt: AuthoredPlan | str,
         *,
         media_paths: Sequence[str | Path] = (),
         existing_input_sha256: str = "",
     ) -> CompleteProposal:
-        from contextlib import nullcontext
+        from .authored_production import compile_authored_design
 
+        plan = prompt if isinstance(prompt, AuthoredPlan) else AuthoredPlan(
+            requested_prompt=prompt, text=prompt,
+            media_paths=tuple(str(path) for path in media_paths),
+        )
         with trace_scope("production_preparation", trace_id=uuid.uuid4().hex):
             emit_root_cause(
-                "production_preparation_start",
-                stage="production",
-                result="START",
-                details=repository_revision(),
+                "production_preparation_start", stage="production", result="START",
+                details={**repository_revision(), "input": "saved_authored_design"},
             )
-            session_factory = getattr(self.router, "generation_session", None)
-            session = session_factory("planner") if callable(session_factory) else nullcontext()
-            with session:
-                return self._plan_in_session(
-                    prompt,
-                    media_paths=media_paths,
-                    existing_input_sha256=existing_input_sha256,
-                )
+            return compile_authored_design(
+                self.router, plan, existing_input_sha256=existing_input_sha256,
+            )
 
     def _plan_in_session(
         self,

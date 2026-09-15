@@ -1,0 +1,9 @@
+﻿id: integration/workflow
+execution: sequence
+steps:
+- integration/registration
+- integration/dependency_connect
+- integration/feature_connect
+- integration/client_server_connect
+- integration/resource_connect
+- integration/call_graph_connect

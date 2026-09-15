@@ -1,0 +1,7 @@
+id: minecraft/resource/block/model_cube_bottom_top
+artifact: json_resource
+target: {operation: CREATE_FILE, file: "src/main/resources/assets/{{mod_id}}/models/block/{{registry_path}}.json"}
+requires: [mod_id, registry_path]
+ai_slots: []
+render: {language: json, body: {parent: "minecraft:block/cube_bottom_top", textures: {side: "{{mod_id}}:block/{{registry_path}}_side", bottom: "{{mod_id}}:block/{{registry_path}}_bottom", top: "{{mod_id}}:block/{{registry_path}}_top"}}}
+validators: [json_parse]

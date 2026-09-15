@@ -101,7 +101,7 @@ def test_build_compilation_cannot_destroy_saved_design(monkeypatch, tmp_path):
     before = (tmp_path / "proposal.json").read_bytes()
 
     def compile_design(prompt, **kwargs):
-        assert RESPONSES[3] in prompt
+        assert prompt.text == RESPONSES[3]
         raise RuntimeError("production compiler unavailable")
 
     monkeypatch.setattr(session.planner, "compile_for_production", compile_design)
@@ -160,5 +160,5 @@ def test_build_receives_the_authored_design_only_after_explicit_build(
 
     session.orchestrator = SimpleNamespace(execute=execute)
     assert session.build(reply) == "production-result"
-    assert calls == [reply.complete_proposal.production_prompt()]
+    assert calls == [reply.complete_proposal]
     assert session.load_plan().message == RESPONSES[3]

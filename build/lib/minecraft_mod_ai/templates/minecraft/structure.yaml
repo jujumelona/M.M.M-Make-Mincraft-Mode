@@ -1,0 +1,15 @@
+id: minecraft/structure
+execution: sequence
+steps:
+- minecraft/structure/requirement
+- minecraft/structure/registry
+- minecraft/structure/template
+- minecraft/structure/pool
+- minecraft/structure/processor
+- minecraft/structure/placement
+- minecraft/structure/terrain
+- minecraft/structure/spawn
+- minecraft/structure/loot
+- minecraft/structure/datagen
+- minecraft/structure/integration
+- minecraft/structure/validation

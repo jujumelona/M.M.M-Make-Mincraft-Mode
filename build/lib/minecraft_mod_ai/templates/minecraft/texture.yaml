@@ -1,0 +1,13 @@
+id: minecraft/texture
+execution: sequence
+steps:
+- minecraft/texture/requirement
+- minecraft/texture/resource_path
+- minecraft/texture/dimensions
+- minecraft/texture/palette
+- minecraft/texture/transparency
+- minecraft/texture/frames
+- minecraft/texture/generation
+- minecraft/texture/encoding
+- minecraft/texture/integration
+- minecraft/texture/validation

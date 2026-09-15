@@ -1,0 +1,11 @@
+id: reuse/license_check
+execution: host
+input:
+  candidate:
+  license_evidence:
+output:
+  permission_state:
+  evidence_refs:
+  unresolved_terms:
+proof:
+  predicate: direct reuse is allowed only when sufficient license evidence permits it

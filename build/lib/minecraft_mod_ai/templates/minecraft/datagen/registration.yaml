@@ -1,0 +1,58 @@
+id: minecraft/datagen/registration
+task: Implement only the registration responsibility of the supplied datagen artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: datagen_identity
+  type: identifier
+  required: true
+- name: datagen_registration_input
+  type: specification
+  required: true
+outputs:
+- name: datagen_registration_receipt
+  type: receipt
+- name: datagen_registration_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - TAGS
+  - RECIPE_CRAFTING
+  symbols: []
+  schemas: []
+implementation_key: fabric/datagen/registration
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - datagen_properties
+repair:
+  scope:
+  - minecraft/datagen/registration
+  writable_anchors:
+  - /* MMM:datagen_registration */
+consumes:
+- artifact_requirement
+- target_cell
+- verified_bindings
+- owned_anchor
+- prerequisite_receipts
+provides:
+- registration
+anchor_kinds:
+- symbol
+- test
+rules:
+- Implement registration responsibility for datagen strictly within declared DATA_GENERATOR
+  capability.
+- Target side must remain common; reject cross-side symbol leakage.
+- Fail closed if required datagen prerequisite receipt is missing; never invent defaults.
+- Output must satisfy java_parse validator before completion.
+postconditions:
+- datagen registration matches host version contract
+- datagen registration receipts emitted with verified context

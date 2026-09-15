@@ -1,0 +1,10 @@
+id: reuse/official_docs
+execution: host
+input:
+  queries:
+  target_cell:
+output:
+  candidates:
+  unresolved_queries:
+proof:
+  predicate: every candidate is source-identified and its authority type is explicit

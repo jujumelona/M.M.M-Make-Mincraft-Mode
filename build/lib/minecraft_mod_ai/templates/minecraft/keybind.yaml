@@ -1,0 +1,11 @@
+id: minecraft/keybind
+execution: sequence
+steps:
+- minecraft/keybind/requirement
+- minecraft/keybind/registration
+- minecraft/keybind/category
+- minecraft/keybind/input
+- minecraft/keybind/conflict
+- minecraft/keybind/dispatch
+- minecraft/keybind/integration
+- minecraft/keybind/validation

@@ -406,8 +406,9 @@ class PlanningPipeline:
 
         from .grounded_source_reuse import build_repository_reuse_plan
 
-        reuse_design = {**design, "_platform_selection": selection_dict}
-        selection_dict["reuse_plan"] = build_repository_reuse_plan(reuse_design)
+        if "authored_plan" not in design:
+            reuse_design = {**design, "_platform_selection": selection_dict}
+            selection_dict["reuse_plan"] = build_repository_reuse_plan(reuse_design)
         target = dict(selection_dict["target"])
         bound_brief = {**research_brief, "_mmm_platform_target": target}
 

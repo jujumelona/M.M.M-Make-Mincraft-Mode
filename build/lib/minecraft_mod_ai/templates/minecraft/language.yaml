@@ -1,0 +1,12 @@
+id: minecraft/language
+execution: sequence
+steps:
+- minecraft/language/requirement
+- minecraft/language/locale
+- minecraft/language/key
+- minecraft/language/text
+- minecraft/language/format
+- minecraft/language/fallback
+- minecraft/language/datagen
+- minecraft/language/integration
+- minecraft/language/validation

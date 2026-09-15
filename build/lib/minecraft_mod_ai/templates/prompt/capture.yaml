@@ -1,0 +1,21 @@
+id: prompt/capture
+execution: host
+operation: identity
+input_schema:
+  type: object
+  properties:
+    original_prompt:
+      type: string
+      minLength: 1
+  required:
+  - original_prompt
+  additionalProperties: false
+output_schema:
+  type: object
+  properties:
+    original_prompt:
+      type: string
+      minLength: 1
+  required:
+  - original_prompt
+  additionalProperties: false

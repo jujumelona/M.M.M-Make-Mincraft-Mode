@@ -1,0 +1,28 @@
+id: asset/visual_spec
+slot_id: visual_spec
+task: Describe only the visual meaning of the supplied asset and gameplay role.
+rules:
+  - Do not invent missing visual requirements.
+  - HOST owns geometry, layout, paths, model families, asset counts and animation.
+  - Registry owns checkpoint, LoRA, weights, triggers and generation resolution.
+record_schema:
+  type: object
+  properties:
+    visual_spec:
+      type: object
+      properties:
+        role: {type: string, minLength: 1, maxLength: 1024}
+        silhouette: {type: string, maxLength: 1024}
+        materials: {type: array, maxItems: 32, items: {type: string, minLength: 1, maxLength: 256}}
+        motifs: {type: array, maxItems: 32, items: {type: string, minLength: 1, maxLength: 256}}
+        palette:
+          type: object
+          properties:
+            primary: {type: string, minLength: 1, maxLength: 256}
+            secondary: {type: string, minLength: 1, maxLength: 256}
+            accent: {type: string, minLength: 1, maxLength: 256}
+          additionalProperties: false
+      required: [role]
+      additionalProperties: false
+  required: [visual_spec]
+  additionalProperties: false

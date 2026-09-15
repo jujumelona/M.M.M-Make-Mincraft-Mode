@@ -1,0 +1,12 @@
+id: minecraft/sound
+execution: sequence
+steps:
+- minecraft/sound/requirement
+- minecraft/sound/identifier
+- minecraft/sound/event
+- minecraft/sound/file
+- minecraft/sound/attenuation
+- minecraft/sound/subtitle
+- minecraft/sound/registration
+- minecraft/sound/integration
+- minecraft/sound/validation

@@ -1,0 +1,58 @@
+id: minecraft/model/format
+task: Implement only the format responsibility of the supplied model artifact.
+execution_mode: model
+side:
+- common
+inputs:
+- name: model_identity
+  type: identifier
+  required: true
+- name: model_format_input
+  type: specification
+  required: true
+outputs:
+- name: model_format_receipt
+  type: receipt
+- name: model_format_artifact
+  type: code_fragment
+host_requirements:
+  capabilities:
+  - REGISTER_ITEM
+  symbols: []
+  schemas:
+  - minecraft/resource/item/model_generated
+implementation_key: fabric/model/format
+validators:
+- java_parse
+context_projection:
+  max_bytes: 4096
+  include:
+  - mod_id
+  - registry_path
+  - package_path
+  - model_properties
+repair:
+  scope:
+  - minecraft/model/format
+  writable_anchors:
+  - /* MMM:model_format */
+consumes:
+- artifact_requirement
+- target_cell
+- verified_bindings
+- owned_anchor
+- prerequisite_receipts
+provides:
+- format
+anchor_kinds:
+- resource
+- test
+rules:
+- Implement format responsibility for model strictly within declared MODEL_DEFINITION
+  capability.
+- Target side must remain client; reject cross-side symbol leakage.
+- Fail closed if required model prerequisite receipt is missing; never invent defaults.
+- Output must satisfy json_schema validator before completion.
+postconditions:
+- model format matches host version contract
+- model format receipts emitted with verified context

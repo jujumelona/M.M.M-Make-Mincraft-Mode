@@ -1,0 +1,7 @@
+id: minecraft/resource/block/model_crop_stage
+artifact: json_resource
+target: {operation: CREATE_FILE, file: "src/main/resources/assets/{{mod_id}}/models/block/{{registry_path}}_stage{{stage}}.json"}
+requires: [mod_id, registry_path, stage]
+ai_slots: []
+render: {language: json, body: {parent: "minecraft:block/crop", textures: {crop: "{{mod_id}}:block/{{registry_path}}_stage{{stage}}"}}}
+validators: [json_parse]

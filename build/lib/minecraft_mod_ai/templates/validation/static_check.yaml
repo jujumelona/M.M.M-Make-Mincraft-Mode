@@ -1,0 +1,10 @@
+id: validation/static_check
+execution: host
+input:
+  generated_project:
+  static_rules:
+output:
+  passed:
+  failed_checks:
+proof:
+  predicate: passed is true only when every required static check passes

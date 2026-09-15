@@ -1,0 +1,9 @@
+﻿id: asset/workflow
+execution: sequence
+steps:
+- asset/asset_requirement
+- asset/texture_plan
+- asset/model_plan
+- asset/sound_plan
+- asset/animation_plan
+- asset/resource_validation
