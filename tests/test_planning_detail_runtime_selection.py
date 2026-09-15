@@ -17,23 +17,23 @@ def _requirements() -> list[dict[str, str]]:
     ]
 
 
-def test_host_selection_defaults_every_requirement_to_full_contract() -> None:
+def test_host_selection_defaults_every_requirement_to_baseline_contract() -> None:
     selected = _host_section_selection(_requirements(), None)
 
     assert selected == {
-        "REQ-1": WORKSHEET_SECTIONS,
-        "REQ-2": WORKSHEET_SECTIONS,
+        "REQ-1": CORE_WORKSHEET_SECTIONS,
+        "REQ-2": CORE_WORKSHEET_SECTIONS,
     }
 
 
-def test_host_selection_can_narrow_one_requirement_without_weakening_others() -> None:
+def test_host_selection_can_expand_one_requirement_without_expanding_others() -> None:
     selected = _host_section_selection(
         _requirements(),
-        {"REQ-1": tuple(reversed(CORE_WORKSHEET_SECTIONS))},
+        {"REQ-1": tuple(reversed(WORKSHEET_SECTIONS))},
     )
 
-    assert selected["REQ-1"] == CORE_WORKSHEET_SECTIONS
-    assert selected["REQ-2"] == WORKSHEET_SECTIONS
+    assert selected["REQ-1"] == WORKSHEET_SECTIONS
+    assert selected["REQ-2"] == CORE_WORKSHEET_SECTIONS
 
 
 def test_host_selection_rejects_unknown_requirement() -> None:
@@ -47,7 +47,7 @@ def test_host_selection_rejects_unknown_requirement() -> None:
 def test_host_selection_cannot_omit_core_section() -> None:
     selection = tuple(key for key in WORKSHEET_SECTIONS if key != "verification")
 
-    with pytest.raises(ValueError, match="core section.*cannot be omitted"):
+    with pytest.raises(ValueError, match="baseline section.*cannot be omitted"):
         _host_section_selection(_requirements(), {"REQ-1": selection})
 
 
