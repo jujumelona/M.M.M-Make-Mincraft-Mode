@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 import pytest
 
+import minecraft_mod_ai.authored_design_mutation_scope as scope_contract
+import minecraft_mod_ai.direct_task_mutation_authority_contract as direct_authority
 from minecraft_mod_ai.authored_design_mutation_scope import (
     AuthoredMutationScope,
     _canonical_scoped_path,
@@ -117,3 +120,112 @@ def test_authored_scope_reports_outside_write_scope():
     )
     assert error is not None
     assert error.startswith("PATH_OUTSIDE_WRITABLE_SET")
+
+
+@dataclass(frozen=True)
+class _FakeRequest:
+    messages: tuple[dict[str, str], ...]
+    parallel_tool_calls: bool = False
+
+
+def _installed_fake_loop():
+    loop = SimpleNamespace()
+    seen: dict[str, object] = {}
+
+    def exact_target_error(tool_name, arguments, context):
+        return "ORIGINAL_EXACT_AUTHORITY"
+
+    def original_turn(*args, **kwargs):
+        seen["parallel"] = kwargs["parallel_tool_calls"]
+        seen["turn_request_parallel"] = kwargs["request"].parallel_tool_calls
+        return SimpleNamespace()
+
+    def original_generate(
+        router,
+        *,
+        config,
+        adapter,
+        request,
+        runtime,
+        stage,
+        role,
+    ):
+        seen["mutation_error"] = loop._mutation_target_error(
+            "apply_source_edit",
+            {
+                "operation": "create_file",
+                "path": (
+                    "src/main/java/ai/minecraft/generated/"
+                    "authored_7bf498f5bbba/GalacticFrontierMod.java"
+                ),
+            },
+            SimpleNamespace(),
+        )
+        loop._generate_turn_with_context_recovery(
+            router,
+            config=config,
+            adapter=adapter,
+            request=request,
+            messages=list(request.messages),
+            media_paths=(),
+            tool_choice={"type": "function", "function": {"name": "apply_source_edit"}},
+            parallel_tool_calls=False,
+        )
+        seen["messages"] = request.messages
+        return "ok"
+
+    loop.generate_with_tools = original_generate
+    loop._mutation_target_error = exact_target_error
+    loop._generate_turn_with_context_recovery = original_turn
+    loop._SOURCE_EDIT_PATH_KEYS = ("path", "file_path", "target_path")
+    scope_contract.install(loop)
+    return loop, seen
+
+
+def test_installed_contract_broadens_only_host_proven_authored_run():
+    loop, seen = _installed_fake_loop()
+    token = direct_authority._CURRENT_AUTHORITY.set(SimpleNamespace(task_id="task-1"))
+    try:
+        result = loop.generate_with_tools(
+            object(),
+            config=object(),
+            adapter=object(),
+            request=_FakeRequest(messages=_messages()),
+            runtime=object(),
+            stage="generation",
+            role="coder",
+        )
+    finally:
+        direct_authority._CURRENT_AUTHORITY.reset(token)
+
+    assert result == "ok"
+    assert seen["mutation_error"] is None
+    assert seen["parallel"] is True
+    assert seen["turn_request_parallel"] is True
+    assert any(
+        message.get("role") == "developer"
+        and "Host-authored design write scope is active" in message.get("content", "")
+        for message in seen["messages"]
+    )
+
+
+def test_installed_contract_keeps_ordinary_exact_authority_and_single_tool_mode():
+    loop, seen = _installed_fake_loop()
+    token = direct_authority._CURRENT_AUTHORITY.set(SimpleNamespace(task_id="task-1"))
+    try:
+        result = loop.generate_with_tools(
+            object(),
+            config=object(),
+            adapter=object(),
+            request=_FakeRequest(messages=_messages(phase="implement_module")),
+            runtime=object(),
+            stage="generation",
+            role="coder",
+        )
+    finally:
+        direct_authority._CURRENT_AUTHORITY.reset(token)
+
+    assert result == "ok"
+    assert seen["mutation_error"] == "ORIGINAL_EXACT_AUTHORITY"
+    assert seen["parallel"] is False
+    assert seen["turn_request_parallel"] is False
