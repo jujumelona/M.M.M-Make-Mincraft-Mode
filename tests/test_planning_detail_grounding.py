@@ -142,14 +142,22 @@ def test_legacy_evidence_container_id_is_removed_before_model_context() -> None:
 
 def test_authored_design_sections_do_not_require_fake_evidence() -> None:
     sheet = _authored_worksheet()
-    assert validate_worksheet(sheet, {"source:1"}) == sheet
+    assert validate_worksheet(
+        sheet,
+        {"source:1"},
+        required_sections=WORKSHEET_SECTIONS,
+    ) == sheet
 
 
 def test_constraint_evidence_must_still_be_host_allowed_when_present() -> None:
     sheet = _authored_worksheet()
     sheet["algorithm"]["constraint_evidence_refs"] = ["model:guess"]
     with pytest.raises(ValueError, match="invalid constraint evidence"):
-        validate_worksheet(sheet, {"source:1"})
+        validate_worksheet(
+            sheet,
+            {"source:1"},
+            required_sections=WORKSHEET_SECTIONS,
+        )
 
 
 def test_grounded_external_fact_requires_real_allowed_evidence() -> None:
