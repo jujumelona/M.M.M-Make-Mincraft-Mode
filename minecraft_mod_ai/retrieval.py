@@ -1,9 +1,8 @@
-"""Target-bound official retrieval without historical platform defaults.
+"""Official retrieval over target-neutral primary sources.
 
-The static corpus is deliberately target-neutral. Exact Minecraft version, loader,
-mappings and toolchain coordinates are admitted only through the executable platform
-provider selected by the host. Query text may rank trusted records but cannot invent
-or select a platform target.
+A resolved Minecraft target is an optional precision filter, not a prerequisite.
+Targetless or partially resolved research still retrieves generic official evidence;
+version-specific generation remains bound later by the executable platform provider.
 """
 
 from __future__ import annotations
@@ -399,38 +398,39 @@ class OfficialCorpusIndex:
         self,
         query: str,
         *,
-        minecraft_version: str,
-        loader: str,
-        mappings: str,
+        minecraft_version: str | None = None,
+        loader: str | None = None,
+        mappings: str | None = None,
         limit: int = 6,
     ) -> RetrievalReceipt:
         query = query.strip()
         if not 2 <= len(query) <= 2_000:
             raise SpecValidationError("RAG query length must be between 2 and 2000.")
-        minecraft_version = str(minecraft_version).strip()
-        loader = str(loader).strip().casefold()
-        mappings = str(mappings).strip()
-        if not minecraft_version or not loader or not mappings:
-            raise SpecValidationError(
-                "Official retrieval requires an explicit Minecraft version, loader and mappings."
-            )
         if type(limit) is not int or not 1 <= limit <= 12:
             raise SpecValidationError("RAG result limit must be between 1 and 12.")
-        try:
-            adapter = adapter_for_target(minecraft_version, loader)
-        except ValueError as exc:
-            raise SpecValidationError(str(exc)) from exc
-        if mappings != adapter.yarn_mappings:
-            raise SpecValidationError(
-                "Retrieval mappings do not match the executable provider receipt."
-            )
+
+        version = str(minecraft_version or "").strip()
+        loader_id = str(loader or "").strip().casefold()
+        mapping_id = str(mappings or "").strip()
+        adapter = None
+        if version and loader_id and mapping_id:
+            try:
+                candidate = adapter_for_target(version, loader_id)
+            except ValueError:
+                candidate = None
+            if candidate is not None and mapping_id == candidate.yarn_mappings:
+                adapter = candidate
+
+        target_version = adapter.minecraft_version if adapter is not None else ""
+        target_loader = adapter.loader if adapter is not None else ""
+        target_mappings = adapter.yarn_mappings if adapter is not None else ""
 
         family = _classify_query(query)
         canonical = _canonical_query(query, family)
         eligible = {
             document.document_id: document
             for document in self.documents
-            if document.loader in {adapter.loader, "agnostic"}
+            if adapter is None or document.loader in {adapter.loader, "agnostic"}
         }
         query_terms = frozenset(_tokens(canonical))
         query_grams = _trigrams(canonical)
@@ -441,9 +441,7 @@ class OfficialCorpusIndex:
         for document_id, document in eligible.items():
             searchable = " ".join((document.title, document.content, *document.topics))
             document_terms = frozenset(_tokens(searchable))
-            lexical[document_id] = (
-                len(query_terms & document_terms) / max(1, len(query_terms))
-            )
+            lexical[document_id] = len(query_terms & document_terms) / max(1, len(query_terms))
             semantic[document_id] = _jaccard(query_grams, _trigrams(searchable))
             family_score[document_id] = 1.0 if family in document.families else 0.0
         lexical_order = sorted(
@@ -475,8 +473,20 @@ class OfficialCorpusIndex:
             if graph_boost[document_id] > 0:
                 active.append("graph")
             channels[document_id] = tuple(active)
-        ordered = sorted(eligible, key=lambda document_id: (-score[document_id], document_id))[:limit]
+        ordered = sorted(
+            eligible,
+            key=lambda document_id: (-score[document_id], document_id),
+        )[:limit]
 
+        target_receipt = (
+            {
+                "minecraft_version": target_version,
+                "loader": target_loader,
+                "mappings": target_mappings,
+            }
+            if adapter is not None
+            else None
+        )
         hits: list[RetrievalHit] = []
         for rank, document_id in enumerate(ordered, start=1):
             document = eligible[document_id]
@@ -487,11 +497,7 @@ class OfficialCorpusIndex:
                     "content_sha256": document.content_sha256,
                     "rank": rank,
                     "snapshot": self.snapshot_hash,
-                    "target": {
-                        "minecraft_version": adapter.minecraft_version,
-                        "loader": adapter.loader,
-                        "mappings": adapter.yarn_mappings,
-                    },
+                    "target": target_receipt,
                 }
             ).encode("utf-8")
             hits.append(
@@ -522,24 +528,29 @@ class OfficialCorpusIndex:
             else "weak"
         )
         correction_required = quality != "strong"
-        corrections = (
-            (
-                f"{family} official API for Minecraft {adapter.minecraft_version} {adapter.loader}",
-                f"{family} mapping symbols for {adapter.yarn_mappings}",
+        if correction_required and adapter is not None:
+            corrections = (
+                f"{family} official API for Minecraft {target_version} {target_loader}",
+                f"{family} mapping symbols for {target_mappings}",
                 f"{family} deterministic runtime validation",
             )
-            if correction_required
-            else ()
-        )
+        elif correction_required:
+            corrections = (
+                f"{family} official API concepts",
+                f"{family} compatibility and mapping constraints",
+                f"{family} deterministic runtime validation",
+            )
+        else:
+            corrections = ()
         query_hash = "sha256:" + hashlib.sha256(
             canonical_json(
                 {
                     "query": query,
                     "canonical": canonical,
                     "family": family,
-                    "minecraft_version": adapter.minecraft_version,
-                    "loader": adapter.loader,
-                    "mappings": adapter.yarn_mappings,
+                    "minecraft_version": target_version,
+                    "loader": target_loader,
+                    "mappings": target_mappings,
                 }
             ).encode("utf-8")
         ).hexdigest()
@@ -548,9 +559,9 @@ class OfficialCorpusIndex:
             query=query,
             canonical_query=canonical,
             query_family=family,
-            minecraft_version=adapter.minecraft_version,
-            loader=adapter.loader,
-            mappings=adapter.yarn_mappings,
+            minecraft_version=target_version,
+            loader=target_loader,
+            mappings=target_mappings,
             query_hash=query_hash,
             corpus_snapshot_hash=self.snapshot_hash,
             quality=quality,
@@ -564,9 +575,9 @@ class OfficialCorpusIndex:
 def retrieve_official_evidence(
     query: str,
     *,
-    minecraft_version: str,
-    loader: str,
-    mappings: str,
+    minecraft_version: str | None = None,
+    loader: str | None = None,
+    mappings: str | None = None,
     limit: int = 6,
 ) -> RetrievalReceipt:
     with OfficialCorpusIndex() as index:
@@ -585,7 +596,7 @@ def corpus_manifest() -> dict[str, Any]:
             "schema_version": "minecraft-mod-ai/rag-corpus-v1",
             "snapshot_hash": index.snapshot_hash,
             "retrieval_policy": "data_only",
-            "target_policy": "explicit-provider-bound-only",
+            "target_policy": "optional-refinement; targetless retrieval allowed",
             "documents": list(index.catalog()),
         }
 
