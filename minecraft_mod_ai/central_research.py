@@ -188,7 +188,11 @@ def normalize_research_brief(
         if any(value not in (None, "") for value in direct_target.values()):
             target = direct_target
     if target is not None:
-        payload["_mmm_platform_target"] = _canonical_platform_target(target)
+        try:
+            payload["_mmm_platform_target"] = _canonical_platform_target(target)
+        except SpecValidationError:
+            # Platform metadata refines research when executable; it never gates research.
+            pass
     payload["brief_sha256"] = _sha256(canonical_json(payload))
     return payload
 
@@ -203,7 +207,11 @@ def _build_research_graph(
         raise SpecValidationError("Central research brief has no domains.")
 
     raw_target = research_brief.get("_mmm_platform_target")
-    target = _canonical_platform_target(raw_target) if raw_target is not None else None
+    try:
+        target = _canonical_platform_target(raw_target) if raw_target is not None else None
+    except SpecValidationError:
+        # Missing/partial/stale platform metadata falls back to target-neutral retrieval.
+        target = None
     adapter = (
         adapter_for_target(target["minecraft_version"], target["loader"])
         if target is not None
@@ -224,35 +232,25 @@ def _build_research_graph(
                 }
             )
             continue
-        if adapter is None:
-            deferred.append(domain.domain_id)
-            results.append(
-                {
-                    "domain_id": domain.domain_id,
-                    "strategy": "deferred_until_platform_selected",
-                    "queries": [],
-                }
-            )
-            continue
-
         query_results: list[dict[str, Any]] = []
         has_hits = False
+        target_kwargs = (
+            {
+                "minecraft_version": adapter.minecraft_version,
+                "loader": adapter.loader,
+                "mappings": adapter.yarn_mappings,
+            }
+            if adapter is not None
+            else {}
+        )
         for query in domain.queries:
-            primary = retrieve(
-                query,
-                minecraft_version=adapter.minecraft_version,
-                loader=adapter.loader,
-                mappings=adapter.yarn_mappings,
-                limit=8,
-            )
+            primary = retrieve(query, limit=8, **target_kwargs)
             corrections: list[dict[str, Any]] = []
             for correction_query in primary.correction_queries:
                 correction = retrieve(
                     correction_query,
-                    minecraft_version=adapter.minecraft_version,
-                    loader=adapter.loader,
-                    mappings=adapter.yarn_mappings,
                     limit=4,
+                    **target_kwargs,
                 )
                 corrections.append(correction.to_dict())
                 has_hits = has_hits or bool(correction.hits)

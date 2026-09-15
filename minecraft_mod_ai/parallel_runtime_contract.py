@@ -693,19 +693,18 @@ def _parallel_retrieve_domain_evidence_factory(
                 retrieve=selected_retrieve,
             )
 
-        # No target means Official RAG is inapplicable, not that the whole production
-        # request is invalid. Exit through the canonical graph before pool/index/prefetch
-        # creation. A present but malformed target still enters the strict contract.
-        if research_brief.get("_mmm_platform_target") is None:
+        # Platform targeting is an optional refinement. Generic Official RAG remains
+        # active when the target is missing, partial, stale, or otherwise non-executable.
+        try:
+            adapter, verified_domains = _require_parallel_research_contract(
+                central_module,
+                research_brief,
+            )
+        except ParallelResearchContractError:
             return build_research_graph(
                 research_brief,
                 retrieve=selected_retrieve,
             )
-
-        adapter, verified_domains = _require_parallel_research_contract(
-            central_module,
-            research_brief,
-        )
         domains = verified_domains
 
         query_criteria, domain_queries, domain_criteria = _coverage_query_plan(
