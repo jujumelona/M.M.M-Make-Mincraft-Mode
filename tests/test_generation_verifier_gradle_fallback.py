@@ -3,7 +3,25 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from minecraft_mod_ai import generation_verifier_resilience
-from minecraft_mod_ai.generation_verifier_fallback_installation import _gradle_fallback_receipt
+from minecraft_mod_ai.generation_verifier_fallback_installation import (
+    _gradle_fallback_receipt,
+)
+
+
+def test_long_gradle_stacktrace_preserves_compiler_evidence(tmp_path):
+    from minecraft_mod_ai.generation_verifier_fallback_installation import (
+        _bounded_log_tail,
+    )
+
+    log = tmp_path / "gradle.log"
+    error = "src/main/java/example/DebugToken.java:3: error: package net.minecraft.item does not exist"
+    log.write_text(error + "\nimport net.minecraft.item.Item;\n    ^\n" +
+                   "\tat org.gradle.SomeFrame.execute(Frame.java:42)\n" * 400,
+                   encoding="utf-8")
+    evidence = _bounded_log_tail(str(log))
+    assert error in evidence
+    assert "import net.minecraft.item.Item;" in evidence
+    assert len(evidence) <= 16 * 1024
 
 
 class _FakeReport:

@@ -8,6 +8,7 @@ no-op retained for import compatibility and performs no runtime rebinding.
 """
 
 import re
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -42,13 +43,32 @@ def _bounded_log_tail(path: str | None) -> str:
     try:
         if not candidate.is_file() or candidate.is_symlink():
             return ""
-        lines = candidate.read_text(encoding="utf-8", errors="replace").splitlines()
+        tail_lines: deque[str] = deque(maxlen=_MAX_LOG_TAIL_LINES)
+        compiler_lines: list[str] = []
+        compiler_chars = 0
+        context_remaining = 0
+        # Keep the first compiler errors even when --stacktrace pushes them out
+        # of the tail. Bound memory as well as the returned model observation.
+        with candidate.open(encoding="utf-8", errors="replace") as stream:
+            while chunk := stream.readline(_MAX_LOG_TAIL_CHARS):
+                line = chunk.rstrip("\r\n")
+                tail_lines.append(line)
+                if re.search(r"\.java:\d+:\s*(?:error|warning):", line):
+                    context_remaining = 4
+                if context_remaining:
+                    remaining = _MAX_LOG_TAIL_CHARS // 2 - compiler_chars
+                    if remaining > 1:
+                        selected = line[:remaining - 1]
+                        compiler_lines.append(selected)
+                        compiler_chars += len(selected) + 1
+                    context_remaining -= 1
     except OSError:
         return ""
-    tail = "\n".join(lines[-_MAX_LOG_TAIL_LINES:])
-    if len(tail) > _MAX_LOG_TAIL_CHARS:
-        tail = tail[-_MAX_LOG_TAIL_CHARS:]
-    return tail
+    tail = "\n".join(tail_lines)
+    if not compiler_lines:
+        return tail[-_MAX_LOG_TAIL_CHARS:]
+    evidence = "Compiler diagnostics:\n" + "\n".join(compiler_lines) + "\n\nLog tail:\n"
+    return evidence + tail[-(_MAX_LOG_TAIL_CHARS - len(evidence)):]
 
 
 def _is_java_toolchain_failure(*parts: str | None) -> bool:
@@ -184,7 +204,7 @@ def _gradle_fallback_receipt(
 def install() -> None:
     """Compatibility hook; fallback dispatch is owned by the verifier itself."""
 
-    return None
+    return
 
 
 __all__ = ["install"]

@@ -14,7 +14,6 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-
 # Callers own their public/idle timeout. Some verifier paths intentionally pass a
 # longer hard budget so a cold JDT owner can finish startup. Honor that explicit
 # budget up to a transport safety ceiling instead of silently truncating it to 90s.
@@ -93,6 +92,9 @@ class OwnerRPC:
     def _timeout_error(self, method: str, timeout: float) -> OwnerRPCError:
         noise = list(self._stdout_noise)
         suffix = f'; non-protocol stdout tail={noise!r}' if noise else ''
+        stderr = list(self._stderr)
+        if stderr:
+            suffix += f'; backend stderr tail={stderr!r}'
         return OwnerRPCError(f'Owner {method} timed out after {timeout}s{suffix}')
 
     def _raise_transport_failure(

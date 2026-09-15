@@ -68,6 +68,52 @@ def test_build_fingerprint_ignores_outputs_and_logs_but_not_sources(tmp_path: Pa
     assert project_build_fingerprint(root) != first
 
 
+def test_build_fingerprint_ignores_host_gradle_cache_only(tmp_path: Path) -> None:
+    root = _project(tmp_path / "project")
+    first = project_build_fingerprint(root)
+    cache = root / ".cache/gradle/gradle-user-home/caches"
+    cache.mkdir(parents=True)
+    (cache / "download.bin").write_bytes(b"downloaded during validation")
+    assert project_build_fingerprint(root) == first
+    # Other files in .cache can still be project inputs.
+    (root / ".cache/custom-input.json").write_text("{}", encoding="utf-8")
+    assert project_build_fingerprint(root) != first
+
+
+@pytest.mark.parametrize("change_source", [False, True])
+def test_fallback_certifies_cold_cache_but_rejects_source_change(tmp_path, monkeypatch, change_source):
+    from minecraft_mod_ai.generation_verifier_fallback_installation import (
+        _gradle_fallback_receipt,
+    )
+    from minecraft_mod_ai.runner import CommandResult
+
+    root = _project(tmp_path / "project")
+
+    def compile_failure(self, project_root, *, run_gametest):
+        assert not run_gametest
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        (self.cache_dir / "distribution.zip").write_bytes(b"new distribution")
+        if change_source:
+            (project_root / "src/main/java/example/Main.java").write_text("changed", encoding="utf-8")
+        log = project_root / ".minecraft_ai/logs/build.log"
+        log.parent.mkdir(parents=True)
+        log.write_text("src/main/java/example/Main.java:3: error: cannot find symbol\n", encoding="utf-8")
+        return BuildReport("FAIL", "8.6", (CommandResult("build", (), 1, 0.1, str(log)),),
+                           None, None, "Gradle build failed.")
+
+    monkeypatch.setattr(GradleRunner, "_build_locked", compile_failure)
+    receipt = _gradle_fallback_receipt(
+        SimpleNamespace(workspace_root=root), root,
+        runtime_module=SimpleNamespace(_bounded_result=lambda result: result),
+        jdt_error=RuntimeError("owner unavailable"),
+    )
+    assert receipt["status"] == ("UNAVAILABLE" if change_source else "FAIL")
+    assert receipt["diagnostics"][0]["code"] == (
+        "VALIDATION_INPUTS_CHANGED" if change_source else "GRADLE_BUILD_FAILED"
+    )
+    assert "cannot find symbol" in receipt["diagnostics"][0]["message"]
+
+
 def test_build_fingerprint_prunes_excluded_trees_before_descent(
     tmp_path: Path,
     monkeypatch,
@@ -146,15 +192,7 @@ def test_gametest_resource_gate_detects_generated_namespace_errors(tmp_path: Pat
     log = root / ".minecraft_ai/logs/gradle-gametest.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text(
-        "\n".join(
-            [
-                "[main/ERROR] (Minecraft) Failed to load properties from file: server.properties",
-                "[Worker-Main-2/ERROR] (Minecraft) Couldn't parse element loot_tables:frost_works:blocks/reference_machine",
-                "com.google.gson.JsonSyntaxException: Expected name to be an item, was unknown string 'frost_works:reference_machine'",
-                "[main/ERROR] (Minecraft) Parsing error loading recipe frost_works:frost_crystal",
-                "[main/ERROR] (Minecraft) Parsing error loading recipe other_mod:not_ours",
-            ]
-        )
+        "[main/ERROR] (Minecraft) Failed to load properties from file: server.properties\n[Worker-Main-2/ERROR] (Minecraft) Couldn't parse element loot_tables:frost_works:blocks/reference_machine\ncom.google.gson.JsonSyntaxException: Expected name to be an item, was unknown string 'frost_works:reference_machine'\n[main/ERROR] (Minecraft) Parsing error loading recipe frost_works:frost_crystal\n[main/ERROR] (Minecraft) Parsing error loading recipe other_mod:not_ours"
         + "\n",
         encoding="utf-8",
     )

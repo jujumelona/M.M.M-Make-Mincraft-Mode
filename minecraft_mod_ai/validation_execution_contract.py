@@ -14,6 +14,8 @@ from .research_validation_fingerprint_performance import content_digest
 from .runner import BuildRunnerError
 from .validation_diagnostic_contract import (
     diagnostic_errors as _diagnostic_errors,
+)
+from .validation_diagnostic_contract import (
     run_diagnostics as _run_jdt_diagnostics,
 )
 
@@ -31,6 +33,9 @@ _SKIP_TOP_LEVEL = {
     "run",
 }
 _SKIP_STATE_DIRECTORIES = {
+    # The host verifier populates this distribution/user-home cache during builds.
+    # Keep other .cache contents eligible: they may be authored build inputs.
+    ".cache/gradle",
     ".minecraft_ai/logs",
     ".minecraft_ai/runtime",
     ".minecraft_ai/validation-cache",
@@ -127,7 +132,7 @@ def project_build_fingerprint(project_root: str | Path) -> str:
 
     root = _canonical_project_root(project_root)
     digest = hashlib.sha256()
-    digest.update(b"mmm/build-input-fingerprint-v4\0")
+    digest.update(b"mmm/build-input-fingerprint-v5\0")
     for relative, path in _iter_build_inputs(root):
         digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
@@ -179,7 +184,7 @@ def _java_fingerprint(
         paths = tuple(_validated_project_file(root, value) for value in relative)
     else:
         relative = tuple(
-            sorted(set(str(value).replace("\\", "/") for value in relative_files))
+            sorted({str(value).replace("\\", "/") for value in relative_files})
         )
         paths = tuple(_validated_project_file(root, value) for value in relative)
 
@@ -222,8 +227,8 @@ def gametest_resource_errors(
         fabric = _validated_project_file(root, "src/main/resources/fabric.mod.json")
     except (FileNotFoundError, OSError, ValueError) as exc:
         return (
-            "GameTest resource validation unavailable: fabric.mod.json or project root "
-            f"is missing or unsafe ({type(exc).__name__}: {exc}).",
+            ("GameTest resource validation unavailable: fabric.mod.json or project root "
+            f"is missing or unsafe ({type(exc).__name__}: {exc})."),
         )
     try:
         payload = json.loads(fabric.read_text(encoding="utf-8"))
@@ -242,8 +247,8 @@ def gametest_resource_errors(
         path = _validated_log_file(root, log_path)
     except (FileNotFoundError, OSError, ValueError) as exc:
         return (
-            "GameTest resource validation unavailable: GameTest log is missing or unsafe "
-            f"({type(exc).__name__}: {exc}).",
+            ("GameTest resource validation unavailable: GameTest log is missing or unsafe "
+            f"({type(exc).__name__}: {exc})."),
         )
 
     namespace = f"{raw_mod_id}:"
