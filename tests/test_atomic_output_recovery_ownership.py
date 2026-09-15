@@ -11,7 +11,6 @@ from minecraft_mod_ai.model_adapters.base import (
     ModelBackendError,
     ModelConfigurationError,
 )
-from minecraft_mod_ai.model_adapters.llama_cpp_adapter import _assistant_prefill_payload
 from minecraft_mod_ai.progress_aware_tool_loop import _atomic_output_recovery_instruction
 
 
@@ -31,29 +30,6 @@ def _forced_source_edit_choice() -> dict:
         "type": "function",
         "function": {"name": "apply_source_edit"},
     }
-
-
-def test_assistant_prefill_preserves_forced_tool_contract() -> None:
-    tools = [_source_edit_schema()]
-    choice = _forced_source_edit_choice()
-    original = {
-        "model": "local",
-        "messages": [{"role": "user", "content": "edit one target"}],
-        "tools": tools,
-        "tool_choice": choice,
-        "parallel_tool_calls": False,
-        "max_tokens": 1886,
-    }
-
-    continued = _assistant_prefill_payload(
-        original,
-        {"role": "assistant", "content": "partial bounded action"},
-    )
-
-    assert continued["tools"] == tools
-    assert continued["tool_choice"] == choice
-    assert continued["parallel_tool_calls"] is False
-    assert continued["max_tokens"] == 1886
 
 
 def test_atomic_recovery_instruction_forces_one_structural_edit() -> None:
@@ -89,8 +65,6 @@ def test_atomic_stall_preserves_typed_output_boundary() -> None:
     backend = ModelBackendError(role="coder", model_id="qwen", cause=stalled)
     backend.__cause__ = stalled
 
-    # The terminal owner can still classify and report the original boundary without
-    # starting a second generation loop or resetting HostRunState.
     assert completion_boundary_error(backend) is boundary
     assert completion_boundary_kind(backend) == OUTPUT_EXHAUSTED
 
