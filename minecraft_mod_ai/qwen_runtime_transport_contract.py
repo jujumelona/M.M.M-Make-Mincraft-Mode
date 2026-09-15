@@ -29,7 +29,7 @@ from .qwen_family_capabilities import qwen_family_capabilities
 
 _TOOL_NAME = "mmm_transport_probe"
 _TOOL_VALUE = 7
-_TOOL_TRANSPORT_EPOCH = "qwen-family-jinja-prefill-host-v2"
+_TOOL_TRANSPORT_EPOCH = "qwen-family-native-tool-message-v3"
 _BENCHMARK_MARKER = "_mmm_qwen_tool_calibration_benchmark_v1"
 _RUN_VARIANT_MARKER = "_mmm_qwen_tool_calibration_context_v2"
 _PROBE_MARKER = "_mmm_qwen_tool_calibration_probe_v2"
@@ -232,7 +232,7 @@ def _tool_probe_request() -> Any:
 
 
 def _tool_probe_payload(config: Any) -> tuple[Any, dict[str, Any]]:
-    """Build calibration through the exact production Jinja/raw-host contract."""
+    """Build calibration through the production native Jinja/tool contract."""
 
     from .llama_server_hardware_policy import _server_payload
 
@@ -254,7 +254,7 @@ def _tool_probe_payload(config: Any) -> tuple[Any, dict[str, Any]]:
 
 
 def _raw_tool_probe_turn(data: Mapping[str, Any], request: Any) -> Any:
-    """Parse a calibration response exactly like a production Qwen tool turn."""
+    """Parse a calibration response exactly like a production native tool turn."""
 
     choices = data.get("choices")
     if (
@@ -266,13 +266,13 @@ def _raw_tool_probe_turn(data: Mapping[str, Any], request: Any) -> Any:
     message = choices[0].get("message")
     if not isinstance(message, Mapping):
         raise RuntimeError("native tool probe returned no assistant message")
-    from .model_adapters.llama_cpp_adapter import _qwen_tool_generation_response
+    from .model_adapters.llama_cpp_adapter import _native_tool_generation_response
 
-    return _qwen_tool_generation_response(message, request)
+    return _native_tool_generation_response(message, request)
 
 
 def _tool_probe(base_url: str, autotune: Any, config: Any) -> tuple[bool, str]:
-    """Exercise pure-content Jinja tools plus MMM's production host parser."""
+    """Exercise native Jinja tools plus the production structured tool parser."""
 
     import httpx
 
