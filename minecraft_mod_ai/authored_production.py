@@ -2,12 +2,40 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from .authored_plan import AuthoredPlan
 from .complete_spec import CompleteProposal, ProductionModule, complete_proposal_from_parts
 from .planning_pipeline import PlanningPipeline
 from .spec import ModSpec, Proposal, ProposalStatus
+
+
+_TARGET_KEYS = ("minecraft_version", "loader", "mappings")
+
+
+def _require_bound_target(design: Mapping[str, Any]) -> dict[str, str]:
+    """Return the host-selected platform triple produced by ``_bind_platform``.
+
+    Saved authored designs bypass the normal planning path, so the production module
+    must carry the same host-selected target contract that normal production receives.
+    Do not infer or default any of these values here: an incomplete binding is an
+    upstream contract violation and must fail before an RAG worker is submitted.
+    """
+    candidates: list[Mapping[str, Any]] = [design]
+    for key in ("platform", "target", "toolchain", "build", "existing_project"):
+        value = design.get(key)
+        if isinstance(value, Mapping):
+            candidates.append(value)
+
+    for candidate in candidates:
+        if all(candidate.get(key) not in (None, "") for key in _TARGET_KEYS):
+            return {key: str(candidate[key]) for key in _TARGET_KEYS}
+
+    raise ValueError(
+        "Saved authored production requires the host-selected minecraft_version, "
+        "loader and mappings returned by platform binding."
+    )
 
 
 def compile_authored_design(
@@ -41,6 +69,13 @@ def compile_authored_design(
     binding = PlanningPipeline(router)
     design = binding._bind_existing_project(design)
     design, base, _, _ = binding._bind_platform(plan.requested_prompt, design, base)
+
+    # The saved-plan route previously preserved the binding only in game_design while
+    # its production module dropped the target triple. Official RAG validates the
+    # production-side host contract, so make the bound target explicit at that boundary.
+    target = _require_bound_target(design)
+    design = {**design, **target}
+
     return complete_proposal_from_parts(
         requested_prompt=plan.requested_prompt,
         base_proposal=base,
@@ -48,7 +83,11 @@ def compile_authored_design(
         modules=(ProductionModule(
             module_id="authored_design",
             kind="custom_java",
-            config={"implementation": "custom", "authored_plan": plan.to_dict()},
+            config={
+                "implementation": "custom",
+                "authored_plan": plan.to_dict(),
+                **target,
+            },
         ),),
         acceptance_tests=acceptance,
         existing_input_sha256=existing_input_sha256 or plan.existing_input_sha256,
