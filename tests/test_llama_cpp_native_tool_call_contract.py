@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from minecraft_mod_ai.model_adapters.base import AdapterConfig, GenerationRequest, ModelBackendError
 from minecraft_mod_ai.model_adapters import llama_cpp_adapter
+from minecraft_mod_ai.model_adapters.base import (
+    AdapterConfig,
+    GenerationRequest,
+    ModelBackendError,
+)
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
 from minecraft_mod_ai.model_adapters.qwen_tool_parser import ToolCallValidationError
 
@@ -50,13 +54,21 @@ def _adapter(monkeypatch: pytest.MonkeyPatch) -> LlamaCppAdapter:
     return adapter
 
 
-def _request(*, choice="required") -> GenerationRequest:
+def _request(*, choice="required", parallel: bool = False) -> GenerationRequest:
     return GenerationRequest(
         messages=({"role": "user", "content": "write x"},),
         tools=(_tool(),),
         tool_choice=choice,
-        parallel_tool_calls=False,
+        parallel_tool_calls=parallel,
     )
+
+
+def _raw_call(name: str, arguments: str, *, call_id: str = "call_1") -> dict:
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {"name": name, "arguments": arguments},
+    }
 
 
 def test_native_tool_turn_uses_one_completion_and_structured_tool_calls(monkeypatch):
@@ -68,16 +80,7 @@ def test_native_tool_turn_uses_one_completion_and_structured_tool_calls(monkeypa
         return {
             "role": "assistant",
             "content": None,
-            "tool_calls": [
-                {
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {
-                        "name": "write_file",
-                        "arguments": '{"path":"src/Main.java"}',
-                    },
-                }
-            ],
+            "tool_calls": [_raw_call("write_file", '{"path":"src/Main.java"}')],
         }
 
     monkeypatch.setattr(llama_cpp_adapter, "_completion_message", completion)
@@ -108,7 +111,7 @@ def test_required_tool_without_native_tool_call_fails_without_retry(monkeypatch)
     assert "required" in str(exc_info.value.cause)
 
 
-def test_invalid_native_argument_json_fails_without_recovery(monkeypatch):
+def test_invalid_native_argument_json_is_fail_closed_recoverable_observation(monkeypatch):
     adapter = _adapter(monkeypatch)
     calls = 0
 
@@ -118,69 +121,79 @@ def test_invalid_native_argument_json_fails_without_recovery(monkeypatch):
         return {
             "role": "assistant",
             "content": None,
-            "tool_calls": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "write_file",
-                        "arguments": '{"path":',
-                    },
-                }
-            ],
+            "tool_calls": [_raw_call("write_file", '{"path":')],
         }
 
     monkeypatch.setattr(llama_cpp_adapter, "_completion_message", completion)
-    with pytest.raises(ModelBackendError) as exc_info:
-        adapter.generate_turn(_request())
+    response = adapter.generate_turn(_request())
 
     assert calls == 1
-    assert isinstance(exc_info.value.cause, ToolCallValidationError)
-    assert "invalid JSON" in str(exc_info.value.cause)
+    assert len(response.tool_calls) == 1
+    rejection = response.tool_calls[0]
+    assert rejection.name == "__mmm_rejected_tool_call__"
+    assert rejection.arguments["failure_code"] == "TOOL_ARGUMENT_JSON_INVALID"
+    assert rejection.arguments["original_tool"] == "write_file"
 
 
-def test_non_visible_native_tool_is_rejected(monkeypatch):
+def test_non_visible_native_tool_is_fail_closed_recoverable_observation(monkeypatch):
     adapter = _adapter(monkeypatch)
-
     monkeypatch.setattr(
         llama_cpp_adapter,
         "_completion_message",
         lambda server_url, payload: {
             "role": "assistant",
             "content": None,
-            "tool_calls": [
-                {
-                    "type": "function",
-                    "function": {"name": "hidden_tool", "arguments": "{}"},
-                }
-            ],
+            "tool_calls": [_raw_call("hidden_tool", "{}")],
         },
     )
-    with pytest.raises(ModelBackendError) as exc_info:
-        adapter.generate_turn(_request(choice="auto"))
 
-    assert isinstance(exc_info.value.cause, ToolCallValidationError)
-    assert "non-visible tool" in str(exc_info.value.cause)
+    response = adapter.generate_turn(_request(choice="auto"))
+
+    assert len(response.tool_calls) == 1
+    rejection = response.tool_calls[0]
+    assert rejection.name == "__mmm_rejected_tool_call__"
+    assert rejection.arguments["failure_code"] == "TOOL_NOT_VISIBLE"
+    assert rejection.arguments["original_tool"] == "hidden_tool"
 
 
-def test_schema_invalid_native_arguments_are_rejected(monkeypatch):
+def test_schema_invalid_native_arguments_are_fail_closed_recoverable_observation(monkeypatch):
     adapter = _adapter(monkeypatch)
-
     monkeypatch.setattr(
         llama_cpp_adapter,
         "_completion_message",
         lambda server_url, payload: {
             "role": "assistant",
             "content": None,
-            "tool_calls": [
-                {
-                    "type": "function",
-                    "function": {"name": "write_file", "arguments": "{}"},
-                }
-            ],
+            "tool_calls": [_raw_call("write_file", "{}")],
         },
     )
-    with pytest.raises(ModelBackendError) as exc_info:
-        adapter.generate_turn(_request())
 
-    assert isinstance(exc_info.value.cause, ToolCallValidationError)
-    assert "schema-invalid" in str(exc_info.value.cause)
+    response = adapter.generate_turn(_request())
+
+    rejection = response.tool_calls[0]
+    assert rejection.name == "__mmm_rejected_tool_call__"
+    assert rejection.arguments["failure_code"] == "TOOL_SCHEMA_INVALID"
+
+
+def test_mixed_valid_and_non_visible_calls_preserve_valid_call_and_reject_only_invalid() -> None:
+    request = GenerationRequest(
+        tools=(_tool(),),
+        tool_choice="auto",
+        parallel_tool_calls=True,
+    )
+    message = {
+        "content": "",
+        "tool_calls": [
+            _raw_call("write_file", '{"path":"src/Main.java"}', call_id="valid"),
+            _raw_call("hidden_tool", "{}", call_id="stale"),
+        ],
+    }
+
+    response = llama_cpp_adapter._native_tool_generation_response(message, request)
+
+    assert [call.name for call in response.tool_calls] == [
+        "write_file",
+        "__mmm_rejected_tool_call__",
+    ]
+    assert response.tool_calls[0].arguments == {"path": "src/Main.java"}
+    assert response.tool_calls[1].arguments["failure_code"] == "TOOL_NOT_VISIBLE"

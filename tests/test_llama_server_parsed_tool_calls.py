@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import pytest
-
 from minecraft_mod_ai.model_adapters.base import GenerationRequest
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import (
-    _qwen_tool_generation_response,
-    _reject_partial_server_tool_calls,
+    _native_tool_generation_response,
 )
 
 
@@ -30,6 +27,7 @@ def _request() -> GenerationRequest:
         messages=({"role": "user", "content": "look it up"},),
         tools=(_strict_tool(),),
         tool_choice="required",
+        parallel_tool_calls=False,
     )
 
 
@@ -46,8 +44,8 @@ def _native_message(arguments: str, *, name: str = "lookup") -> dict[str, object
     }
 
 
-def test_server_parsed_tool_call_is_normalized_only_after_host_validation() -> None:
-    turn = _qwen_tool_generation_response(
+def test_server_parsed_tool_call_is_normalized_after_host_validation() -> None:
+    turn = _native_tool_generation_response(
         _native_message('{"q":"x"}'),
         _request(),
     )
@@ -59,24 +57,43 @@ def test_server_parsed_tool_call_is_normalized_only_after_host_validation() -> N
     assert turn.tool_calls[0].arguments == {"q": "x"}
 
 
-def test_server_parsed_tool_call_rejects_schema_invalid_arguments() -> None:
-    with pytest.raises(RuntimeError, match="schema-invalid arguments"):
-        _qwen_tool_generation_response(
-            _native_message('{"q":7}'),
-            _request(),
-        )
+def test_server_parsed_schema_invalid_call_is_non_executable_rejection() -> None:
+    turn = _native_tool_generation_response(
+        _native_message('{"q":7}'),
+        _request(),
+    )
+
+    assert len(turn.tool_calls) == 1
+    rejection = turn.tool_calls[0]
+    assert rejection.name == "__mmm_rejected_tool_call__"
+    assert rejection.arguments["failure_code"] == "TOOL_SCHEMA_INVALID"
+    assert rejection.arguments["original_tool"] == "lookup"
 
 
-def test_server_parsed_tool_call_preserves_unexposed_tool_for_host_phase_validation() -> None:
-    turn = _qwen_tool_generation_response(
+def test_server_parsed_unexposed_tool_is_non_executable_rejection() -> None:
+    turn = _native_tool_generation_response(
         _native_message('{"q":"x"}', name="not_visible"),
         _request(),
     )
+
     assert len(turn.tool_calls) == 1
-    assert turn.tool_calls[0].name == "not_visible"
-    assert turn.tool_calls[0].arguments == {"q": "x"}
+    rejection = turn.tool_calls[0]
+    assert rejection.name == "__mmm_rejected_tool_call__"
+    assert rejection.arguments["failure_code"] == "TOOL_NOT_VISIBLE"
+    assert rejection.arguments["original_tool"] == "not_visible"
 
 
-def test_incomplete_server_parsed_tool_call_remains_non_executable() -> None:
-    with pytest.raises(RuntimeError, match="partial tool actions are never executable"):
-        _reject_partial_server_tool_calls(_native_message('{"q":"x"}'))
+def test_qwen_markup_fallback_uses_same_host_validation_surface() -> None:
+    message = {
+        "content": (
+            "<tool_call><function=lookup>"
+            "<parameter=q>registry</parameter>"
+            "</function></tool_call>"
+        )
+    }
+
+    turn = _native_tool_generation_response(message, _request())
+
+    assert len(turn.tool_calls) == 1
+    assert turn.tool_calls[0].name == "lookup"
+    assert turn.tool_calls[0].arguments == {"q": "registry"}

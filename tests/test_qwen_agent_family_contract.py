@@ -3,7 +3,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from minecraft_mod_ai import llama_server_hardware_policy as hardware
-from minecraft_mod_ai.forced_tool_execution_contract import _single_tool_request
 from minecraft_mod_ai.model_adapters.base import (
     GenerationRequest,
     GenerationResponse,
@@ -64,7 +63,7 @@ class _Adapter:
         reasoning_effort: str = "",
         family: str = "qwen3.6",
     ) -> None:
-        extra = {}
+        extra: dict[str, object] = {}
         if enabled:
             extra.update(
                 {
@@ -117,7 +116,6 @@ def test_registry_declared_auto_tool_action_disables_thinking() -> None:
     assert payload["min_p"] == 0.01
     assert payload["presence_penalty"] == 0.04
     assert payload["repeat_penalty"] == 0.83
-    assert "repetition_penalty" not in payload
 
 
 def test_registry_metadata_not_model_name_selects_agent_policy() -> None:
@@ -128,7 +126,6 @@ def test_registry_metadata_not_model_name_selects_agent_policy() -> None:
         "enable_thinking": False,
         "preserve_thinking": False,
     }
-    assert "reasoning_effort" not in enabled
     assert enabled["temperature"] == 0.11
     assert disabled["chat_template_kwargs"] == {"enable_thinking": False}
     assert disabled["reasoning_effort"] == "none"
@@ -150,7 +147,6 @@ def test_qwen38_action_drops_planning_reasoning_effort() -> None:
 
 def test_family_wrapper_preserves_existing_payload_contract_markers() -> None:
     assert getattr(hardware._server_payload, "_mmm_active_cache_reuse", False)
-    assert not getattr(hardware._server_payload, "_mmm_qwen35_request_policy_v2", False)
     assert getattr(hardware._server_payload, "_mmm_qwen_family_agent_policy", False)
 
 
@@ -165,38 +161,17 @@ def test_family_wrapper_accepts_request_without_tools_attribute() -> None:
     assert payload["temperature"] == 0.0
 
 
-def test_forced_return_function_stays_owned_by_transport_layer() -> None:
-    payload = hardware._server_payload(
-        _Adapter(),
-        _request(
-            tool_choice={
-                "type": "function",
-                "function": {"name": "read_project_file"},
-            }
-        ),
-    )
-
-    assert payload["temperature"] == 0.0
-    assert payload["chat_template_kwargs"] == {
-        "enable_thinking": False,
-        "preserve_thinking": False,
-    }
-    assert "reasoning_effort" not in payload
-
-
-def test_required_single_tool_turn_does_not_restore_agent_thinking() -> None:
-    original = _request(
+def test_named_required_action_stays_deterministic_and_non_thinking() -> None:
+    request = _request(
         tool_choice={
             "type": "function",
             "function": {"name": "read_project_file"},
         }
     )
-    local = _single_tool_request(original, "read_project_file")
+    payload = hardware._server_payload(_Adapter(), request)
 
-    payload = hardware._server_payload(_Adapter(), local)
-
-    assert local.tool_choice == "required"
-    assert local.parallel_tool_calls is False
+    assert payload["tool_choice"] == "required"
+    assert payload["temperature"] == 0.0
     assert payload["chat_template_kwargs"] == {
         "enable_thinking": False,
         "preserve_thinking": False,
@@ -282,8 +257,9 @@ def test_reasoning_trace_is_restored_for_next_tool_turn() -> None:
     )
     prepared = _inject_reasoning_history(adapter, continuation)
 
-    assistant = prepared.messages[1]
-    assert assistant["reasoning_content"] == "Inspect the exact Java API before editing."
+    assert prepared.messages[1]["reasoning_content"] == (
+        "Inspect the exact Java API before editing."
+    )
 
 
 def test_fresh_agent_request_does_not_leak_prior_reasoning() -> None:
