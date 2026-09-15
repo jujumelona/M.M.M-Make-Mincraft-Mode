@@ -18,6 +18,10 @@ _PREFETCH_LOCK = threading.RLock()
 _PREFETCH_FUTURES: dict[tuple[str, str], Future[str]] = {}
 
 
+class ParallelResearchContractError(RuntimeError):
+    """Raised when official-doc parallel research is missing a required invariant."""
+
+
 def _env_workers(name: str, default: int, *, maximum: int = 32) -> int:
     raw = os.environ.get(name, "").strip()
     if not raw:
@@ -589,51 +593,92 @@ class _PrefetchedRetriever:
         return receipt
 
 
+def _require_parallel_research_contract(
+    central_module: Any,
+    research_brief: Mapping[str, Any],
+) -> tuple[Any, list[Any]]:
+    """Resolve official-research invariants once; never degrade to another path."""
+    raw_target = research_brief.get("_mmm_platform_target")
+    if not isinstance(raw_target, Mapping):
+        raise ParallelResearchContractError(
+            "official-doc research requires _mmm_platform_target"
+        )
+
+    version = str(raw_target.get("minecraft_version", "")).strip()
+    loader = str(raw_target.get("loader", "")).strip().casefold()
+    mappings = str(raw_target.get("mappings", "")).strip()
+    if not version or not loader or not mappings:
+        raise ParallelResearchContractError(
+            "official-doc research requires minecraft_version, loader, and mappings"
+        )
+
+    try:
+        adapter = central_module.adapter_for_target(version, loader)
+    except Exception as exc:  # noqa: BLE001 - contract boundary
+        raise ParallelResearchContractError(
+            f"no platform adapter for target {version}/{loader}"
+        ) from exc
+
+    if str(getattr(adapter, "minecraft_version", "")).strip() != version:
+        raise ParallelResearchContractError(
+            "resolved platform adapter minecraft_version does not match selected target"
+        )
+    if str(getattr(adapter, "loader", "")).strip().casefold() != loader:
+        raise ParallelResearchContractError(
+            "resolved platform adapter loader does not match selected target"
+        )
+    if str(getattr(adapter, "yarn_mappings", "")).strip() != mappings:
+        raise ParallelResearchContractError(
+            "resolved platform adapter mappings do not match selected target"
+        )
+
+    raw_domains = research_brief.get("domains")
+    if not isinstance(raw_domains, list) or not raw_domains:
+        raise ParallelResearchContractError(
+            "official-doc research requires at least one research domain"
+        )
+
+    domains: list[Any] = []
+    for index, raw_domain in enumerate(raw_domains):
+        try:
+            domain = central_module._research_domain(raw_domain)
+        except Exception as exc:  # noqa: BLE001 - contract boundary
+            raise ParallelResearchContractError(
+                f"invalid research domain at index {index}"
+            ) from exc
+        domains.append(domain)
+
+    return adapter, domains
+
+
 def _parallel_retrieve_domain_evidence_factory(
     central_module: Any,
-    original_retrieve_graph: Callable[..., dict[str, Any]],
+    build_research_graph: Callable[..., dict[str, Any]],
 ) -> Callable[..., dict[str, Any]]:
-    """Run criterion-bound official RAG with bounded corrective retrieval."""
+    """Run criterion-bound official RAG with no serial/deferred fallback path."""
     original_default_retrieve = central_module.retrieve_official_evidence
 
-    @wraps(original_retrieve_graph)
+    @wraps(build_research_graph)
     def retrieve_domain_evidence_parallel(
         research_brief: dict[str, Any],
         *,
         retrieve: Callable[..., Any] | None = None,
     ) -> dict[str, Any]:
-        selected_retrieve = retrieve or original_default_retrieve
-        raw_target = research_brief.get("_mmm_platform_target")
-        if not isinstance(raw_target, Mapping):
-            return original_retrieve_graph(
-                research_brief,
-                retrieve=selected_retrieve,
-            )
-        version = str(raw_target.get("minecraft_version", "")).strip()
-        loader = str(raw_target.get("loader", "")).strip().casefold()
-        if not version or not loader:
-            return original_retrieve_graph(
-                research_brief,
-                retrieve=selected_retrieve,
-            )
-        try:
-            adapter = central_module.adapter_for_target(version, loader)
-        except ValueError:
-            return original_retrieve_graph(
-                research_brief,
-                retrieve=selected_retrieve,
-            )
+        if not isinstance(research_brief, Mapping):
+            raise ParallelResearchContractError("research_brief must be a mapping")
 
-        raw_domains = research_brief.get("domains")
-        if not isinstance(raw_domains, list) or not raw_domains:
-            return original_retrieve_graph(
-                research_brief,
-                retrieve=selected_retrieve,
-            )
-        try:
-            domains = [central_module._research_domain(raw) for raw in raw_domains]
-        except Exception:  # noqa: BLE001 - compatibility fallback
-            return original_retrieve_graph(
+        selected_retrieve = retrieve or original_default_retrieve
+        adapter, domains = _require_parallel_research_contract(
+            central_module,
+            research_brief,
+        )
+        raw_domains = research_brief["domains"]
+
+        official_domains = [
+            domain for domain in domains if "official_docs" in domain.providers
+        ]
+        if not official_domains:
+            return build_research_graph(
                 research_brief,
                 retrieve=selected_retrieve,
             )
@@ -645,6 +690,10 @@ def _parallel_retrieve_domain_evidence_factory(
         augmented_brief = dict(research_brief)
         augmented_domains: list[dict[str, Any]] = []
         for raw_domain, domain in zip(raw_domains, domains, strict=True):
+            if not isinstance(raw_domain, Mapping):
+                raise ParallelResearchContractError(
+                    f"research domain {domain.domain_id!r} must be a mapping"
+                )
             updated = dict(raw_domain)
             if "official_docs" in domain.providers:
                 updated["queries"] = domain_queries[domain.domain_id]
@@ -659,20 +708,14 @@ def _parallel_retrieve_domain_evidence_factory(
                 for query in domain_queries[domain.domain_id]
             )
         )
-        workers = _env_workers("MMM_RESEARCH_WORKERS", 8, maximum=32)
         if not primary_queries:
-            graph = original_retrieve_graph(
-                augmented_brief,
-                retrieve=selected_retrieve,
-            )
-            return _attach_coverage_status(
-                graph,
-                query_criteria=query_criteria,
-                domain_criteria=domain_criteria,
+            raise ParallelResearchContractError(
+                "official-doc research produced no primary queries"
             )
 
+        workers = _env_workers("MMM_RESEARCH_WORKERS", 8, maximum=32)
         pool = ThreadPoolExecutor(
-            max_workers=min(workers, max(1, len(primary_queries))),
+            max_workers=min(workers, len(primary_queries)),
             thread_name_prefix="mmm_official_rag",
         )
         prefetched = _PrefetchedRetriever(
@@ -687,7 +730,7 @@ def _parallel_retrieve_domain_evidence_factory(
             if workers > 1:
                 for query in primary_queries:
                     prefetched.prefetch_primary(query)
-            graph = original_retrieve_graph(augmented_brief, retrieve=prefetched)
+            graph = build_research_graph(augmented_brief, retrieve=prefetched)
         finally:
             for future in tuple(prefetched._futures.values()):
                 future.cancel()
@@ -721,9 +764,10 @@ def discover_seed_bundle(*args: Any, **kwargs: Any) -> dict[str, Any]:
 def _native_research_wrapper() -> Callable[..., dict[str, Any]]:
     from . import central_research as central_module
 
+    build_research_graph = central_module._serial_retrieve_domain_evidence
     return _parallel_retrieve_domain_evidence_factory(
         central_module,
-        central_module._serial_retrieve_domain_evidence,
+        build_research_graph,
     )
 
 
@@ -744,6 +788,7 @@ def install(
 
 
 __all__ = [
+    "ParallelResearchContractError",
     "discover_seed_bundle",
     "install",
     "prefetch_profile",
