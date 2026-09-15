@@ -71,7 +71,7 @@ def test_detailed_planning_not_ready_result_stays_pending(monkeypatch) -> None:
     pending_result = {
         "plan_ready": False,
         "decisions": [],
-        "detail_progress": [{"requirement_ref": "req_001", "criterion_index": 0}],
+        "detail_progress": [],
     }
 
     monkeypatch.setattr(
@@ -99,6 +99,59 @@ def test_detailed_planning_not_ready_result_stays_pending(monkeypatch) -> None:
     pending = [fields for event, fields in events if event == "detailed_planning_pending"]
     assert pending
     assert pending[-1]["result"] == "RESUMABLE"
+    assert not any(fields.get("result") in {"FAIL", "ERROR", "BLOCKED"} for _, fields in events)
+
+
+def test_detailed_planning_progress_is_requeued_until_ready(monkeypatch) -> None:
+    events: list[tuple[str, dict]] = []
+    checkpoints: list[dict] = []
+    calls = 0
+    progressed = {
+        "plan_ready": False,
+        "decisions": [],
+        "detail_progress": [{"requirement_ref": "req_001", "criterion_index": 0}],
+    }
+    ready = {
+        "plan_ready": True,
+        "decisions": [],
+        "detail_progress": [{"requirement_ref": "req_001", "criterion_index": 0}],
+    }
+
+    monkeypatch.setattr(
+        pipeline,
+        "emit_root_cause",
+        lambda event, **fields: events.append((event, fields)),
+    )
+    monkeypatch.setattr(pipeline, "emit_planning_goal_satisfied", lambda *args, **kwargs: None)
+
+    def compile_until_ready(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return progressed if calls == 1 else ready
+
+    monkeypatch.setattr(
+        pipeline,
+        "compile_progress_monotone_detailed_plans",
+        compile_until_ready,
+    )
+
+    result = pipeline._compile_detailed_plans_resumable(
+        object(),
+        "prompt",
+        {"plan_ready": False, "decisions": []},
+        {},
+        checkpoints.append,
+    )
+
+    assert result is ready
+    assert calls == 2
+    resumed = [
+        fields
+        for event, fields in events
+        if event == "detailed_planning_resume_after_progress"
+    ]
+    assert resumed
+    assert resumed[-1]["result"] == "CONTINUE"
     assert not any(fields.get("result") in {"FAIL", "ERROR", "BLOCKED"} for _, fields in events)
 
 
