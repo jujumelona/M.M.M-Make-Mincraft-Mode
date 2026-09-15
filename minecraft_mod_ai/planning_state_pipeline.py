@@ -33,7 +33,7 @@ from .planning_state_contract import (
     validate_planning_state,
 )
 from .prompt_task_checkpoint import is_prompt_checkpoint
-from .root_cause_trace import emit_root_cause, traced_callable
+from .root_cause_trace import emit_root_cause
 
 _T = TypeVar("_T")
 DetailSectionApplicabilityResolver = Callable[
@@ -72,6 +72,24 @@ def _state_summary(state: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _observe(event: str, **fields: Any) -> None:
+    """Emit planning telemetry without allowing observability to affect control flow."""
+
+    try:
+        emit_root_cause(event, **fields)
+    except Exception:
+        pass
+
+
+def _observe_goal_satisfied(state: Mapping[str, Any]) -> None:
+    """Keep goal telemetry best-effort for the same reason as root-cause telemetry."""
+
+    try:
+        emit_planning_goal_satisfied(state)
+    except Exception:
+        pass
+
+
 def _trace_state_snapshot(
     event: str,
     operation: str,
@@ -80,7 +98,7 @@ def _trace_state_snapshot(
     result: str = "SNAPSHOT",
     reason: str = "",
 ) -> None:
-    emit_root_cause(
+    _observe(
         event,
         stage="planning_state",
         operation=operation,
@@ -98,11 +116,11 @@ def _transition(
 ) -> _T:
     if input_state is not None:
         _trace_state_snapshot("planning_state_transition_input", operation, input_state)
-    value = traced_callable(callback, stage="planning_state", operation=operation)()
+    value = callback()
     if isinstance(value, Mapping):
         _trace_state_snapshot("planning_state_transition_output", operation, value)
     else:
-        emit_root_cause(
+        _observe(
             "planning_state_transition_output",
             stage="planning_state",
             operation=operation,
@@ -113,7 +131,7 @@ def _transition(
 
 
 def _host_transition_notice(operation: str, state: Mapping[str, Any], exc: BaseException) -> None:
-    emit_root_cause(
+    _observe(
         "planning_state_host_continuation",
         stage="planning_state",
         operation=operation,
@@ -237,7 +255,6 @@ def _host_add_requirement(state: Mapping[str, Any]) -> dict[str, Any]:
     return value
 
 
-
 def _research_stage_needed(state: Mapping[str, Any]) -> bool:
     """Enter research only when an explicit unresolved obligation needs it."""
 
@@ -255,6 +272,7 @@ def _research_stage_needed(state: Mapping[str, Any]) -> bool:
         and row.get("resolution_route") == "default_policy"
         for row in unresolved
     )
+
 
 def _collect_research_if_needed(
     router: Any,
@@ -318,7 +336,7 @@ def _resolve_requirements_or_wait(
         return state, False
 
     if _has_open_user_only_unknown(state):
-        emit_root_cause(
+        _observe(
             "planning_state_waiting_for_user_input",
             stage="planning_state",
             operation="requirement_selection",
@@ -330,7 +348,7 @@ def _resolve_requirements_or_wait(
         return state, True
 
     state = _host_add_requirement(state)
-    emit_root_cause(
+    _observe(
         "planning_state_host_requirement",
         stage="planning_state",
         operation="requirement_selection",
@@ -340,6 +358,7 @@ def _resolve_requirements_or_wait(
     )
     _checkpoint_state(checkpoint, state)
     return state, False
+
 
 def _select_detail_sections(
     state: dict[str, Any],
@@ -511,7 +530,7 @@ def _compile_detailed_plans_resumable(
                     latest_state,
                     exc,
                 )
-                emit_root_cause(
+                _observe(
                     "detailed_planning_resume_from_checkpoint",
                     stage="planning_runtime",
                     operation="compile_progress_monotone_detailed_plans",
@@ -524,34 +543,34 @@ def _compile_detailed_plans_resumable(
                 )
                 continue
 
-            emit_root_cause(
-                "detailed_planning_runtime_stalled",
+            _observe(
+                "detailed_planning_pending",
                 stage="planning_runtime",
                 operation="compile_progress_monotone_detailed_plans",
-                result="ERROR",
+                result="RESUMABLE",
                 reason=f"{type(exc).__name__}: {exc}",
                 details={
                     **_state_summary(latest_state),
-                    "policy": "runtime_defect_not_synthetic_plan",
+                    "policy": "preserve_pending_without_synthetic_completion",
                 },
             )
-            raise RuntimeError(
-                "DETAILED_PLAN_RUNTIME_STALLED: detailed planning raised again without "
-                "completing any new durable obligation; refusing to synthesize plan_ready"
-            ) from exc
+            _checkpoint_state(checkpoint, latest_state)
+            return latest_state
 
         if result.get("plan_ready") is not True:
-            _trace_state_snapshot(
-                "detailed_planning_invariant_violation",
-                "compile_progress_monotone_detailed_plans",
-                result,
-                result="ERROR",
-                reason="compiler returned without a fully ready validated plan",
+            _observe(
+                "detailed_planning_pending",
+                stage="planning_runtime",
+                operation="compile_progress_monotone_detailed_plans",
+                result="RESUMABLE",
+                reason="compiler returned before all validated obligations were complete",
+                details={
+                    **_state_summary(result),
+                    "policy": "preserve_pending_without_synthetic_completion",
+                },
             )
-            raise RuntimeError(
-                "DETAILED_PLAN_NOT_READY: detailed planner returned before every validated "
-                "requirement was complete; refusing host-authored placeholder completion"
-            )
+            _checkpoint_state(checkpoint, result)
+            return result
         break
 
     _trace_state_snapshot(
@@ -559,7 +578,7 @@ def _compile_detailed_plans_resumable(
         "compile_progress_monotone_detailed_plans",
         result,
     )
-    emit_planning_goal_satisfied(result)
+    _observe_goal_satisfied(result)
     _checkpoint_state(checkpoint, result)
     return result
 
@@ -575,7 +594,7 @@ def prepare_planning_state(
 ) -> dict[str, Any]:
     """Resolve the request without exposing a terminal planning failure state."""
 
-    emit_root_cause(
+    _observe(
         "planning_state_runtime_identity",
         stage="planning_state",
         operation="prepare_planning_state",
@@ -626,7 +645,7 @@ def prepare_planning_state(
             _host_transition_notice("refresh_worksheet_checkpoint", state, exc)
 
     if state.get("plan_ready") is True:
-        emit_planning_goal_satisfied(state)
+        _observe_goal_satisfied(state)
         return state
     _checkpoint_state(checkpoint, state)
 
