@@ -1,5 +1,6 @@
 """M.M.M Make Mincraft Mode: scalable multimodal Minecraft mod production tools."""
 
+from .authored_design_mutation_scope import install as install_authored_design_mutation_scope
 from .custom_checkpoint_performance_installation import install as install_checkpoint_performance
 from .execution_feedback_semantic_convergence_installation import (
     install as install_execution_feedback_semantic_convergence,
@@ -57,6 +58,10 @@ assert_generation_accuracy_inner(_model_router)
 # termination rule before runtime_finalization installs the durable feedback wrapper.
 install_execution_feedback_semantic_convergence(_execution_feedback_replan_contract)
 finalize_runtime()
+# Authored plans deliberately choose their own source/resource files. Install this after
+# every exact-file authority wrapper so ordinary modules remain exact-path while only a
+# host-proven implement_authored_design run receives the bounded four-root write scope.
+install_authored_design_mutation_scope()
 # The generation verifier is finalized above. Wrap only its infrastructure-unavailable
 # path with a real pinned Gradle build; source failures remain ordinary verifier FAILs.
 install_generation_verifier_fallback()
