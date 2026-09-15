@@ -1,0 +1,79 @@
+name: One-shot native target-optional RAG
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-shot-make-rag-target-optional.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-make-rag-target-optional
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Remove target as a RAG precondition
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          central_path = Path('minecraft_mod_ai/central_research.py')
+          central = central_path.read_text(encoding='utf-8')
+
+          replacements = [
+              (
+                  '''    if target is not None:\n        payload["_mmm_platform_target"] = _canonical_platform_target(target)\n''',
+                  '''    if target is not None:\n        try:\n            payload["_mmm_platform_target"] = _canonical_platform_target(target)\n        except SpecValidationError:\n            # Platform metadata refines research when executable; it never gates research.\n            pass\n''',
+              ),
+              (
+                  '''    raw_target = research_brief.get("_mmm_platform_target")\n    target = _canonical_platform_target(raw_target) if raw_target is not None else None\n''',
+                  '''    raw_target = research_brief.get("_mmm_platform_target")\n    try:\n        target = _canonical_platform_target(raw_target) if raw_target is not None else None\n    except SpecValidationError:\n        # Missing/partial/stale platform metadata falls back to target-neutral retrieval.\n        target = None\n''',
+              ),
+              (
+                  '''        if adapter is None:\n            deferred.append(domain.domain_id)\n            results.append(\n                {\n                    "domain_id": domain.domain_id,\n                    "strategy": "deferred_until_platform_selected",\n                    "queries": [],\n                }\n            )\n            continue\n\n        query_results: list[dict[str, Any]] = []\n        has_hits = False\n        for query in domain.queries:\n            primary = retrieve(\n                query,\n                minecraft_version=adapter.minecraft_version,\n                loader=adapter.loader,\n                mappings=adapter.yarn_mappings,\n                limit=8,\n            )\n''',
+                  '''        query_results: list[dict[str, Any]] = []\n        has_hits = False\n        target_kwargs = (\n            {\n                "minecraft_version": adapter.minecraft_version,\n                "loader": adapter.loader,\n                "mappings": adapter.yarn_mappings,\n            }\n            if adapter is not None\n            else {}\n        )\n        for query in domain.queries:\n            primary = retrieve(query, limit=8, **target_kwargs)\n''',
+              ),
+              (
+                  '''                correction = retrieve(\n                    correction_query,\n                    minecraft_version=adapter.minecraft_version,\n                    loader=adapter.loader,\n                    mappings=adapter.yarn_mappings,\n                    limit=4,\n                )\n''',
+                  '''                correction = retrieve(\n                    correction_query,\n                    limit=4,\n                    **target_kwargs,\n                )\n''',
+              ),
+          ]
+          for old, new in replacements:
+              count = central.count(old)
+              if count != 1:
+                  raise SystemExit(f'central_research patch expected 1 match, got {count}: {old[:80]!r}')
+              central = central.replace(old, new, 1)
+          central_path.write_text(central, encoding='utf-8')
+
+          parallel_path = Path('minecraft_mod_ai/parallel_runtime_contract.py')
+          parallel = parallel_path.read_text(encoding='utf-8')
+          old = '''        # No target means Official RAG is inapplicable, not that the whole production\n        # request is invalid. Exit through the canonical graph before pool/index/prefetch\n        # creation. A present but malformed target still enters the strict contract.\n        if research_brief.get("_mmm_platform_target") is None:\n            return build_research_graph(\n                research_brief,\n                retrieve=selected_retrieve,\n            )\n\n        adapter, verified_domains = _require_parallel_research_contract(\n            central_module,\n            research_brief,\n        )\n'''
+          new = '''        # Platform targeting is an optional refinement. Generic Official RAG remains\n        # active when the target is missing, partial, stale, or otherwise non-executable.\n        try:\n            adapter, verified_domains = _require_parallel_research_contract(\n                central_module,\n                research_brief,\n            )\n        except ParallelResearchContractError:\n            return build_research_graph(\n                research_brief,\n                retrieve=selected_retrieve,\n            )\n'''
+          count = parallel.count(old)
+          if count != 1:
+              raise SystemExit(f'parallel_runtime_contract patch expected 1 match, got {count}')
+          parallel = parallel.replace(old, new, 1)
+          parallel_path.write_text(parallel, encoding='utf-8')
+          PY
+
+          python -m compileall -q minecraft_mod_ai tests/test_live_rag_target_submission_guard.py
+          git diff --check
+
+          rm -f .github/workflows/one-shot-make-rag-target-optional.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: make platform target optional for native RAG"
+          git push origin HEAD:main
