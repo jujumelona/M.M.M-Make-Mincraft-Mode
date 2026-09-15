@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import re
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -22,6 +23,13 @@ _CORE_RUNTIME_UNRESOLVED_PATTERNS = (
     "the type java.lang.object cannot be resolved",
     "the type object cannot be resolved. it is indirectly referenced from required .class files",
     "implicit super constructor object() is undefined for default constructor",
+)
+_TOOLCHAIN_UNAVAILABLE_PATTERNS = (
+    re.compile(r"\brelease\s+\d+\s+is\s+not\s+found\s+in\s+the\s+system\b"),
+    re.compile(r"\binvalid\s+source\s+release\b"),
+    re.compile(r"\brelease\s+version\s+\d+\s+not\s+supported\b"),
+    re.compile(r"\bno\s+matching\s+toolchains?\s+found\b"),
+    re.compile(r"\bcannot\s+find\s+(?:a\s+)?java\s+installation\b"),
 )
 
 
@@ -258,6 +266,33 @@ def _core_runtime_readiness_error(
     }
 
 
+def _toolchain_readiness_error(
+    items: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Treat requested-Java/toolchain mismatches as verifier infrastructure failures."""
+
+    matches: list[str] = []
+    for item in items:
+        if not _is_error(item):
+            continue
+        message = str(item.get("message") or "").strip()
+        normalized = " ".join(message.casefold().split())
+        if any(pattern.search(normalized) is not None for pattern in _TOOLCHAIN_UNAVAILABLE_PATTERNS):
+            matches.append(message)
+    if not matches:
+        return None
+    return {
+        "severity": 1,
+        "source": "jdtls",
+        "code": "JDT_DIAGNOSTICS_UNAVAILABLE",
+        "message": (
+            "JDT diagnostics are unavailable because the requested Java release/toolchain "
+            "is not present or supported; source repair is suppressed until verifier "
+            f"infrastructure is corrected. Evidence: {matches[0]}"
+        ),
+    }
+
+
 def diagnostic_errors(receipt: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     """Return source errors, or one fail-closed verifier/readiness diagnostic."""
 
@@ -266,16 +301,23 @@ def diagnostic_errors(receipt: Mapping[str, Any] | None) -> list[dict[str, Any]]
     source_errors = [item for item in items if _is_error(item)]
     unavailable = _availability_error(normalized)
     readiness = None if unavailable is not None else _core_runtime_readiness_error(items)
+    toolchain = (
+        None
+        if unavailable is not None or readiness is not None
+        else _toolchain_readiness_error(items)
+    )
 
     if unavailable is not None:
         errors = [unavailable]
     elif readiness is not None:
         errors = [readiness]
+    elif toolchain is not None:
+        errors = [toolchain]
     else:
         errors = source_errors
 
     status = str(normalized.get("status") or "").strip().upper()
-    infrastructure_error = unavailable or readiness
+    infrastructure_error = unavailable or readiness or toolchain
     emit_root_cause(
         "diagnostic_receipt_classified",
         stage="verify",
@@ -288,7 +330,11 @@ def diagnostic_errors(receipt: Mapping[str, Any] | None) -> list[dict[str, Any]]
             else (
                 "JDT core runtime symbols are unresolved; verifier workspace is not ready"
                 if readiness is not None
-                else ("JDT published severity-1 diagnostics" if errors else "JDT receipt is healthy")
+                else (
+                    "JDT requested Java release/toolchain is unavailable"
+                    if toolchain is not None
+                    else ("JDT published severity-1 diagnostics" if errors else "JDT receipt is healthy")
+                )
             )
         ),
         details={
@@ -299,6 +345,7 @@ def diagnostic_errors(receipt: Mapping[str, Any] | None) -> list[dict[str, Any]]
             "severity_1_count": len(source_errors),
             "availability_error": unavailable,
             "readiness_error": readiness,
+            "toolchain_error": toolchain,
             "source_repair_suppressed": infrastructure_error is not None,
         },
     )
@@ -437,7 +484,12 @@ def run_diagnostics(
     items = _diagnostic_items_from_receipt(normalized)
     unavailable = _availability_error(normalized)
     readiness = None if unavailable is not None else _core_runtime_readiness_error(items)
-    infrastructure_error = unavailable or readiness
+    toolchain = (
+        None
+        if unavailable is not None or readiness is not None
+        else _toolchain_readiness_error(items)
+    )
+    infrastructure_error = unavailable or readiness or toolchain
     emit_root_cause(
         "diagnostic_run_result",
         stage="verify",
@@ -446,7 +498,7 @@ def run_diagnostics(
         result="UNAVAILABLE" if infrastructure_error is not None else "PASS",
         reason=(
             "diagnostic service returned an unready verifier receipt"
-            if readiness is not None
+            if readiness is not None or toolchain is not None
             else "diagnostic service returned a receipt"
         ),
         details={
@@ -458,6 +510,7 @@ def run_diagnostics(
             "diagnostic_item_count": len(items),
             "availability_error": unavailable,
             "readiness_error": readiness,
+            "toolchain_error": toolchain,
         },
     )
     return result
