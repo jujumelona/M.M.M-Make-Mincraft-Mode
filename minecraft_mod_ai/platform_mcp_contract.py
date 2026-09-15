@@ -205,6 +205,10 @@ def _install_core_tools(module: Any) -> None:
             media_paths=self._scoped_media_paths(media_paths),
             existing_input_sha256=existing_input_sha256,
         )
+        from .authored_plan import AuthoredPlan
+
+        if isinstance(proposal, AuthoredPlan):
+            return self._authored_plan_result(proposal)
         adapter = adapter_for_lock_values(proposal.base_proposal.spec.platform)
         self._mmm_last_platform_adapter = adapter
         os.environ["MMM_MCP_MINECRAFT_VERSION"] = adapter.minecraft_version

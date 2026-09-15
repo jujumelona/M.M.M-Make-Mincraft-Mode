@@ -5,7 +5,7 @@ import json
 import math
 import re
 from collections.abc import Mapping
-from dataclasses import asdict, is_dataclass, replace
+from dataclasses import asdict, is_dataclass
 from functools import wraps
 from typing import Any
 
@@ -299,24 +299,8 @@ def validate_ir(proposal: Any) -> dict[str, Any]:
     return ir
 
 def install(complete_planner_module: Any, orchestrator_module: Any) -> None:
-    planner_cls = complete_planner_module.CompleteGameDesignPlanner
-    planner_original = planner_cls.plan
-    if not getattr(planner_original, '_mmm_atomic_requirement_ir', False):
-
-        @wraps(planner_original)
-        def planned(self: Any, *args: Any, **kwargs: Any):
-            proposal = planner_original(self, *args, **kwargs)
-            ir = compile_ir(proposal)
-            if ir['unresolved_atom_ids']:
-                ir = semantic_review(self.router, proposal, ir)
-            if ir['unresolved_atom_ids']:
-                missing = [atom['text'] for atom in ir['atoms'] if atom['atom_id'] in set(ir['unresolved_atom_ids'])]
-                raise complete_planner_module.SpecValidationError('Planner left authoritative request atoms uncovered after bounded review: ' + ' | '.join(missing[:6]))
-            game_design = dict(proposal.game_design)
-            game_design['_atomic_requirement_ir'] = ir
-            return replace(proposal, game_design=game_design, approval_hash='').with_hash()
-        planned._mmm_atomic_requirement_ir = True
-        planner_cls.plan = planned
+    # No planning decorator: authored templates are never subjected to a second
+    # semantic review or rejected for a host-computed coverage expectation.
     orchestrator_cls = orchestrator_module.CompleteProductionOrchestrator
     execute_original = orchestrator_cls.execute
     if not getattr(execute_original, '_mmm_atomic_release_guard', False):

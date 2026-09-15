@@ -85,6 +85,7 @@ from .complete_orchestrator import (
 )
 from .complete_orchestrator_support import CompleteProductionError
 from .complete_planner import CompleteGameDesignPlanner
+from .authored_plan import AuthoredPlan
 from .complete_spec import AssetRequest, CompleteProposal, ProductionModule
 from .ecosystem_discovery import EcosystemDiscoveryClient
 from .external_mcp import ExternalMCPRegistry
@@ -129,7 +130,7 @@ install_source_observation_budget()
 MinecraftModPipeline = ScalableMinecraftModPipeline
 
 __all__ = [
-    "AssetRequest", "BossSpec", "ChatReply", "CompleteChatReply",
+    "AssetRequest", "AuthoredPlan", "BossSpec", "ChatReply", "CompleteChatReply",
     "CompleteExecutionOptions", "CompleteGameDesignPlanner", "CompleteModAISession",
     "CompletePipelineResult", "CompleteProductionError", "CompleteProductionOrchestrator",
     "CompleteProposal", "ContentSpec", "EcosystemDiscoveryClient", "ExistingProjectImportError",

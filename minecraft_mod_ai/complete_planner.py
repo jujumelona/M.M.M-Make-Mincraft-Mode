@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from .implementation_fact import ImplementationFact
 
 from . import production_contract
+from .authored_plan import AuthoredPlan
 from .complete_spec import (
     AssetRequest,
     CompleteProposal,
@@ -89,12 +90,7 @@ def _merge_atomic_assets(
 
 
 class CompleteGameDesignPlanner:
-    """Compile one authored request into a coder-ready production proposal.
-
-    All mandatory plan structure is host-owned. The planner model is not asked to fill
-    implementation holes, invent module identities, emit planning JSON, or decide whether
-    the plan exists.
-    """
+    """Write a design freely; compile executable contracts only for production."""
 
     def __init__(self, router: ModelRouter) -> None:
         self.router = router
@@ -105,13 +101,71 @@ class CompleteGameDesignPlanner:
         *,
         media_paths: Sequence[str | Path] = (),
         existing_input_sha256: str = "",
+    ) -> AuthoredPlan:
+        """Write the design itself; no schema, critic, evidence or production gate."""
+        from .planner_operation import planner_operation
+        from .planning_detail_slots import DETAIL_RECORDS
+
+        template = "\n".join(
+            "# " + section + "\n" + "\n".join(
+                "- " + concern + ": " + ", ".join(fields)
+                for concern, fields in records.items()
+            )
+            for section, records in DETAIL_RECORDS.items()
+        )
+
+        with planner_operation("author_game_plan"):
+            text = self.router.generate_text(
+                "planner",
+                (
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are the game designer. Write a complete, concrete Minecraft "
+                            "mod design in the user's language as readable prose and Markdown. "
+                            "Develop every requested feature into a coherent playable experience: "
+                            "the main gameplay loop, progression, interacting systems, resources "
+                            "and content, player actions, UI and multiplayer behavior. Choose "
+                            "missing mechanics, quantities, names and balance values yourself. "
+                            "Explain how the systems connect using concrete examples. "
+                            "Your choices are authored design and need no proof or approval. "
+                            "Describe desired platform behavior without claiming unresearched "
+                            "API symbols are verified. Fill this writing template in one response, "
+                            "choosing your own level of detail and leaving irrelevant parts aside:\n"
+                            + template
+                            + "\nThese existing template sections and fields are writing guidance, "
+                            "not required output keys. Verification sections describe future tests "
+                            "of the implementation; they do not judge your plan. "
+                            "Finish the design in this response."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ),
+                media_paths=media_paths,
+                response_format="text",
+                response_schema=None,
+                enable_tools=False,
+            )
+        return AuthoredPlan(
+            requested_prompt=prompt,
+            text=text,
+            existing_input_sha256=existing_input_sha256,
+            media_paths=tuple(str(path) for path in media_paths),
+        )
+
+    def compile_for_production(
+        self,
+        prompt: str,
+        *,
+        media_paths: Sequence[str | Path] = (),
+        existing_input_sha256: str = "",
     ) -> CompleteProposal:
         from contextlib import nullcontext
 
-        with trace_scope("complete_planning", trace_id=uuid.uuid4().hex):
+        with trace_scope("production_preparation", trace_id=uuid.uuid4().hex):
             emit_root_cause(
-                "planner_run_start",
-                stage="planning",
+                "production_preparation_start",
+                stage="production",
                 result="START",
                 details=repository_revision(),
             )

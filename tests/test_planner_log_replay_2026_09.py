@@ -264,7 +264,7 @@ def test_deterministic_link_failure_precedes_any_augmentation(monkeypatch):
         lambda *_a, **_k: pytest.fail("late preflight"),
     )
     with pytest.raises(PlanCollectAllLinkError):
-        complete_planner.CompleteGameDesignPlanner(_NoModel()).plan("Add trade.")
+        complete_planner.CompleteGameDesignPlanner(_NoModel()).compile_for_production("Add trade.")
 
 
 def test_derived_obligation_is_bound_to_exactly_one_valid_parent_task():

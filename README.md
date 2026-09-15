@@ -26,10 +26,17 @@ The repository has one canonical notebook: [`M.M.M_Make_Mincraft_Mode_Colab.ipyn
 
 Choose `RUN_MODE` in the first cell:
 
-- **Full** — create a new plan, revise it in conversation until you explicitly approve it, then build.
-- **Plan** — create and revise a plan, approve it, and save the plan without building.
-- **Revise** — upload exactly one existing source/release ZIP that you own or may modify, create a revision plan, approve it, then patch the project.
-- **Execute** — load a saved plan, review or revise the full plan, and build only after explicit approval.
+- **Full** — write and save the plan, then prepare and build the implementation.
+- **Plan** — write and save the plan, then stop without preparing production contracts.
+- **Revise** — upload an existing source/release ZIP, write a revision plan, then patch the project.
+- **Execute** — load a saved plan and build its implementation.
+
+The Planner uses a writing template and returns its own text. Planning does not parse
+the model's response as JSON, grade its content, require evidence for design choices,
+or run a repair loop. The host saves the text unchanged in an `mmm/authored-plan-v1`
+document; JSON is only the file container, not a required model response. Existing
+compiled proposal files remain loadable. Production contracts and target binding run
+when building, and a production error leaves the saved design intact.
 
 The notebook does not require an engine ZIP. The setup cell clones or fast-forwards the official GitHub `main`, verifies that the checkout exactly matches `origin/main`, and prints the commit actually used. If a Colab tab predates an engine/setup change, reopen the notebook and restart the runtime before running the cells again.
 

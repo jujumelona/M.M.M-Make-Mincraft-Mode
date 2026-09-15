@@ -271,6 +271,8 @@ class ModelRouter:
         else:
             with self._generation_scope(config):
                 content = adapter.generate(request)
+        if request.response_format == "text" and request.response_schema is None:
+            return content
         return validate_structured_output(
             content,
             response_format=request.response_format,

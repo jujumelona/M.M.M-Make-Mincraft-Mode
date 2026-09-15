@@ -179,7 +179,9 @@ def main(argv: list[str] | None = None) -> int:
             if args.json:
                 sys.stdout.write(serialized)
             else:
-                rendered = render_complete_plan(
+                from .authored_plan import AuthoredPlan
+
+                rendered = proposal.text if isinstance(proposal, AuthoredPlan) else render_complete_plan(
                     requested_prompt=proposal.requested_prompt,
                     game_design=proposal.game_design,
                     modules=proposal.modules,
@@ -191,7 +193,17 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "execute":
-            proposal = CompleteProposal.from_dict(_read_json(args.proposal))
+            from .authored_plan import AuthoredPlan
+
+            data = _read_json(args.proposal)
+            if data.get("schema_version") == "mmm/authored-plan-v1":
+                design = AuthoredPlan.from_dict(data)
+                proposal = CompleteGameDesignPlanner(ModelRouter(profile=args.profile)).compile_for_production(
+                    design.production_prompt(), media_paths=design.media_paths,
+                    existing_input_sha256=_sha256_file(args.existing_zip) if args.existing_zip else "",
+                )
+            else:
+                proposal = CompleteProposal.from_dict(data)
             actions = _read_playtest_actions(args.playtest_actions)
             options = CompleteExecutionOptions(
                 source_only=args.source_only,

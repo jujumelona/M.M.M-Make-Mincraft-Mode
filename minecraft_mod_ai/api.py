@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .authored_plan import AuthoredPlan
 from .conversation import merge_design_brief
 from .model_concurrency import planning_work_unit_timeout_seconds
 from .pipeline import PipelineResult
@@ -443,7 +444,7 @@ class CompleteChatReply:
 
     message: str
     approval_hash: str = field(repr=False)
-    complete_proposal: CompleteProposal = field(repr=False)
+    complete_proposal: CompleteProposal | AuthoredPlan = field(repr=False)
 
     @property
     def ready_to_build(self) -> bool:
@@ -503,7 +504,7 @@ class CompleteModAISession:
         )
         self.orchestrator._fast_mode = fast_mode
         self.brief = ""
-        self.complete_proposal: CompleteProposal | None = None
+        self.complete_proposal: CompleteProposal | AuthoredPlan | None = None
 
     def plan(
         self,
@@ -532,35 +533,18 @@ class CompleteModAISession:
             updated_brief = merge_design_brief(self.brief, message)
         except ValueError as exc:
             raise SpecValidationError("대화 내용을 입력해 주세요.") from exc
-        existing_hash = ""
-        if self.existing_input is not None:
-            existing_hash = _verified_existing_input_sha256(
-                self.router,
-                self.existing_input,
-            )
-
         proposal = self.planner.plan(
             updated_brief,
             media_paths=media_paths,
-            existing_input_sha256=existing_hash,
+            existing_input_sha256="",
         )
-        if self.existing_input is not None:
-            rebound = _verified_existing_input_sha256(
-                self.router,
-                self.existing_input,
-                await_inventory=True,
-            )
-            if rebound != existing_hash or proposal.existing_input_sha256 != existing_hash:
-                raise SpecValidationError(
-                    "Complete proposal is not bound to the session's observed existing-project ZIP."
-                )
         self.brief = updated_brief
         self.complete_proposal = proposal
         self.save_plan()
         from .plan_render import render_complete_plan
 
         return CompleteChatReply(
-            message=render_complete_plan(
+            message=proposal.text if isinstance(proposal, AuthoredPlan) else render_complete_plan(
                 requested_prompt=proposal.requested_prompt,
                 game_design=proposal.game_design,
                 modules=proposal.modules,
@@ -600,13 +584,16 @@ class CompleteModAISession:
         )
         if not path.is_file():
             raise FileNotFoundError(f"No saved proposal JSON found at {path}")
-        proposal = CompleteProposal.from_dict(
-            json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        proposal = (
+            AuthoredPlan.from_dict(data)
+            if data.get("schema_version") == "mmm/authored-plan-v1"
+            else CompleteProposal.from_dict(data)
         )
         self.complete_proposal = proposal
         self.brief = proposal.requested_prompt
         return CompleteChatReply(
-            message=render_complete_plan(
+            message=proposal.text if isinstance(proposal, AuthoredPlan) else render_complete_plan(
                 requested_prompt=proposal.requested_prompt,
                 game_design=proposal.game_design,
                 modules=proposal.modules,
@@ -647,7 +634,7 @@ class CompleteModAISession:
 
     def build(
         self,
-        candidate: CompleteChatReply | CompleteProposal | None = None,
+        candidate: CompleteChatReply | CompleteProposal | AuthoredPlan | None = None,
         *,
         run_name: str = "complete-run",
         source_only: bool = False,
@@ -658,7 +645,7 @@ class CompleteModAISession:
 
         if isinstance(candidate, CompleteChatReply):
             proposal = candidate.complete_proposal
-        elif isinstance(candidate, CompleteProposal):
+        elif isinstance(candidate, (CompleteProposal, AuthoredPlan)):
             proposal = candidate
         elif candidate is None:
             proposal = self.complete_proposal
@@ -668,6 +655,19 @@ class CompleteModAISession:
             )
         if proposal is None:
             raise SpecValidationError("Create a complete plan before building.")
+        if isinstance(proposal, AuthoredPlan):
+            existing_hash = ""
+            if self.existing_input is not None:
+                existing_hash = _verified_existing_input_sha256(
+                    self.router, self.existing_input, await_inventory=True,
+                )
+            # Compile only after build is requested. Keep the saved design intact
+            # even if platform binding or executable-contract compilation stops.
+            proposal = self.planner.compile_for_production(
+                proposal.production_prompt(),
+                media_paths=proposal.media_paths,
+                existing_input_sha256=existing_hash,
+            )
         selected = options or CompleteExecutionOptions(source_only=source_only)
         if source_only and not selected.source_only:
             selected = CompleteExecutionOptions(

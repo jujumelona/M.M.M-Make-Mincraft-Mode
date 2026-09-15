@@ -10,6 +10,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+from .authored_plan import AuthoredPlan
 from .broker import LocalPolicyBroker, ToolAction, approved_request
 from .complete_orchestrator import (
     CompleteExecutionOptions,
@@ -99,6 +100,8 @@ class MMMToolService:
 
     def plan_complete_game(self, prompt: str, media_paths: Sequence[str]=(), existing_input_sha256: str='') -> dict[str, Any]:
         proposal = CompleteGameDesignPlanner(self.router_factory()).plan(prompt, media_paths=self._scoped_media_paths(media_paths), existing_input_sha256=existing_input_sha256)
+        if isinstance(proposal, AuthoredPlan):
+            return self._authored_plan_result(proposal)
         proposal_ref = self._store_complete_proposal(proposal)
         return {'schema_version': 'mmm/complete-plan-result-v3', 'profile': self.profile, 'message': render_complete_plan(requested_prompt=proposal.requested_prompt, game_design=proposal.game_design, modules=proposal.modules, acceptance_tests=proposal.acceptance_tests), 'proposal_ref': proposal_ref, 'approval_hash': proposal.calculate_hash(), 'counts': self._complete_proposal_counts(proposal), 'detail_tool': 'read_complete_plan_section'}
 
@@ -111,6 +114,8 @@ class MMMToolService:
 
     def approve_complete_plan(self, complete_proposal: dict[str, Any] | None=None, approval_hash: str='', proposal_ref: str='') -> dict[str, Any]:
         parsed, stored_ref = self._resolve_complete_proposal(complete_proposal=complete_proposal, proposal_ref=proposal_ref)
+        if isinstance(parsed, AuthoredPlan):
+            return {'schema_version': 'mmm/authored-plan-receipt-v1', 'status': 'SAVED', 'proposal_ref': stored_ref, 'approval_hash': parsed.calculate_hash()}
         approved = parsed.approve(approval_hash, policy=self.policy)
         return {'schema_version': 'mmm/complete-plan-approval-v2', 'status': approved.status.value, 'proposal_ref': stored_ref, 'approval_hash': approved.calculate_hash(), 'counts': self._complete_proposal_counts(approved)}
 
@@ -126,6 +131,12 @@ class MMMToolService:
             scoped_options['screenshot_paths'] = tuple(str(self._existing_file(str(value))) for value in raw_screenshots)
         parsed_options = CompleteExecutionOptions(**scoped_options)
         scoped_existing = str(self._existing_file(existing_input)) if existing_input is not None else None
+        if isinstance(parsed, AuthoredPlan):
+            parsed = CompleteGameDesignPlanner(self.router_factory()).compile_for_production(
+                parsed.production_prompt(), media_paths=parsed.media_paths,
+                existing_input_sha256=_sha256(Path(scoped_existing)) if scoped_existing else '',
+            )
+            approval_hash = parsed.calculate_hash()
         return CompleteProductionOrchestrator(workspace_root=self.workspace_root, profile=self.profile, router_factory=self.router_factory, policy=self.policy).execute(parsed, approval_hash=approval_hash, run_name=run_name, options=parsed_options, existing_input=scoped_existing).to_dict()
 
     def read_complete_plan_section(self, proposal_ref: str, section: str='overview', cursor: str='', limit: int=100) -> dict[str, Any]:
@@ -133,6 +144,13 @@ class MMMToolService:
         index, expected_hash, expected_index_hash = self._proposal_index_for_ref(proposal_ref, require_existing=True)
         if _sha256(index) != expected_index_hash:
             raise SpecValidationError('Stored proposal index does not match its opaque reference.')
+        data = json.loads(index.read_text(encoding='utf-8'))
+        if data.get('schema_version') == 'mmm/authored-plan-v1':
+            start = int(cursor or '0')
+            text = data['text']
+            end = start + max(1, min(limit, self.policy.mcp_page_bytes // 4))
+            return {'schema_version': 'mmm/authored-plan-page-v1', 'proposal_ref': proposal_ref,
+                    'text': text[start:end], 'next_cursor': str(end) if end < len(text) else ''}
         result = read_sharded_complete_proposal_section(index, section, cursor=cursor, limit=limit, max_bytes=self.policy.mcp_page_bytes, cursor_key=self._proposal_cursor_key(index, create=False))
         if result.get('proposal_hash') != expected_hash:
             raise SpecValidationError('Stored proposal does not match its opaque reference.')
@@ -141,6 +159,9 @@ class MMMToolService:
     def read_quality_contract(self, proposal_ref: str) -> dict[str, Any]:
         """Read the bounded completion contract for one stored proposal."""
         proposal, stored_ref = self._resolve_complete_proposal(complete_proposal=None, proposal_ref=proposal_ref)
+        if isinstance(proposal, AuthoredPlan):
+            return {'schema_version': 'mmm/authored-plan-production-v1', 'proposal_ref': stored_ref,
+                    'message': 'Production contracts are prepared when building.'}
         contract = proposal.game_design.get('_production_contract')
         if not isinstance(contract, dict):
             raise SpecValidationError('This legacy proposal has no production quality contract.')
@@ -320,6 +341,12 @@ class MMMToolService:
         return approved
 
     def _store_complete_proposal(self, proposal: CompleteProposal) -> str:
+        if isinstance(proposal, AuthoredPlan):
+            digest = proposal.calculate_hash()
+            index = self._proposal_index_for_digest(digest, require_existing=False)
+            index.parent.mkdir(parents=True, exist_ok=True)
+            index.write_text(json.dumps(proposal.to_dict(), ensure_ascii=False), encoding='utf-8')
+            return f"plan_{digest}_{_sha256(index).removeprefix('sha256:')}"
         proposal.validate(policy=self.policy)
         digest = proposal.calculate_hash().removeprefix('sha256:')
         expected_hash = f'sha256:{digest}'
@@ -350,13 +377,17 @@ class MMMToolService:
         if has_inline:
             if not isinstance(complete_proposal, dict):
                 raise SpecValidationError('complete_proposal must be an object.')
-            parsed = CompleteProposal.from_dict(complete_proposal)
+            parsed = (AuthoredPlan.from_dict(complete_proposal)
+                      if complete_proposal.get('schema_version') == 'mmm/authored-plan-v1'
+                      else CompleteProposal.from_dict(complete_proposal))
             return (parsed, self._store_complete_proposal(parsed))
         index, expected_hash, expected_index_hash = self._proposal_index_for_ref(proposal_ref, require_existing=True)
         if _sha256(index) != expected_index_hash:
             raise SpecValidationError('Stored proposal index does not match its opaque reference.')
-        parsed = load_sharded_complete_proposal(index)
-        if parsed.calculate_hash() != expected_hash:
+        data = json.loads(index.read_text(encoding='utf-8'))
+        parsed = (AuthoredPlan.from_dict(data) if data.get('schema_version') == 'mmm/authored-plan-v1'
+                  else load_sharded_complete_proposal(index))
+        if parsed.calculate_hash().removeprefix('sha256:') != expected_hash.removeprefix('sha256:'):
             raise SpecValidationError('Stored proposal does not match its opaque reference.')
         return (parsed, proposal_ref)
 
@@ -414,6 +445,8 @@ class MMMToolService:
 
     @staticmethod
     def _complete_proposal_counts(proposal: CompleteProposal) -> dict[str, int]:
+        if isinstance(proposal, AuthoredPlan):
+            return {'characters': len(proposal.text)}
         counts = {'production_batches': len(proposal.game_design.get('production_outline', ())) if isinstance(proposal.game_design.get('production_outline'), list) else 0, 'modules': len(proposal.modules), 'assets': len(proposal.assets), 'acceptance_tests': len(proposal.acceptance_tests)}
         contract = proposal.game_design.get('_production_contract')
         if isinstance(contract, dict) and isinstance(contract.get('catalog_stats'), dict):
@@ -421,6 +454,12 @@ class MMMToolService:
             counts['requirements'] = int(stats.get('requirements', 0))
             counts['quality_dimensions'] = int(stats.get('quality_dimensions', 0))
         return counts
+
+    def _authored_plan_result(self, proposal: AuthoredPlan) -> dict[str, Any]:
+        return {'schema_version': 'mmm/authored-plan-result-v1', 'profile': self.profile,
+                'message': proposal.text, 'proposal_ref': self._store_complete_proposal(proposal),
+                'approval_hash': proposal.calculate_hash(), 'counts': self._complete_proposal_counts(proposal),
+                'detail_tool': 'read_complete_plan_section'}
 
     def _new_child(self, relative: str) -> Path:
         target = self._resolve_child(relative)
