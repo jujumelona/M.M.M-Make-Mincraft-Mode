@@ -764,7 +764,7 @@ def discover_seed_bundle(*args: Any, **kwargs: Any) -> dict[str, Any]:
 def _native_research_wrapper() -> Callable[..., dict[str, Any]]:
     from . import central_research as central_module
 
-    build_research_graph = central_module._serial_retrieve_domain_evidence
+    build_research_graph = central_module._build_research_graph
     return _parallel_retrieve_domain_evidence_factory(
         central_module,
         build_research_graph,
