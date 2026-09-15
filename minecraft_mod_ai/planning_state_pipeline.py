@@ -558,6 +558,23 @@ def _compile_detailed_plans_resumable(
             return latest_state
 
         if result.get("plan_ready") is not True:
+            progress_after = _detail_progress_position(result)
+            if _detail_progress_strictly_advanced(progress_before, progress_after):
+                latest_state = deepcopy(result)
+                _observe(
+                    "detailed_planning_resume_after_progress",
+                    stage="planning_runtime",
+                    operation="compile_progress_monotone_detailed_plans",
+                    result="CONTINUE",
+                    reason="compiler produced durable progress; requeue remaining obligations",
+                    details={
+                        **_state_summary(result),
+                        "policy": "continue_while_durable_progress_advances",
+                    },
+                )
+                _checkpoint_state(checkpoint, result)
+                continue
+
             _observe(
                 "detailed_planning_pending",
                 stage="planning_runtime",
