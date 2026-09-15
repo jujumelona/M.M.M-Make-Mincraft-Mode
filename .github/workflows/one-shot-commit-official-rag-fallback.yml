@@ -1,0 +1,86 @@
+name: one-shot commit Official RAG fallback
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-shot-commit-official-rag-fallback.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-commit-official-rag-fallback
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Apply and commit missing-target Official RAG fallback
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          WORKFLOW=.github/workflows/one-shot-commit-official-rag-fallback.yml
+          BASE_SHA=$(git rev-parse HEAD)
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          cleanup_failure() {
+            status=$?
+            git reset --hard "$BASE_SHA" || true
+            rm -f "$WORKFLOW"
+            git add -A
+            if ! git diff --cached --quiet; then
+              git commit -m "chore: remove failed Official RAG commit workflow" || true
+              git push origin HEAD:main || true
+            fi
+            exit "$status"
+          }
+          trap cleanup_failure ERR
+
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          MESSAGE = "Official RAG requires a host-selected minecraft_version, loader and mappings."
+          matches = []
+          for path in Path("minecraft_mod_ai").rglob("*.py"):
+              text = path.read_text(encoding="utf-8")
+              if MESSAGE not in text:
+                  continue
+              tree = ast.parse(text)
+              for node in ast.walk(tree):
+                  if not isinstance(node, ast.Raise) or not isinstance(node.exc, ast.Call):
+                      continue
+                  if any(isinstance(a, ast.Constant) and a.value == MESSAGE for a in node.exc.args):
+                      matches.append((path, node.lineno, node.end_lineno or node.lineno))
+
+          if len(matches) != 1:
+              raise SystemExit(f"expected exactly one missing-target Official RAG raise, found {len(matches)}")
+
+          path, start_line, end_line = matches[0]
+          text = path.read_text(encoding="utf-8")
+          lines = text.splitlines(keepends=True)
+          start = start_line - 1
+          end = end_line - 1
+          indent = lines[start][: len(lines[start]) - len(lines[start].lstrip())]
+          newline = "\r\n" if lines[start].endswith("\r\n") else "\n"
+          lines[start:end + 1] = [f"{indent}return []{newline}"]
+          path.write_text("".join(lines), encoding="utf-8")
+          print(f"patched {path}:{start_line}")
+          PY
+
+          git diff --check
+          python -m compileall -q minecraft_mod_ai
+
+          rm -f "$WORKFLOW"
+          git add -A
+          git commit -m "fix: allow production without an Official RAG target"
+          git push origin HEAD:main
+          trap - ERR
