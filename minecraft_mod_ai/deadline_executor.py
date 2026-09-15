@@ -218,6 +218,7 @@ def _iter_completed_with_deadlines_impl(
     stage: str,
     sort_key: Callable[[_Item], object] | None,
     on_result: Callable[[_Item, _Result], None] | None,
+    on_error: Callable[[_Item, BaseException], None] | None,
 ) -> Iterator[tuple[_Item, _Result]]:
     total_units = len(items) if isinstance(items, Sized) else None
     if total_units is not None and total_units <= 0:
@@ -250,19 +251,32 @@ def _iter_completed_with_deadlines_impl(
             stage_deadline=stage_deadline,
         )
         while active:
-            done = _next_completed_batch(
-                active,
-                stage=stage,
-                unit_timeout=unit_timeout,
-                stage_deadline=stage_deadline,
-            )
+            try:
+                done = _next_completed_batch(
+                    active,
+                    stage=stage,
+                    unit_timeout=unit_timeout,
+                    stage_deadline=stage_deadline,
+                )
+            except ParallelExecutionTimeout as exc:
+                if on_error is None:
+                    raise
+                on_error(exc.item, exc)
+                return
+
             ordered = sorted(
                 done,
                 key=lambda future: _completion_order(future, active, sort_key),
             )
             for future in ordered:
                 meta = active.pop(future)
-                result = _completed_result(future, meta, stage=stage)
+                try:
+                    result = _completed_result(future, meta, stage=stage)
+                except ParallelTaskError as exc:
+                    if on_error is None:
+                        raise
+                    on_error(meta.item, exc.cause)
+                    continue
                 if on_result is not None:
                     on_result(meta.item, result)
                 yield meta.item, result
@@ -288,8 +302,16 @@ def iter_completed_with_deadlines(
     stage: str,
     sort_key: Callable[[_Item], object] | None = None,
     on_result: Callable[[_Item, _Result], None] | None = None,
+    on_error: Callable[[_Item, BaseException], None] | None = None,
 ) -> Iterator[tuple[_Item, _Result]]:
-    """Yield completed work through a bounded deadline-aware submission window."""
+    """Yield completed work through a bounded deadline-aware submission window.
+
+    ``on_error`` is an opt-in isolation boundary. Without it, worker errors and deadline
+    expiry preserve the historical fail-fast behavior. With it, an individual worker
+    exception is reported to the caller and independent work continues; deadline expiry
+    is reported and ends only the current scheduling round so a durable caller can requeue
+    unfinished work without converting the interruption into a terminal domain failure.
+    """
 
     yield from _iter_completed_with_deadlines_impl(
         items,
@@ -298,6 +320,7 @@ def iter_completed_with_deadlines(
         stage=stage,
         sort_key=sort_key,
         on_result=on_result,
+        on_error=on_error,
     )
 
 
@@ -309,6 +332,7 @@ def collect_completed_with_deadlines(
     stage: str,
     sort_key: Callable[[_Item], object] | None = None,
     on_result: Callable[[_Item, _Result], None] | None = None,
+    on_error: Callable[[_Item, BaseException], None] | None = None,
 ) -> list[tuple[_Item, _Result]]:
     """Compatibility collector for callers that explicitly need all results in memory."""
 
@@ -320,6 +344,7 @@ def collect_completed_with_deadlines(
             stage=stage,
             sort_key=sort_key,
             on_result=on_result,
+            on_error=on_error,
         )
     )
 
