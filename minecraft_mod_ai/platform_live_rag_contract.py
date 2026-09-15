@@ -324,11 +324,11 @@ def _install_optional_central_boundary(
     if not getattr(current_parallel, "_mmm_optional_platform_target", False):
 
         @wraps(current_parallel)
-        def optional_parallel(
-            research_brief: dict[str, Any],
-            *args: Any,
-            **kwargs: Any,
-        ) -> dict[str, Any]:
+        def optional_parallel(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            # The public parallel compatibility shim intentionally exposes
+            # (*args, **kwargs).  Preserve that exact call domain: runtime wrapper
+            # integrity validates the concrete wrapper signature, not only __wrapped__.
+            research_brief = args[0] if args else kwargs.get("research_brief")
             if isinstance(research_brief, Mapping) and not _resolved_brief_target(
                 central_module,
                 research_brief,
@@ -338,7 +338,7 @@ def _install_optional_central_boundary(
                     research_brief,
                     retrieve=selected_retrieve,
                 )
-            return current_parallel(research_brief, *args, **kwargs)
+            return current_parallel(*args, **kwargs)
 
         optional_parallel._mmm_optional_platform_target = True
         parallel_module.retrieve_domain_evidence = optional_parallel
