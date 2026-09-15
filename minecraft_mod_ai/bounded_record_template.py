@@ -21,6 +21,7 @@ from .model_concurrency import router_native_model_parallelism
 from .single_record_template import run_single_record_template
 from .task_template_catalog import load_record_template
 from .task_template_input import task_binding, task_context
+from .template_errors import TemplateBlocked
 
 _EMPTY_REASON = "No applicable records in the supplied context."
 
@@ -187,10 +188,9 @@ def run_bounded_record_template(
                     future.cancel()
                 raise
 
-    # Duplicate model records reduce plan quality but are not a planning failure.
-    # Preserve stable order while keeping every distinct authored record so the caller
-    # can continue assembling/refining the plan instead of terminating the stage.
-    unique_records: list[dict[str, Any]] = []
+    # Cardinality is a host-owned semantic contract: each ordinal must contribute a
+    # distinct record. Repeating an already-produced record is a fixed point, not a
+    # smaller valid result, so fail closed instead of silently shrinking cardinality.
     seen: set[str] = set()
     for record in records:
         key = json.dumps(
@@ -200,10 +200,8 @@ def run_bounded_record_template(
             separators=(",", ":"),
         )
         if key in seen:
-            continue
+            raise TemplateBlocked(f"TEMPLATE_NO_PROGRESS: repeated record in {identifier}")
         seen.add(key)
-        unique_records.append(record)
-    records = unique_records
 
     return {
         "records": records,
