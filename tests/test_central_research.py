@@ -8,6 +8,7 @@ from minecraft_mod_ai.central_research import (
     normalize_research_brief,
     retrieve_domain_evidence,
 )
+from minecraft_mod_ai.parallel_runtime_contract import ParallelResearchContractError
 from minecraft_mod_ai.platform_catalog import adapter_for_target
 from minecraft_mod_ai.retrieval import RetrievalHit, RetrievalReceipt
 from minecraft_mod_ai.spec import SpecValidationError
@@ -22,9 +23,10 @@ def _candidate(domains: list[dict[str, object]]) -> dict[str, object]:
 def _selected_design(version: str='1.20.1', loader: str='fabric') -> dict[str, object]:
     return {'_platform_selection': {'target': {'minecraft_version': version, 'loader': loader}}}
 
-def test_normalize_research_brief_preserves_host_selected_target() -> None:
+def test_normalize_research_brief_canonicalizes_host_selected_target() -> None:
     normalized = normalize_research_brief('Build the requested simulation.', _selected_design('1.21.1', 'fabric'), _candidate([_domain('request')]))
-    assert normalized['_mmm_platform_target'] == {'minecraft_version': '1.21.1', 'loader': 'fabric'}
+    adapter = adapter_for_target('1.21.1', 'fabric')
+    assert normalized['_mmm_platform_target'] == {'minecraft_version': adapter.minecraft_version, 'loader': adapter.loader, 'mappings': adapter.yarn_mappings}
 
 def test_normalize_research_brief_rejects_cycles_and_unknown_providers() -> None:
     cyclic = _candidate([_domain('first', depends_on=['second']), _domain('second', depends_on=['first'])])
@@ -55,19 +57,16 @@ def _receipt(query: str, *, correction_queries: tuple[str, ...]=()) -> Retrieval
     hit = RetrievalHit(evidence_id='sha256:' + '1' * 64, document_id='fabric-api-1201', title='Fabric API 1.20.1', url='https://maven.fabricmc.net/', excerpt=f'Evidence for {query}', content_sha256='sha256:' + '2' * 64, revision='fabric-api-0.92.11+1.20.1', minecraft_versions=('1.20.1',), score=1.0, channels=('test',))
     return RetrievalReceipt(schema_version='minecraft-mod-ai/retrieval-receipt-v1', query=query, canonical_query=query, query_family='project', minecraft_version='1.20.1', loader='fabric', mappings='1.20.1+build.1', query_hash='sha256:' + '3' * 64, corpus_snapshot_hash='sha256:' + '4' * 64, quality='strong', coverage=1.0, correction_required=bool(correction_queries), correction_queries=correction_queries, hits=(hit,))
 
-def test_targetless_official_research_is_deferred_without_retrieval() -> None:
+def test_targetless_official_research_fails_before_retrieval() -> None:
     brief = normalize_research_brief('Research all routed facts.', {}, _candidate([_domain('official_one', providers=['official_docs'])]))
     calls: list[str] = []
 
     def fake_retrieve(query: str, **_kwargs: object) -> RetrievalReceipt:
         calls.append(query)
         return _receipt(query)
-    evidence = retrieve_domain_evidence(brief, retrieve=fake_retrieve)
+    with pytest.raises(ParallelResearchContractError, match='_mmm_platform_target'):
+        retrieve_domain_evidence(brief, retrieve=fake_retrieve)
     assert calls == []
-    assert evidence['target'] is None
-    assert evidence['deferred_official_domains'] == ['official_one']
-    assert evidence['unresolved_official_domains'] == []
-    assert evidence['domains'][0]['strategy'] == 'deferred_until_platform_selected'
 
 def test_retrieve_domain_evidence_covers_authored_and_declared_criteria_without_speculative_corrections() -> None:
     official_queries = ('official query alpha', 'official query beta', 'official query gamma')
