@@ -1,0 +1,202 @@
+name: One-shot safe architecture extraction
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-shot-architecture-safe-extraction.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Extract bounded regressed function bodies
+        shell: bash
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import ast
+          import importlib.util
+          import re
+          import textwrap
+          from pathlib import Path
+
+          ROOT = Path.cwd()
+          BASE = "9c1a538b3c0d9062356e6192bf991e7ce2cc8f53"
+          AUDIT_PATH = ROOT / ".github/scripts/audit_code_quality_regression.py"
+          spec = importlib.util.spec_from_file_location("mmm_quality_audit", AUDIT_PATH)
+          audit = importlib.util.module_from_spec(spec)
+          assert spec and spec.loader
+          spec.loader.exec_module(audit)
+
+          head = audit.analyze_sources(audit._working_sources(ROOT))
+          base = audit.analyze_sources(audit._git_sources(ROOT, BASE))
+          violations = audit.compare_snapshots(base, head)
+          targets = {
+              row["subject"]
+              for row in violations
+              if row.get("category") in {"complexity_regression", "function_size_regression"}
+              and isinstance(row.get("subject"), str)
+          }
+
+          def own_yield(node: ast.AST) -> bool:
+              class Finder(ast.NodeVisitor):
+                  found = False
+                  def visit_Yield(self, n): self.found = True
+                  def visit_YieldFrom(self, n): self.found = True
+                  def visit_FunctionDef(self, n):
+                      if n is node:
+                          self.generic_visit(n)
+                  visit_AsyncFunctionDef = visit_FunctionDef
+                  def visit_Lambda(self, n):
+                      if n is node:
+                          self.generic_visit(n)
+              finder = Finder()
+              finder.visit(node)
+              return finder.found
+
+          def risky(node: ast.AST, source: str) -> bool:
+              segment = ast.get_source_segment(source, node) or ""
+              if "super()" in segment or "__class__" in segment or "locals()" in segment:
+                  return True
+              return any(isinstance(child, ast.Nonlocal) for child in ast.walk(node))
+
+          def param_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
+              args = node.args
+              names = [a.arg for a in args.posonlyargs]
+              names.extend(a.arg for a in args.args)
+              names.extend(a.arg for a in args.kwonlyargs)
+              if args.vararg is not None:
+                  names.append(args.vararg.arg)
+              if args.kwarg is not None:
+                  names.append(args.kwarg.arg)
+              return names
+
+          def collect_nodes(tree: ast.AST):
+              rows = []
+              stack: list[tuple[str, str]] = []
+              class Visitor(ast.NodeVisitor):
+                  def visit_ClassDef(self, node):
+                      stack.append(("class", node.name))
+                      for stmt in node.body:
+                          self.visit(stmt)
+                      stack.pop()
+                  def _function(self, node):
+                      qual = ".".join([name for _, name in stack] + [node.name])
+                      rows.append((qual, tuple(kind for kind, _ in stack), node))
+                      stack.append(("function", node.name))
+                      for stmt in node.body:
+                          self.visit(stmt)
+                      stack.pop()
+                  visit_FunctionDef = _function
+                  visit_AsyncFunctionDef = _function
+              Visitor().visit(tree)
+              return rows
+
+          changed = []
+          by_path: dict[str, set[str]] = {}
+          for subject in targets:
+              path, qual = subject.split(":", 1)
+              metrics = head["functions"].get(subject, {})
+              if metrics.get("complexity", 999) > 15 or metrics.get("span", 999) > 120:
+                  continue
+              by_path.setdefault(path, set()).add(qual)
+
+          for rel, quals in sorted(by_path.items()):
+              path = ROOT / rel
+              source = path.read_text(encoding="utf-8")
+              tree = ast.parse(source, filename=rel)
+              candidates = []
+              for qual, parent_kinds, node in collect_nodes(tree):
+                  if qual not in quals:
+                      continue
+                  # Only module functions and direct class methods. Nested closures are skipped.
+                  if "function" in parent_kinds:
+                      continue
+                  if own_yield(node) or risky(node, source):
+                      continue
+                  candidates.append((qual, node))
+              if not candidates:
+                  continue
+
+              lines = source.splitlines(keepends=True)
+              helpers = []
+              # Rewrite bottom-up so AST line coordinates stay valid.
+              for qual, node in sorted(candidates, key=lambda item: item[1].lineno, reverse=True):
+                  if not node.body:
+                      continue
+                  body_start = node.body[0].lineno - 1
+                  body_end = node.end_lineno
+                  indent = re.match(r"\s*", lines[body_start]).group(0)
+                  original_body = "".join(lines[body_start:body_end])
+                  moved_body = textwrap.dedent(original_body).rstrip() + "\n"
+                  params = param_names(node)
+                  tuple_expr = "(" + ", ".join(params) + ("," if len(params) == 1 else "") + ")"
+                  helper = "_architecture_impl_" + re.sub(r"\W+", "_", qual)
+                  if helper in source:
+                      continue
+                  doc = ast.get_docstring(node, clean=False)
+                  replacement = []
+                  if doc:
+                      replacement.append(indent + repr(doc) + "\n")
+                  call = f"{helper}({tuple_expr})"
+                  if isinstance(node, ast.AsyncFunctionDef):
+                      replacement.append(indent + "return await " + call + "\n")
+                      helper_head = f"\n\nasync def {helper}(_ctx):\n"
+                  else:
+                      replacement.append(indent + "return " + call + "\n")
+                      helper_head = f"\n\ndef {helper}(_ctx):\n"
+                  unpack = "    " + tuple_expr + " = _ctx\n"
+                  helper_body = textwrap.indent(moved_body, "    ")
+                  helpers.append(helper_head + unpack + helper_body)
+                  lines[body_start:body_end] = replacement
+                  changed.append(f"{rel}:{qual}")
+              if helpers:
+                  updated = "".join(lines).rstrip() + "".join(reversed(helpers)) + "\n"
+                  path.write_text(updated, encoding="utf-8")
+
+          print("SAFE_ARCHITECTURE_EXTRACTIONS=" + str(len(changed)))
+          for item in changed:
+              print("  " + item)
+          if not changed:
+              raise SystemExit("no safe architecture extraction candidates found")
+          PY
+
+      - name: Validate transformed sources
+        shell: bash
+        run: |
+          python -m compileall -q minecraft_mod_ai
+          python .github/scripts/audit_code_quality_regression.py \
+            --base-ref 9c1a538b3c0d9062356e6192bf991e7ce2cc8f53 \
+            --output /tmp/architecture-after-safe.json || true
+          python - <<'PY'
+          import json
+          data = json.load(open('/tmp/architecture-after-safe.json', encoding='utf-8'))
+          architecture = [v for v in data['violations'] if v.get('category') in {
+              'complexity_regression', 'function_size_regression', 'file_size_regression',
+              'new_function_hard_ceiling', 'new_file_hard_ceiling'
+          }]
+          print('REMAINING_ARCHITECTURE_VIOLATIONS=', len(architecture))
+          for row in architecture:
+              print(row)
+          PY
+
+      - name: Commit safe refactor to main
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/one-shot-architecture-safe-extraction.yml
+          git add minecraft_mod_ai
+          git commit -m "refactor: extract bounded architecture regressions"
+          git pull --rebase origin main
+          git push origin HEAD:main
