@@ -5,7 +5,7 @@ from typing import Any
 
 from minecraft_mod_ai.fixed_template_generation import generate_fixed_template_value
 from minecraft_mod_ai.model_adapters.base import GenerationRequest, ToolDefinition
-from minecraft_mod_ai.model_adapters.llama_cpp_adapter import _qwen_tool_generation_response
+from minecraft_mod_ai.model_adapters.llama_cpp_adapter import _native_tool_generation_response
 
 MODEL = "unsloth/Qwen3.5-9B-MTP-GGUF:Qwen3.5-9B-UD-Q4_K_XL.gguf"
 # These deterministic fixtures model observed Qwen-family failure shapes. They are
@@ -63,16 +63,16 @@ class ToolReplayRouter:
             parallel_tool_calls=False,
         )
         # This is the exact production post-inference seam used by
-        # llama_cpp_adapter._tool_semantic_completion after llama.cpp returns its
+        # llama_cpp_adapter._native_tool_completion after llama.cpp returns its
         # assistant message. The replay layer supplies only that raw message; it does
         # not own a parser or reproduce Qwen routing semantics.
-        turn = _qwen_tool_generation_response(
+        turn = _native_tool_generation_response(
             {"role": "assistant", "content": self.raw},
             request,
         )
         if len(turn.tool_calls) != 1:
             raise ValueError(
-                f"expected exactly one production-routed Qwen tool call, got {len(turn.tool_calls)}"
+                f"expected exactly one production-routed native tool call, got {len(turn.tool_calls)}"
             )
         call = turn.tool_calls[0]
         if call.name != tool_name:
