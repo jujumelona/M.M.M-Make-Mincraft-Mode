@@ -94,6 +94,35 @@ class ResearchDomain:
         }
 
 
+def _canonical_platform_target(raw_target: Any) -> dict[str, str]:
+    if not isinstance(raw_target, Mapping):
+        raise SpecValidationError(
+            "Central research requires one resolved platform target before RAG starts."
+        )
+    version = str(
+        raw_target.get("minecraft_version") or raw_target.get("game_version") or ""
+    ).strip()
+    loader = str(raw_target.get("loader") or "").strip().casefold()
+    if not version or not loader:
+        raise SpecValidationError(
+            "Central research platform target requires minecraft_version and loader."
+        )
+    try:
+        adapter = adapter_for_target(version, loader)
+    except ValueError as exc:
+        raise SpecValidationError(str(exc)) from exc
+    mappings = str(raw_target.get("mappings") or "").strip()
+    if mappings and mappings != adapter.yarn_mappings:
+        raise SpecValidationError(
+            "Central research platform mappings do not match the selected target."
+        )
+    return {
+        "minecraft_version": adapter.minecraft_version,
+        "loader": adapter.loader,
+        "mappings": adapter.yarn_mappings,
+    }
+
+
 def normalize_research_brief(
     prompt: str,
     game_design: dict[str, Any],
@@ -151,13 +180,13 @@ def normalize_research_brief(
     selection = game_design.get("_platform_selection")
     if isinstance(selection, Mapping):
         target = selection.get("target")
-        if isinstance(target, Mapping):
-            payload["_mmm_platform_target"] = dict(target)
+        if target is not None:
+            payload["_mmm_platform_target"] = _canonical_platform_target(target)
     payload["brief_sha256"] = _sha256(canonical_json(payload))
     return payload
 
 
-def _serial_retrieve_domain_evidence(
+def _build_research_graph(
     research_brief: dict[str, Any],
     *,
     retrieve: Callable[..., RetrievalReceipt] = retrieve_official_evidence,
@@ -166,27 +195,11 @@ def _serial_retrieve_domain_evidence(
     if not isinstance(domains, list) or not domains:
         raise SpecValidationError("Central research brief has no domains.")
 
-    raw_target = research_brief.get("_mmm_platform_target")
-    adapter = None
-    if raw_target is not None:
-        if not isinstance(raw_target, Mapping):
-            raise SpecValidationError(
-                "Central research platform target must be an object."
-            )
-        version = str(raw_target.get("minecraft_version", "")).strip()
-        loader = str(raw_target.get("loader", "")).strip().casefold()
-        if not version or not loader:
-            raise SpecValidationError(
-                "Central research platform target requires minecraft_version and loader."
-            )
-        try:
-            adapter = adapter_for_target(version, loader)
-        except ValueError as exc:
-            raise SpecValidationError(str(exc)) from exc
+    target = _canonical_platform_target(research_brief.get("_mmm_platform_target"))
+    adapter = adapter_for_target(target["minecraft_version"], target["loader"])
 
     results: list[dict[str, Any]] = []
     unresolved: list[str] = []
-    deferred: list[str] = []
     for raw_domain in domains:
         domain = _research_domain(raw_domain)
         if "official_docs" not in domain.providers:
@@ -194,16 +207,6 @@ def _serial_retrieve_domain_evidence(
                 {
                     "domain_id": domain.domain_id,
                     "strategy": "routed_to_other_providers",
-                    "queries": [],
-                }
-            )
-            continue
-        if adapter is None:
-            deferred.append(domain.domain_id)
-            results.append(
-                {
-                    "domain_id": domain.domain_id,
-                    "strategy": "deferred_until_platform_selected",
                     "queries": [],
                 }
             )
@@ -253,27 +256,23 @@ def _serial_retrieve_domain_evidence(
             }
         )
 
-    target_payload = (
-        {
-            "minecraft_version": adapter.minecraft_version,
-            "loader": adapter.loader,
-            "mappings": adapter.yarn_mappings,
-        }
-        if adapter is not None
-        else None
-    )
     payload = {
         "schema_version": "mmm/central-evidence-graph-v1",
         "brief_sha256": research_brief.get("brief_sha256", ""),
-        "target": target_payload,
+        "target": target,
         "domains": results,
-        "deferred_official_domains": deferred,
+        "deferred_official_domains": [],
         "unresolved_official_domains": unresolved,
         "authorization": "none",
         "retrieval_is_authority": False,
     }
     payload["evidence_sha256"] = _sha256(canonical_json(payload))
     return payload
+
+
+# Temporary compatibility name for callers pinned to the old graph-builder symbol.
+# It is not a fallback path: both names resolve to the same strict implementation.
+_serial_retrieve_domain_evidence = _build_research_graph
 
 
 def retrieve_domain_evidence(
