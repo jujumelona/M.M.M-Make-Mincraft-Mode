@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 from functools import wraps
-from typing import Any
+from typing import Any, Callable
 
 _RAG_THREAD_STATE = threading.local()
 
@@ -44,6 +44,19 @@ def _required_target(
     return version, loader_id, mapping_id
 
 
+def _with_optional_target(
+    retrieval: Any,
+    minecraft_version: str | None,
+    loader: str | None,
+    mappings: str | None,
+    operation: Callable[[str, str, str], Any],
+) -> Any:
+    target = _required_target(retrieval, minecraft_version, loader, mappings)
+    if target is None:
+        return []
+    return operation(*target)
+
+
 def install(*, retrieval_module: Any) -> None:
     """Require an explicit live target while preserving the public retrieval implementation.
 
@@ -68,22 +81,19 @@ def install(*, retrieval_module: Any) -> None:
             mappings: str | None = None,
             limit: int = 6,
         ):
-            target = _required_target(
+            return _with_optional_target(
                 retrieval_module,
                 minecraft_version,
                 loader,
                 mappings,
-            )
-            if target is None:
-                return []
-            version, loader_id, mapping_id = target
-            return original(
-                self,
-                query,
-                minecraft_version=version,
-                loader=loader_id,
-                mappings=mapping_id,
-                limit=limit,
+                lambda version, loader_id, mapping_id: original(
+                    self,
+                    query,
+                    minecraft_version=version,
+                    loader=loader_id,
+                    mappings=mapping_id,
+                    limit=limit,
+                ),
             )
 
         retrieve._mmm_live_platform_rag = True
@@ -103,21 +113,20 @@ def install(*, retrieval_module: Any) -> None:
             mappings: str | None = None,
             limit: int = 6,
         ):
-            target = _required_target(
+            return _with_optional_target(
                 retrieval_module,
                 minecraft_version,
                 loader,
                 mappings,
-            )
-            if target is None:
-                return []
-            version, loader_id, mapping_id = target
-            return _thread_index(retrieval_module).retrieve(
-                query,
-                minecraft_version=version,
-                loader=loader_id,
-                mappings=mapping_id,
-                limit=limit,
+                lambda version, loader_id, mapping_id: _thread_index(
+                    retrieval_module
+                ).retrieve(
+                    query,
+                    minecraft_version=version,
+                    loader=loader_id,
+                    mappings=mapping_id,
+                    limit=limit,
+                ),
             )
 
         shared_retrieve._mmm_thread_local_index_reuse = True
