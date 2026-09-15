@@ -13,7 +13,6 @@ from .generation_accuracy_contract import (
 from .generation_accuracy_contract import install_inner as install_generation_accuracy_inner
 from .generation_accuracy_contract import install_outer as install_generation_accuracy_outer
 from .generation_verifier_fallback_installation import install as install_generation_verifier_fallback
-from .verifier_failure_routing_installation import install as install_verifier_failure_routing
 from .hardware_concurrency_installation import install as install_hardware_concurrency
 from . import jdtls_bootstrap as _jdtls_bootstrap
 from .runtime_bootstrap import initialize_runtime
@@ -48,10 +47,6 @@ from . import execution_feedback_replan_contract as _execution_feedback_replan_c
 from . import java_lsp as _java_lsp
 from . import model_router as _model_router
 
-# Install typed verifier routing before the coder loop is exercised. Toolchain or
-# transient infrastructure failures must not enter source RECOVER, while genuine
-# source RECOVER must retain the reviewed mutation tools already exposed by the host.
-install_verifier_failure_routing()
 install_checkpoint_performance(_custom_module_generator)
 install_source_set_boundary(_java_lsp)
 # Install the accuracy verifier before runtime finalization. The atomic coder slicer is
