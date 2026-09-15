@@ -15,6 +15,7 @@ from .generation_accuracy_contract import install_inner as install_generation_ac
 from .generation_accuracy_contract import install_outer as install_generation_accuracy_outer
 from .generation_verifier_fallback_installation import install as install_generation_verifier_fallback
 from .hardware_concurrency_installation import install as install_hardware_concurrency
+from .java_toolchain_separation_installation import install as install_java_toolchain_separation
 from . import jdtls_bootstrap as _jdtls_bootstrap
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
@@ -49,6 +50,10 @@ from . import java_lsp as _java_lsp
 from . import model_router as _model_router
 
 install_checkpoint_performance(_custom_module_generator)
+# JDT LS may run on a tooling JDK that differs from the project JDK. Pin the
+# Buildship/Gradle daemon to the already-resolved project JDK before any source-set
+# or generation verifier wrapper can start Java diagnostics.
+install_java_toolchain_separation(_java_lsp)
 install_source_set_boundary(_java_lsp)
 # Install the accuracy verifier before runtime finalization. The atomic coder slicer is
 # finalized later and therefore calls through this boundary once for every obligation.
