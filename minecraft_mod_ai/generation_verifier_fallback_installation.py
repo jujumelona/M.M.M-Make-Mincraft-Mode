@@ -22,6 +22,10 @@ _JAVA_TOOLCHAIN_PATTERNS = (
     re.compile(r"\bno matching toolchains found\b", re.IGNORECASE),
     re.compile(r"\bcannot find a java installation\b", re.IGNORECASE),
 )
+_VALIDATION_INPUT_CHANGE_PATTERNS = (
+    re.compile(r"\bproject inputs changed during validation\b", re.IGNORECASE),
+    re.compile(r"\bresult is not certifiable\b", re.IGNORECASE),
+)
 
 
 def _bounded_log_tail(path: str | None) -> str:
@@ -45,6 +49,13 @@ def _is_java_toolchain_failure(*parts: str | None) -> bool:
     return any(pattern.search(text) is not None for pattern in _JAVA_TOOLCHAIN_PATTERNS)
 
 
+def _is_validation_input_change(*parts: str | None) -> bool:
+    """Return true only for the host's non-certifiable input-snapshot condition."""
+
+    text = "\n".join(str(part or "") for part in parts)
+    return all(pattern.search(text) is not None for pattern in _VALIDATION_INPUT_CHANGE_PATTERNS)
+
+
 def _last_gradle_log(report: Any, report_dict: dict[str, Any]) -> str:
     if report.passed:
         return ""
@@ -57,53 +68,61 @@ def _last_gradle_log(report: Any, report_dict: dict[str, Any]) -> str:
     return _bounded_log_tail(str(final_command.get("log_path") or ""))
 
 
-def _fallback_status(report: Any, last_log: str) -> tuple[str, bool]:
-    toolchain_unavailable = (
+def _fallback_status(report: Any, last_log: str) -> tuple[str, str | None]:
+    if report.passed:
+        return "PASS", None
+    if (
         str(report.status).strip().upper() == "UNAVAILABLE"
         or _is_java_toolchain_failure(report.error, last_log)
-    )
-    if report.passed:
-        return "PASS", toolchain_unavailable
-    if toolchain_unavailable:
-        return "UNAVAILABLE", True
-    return "FAIL", False
+    ):
+        return "UNAVAILABLE", "JAVA_TOOLCHAIN_UNAVAILABLE"
+    if _is_validation_input_change(report.error, last_log):
+        return "UNAVAILABLE", "VALIDATION_INPUTS_CHANGED"
+    return "FAIL", "GRADLE_BUILD_FAILED"
 
 
 def _fallback_diagnostics(
     report: Any,
     last_log: str,
     *,
-    toolchain_unavailable: bool,
+    failure_code: str | None,
 ) -> list[dict[str, Any]]:
     if report.passed:
         return []
     message = str(report.error or "Gradle build failed.")
     if last_log:
         message += "\n\nGradle log tail:\n" + last_log
-    code = "JAVA_TOOLCHAIN_UNAVAILABLE" if toolchain_unavailable else "GRADLE_BUILD_FAILED"
     return [
         {
             "severity": 1,
             "source": "gradle",
-            "code": code,
+            "code": failure_code or "GRADLE_BUILD_FAILED",
             "message": message,
         }
     ]
 
 
-def _environment_failure_fields(toolchain_unavailable: bool) -> dict[str, Any]:
-    if not toolchain_unavailable:
-        return {}
-    return {
-        "failure_class": "environment",
-        "repairable": False,
-        "code": "JAVA_TOOLCHAIN_UNAVAILABLE",
-    }
+def _failure_fields(failure_code: str | None) -> dict[str, Any]:
+    if failure_code == "JAVA_TOOLCHAIN_UNAVAILABLE":
+        return {
+            "failure_class": "environment",
+            "repairable": False,
+            "code": failure_code,
+        }
+    if failure_code == "VALIDATION_INPUTS_CHANGED":
+        return {
+            "failure_class": "validation_state",
+            "repairable": False,
+            "code": failure_code,
+        }
+    return {}
 
 
-def _fallback_reason(toolchain_unavailable: bool) -> str:
-    if toolchain_unavailable:
+def _fallback_reason(failure_code: str | None) -> str:
+    if failure_code == "JAVA_TOOLCHAIN_UNAVAILABLE":
         return "JDT verifier unavailable and Gradle Java toolchain unavailable"
+    if failure_code == "VALIDATION_INPUTS_CHANGED":
+        return "JDT verifier unavailable and Gradle validation inputs changed before certification"
     return "JDT verifier unavailable; pinned Gradle build used as host verifier"
 
 
@@ -124,11 +143,11 @@ def _gradle_fallback_receipt(
     report = runner.build(Path(root).resolve(), run_gametest=False)
     report_dict = report.to_dict()
     last_log = _last_gradle_log(report, report_dict)
-    status, toolchain_unavailable = _fallback_status(report, last_log)
+    status, failure_code = _fallback_status(report, last_log)
     diagnostics = _fallback_diagnostics(
         report,
         last_log,
-        toolchain_unavailable=toolchain_unavailable,
+        failure_code=failure_code,
     )
     receipt: dict[str, Any] = {
         "status": status,
@@ -142,17 +161,18 @@ def _gradle_fallback_receipt(
         "jdt_unavailable_reason": f"{type(jdt_error).__name__}: {jdt_error}",
         "build": report_dict,
     }
-    receipt.update(_environment_failure_fields(toolchain_unavailable))
+    receipt.update(_failure_fields(failure_code))
     emit_root_cause(
         "generation_verifier_gradle_fallback_result",
         stage="generation",
         operation="run_gradle_build",
         gate="target_compile",
         result=status,
-        reason=_fallback_reason(toolchain_unavailable),
+        reason=_fallback_reason(failure_code),
         details={"result": receipt},
     )
     return runtime_module._bounded_result(receipt)
+
 
 def install() -> None:
     """Compatibility hook; fallback dispatch is owned by the verifier itself."""
