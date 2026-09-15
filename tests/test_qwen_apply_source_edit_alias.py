@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from minecraft_mod_ai.model_adapters.llama_cpp_adapter import _parse_qwen_tool_markup
+from minecraft_mod_ai.model_adapters.qwen_tool_parser import parse_qwen_tool_markup
 from minecraft_mod_ai.model_tool_aliases import (
     canonical_model_tool,
     is_model_tool_alias,
@@ -33,7 +33,7 @@ def _parse(parameters: str):
         f"{parameters}"
         "</function></tool_call>"
     )
-    return _parse_qwen_tool_markup(text, _schemas())
+    return parse_qwen_tool_markup(text, _schemas())
 
 
 def test_apply_source_edit_file_alias_normalizes_to_path() -> None:
@@ -132,7 +132,7 @@ def test_patch_file_alias_resolves_only_to_exposed_source_edit() -> None:
         "</function></tool_call>"
     )
 
-    visible, calls = _parse_qwen_tool_markup(text, _schemas())
+    visible, calls = parse_qwen_tool_markup(text, _schemas())
 
     assert visible == ""
     assert len(calls) == 1
@@ -152,7 +152,7 @@ def test_patch_file_alias_is_preserved_when_source_edit_is_not_exposed() -> None
         "</function></tool_call>"
     )
 
-    visible, calls = _parse_qwen_tool_markup(text, {})
+    visible, calls = parse_qwen_tool_markup(text, {})
     assert visible == ""
     assert len(calls) == 1
     assert calls[0].name == "patch_file"
