@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/one-shot-fix-targetless-production.yml
       - .github/scripts/fix_targetless_production.py
+      - .github/scripts/trigger_targetless_fix.txt
 
 permissions:
   contents: write
@@ -41,6 +42,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           rm -f .github/scripts/fix_targetless_production.py
+          rm -f .github/scripts/trigger_targetless_fix.txt
           rm -f .github/workflows/one-shot-fix-targetless-production.yml
           git add -A
           git commit -m "fix: skip targetless Official RAG without stopping production"
