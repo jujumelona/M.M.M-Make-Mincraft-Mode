@@ -23,7 +23,7 @@ jobs:
           set -Eeuo pipefail
           python .github/scripts/patch_targetless_retrieval.py
           python -m compileall -q minecraft_mod_ai tests/test_live_rag_target_submission_guard.py
-          python -m pip install -q pytest
+          python -m pip install -q -e ".[dev]"
           python -m pytest -q tests/test_live_rag_target_submission_guard.py
           git diff --check
           rm -f .github/workflows/one-shot-native-targetless-retrieval-v2.yml
