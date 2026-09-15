@@ -11,7 +11,7 @@ from minecraft_mod_ai.model_adapters import (
     ModelConfigurationError,
     ToolCall,
 )
-from minecraft_mod_ai.model_adapters.llama_cpp_adapter import _parse_qwen_tool_markup
+from minecraft_mod_ai.model_adapters.qwen_tool_parser import parse_qwen_tool_markup
 from minecraft_mod_ai.model_router import ModelRouter
 
 
@@ -144,7 +144,7 @@ def test_llama_qwen_tool_markup_parser_accepts_schema_typed_arguments() -> None:
         '<parameter=arguments>{"class_name":"Block"}</parameter>'
         "</function></tool_call>"
     )
-    visible, calls = _parse_qwen_tool_markup(text, schemas)
+    visible, calls = parse_qwen_tool_markup(text, schemas)
     assert visible == ""
     assert len(calls) == 1
     assert calls[0].name == "external_mcp_call"
