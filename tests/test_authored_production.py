@@ -11,6 +11,22 @@ from minecraft_mod_ai.small_model_atomic_coder_execution import atomicize_coder_
 from minecraft_mod_ai.work_graph import build_production_work_plan
 
 
+@pytest.mark.parametrize("version", ["1.21.11", "26.2"])
+def test_saved_design_compiler_preserves_target_through_coder_handoff(version):
+    from minecraft_mod_ai.custom_generation_research import _target_values
+    from minecraft_mod_ai.platform_catalog import adapter_for_target
+
+    plan = AuthoredPlan(f"Create a token item for Fabric {version}", "Add one token item.")
+    proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(plan)
+    adapter = adapter_for_target(version, "fabric")
+    expected = (version, "fabric", adapter.yarn_mappings)
+    assert _target_values(proposal.game_design) == expected
+    assert _target_values(proposal.modules[0].config) == expected
+    assert proposal.game_design["authored_plan"] == plan.to_dict()
+    assert proposal.modules[0].config["authored_plan"] == plan.to_dict()
+    assert proposal.game_design["_platform_selection"]["target"] == adapter.public_dict()
+
+
 @pytest.mark.parametrize("text", [
     "우주선을 만들고 행성마다 다른 광물을 거래한다.",
     '```json\n{"capability_label":"trade"}\n```',

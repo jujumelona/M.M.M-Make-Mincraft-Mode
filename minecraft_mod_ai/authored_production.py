@@ -6,10 +6,14 @@ from collections.abc import Mapping
 from typing import Any
 
 from .authored_plan import AuthoredPlan
-from .complete_spec import CompleteProposal, ProductionModule, complete_proposal_from_parts
+from .complete_spec import (
+    CompleteProposal,
+    ProductionModule,
+    complete_proposal_from_parts,
+)
 from .planning_pipeline import PlanningPipeline
 from .spec import ModSpec, Proposal, ProposalStatus
-
+from .target_contract import TargetContractError, target_coordinates_from_mapping
 
 _TARGET_KEYS = ("minecraft_version", "loader", "mappings")
 
@@ -17,9 +21,9 @@ _TARGET_KEYS = ("minecraft_version", "loader", "mappings")
 def _bound_target(design: Mapping[str, Any]) -> dict[str, str]:
     """Return the complete host-selected target, or no target when none exists.
 
-    Saved authored production may be target-agnostic. Complete absence must not abort
-    production; Official RAG is skipped later before a worker is created. A partial
-    target is never accepted because it would make the host contract ambiguous.
+    The platform selector owns the target. Decode its receipt through the same
+    contract used by generation, including native names and mapping receipt objects.
+    Older saved designs without a selection may still carry standalone coordinates.
     """
     candidates: list[Mapping[str, Any]] = [design]
     for key in ("platform", "target", "toolchain", "build", "existing_project"):
@@ -28,24 +32,33 @@ def _bound_target(design: Mapping[str, Any]) -> dict[str, str]:
             candidates.append(value)
 
     selection = design.get("_platform_selection")
+    if isinstance(selection, Mapping) and "target" in selection:
+        target = selection["target"]
+        if not isinstance(target, Mapping):
+            raise ValueError("Saved authored platform selection target must be an object.")
+        # Never let stale design/existing-project fields override the selected target,
+        # including when the selected receipt is invalid.
+        coordinates = target_coordinates_from_mapping(target)
+        return {key: getattr(coordinates, key) for key in _TARGET_KEYS}
     if isinstance(selection, Mapping):
         candidates.append(selection)
-        selected_target = selection.get("target")
-        if isinstance(selected_target, Mapping):
-            candidates.append(selected_target)
 
-    saw_partial = False
+    first_error: TargetContractError | None = None
     for candidate in candidates:
-        present = [candidate.get(key) not in (None, "") for key in _TARGET_KEYS]
-        if all(present):
-            return {key: str(candidate[key]) for key in _TARGET_KEYS}
-        saw_partial = saw_partial or any(present)
+        if not any(candidate.get(key) not in (None, "") for key in (
+            *_TARGET_KEYS, "mappings_version", "yarn_mappings",
+        )):
+            continue
+        try:
+            coordinates = target_coordinates_from_mapping(candidate)
+        except TargetContractError as exc:
+            if first_error is None:
+                first_error = exc
+            continue
+        return {key: getattr(coordinates, key) for key in _TARGET_KEYS}
 
-    if saw_partial:
-        raise ValueError(
-            "Saved authored production received an incomplete platform target; "
-            "minecraft_version, loader and mappings must be provided together."
-        )
+    if first_error is not None:
+        raise first_error
     return {}
 
 
