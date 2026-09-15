@@ -40,9 +40,7 @@ def _required_target(
     loader_id = str(loader or "").strip().casefold()
     mapping_id = str(mappings or "").strip()
     if not version or not loader_id or not mapping_id:
-        raise retrieval.SpecValidationError(
-            "Official RAG requires a host-selected minecraft_version, loader and mappings."
-        )
+        return []
     return version, loader_id, mapping_id
 
 
