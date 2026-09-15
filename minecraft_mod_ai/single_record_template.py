@@ -191,10 +191,7 @@ def run_single_record_template(
             },
             {
                 "role": "user",
-                "content": (
-                    "READ_ONLY_INPUT_CONTEXT:\n"
-                    + json.dumps(normalized_context, ensure_ascii=False)
-                ),
+                "content": json.dumps(normalized_context, ensure_ascii=False),
             },
         ]
         slices = _atomic_record_schema_slices(schema, identifier=identifier)
