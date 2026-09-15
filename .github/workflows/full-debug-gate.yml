@@ -3,7 +3,7 @@ name: Full Debug Gate
 on:
   workflow_dispatch:
   workflow_run:
-    workflows: [CI, Windows Debug, Workflow Lint, Audit Runtime Bottleneck Candidates, Cumulative Regression Guard]
+    workflows: [CI, Windows Debug, Workflow Lint, Audit Runtime Bottleneck Candidates, Cumulative Regression Guard, Production Kill Gates]
     types: [completed]
 
 permissions:
@@ -159,7 +159,9 @@ jobs:
             tests/test_worksheet_atomic_chunker.py \
             tests/test_root_cause_audit_wrapper.py \
             tests/test_ci_quality_regression_audit.py \
-            tests/test_pytest_diagnostics_timeout_evidence.py
+            tests/test_pytest_diagnostics.py \
+            tests/test_pytest_diagnostics_timeout_evidence.py \
+            tests/test_ci_test_matrix_file_cells.py
 
       - name: Run exhaustive project Debug audit with compact root-cause output
         if: ${{ always() }}
