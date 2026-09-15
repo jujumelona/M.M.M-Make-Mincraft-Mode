@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - .github/workflows/one-shot-fix-targetless-production.yml
+      - .github/scripts/fix_targetless_production.py
 
 permissions:
   contents: write
@@ -20,6 +21,9 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+
+      - name: Install test dependencies
+        run: python -m pip install -e ".[dev]"
 
       - name: Apply invariant patch
         run: python .github/scripts/fix_targetless_production.py
