@@ -2,10 +2,11 @@ from __future__ import annotations
 
 """Single prompt-first planning state machine with durable transition snapshots.
 
-Planning state is monotone progress. Model, template, transport, and partial-output
-problems are absorbed into host-owned progress; they never become terminal planning
-FAIL/BLOCKED judgements. Detailed plans are promoted only from validated authored
-checkpoints; the host never fabricates missing engineering detail.
+Planning state advances monotonically through durable checkpoints. Model, template,
+transport, and partial-output interruptions may resume only after a new validated
+obligation marker is persisted. A detailed-planning attempt that makes no durable
+progress, or returns non-ready without progress, fails closed instead of being promoted
+or silently returned as a resumable success.
 """
 
 from collections.abc import Callable, Mapping
@@ -546,24 +547,21 @@ def _compile_detailed_plans_resumable(
                 continue
 
             _observe(
-                "detailed_planning_pending",
+                "detailed_planning_stalled",
                 stage="planning_runtime",
                 operation="compile_progress_monotone_detailed_plans",
-                result="RESUMABLE",
+                result="FAIL",
                 reason=f"{type(exc).__name__}: {exc}",
                 details={
                     **_state_summary(latest_state),
-                    "policy": "preserve_pending_without_synthetic_completion",
+                    "policy": "fail_closed_without_new_durable_obligation_progress",
                 },
             )
-            latest_state["generation_interruption"] = {
-                "operation": "compile_progress_monotone_detailed_plans",
-                "cause_type": type(exc).__name__,
-                "reason": str(exc),
-            }
-            latest_state = _rehash(latest_state)
             _checkpoint_state(checkpoint, latest_state)
-            return latest_state
+            raise RuntimeError(
+                "DETAILED_PLAN_RUNTIME_STALLED: "
+                f"compiler failed without new durable obligation progress: {type(exc).__name__}: {exc}"
+            ) from exc
 
         if result.get("plan_ready") is not True:
             progress_after = _detail_progress_position(result)
@@ -584,18 +582,21 @@ def _compile_detailed_plans_resumable(
                 continue
 
             _observe(
-                "detailed_planning_pending",
+                "detailed_planning_not_ready",
                 stage="planning_runtime",
                 operation="compile_progress_monotone_detailed_plans",
-                result="RESUMABLE",
+                result="FAIL",
                 reason="compiler returned before all validated obligations were complete",
                 details={
                     **_state_summary(result),
-                    "policy": "preserve_pending_without_synthetic_completion",
+                    "policy": "fail_closed_without_ready_plan_or_new_durable_progress",
                 },
             )
             _checkpoint_state(checkpoint, result)
-            return result
+            raise RuntimeError(
+                "DETAILED_PLAN_NOT_READY: compiler returned a non-ready plan without "
+                "new durable obligation progress"
+            )
         break
 
     if "generation_interruption" in result:
@@ -620,7 +621,7 @@ def prepare_planning_state(
     checkpoint: PlanningCheckpoint | None = None,
     detail_section_applicability_resolver: DetailSectionApplicabilityResolver | None = None,
 ) -> dict[str, Any]:
-    """Resolve the request without exposing a terminal planning failure state."""
+    """Resolve the request without promoting an incomplete detailed plan."""
 
     _observe(
         "planning_state_runtime_identity",
