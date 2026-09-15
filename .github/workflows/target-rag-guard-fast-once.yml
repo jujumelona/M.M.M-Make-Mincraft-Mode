@@ -1,0 +1,29 @@
+name: Target RAG guard fast once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/target-rag-guard-fast-once.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Run target-bound RAG regressions
+        run: |
+          set -euo pipefail
+          python -m compileall -q minecraft_mod_ai tests/test_central_research.py tests/test_authored_production_optional_target.py tests/test_live_rag_target_submission_guard.py
+          python -m pytest -q \
+            tests/test_central_research.py \
+            tests/test_authored_production_optional_target.py \
+            tests/test_live_rag_target_submission_guard.py
