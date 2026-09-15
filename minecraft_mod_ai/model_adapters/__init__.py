@@ -10,10 +10,13 @@ from .base import (
 from .embedding import EmbeddingAdapter
 from .image_diffusion import ImageDiffusionAdapter
 from .llama_cpp_adapter import LlamaCppAdapter
+from .llama_qwen_tool_recovery import install_llama_qwen_tool_recovery
 from .openai_compatible import OpenAICompatibleAdapter
 from .reranker import RerankerAdapter
 from .transformers_multimodal import TransformersMultimodalAdapter
 from .transformers_text import TransformersTextAdapter
+
+install_llama_qwen_tool_recovery()
 
 __all__ = [
     "AdapterConfig",
