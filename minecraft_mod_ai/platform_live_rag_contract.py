@@ -150,6 +150,18 @@ def _assert_parallel_research_ready(
         )
 
 
+def _research_brief_argument(
+    args: tuple[Any, ...],
+    kwargs: Mapping[str, Any],
+) -> dict[str, Any]:
+    research_brief = args[0] if args else kwargs.get("research_brief")
+    if not isinstance(research_brief, dict):
+        raise PlatformTargetContractError(
+            "Parallel research requires a mapping research_brief before RAG starts."
+        )
+    return research_brief
+
+
 def _install_strict_research_boundary(central_module: Any) -> None:
     """Make fallback-only branches unreachable from the production research entrypoint."""
     from . import parallel_runtime_contract as parallel_module
@@ -174,11 +186,7 @@ def _install_strict_research_boundary(central_module: Any) -> None:
 
         @wraps(current_parallel)
         def strict_parallel_retrieve(*args: Any, **kwargs: Any) -> dict[str, Any]:
-            research_brief = args[0] if args else kwargs.get("research_brief")
-            if not isinstance(research_brief, dict):
-                raise PlatformTargetContractError(
-                    "Parallel research requires a mapping research_brief before RAG starts."
-                )
+            research_brief = _research_brief_argument(args, kwargs)
             _assert_parallel_research_ready(
                 central_module,
                 parallel_module,
