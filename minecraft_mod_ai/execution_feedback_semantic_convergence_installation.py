@@ -6,8 +6,15 @@ Two host-owned invariants live here:
 * validation diagnostics for the deterministic Fabric project skeleton belong to the
   ``prepare-project`` work node when no generation receipt owns the failing path;
 * feedback retries terminate on repeated evidence, not on an arbitrary retry count.
+
+Verifier/toolchain infrastructure failures are a third, stricter boundary: they are
+never source-repair evidence.  Replaying a successful generation action because JDT is
+unavailable cannot improve the verifier and is therefore forbidden.
 """
 
+import hashlib
+import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from functools import wraps
@@ -23,6 +30,20 @@ _BASE_EXACT_SUFFIXES = (
     "settings.gradle.kts",
     "src/main/resources/fabric.mod.json",
     "src/main/resources/pack.mcmeta",
+)
+_VERIFIER_INFRASTRUCTURE_CODES = frozenset(
+    {
+        "JDT_DIAGNOSTICS_UNAVAILABLE",
+        "VERIFIER_UNAVAILABLE",
+    }
+)
+_RELEASE_NOT_FOUND = re.compile(
+    r"\brelease\s+(?P<major>\d+)\s+is\s+not\s+found\s+in\s+the\s+system\b",
+    re.IGNORECASE,
+)
+_VERIFIER_UNAVAILABLE_TEXT = re.compile(
+    r"\b(?:jdt(?:\s+diagnostics)?|verifier)\b[^\n]{0,160}\bunavailable\b",
+    re.IGNORECASE,
 )
 
 
@@ -45,6 +66,81 @@ def _host_base_owned_path(feedback_module: Any, value: Any) -> bool:
         and parts[1] == "lang"
         and parts[2] in {"en_us.json", "ko_kr.json"}
     )
+
+
+def _failure_scalars(value: Any, *, depth: int = 0) -> list[tuple[str, str]]:
+    """Return bounded key/value text from nested feedback without assuming one schema."""
+    if depth > 12:
+        return []
+    if isinstance(value, Mapping):
+        result: list[tuple[str, str]] = []
+        for key, child in value.items():
+            key_text = str(key)
+            if isinstance(child, Mapping) or (
+                isinstance(child, Sequence)
+                and not isinstance(child, (str, bytes, bytearray))
+            ):
+                result.extend(_failure_scalars(child, depth=depth + 1))
+            elif child is not None:
+                result.append((key_text, str(child)))
+        return result[:4096]
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        result = []
+        for child in value:
+            result.extend(_failure_scalars(child, depth=depth + 1))
+            if len(result) >= 4096:
+                break
+        return result[:4096]
+    if value is None:
+        return []
+    return [("", str(value))]
+
+
+def _verifier_infrastructure_failure(feedback: Any) -> dict[str, Any] | None:
+    """Classify non-source-repairable verifier failures and extract required Java."""
+    scalars = _failure_scalars(feedback)
+    matched_code = ""
+    required_java: int | None = None
+    matched_text = ""
+
+    for key, text in scalars:
+        normalized_key = key.casefold().replace("-", "_")
+        normalized_text = text.strip()
+        upper = normalized_text.upper()
+        if (
+            normalized_key in {"code", "error_code", "failure_code", "reason_code"}
+            and upper in _VERIFIER_INFRASTRUCTURE_CODES
+        ):
+            matched_code = upper
+            matched_text = normalized_text
+        release_match = _RELEASE_NOT_FOUND.search(normalized_text)
+        if release_match is not None:
+            required_java = int(release_match.group("major"))
+            matched_text = normalized_text
+        if not matched_code and _VERIFIER_UNAVAILABLE_TEXT.search(normalized_text):
+            matched_code = "VERIFIER_UNAVAILABLE"
+            matched_text = normalized_text
+
+    if not matched_code and required_java is None:
+        return None
+    if not matched_code:
+        matched_code = "JDT_DIAGNOSTICS_UNAVAILABLE"
+
+    canonical = {
+        "code": matched_code,
+        "required_java": required_java,
+        "message": matched_text,
+    }
+    rendered = json.dumps(
+        canonical,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    canonical["fingerprint"] = "sha256:" + hashlib.sha256(
+        rendered.encode("utf-8")
+    ).hexdigest()
+    return canonical
 
 
 def _install_base_project_owner(feedback_module: Any) -> None:
@@ -159,6 +255,32 @@ def _semantic_install_run_context(feedback_module: Any, orchestrator_module: Any
                 feedback = feedback_module._latest_failed_feedback(ledger)
                 if not isinstance(feedback, Mapping):
                     raise
+
+                infrastructure_failure = _verifier_infrastructure_failure(feedback)
+                if infrastructure_failure is not None:
+                    # This is deliberately before ledger invalidation.  A verifier/JDK
+                    # outage says nothing about source ownership and cannot make a
+                    # successful ACT eligible for fresh generation or source repair.
+                    fingerprint = str(infrastructure_failure["fingerprint"])
+                    seen.add(fingerprint)
+                    emit_root_cause(
+                        "execution_feedback_abort",
+                        stage="generation",
+                        operation="execute_with_feedback",
+                        gate="retry_eligibility",
+                        result="FAIL",
+                        reason=(
+                            "verifier infrastructure failure is not source-repairable; "
+                            "generation replay is forbidden"
+                        ),
+                        details={
+                            "feedback": feedback,
+                            "infrastructure_failure": infrastructure_failure,
+                            "seen_fingerprints": sorted(seen),
+                        },
+                    )
+                    raise
+
                 receipt = ledger.invalidate_execution_feedback(feedback)
                 fingerprint = str(receipt.get("feedback_fingerprint") or "")
                 emit_root_cause(
@@ -258,6 +380,12 @@ def _semantic_install_run_context(feedback_module: Any, orchestrator_module: Any
 
 def install(feedback_module: Any) -> None:
     """Patch the feedback contract before ``runtime_finalization`` installs it."""
+    # java_diagnostics must resolve the target project JDK inside the verifier call;
+    # Colab bootstrap may have happened before the target Minecraft version existed.
+    from . import production_tools as production_tools_module
+    from .project_java_diagnostics_installation import install as install_project_java_diagnostics
+
+    install_project_java_diagnostics(production_tools_module)
     _install_base_project_owner(feedback_module)
     current = feedback_module._install_run_context
     if getattr(current, "_mmm_semantic_convergence_installation", False):
@@ -271,4 +399,7 @@ def install(feedback_module: Any) -> None:
     feedback_module._install_run_context = install_run_context
 
 
-__all__ = ["install"]
+__all__ = [
+    "_verifier_infrastructure_failure",
+    "install",
+]
