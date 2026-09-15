@@ -101,7 +101,7 @@ def test_tool_signature_rejects_wrong_tool_arguments() -> None:
     )
 
 
-def test_qwen35_tool_probe_uses_required_jinja_and_raw_host_parser(
+def test_qwen35_tool_probe_uses_required_jinja_and_production_native_parser(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -113,20 +113,7 @@ def test_qwen35_tool_probe_uses_required_jinja_and_raw_host_parser(
 
         @staticmethod
         def json() -> dict:
-            return {
-                "choices": [
-                    {
-                        "message": {
-                            "content": (
-                                "<think>check the exact argument</think>"
-                                "<tool_call><function=mmm_transport_probe>"
-                                "<parameter=value>7</parameter>"
-                                "</function></tool_call>"
-                            )
-                        }
-                    }
-                ]
-            }
+            return _tool_response(call_id="native-call", arguments='{"value":7}')
 
     def post(url: str, *, json: dict, timeout: int) -> Response:
         captured.update(url=url, payload=dict(json), timeout=timeout)
@@ -151,6 +138,40 @@ def test_qwen35_tool_probe_uses_required_jinja_and_raw_host_parser(
     assert "reasoning_effort" not in payload
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert payload["tools"][0]["function"]["name"] == "mmm_transport_probe"
+
+
+def test_qwen35_tool_probe_rejects_content_only_tool_markup(monkeypatch) -> None:
+    class Response:
+        @staticmethod
+        def raise_for_status() -> None:
+            return None
+
+        @staticmethod
+        def json() -> dict:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                "<tool_call><function=mmm_transport_probe>"
+                                "<parameter=value>7</parameter>"
+                                "</function></tool_call>"
+                            )
+                        }
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: Response())
+
+    ok, error = contract._tool_probe(
+        "http://127.0.0.1:8910/v1",
+        SimpleNamespace(_env_int=lambda _name, default: default),
+        _config("unsloth/Qwen3.5-9B-MTP-GGUF", family="qwen3.5"),
+    )
+
+    assert ok is False
+    assert "required" in error or "native tool" in error
 
 
 def test_qwen35_tool_probe_accepts_host_validated_server_parsed_tool_calls(
