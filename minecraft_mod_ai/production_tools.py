@@ -80,6 +80,14 @@ class ProductionToolService:
 
     def search_code_rag(self, query: str, *, index_path: str='rag/project-index.json', limit: int=8, semantic: bool=False, rerank: bool=False, required_metadata: dict[str, Any] | None=None) -> dict[str, Any]:
         target = self._resolve(index_path, allow_root=True)
+        if not target.exists() and target == self._resolve('rag/project-index.json', allow_root=True):
+            from .agent_tool_runtime import _looks_like_bound_project
+            from .workspace_code_search import search_workspace_source
+
+            if _looks_like_bound_project(self.workspace_root):
+                return search_workspace_source(
+                    self.workspace_root, query, limit=limit, required_metadata=required_metadata,
+                )
         if target.is_dir():
             canonical = self._resolve('rag/project-index.json', allow_root=True)
             target = canonical if canonical.is_file() else target

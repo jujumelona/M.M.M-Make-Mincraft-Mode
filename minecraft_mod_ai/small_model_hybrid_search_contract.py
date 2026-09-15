@@ -423,7 +423,10 @@ def install(production_tools_module: Any) -> None:
             rerank=rerank,
             required_metadata=required_metadata,
         )
-        cached = _search_cache_get(key)
+        # A missing index has no immutable snapshot. Source-backed searches must
+        # read current files after every mutation, not reuse the missing-file key.
+        cacheable = _resolve_index_target(self, index_path).is_file()
+        cached = _search_cache_get(key) if cacheable else None
         if cached is not None:
             return cached
         result = searched(
@@ -435,7 +438,8 @@ def install(production_tools_module: Any) -> None:
             rerank=rerank,
             required_metadata=required_metadata,
         )
-        _search_cache_put(key, result)
+        if cacheable:
+            _search_cache_put(key, result)
         return result
 
     cached_search._mmm_task_routed_code_search = True  # type: ignore[attr-defined]

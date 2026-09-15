@@ -18,6 +18,11 @@ _INTENT_FIELDS = (
 )
 _MODULE_FIELDS = ("id", "module_id", "name", "kind", "type")
 _MAX_ROUTING_CHARS = 12_000
+IMPLEMENTATION_PHASES = frozenset({"implement_module", "implement_authored_design"})
+
+
+def is_implementation_phase(value: Any) -> bool:
+    return str(value or "").strip().casefold() in IMPLEMENTATION_PHASES
 
 
 def _payload(value: Any) -> Mapping[str, Any] | None:
@@ -86,7 +91,7 @@ def structured_user_intent(
 
 
 def is_implementation_intent(intent: str) -> bool:
-    return "implement_module" in str(intent).casefold()
+    return any(phase in str(intent).casefold() for phase in IMPLEMENTATION_PHASES)
 
 
 def implementation_requested(messages: Sequence[Mapping[str, Any]]) -> bool:
@@ -94,7 +99,9 @@ def implementation_requested(messages: Sequence[Mapping[str, Any]]) -> bool:
 
 
 __all__ = [
+    "IMPLEMENTATION_PHASES",
     "implementation_requested",
     "is_implementation_intent",
+    "is_implementation_phase",
     "structured_user_intent",
 ]

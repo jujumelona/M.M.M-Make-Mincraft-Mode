@@ -423,7 +423,7 @@ def _parse_native_tool_call(raw_call: Any, *, index: int) -> ToolCall:
     call_id = str(raw_call.get("id", "")).strip()
     if not call_id:
         digest = hashlib.sha256(
-            f"{index}\0{name}\0{raw_arguments}".encode("utf-8")
+            f"{index}\0{name}\0{raw_arguments}".encode()
         ).hexdigest()[:16]
         call_id = f"call_{digest}"
     return ToolCall(
@@ -480,9 +480,7 @@ def _rejected_tool_call(
         rejection, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
     digest = hashlib.sha256(
-        f"{index}\0{original_tool}\0{raw_arguments}\0{failure_code}\0{error}".encode(
-            "utf-8"
-        )
+        f"{index}\0{original_tool}\0{raw_arguments}\0{failure_code}\0{error}".encode()
     ).hexdigest()[:16]
     return ToolCall(
         id=f"rejected_{digest}",
@@ -597,9 +595,20 @@ def _partition_tool_calls_against_host_schema(
 
 
 def _completion_message(server_url: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    from ..llama_finish_reason_contract import (
+        CONTEXT_PRESSURE,
+        LlamaCompletionBoundaryError,
+        _http_context_pressure,
+        _length_error,
+    )
+
     response = _post_completion(server_url, payload)
     if response.status_code >= 400:
         body = _bounded_response_body(response)
+        if _http_context_pressure(response.status_code, body):
+            raise LlamaCompletionBoundaryError(
+                f"llama-server rejected prompt context: {body}", kind=CONTEXT_PRESSURE,
+            )
         raise RuntimeError(
             f"llama server returned HTTP {response.status_code}"
             + (f": {body}" if body else "")
@@ -613,10 +622,7 @@ def _completion_message(server_url: str, payload: Mapping[str, Any]) -> Mapping[
         raise TypeError("native llama-server returned an invalid completion choice")
     finish_reason = str(choice.get("finish_reason", "") or "").strip().lower()
     if finish_reason == "length":
-        raise RuntimeError(
-            "native llama-server reached its model/server context boundary before "
-            "the assistant turn completed"
-        )
+        raise _length_error(data, payload)
     message = choice.get("message")
     if not isinstance(message, Mapping):
         raise TypeError("native llama-server returned no assistant message")

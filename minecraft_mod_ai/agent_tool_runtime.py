@@ -415,6 +415,14 @@ class AgentToolRuntime:
                 "MMM_AGENT_TOOL_CHILD": "1",
             }
         )
+        if stage == "generation" and _looks_like_bound_project(Path(self.workspace_root)):
+            from .platform_catalog import adapter_from_project
+
+            # Child services cannot see the parent's selected adapter. Bind from this
+            # runtime's project lock, never a process-global target from another worker.
+            target = adapter_from_project(Path(self.workspace_root))
+            env["MMM_MCP_MINECRAFT_VERSION"] = target.minecraft_version
+            env["MMM_MCP_LOADER"] = target.loader
         return env
 
     def _run_async(self, function: Any, *args: Any) -> Any:

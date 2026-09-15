@@ -16,6 +16,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .agent_context_archive import archive_preview, archive_transcript, context_ledger
+from .agent_intent import is_implementation_phase
 
 _DEFAULT_CONTEXT_BYTES = 96 * 1024
 _MIN_CONTEXT_BYTES = 12 * 1024
@@ -202,7 +203,7 @@ def _compact_implementation_seed(
         except json.JSONDecodeError:
             compacted.append(message)
             continue
-        if not isinstance(payload, dict) or payload.get("phase") != "implement_module":
+        if not isinstance(payload, dict) or not is_implementation_phase(payload.get("phase")):
             compacted.append(message)
             continue
         for key in _REDUNDANT_IMPLEMENTATION_FIELDS:
