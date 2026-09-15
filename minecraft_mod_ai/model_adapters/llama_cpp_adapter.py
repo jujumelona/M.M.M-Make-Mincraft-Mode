@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from dataclasses import replace
 from typing import Any
 
@@ -108,7 +109,7 @@ def _normalize_tool_schema(tool: Any) -> Mapping[str, Any]:
     schema = tool.to_schema() if hasattr(tool, "to_schema") else tool
     if not isinstance(schema, Mapping):
         raise TypeError("tool definition must be a mapping or expose to_schema()")
-    return dict(schema)
+    return deepcopy(dict(schema))
 
 
 def _normalized_tool_request(request: GenerationRequest) -> GenerationRequest:
@@ -171,7 +172,16 @@ def _native_tool_completion(
     )
     message = _completion_message(server_url, payload)
     _report_server_connection(server_url)
+    return _native_tool_generation_response(message, request)
 
+
+def _native_tool_generation_response(
+    message: Mapping[str, Any],
+    request: GenerationRequest,
+) -> GenerationResponse:
+    """Normalize one native assistant message through the production tool boundary."""
+
+    request = _normalized_tool_request(request)
     schemas = _request_tool_schema_map(request)
     raw_calls = _raw_native_tool_calls(message)
     if not request.parallel_tool_calls and len(raw_calls) > 1:
@@ -213,6 +223,49 @@ def _native_tool_completion(
     )
 
 
+def _tool_definition_name(tool: Mapping[str, Any]) -> str:
+    function = tool.get("function")
+    if not isinstance(function, Mapping):
+        raise RuntimeError("native tool transport exposed a schema without function metadata")
+    name = str(function.get("name", "")).strip()
+    if not name:
+        raise RuntimeError("native tool transport exposed an unnamed function schema")
+    return name
+
+
+def _exact_model_visible_tools(
+    declared: Sequence[Mapping[str, Any]],
+    transported: Any,
+) -> list[Mapping[str, Any]]:
+    """Restore host-declared schemas for exactly the tool names selected by transport."""
+
+    if not isinstance(transported, Sequence) or isinstance(
+        transported, (str, bytes, bytearray)
+    ):
+        raise RuntimeError("native llama tool transport dropped the tools surface")
+
+    declared_by_name: dict[str, Mapping[str, Any]] = {}
+    for tool in declared:
+        name = _tool_definition_name(tool)
+        if name in declared_by_name:
+            raise RuntimeError(f"duplicate model-visible tool schema {name!r}")
+        declared_by_name[name] = tool
+
+    exact: list[Mapping[str, Any]] = []
+    seen: set[str] = set()
+    for raw in transported:
+        if not isinstance(raw, Mapping):
+            raise RuntimeError("native llama tool transport exposed a non-object schema")
+        name = _tool_definition_name(raw)
+        if name not in declared_by_name:
+            raise RuntimeError(f"native llama transport exposed undeclared tool {name!r}")
+        if name in seen:
+            raise RuntimeError(f"native llama transport duplicated tool schema {name!r}")
+        seen.add(name)
+        exact.append(deepcopy(dict(declared_by_name[name])))
+    return exact
+
+
 def _tool_server_payload(
     adapter: LlamaCppAdapter,
     request: GenerationRequest,
@@ -220,7 +273,9 @@ def _tool_server_payload(
     from ..llama_server_hardware_policy import _server_payload, _server_tool_choice
 
     payload = _server_payload(adapter, request)
-    if not payload.get("tools"):
+    transported = payload.get("tools")
+    payload["tools"] = _exact_model_visible_tools(request.tools, transported)
+    if not payload["tools"]:
         raise RuntimeError("native tool transport received no tool schemas")
     expected = _server_tool_choice(request)
     if payload.get("tool_choice") != expected:
