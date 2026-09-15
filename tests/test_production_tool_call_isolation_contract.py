@@ -138,7 +138,7 @@ def test_schema_invalid_native_sibling_does_not_discard_valid_call(monkeypatch):
     assert "schema-invalid" in rejected.arguments["error"]
 
 
-def test_all_invalid_native_calls_still_fail_the_turn(monkeypatch):
+def test_all_invalid_native_calls_return_non_executable_rejection(monkeypatch):
     adapter = _adapter(monkeypatch)
     monkeypatch.setattr(
         llama_cpp_adapter,
@@ -159,11 +159,14 @@ def test_all_invalid_native_calls_still_fail_the_turn(monkeypatch):
         },
     )
 
-    with pytest.raises(ModelBackendError) as exc_info:
-        adapter.generate_turn(_request())
+    response = adapter.generate_turn(_request())
 
-    assert isinstance(exc_info.value.cause, ToolCallValidationError)
-    assert "invalid JSON" in str(exc_info.value.cause)
+    assert len(response.tool_calls) == 1
+    rejected = response.tool_calls[0]
+    assert rejected.name == "__mmm_rejected_tool_call__"
+    assert rejected.arguments["original_tool"] == "write_file"
+    assert rejected.arguments["failure_code"] == "TOOL_ARGUMENT_JSON_INVALID"
+    assert "invalid JSON" in rejected.arguments["error"]
 
 
 def test_parallel_disabled_does_not_use_isolation_to_bypass_protocol(monkeypatch):
