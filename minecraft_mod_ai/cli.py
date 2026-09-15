@@ -6,6 +6,7 @@ import json
 import sys
 from pathlib import Path
 
+from .authored_plan import AuthoredPlan
 from .complete_orchestrator import (
     CompleteExecutionOptions,
     CompleteProductionOrchestrator,
@@ -159,6 +160,34 @@ def _render_complete_result(result: object) -> str:
     return "\n".join(lines)
 
 
+def _render_plan(proposal: CompleteProposal | AuthoredPlan) -> str:
+    if isinstance(proposal, AuthoredPlan):
+        return proposal.text
+    return render_complete_plan(
+        requested_prompt=proposal.requested_prompt,
+        game_design=proposal.game_design,
+        modules=proposal.modules,
+        acceptance_tests=proposal.acceptance_tests,
+    )
+
+
+def _load_execution_proposal(
+    data: dict,
+    *,
+    orchestrator: CompleteProductionOrchestrator,
+    existing_zip: Path | None,
+) -> CompleteProposal:
+    if data.get("schema_version") != "mmm/authored-plan-v1":
+        return CompleteProposal.from_dict(data)
+    design = AuthoredPlan.from_dict(data)
+    planner = CompleteGameDesignPlanner(orchestrator.router_factory())
+    return planner.compile_for_production(
+        design,
+        media_paths=design.media_paths,
+        existing_input_sha256=_sha256_file(existing_zip) if existing_zip else "",
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -179,31 +208,22 @@ def main(argv: list[str] | None = None) -> int:
             if args.json:
                 sys.stdout.write(serialized)
             else:
-                from .authored_plan import AuthoredPlan
-
-                rendered = proposal.text if isinstance(proposal, AuthoredPlan) else render_complete_plan(
-                    requested_prompt=proposal.requested_prompt,
-                    game_design=proposal.game_design,
-                    modules=proposal.modules,
-                    acceptance_tests=proposal.acceptance_tests,
-                )
+                rendered = _render_plan(proposal)
                 if args.save:
                     rendered += f"\n\n제작용 계획 저장: {args.save}"
                 sys.stdout.write(rendered + "\n")
             return 0
 
         if args.command == "execute":
-            from .authored_plan import AuthoredPlan
-
-            data = _read_json(args.proposal)
-            if data.get("schema_version") == "mmm/authored-plan-v1":
-                design = AuthoredPlan.from_dict(data)
-                proposal = CompleteGameDesignPlanner(ModelRouter(profile=args.profile)).compile_for_production(
-                    design, media_paths=design.media_paths,
-                    existing_input_sha256=_sha256_file(args.existing_zip) if args.existing_zip else "",
-                )
-            else:
-                proposal = CompleteProposal.from_dict(data)
+            orchestrator = CompleteProductionOrchestrator(
+                workspace_root=args.output,
+                profile=args.profile,
+            )
+            proposal = _load_execution_proposal(
+                _read_json(args.proposal),
+                orchestrator=orchestrator,
+                existing_zip=args.existing_zip,
+            )
             actions = _read_playtest_actions(args.playtest_actions)
             options = CompleteExecutionOptions(
                 source_only=args.source_only,
@@ -224,10 +244,7 @@ def main(argv: list[str] | None = None) -> int:
                 publish_project_id=args.publish_project_id,
                 changelog=args.changelog,
             )
-            result = CompleteProductionOrchestrator(
-                workspace_root=args.output,
-                profile=args.profile,
-            ).execute(
+            result = orchestrator.execute(
                 proposal,
                 approval_hash=args.approve or proposal.calculate_hash(),
                 run_name=args.run_name,
