@@ -250,8 +250,11 @@ def _native_tool_generation_response(
     rejections = (*parse_rejections, *schema_rejections)
 
     if not valid_calls and rejections:
-        error = str(rejections[0].arguments.get("error", "invalid native tool call"))
-        raise ToolCallValidationError(error)
+        return GenerationResponse(
+            content=content_text.strip(),
+            tool_calls=rejections,
+            reasoning_content=reasoning_text.strip(),
+        )
     if not valid_calls and _tool_choice_requires_call(request.tool_choice):
         raise ToolCallValidationError(
             "model omitted required native tool call"
