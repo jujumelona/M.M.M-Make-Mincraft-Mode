@@ -70,7 +70,7 @@ def test_fixed_template_regenerates_after_schema_rejection() -> None:
 
     value = generate_fixed_template_value(
         router,
-        "planner",
+        "coder",
         ({"role": "user", "content": "fill the planning detail"},),
         response_schema=schema,
         tool_name="submit_planning_detail",
@@ -110,7 +110,7 @@ def test_fixed_template_repairs_mapping_rejected_by_host_nested_schema() -> None
 
     value = generate_fixed_template_value(
         router,
-        "planner",
+        "coder",
         ({"role": "user", "content": "fill nested planning detail"},),
         response_schema=schema,
         tool_name="submit_nested_planning_detail",

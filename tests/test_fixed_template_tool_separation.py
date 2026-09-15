@@ -31,7 +31,7 @@ class _Registry:
 
     def role(self, profile: str, role: str):
         assert profile == "local"
-        assert role == "planner"
+        assert role == "coder"
         return SimpleNamespace(adapter=self.adapter)
 
 
@@ -81,7 +81,7 @@ class _MockRouter(_TextOnlyRouter):
 def _generate(router, *, enable_tools: bool = False):
     return generate_fixed_template_value(
         router,
-        "planner",
+        "coder",
         [{"role": "user", "content": "Fill the record."}],
         response_schema=_SCHEMA,
         enable_tools=enable_tools,

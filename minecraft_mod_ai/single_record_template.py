@@ -209,7 +209,7 @@ def run_single_record_template(
                             "The host has already accepted these fields for the same logical "
                             "record: "
                             + json.dumps(value, ensure_ascii=False, sort_keys=True)
-                            + ". Fill only the fields declared by the supplied native function "
+                            + ". Fill only the fields declared by the supplied response "
                             "schema and keep them semantically consistent with the accepted fields."
                         ),
                     }

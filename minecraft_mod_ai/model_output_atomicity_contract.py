@@ -290,6 +290,13 @@ def _install_router_boundary(model_router_module: Any) -> None:
                 surface=f"JSON response for role {role!r}",
             )
 
+            # Planning authors data; it does not execute an action. In particular,
+            # Qwen may return the requested design as content without tool_calls.
+            # Keep that content on the structured-text route instead of forcing a
+            # function call and feeding protocol rejections back into the design.
+            if role == "planner":
+                return current_text(self, role, messages, **kwargs)
+
             # The deterministic mock profile is not a model and has no native function
             # transport. Keep its existing fixture behavior while forbidding this escape
             # hatch for every real generation adapter.
@@ -353,7 +360,7 @@ def _install_router_boundary(model_router_module: Any) -> None:
             )
 
         setattr(generate_text, _TEXT_MARKER, True)
-        generate_text._mmm_fixed_template_arguments_only = True  # type: ignore[attr-defined]
+        generate_text._mmm_role_specific_structured_transport = True  # type: ignore[attr-defined]
         cls.generate_text = generate_text
 
     if not getattr(cls.generate_tool_decision, _TOOL_MARKER, False):
@@ -413,9 +420,9 @@ def assert_installed(*, model_router_module: Any | None = None) -> None:
     if not getattr(cls.generate_text, _TEXT_MARKER, False):
         raise RuntimeError("model JSON response template boundary is not installed")
     if not getattr(
-        cls.generate_text, "_mmm_fixed_template_arguments_only", False
+        cls.generate_text, "_mmm_role_specific_structured_transport", False
     ):
-        raise RuntimeError("model JSON response can still bypass fixed template arguments")
+        raise RuntimeError("model structured response transport policy is not installed")
     if not getattr(cls.generate_tool_decision, _TOOL_MARKER, False):
         raise RuntimeError("model native-tool template boundary is not installed")
 

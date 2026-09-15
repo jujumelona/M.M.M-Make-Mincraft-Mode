@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from worksheet_fixtures import specification
-
 from copy import deepcopy
 
 import pytest
+from worksheet_fixtures import specification
 
 from minecraft_mod_ai.planning_detail_template import WORKSHEET_SECTIONS
 from minecraft_mod_ai.planning_handoff_contract import (
@@ -91,6 +90,31 @@ def test_projection_preserves_canonical_grounding_and_verification() -> None:
     assert projection["required_detail_sections"] == canonical[
         "required_detail_sections"
     ]
+
+
+def test_authored_detail_is_lowered_without_readiness_approval() -> None:
+    from minecraft_mod_ai.planning_state_handoff import (
+        build_request_catalog_from_planning_state,
+    )
+    from minecraft_mod_ai.planning_state_pipeline import _host_initial_state, _rehash
+
+    prompt = "Players trade minerals to fund spacecraft construction."
+    state = _host_initial_state(prompt)
+    detail = _detail()
+    detail.update(decision_id="d_002", decision_type="detailed_implementation_plan")
+    detail["grounded_bindings"] = []
+    detail["reuse_candidates"] = []
+    detail["artifact_obligations"][0]["constraint_evidence_refs"] = []
+    state["decisions"] = [
+        {"decision_id": "d_001", "decision_type": "requirement", "requirement_id": "req_001",
+         "statement": prompt, "semantic_capability": "space_economy",
+         "acceptance": ["Trading minerals increases the player's balance."]},
+        detail,
+    ]
+    state = _rehash(state)
+    assert state["plan_ready"] is False
+    catalog = build_request_catalog_from_planning_state(prompt, state)
+    assert catalog["requirements"][0]["statement"] == prompt
 
 
 def test_request_requirement_detail_rejects_projection_drift() -> None:

@@ -29,4 +29,4 @@ rules:
 - Keep each string within the record schema's atomic string bound so the primary tool schema and recovery schema are identical.
 - Preserve supplied evidence identifiers. Never invent external APIs, paths or facts.
 - Do not emit continuation, completion, applicability, retry, or loop-control decisions; the host owns cardinality and iteration.
-- If the supplied facts cannot support the requested ordinal record, fail rather than inventing a fallback record.
+- Author the requested gameplay record, choosing missing mechanics and values consistently with the requirement. These are design choices and do not require external evidence.

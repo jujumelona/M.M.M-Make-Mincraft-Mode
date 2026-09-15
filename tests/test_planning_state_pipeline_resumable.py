@@ -56,7 +56,8 @@ def test_detailed_planning_exception_without_progress_stays_pending(monkeypatch)
         checkpoints.append,
     )
 
-    assert result == initial
+    assert result["decisions"] == initial["decisions"]
+    assert result["generation_interruption"]["reason"] == "recoverable model failure"
     assert result["plan_ready"] is False
     assert checkpoints[-1]["plan_ready"] is False
     pending = [fields for event, fields in events if event == "detailed_planning_pending"]

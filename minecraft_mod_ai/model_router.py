@@ -291,6 +291,16 @@ class ModelRouter:
         name = str(tool_name or "").strip()
         if not name:
             raise ModelConfigurationError("Tool-decision name must not be empty.")
+        if role == "planner":
+            import json
+
+            return json.loads(self.generate_text(
+                role,
+                messages,
+                response_format="json",
+                response_schema=parameters,
+                enable_tools=False,
+            ))
         schema = {
             "type": "function",
             "function": {
@@ -366,6 +376,17 @@ class ModelRouter:
             messages,
             _REPOSITORY_MAIN_ONLY_SYSTEM_CONTEXT,
         )
+        if role == "planner" and response_format == "json" and response_schema is not None:
+            import json
+
+            request_messages = _inject_system_context(
+                request_messages,
+                "Author the requested design values. You may choose missing gameplay details "
+                "and expand the design coherently with the user's request. Return one JSON "
+                "value in the following interchange shape, without a function call or Markdown. "
+                "This shape is for storing your design, not a judgement of its correctness.\n"
+                + json.dumps(response_schema, ensure_ascii=False),
+            )
         if self._tools_enabled(
             enable_tools=enable_tools,
             stage=stage,

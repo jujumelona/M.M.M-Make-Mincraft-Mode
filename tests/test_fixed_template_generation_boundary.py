@@ -62,7 +62,7 @@ def _installed_router_class():
 
     module = SimpleNamespace(
         ModelRouter=Router,
-        _ROLE_TOOL_STAGE={"planner": "planning"},
+        _ROLE_TOOL_STAGE={"coder": "generation"},
     )
     contract.install(model_router_module=module)
     return Router, module
@@ -73,7 +73,7 @@ def test_structured_generation_never_uses_free_json_text_path():
     router = Router()
 
     output = router.generate_text(
-        "planner",
+        "coder",
         ({"role": "user", "content": "fill it"},),
         response_format="json",
         response_schema=SCHEMA,
@@ -92,7 +92,7 @@ def test_plain_text_generation_is_unchanged():
     router = Router()
 
     output = router.generate_text(
-        "planner",
+        "coder",
         ({"role": "user", "content": "plain"},),
         response_format="text",
         enable_tools=False,
@@ -108,7 +108,7 @@ def test_tool_or_media_semantics_run_before_fixed_template_fill():
     router = Router()
 
     output = router.generate_text(
-        "planner",
+        "coder",
         ({"role": "user", "content": "research then fill"},),
         response_format="json",
         response_schema=SCHEMA,
@@ -134,7 +134,7 @@ def test_non_object_root_is_wrapped_only_for_function_transport():
 
     module = SimpleNamespace(
         ModelRouter=Router,
-        _ROLE_TOOL_STAGE={"planner": "planning"},
+        _ROLE_TOOL_STAGE={"coder": "generation"},
     )
     contract.install(model_router_module=module)
     router = Router()
@@ -145,7 +145,7 @@ def test_non_object_root_is_wrapped_only_for_function_transport():
     }
 
     output = router.generate_text(
-        "planner",
+        "coder",
         ({"role": "user", "content": "fill list"},),
         response_format="json",
         response_schema=schema,
@@ -166,7 +166,7 @@ def test_mock_profile_keeps_deterministic_fixture_transport_only():
     router = Router(adapter="mock")
 
     output = router.generate_text(
-        "planner",
+        "coder",
         ({"role": "user", "content": "fixture"},),
         response_format="json",
         response_schema=SCHEMA,

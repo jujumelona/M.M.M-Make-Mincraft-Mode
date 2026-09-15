@@ -146,6 +146,13 @@ def _apply_record_host_policy(identifier: str, value: dict):
         rules.append(text)
     if not any("host owns cardinality and iteration" in rule.lower() for rule in rules):
         rules.append(_HOST_CONTROL_RULE)
+    if not expected_blocking:
+        rules.append(
+            "You are the designer of this gameplay record. Choose unspecified mechanics, "
+            "actors, values and interactions coherently with the requirement. Authored "
+            "design choices need no external evidence or approval. Keep externally "
+            "verifiable API and repository facts separate from those choices."
+        )
     value["rules"] = rules
     return value
 

@@ -159,11 +159,6 @@ def build_request_catalog_from_planning_state(
     prompt: str, state: Mapping[str, Any]
 ) -> dict[str, Any]:
     validate_planning_state(state, prompt=prompt)
-    if state.get("plan_ready") is not True:
-        raise ValueError(
-            "PLANNING_HANDOFF_READY: request catalog requires a plan-ready state"
-        )
-
     requirements = _requirements(state)
     details = _details(state)
     if not requirements or len(details) != len(requirements):

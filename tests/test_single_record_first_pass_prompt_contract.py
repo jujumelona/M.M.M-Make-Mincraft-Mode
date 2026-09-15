@@ -83,8 +83,12 @@ class _NativeToolRouter:
         self.text_calls = 0
 
     def generate_text(self, *args, **kwargs):
+        import json
+
         self.text_calls += 1
-        raise AssertionError("native fixed-template generation must not use text/repair transport")
+        assert kwargs["response_format"] == "json"
+        assert kwargs["enable_tools"] is False
+        return json.dumps(_EXPECTED)
 
     def generate_tool_decision(self, role, messages, *, tool_name, parameters, description):
         self.tool_calls.append(
@@ -100,7 +104,7 @@ class _NativeToolRouter:
         return dict(_EXPECTED)
 
 
-def test_atomic_mutations_first_pass_uses_one_native_tool_decision() -> None:
+def test_atomic_mutations_first_pass_writes_design_without_a_tool_call() -> None:
     router = _NativeToolRouter()
 
     result = run_single_record_template(
@@ -110,5 +114,5 @@ def test_atomic_mutations_first_pass_uses_one_native_tool_decision() -> None:
     )
 
     assert result == _EXPECTED
-    assert router.text_calls == 0
-    assert len(router.tool_calls) == 1
+    assert router.text_calls == 1
+    assert router.tool_calls == []

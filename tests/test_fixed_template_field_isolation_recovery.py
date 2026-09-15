@@ -36,8 +36,8 @@ def test_failed_multi_field_template_is_recovered_one_field_at_a_time() -> None:
     schema = {
         "type": "object",
         "properties": {
-            "mappings": {"type": "string", "minLength": 1},
-            "constraint": {"type": "string", "minLength": 1},
+            "mappings": {"type": "string", "minLength": 1, "maxLength": 256},
+            "constraint": {"type": "string", "minLength": 1, "maxLength": 256},
         },
         "required": ["mappings", "constraint"],
         "additionalProperties": False,
@@ -45,7 +45,7 @@ def test_failed_multi_field_template_is_recovered_one_field_at_a_time() -> None:
 
     value = _generate_native_template_arguments(
         router,
-        "planner",
+        "coder",
         ({"role": "user", "content": "compatibility fixture"},),
         tool_name="submit_one_feature_reuse_assessment_compatibility_part_2_of_2",
         parameters=schema,

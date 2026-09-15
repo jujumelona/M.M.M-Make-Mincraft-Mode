@@ -43,11 +43,10 @@ def test_nested_fields_cannot_change_shape_or_silently_disappear():
             validate_worksheet_section(bad, set(), "behavior_contract")
 
 
-def test_inapplicable_concern_needs_explicit_reason():
+def test_authored_omissions_do_not_need_a_justification_to_pass():
     payload = row("persistence")
     payload["specification"]["migration"] = []
-    with pytest.raises(ValueError, match="inapplicable reason"):
-        validate_worksheet_section(payload, set(), "persistence")
+    assert validate_worksheet_section(payload, set(), "persistence") == payload
     payload["specification"]["inapplicable_concerns"] = [
         {"concern": "migration", "reason": "First storage version; no prior data schema exists."}
     ]

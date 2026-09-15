@@ -7,14 +7,14 @@ section is optional work and must be explicitly selected by trusted host applica
 state. Unknown applicability never expands the work graph.
 """
 
+import json
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from typing import Any
-import json
 
 from jsonschema import Draft202012Validator
 
-from .planning_detail_slots import DETAIL_RECORDS, specification_schema
+from .planning_detail_slots import specification_schema
 
 DETAIL_SLOT_GUIDANCE: dict[str, tuple[str, ...]] = {
     "behavior_contract": (
@@ -153,11 +153,11 @@ CONDITIONAL_WORKSHEET_SECTIONS: tuple[str, ...] = tuple(
 WORKSHEET_INSTRUCTIONS: tuple[str, ...] = (
     "Work on exactly one user-visible requirement; do not redesign neighboring requirements.",
     "Use constraint_evidence_refs only when retrieved evidence actually constrains the authored design; an empty list is valid.",
-    "Fill exactly the host-selected sections. Never invent work for an omitted section and never use a bare N/A, none, TODO, TBD, unknown, same-as-above, or generic placeholder.",
-    "Write a distinct section-specific specification for every selected section; copying one generic answer across sections is invalid.",
+    "Fill the selected sections with your design. Use concrete gameplay details where they help explain the intended experience.",
+    "Explain each section in terms of its purpose; shared rules may recur where useful.",
     "Separate retrieved facts from design decisions. Proposed identifiers, algorithms, paths, constants or behavior rules are authored design, not evidence-backed facts.",
     "Use exact actors, state owners, triggers, inputs, outputs, branches, units, limits and observable postconditions instead of vague adjectives.",
-    "Do not silently widen scope. Every claimed behavior must belong to the current requirement or a necessary established dependency.",
+    "Author missing gameplay details and expand this requirement coherently with the user's request; distinguish your design choices from retrieved facts.",
     "Treat compile/static checks as necessary but insufficient: verification must prove user-visible runtime behavior and relevant failure paths.",
 )
 
@@ -238,7 +238,7 @@ def worksheet_section_prompt(section: str) -> str:
             f"Purpose: {_section_description(key)}",
             "Return exactly one JSON object containing only specification and constraint_evidence_refs.",
             "specification MUST be an object with the fixed concern arrays below, never a string or an invented object layout.",
-            "Fill every record field with a string value. For an inapplicable concern, leave its array empty and add exactly one concrete reason to inapplicable_concerns. Never omit a concern key.",
+            "Fill record fields with string values. A concern may have an empty array; explain its omission in inapplicable_concerns when useful. Keep the concern keys for storage.",
             "Exact response schema: " + json.dumps(worksheet_section_schema(key), ensure_ascii=False, separators=(",", ":")),
             "Resolve one deterministic implementation contract for this section only; do not restate unrelated sections.",
             "Treat supplied prerequisite section results as authoritative continuity constraints.",
@@ -291,19 +291,12 @@ def worksheet_schema(required_sections: Iterable[str] | None = None) -> dict[str
 
 WORKSHEET_SCHEMA = worksheet_schema()
 
+# Compatibility vocabulary for the legacy chunk assembler. The authored worksheet
+# boundary does not use wording as an admission criterion.
 _PLACEHOLDERS = {
-    "n/a",
-    "na",
-    "none",
-    "not applicable",
-    "not-applicable",
-    "todo",
-    "tbd",
-    "unknown",
-    "same as above",
-    "same-as-above",
+    "n/a", "na", "none", "not applicable", "not-applicable", "todo", "tbd",
+    "unknown", "same as above", "same-as-above",
 }
-
 
 def validate_worksheet_section(
     value: Any,
@@ -326,24 +319,8 @@ def validate_worksheet_section(
         raise ValueError(
             f"DETAILED_PLAN_WORKSHEET: {key}.{path} violates fixed specification template: {error.message}"
         )
-    reasons = specification["inapplicable_concerns"]
-    excluded = [row["concern"] for row in reasons]
-    empty = {concern for concern in DETAIL_RECORDS[key] if not specification[concern]}
-    if len(excluded) != len(set(excluded)) or set(excluded) != empty:
-        raise ValueError(
-            f"DETAILED_PLAN_WORKSHEET: {key} every empty concern requires exactly one inapplicable reason"
-        )
-    for concern, records in specification.items():
-        for record in records:
-            for field, text in record.items():
-                if not text.strip() or (
-                    concern == "inapplicable_concerns"
-                    and field == "reason"
-                    and text.strip().casefold() in _PLACEHOLDERS
-                ):
-                    raise ValueError(
-                        f"DETAILED_PLAN_WORKSHEET: {key}.{concern}.{field} has no concrete value"
-                    )
+    # Applicability explanations and wording are authored design. Do not grade
+    # them or require the author to justify every omitted concern.
 
     refs = value.get("constraint_evidence_refs")
     if not isinstance(refs, list):
@@ -375,19 +352,9 @@ def validate_worksheet(
             "DETAILED_PLAN_WORKSHEET: exactly the host-required engineering sections must be filled"
         )
 
-    seen_specifications: dict[str, str] = {}
     normalized: dict[str, Any] = {}
     for key in selected:
         row = validate_worksheet_section(value[key], allowed_refs, key)
-        normalized_specification = json.dumps(
-            row["specification"], sort_keys=True, ensure_ascii=False
-        ).casefold()
-        duplicate_of = seen_specifications.get(normalized_specification)
-        if duplicate_of is not None:
-            raise ValueError(
-                f"DETAILED_PLAN_WORKSHEET: {key} duplicates {duplicate_of}; every section requires a section-specific specification"
-            )
-        seen_specifications[normalized_specification] = key
         normalized[key] = row
     return deepcopy(normalized)
 

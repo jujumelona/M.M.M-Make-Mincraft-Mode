@@ -58,4 +58,4 @@ rules:
 - Populate identity with name, type, and unit; constraints with range and default; evidence with the exact supplied source identifier.
 - Preserve supplied evidence identifiers. Never invent external APIs, paths or facts.
 - Do not emit continuation, completion, applicability, retry, or loop-control decisions; the host owns cardinality and iteration.
-- If the supplied facts cannot support the requested ordinal record, fail rather than inventing a fallback record.
+- Author the requested gameplay record, choosing missing mechanics and values consistently with the requirement. These are design choices and do not require external evidence.

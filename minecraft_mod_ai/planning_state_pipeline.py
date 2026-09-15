@@ -24,7 +24,9 @@ from .planning_detail_applicability import (
     required_sections_by_requirement,
 )
 from .planning_detail_template import normalize_required_sections
-from .planning_state_adaptive_implementation import compile_progress_monotone_detailed_plans
+from .planning_state_adaptive_implementation import (
+    compile_progress_monotone_detailed_plans,
+)
 from .planning_state_contract import (
     SCHEMA,
     _hash_without,
@@ -554,6 +556,12 @@ def _compile_detailed_plans_resumable(
                     "policy": "preserve_pending_without_synthetic_completion",
                 },
             )
+            latest_state["generation_interruption"] = {
+                "operation": "compile_progress_monotone_detailed_plans",
+                "cause_type": type(exc).__name__,
+                "reason": str(exc),
+            }
+            latest_state = _rehash(latest_state)
             _checkpoint_state(checkpoint, latest_state)
             return latest_state
 
@@ -590,6 +598,9 @@ def _compile_detailed_plans_resumable(
             return result
         break
 
+    if "generation_interruption" in result:
+        result.pop("generation_interruption")
+        result = _rehash(result)
     _trace_state_snapshot(
         "planning_state_transition_output",
         "compile_progress_monotone_detailed_plans",

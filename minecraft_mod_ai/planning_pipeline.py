@@ -52,6 +52,16 @@ class PlanningStageError(SpecValidationError):
         super().__init__(f"planning host invariant {stage.value}: {message}{suffix}")
 
 
+class PlanningGenerationInterrupted(RuntimeError):
+    """The writer stopped; retain its draft and report the generation cause."""
+
+    def __init__(self, state: Mapping[str, Any]) -> None:
+        self.planning_state = deepcopy(dict(state))
+        interruption = state.get("generation_interruption") or {}
+        reason = interruption.get("reason", "The planning writer has not finished.")
+        super().__init__(f"Planning generation interrupted; draft saved: {reason}")
+
+
 @dataclass(frozen=True)
 class PlanningArtifacts:
     planning_state: dict[str, Any]
@@ -136,6 +146,9 @@ class PlanningPipeline:
                 "prompt-first research state did not reach code-ready coverage",
                 cause=exc,
             ) from exc
+
+        if planning_state.get("generation_interruption"):
+            raise PlanningGenerationInterrupted(planning_state)
 
         try:
             game_design, base_proposal = _host_operation(

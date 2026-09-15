@@ -2,9 +2,8 @@ from __future__ import annotations
 
 """Host-owned fixed-template generation for every structured model response.
 
-Real generation adapters fill forced function arguments. The model never authors JSON
-serialization syntax. The deterministic ``mock`` profile keeps its fixture transport only
-so fast tests can remain model-free.
+Planning writes structured design content directly. Action-producing roles fill forced
+function arguments. The deterministic ``mock`` profile keeps its fixture transport.
 """
 
 import json
@@ -37,7 +36,8 @@ def _adapter_name(router: Any, role: str) -> str:
 
 def _structured_text_transport_required(router: Any, role: str) -> bool:
     return (
-        _adapter_name(router, role) == "mock"
+        (role == "planner" and callable(getattr(router, "generate_text", None)))
+        or _adapter_name(router, role) == "mock"
         or not callable(getattr(router, "generate_tool_decision", None))
     )
 
@@ -325,6 +325,8 @@ def _generate_native_template_arguments(
             raise ValueError("fixed-template function call did not return an argument mapping")
         return _validate_native_arguments(arguments, parameters)
     except Exception as initial_error:
+        if role == "planner":
+            raise
         # A multi-field schema can enter a deterministic invalid attractor when one field is
         # repeatedly malformed. Do not regenerate the same object again. Project the failed
         # object into one-field forced calls, merge the host-validated fields, then validate
@@ -394,15 +396,14 @@ def generate_fixed_template_value(
     tool_name: str = _DEFAULT_TOOL_NAME,
     description: str = "",
 ) -> Any:
-    """Return host-validated structured data without model-authored JSON syntax."""
+    """Return structured data through the role's content or action transport."""
 
     if not isinstance(response_schema, Mapping):
         raise TypeError("fixed-template generation requires a response_schema mapping")
     assert_atomic_model_schema(response_schema, surface=f"fixed template for role {role!r}")
 
-    # ``enable_tools`` controls semantic/external tools, not the host-owned function-argument
-    # transport used to fill a fixed response template. Mock and text-only routers keep the
-    # structured-text fallback; real tool-capable routers always use native template transport.
+    # Planning authors structured content without function-call repair. Other roles
+    # retain the native action boundary. Mock and text-only routers use text as well.
     if _structured_text_transport_required(router, role):
         generate_text = _structured_text_generator(router)
         fixture_kwargs: dict[str, Any] = {
