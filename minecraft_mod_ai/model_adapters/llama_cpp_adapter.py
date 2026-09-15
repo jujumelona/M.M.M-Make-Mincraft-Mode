@@ -179,7 +179,7 @@ def _native_tool_generation_response(
     message: Mapping[str, Any],
     request: GenerationRequest,
 ) -> GenerationResponse:
-    """Normalize one native assistant message through the production tool boundary."""
+    """Decode one native assistant message without enforcing orchestration policy."""
 
     request = _normalized_tool_request(request)
     schemas = _request_tool_schema_map(request)
@@ -188,10 +188,6 @@ def _native_tool_generation_response(
         raise ToolCallValidationError(
             "model emitted parallel tool calls when they are disabled"
         )
-    if request.tool_choice == "none" and raw_calls:
-        raise ToolCallValidationError(
-            "model emitted a tool call when tool_choice is none"
-        )
 
     parsed, parse_rejections = _parse_native_tool_calls_isolated(raw_calls)
     valid_calls, schema_rejections = _partition_tool_calls_against_host_schema(
@@ -199,23 +195,17 @@ def _native_tool_generation_response(
     )
     rejections = (*parse_rejections, *schema_rejections)
 
-    # A turn with no usable native action is still a failed semantic turn. Isolation
-    # exists only to preserve independently valid siblings; it must never turn a wholly
-    # malformed response into apparent progress.
+    # Actual malformed native calls remain transport/schema failures. Whether a model
+    # should have called a tool at all is orchestration policy and is intentionally not
+    # enforced at this boundary.
     if not valid_calls and rejections:
         error = str(rejections[0].arguments.get("error", "invalid native tool call"))
         raise ToolCallValidationError(error)
-
-    _validate_tool_choice(request, valid_calls)
 
     content = message.get("content")
     reasoning = message.get("reasoning_content", message.get("reasoning"))
     content_text = content if isinstance(content, str) else ""
     reasoning_text = reasoning if isinstance(reasoning, str) else ""
-    if not valid_calls and not content_text.strip():
-        raise ToolCallValidationError(
-            "native tool completion returned neither message.tool_calls nor visible content"
-        )
     return GenerationResponse(
         content=content_text.strip(),
         tool_calls=(*valid_calls, *rejections),
@@ -550,49 +540,6 @@ def _partition_tool_calls_against_host_schema(
         else:
             accepted.append(call)
     return tuple(accepted), tuple(rejected)
-
-
-def _named_tool_choice(choice: Any) -> str:
-    if not isinstance(choice, Mapping):
-        raise ToolCallValidationError(f"unsupported named tool_choice: {choice!r}")
-    function = choice.get("function")
-    if not isinstance(function, Mapping):
-        raise ToolCallValidationError("named tool_choice lacks function metadata")
-    name = str(function.get("name", "")).strip()
-    if not name:
-        raise ToolCallValidationError("named tool_choice lacks a function name")
-    return name
-
-
-def _validate_tool_choice(
-    request: GenerationRequest,
-    calls: Sequence[ToolCall],
-) -> None:
-    if not request.parallel_tool_calls and len(calls) > 1:
-        raise ToolCallValidationError(
-            "model emitted parallel tool calls when they are disabled"
-        )
-    choice = request.tool_choice
-    if choice is None or choice == "auto":
-        return
-    if choice == "none":
-        if calls:
-            raise ToolCallValidationError(
-                "model emitted a tool call when tool_choice is none"
-            )
-        return
-    if choice == "required":
-        if not calls:
-            raise ToolCallValidationError(
-                "model did not emit a native tool call when one is required"
-            )
-        return
-    expected = _named_tool_choice(choice)
-    if len(calls) != 1 or calls[0].name != expected:
-        received = ", ".join(call.name for call in calls) or "<none>"
-        raise ToolCallValidationError(
-            f"model violated named tool_choice {expected!r}; received {received}"
-        )
 
 
 def _completion_message(server_url: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
