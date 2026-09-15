@@ -7,6 +7,8 @@ from minecraft_mod_ai.model_adapters.base import AdapterConfig, GenerationReques
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
 from minecraft_mod_ai.model_adapters.qwen_tool_parser import ToolCallValidationError
 
+# Invalid native calls remain non-executable and return protocol observations for recovery.
+
 
 def _tool(name: str = "write_file") -> dict:
     return {
