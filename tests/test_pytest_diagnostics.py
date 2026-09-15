@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import subprocess
-from types import SimpleNamespace
 from pathlib import Path
 
 from tools import pytest_diagnostics
@@ -26,6 +25,13 @@ def _write_passing_junit(path: Path) -> None:
         tests=1,
         failures=0,
     )
+
+
+def _install_fake_launch(monkeypatch, callback):
+    def fake_launch(command, raw_handle, *, timeout_seconds):
+        return callback(command, raw_handle, timeout_seconds)
+
+    monkeypatch.setattr(pytest_diagnostics, "_launch_and_wait", fake_launch)
 
 
 def test_duplicate_junit_failures_collapse_to_one_root_cause(tmp_path: Path) -> None:
@@ -85,14 +91,13 @@ def test_main_never_reuses_stale_junit_or_raw_log(tmp_path: Path, monkeypatch, c
     log.write_text("stale pytest output\n", encoding="utf-8")
     _write_passing_junit(junit)
 
-    def fake_run(*args, **kwargs):
+    def callback(command, raw_handle, timeout_seconds):
         assert not junit.exists(), "stale JUnit must be removed before pytest starts"
         assert log.read_text(encoding="utf-8") == ""
-        assert kwargs["stdout"] is not subprocess.PIPE
-        kwargs["stdout"].write("pytest crashed before producing JUnit\n")
-        return SimpleNamespace(returncode=5)
+        raw_handle.write("pytest crashed before producing JUnit\n")
+        return 5, None
 
-    monkeypatch.setattr(pytest_diagnostics.subprocess, "run", fake_run)
+    _install_fake_launch(monkeypatch, callback)
     result = pytest_diagnostics.main(
         ["--log", str(log), "--junit", str(junit), "tests/test_missing.py"]
     )
@@ -107,17 +112,14 @@ def test_success_without_junit_fails_closed(tmp_path: Path, monkeypatch, capsys)
     log = tmp_path / "pytest.log"
     junit = tmp_path / "pytest.xml"
 
-    def fake_run(*args, **kwargs):
-        kwargs["stdout"].write("pytest claimed success without proof\n")
-        return SimpleNamespace(returncode=0)
+    def callback(command, raw_handle, timeout_seconds):
+        raw_handle.write("pytest claimed success without proof\n")
+        return 0, None
 
-    monkeypatch.setattr(pytest_diagnostics.subprocess, "run", fake_run)
-    assert (
-        pytest_diagnostics.main(
-            ["--log", str(log), "--junit", str(junit), "tests/test_anything.py"]
-        )
-        == 1
-    )
+    _install_fake_launch(monkeypatch, callback)
+    assert pytest_diagnostics.main(
+        ["--log", str(log), "--junit", str(junit), "tests/test_anything.py"]
+    ) == 1
     assert "MissingJUnit" in capsys.readouterr().out
 
 
@@ -125,23 +127,20 @@ def test_success_with_failure_nodes_fails_closed(tmp_path: Path, monkeypatch, ca
     log = tmp_path / "pytest.log"
     junit = tmp_path / "pytest.xml"
 
-    def fake_run(*args, **kwargs):
-        kwargs["stdout"].write("contradictory pytest run\n")
+    def callback(command, raw_handle, timeout_seconds):
+        raw_handle.write("contradictory pytest run\n")
         _write_junit(
             junit,
             '<testcase classname="tests.a" name="one"><failure message="boom">trace</failure></testcase>',
             tests=1,
             failures=1,
         )
-        return SimpleNamespace(returncode=0)
+        return 0, None
 
-    monkeypatch.setattr(pytest_diagnostics.subprocess, "run", fake_run)
-    assert (
-        pytest_diagnostics.main(
-            ["--log", str(log), "--junit", str(junit), "tests/test_anything.py"]
-        )
-        == 1
-    )
+    _install_fake_launch(monkeypatch, callback)
+    assert pytest_diagnostics.main(
+        ["--log", str(log), "--junit", str(junit), "tests/test_anything.py"]
+    ) == 1
     assert "PytestExitMismatch" in capsys.readouterr().out
 
 
@@ -151,18 +150,15 @@ def test_empty_success_junit_is_not_accepted_as_test_evidence(
     log = tmp_path / "pytest.log"
     junit = tmp_path / "pytest.xml"
 
-    def fake_run(*args, **kwargs):
-        kwargs["stdout"].write("no tests somehow returned zero\n")
+    def callback(command, raw_handle, timeout_seconds):
+        raw_handle.write("no tests somehow returned zero\n")
         junit.write_text('<testsuite tests="0" failures="0" />', encoding="utf-8")
-        return SimpleNamespace(returncode=0)
+        return 0, None
 
-    monkeypatch.setattr(pytest_diagnostics.subprocess, "run", fake_run)
-    assert (
-        pytest_diagnostics.main(
-            ["--log", str(log), "--junit", str(junit), "tests/test_anything.py"]
-        )
-        == 1
-    )
+    _install_fake_launch(monkeypatch, callback)
+    assert pytest_diagnostics.main(
+        ["--log", str(log), "--junit", str(junit), "tests/test_anything.py"]
+    ) == 1
     assert "EmptyJUnit" in capsys.readouterr().out
 
 
@@ -170,18 +166,15 @@ def test_output_path_collision_is_rejected_before_pytest(tmp_path: Path, monkeyp
     output = tmp_path / "same.file"
     called = False
 
-    def fake_run(*args, **kwargs):
+    def callback(command, raw_handle, timeout_seconds):
         nonlocal called
         called = True
-        return SimpleNamespace(returncode=0)
+        return 0, None
 
-    monkeypatch.setattr(pytest_diagnostics.subprocess, "run", fake_run)
-    assert (
-        pytest_diagnostics.main(
-            ["--log", str(output), "--junit", str(output), "tests/test_anything.py"]
-        )
-        == 2
-    )
+    _install_fake_launch(monkeypatch, callback)
+    assert pytest_diagnostics.main(
+        ["--log", str(output), "--junit", str(output), "tests/test_anything.py"]
+    ) == 2
     assert called is False
     assert "OutputPathCollision" in capsys.readouterr().out
 
@@ -191,26 +184,23 @@ def test_nonpositive_timeout_is_rejected_before_pytest(tmp_path: Path, monkeypat
     junit = tmp_path / "pytest.xml"
     called = False
 
-    def fake_run(*args, **kwargs):
+    def callback(command, raw_handle, timeout_seconds):
         nonlocal called
         called = True
-        return SimpleNamespace(returncode=0)
+        return 0, None
 
-    monkeypatch.setattr(pytest_diagnostics.subprocess, "run", fake_run)
-    assert (
-        pytest_diagnostics.main(
-            [
-                "--log",
-                str(log),
-                "--junit",
-                str(junit),
-                "--timeout-seconds",
-                "0",
-                "tests/test_anything.py",
-            ]
-        )
-        == 2
-    )
+    _install_fake_launch(monkeypatch, callback)
+    assert pytest_diagnostics.main(
+        [
+            "--log",
+            str(log),
+            "--junit",
+            str(junit),
+            "--timeout-seconds",
+            "0",
+            "tests/test_anything.py",
+        ]
+    ) == 2
     assert called is False
     output = capsys.readouterr().out
     assert "InvalidPytestTimeout" in output
@@ -222,27 +212,24 @@ def test_zero_durations_omits_pytest_all_durations_mode(tmp_path: Path, monkeypa
     junit = tmp_path / "pytest.xml"
     seen_command: list[str] = []
 
-    def fake_run(command, **kwargs):
+    def callback(command, raw_handle, timeout_seconds):
         seen_command.extend(command)
-        kwargs["stdout"].write("pass\n")
+        raw_handle.write("pass\n")
         _write_passing_junit(junit)
-        return SimpleNamespace(returncode=0)
+        return 0, None
 
-    monkeypatch.setattr(pytest_diagnostics.subprocess, "run", fake_run)
-    assert (
-        pytest_diagnostics.main(
-            [
-                "--log",
-                str(log),
-                "--junit",
-                str(junit),
-                "--durations",
-                "0",
-                "tests/test_anything.py",
-            ]
-        )
-        == 0
-    )
+    _install_fake_launch(monkeypatch, callback)
+    assert pytest_diagnostics.main(
+        [
+            "--log",
+            str(log),
+            "--junit",
+            str(junit),
+            "--durations",
+            "0",
+            "tests/test_anything.py",
+        ]
+    ) == 0
     assert not any(item.startswith("--durations=") for item in seen_command)
 
 
@@ -277,8 +264,8 @@ def test_main_redacts_pytest_log_and_junit_artifacts(
     exact_secret = "do-not-leak-artifact-secret"
     monkeypatch.setenv("MMM_TEST_SECRET", exact_secret)
 
-    def fake_run(*args, **kwargs):
-        kwargs["stdout"].write(f"token=raw-secret {exact_secret}\n")
+    def callback(command, raw_handle, timeout_seconds):
+        raw_handle.write(f"token=raw-secret {exact_secret}\n")
         _write_junit(
             junit,
             (
@@ -289,9 +276,9 @@ def test_main_redacts_pytest_log_and_junit_artifacts(
             tests=1,
             failures=1,
         )
-        return SimpleNamespace(returncode=1)
+        return 1, None
 
-    monkeypatch.setattr(pytest_diagnostics.subprocess, "run", fake_run)
+    _install_fake_launch(monkeypatch, callback)
     result = pytest_diagnostics.main(
         ["--log", str(log), "--junit", str(junit), "tests/test_anything.py"]
     )
@@ -321,11 +308,11 @@ def test_timeout_returns_124_and_preserves_only_redacted_output(
     log = tmp_path / "pytest.log"
     junit = tmp_path / "pytest.xml"
 
-    def fake_run(command, **kwargs):
-        kwargs["stdout"].write("token=timeout-secret\n")
-        raise subprocess.TimeoutExpired(command, timeout=kwargs["timeout"])
+    def callback(command, raw_handle, timeout_seconds):
+        raw_handle.write("token=timeout-secret\n")
+        return None, subprocess.TimeoutExpired(command, timeout=timeout_seconds)
 
-    monkeypatch.setattr(pytest_diagnostics.subprocess, "run", fake_run)
+    _install_fake_launch(monkeypatch, callback)
     result = pytest_diagnostics.main(
         [
             "--log",
