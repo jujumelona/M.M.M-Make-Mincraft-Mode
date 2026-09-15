@@ -1,10 +1,11 @@
 """Direct OpenAI-compatible llama.cpp adapter.
 
-Tool turns use exactly one native ``/v1/chat/completions`` request and consume only
-``message.tool_calls``. The adapter never regenerates arguments, parses Qwen markup,
-continues a failed tool turn, or retries a semantic response. When parallel native
-tool calls are allowed, independently malformed siblings are converted to explicit
-non-executable host rejection receipts so valid siblings remain usable.
+Tool turns use exactly one native ``/v1/chat/completions`` request. Native
+``message.tool_calls`` remain authoritative. When llama-server leaves Qwen's native
+``<tool_call>`` markup in ``message.content`` with no structured calls, the adapter
+recovers that markup once at the response boundary and validates it against the same
+host schema surface. The adapter never regenerates arguments, retries a semantic
+response, or turns ordinary prose into an executable tool call.
 """
 from __future__ import annotations
 
@@ -25,11 +26,15 @@ from .base import (
     ModelBackendError,
     ToolCall,
 )
-from .qwen_tool_parser import ToolCallValidationError
+from .qwen_tool_parser import ToolCallValidationError, parse_qwen_tool_markup
 
 _DEFAULT_HTTPX_POST = httpx.post
 _DEFAULT_COMPLETION_TIMEOUT_SECONDS = 120.0
 _REJECTED_TOOL_CALL_NAME = "__mmm_rejected_tool_call__"
+_QWEN_TOOL_CALL_OPEN = "<tool_call>"
+_QWEN_FUNCTION_OPEN = "<function="
+_QWEN_PAYLOAD_PARAMETER_OPEN = "<parameter=payload>"
+_QWEN_ARGUMENTS_PARAMETER_OPEN = "<parameter=arguments>"
 
 
 class LlamaCppAdapter(ModelAdapter):
@@ -175,37 +180,83 @@ def _native_tool_completion(
     return _native_tool_generation_response(message, request)
 
 
+def _tool_choice_requires_call(choice: Any) -> bool:
+    if isinstance(choice, Mapping):
+        return True
+    if not isinstance(choice, str):
+        return False
+    return choice.strip().casefold() not in {"", "auto", "none"}
+
+
+def _contains_qwen_tool_markup(text: str) -> bool:
+    return _QWEN_TOOL_CALL_OPEN in text or text.lstrip().startswith(_QWEN_FUNCTION_OPEN)
+
+
+def _qwen_markup_for_schema(
+    text: str,
+    schemas: Mapping[str, Mapping[str, Any]],
+) -> str:
+    """Map Qwen's generic payload container only when no tool owns a payload field."""
+
+    if _QWEN_PAYLOAD_PARAMETER_OPEN not in text:
+        return text
+    for schema in schemas.values():
+        properties = schema.get("properties", {})
+        if isinstance(properties, Mapping) and "payload" in properties:
+            return text
+    return text.replace(
+        _QWEN_PAYLOAD_PARAMETER_OPEN,
+        _QWEN_ARGUMENTS_PARAMETER_OPEN,
+    )
+
+
 def _native_tool_generation_response(
     message: Mapping[str, Any],
     request: GenerationRequest,
 ) -> GenerationResponse:
-    """Decode one native assistant message without enforcing orchestration policy."""
+    """Decode one assistant message while preserving the required-tool contract."""
 
     request = _normalized_tool_request(request)
     schemas = _request_tool_schema_map(request)
     raw_calls = _raw_native_tool_calls(message)
-    if not request.parallel_tool_calls and len(raw_calls) > 1:
-        raise ToolCallValidationError(
-            "model emitted parallel tool calls when they are disabled"
-        )
+    content = message.get("content")
+    reasoning = message.get("reasoning_content", message.get("reasoning"))
+    content_text = content if isinstance(content, str) else ""
+    reasoning_text = reasoning if isinstance(reasoning, str) else ""
 
-    parsed, parse_rejections = _parse_native_tool_calls_isolated(raw_calls)
+    parse_rejections: tuple[ToolCall, ...] = ()
+    parsed: tuple[ToolCall, ...]
+    if raw_calls:
+        if not request.parallel_tool_calls and len(raw_calls) > 1:
+            raise ToolCallValidationError(
+                "model emitted parallel tool calls when they are disabled"
+            )
+        parsed, parse_rejections = _parse_native_tool_calls_isolated(raw_calls)
+    elif _contains_qwen_tool_markup(content_text):
+        content_text, parsed = parse_qwen_tool_markup(
+            _qwen_markup_for_schema(content_text, schemas),
+            schemas,
+        )
+        if not request.parallel_tool_calls and len(parsed) > 1:
+            raise ToolCallValidationError(
+                "model emitted parallel tool calls when they are disabled"
+            )
+    else:
+        parsed = ()
+
     valid_calls, schema_rejections = _partition_tool_calls_against_host_schema(
         parsed, schemas
     )
     rejections = (*parse_rejections, *schema_rejections)
 
-    # Actual malformed native calls remain transport/schema failures. Whether a model
-    # should have called a tool at all is orchestration policy and is intentionally not
-    # enforced at this boundary.
     if not valid_calls and rejections:
         error = str(rejections[0].arguments.get("error", "invalid native tool call"))
         raise ToolCallValidationError(error)
+    if not valid_calls and _tool_choice_requires_call(request.tool_choice):
+        raise ToolCallValidationError(
+            "model omitted required native tool call"
+        )
 
-    content = message.get("content")
-    reasoning = message.get("reasoning_content", message.get("reasoning"))
-    content_text = content if isinstance(content, str) else ""
-    reasoning_text = reasoning if isinstance(reasoning, str) else ""
     return GenerationResponse(
         content=content_text.strip(),
         tool_calls=(*valid_calls, *rejections),
