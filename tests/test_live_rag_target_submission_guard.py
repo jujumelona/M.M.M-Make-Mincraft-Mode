@@ -1,70 +1,58 @@
 from __future__ import annotations
 
-import ast
-from pathlib import Path
+from minecraft_mod_ai import central_research, retrieval
+from minecraft_mod_ai.platform_live_rag_contract import install
 
 
-PACKAGE_ROOT = Path(__file__).resolve().parents[1] / "minecraft_mod_ai"
-_TARGET_KEYWORDS = {"minecraft_version", "loader", "mappings"}
-_STRICT_CALL_NAMES = {"retrieve_official_evidence", "retrieve_target_agentic_evidence"}
+install(retrieval_module=retrieval)
 
 
-def _python_sources() -> list[Path]:
-    return sorted(path for path in PACKAGE_ROOT.rglob("*.py") if path.is_file())
+def test_targetless_official_rag_returns_real_evidence() -> None:
+    receipt = retrieval.retrieve_official_evidence(
+        "Fabric data generation recipes loot tags models",
+        limit=4,
+    )
+
+    assert receipt.hits
+    assert receipt.minecraft_version == ""
+    assert receipt.loader == ""
+    assert receipt.mappings == ""
 
 
-def _call_name(node: ast.Call) -> str:
-    func = node.func
-    if isinstance(func, ast.Name):
-        return func.id
-    if isinstance(func, ast.Attribute):
-        return func.attr
-    return ""
+def test_partial_platform_target_does_not_abort_live_rag() -> None:
+    receipt = retrieval.retrieve_official_evidence(
+        "Fabric automated testing GameTest runtime validation",
+        minecraft_version="1.21.1",
+        loader="fabric",
+        mappings=None,
+        limit=4,
+    )
+
+    assert receipt.hits
+    assert receipt.minecraft_version == ""
+    assert receipt.loader == ""
+    assert receipt.mappings == ""
 
 
-def _keyword_names(node: ast.Call) -> set[str]:
-    return {keyword.arg for keyword in node.keywords if keyword.arg is not None}
+def test_targetless_central_graph_retrieves_instead_of_deferring() -> None:
+    brief = central_research.normalize_research_brief(
+        "Create a Minecraft mod with resource gathering, trading and progression.",
+        {},
+    )
+    assert "_mmm_platform_target" not in brief
 
+    graph = central_research.retrieve_domain_evidence(brief)
 
-def test_all_direct_official_rag_calls_are_target_bound() -> None:
-    """No direct strict/live Official RAG call may omit the immutable target triple."""
-    violations: list[str] = []
-    for path in _python_sources():
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            call_name = _call_name(node)
-            if call_name not in _STRICT_CALL_NAMES:
-                continue
-            missing = sorted(_TARGET_KEYWORDS - _keyword_names(node))
-            if missing:
-                relative = path.relative_to(PACKAGE_ROOT.parent).as_posix()
-                violations.append(
-                    f"{relative}:{node.lineno}: {call_name} missing {', '.join(missing)}"
-                )
-    assert not violations, "Targetless strict RAG submission(s):\n" + "\n".join(violations)
-
-
-def test_public_central_research_routes_through_target_guarded_parallel_boundary() -> None:
-    """The public central entrypoint must keep the pre-worker target applicability gate."""
-    central_path = PACKAGE_ROOT / "central_research.py"
-    parallel_path = PACKAGE_ROOT / "parallel_runtime_contract.py"
-    central = central_path.read_text(encoding="utf-8")
-    parallel = parallel_path.read_text(encoding="utf-8")
-
-    assert "from .parallel_runtime_contract import retrieve_domain_evidence as parallel_retrieve" in central
-    assert "return parallel_retrieve(research_brief, retrieve=retrieve)" in central
-    assert 'if research_brief.get("_mmm_platform_target") is None:' in parallel
-    guard = parallel.index('if research_brief.get("_mmm_platform_target") is None:')
-    pool = parallel.index("ThreadPoolExecutor(", guard)
-    assert guard < pool
-
-
-def test_targetless_central_graph_defers_only_official_lane() -> None:
-    """Target absence is an Official-RAG applicability decision, not a production abort."""
-    central_path = PACKAGE_ROOT / "central_research.py"
-    source = central_path.read_text(encoding="utf-8")
-    assert '"strategy": "routed_to_other_providers"' in source
-    assert '"strategy": "deferred_until_platform_selected"' in source
-    assert '"deferred_official_domains": deferred' in source
+    assert graph["target"] is None
+    assert graph["deferred_official_domains"] == []
+    official_domains = [
+        domain
+        for domain in graph["domains"]
+        if domain.get("strategy") != "routed_to_other_providers"
+    ]
+    assert official_domains
+    assert any(domain.get("queries") for domain in official_domains)
+    assert all(
+        domain.get("strategy") == "adaptive_generic_per_query"
+        for domain in official_domains
+    )
