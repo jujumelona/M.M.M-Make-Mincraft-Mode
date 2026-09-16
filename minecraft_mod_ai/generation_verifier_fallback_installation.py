@@ -2,9 +2,10 @@ from __future__ import annotations
 
 """Real Gradle fallback support for generation-time JDT infrastructure outages.
 
-The generation verifier owns fallback selection directly. This module only
-contains the Gradle execution/receipt helper; ``install`` is intentionally a
-no-op retained for import compatibility and performs no runtime rebinding.
+The generation verifier owns fallback selection directly. This module installs
+that fallback at the AgentToolRuntime boundary so JDT infrastructure failures
+become a real pinned Gradle verification receipt instead of escaping as a raw
+runtime exception.
 """
 
 import re
@@ -16,6 +17,7 @@ from .root_cause_trace import emit_root_cause
 
 _MAX_LOG_TAIL_CHARS = 16 * 1024
 _MAX_LOG_TAIL_LINES = 120
+_INSTALL_MARKER = "_mmm_generation_verifier_fallback_installed"
 _JAVA_TOOLCHAIN_PATTERNS = (
     re.compile(r"\brelease version\s+\d+\s+not supported\b", re.IGNORECASE),
     re.compile(r"\binvalid target release\s*:\s*\d+\b", re.IGNORECASE),
@@ -201,10 +203,85 @@ def _gradle_fallback_receipt(
     return runtime_module._bounded_result(receipt)
 
 
-def install() -> None:
-    """Compatibility hook; fallback dispatch is owned by the verifier itself."""
+def _is_jdt_infrastructure_error(exc: BaseException) -> bool:
+    """Exclude host argument mistakes; fallback only for JDT/MCP runtime outages."""
 
-    return
+    text = str(exc or "")
+    lowered = text.casefold()
+    if "verifier relative_files must" in lowered or "invalid task diagnostic path" in lowered:
+        return False
+    return any(
+        marker in lowered
+        for marker in (
+            "mcp tool 'java_diagnostics' returned an error",
+            "jdt ls",
+            "jdt_diagnostics_unavailable",
+            "jdt diagnostics unavailable",
+        )
+    )
+
+
+def install() -> None:
+    """Install the generation-only JDT -> pinned Gradle verifier fallback once."""
+
+    from . import agent_tool_runtime as runtime_module
+
+    runtime_type = runtime_module.AgentToolRuntime
+    current = runtime_type._call
+    if bool(getattr(current, _INSTALL_MARKER, False)):
+        return
+
+    def call_with_generation_verifier_fallback(
+        self: Any,
+        stage: str,
+        name: str,
+        arguments: Any,
+        *,
+        external_server_ids: frozenset[str] | None,
+    ) -> dict[str, Any]:
+        try:
+            return current(
+                self,
+                stage,
+                name,
+                arguments,
+                external_server_ids=external_server_ids,
+            )
+        except runtime_module.AgentToolRuntimeError as exc:
+            selected = self._stage(stage)
+            tool_name = str(name or "").strip()
+            if (
+                selected != "generation"
+                or tool_name != "java_diagnostics"
+                or not _is_jdt_infrastructure_error(exc)
+            ):
+                raise
+
+            project_root, _project_argument = runtime_module._discover_model_project_root(
+                self.workspace_root
+            )
+            emit_root_cause(
+                "generation_verifier_gradle_fallback_start",
+                stage="generation",
+                operation="run_gradle_build",
+                gate="target_compile",
+                result="START",
+                reason="java_diagnostics infrastructure unavailable",
+                details={
+                    "project_root": str(project_root),
+                    "jdt_error": f"{type(exc).__name__}: {exc}",
+                },
+            )
+            return _gradle_fallback_receipt(
+                self,
+                Path(project_root),
+                runtime_module=runtime_module,
+                jdt_error=exc,
+            )
+
+    setattr(call_with_generation_verifier_fallback, _INSTALL_MARKER, True)
+    call_with_generation_verifier_fallback.__wrapped__ = current  # type: ignore[attr-defined]
+    runtime_type._call = call_with_generation_verifier_fallback
 
 
 __all__ = ["install"]
