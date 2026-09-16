@@ -7,6 +7,7 @@ from typing import Any
 from .agent_capability_context import reviewed_mcp_servers_for_model_role
 from .agent_roles import skills_for_model_role
 from .mutation_authority import current_mutation_error
+from .target_contract import validate_target_coordinates
 
 _SCHEMA_VERSION = "mmm/host-owned-coder-grounding-v1"
 _KIND_SKILL: dict[str, str] = {
@@ -123,6 +124,9 @@ def build_coder_grounding(
     if not kind:
         raise ValueError("module_kind must be non-empty")
 
+    target = validate_target_coordinates(minecraft_version, loader, mappings)
+    java_major = target.minimum_java_major or 17
+
     eligible_skills = tuple(skills_for_model_role("coder"))
     eligible_set = set(eligible_skills)
     specialized = _KIND_SKILL.get(kind, "generate-fabric-core")
@@ -166,10 +170,12 @@ def build_coder_grounding(
         "stage": "generation",
         "model_role": "coder",
         "target": {
-            "minecraft_version": str(minecraft_version),
-            "loader": str(loader),
-            "mappings": str(mappings),
-            "java": "17",
+            "minecraft_version": target.minecraft_version,
+            "loader": target.loader,
+            "mappings": target.mappings,
+            "mappings_applicable": target.mappings_applicable,
+            "naming_regime": target.naming_regime,
+            "java": str(java_major),
         },
         "required_skills": list(required),
         "reviewed_mcp_servers": list(reviewed_servers),
