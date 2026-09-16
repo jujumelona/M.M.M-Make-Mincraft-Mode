@@ -11,11 +11,12 @@ _HOST_BASELINE_CAUSAL_FACTS = frozenset(
 
 
 def host_baseline_evidence_ready(messages: Sequence[Mapping[str, Any]]) -> bool:
-    """Return whether host-validated coder evidence already satisfies baseline grounding.
+    """Return whether host-validated evidence is actionable before the first coder decode.
 
-    Supplemental model retrieval remains available; this only prevents the router
-    from making a retrieval tool invocation mandatory when the host has already
-    bound exact project evidence before the first coder decode.
+    A project snapshot proves repository identity, but it does not by itself prove the
+    Minecraft/Fabric API details needed to author a fresh Java implementation. When the
+    approved research binding contains no selected facts, keep fresh retrieval mandatory
+    so the coder must query the version-pinned code/API evidence surface before mutation.
     """
     for message in messages:
         content = message.get("content")
@@ -68,6 +69,20 @@ def _find_host_grounding(value: Any) -> Mapping[str, Any] | None:
     return None
 
 
+def _selected_research_fact_count(bindings: Mapping[str, Any]) -> int:
+    research = bindings.get("approved_research_rag")
+    if not isinstance(research, Mapping):
+        return 0
+    receipt = research.get("receipt")
+    if not isinstance(receipt, Mapping):
+        return 0
+    try:
+        selected = int(receipt.get("selected_fact_count", 0) or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return max(0, selected)
+
+
 def _grounding_ready(grounding: Mapping[str, Any]) -> bool:
     policy = grounding.get("policy")
     bindings = grounding.get("evidence_bindings")
@@ -86,10 +101,18 @@ def _grounding_ready(grounding: Mapping[str, Any]) -> bool:
     receipt = project.get("receipt")
     if not isinstance(receipt, Mapping):
         return False
-    return bool(
+    project_ready = bool(
         str(receipt.get("project_sha256", "")).strip()
         and str(receipt.get("observations_sha256", "")).strip()
     )
+    if not project_ready:
+        return False
+
+    # Repository identity alone is not actionable API evidence for fresh generated
+    # Java. CustomModuleGenerator binds require_fresh_evidence=True, so an empty
+    # approved research selection must leave the baseline unsatisfied and force one
+    # version-pinned RAG/API retrieval before ACT.
+    return _selected_research_fact_count(bindings) > 0
 
 
 __all__ = ["host_baseline_causal_facts", "host_baseline_evidence_ready"]
