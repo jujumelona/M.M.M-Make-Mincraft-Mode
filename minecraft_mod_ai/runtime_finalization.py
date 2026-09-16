@@ -74,7 +74,6 @@ def finalize_runtime() -> None:
         from .context_budget_preflight import run_context_budget_preflight
         from .deep_design_execution_contract import install as install_deep_design_execution
         from .design_resolution_provenance_contract import install_design_resolution_provenance_contract
-        from .direct_task_mutation_authority_contract import install as install_direct_task_mutation_authority
         from .evidence_first_pipeline_contract import install as install_evidence_first_pipeline
         from .evidence_obligation_contract import install_evidence_obligation_contract
         from .execution_feedback_exception_scope_contract import install as install_execution_feedback_exception_scope
@@ -201,10 +200,6 @@ def finalize_runtime() -> None:
         install_model_output_atomicity(model_router_module=model_router)
         assert_model_output_atomicity(model_router_module=model_router)
 
-        install_direct_task_mutation_authority(
-            custom_module_generator_module=custom_module_generator,
-            loop_module=progress_aware_tool_loop,
-        )
         install_repair_mutation_recovery(progress_aware_tool_loop)
         assert_repair_mutation_recovery(progress_aware_tool_loop)
         install_mutation_authority_final_guard(progress_aware_tool_loop)
