@@ -14,15 +14,14 @@ _HOST_BASELINE_CAUSAL_FACTS = frozenset(
 def host_baseline_evidence_ready(messages: Sequence[Mapping[str, Any]]) -> bool:
     """Return whether host-validated baseline evidence is ready for the coder.
 
-    The host owns baseline grounding before the first coder decode. Once that grounding
-    has a valid project receipt and the host policy marks it resolved, the coder must not
-    reopen a mandatory retrieval phase merely because the writable target is a fresh Java
-    file or because the optional approved-research selection is empty.
+    A host receipt is baseline evidence only when it proves that at least one project
+    observation was actually collected. A hash of an empty observation set is a valid
+    integrity receipt, but it is not evidence and must not suppress the coder's retrieval
+    phase.
 
     Target localization and write authority remain separate concerns and are enforced by
-    the task capsule/tool loop. Additional retrieval can still be requested by stages that
-    genuinely need evidence, but it is not allowed to invalidate already-resolved host
-    grounding.
+    the task capsule/tool loop. Additional retrieval remains available whenever the host
+    baseline is incomplete.
     """
 
     for message in messages:
@@ -81,6 +80,11 @@ def _find_host_grounding(value: Any) -> Mapping[str, Any] | None:
     return None
 
 
+def _positive_observation_count(receipt: Mapping[str, Any]) -> bool:
+    value = receipt.get("observation_count")
+    return type(value) is int and value > 0
+
+
 def _grounding_ready(grounding: Mapping[str, Any]) -> bool:
     policy = grounding.get("policy")
     bindings = grounding.get("evidence_bindings")
@@ -97,7 +101,7 @@ def _grounding_ready(grounding: Mapping[str, Any]) -> bool:
     if not isinstance(project, Mapping):
         return False
     receipt = project.get("receipt")
-    if not isinstance(receipt, Mapping):
+    if not isinstance(receipt, Mapping) or not _positive_observation_count(receipt):
         return False
     return bool(
         str(receipt.get("project_sha256", "")).strip()
