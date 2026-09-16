@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-"""Real Gradle fallback support for generation-time JDT infrastructure outages.
+"""Real Gradle verification support for generation-time JDT uncertainty.
 
 The canonical generation verifier calls this module directly. It intentionally performs
-no runtime method rebinding; the generation verifier already owns fallback selection.
+no runtime method rebinding; the generation verifier already owns fallback/corroboration
+selection.
 """
 
 import re
@@ -160,18 +161,12 @@ def _structured_fallback_receipt(
     *,
     runtime_module: Any,
 ) -> dict[str, Any]:
-    """Keep fallback verifier semantics structured for host adjudication.
-
-    Generic tool-result bounding is applied later when the observation is reinjected into
-    the model conversation. Applying it here destroys ``diagnostics`` before the host can
-    classify a real Gradle failure, reproducing the same false verifier-unavailable path
-    that the JDT verifier must avoid.
-    """
+    """Keep fallback verifier semantics structured for host adjudication."""
 
     sanitized = runtime_module._sanitize_observation(receipt)
     if not isinstance(sanitized, Mapping):
         raise runtime_module.AgentToolRuntimeError(
-            "Gradle fallback returned a non-mapping diagnostic receipt"
+            "Gradle verification returned a non-mapping diagnostic receipt"
         )
     payload = dict(sanitized)
     payload["_mmm_observation"] = {
@@ -189,6 +184,7 @@ def _gradle_fallback_receipt(
     runtime_module: Any,
     jdt_error: BaseException,
     gradle_runner_factory: Any | None = None,
+    corroboration: bool = False,
 ) -> dict[str, Any]:
     """Run the pinned Gradle build and return a verifier-compatible receipt."""
 
@@ -201,26 +197,47 @@ def _gradle_fallback_receipt(
     last_log = _last_gradle_log(report, report_dict)
     status, failure_code = _fallback_status(report, last_log)
     diagnostics = _fallback_diagnostics(report, last_log, failure_code=failure_code)
+    reason_text = f"{type(jdt_error).__name__}: {jdt_error}"
     receipt: dict[str, Any] = {
         "status": status,
         "complete": True,
-        "session_id": "gradle-fallback",
+        "session_id": "gradle-corroboration" if corroboration else "gradle-fallback",
         "model_id": f"gradle:{report.gradle_version}",
         "diagnostics": diagnostics,
         "error_count": len(diagnostics),
         "verifier_backend": "gradle_build",
-        "fallback_from": "java_diagnostics",
-        "jdt_unavailable_reason": f"{type(jdt_error).__name__}: {jdt_error}",
         "build": report_dict,
     }
+    if corroboration:
+        receipt.update(
+            {
+                "corroboration_from": "java_diagnostics",
+                "jdt_corroboration_reason": reason_text,
+            }
+        )
+    else:
+        receipt.update(
+            {
+                "fallback_from": "java_diagnostics",
+                "jdt_unavailable_reason": reason_text,
+            }
+        )
     receipt.update(_failure_fields(failure_code))
     emit_root_cause(
-        "generation_verifier_gradle_fallback_result",
+        (
+            "generation_verifier_gradle_corroboration_result"
+            if corroboration
+            else "generation_verifier_gradle_fallback_result"
+        ),
         stage="generation",
         operation="run_gradle_build",
         gate="target_compile",
         result=status,
-        reason=_fallback_reason(failure_code),
+        reason=(
+            "JDT dependency-resolution diagnostics corroborated with pinned Gradle build"
+            if corroboration
+            else _fallback_reason(failure_code)
+        ),
         details={"result": receipt},
     )
     return _structured_fallback_receipt(receipt, runtime_module=runtime_module)
