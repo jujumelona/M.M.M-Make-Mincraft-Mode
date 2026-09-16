@@ -6,7 +6,7 @@ from minecraft_mod_ai.grounding_policy import host_baseline_evidence_ready
 from minecraft_mod_ai.host_grounding import _SCHEMA_VERSION
 
 
-def _messages(*, selected_fact_count: int):
+def _messages(*, selected_fact_count: int, fresh_java: bool):
     grounding = {
         "schema_version": _SCHEMA_VERSION,
         "policy": {
@@ -29,17 +29,53 @@ def _messages(*, selected_fact_count: int):
             },
         },
     }
-    return [
+    messages = []
+    if fresh_java:
+        messages.append(
+            {
+                "role": "developer",
+                "content": json.dumps(
+                    {
+                        "schema_version": "mmm/small-model-task-capsule",
+                        "reuse_action": "fresh",
+                        "mutation_target": {
+                            "path": "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+                        },
+                    }
+                ),
+            }
+        )
+    messages.append(
         {
             "role": "user",
             "content": json.dumps({"host_grounding": grounding}),
         }
-    ]
+    )
+    return messages
 
 
-def test_empty_research_does_not_bypass_required_fresh_retrieval():
-    assert host_baseline_evidence_ready(_messages(selected_fact_count=0)) is False
+def test_fresh_java_with_empty_research_requires_retrieval():
+    assert (
+        host_baseline_evidence_ready(
+            _messages(selected_fact_count=0, fresh_java=True)
+        )
+        is False
+    )
 
 
-def test_selected_research_can_satisfy_host_baseline_grounding():
-    assert host_baseline_evidence_ready(_messages(selected_fact_count=1)) is True
+def test_fresh_java_with_selected_research_can_use_host_grounding():
+    assert (
+        host_baseline_evidence_ready(
+            _messages(selected_fact_count=1, fresh_java=True)
+        )
+        is True
+    )
+
+
+def test_nonfresh_turn_preserves_existing_host_grounding_contract():
+    assert (
+        host_baseline_evidence_ready(
+            _messages(selected_fact_count=0, fresh_java=False)
+        )
+        is True
+    )
