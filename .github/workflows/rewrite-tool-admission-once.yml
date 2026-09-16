@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   rewrite:
-    if: github.event.head_commit.message == 'Retry clean tool admission rewrite'
+    if: github.event.head_commit.message == 'Retry tool admission rewrite after lint'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -70,9 +70,7 @@ jobs:
                   "description": "Apply one source edit.",
                   "parameters": {
                       "type": "object",
-                      "properties": {
-                          "path": {"type": "string"},
-                      },
+                      "properties": {"path": {"type": "string"}},
                       "required": ["path"],
                       "additionalProperties": False,
                   },
@@ -93,10 +91,7 @@ jobs:
 
 
           def _named_apply_source_edit_choice() -> dict:
-              return {
-                  "type": "function",
-                  "function": {"name": "apply_source_edit"},
-              }
+              return {"type": "function", "function": {"name": "apply_source_edit"}}
 
 
           def _valid_call(call_id: str, path: str) -> dict:
@@ -122,7 +117,6 @@ jobs:
                   {"content": "I cannot make a safe edit from the current evidence."},
                   _request(tool_choice=_named_apply_source_edit_choice()),
               )
-
               assert response.content == "I cannot make a safe edit from the current evidence."
               _assert_rejection(response, "REQUIRED_TOOL_MISSING")
 
@@ -132,7 +126,6 @@ jobs:
                   {"content": "", "tool_calls": []},
                   _request(tool_choice="required"),
               )
-
               assert response.content == ""
               assert response.reasoning_content == ""
               _assert_rejection(response, "REQUIRED_TOOL_MISSING")
@@ -142,20 +135,14 @@ jobs:
               response = _native_tool_generation_response(
                   {
                       "content": "",
-                      "tool_calls": [
-                          {
-                              "id": "broken",
-                              "type": "function",
-                              "function": {
-                                  "name": "apply_source_edit",
-                                  "arguments": "{",
-                              },
-                          }
-                      ],
+                      "tool_calls": [{
+                          "id": "broken",
+                          "type": "function",
+                          "function": {"name": "apply_source_edit", "arguments": "{"},
+                      }],
                   },
                   _request(),
               )
-
               _assert_rejection(response, "TOOL_CALL_MALFORMED")
 
 
@@ -170,9 +157,53 @@ jobs:
                   },
                   _request(parallel_tool_calls=False),
               )
-
               _assert_rejection(response, "PARALLEL_TOOL_CALLS_DISABLED")
           PY
+      - name: Normalize changed files to repository lint contract
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          adapter_path = Path('minecraft_mod_ai/model_adapters/llama_cpp_adapter.py')
+          adapter = adapter_path.read_text()
+          replacements = {
+              'raise RuntimeError("native tool transport exposed a schema without function metadata")':
+                  'raise TypeError("native tool transport exposed a schema without function metadata")',
+              'raise RuntimeError("native llama tool transport dropped the tools surface")':
+                  'raise TypeError("native llama tool transport dropped the tools surface")',
+              'raise RuntimeError("native llama tool transport exposed a non-object schema")':
+                  'raise TypeError("native llama tool transport exposed a non-object schema")',
+              'raise RuntimeError("tool schema lacks function metadata")':
+                  'raise TypeError("tool schema lacks function metadata")',
+              'raise ValueError("structured tool call is not an object")':
+                  'raise TypeError("structured tool call is not an object")',
+              'raise ValueError("structured tool call lacks function metadata")':
+                  'raise TypeError("structured tool call lacks function metadata")',
+              'raise ValueError("structured tool arguments must decode to an object")':
+                  'raise TypeError("structured tool arguments must decode to an object")',
+              'raise ValueError("structured tool arguments have an invalid shape")':
+                  'raise TypeError("structured tool arguments have an invalid shape")',
+          }
+          for old, new in replacements.items():
+              adapter = adapter.replace(old, new)
+          adapter_path.write_text(adapter)
+
+          qwen_path = Path('minecraft_mod_ai/model_adapters/qwen_tool_parser.py')
+          qwen = qwen_path.read_text().replace(
+              'except Exception as exc:',
+              'except (TypeError, ValueError) as exc:',
+          )
+          qwen_path.write_text(qwen)
+
+          loop_path = Path('minecraft_mod_ai/progress_aware_tool_loop.py')
+          loop = loop_path.read_text()
+          old = '''        if forced_verify_tool is not None:\n            if len(turn.tool_calls) != 1 or turn.tool_calls[0].name != forced_verify_tool:\n                called = ", ".join(call.name for call in turn.tool_calls) or "<none>"\n                raise ModelConfigurationError(\n                    f"VERIFIER_PROTOCOL_VIOLATION: expected exactly {forced_verify_tool!r}; received {called}."\n                )\n'''
+          new = '''        if (\n            forced_verify_tool is not None\n            and (len(turn.tool_calls) != 1 or turn.tool_calls[0].name != forced_verify_tool)\n        ):\n            called = ", ".join(call.name for call in turn.tool_calls) or "<none>"\n            raise ModelConfigurationError(\n                f"VERIFIER_PROTOCOL_VIOLATION: expected exactly {forced_verify_tool!r}; received {called}."\n            )\n'''
+          if old not in loop:
+              raise SystemExit('forced verifier lint normalization anchor missing')
+          loop_path.write_text(loop.replace(old, new, 1))
+          PY
+          ruff check --fix --exit-zero minecraft_mod_ai/model_adapters/qwen_tool_parser.py minecraft_mod_ai/model_adapters/llama_cpp_adapter.py minecraft_mod_ai/progress_aware_tool_loop.py tests/test_tool_call_admission_contract.py tests/test_llama_cpp_adapter_tool_policy.py
       - name: Structural guard
         run: |
           set -euo pipefail
