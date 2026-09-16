@@ -191,7 +191,11 @@ def _project_jdk_package(major: int) -> tuple[str, str]:
             and isinstance(checksum, str)
             and _SHA256.fullmatch(checksum)
         ):
-            return link, checksum.lower()
+            download_url = (
+                f"{ADOPTIUM_BASE_URL}/binary/latest/{major}/ga/linux/{architecture}"
+                "/jdk/hotspot/normal/eclipse"
+            )
+            return download_url, checksum.lower()
     raise JDTLSBootstrapError(
         f"Adoptium metadata for Java {major} did not contain a verifiable JDK package."
     )
@@ -401,10 +405,13 @@ def _install_project_jdk(major: int) -> Path:
         return target.resolve()
 
 
-def _ensure_project_jdk() -> Path | None:
-    major = _requested_project_java_major()
+def ensure_project_jdk(required_major: int | None = None) -> Path | None:
+    """Return the exact project JDK, provisioning it only when verification needs it."""
+    major = required_major if required_major is not None else _requested_project_java_major()
     if major is None:
         return None
+    if major <= 0:
+        raise JDTLSBootstrapError(f"Project Java major must be positive; got {major!r}.")
     home = _find_matching_jdk(major)
     if home is None:
         home = _install_project_jdk(major)
@@ -417,6 +424,10 @@ def _ensure_project_jdk() -> Path | None:
     resolved = home.resolve()
     os.environ["MMM_PROJECT_JAVA_HOME"] = str(resolved)
     return resolved
+
+
+def _ensure_project_jdk() -> Path | None:
+    return ensure_project_jdk()
 
 
 def _find_launcher(root: Path) -> Path | None:

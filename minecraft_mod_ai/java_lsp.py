@@ -219,6 +219,18 @@ def _resolve_project_java_home(required_major: int | None = None) -> Path:
         if major == required:
             return home
     detail = ", ".join(observed) if observed else "no usable Java homes discovered"
+    try:
+        from .jdtls_bootstrap import JDTLSBootstrapError, ensure_project_jdk
+
+        provisioned = ensure_project_jdk(required)
+    except (JDTLSBootstrapError, OSError, ValueError) as exc:
+        raise JDTWorkspaceBootstrapError(
+            "JDT workspace bootstrap failure: no project JDK matching "
+            f"MMM_JAVA_VERSION={required} was found locally ({detail}); "
+            f"lazy provisioning failed: {type(exc).__name__}: {exc}"
+        ) from exc
+    if provisioned is not None:
+        return provisioned.resolve()
     raise JDTWorkspaceBootstrapError(
         "JDT workspace bootstrap failure: no project JDK matching "
         f"MMM_JAVA_VERSION={required} was found ({detail})."
