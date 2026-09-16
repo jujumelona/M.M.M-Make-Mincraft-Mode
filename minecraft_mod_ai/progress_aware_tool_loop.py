@@ -118,6 +118,7 @@ _SOURCE_CREATE_OPERATIONS = frozenset({
     "create", "create_file", "create_java_type", "create_class", "create_type",
     "write", "write_file",
 })
+_MODEL_REJECTION_TOOL_NAME = "__mmm_rejected_tool_call__"
 _HOST_AUTHORITY_ROLES = frozenset({"system", "developer", "tool"})
 _CODE_MARKERS = frozenset({
     "class ", "interface ", "enum ", "record ", "public ", "private ", "protected ",
@@ -682,6 +683,82 @@ def _verification_outcome(tool_name: str, payload: Mapping[str, Any]) -> str:
         except (TypeError, ValueError, OverflowError):
             return "UNAVAILABLE"
     return "PASS"
+
+
+def _fixed_point_tool_results(
+    executed: Sequence[tuple[Any, Mapping[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Use semantic outcomes, not volatile transport text, as loop identity."""
+    stable: list[dict[str, Any]] = []
+    for call, payload in executed:
+        if call.name in _VERIFY_TOOLS:
+            stable.append({
+                "name": call.name,
+                "verification_outcome": _verification_outcome(call.name, payload),
+            })
+        else:
+            stable.append({
+                "name": call.name,
+                "ok": bool(payload.get("ok")),
+                "failure_code": payload.get("failure_code"),
+            })
+    return stable
+
+
+def _atomic_output_recovery_instruction(request: GenerationRequest) -> str:
+    names = frozenset(_tool_name(schema) for schema in request.tools if _tool_name(schema))
+    if names & _MUTATION_ACT_TOOLS:
+        return (
+            "The preceding assistant action exceeded the bounded output allowance and is discarded. "
+            "Do not continue, reproduce, or complete that oversized payload. Call exactly one visible "
+            "source-mutation tool now with exactly one small semantic edit and no prose. For a new Java "
+            "file, the first action must be create_java_type with only package_name and an empty type "
+            "declaration; never create a complete Java file with create_file. After each tool observation, "
+            "add at most one import with add_java_import or one field/constructor/method/nested declaration "
+            "with insert_java_member. For an existing file, use one bounded replace_exact/insert action. "
+            "The host will preserve the same mutation target and workspace state between actions."
+        )
+    return (
+        "The preceding assistant action exceeded the bounded output allowance and is discarded. "
+        "Do not continue that oversized payload. Produce exactly one concise visible tool call or one "
+        "concise final answer using the already-grounded state; do not emit a long reconstruction."
+    )
+
+
+def _model_tool_rejection_feedback(
+    calls: Sequence[Any],
+) -> tuple[str, list[Mapping[str, Any]]] | None:
+    """Convert adapter admission rejections into retryable model feedback."""
+    rejections: list[Mapping[str, Any]] = []
+    for call in calls:
+        if str(getattr(call, "name", "") or "").strip() != _MODEL_REJECTION_TOOL_NAME:
+            continue
+        arguments = getattr(call, "arguments", None)
+        if isinstance(arguments, Mapping):
+            rejections.append(dict(arguments))
+        else:
+            rejections.append({
+                "failure_code": "MODEL_TOOL_CALL_REJECTED",
+                "error": "invalid rejection payload",
+            })
+    if not rejections:
+        return None
+
+    details: list[str] = []
+    for payload in rejections:
+        code = str(payload.get("failure_code") or "MODEL_TOOL_CALL_REJECTED").strip()
+        name = str(payload.get("rejected_name") or "").strip()
+        error = str(payload.get("error") or "").strip()
+        line = code + (f" for {name!r}" if name else "")
+        if error:
+            line += f": {error}"
+        details.append(line)
+    return (
+        "The previous model tool call was rejected during host admission and was not executed. "
+        "Correct the tool name/arguments to match the currently exposed schema and try the required "
+        "phase action again. Rejections: " + " | ".join(details),
+        rejections,
+    )
 
 
 @dataclass(frozen=True)
@@ -1407,6 +1484,43 @@ def _generate_with_tools_impl(
             parallel_tool_calls=parallel,
         )
 
+        rejection = _model_tool_rejection_feedback(turn.tool_calls)
+        if rejection is not None:
+            feedback, rejection_payloads = rejection
+            for payload in rejection_payloads:
+                state.record_failure(
+                    str(payload.get("rejected_name") or "model_tool_call"),
+                    str(
+                        payload.get("error")
+                        or payload.get("failure_code")
+                        or "model tool call rejected"
+                    ),
+                )
+            repeated = state.record_no_progress_result({
+                "phase": state.phase.value,
+                "validation": state.validation_status,
+                "verifier": state.latest_verifier_fingerprint,
+                "model_tool_rejections": rejection_payloads,
+            })
+            messages.append({"role": "assistant", "content": turn.content or None})
+            messages.append({"role": "system", "content": feedback})
+            emit_root_cause(
+                "model_tool_call_rejected",
+                stage=stage,
+                operation="generate_with_tools",
+                gate="tool_admission",
+                result="RETRY",
+                reason="model tool call rejected before phase checks/runtime execution",
+                details={
+                    "step_index": state.step_index,
+                    "phase": state.phase.value,
+                    "rejections": rejection_payloads,
+                },
+            )
+            if repeated:
+                raise _fixed_point_error(state)
+            continue
+
         if not turn.tool_calls:
             content = turn.content.strip()
             if not content:
@@ -1661,18 +1775,7 @@ def _generate_with_tools_impl(
             if state.mutation_context else LocalizationStage.NEED_FILE.value
         )
         call_info = [{"name": call.name, "arguments": dict(call.arguments)} for call in turn.tool_calls]
-        result_info = [
-            {
-                "name": call.name,
-                "ok": payload.get("ok"),
-                "failure_code": payload.get("failure_code"),
-                "verification_outcome": (
-                    _verification_outcome(call.name, payload)
-                    if call.name in _VERIFY_TOOLS else None
-                ),
-            }
-            for call, payload in executed
-        ]
+        result_info = _fixed_point_tool_results(executed)
 
         if progress:
             state.clear_no_progress_result()
@@ -1783,6 +1886,9 @@ __all__ = [
     "_READ_OBSERVE_TOOLS",
     "_RECOVERY_EVIDENCE_TOOLS",
     "_VERIFY_TOOLS",
+    "_atomic_output_recovery_instruction",
+    "_fixed_point_tool_results",
+    "_model_tool_rejection_feedback",
     "ExecutionStepTrace",
     "HostRunState",
     "LocalizationStage",
