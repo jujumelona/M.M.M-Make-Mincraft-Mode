@@ -80,12 +80,7 @@ def _normalized_scope_path(path: str) -> str:
     return "" if normalized in {"", "."} else normalized
 
 
-def custom_module_path_protected(path: str) -> bool:
-    """Reject protected paths and paths outside the active host mutation authority."""
-
-    normalized = _normalized_scope_path(path)
-    if not normalized:
-        return False
+def _normalized_path_protected(normalized: str) -> bool:
     if current_mutation_error(normalized) is not None:
         return True
     folded = normalized.casefold()
@@ -93,6 +88,15 @@ def custom_module_path_protected(path: str) -> bool:
         folded == root or folded.startswith(root + "/")
         for root in _PROTECTED_WRITE_PREFIXES
     )
+
+
+def custom_module_path_protected(path: str) -> bool:
+    """Reject protected paths and paths outside the active host mutation authority."""
+
+    normalized = _normalized_scope_path(path)
+    if not normalized:
+        return False
+    return _normalized_path_protected(normalized)
 
 
 def custom_module_path_allowed(path: str) -> bool:
