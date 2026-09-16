@@ -142,7 +142,7 @@ def test_phase_handoff_closes_old_tool_protocol_and_preserves_observation_data()
                     "type": "function",
                     "function": {
                         "name": "search_code_rag",
-                        "arguments": "{\\"query\\":\\"DebugToken source\\"}",
+                        "arguments": "{}",
                     },
                 }
             ],
@@ -151,7 +151,7 @@ def test_phase_handoff_closes_old_tool_protocol_and_preserves_observation_data()
             "role": "tool",
             "tool_call_id": "call_search",
             "name": "search_code_rag",
-            "content": "{\\"ok\\":true,\\"result\\":{\\"source\\":\\"public final class DebugToken {}\\"}}",
+            "content": "public final class DebugToken {}",
         },
     ]
 
