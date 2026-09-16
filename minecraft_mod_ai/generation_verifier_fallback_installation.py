@@ -2,22 +2,19 @@ from __future__ import annotations
 
 """Real Gradle fallback support for generation-time JDT infrastructure outages.
 
-The generation verifier owns fallback selection directly. This module installs
-that fallback at the AgentToolRuntime boundary so JDT infrastructure failures
-become a real pinned Gradle verification receipt instead of escaping as a raw
-runtime exception.
+The canonical generation verifier calls this module directly. It intentionally performs
+no runtime method rebinding; the generation verifier already owns fallback selection.
 """
 
 import re
 from collections import deque
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from .root_cause_trace import emit_root_cause
 
 _MAX_LOG_TAIL_CHARS = 16 * 1024
 _MAX_LOG_TAIL_LINES = 120
-_INSTALL_MARKER = "_mmm_generation_verifier_fallback_installed"
 _JAVA_TOOLCHAIN_PATTERNS = (
     re.compile(r"\brelease version\s+\d+\s+not supported\b", re.IGNORECASE),
     re.compile(r"\binvalid target release\s*:\s*\d+\b", re.IGNORECASE),
@@ -38,6 +35,27 @@ _FALLBACK_REASONS = {
 _DEFAULT_FALLBACK_REASON = "JDT verifier unavailable; pinned Gradle build used as host verifier"
 
 
+def _collect_log_evidence(stream: TextIO) -> tuple[deque[str], list[str]]:
+    tail_lines: deque[str] = deque(maxlen=_MAX_LOG_TAIL_LINES)
+    compiler_lines: list[str] = []
+    compiler_chars = 0
+    context_remaining = 0
+    while chunk := stream.readline(_MAX_LOG_TAIL_CHARS):
+        line = chunk.rstrip("\r\n")
+        tail_lines.append(line)
+        if re.search(r"\.java:\d+:\s*(?:error|warning):", line):
+            context_remaining = 4
+        if not context_remaining:
+            continue
+        remaining = _MAX_LOG_TAIL_CHARS // 2 - compiler_chars
+        if remaining > 1:
+            selected = line[: remaining - 1]
+            compiler_lines.append(selected)
+            compiler_chars += len(selected) + 1
+        context_remaining -= 1
+    return tail_lines, compiler_lines
+
+
 def _bounded_log_tail(path: str | None) -> str:
     if not path:
         return ""
@@ -45,25 +63,8 @@ def _bounded_log_tail(path: str | None) -> str:
     try:
         if not candidate.is_file() or candidate.is_symlink():
             return ""
-        tail_lines: deque[str] = deque(maxlen=_MAX_LOG_TAIL_LINES)
-        compiler_lines: list[str] = []
-        compiler_chars = 0
-        context_remaining = 0
-        # Keep the first compiler errors even when --stacktrace pushes them out
-        # of the tail. Bound memory as well as the returned model observation.
         with candidate.open(encoding="utf-8", errors="replace") as stream:
-            while chunk := stream.readline(_MAX_LOG_TAIL_CHARS):
-                line = chunk.rstrip("\r\n")
-                tail_lines.append(line)
-                if re.search(r"\.java:\d+:\s*(?:error|warning):", line):
-                    context_remaining = 4
-                if context_remaining:
-                    remaining = _MAX_LOG_TAIL_CHARS // 2 - compiler_chars
-                    if remaining > 1:
-                        selected = line[:remaining - 1]
-                        compiler_lines.append(selected)
-                        compiler_chars += len(selected) + 1
-                    context_remaining -= 1
+            tail_lines, compiler_lines = _collect_log_evidence(stream)
     except OSError:
         return ""
     tail = "\n".join(tail_lines)
@@ -79,8 +80,6 @@ def _is_java_toolchain_failure(*parts: str | None) -> bool:
 
 
 def _is_validation_input_change(*parts: str | None) -> bool:
-    """Return true only for the host's non-certifiable input-snapshot condition."""
-
     text = "\n".join(str(part or "") for part in parts)
     return all(pattern.search(text) is not None for pattern in _VALIDATION_INPUT_CHANGE_PATTERNS)
 
@@ -173,11 +172,7 @@ def _gradle_fallback_receipt(
     report_dict = report.to_dict()
     last_log = _last_gradle_log(report, report_dict)
     status, failure_code = _fallback_status(report, last_log)
-    diagnostics = _fallback_diagnostics(
-        report,
-        last_log,
-        failure_code=failure_code,
-    )
+    diagnostics = _fallback_diagnostics(report, last_log, failure_code=failure_code)
     receipt: dict[str, Any] = {
         "status": status,
         "complete": True,
@@ -203,85 +198,4 @@ def _gradle_fallback_receipt(
     return runtime_module._bounded_result(receipt)
 
 
-def _is_jdt_infrastructure_error(exc: BaseException) -> bool:
-    """Exclude host argument mistakes; fallback only for JDT/MCP runtime outages."""
-
-    text = str(exc or "")
-    lowered = text.casefold()
-    if "verifier relative_files must" in lowered or "invalid task diagnostic path" in lowered:
-        return False
-    return any(
-        marker in lowered
-        for marker in (
-            "mcp tool 'java_diagnostics' returned an error",
-            "jdt ls",
-            "jdt_diagnostics_unavailable",
-            "jdt diagnostics unavailable",
-        )
-    )
-
-
-def install() -> None:
-    """Install the generation-only JDT -> pinned Gradle verifier fallback once."""
-
-    from . import agent_tool_runtime as runtime_module
-
-    runtime_type = runtime_module.AgentToolRuntime
-    current = runtime_type._call
-    if bool(getattr(current, _INSTALL_MARKER, False)):
-        return
-
-    def call_with_generation_verifier_fallback(
-        self: Any,
-        stage: str,
-        name: str,
-        arguments: Any,
-        *,
-        external_server_ids: frozenset[str] | None,
-    ) -> dict[str, Any]:
-        try:
-            return current(
-                self,
-                stage,
-                name,
-                arguments,
-                external_server_ids=external_server_ids,
-            )
-        except runtime_module.AgentToolRuntimeError as exc:
-            selected = self._stage(stage)
-            tool_name = str(name or "").strip()
-            if (
-                selected != "generation"
-                or tool_name != "java_diagnostics"
-                or not _is_jdt_infrastructure_error(exc)
-            ):
-                raise
-
-            project_root, _project_argument = runtime_module._discover_model_project_root(
-                self.workspace_root
-            )
-            emit_root_cause(
-                "generation_verifier_gradle_fallback_start",
-                stage="generation",
-                operation="run_gradle_build",
-                gate="target_compile",
-                result="START",
-                reason="java_diagnostics infrastructure unavailable",
-                details={
-                    "project_root": str(project_root),
-                    "jdt_error": f"{type(exc).__name__}: {exc}",
-                },
-            )
-            return _gradle_fallback_receipt(
-                self,
-                Path(project_root),
-                runtime_module=runtime_module,
-                jdt_error=exc,
-            )
-
-    setattr(call_with_generation_verifier_fallback, _INSTALL_MARKER, True)
-    call_with_generation_verifier_fallback.__wrapped__ = current  # type: ignore[attr-defined]
-    runtime_type._call = call_with_generation_verifier_fallback
-
-
-__all__ = ["install"]
+__all__ = ["_gradle_fallback_receipt"]
