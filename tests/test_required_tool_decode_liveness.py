@@ -39,9 +39,8 @@ class _FakeStreamResponse:
     status_code = 200
     headers: dict[str, str] = {}
 
-    def __init__(self, lines: list[str], *, forbid_after: int | None = None) -> None:
+    def __init__(self, lines: list[str]) -> None:
         self._lines = lines
-        self._forbid_after = forbid_after
         self.lines_requested = 0
         self.saw_done = False
 
@@ -57,8 +56,6 @@ class _FakeStreamResponse:
     def iter_lines(self):
         for line in self._lines:
             self.lines_requested += 1
-            if self._forbid_after is not None and self.lines_requested > self._forbid_after:
-                raise AssertionError("required-tool semantic guard failed to abort immediately")
             if line == "data: [DONE]":
                 self.saw_done = True
             yield line
@@ -89,23 +86,41 @@ def _post(response: _FakeStreamResponse, *, tool_choice="required") -> dict[str,
     ).json()
 
 
-def test_required_tool_reasoning_is_rejected_on_first_semantic_delta() -> None:
+def _native_call(arguments: dict[str, object] | None = None) -> dict[str, object]:
+    return {
+        "tool_calls": [
+            {
+                "index": 0,
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "apply_source_edit",
+                    "arguments": json.dumps(arguments or {
+                        "operation": "replace_exact",
+                        "path": "src/main/java/dev/mmm/debugfixture/DebugToken.java",
+                    }),
+                },
+            }
+        ]
+    }
+
+
+def test_required_tool_reasoning_can_precede_native_tool_call() -> None:
     response = _FakeStreamResponse(
         [
-            _sse({"reasoning_content": "I need to think first."}),
-            _sse({"reasoning_content": "this must never be requested"}),
-        ],
-        forbid_after=1,
+            _sse({"reasoning_content": "I need to inspect the repair first."}),
+            _sse(_native_call()),
+            "data: [DONE]",
+        ]
     )
 
     data = _post(response)
     choice = data["choices"][0]
 
-    assert choice["finish_reason"] == "stop"
-    assert choice["message"].get("tool_calls") in (None, [])
-    assert choice["message"]["reasoning_content"] == "I need to think first."
-    assert response.lines_requested == 1
-    assert response.saw_done is False
+    assert response.saw_done is True
+    assert response.lines_requested == 3
+    assert choice["message"]["reasoning_content"].startswith("I need to inspect")
+    assert choice["message"]["tool_calls"][0]["function"]["name"] == "apply_source_edit"
 
     tool = _apply_source_edit_tool()
     request = GenerationRequest(
@@ -118,7 +133,31 @@ def test_required_tool_reasoning_is_rejected_on_first_semantic_delta() -> None:
         parallel_tool_calls=False,
     )
     generation = _native_tool_generation_response(choice["message"], request)
+    assert len(generation.tool_calls) == 1
+    assert generation.tool_calls[0].name == "apply_source_edit"
 
+
+def test_required_tool_completed_without_tool_is_rejected_after_done() -> None:
+    response = _FakeStreamResponse(
+        [
+            _sse({"reasoning_content": "I considered the edit."}),
+            _sse({"content": "No tool call."}),
+            "data: [DONE]",
+        ]
+    )
+
+    data = _post(response)
+    choice = data["choices"][0]
+    assert response.saw_done is True
+
+    tool = _apply_source_edit_tool()
+    request = GenerationRequest(
+        tools=(tool,),
+        tool_validation_schemas=(tool,),
+        tool_choice={"type": "function", "function": {"name": "apply_source_edit"}},
+        parallel_tool_calls=False,
+    )
+    generation = _native_tool_generation_response(choice["message"], request)
     assert len(generation.tool_calls) == 1
     rejected = generation.tool_calls[0]
     assert rejected.name == "__mmm_rejected_tool_call__"
@@ -145,30 +184,13 @@ def test_required_tool_fragmented_text_marker_is_not_rejected() -> None:
 
 def test_required_native_tool_allows_large_arguments_after_invocation_starts() -> None:
     large_content = "x" * 20000
-    arguments = json.dumps(
-        {
-            "operation": "write",
-            "path": "src/main/java/dev/mmm/debugfixture/DebugToken.java",
-            "content": large_content,
-        }
-    )
     response = _FakeStreamResponse(
         [
-            _sse(
-                {
-                    "tool_calls": [
-                        {
-                            "index": 0,
-                            "id": "call_1",
-                            "type": "function",
-                            "function": {
-                                "name": "apply_source_edit",
-                                "arguments": arguments,
-                            },
-                        }
-                    ]
-                }
-            ),
+            _sse(_native_call({
+                "operation": "write",
+                "path": "src/main/java/dev/mmm/debugfixture/DebugToken.java",
+                "content": large_content,
+            })),
             "data: [DONE]",
         ]
     )
@@ -199,13 +221,13 @@ def test_optional_tool_turn_preserves_reasoning_stream() -> None:
     assert message["content"] == "No edit needed."
 
 
-def test_explicit_function_choice_uses_required_tool_semantics() -> None:
+def test_explicit_function_choice_allows_preface_then_native_tool() -> None:
     response = _FakeStreamResponse(
         [
-            _sse({"content": "I will explain before editing."}),
+            _sse({"content": "I will repair the existing file."}),
+            _sse(_native_call()),
             "data: [DONE]",
-        ],
-        forbid_after=1,
+        ]
     )
     explicit = {
         "type": "function",
@@ -214,6 +236,5 @@ def test_explicit_function_choice_uses_required_tool_semantics() -> None:
 
     data = _post(response, tool_choice=explicit)
 
-    assert data["choices"][0]["finish_reason"] == "stop"
-    assert response.lines_requested == 1
-    assert response.saw_done is False
+    assert response.saw_done is True
+    assert data["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "apply_source_edit"
