@@ -1,0 +1,173 @@
+name: Root-cause API grounding hotfix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/root-cause-api-grounding-hotfix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Apply root-cause fix
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected exactly one match in {path}, found {count}: {old[:120]!r}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          # 1) A metadata-only mapping is not usable RAG evidence.  The previous
+          # fallback treated any non-empty mapping as success, which is exactly how
+          # parsed_text=null/resources=[]/text=[] unlocked ACT in the failing trace.
+          replace_once(
+              "minecraft_mod_ai/model_router.py",
+              '''    if isinstance(value, Mapping):\n        return bool(value)\n    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):\n        return bool(value)\n''',
+              '''    if isinstance(value, Mapping):\n        return False\n    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):\n        return bool(value)\n''',
+          )
+
+          loop = "minecraft_mod_ai/progress_aware_tool_loop.py"
+
+          # 2) Generic fresh evidence and compile/API evidence are different states.
+          replace_once(
+              loop,
+              '''    evidence_fingerprints: set[str] = field(default_factory=set)\n    mutation_context: TargetMutationContext | None = None\n''',
+              '''    evidence_fingerprints: set[str] = field(default_factory=set)\n    api_evidence_fingerprints: set[str] = field(default_factory=set)\n    mutation_context: TargetMutationContext | None = None\n''',
+          )
+
+          replace_once(
+              loop,
+              '''    @property\n    def has_fresh_evidence(self) -> bool:\n        with self._lock:\n            return bool(self.evidence_fingerprints)\n\n    def record_query(self, tool_name: str, arguments: Mapping[str, Any]) -> bool:\n''',
+              '''    @property\n    def has_fresh_evidence(self) -> bool:\n        with self._lock:\n            return bool(self.evidence_fingerprints)\n\n    @property\n    def has_api_evidence(self) -> bool:\n        with self._lock:\n            return bool(self.api_evidence_fingerprints)\n\n    def invalidate_api_evidence(self) -> None:\n        with self._lock:\n            self.api_evidence_fingerprints.clear()\n\n    def record_query(self, tool_name: str, arguments: Mapping[str, Any]) -> bool:\n''',
+          )
+
+          replace_once(
+              loop,
+              '''    def record_evidence(self, value: Any, *, usable: bool) -> bool:\n        if not usable:\n            return False\n        fp = evidence_fingerprint(value)\n        if fp is None:\n            return False\n        with self._lock:\n            if fp in self.evidence_fingerprints:\n                return False\n            self.evidence_fingerprints.add(fp)\n            context = _extract_mutation_context_from_payload(value)\n            if context is not None and self.mutation_context is not None:\n                self.mutation_context = self.mutation_context.merge(context)\n            return True\n''',
+              '''    def record_evidence(\n        self,\n        value: Any,\n        *,\n        usable: bool,\n        api_grounded: bool = False,\n    ) -> bool:\n        if not usable:\n            return False\n        fp = evidence_fingerprint(value)\n        if fp is None:\n            return False\n        with self._lock:\n            if fp in self.evidence_fingerprints:\n                if api_grounded:\n                    self.api_evidence_fingerprints.add(fp)\n                return False\n            self.evidence_fingerprints.add(fp)\n            if api_grounded:\n                self.api_evidence_fingerprints.add(fp)\n            context = _extract_mutation_context_from_payload(value)\n            if context is not None and self.mutation_context is not None:\n                self.mutation_context = self.mutation_context.merge(context)\n            return True\n''',
+          )
+
+          # Capability-specific evidence predicates: a non-empty dict is not enough.
+          replace_once(
+              loop,
+              '''def _verification_outcome(tool_name: str, payload: Mapping[str, Any]) -> str:\n''',
+              '''def _usable_java_workspace_symbols(value: Any) -> bool:\n    if not isinstance(value, Mapping):\n        return False\n    symbols = value.get("symbols")\n    if not isinstance(symbols, Sequence) or isinstance(symbols, (str, bytes)):\n        return False\n    return any(\n        isinstance(symbol, Mapping)\n        and bool(str(symbol.get("name") or symbol.get("qualified_name") or "").strip())\n        for symbol in symbols\n    )\n\n\ndef _usable_code_rag_api_result(value: Any) -> bool:\n    if not isinstance(value, Mapping):\n        return False\n    hits = value.get("hits")\n    if isinstance(hits, Sequence) and not isinstance(hits, (str, bytes)):\n        for hit in hits:\n            if isinstance(hit, str) and hit.strip():\n                return True\n            if isinstance(hit, Mapping) and any(\n                isinstance(hit.get(key), str) and bool(hit.get(key).strip())\n                for key in ("text", "content", "snippet", "code", "source")\n            ):\n                return True\n    for key in ("result", "data", "structured_content", "structuredContent"):\n        nested = value.get(key)\n        if isinstance(nested, Mapping) and _usable_code_rag_api_result(nested):\n            return True\n    return False\n\n\ndef _verification_outcome(tool_name: str, payload: Mapping[str, Any]) -> str:\n''',
+          )
+
+          # 3) For a fresh Java target, prefer exact project code first.  Target-neutral
+          # project RAG is last and can never by itself satisfy API grounding.
+          replace_once(
+              loop,
+              '''            preferred = (\n                "java_workspace_symbols", "search_project_rag", "external_mcp_call", "search_code_rag"\n            )\n''',
+              '''            preferred = (\n                "search_code_rag", "java_workspace_symbols", "external_mcp_call", "search_project_rag"\n            )\n''',
+          )
+
+          # 4) Fresh Java ACT requires API evidence, not merely any fresh evidence.
+          replace_once(
+              loop,
+              '''    require_rag = bool(\n        role in {"coder", "coder_safe"}\n        and all_names & _RAG_EVIDENCE_TOOLS\n        and (\n            (router._agent_require_fresh_evidence and not host_grounded)\n            or fresh_java_target\n        )\n    )\n\n    if require_rag:\n''',
+              '''    require_rag = bool(\n        role in {"coder", "coder_safe"}\n        and all_names & _RAG_EVIDENCE_TOOLS\n        and (\n            (router._agent_require_fresh_evidence and not host_grounded)\n            or fresh_java_target\n        )\n    )\n\n    def grounding_ready() -> bool:\n        if not require_rag:\n            return True\n        if fresh_java_target:\n            return state.has_api_evidence\n        return state.has_fresh_evidence\n\n    if require_rag:\n''',
+          )
+
+          replace_once(
+              loop,
+              '''        baseline_ready = state.has_fresh_evidence or not require_rag\n''',
+              '''        baseline_ready = grounding_ready()\n''',
+          )
+
+          replace_once(
+              loop,
+              '''            semantic_retrieval_choice=bool(require_rag and not state.has_fresh_evidence),\n''',
+              '''            semantic_retrieval_choice=bool(require_rag and not grounding_ready()),\n''',
+          )
+
+          replace_once(
+              loop,
+              '''            and require_rag\n            and not state.has_fresh_evidence\n        ):\n''',
+              '''            and require_rag\n            and not grounding_ready()\n        ):\n''',
+          )
+
+          # 5) Only concrete code hits / concrete JDT symbols / reviewed external
+          # evidence may satisfy fresh-Java API grounding.
+          replace_once(
+              loop,
+              '''            if is_evidence_tool(call):\n                if not bool(payload.get("ok")):\n                    state.record_failure(call.name, payload.get("error", "evidence tool failed"))\n                    continue\n                if call.name in _RAG_EVIDENCE_TOOLS:\n                    usable = _usable_rag_result(payload.get("result"))\n                elif call.name == "external_mcp_call":\n                    usable = _usable_external_rag_result(call.arguments, payload.get("result"))\n                else:\n                    usable = bool(payload.get("result"))\n                before = _mutation_context_dict(state.mutation_context)\n                recorded = state.record_evidence(payload.get("result"), usable=usable)\n                after = _mutation_context_dict(state.mutation_context)\n                localization_progress = before != after\n                baseline_progress = bool(\n                    state.phase == LoopPhase.OBSERVE\n                    and require_rag\n                    and recorded\n                    and usable\n                )\n                if localization_progress or baseline_progress:\n                    progress = True\n                    if (\n                        implementation\n                        and state.mutation_context\n                        and state.mutation_context.is_mutation_ready\n                        and (state.has_fresh_evidence or not require_rag)\n                    ):\n                        state.phase = LoopPhase.ACT\n                continue\n''',
+              '''            if is_evidence_tool(call):\n                if not bool(payload.get("ok")):\n                    state.record_failure(call.name, payload.get("error", "evidence tool failed"))\n                    continue\n                result_value = payload.get("result")\n                if call.name in _RAG_EVIDENCE_TOOLS:\n                    usable = _usable_rag_result(result_value)\n                elif call.name == "external_mcp_call":\n                    usable = _usable_external_rag_result(call.arguments, result_value)\n                elif call.name == "java_workspace_symbols":\n                    usable = _usable_java_workspace_symbols(result_value)\n                else:\n                    usable = bool(result_value)\n                api_grounded = bool(\n                    fresh_java_target\n                    and usable\n                    and (\n                        (call.name == "search_code_rag" and _usable_code_rag_api_result(result_value))\n                        or call.name == "java_workspace_symbols"\n                        or (\n                            call.name == "external_mcp_call"\n                            and bool(_external_rag_capability(call.arguments))\n                        )\n                    )\n                )\n                before = _mutation_context_dict(state.mutation_context)\n                recorded = state.record_evidence(\n                    result_value,\n                    usable=usable,\n                    api_grounded=api_grounded,\n                )\n                after = _mutation_context_dict(state.mutation_context)\n                localization_progress = before != after\n                baseline_progress = bool(\n                    state.phase in {LoopPhase.OBSERVE, LoopPhase.RECOVER}\n                    and require_rag\n                    and recorded\n                    and usable\n                    and grounding_ready()\n                )\n                if localization_progress or baseline_progress:\n                    progress = True\n                    if (\n                        implementation\n                        and state.mutation_context\n                        and state.mutation_context.is_mutation_ready\n                        and grounding_ready()\n                    ):\n                        state.phase = LoopPhase.ACT\n                continue\n''',
+          )
+
+          # 6) A verifier API failure invalidates the evidence that admitted the bad
+          # source.  Re-ground before another mutation instead of blindly ACT-looping.
+          replace_once(
+              loop,
+              '''                if status == "FAIL":\n                    state.record_failure(call.name, "verification reported source defects")\n                    if state.mutation_context and state.mutation_context.is_mutation_ready:\n                        state.phase = LoopPhase.ACT\n                    else:\n                        state.phase = LoopPhase.RECOVER\n                continue\n''',
+              '''                if status == "FAIL":\n                    state.record_failure(call.name, "verification reported source defects")\n                    if fresh_java_target:\n                        state.invalidate_api_evidence()\n                        state.phase = LoopPhase.RECOVER\n                    elif state.mutation_context and state.mutation_context.is_mutation_ready:\n                        state.phase = LoopPhase.ACT\n                    else:\n                        state.phase = LoopPhase.RECOVER\n                continue\n''',
+          )
+
+          # Regression coverage mirrors the failing trace shape and asserts the new
+          # capability-specific evidence boundary.
+          test_path = Path("tests/test_coder_grounding_repair_regression.py")
+          tests = test_path.read_text(encoding="utf-8")
+          tests = tests.replace(
+              "from minecraft_mod_ai.grounding_policy import host_baseline_evidence_ready\n",
+              "from minecraft_mod_ai.grounding_policy import host_baseline_evidence_ready\nfrom minecraft_mod_ai.model_router import _usable_rag_result\n",
+              1,
+          )
+          tests = tests.replace(
+              '''    _filter_tools_for_phase,\n)\n''',
+              '''    _filter_tools_for_phase,\n    _usable_code_rag_api_result,\n    _usable_java_workspace_symbols,\n)\n''',
+              1,
+          )
+          marker = "def test_metadata_only_project_rag_cannot_ground_fresh_java()"
+          if marker not in tests:
+              tests += '''\n\ndef test_metadata_only_project_rag_cannot_ground_fresh_java() -> None:\n    result = {\n        "_mmm_observation": {"sanitized": True, "truncated": False, "trust": "untrusted_data_only"},\n        "parsed_text": None,\n        "resources": [],\n        "structured_content": {\n            "query": "DebugToken.java src/main/java/dev/mmm/debugfixture",\n            "schema_version": "mmm/rag-result-v2",\n            "sources": [{\n                "authority": "official",\n                "record_sha256": "abc",\n                "retrieval_policy": "primary",\n                "source_id": "metadata-only",\n                "title": "metadata only",\n                "trust_tier": "primary",\n                "url": "https://example.invalid",\n                "verified_on": "2026-09-16",\n                "version_scope": "26.2",\n            }],\n            "target": {"loader": "fabric", "mappings": "", "minecraft_version": "26.2"},\n        },\n        "text": [],\n    }\n\n    assert _usable_rag_result(result) is False\n\n\ndef test_generic_evidence_does_not_satisfy_api_grounding() -> None:\n    state = HostRunState()\n\n    assert state.record_evidence({"text": "project convention"}, usable=True) is True\n    assert state.has_fresh_evidence is True\n    assert state.has_api_evidence is False\n\n    exact = {"hits": [{"text": "import net.minecraft.world.item.Item;"}]}\n    assert state.record_evidence(exact, usable=True, api_grounded=True) is True\n    assert state.has_api_evidence is True\n\n    state.invalidate_api_evidence()\n    assert state.has_fresh_evidence is True\n    assert state.has_api_evidence is False\n\n\ndef test_api_evidence_predicates_require_concrete_content() -> None:\n    assert _usable_java_workspace_symbols({"symbols": []}) is False\n    assert _usable_java_workspace_symbols({"symbols": [{"name": "Item"}]}) is True\n    assert _usable_code_rag_api_result({"hits": [{"path": "Example.java"}]}) is False\n    assert _usable_code_rag_api_result({"hits": [{"text": "class Example {}"}]}) is True\n'''
+          test_path.write_text(tests, encoding="utf-8")
+          PY
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest
+
+      - name: Run root-cause regressions
+        run: |
+          python -m pytest -q \
+            tests/test_coder_grounding_repair_regression.py \
+            tests/test_agent_tool_verification_terminal.py \
+            tests/test_backtracking_recovery_semantics.py \
+            tests/test_tool_call_admission_contract.py
+
+      - name: Compile changed Python
+        run: |
+          python -m py_compile \
+            minecraft_mod_ai/model_router.py \
+            minecraft_mod_ai/progress_aware_tool_loop.py \
+            tests/test_coder_grounding_repair_regression.py
+
+      - name: Commit verified fix directly to main
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/root-cause-api-grounding-hotfix.yml
+          git add minecraft_mod_ai/model_router.py minecraft_mod_ai/progress_aware_tool_loop.py tests/test_coder_grounding_repair_regression.py
+          git commit -m "Fix fresh Java API grounding and repair recovery"
+          git push origin HEAD:main
