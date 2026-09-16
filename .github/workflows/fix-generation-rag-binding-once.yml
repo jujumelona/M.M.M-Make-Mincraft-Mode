@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - .github/scripts/fix_generation_rag_binding_once.py
+      - .github/scripts/finish_generation_rag_recovery_once.py
       - .github/workflows/fix-generation-rag-binding-once.yml
 
 concurrency:
@@ -35,8 +36,11 @@ jobs:
           python -m pip install -e .
           python -m pip install pytest ruff
 
-      - name: Apply complete RAG and recovery rewrite
+      - name: Apply host-bound RAG rewrite
         run: python .github/scripts/fix_generation_rag_binding_once.py
+
+      - name: Complete recovery RAG ownership rewrite
+        run: python .github/scripts/finish_generation_rag_recovery_once.py
 
       - name: Format changed Python
         run: |
@@ -69,7 +73,7 @@ jobs:
             tests/test_generation_rag_target_binding.py \
             --ignore BLE001,C901,PLR0911,PLR0912,PLR0915
 
-      - name: Run RAG, admission, recovery contracts
+      - name: Run RAG admission recovery contracts
         run: |
           python -m pytest -q \
             tests/test_generation_rag_target_binding.py \
@@ -85,6 +89,7 @@ jobs:
       - name: Commit verified complete rewrite to main
         run: |
           rm .github/scripts/fix_generation_rag_binding_once.py
+          rm .github/scripts/finish_generation_rag_recovery_once.py
           rm .github/workflows/fix-generation-rag-binding-once.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
