@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   rewrite:
-    if: github.event.head_commit.message == 'Retry tool admission rewrite after lint'
+    if: github.event.head_commit.message == 'Migrate legacy tool admission contracts'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -26,184 +26,59 @@ jobs:
           cache: pip
       - name: Install test dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
-      - name: Fetch audited rewrite program
+      - name: Fetch audited rewrite programs
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           python - <<'PY'
-          import base64, json, os, urllib.request
+          import base64
+          import json
+          import os
+          import urllib.request
+
           repo = os.environ['GITHUB_REPOSITORY']
-          sha = '08960ecef57852b63cb6e1e3f5a752596a87cc2c'
-          req = urllib.request.Request(
-              f'https://api.github.com/repos/{repo}/git/blobs/{sha}',
-              headers={
-                  'Authorization': f'Bearer {os.environ["GH_TOKEN"]}',
-                  'Accept': 'application/vnd.github+json',
-                  'X-GitHub-Api-Version': '2022-11-28',
-              },
-          )
-          with urllib.request.urlopen(req, timeout=30) as response:
-              payload = json.load(response)
-          if payload.get('encoding') != 'base64':
-              raise SystemExit(f'unexpected blob encoding: {payload.get("encoding")!r}')
-          program = base64.b64decode(payload['content'])
-          open('/tmp/rewrite_tool_admission.py', 'wb').write(program)
-          print(f'fetched rewrite blob {sha}: {len(program)} bytes')
+          programs = {
+              '08960ecef57852b63cb6e1e3f5a752596a87cc2c': '/tmp/rewrite_tool_admission.py',
+              'e89ea38f6d1f580d412b1c9091b2675e796c6966': '/tmp/migrate_legacy_tool_tests.py',
+              '7c83b298cda94e53265d8a2ed886e7b87a17d49d': '/tmp/normalize_tool_admission.py',
+          }
+          for sha, destination in programs.items():
+              req = urllib.request.Request(
+                  f'https://api.github.com/repos/{repo}/git/blobs/{sha}',
+                  headers={
+                      'Authorization': f'Bearer {os.environ["GH_TOKEN"]}',
+                      'Accept': 'application/vnd.github+json',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                  },
+              )
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  payload = json.load(response)
+              if payload.get('encoding') != 'base64':
+                  raise SystemExit(f'unexpected blob encoding for {sha}: {payload.get("encoding")!r}')
+              program = base64.b64decode(payload['content'])
+              open(destination, 'wb').write(program)
+              print(f'fetched {sha} -> {destination}: {len(program)} bytes')
           PY
-      - name: Apply clean rewrite
+      - name: Apply single-boundary rewrite
         run: python /tmp/rewrite_tool_admission.py
-      - name: Migrate legacy adapter policy tests to admission contract
+      - name: Migrate legacy tool contract tests
+        run: python /tmp/migrate_legacy_tool_tests.py
+      - name: Normalize implementation and policy contracts
+        run: python /tmp/normalize_tool_admission.py
+      - name: Apply repository formatting fixes
         run: |
-          cat > tests/test_llama_cpp_adapter_tool_policy.py <<'PY'
-          from __future__ import annotations
-
-          from minecraft_mod_ai.model_adapters.base import GenerationRequest
-          from minecraft_mod_ai.model_adapters.llama_cpp_adapter import (
-              _native_tool_generation_response,
-          )
-
-
-          _APPLY_SOURCE_EDIT = {
-              "type": "function",
-              "function": {
-                  "name": "apply_source_edit",
-                  "description": "Apply one source edit.",
-                  "parameters": {
-                      "type": "object",
-                      "properties": {"path": {"type": "string"}},
-                      "required": ["path"],
-                      "additionalProperties": False,
-                  },
-              },
-          }
-
-
-          def _request(
-              *,
-              tool_choice: str | dict = "required",
-              parallel_tool_calls: bool = True,
-          ) -> GenerationRequest:
-              return GenerationRequest(
-                  tools=(_APPLY_SOURCE_EDIT,),
-                  tool_choice=tool_choice,
-                  parallel_tool_calls=parallel_tool_calls,
-              )
-
-
-          def _named_apply_source_edit_choice() -> dict:
-              return {"type": "function", "function": {"name": "apply_source_edit"}}
-
-
-          def _valid_call(call_id: str, path: str) -> dict:
-              return {
-                  "id": call_id,
-                  "type": "function",
-                  "function": {
-                      "name": "apply_source_edit",
-                      "arguments": '{"path": ' + repr(path).replace("'", '"') + "}",
-                  },
-              }
-
-
-          def _assert_rejection(response, failure_code: str) -> None:
-              assert len(response.tool_calls) == 1
-              call = response.tool_calls[0]
-              assert call.name == "__mmm_rejected_tool_call__"
-              assert call.arguments["failure_code"] == failure_code
-
-
-          def test_named_tool_choice_returns_missing_required_rejection_for_prose_only_completion() -> None:
-              response = _native_tool_generation_response(
-                  {"content": "I cannot make a safe edit from the current evidence."},
-                  _request(tool_choice=_named_apply_source_edit_choice()),
-              )
-              assert response.content == "I cannot make a safe edit from the current evidence."
-              _assert_rejection(response, "REQUIRED_TOOL_MISSING")
-
-
-          def test_required_tool_choice_returns_missing_required_rejection_for_empty_completion() -> None:
-              response = _native_tool_generation_response(
-                  {"content": "", "tool_calls": []},
-                  _request(tool_choice="required"),
-              )
-              assert response.content == ""
-              assert response.reasoning_content == ""
-              _assert_rejection(response, "REQUIRED_TOOL_MISSING")
-
-
-          def test_malformed_native_tool_call_is_non_executed_rejection() -> None:
-              response = _native_tool_generation_response(
-                  {
-                      "content": "",
-                      "tool_calls": [{
-                          "id": "broken",
-                          "type": "function",
-                          "function": {"name": "apply_source_edit", "arguments": "{"},
-                      }],
-                  },
-                  _request(),
-              )
-              _assert_rejection(response, "TOOL_CALL_MALFORMED")
-
-
-          def test_parallel_native_calls_are_non_executed_rejection_when_disabled() -> None:
-              response = _native_tool_generation_response(
-                  {
-                      "content": "",
-                      "tool_calls": [
-                          _valid_call("call_a", "a.py"),
-                          _valid_call("call_b", "b.py"),
-                      ],
-                  },
-                  _request(parallel_tool_calls=False),
-              )
-              _assert_rejection(response, "PARALLEL_TOOL_CALLS_DISABLED")
-          PY
-      - name: Normalize changed files to repository lint contract
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          adapter_path = Path('minecraft_mod_ai/model_adapters/llama_cpp_adapter.py')
-          adapter = adapter_path.read_text()
-          replacements = {
-              'raise RuntimeError("native tool transport exposed a schema without function metadata")':
-                  'raise TypeError("native tool transport exposed a schema without function metadata")',
-              'raise RuntimeError("native llama tool transport dropped the tools surface")':
-                  'raise TypeError("native llama tool transport dropped the tools surface")',
-              'raise RuntimeError("native llama tool transport exposed a non-object schema")':
-                  'raise TypeError("native llama tool transport exposed a non-object schema")',
-              'raise RuntimeError("tool schema lacks function metadata")':
-                  'raise TypeError("tool schema lacks function metadata")',
-              'raise ValueError("structured tool call is not an object")':
-                  'raise TypeError("structured tool call is not an object")',
-              'raise ValueError("structured tool call lacks function metadata")':
-                  'raise TypeError("structured tool call lacks function metadata")',
-              'raise ValueError("structured tool arguments must decode to an object")':
-                  'raise TypeError("structured tool arguments must decode to an object")',
-              'raise ValueError("structured tool arguments have an invalid shape")':
-                  'raise TypeError("structured tool arguments have an invalid shape")',
-          }
-          for old, new in replacements.items():
-              adapter = adapter.replace(old, new)
-          adapter_path.write_text(adapter)
-
-          qwen_path = Path('minecraft_mod_ai/model_adapters/qwen_tool_parser.py')
-          qwen = qwen_path.read_text().replace(
-              'except Exception as exc:',
-              'except (TypeError, ValueError) as exc:',
-          )
-          qwen_path.write_text(qwen)
-
-          loop_path = Path('minecraft_mod_ai/progress_aware_tool_loop.py')
-          loop = loop_path.read_text()
-          old = '''        if forced_verify_tool is not None:\n            if len(turn.tool_calls) != 1 or turn.tool_calls[0].name != forced_verify_tool:\n                called = ", ".join(call.name for call in turn.tool_calls) or "<none>"\n                raise ModelConfigurationError(\n                    f"VERIFIER_PROTOCOL_VIOLATION: expected exactly {forced_verify_tool!r}; received {called}."\n                )\n'''
-          new = '''        if (\n            forced_verify_tool is not None\n            and (len(turn.tool_calls) != 1 or turn.tool_calls[0].name != forced_verify_tool)\n        ):\n            called = ", ".join(call.name for call in turn.tool_calls) or "<none>"\n            raise ModelConfigurationError(\n                f"VERIFIER_PROTOCOL_VIOLATION: expected exactly {forced_verify_tool!r}; received {called}."\n            )\n'''
-          if old not in loop:
-              raise SystemExit('forced verifier lint normalization anchor missing')
-          loop_path.write_text(loop.replace(old, new, 1))
-          PY
-          ruff check --fix --exit-zero minecraft_mod_ai/model_adapters/qwen_tool_parser.py minecraft_mod_ai/model_adapters/llama_cpp_adapter.py minecraft_mod_ai/progress_aware_tool_loop.py tests/test_tool_call_admission_contract.py tests/test_llama_cpp_adapter_tool_policy.py
+          ruff check --fix --exit-zero \
+            minecraft_mod_ai/model_adapters/qwen_tool_parser.py \
+            minecraft_mod_ai/model_adapters/llama_cpp_adapter.py \
+            minecraft_mod_ai/progress_aware_tool_loop.py \
+            tests/test_tool_call_admission_contract.py \
+            tests/test_llama_cpp_adapter_tool_policy.py \
+            tests/test_llama_cpp_native_tool_call_contract.py \
+            tests/test_llama_qwen_tool_recovery.py \
+            tests/test_production_tool_call_isolation_contract.py \
+            tests/test_qwen_enum_recovery_contract.py \
+            tests/test_qwen_required_alias_contract.py \
+            tests/test_qwen_tool_parser_sibling_isolation.py
       - name: Structural guard
         run: |
           set -euo pipefail
@@ -212,20 +87,66 @@ jobs:
           if grep -q 'SOURCE_EDIT_PARAMETER_ALIASES' minecraft_mod_ai/model_adapters/qwen_tool_parser.py; then exit 1; fi
           if grep -q '_validate_decoded_value' minecraft_mod_ai/model_adapters/qwen_tool_parser.py; then exit 1; fi
           if grep -q 'additionalProperties' minecraft_mod_ai/model_adapters/qwen_tool_parser.py; then exit 1; fi
+          if grep -R -n -E 'ToolCallValidationError|_canonical_string_enum|_parse_qwen_function' tests; then exit 1; fi
           grep -q '_admit_model_tool_calls' minecraft_mod_ai/model_adapters/llama_cpp_adapter.py
+          grep -q 'raw_native_calls = _raw_native_tool_calls(message)' minecraft_mod_ai/model_adapters/llama_cpp_adapter.py
           grep -q '_model_tool_rejection_feedback' minecraft_mod_ai/progress_aware_tool_loop.py
-      - name: Compile changed Python
-        run: python -m compileall -q minecraft_mod_ai/model_adapters/qwen_tool_parser.py minecraft_mod_ai/model_adapters/llama_cpp_adapter.py minecraft_mod_ai/progress_aware_tool_loop.py tests/test_tool_call_admission_contract.py tests/test_llama_cpp_adapter_tool_policy.py
-      - name: Ruff changed Python
-        run: ruff check minecraft_mod_ai/model_adapters/qwen_tool_parser.py minecraft_mod_ai/model_adapters/llama_cpp_adapter.py minecraft_mod_ai/progress_aware_tool_loop.py tests/test_tool_call_admission_contract.py tests/test_llama_cpp_adapter_tool_policy.py
-      - name: Run admission contract tests
-        run: pytest -q tests/test_tool_call_admission_contract.py tests/test_llama_cpp_adapter_tool_policy.py
-      - name: Run related regression tests
+      - name: Compile rewritten Python
+        run: |
+          python -m compileall -q \
+            minecraft_mod_ai/model_adapters/qwen_tool_parser.py \
+            minecraft_mod_ai/model_adapters/llama_cpp_adapter.py \
+            minecraft_mod_ai/progress_aware_tool_loop.py \
+            tests/test_tool_call_admission_contract.py \
+            tests/test_llama_cpp_adapter_tool_policy.py \
+            tests/test_llama_cpp_native_tool_call_contract.py \
+            tests/test_llama_qwen_tool_recovery.py \
+            tests/test_production_tool_call_isolation_contract.py \
+            tests/test_qwen_enum_recovery_contract.py \
+            tests/test_qwen_required_alias_contract.py \
+            tests/test_qwen_tool_parser_sibling_isolation.py
+      - name: Ruff rewritten Python
+        run: |
+          ruff check \
+            minecraft_mod_ai/model_adapters/qwen_tool_parser.py \
+            minecraft_mod_ai/model_adapters/llama_cpp_adapter.py \
+            minecraft_mod_ai/progress_aware_tool_loop.py \
+            tests/test_tool_call_admission_contract.py \
+            tests/test_llama_cpp_adapter_tool_policy.py \
+            tests/test_llama_cpp_native_tool_call_contract.py \
+            tests/test_llama_qwen_tool_recovery.py \
+            tests/test_production_tool_call_isolation_contract.py \
+            tests/test_qwen_enum_recovery_contract.py \
+            tests/test_qwen_required_alias_contract.py \
+            tests/test_qwen_tool_parser_sibling_isolation.py
+      - name: Run direct admission contracts
+        run: |
+          pytest -q \
+            tests/test_tool_call_admission_contract.py \
+            tests/test_llama_cpp_adapter_tool_policy.py \
+            tests/test_llama_cpp_native_tool_call_contract.py \
+            tests/test_llama_qwen_tool_recovery.py \
+            tests/test_production_tool_call_isolation_contract.py \
+            tests/test_qwen_enum_recovery_contract.py \
+            tests/test_qwen_required_alias_contract.py \
+            tests/test_qwen_tool_parser_sibling_isolation.py
+      - name: Run related regression suite
         run: pytest -q tests -k 'qwen or llama_cpp or tool_call or tool_validation'
       - name: Commit rewritten implementation to main
         run: |
           set -euo pipefail
-          git add minecraft_mod_ai/model_adapters/qwen_tool_parser.py minecraft_mod_ai/model_adapters/llama_cpp_adapter.py minecraft_mod_ai/progress_aware_tool_loop.py tests/test_tool_call_admission_contract.py tests/test_llama_cpp_adapter_tool_policy.py
+          git add \
+            minecraft_mod_ai/model_adapters/qwen_tool_parser.py \
+            minecraft_mod_ai/model_adapters/llama_cpp_adapter.py \
+            minecraft_mod_ai/progress_aware_tool_loop.py \
+            tests/test_tool_call_admission_contract.py \
+            tests/test_llama_cpp_adapter_tool_policy.py \
+            tests/test_llama_cpp_native_tool_call_contract.py \
+            tests/test_llama_qwen_tool_recovery.py \
+            tests/test_production_tool_call_isolation_contract.py \
+            tests/test_qwen_enum_recovery_contract.py \
+            tests/test_qwen_required_alias_contract.py \
+            tests/test_qwen_tool_parser_sibling_isolation.py
           git diff --cached --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
