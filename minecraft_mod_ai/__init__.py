@@ -14,7 +14,6 @@ from .generation_accuracy_contract import install_inner as install_generation_ac
 from .generation_accuracy_contract import install_outer as install_generation_accuracy_outer
 from .hardware_concurrency_installation import install as install_hardware_concurrency
 from .java_toolchain_separation_installation import install as install_java_toolchain_separation
-from . import jdtls_bootstrap as _jdtls_bootstrap
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
 from .source_observation_budget_installation import install as install_source_observation_budget
@@ -34,7 +33,6 @@ def _validate_runtime_template_authority() -> None:
 
 install_hardware_concurrency()
 initialize_runtime()
-_jdtls_bootstrap._ensure_project_jdk()
 _validate_runtime_template_authority()
 from . import custom_module_generator as _custom_module_generator
 from . import execution_feedback_replan_contract as _execution_feedback_replan_contract
