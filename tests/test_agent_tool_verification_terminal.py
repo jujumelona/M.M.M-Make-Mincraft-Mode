@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+from minecraft_mod_ai.host_grounding import _SCHEMA_VERSION as _HOST_GROUNDING_SCHEMA
 from minecraft_mod_ai.model_adapters import GenerationResponse, ToolCall
 from minecraft_mod_ai.model_router import ModelRouter
 
@@ -97,9 +98,8 @@ class _Adapter:
                 )
             )
         if index == 2:
-            # Generation verification is now host-owned. The coder does not spend a
-            # redundant inference turn merely selecting java_diagnostics; after the
-            # host verifier passes, the next model turn is the terminal no-tool turn.
+            # Generation verification is host-owned. After the verifier passes, the
+            # next model turn is terminal and has no tool surface.
             assert request.tools == ()
             assert request.tool_choice is None
             return GenerationResponse(content="verified implementation complete")
@@ -121,9 +121,25 @@ def test_verifier_pass_finalizes_without_repeating_verifier(monkeypatch) -> None
     )
     request = {
         "task": "implement_module",
+        "phase": "implement_module",
+        "workspace_project_root": ".",
         "operation": "create_file",
         "path": "src/main/java/Example.java",
+        "primary_path": "src/main/java/Example.java",
+        "writable_paths": ["src/main/java/Example.java"],
+        "reuse_action": "fresh",
         "request": "implement_module",
+        "host_grounding": {
+            "schema_version": _HOST_GROUNDING_SCHEMA,
+            "policy": {
+                "resolved_before_first_coder_decode": True,
+                "baseline_grounding_owned_by_host": True,
+                "baseline_grounding_optional_for_model": False,
+                "model_tool_choice_required_for_baseline": False,
+                "writes_still_require_approved_pipeline": True,
+            },
+            "evidence_bindings": {},
+        },
     }
 
     result = router.generate_text(
