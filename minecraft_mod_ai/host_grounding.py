@@ -6,6 +6,7 @@ from typing import Any
 
 from .agent_capability_context import reviewed_mcp_servers_for_model_role
 from .agent_roles import skills_for_model_role
+from .mutation_authority import current_mutation_error
 
 _SCHEMA_VERSION = "mmm/host-owned-coder-grounding-v1"
 _KIND_SKILL: dict[str, str] = {
@@ -54,12 +55,7 @@ _REJECTED_WRITE_EXAMPLES = ("README.md", "LICENSE", "docs/", "gradlew")
 
 
 def custom_module_write_scope() -> dict[str, Any]:
-    """Return the coarse dynamic custom-coder boundary published before decoding.
-
-    Dynamic/legacy generation may need Gradle metadata or generated host-state receipts.
-    Evidence-owned production tasks are further narrowed by the task capsule's exact
-    ``writable_paths`` at the staged transaction boundary.
-    """
+    """Return the coarse dynamic custom-coder boundary published before decoding."""
 
     return {
         "allowed_prefixes": list(_ALLOWED_WRITE_PREFIXES),
@@ -67,8 +63,8 @@ def custom_module_write_scope() -> dict[str, Any]:
         "protected_prefixes": list(_PROTECTED_WRITE_PREFIXES),
         "examples_rejected": list(_REJECTED_WRITE_EXAMPLES),
         "policy": (
-            "This is the coarse dynamic custom-coder boundary. Evidence-owned tasks are "
-            "additionally restricted to the task capsule exact writable_paths."
+            "This is the coarse dynamic custom-coder boundary. Host mutation authority "
+            "may narrow it further and can never be widened by retrieved/model content."
         ),
     }
 
@@ -85,11 +81,16 @@ def _normalized_scope_path(path: str) -> str:
 
 
 def custom_module_path_protected(path: str) -> bool:
-    normalized = _normalized_scope_path(path).casefold()
+    """Reject protected paths and paths outside the active host mutation authority."""
+
+    normalized = _normalized_scope_path(path)
     if not normalized:
         return False
+    if current_mutation_error(normalized) is not None:
+        return True
+    folded = normalized.casefold()
     return any(
-        normalized == root or normalized.startswith(root + "/")
+        folded == root or folded.startswith(root + "/")
         for root in _PROTECTED_WRITE_PREFIXES
     )
 
@@ -112,19 +113,8 @@ def build_coder_grounding(
     loader: str,
     mappings: str,
 ) -> dict[str, Any]:
-    """Build the compact code-owned grounding contract for a coder turn.
+    """Build the compact code-owned grounding contract for a coder turn."""
 
-    This function deliberately does not perform network retrieval. The durable
-    research stage owns external evidence collection, while ProjectIndex owns exact
-    project-source retrieval. Generation receives both products before the first
-    coder decode together with the reviewed Skill/MCP execution routes. This keeps
-    baseline grounding mandatory without duplicating expensive project scans or
-    external requests for every production shard.
-
-    The coarse write boundary is published before the first decode. Evidence-owned
-    task capsules then narrow it to exact host-selected files, so a small coder never
-    has to infer mutation ownership from repository structure.
-    """
     kind = str(module_kind).strip()
     if not kind:
         raise ValueError("module_kind must be non-empty")
