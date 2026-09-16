@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """Canonical host-owned mutation authority.
 
-The host compiles this authority before generation and carries it out-of-band in a
-ContextVar. Model-visible payloads may explain the active authority, but model text,
-retrieval and localization can never create or widen it. The same active value is used
-by loop preflight, source-edit materialization and final staged-patch validation.
+The host compiles this authority before generation and carries it out-of-band. Model-visible
+payloads may explain the active authority, but model text, retrieval and localization can never
+create or widen it. The same active value is used by loop preflight, source-edit materialization
+and final staged-patch validation.
 """
 
 import contextvars
@@ -155,9 +155,44 @@ class MutationAuthority:
 
 
 AUTHORED_DESIGN_ROOTS = _DEFAULT_BOUNDED_ROOTS
-CURRENT_MUTATION_AUTHORITY: contextvars.ContextVar[MutationAuthority | None] = (
-    contextvars.ContextVar("mmm_mutation_authority", default=None)
-)
+
+
+class _MutationAuthorityContext:
+    """Canonical authority view with compatibility fallback to the host task envelope.
+
+    The direct-task ContextVar carries task metadata needed by the model-facing authority receipt.
+    This object exposes only the underlying ``MutationAuthority`` to every write guard. The lazy
+    fallback keeps those guards synchronized with the already-active host task without allowing
+    model text to create or widen authority.
+    """
+
+    def __init__(self) -> None:
+        self._local: contextvars.ContextVar[MutationAuthority | None] = contextvars.ContextVar(
+            "mmm_mutation_authority",
+            default=None,
+        )
+
+    def get(self, default: MutationAuthority | None = None) -> MutationAuthority | None:
+        authority = self._local.get()
+        if authority is not None:
+            return authority
+        try:
+            from .direct_task_mutation_authority_contract import _CURRENT_AUTHORITY
+
+            envelope = _CURRENT_AUTHORITY.get()
+        except (ImportError, AttributeError):
+            envelope = None
+        inherited = getattr(envelope, "mutation_authority", None)
+        return inherited if isinstance(inherited, MutationAuthority) else default
+
+    def set(self, value: MutationAuthority | None):
+        return self._local.set(value)
+
+    def reset(self, token: contextvars.Token[MutationAuthority | None]) -> None:
+        self._local.reset(token)
+
+
+CURRENT_MUTATION_AUTHORITY = _MutationAuthorityContext()
 
 
 def current_mutation_error(path: Any, *, operation: Any = "") -> str | None:
