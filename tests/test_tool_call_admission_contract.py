@@ -102,8 +102,11 @@ def test_progress_loop_consumes_rejection_as_feedback_not_as_runtime_tool():
     )
     feedback = _model_tool_rejection_feedback(rejection)
     assert feedback is not None
-    assert "not executed" in feedback
-    assert "TOOL_SCHEMA_INVALID" in feedback
+    message, rejected_payloads = feedback
+    assert "not executed" in message
+    assert "TOOL_SCHEMA_INVALID" in message
+    assert rejected_payloads
+    assert rejected_payloads[0]["failure_code"] == "TOOL_SCHEMA_INVALID"
 
 
 def test_phase_handoff_closes_old_protocol_and_preserves_observation_data():
