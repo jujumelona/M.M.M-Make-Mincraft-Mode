@@ -13,14 +13,14 @@ concurrency:
 
 jobs:
   rewrite:
-    if: github.event.head_commit.message == 'Bootstrap single-boundary tool admission rewrite'
+    if: github.event.head_commit.message == 'Retry clean tool admission rewrite'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.11'
           cache: pip
@@ -52,27 +52,149 @@ jobs:
           PY
       - name: Apply clean rewrite
         run: python /tmp/rewrite_tool_admission.py
+      - name: Migrate legacy adapter policy tests to admission contract
+        run: |
+          cat > tests/test_llama_cpp_adapter_tool_policy.py <<'PY'
+          from __future__ import annotations
+
+          from minecraft_mod_ai.model_adapters.base import GenerationRequest
+          from minecraft_mod_ai.model_adapters.llama_cpp_adapter import (
+              _native_tool_generation_response,
+          )
+
+
+          _APPLY_SOURCE_EDIT = {
+              "type": "function",
+              "function": {
+                  "name": "apply_source_edit",
+                  "description": "Apply one source edit.",
+                  "parameters": {
+                      "type": "object",
+                      "properties": {
+                          "path": {"type": "string"},
+                      },
+                      "required": ["path"],
+                      "additionalProperties": False,
+                  },
+              },
+          }
+
+
+          def _request(
+              *,
+              tool_choice: str | dict = "required",
+              parallel_tool_calls: bool = True,
+          ) -> GenerationRequest:
+              return GenerationRequest(
+                  tools=(_APPLY_SOURCE_EDIT,),
+                  tool_choice=tool_choice,
+                  parallel_tool_calls=parallel_tool_calls,
+              )
+
+
+          def _named_apply_source_edit_choice() -> dict:
+              return {
+                  "type": "function",
+                  "function": {"name": "apply_source_edit"},
+              }
+
+
+          def _valid_call(call_id: str, path: str) -> dict:
+              return {
+                  "id": call_id,
+                  "type": "function",
+                  "function": {
+                      "name": "apply_source_edit",
+                      "arguments": '{"path": ' + repr(path).replace("'", '"') + "}",
+                  },
+              }
+
+
+          def _assert_rejection(response, failure_code: str) -> None:
+              assert len(response.tool_calls) == 1
+              call = response.tool_calls[0]
+              assert call.name == "__mmm_rejected_tool_call__"
+              assert call.arguments["failure_code"] == failure_code
+
+
+          def test_named_tool_choice_returns_missing_required_rejection_for_prose_only_completion() -> None:
+              response = _native_tool_generation_response(
+                  {"content": "I cannot make a safe edit from the current evidence."},
+                  _request(tool_choice=_named_apply_source_edit_choice()),
+              )
+
+              assert response.content == "I cannot make a safe edit from the current evidence."
+              _assert_rejection(response, "REQUIRED_TOOL_MISSING")
+
+
+          def test_required_tool_choice_returns_missing_required_rejection_for_empty_completion() -> None:
+              response = _native_tool_generation_response(
+                  {"content": "", "tool_calls": []},
+                  _request(tool_choice="required"),
+              )
+
+              assert response.content == ""
+              assert response.reasoning_content == ""
+              _assert_rejection(response, "REQUIRED_TOOL_MISSING")
+
+
+          def test_malformed_native_tool_call_is_non_executed_rejection() -> None:
+              response = _native_tool_generation_response(
+                  {
+                      "content": "",
+                      "tool_calls": [
+                          {
+                              "id": "broken",
+                              "type": "function",
+                              "function": {
+                                  "name": "apply_source_edit",
+                                  "arguments": "{",
+                              },
+                          }
+                      ],
+                  },
+                  _request(),
+              )
+
+              _assert_rejection(response, "TOOL_CALL_MALFORMED")
+
+
+          def test_parallel_native_calls_are_non_executed_rejection_when_disabled() -> None:
+              response = _native_tool_generation_response(
+                  {
+                      "content": "",
+                      "tool_calls": [
+                          _valid_call("call_a", "a.py"),
+                          _valid_call("call_b", "b.py"),
+                      ],
+                  },
+                  _request(parallel_tool_calls=False),
+              )
+
+              _assert_rejection(response, "PARALLEL_TOOL_CALLS_DISABLED")
+          PY
       - name: Structural guard
         run: |
           set -euo pipefail
-          ! grep -q 'ToolCallValidationError' minecraft_mod_ai/model_adapters/qwen_tool_parser.py
-          ! grep -q 'MMM_MINECRAFT_VERSION' minecraft_mod_ai/model_adapters/qwen_tool_parser.py
-          ! grep -q 'SOURCE_EDIT_PARAMETER_ALIASES' minecraft_mod_ai/model_adapters/qwen_tool_parser.py
-          ! grep -q '_validate_decoded_value' minecraft_mod_ai/model_adapters/qwen_tool_parser.py
-          ! grep -q 'additionalProperties' minecraft_mod_ai/model_adapters/qwen_tool_parser.py
+          if grep -q 'ToolCallValidationError' minecraft_mod_ai/model_adapters/qwen_tool_parser.py; then exit 1; fi
+          if grep -q 'MMM_MINECRAFT_VERSION' minecraft_mod_ai/model_adapters/qwen_tool_parser.py; then exit 1; fi
+          if grep -q 'SOURCE_EDIT_PARAMETER_ALIASES' minecraft_mod_ai/model_adapters/qwen_tool_parser.py; then exit 1; fi
+          if grep -q '_validate_decoded_value' minecraft_mod_ai/model_adapters/qwen_tool_parser.py; then exit 1; fi
+          if grep -q 'additionalProperties' minecraft_mod_ai/model_adapters/qwen_tool_parser.py; then exit 1; fi
           grep -q '_admit_model_tool_calls' minecraft_mod_ai/model_adapters/llama_cpp_adapter.py
           grep -q '_model_tool_rejection_feedback' minecraft_mod_ai/progress_aware_tool_loop.py
       - name: Compile changed Python
-        run: python -m compileall -q minecraft_mod_ai/model_adapters/qwen_tool_parser.py minecraft_mod_ai/model_adapters/llama_cpp_adapter.py minecraft_mod_ai/progress_aware_tool_loop.py tests/test_tool_call_admission_contract.py
+        run: python -m compileall -q minecraft_mod_ai/model_adapters/qwen_tool_parser.py minecraft_mod_ai/model_adapters/llama_cpp_adapter.py minecraft_mod_ai/progress_aware_tool_loop.py tests/test_tool_call_admission_contract.py tests/test_llama_cpp_adapter_tool_policy.py
+      - name: Ruff changed Python
+        run: ruff check minecraft_mod_ai/model_adapters/qwen_tool_parser.py minecraft_mod_ai/model_adapters/llama_cpp_adapter.py minecraft_mod_ai/progress_aware_tool_loop.py tests/test_tool_call_admission_contract.py tests/test_llama_cpp_adapter_tool_policy.py
       - name: Run admission contract tests
-        run: pytest -q tests/test_tool_call_admission_contract.py
+        run: pytest -q tests/test_tool_call_admission_contract.py tests/test_llama_cpp_adapter_tool_policy.py
       - name: Run related regression tests
-        run: pytest -q tests -k 'qwen or llama_cpp or tool_call or tool_validation' --maxfail=1
+        run: pytest -q tests -k 'qwen or llama_cpp or tool_call or tool_validation'
       - name: Commit rewritten implementation to main
         run: |
           set -euo pipefail
-          git rm .github/workflows/rewrite-tool-admission-once.yml
-          git add -A minecraft_mod_ai/model_adapters/qwen_tool_parser.py minecraft_mod_ai/model_adapters/llama_cpp_adapter.py minecraft_mod_ai/progress_aware_tool_loop.py tests/test_tool_call_admission_contract.py .github/workflows/rewrite-tool-admission-once.yml
+          git add minecraft_mod_ai/model_adapters/qwen_tool_parser.py minecraft_mod_ai/model_adapters/llama_cpp_adapter.py minecraft_mod_ai/progress_aware_tool_loop.py tests/test_tool_call_admission_contract.py tests/test_llama_cpp_adapter_tool_policy.py
           git diff --cached --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
