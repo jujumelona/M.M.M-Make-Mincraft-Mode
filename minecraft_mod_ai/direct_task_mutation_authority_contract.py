@@ -386,11 +386,12 @@ def _insert_authority_message(
 
 
 def _mutation_path(arguments: Mapping[str, Any], loop_module: Any) -> str:
-    for key in tuple(getattr(loop_module, "_SOURCE_EDIT_PATH_KEYS", ("path",))):
-        value = arguments.get(key)
-        if isinstance(value, str) and value.strip():
-            return value
-    return ""
+    keys = tuple(getattr(loop_module, "_SOURCE_EDIT_PATH_KEYS", ("path",)))
+    candidates = (arguments.get(key) for key in keys)
+    return next(
+        (value for value in candidates if isinstance(value, str) and value.strip()),
+        "",
+    )
 
 
 def _validate_operation_with_authority(
