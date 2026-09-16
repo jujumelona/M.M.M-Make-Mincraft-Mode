@@ -4,6 +4,12 @@ from .custom_checkpoint_performance_installation import install as install_check
 from .execution_feedback_semantic_convergence_installation import (
     install as install_execution_feedback_semantic_convergence,
 )
+from .fresh_java_grounding_transition_installation import (
+    assert_installed as assert_fresh_java_grounding_transition,
+)
+from .fresh_java_grounding_transition_installation import (
+    install as install_fresh_java_grounding_transition,
+)
 from .generation_accuracy_contract import (
     assert_inner_installed as assert_generation_accuracy_inner,
 )
@@ -48,6 +54,10 @@ install_generation_accuracy_inner(_model_router)
 assert_generation_accuracy_inner(_model_router)
 install_execution_feedback_semantic_convergence(_execution_feedback_replan_contract)
 finalize_runtime()
+from . import progress_aware_tool_loop as _progress_aware_tool_loop
+
+install_fresh_java_grounding_transition(_progress_aware_tool_loop)
+assert_fresh_java_grounding_transition(_progress_aware_tool_loop)
 # generation_verifier_resilience owns JDT -> Gradle fallback directly; no second
 # AgentToolRuntime._call wrapper is installed after finalization.
 install_generation_accuracy_outer(_model_router)
