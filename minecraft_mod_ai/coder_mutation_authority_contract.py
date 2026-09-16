@@ -222,6 +222,37 @@ def _authority_target_decision(
     return authority.mode is MutationAuthorityMode.BOUNDED_ROOTS, None
 
 
+def _same_path_verifier_repair_replacement(
+    loop_module: Any,
+    tool_name: str,
+    arguments: Mapping[str, Any],
+    context: Any,
+) -> bool:
+    """Admit one full-file repair only for the exact file created in this run.
+
+    The verifier repair loop can receive a complete corrected source body.  Treating
+    that body as a same-path transactional replacement is safe only when the host
+    proves that the current file came from an earlier accepted mutation in this run.
+    Existing user/project files never satisfy this predicate.
+    """
+    if tool_name != "apply_source_edit" or context is None:
+        return False
+    operation = str(arguments.get("operation") or "").strip().casefold()
+    if operation not in loop_module._SOURCE_CREATE_OPERATIONS:
+        return False
+    pinned = loop_module._canonical_mutation_path(getattr(context, "target_path", None))
+    supplied = loop_module._canonical_mutation_path(_source_edit_path(loop_module, arguments))
+    source_body = getattr(context, "source_body", None)
+    return bool(
+        pinned
+        and supplied == pinned
+        and not bool(getattr(context, "is_new_file", False))
+        and bool(getattr(context, "target_pinned", False))
+        and str(getattr(context, "evidence_source", "") or "").strip() == "mutation_receipt"
+        and isinstance(source_body, str)
+    )
+
+
 def _creation_conflict_error(
     loop_module: Any,
     tool_name: str,
@@ -259,6 +290,8 @@ def _install_creation_conflict_classification(loop_module: Any) -> None:
         handled, error = _authority_target_decision(loop_module, tool_name, arguments)
         if handled:
             return error
+        if _same_path_verifier_repair_replacement(loop_module, tool_name, arguments, context):
+            return None
         conflict = _creation_conflict_error(loop_module, tool_name, arguments, context)
         return conflict if conflict is not None else original(tool_name, arguments, context)
 
