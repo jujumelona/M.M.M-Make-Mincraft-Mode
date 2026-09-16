@@ -26,85 +26,18 @@ jobs:
           cache: pip
       - name: Install test dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
-      - name: Make tool phases protocol-local and add regressions
-        env:
-          PATCH_SCRIPT_B64: >-
-            CmZyb20gcGF0aGxpYiBpbXBvcnQgUGF0aAoKbG9vcF9wYXRoID0gUGF0aCgibWluZWNyYWZ0X21vZF9haS9wcm9ncmVzc19hd2FyZV90b29sX2xvb3AucHki
-            KQp0ZXh0ID0gbG9vcF9wYXRoLnJlYWRfdGV4dChlbmNvZGluZz0idXRmLTgiKQoKbWFya2VyID0gIlxuZGVmIF9nZW5lcmF0ZV93aXRoX3Rvb2xzX2ltcGwo
-            XG4iCmlmIHRleHQuY291bnQobWFya2VyKSAhPSAxOgogICAgcmFpc2UgU3lzdGVtRXhpdCgiZXhwZWN0ZWQgZXhhY3RseSBvbmUgX2dlbmVyYXRlX3dpdGhf
-            dG9vbHNfaW1wbCBtYXJrZXIiKQppZiAiZGVmIF9jb21wYWN0X3BoYXNlX3Rvb2xfdHJhbnNjcmlwdCgiIGluIHRleHQ6CiAgICByYWlzZSBTeXN0ZW1FeGl0
-            KCJwaGFzZSB0cmFuc2NyaXB0IGhlbHBlciBhbHJlYWR5IGV4aXN0cyIpCgpoZWxwZXJfbGluZXMgPSBbCiAgICAiIiwKICAgICJkZWYgX2NvbXBhY3RfcGhh
-            c2VfdG9vbF90cmFuc2NyaXB0KCIsCiAgICAiICAgIG1lc3NhZ2VzOiBsaXN0W2RpY3Rbc3RyLCBBbnldXSwiLAogICAgIiAgICAqLCIsCiAgICAiICAgIHBy
-            ZXZpb3VzX3BoYXNlOiBMb29wUGhhc2UsIiwKICAgICIgICAgbmV4dF9waGFzZTogTG9vcFBoYXNlLCIsCiAgICAiKSAtPiBpbnQ6IiwKICAgICcgICAgIiIi
-            Q2xvc2UgdGhlIHByZXZpb3VzIHBoYXNlIHRvb2wgcHJvdG9jb2wgd2hpbGUgcHJlc2VydmluZyBvYnNlcnZhdGlvbiBkYXRhLiIiIicsCiAgICAiICAgIGlm
-            IHByZXZpb3VzX3BoYXNlID09IG5leHRfcGhhc2U6IiwKICAgICIgICAgICAgIHJldHVybiAwIiwKICAgICJbZW1wdHkiLAogICAgIiAgICBjb21wYWN0ZWQ6
-            IGxpc3RbZGljdFtzdHIsIEFueV1dID0gW10iLAogICAgIiAgICBvYnNlcnZhdGlvbnM6IGxpc3Rbc3RyXSA9IFtdIiwKICAgICIgICAgcmVtb3ZlZCA9IDAi
-            LAogICAgIiIsCiAgICAiICAgIGZvciByYXdfbWVzc2FnZSBpbiBtZXNzYWdlczoiLAogICAgIiAgICAgICAgbWVzc2FnZSA9IGRpY3QocmF3X21lc3NhZ2Up
-            IiwKICAgICcgICAgICAgIHJvbGUgPSBzdHIobWVzc2FnZS5nZXQoInJvbGUiKSBvciAiIikiLAogICAgJyAgICAgICAgaWYgcm9sZSA9PSAiYXNzaXN0YW50
-            IiBhbmQgbWVzc2FnZS5nZXQoInRvb2xfY2FsbHMiKTonLAogICAgJyAgICAgICAgICAgIGNvbnRlbnQgPSBtZXNzYWdlLmdldCgiY29udGVudCIpJywKICAg
-            ICJICAgICAgICAgICAgaWYgaXNpbnN0YW5jZShjb250ZW50LCBzdHIpIGFuZCBjb250ZW50LnN0cmlwKCk6IiwKICAgICcgICAgICAgICAgICAgICAgY29t
-            cGFjdGVkLmFwcGVuZCh7InJvbGUiOiAiYXNzaXN0YW50IiwgImNvbnRlbnQiOiBjb250ZW50fSknLAogICAgIiAgICAgICAgICAgIHJlbW92ZWQgKz0gMSIs
-            CiAgICAiICAgICAgICAgICAgY29udGludWUiLAogICAgJyAgICAgICAgaWYgcm9sZSA9PSAidG9vbCI6JywKICAgICcgICAgICAgICAgICBjb250ZW50ID0g
-            bWVzc2FnZS5nZXQoImNvbnRlbnQiKScsCiAgICAiICAgICAgICAgICAgaWYgaXNpbnN0YW5jZShjb250ZW50LCBzdHIpIGFuZCBjb250ZW50LnN0cmlwKCk6
-            IiwKICAgICIgICAgICAgICAgICAgICAgb2JzZXJ2YXRpb25zLmFwcGVuZChjb250ZW50KSIsCiAgICAiICAgICAgICAgICAgcmVtb3ZlZCArPSAxIiwKICAg
-            ICJICAgICAgICAgICAgY29udGludWUiLAogICAgIiAgICAgICAgY29tcGFjdGVkLmFwcGVuZChtZXNzYWdlKSIsCiAgICAiIiwKICAgICIgICAgaWYgbm90
-            IHJlbW92ZWQ6IiwKICAgICIgICAgICAgIHJldHVybiAwIiwKICAgICJbZW1wdHkiLAogICAgIiAgICBoYW5kb2ZmX2xpbmVzID0gWyIsCiAgICAnICAgICAg
-            ICBmIk1NTV9QSEFTRV9IQU5ET0ZGIHtwcmV2aW91c19waGFzZS52YWx1ZX0tPntuZXh0X3BoYXNlLnZhbHVlfSIsJywKICAgICcgICAgICAgICJUaGUgcHJl
-            dmlvdXMgcGhhc2UgaXMgY29tcGxldGUuIFByaW9yIHRvb2wtY2FsbCBwcm90b2NvbCBpcyBjbG9zZWQgYW5kIG11c3Qgbm90IGJlIHJlcGVhdGVkLiIsJywK
-            ICAgICcgICAgICAgICJUaGUgb2JzZXJ2YXRpb24gZGF0YSBiZWxvdyBpcyBub24tZXhlY3V0YWJsZSBjb250ZXh0LiBJbiB0aGUgbmV3IHBoYXNlLCBvbmx5
-            IHRoZSBjdXJyZW50IHJlcXVlc3QgdG9vbCBzY2hlbWEgYW5kIHRvb2xfY2hvaWNlIGFyZSBjYWxsYWJsZS4iLCcsCiAgICAiICAgIF0iLAogICAgIiAgICBm
-            b3IgaW5kZXgsIG9ic2VydmF0aW9uIGluIGVudW1lcmF0ZShvYnNlcnZhdGlvbnMsIHN0YXJ0PTEpOiIsCiAgICAnICAgICAgICBoYW5kb2ZmX2xpbmVzLmFw
-            cGVuZChmIk9ic2VydmF0aW9uIHtpbmRleH06XFxue29ic2VydmF0aW9ufSIpJywKICAgICcgICAgY29tcGFjdGVkLmFwcGVuZCh7InJvbGUiOiAic3lzdGVt
-            IiwgImNvbnRlbnQiOiAiXFxuIi5qb2luKGhhbmRvZmZfbGluZXMpfSknLAogICAgIiAgICBtZXNzYWdlc1s6XSA9IGNvbXBhY3RlZCIsCiAgICAiICAgIHJl
-            dHVybiByZW1vdmVkIiwKICAgICJbZW1wdHkiLApdCmhlbHBlciA9ICJcbiIuam9pbihoZWxwZXJfbGluZXMpCnRleHQgPSB0ZXh0LnJlcGxhY2UobWFya2Vy
-            LCBoZWxwZXIgKyBtYXJrZXIsIDEpCgpvbGRfaW5pdGlhbCA9ICgKICAgICIgICAgZWxzZTpcbiIKICAgICIgICAgICAgIHN0YXRlLnBoYXNlID0gTG9vcFBo
-            YXNlLk9CU0VSVkVcblxuIgogICAgIiAgICBlbWl0X3Jvb3RfY2F1c2UoXG4iCikKbmV3X2luaXRpYWwgPSAoCiAgICAiICAgIGVsc2U6XG4iCiAgICAiICAg
-            ICAgICBzdGF0ZS5waGFzZSA9IExvb3BQaGFzZS5PQlNFUlZFXG5cbiIKICAgICIgICAgbGFzdF9wcm9tcHRfcGhhc2UgPSBzdGF0ZS5waGFzZVxuXG4iCiAg
-            ICAiICAgIGVtaXRfcm9vdF9jYXVzZShcbiIKIAppZiB0ZXh0LmNvdW50KG9sZF9pbml0aWFsKSAhPSAxOgogICAgcmFpc2UgU3lzdGVtRXhpdCgiZXhwZWN0
-            ZWQgZXhhY3RseSBvbmUgaW5pdGlhbCBwaGFzZSBibG9jayIpCnRleHQgPSB0ZXh0LnJlcGxhY2Uob2xkX2luaXRpYWwsIG5ld19pbml0aWFsLCAxKQoKb2xk
-            X2xvb3AgPSAoCiAgICAiICAgIHdoaWxlIFRydWU6XG4iCiAgICAiICAgICAgICBpZiAoXG4iCiAgICAiICAgICAgICAgICAgaW1wbGVtZW50YXRpb25fcmVx
-            dWlyZXNfbXV0YXRpb25cbiIKICAgICIgICAgICAgICAgICBhbmQgc3RhdGUud29ya3NwYWNlX2NoYW5nZWRcbiIKIQpuZXdfbG9vcCA9ICgKICAgICIgICAg
-            d2hpbGUgVHJ1ZTpcbiIKICAgICIgICAgICAgIGlmIHN0YXRlLnBoYXNlICE9IGxhc3RfcHJvbXB0X3BoYXNlOlxuIgogICAgIiAgICAgICAgICAgIHByZXZp
-            b3VzX3Byb21wdF9waGFzZSA9IGxhc3RfcHJvbXB0X3BoYXNlXG4iCiAgICAiICAgICAgICAgICAgcmVtb3ZlZF9wcm90b2NvbF9tZXNzYWdlcyA9IF9jb21w
-            YWN0X3BoYXNlX3Rvb2xfdHJhbnNjcmlwdChcbiIKICAgICIgICAgICAgICAgICAgICAgbWVzc2FnZXMsXG4iCiAgICAiICAgICAgICAgICAgICAgIHByZXZp
-            b3VzX3BoYXNlPXByZXZpb3VzX3Byb21wdF9waGFzZSxcbiIKICAgICIgICAgICAgICAgICAgICAgbmV4dF9waGFzZT1zdGF0ZS5waGFzZSxcbiIKICAgICIg
-            ICAgICAgICAgICApXG4iCiAgICAiICAgICAgICAgICAgZW1pdF9yb290X2NhdXNlKFxuIgogICAgJyAgICAgICAgICAgICAgICAicGhhc2VfdG9vbF90cmFu
-            c2NyaXB0X2hhbmRvZmYiLFxuJwogICAgIiAgICAgICAgICAgICAgICBzdGFnZT1zdGFnZSxcbiIKICAgICcgICAgICAgICAgICAgICAgb3BlcmF0aW9uPSJn
-            ZW5lcmF0ZV93aXRoX3Rvb2xzIixcbicKICAgICcgICAgICAgICAgICAgICAgZ2F0ZT0icGhhc2VfYm91bmRhcnkiLFxuJwogICAgJyAgICAgICAgICAgICAgICBy
-            ZXN1bHQ9IlBBU1MiLFxuJwogICAgJyAgICAgICAgICAgICAgICByZWFzb249ImNsb3NlZCBwcmlvciBwaGFzZSB0b29sIHByb3RvY29sIGJlZm9yZSB0aGUg
-            bmV4dCBtb2RlbCB0dXJuIixcbicKICAgICIgICAgICAgICAgICAgICAgZGV0YWlscz17XG4iCiAgICAnICAgICAgICAgICAgICAgICAgICAicHJldmlvdXNfcGhh
-            c2UiOiBwcmV2aW91c19wcm9tcHRfcGhhc2UudmFsdWUsXG4nCiAgICAnICAgICAgICAgICAgICAgICAgICAibmV4dF9waGFzZSI6IHN0YXRlLnBoYXNlLnZh
-            bHVlLFxuJwogICAgJyAgICAgICAgICAgICAgICAgICAgInJlbW92ZWRfcHJvdG9jb2xfbWVzc2FnZXMiOiByZW1vdmVkX3Byb3RvY29sX21lc3NhZ2VzLFxu
-            JwogICAgJyAgICAgICAgICAgICAgICAgICAgIm1lc3NhZ2VfY291bnQiOiBsZW4obWVzc2FnZXMpLFxuJwogICAgIiAgICAgICAgICAgICAgICB9LFxuIgog
-            ICAgIiAgICAgICAgICAgIClcbiIKICAgICIgICAgICAgICAgICBsYXN0X3Byb21wdF9waGFzZSA9IHN0YXRlLnBoYXNlXG5cbiIKICAgICIgICAgICAgIGlm
-            IChcbiIKICAgICIgICAgICAgICAgICBpbXBsZW1lbnRhdGlvbl9yZXF1aXJlc19tdXRhdGlvblxuIgogICAgIiAgICAgICAgICAgIGFuZCBzdGF0ZS53b3Jr
-            c3BhY2VfY2hhbmdlZFxuIgo pQppZiB0ZXh0LmNvdW50KG9sZF9sb29wKSAhPSAxOgogICAgcmFpc2UgU3lzdGVtRXhpdCgiZXhwZWN0ZWQgZXhhY3RseSBv
-            bmUgbWFpbiB0b29sIGxvb3AgZW50cnkiKQp0ZXh0ID0gdGV4dC5yZXBsYWNlKG9sZF9sb29wLCBuZXdfbG9vcCwgMSkKbG9vcF9wYXRoLndyaXRlX3RleHQo
-            dGV4dCwgZW5jb2Rpbmc9InV0Zi04IikKCnRlc3RfcGF0aCA9IFBhdGgoInRlc3RzL3Rlc3RfdG9vbF9jYWxsX2FkbWlzc2lvbl9jb250cmFjdC5weSIpCnRl
-            c3RzID0gdGVzdF9wYXRoLnJlYWRfdGV4dChlbmNvZGluZz0idXRmLTgiKQppZiAidGVzdF9waGFzZV9oYW5kb2ZmX2Nsb3Nlc19vbGRfdG9vbF9wcm90b2Nv
-            bF9hbmRfcHJlc2VydmVzX29ic2VydmF0aW9uX2RhdGEiIGluIHRlc3RzOgogICAgcmFpc2UgU3lzdGVtRXhpdCwicGhhc2UgaGFuZG9mZiB0ZXN0cyBhbHJl
-            YWR5IGV4aXN0IikKdGVzdF9saW5lcyA9IFsKICAgICIiLAogICAgIiIsCiAgICAiZGVmIHRlc3RfcGhhc2VfaGFuZG9mZl9jbG9zZXNfb2xkX3Rvb2xfcHJv
-            dG9jb2xfYW5kX3ByZXNlcnZlc19vYnNlcnZhdGlvbl9kYXRhKCk6IiwKICAgICIgICAgZnJvbSBtaW5lY3JhZnRfbW9kX2FpLnByb2dyZXNzX2F3YXJlX3Rv
-            b2xfbG9vcCBpbXBvcnQgKCIsCiAgICAiICAgICAgICBMb29wUGhhc2UsIiwKICAgICIgICAgICAgIF9jb21wYWN0X3BoYXNlX3Rvb2xfdHJhbnNjcmlwdCwi
-            LAogICAgIiAgICApIiwKICAgICJbZW1wdHkiLAogICAgJyAgICBtZXNzYWdlcyA9IFsnLAogICAgJyAgICAgICAgeyJyb2xlIjogInVzZXIiLCAiY29udGVu
-            dCI6ICJpbXBsZW1lbnQgdGhlIHRhcmdldCJ9LCcsCiAgICAiICAgICAgICB7IiwKICAgICcgICAgICAgICAgICAicm9sZSI6ICJhc3Npc3RhbnQiLCcsCiAg
-            ICAgJyAgICAgICAgICAgICJjb250ZW50IjogTm9uZSw nLAogICAgJyAgICAgICAgICAgICJ0b29sX2NhbGxzIjogWycsCiAgICAiICAgICAgICAgICAgICAgIHsi
-            LAogICAgJyAgICAgICAgICAgICAgICAgICAgImlkIjogImNhbGxfc2VhcmNoIiw nLAogICAgJyAgICAgICAgICAgICAgICAgICAgInR5cGUiOiAiZnVuY3Rpb24i
-            L CcsCiAgICAiICAgICAgICAgICAgICAgICAgICAiZnVuY3Rpb24iOiB7IiwKICAgICcgICAgICAgICAgICAgICAgICAgICAgICAibmFtZSI6ICJzZWFyY2hfY29k
-            ZV9yYWciLCcsCiAgICAnICAgICAgICAgICAgICAgICAgICAgICAgImFyZ3VtZW50cyI6ICd7InF1ZXJ5IjoiRGVidWdUb2tlbiBzb3VyY2UifScsJywKICAg
-            ICcgICAgICAgICAgICAgICAgICAgIH0sJywKICAgICIgICAgICAgICAgICAgICAgfSIsCiAgICAiICAgICAgICAgICAgXSwiLAogICAgIiAgICAgICAgfSwiLAog
-            ICAgIiAgICAgICB7IiwKICAgICcgICAgICAgICAgICAicm9sZSI6ICJ0b29sIiw nLAogICAgJyAgICAgICAgICAgICJ0b29sX2NhbGxfaWQiOiAiY2FsbF9z
-            ZWFyY2giLCcsCiAgICAnICAgICAgICAgICAgIm5hbWUiOiAic2VhcmNoX2NvZGVfcmFnIiw nLAogICAgJyAgICAgICAgICAgICJjb250ZW50IjogJ3sib2siOnRydWUsInJlc3VsdCI6eyJzb3VyY2UiOiJwdWJsaWMgZmluYWwgY2xhc3MgRGVidWdUb2tlbiB7fSJ9fScsJywKICAgICIgICAgICAgIH0sIiwKICAgICIgICAgXSIsCiAgICAiIiwKICAgICIgICAgcmVtb3ZlZCA9IF9jb21wYWN0X3BoYXNlX3Rvb2xfdHJhbnNjcmlwdCgiLAogICAgIiAgICAgICAgbWVzc2FnZXMsIiwKICAgICIgICAgICAgIHByZXZpb3VzX3BoYXNlPUxvb3BQaGFzZS5PQlNFUlZFLCIsCiAgICAiICAgICAgICBuZXh0X3BoYXNlPUxvb3BQaGFzZS5BQ1QsIiwKICAgICIgICAgKSIsCiAgICAiIiwKICAgICIgICAgYXNzZXJ0IHJlbW92ZWQgPT0gMiIsCiAgICAnICAgIGFzc2VydCBhbGwobWVzc2FnZS5nZXQoInJvbGUiKSAhPSAidG9vbCIgZm9yIG1lc3NhZ2UgaW4gbWVzc2FnZXMpJywKICAgICcgICAgYXNzZXJ0IGFsbChub3QgbWVzc2FnZS5nZXQoInRvb2xfY2FsbHMiKSBmb3IgbWVzc2FnZSBpbiBtZXNzYWdlcyknLAogICAgJyAgICBhc3NlcnQgbWVzc2FnZXNbLTFdWyJyb2xlIl0gPT0gInN5c3RlbSInLAogICAgJyAgICBhc3NlcnQgIk9CU0VSVkUtPkFDVCIgaW4gbWVzc2FnZXNbLTFdWyJjb250ZW50Il0nLAogICAgJyAgICBhc3NlcnQgInB1YmxpYyBmaW5hbCBjbGFzcyBEZWJ1Z1Rva2VuIHt9IiBpbiBtZXNzYWdlc1stMV1bImNvbnRlbnQiXScsCiAgICAnICAgIGFzc2VydCAic2VhcmNoX2NvZGVfcmFnIiBub3QgaW4gbWVzc2FnZXNbLTFdWyJjb250ZW50Il0nLAogICAgIiIsCiAgICAiIiwKICAgICJkZWYgdGVzdF9waGFzZV9oYW5kb2ZmX2lzX3dpcmVkX2JlZm9yZV9uZXh0X21vZGVsX3R1cm4oKToiLAogICAgIiAgICBpbXBvcnQgaW5zcGVjdCIsCiAgICAiIiwKICAgICIgICAgZnJvbSBtaW5lY3JhZnRfbW9kX2FpLnByb2dyZXNzX2F3YXJlX3Rvb2xfbG9vcCBpbXBvcnQgX2dlbmVyYXRlX3dpdGhfdG9vbHNfaW1wbCIsCiAgICAiIiwKICAgICIgICAgc291cmNlID0gaW5zcGVjdC5nZXRzb3VyY2UoX2dlbmVyYXRlX3dpdGhfdG9vbHNfaW1wbCkiLAogICAgJyAgICBhc3NlcnQgInN0YXRlLnBoYXNlICE9IGxhc3RfcHJvbXB0X3BoYXNlIiBpbiBzb3VyY2UnLAogICAgJyAgICBhc3NlcnQgIl9jb21wYWN0X3BoYXNlX3Rvb2xfdHJhbnNjcmlwdCgiIGluIHNvdXJjZScsCiAgICAnICAgIGFzc2VydCAicGhhc2VfdG9vbF90cmFuc2NyaXB0X2hhbmRvZmYiIGluIHNvdXJjZScsCiAgICAiIiwKXQp0ZXN0X3BhdGgud3JpdGVfdGV4dCh0ZXN0cyArICJcbiIuam9pbih0ZXN0X2xpbmVzKSwgZW5jb2Rpbmc9InV0Zi04IikK
-        run: python -c "import base64, os; exec(base64.b64decode(os.environ['PATCH_SCRIPT_B64']))"
+      - name: Rewrite phase-local tool protocol
+        run: python .github/scripts/fix_phase_handoff_once.py
       - name: Verify focused change
         run: |
           python -m compileall -q minecraft_mod_ai/progress_aware_tool_loop.py tests/test_tool_call_admission_contract.py
           ruff check tests/test_tool_call_admission_contract.py
           pytest -q tests/test_tool_call_admission_contract.py
-      - name: Commit implementation to main and remove one-shot workflow
+      - name: Commit implementation to main and remove one-shot helpers
         run: |
           set -euo pipefail
           git rm .github/workflows/fix-phase-handoff-once.yml
+          git rm .github/scripts/fix_phase_handoff_once.py
           git add minecraft_mod_ai/progress_aware_tool_loop.py tests/test_tool_call_admission_contract.py
           git diff --cached --check
           git config user.name 'github-actions[bot]'
