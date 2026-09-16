@@ -22,7 +22,6 @@ from .source_observation_budget_installation import install as install_source_ob
 from .source_set_boundary_installation import install as install_source_set_boundary
 from .task_template_catalog import RUNTIME_TEMPLATE_ROOT
 from .template_contract_validation import runtime_consumer_roots, validate_catalog
-from .verification_pending_result_installation import install as install_verification_pending_result
 from .versioned_reference_context_installation import install as install_versioned_reference_context
 
 
@@ -34,14 +33,14 @@ def _validate_runtime_template_authority() -> None:
     )
 
 
-# MMM_LLAMA_ACTIVE_PARALLEL describes proven live server capacity.  Importing the
+# MMM_LLAMA_ACTIVE_PARALLEL describes proven live server capacity. Importing the
 # package must never synthesize that receipt from a desired/default server width.
 install_hardware_concurrency()
 initialize_runtime()
 # A generation/quality MCP child inherits the target-selected MMM_JAVA_VERSION.
 # Colab setup may have run before that value existed, so ensure the exact project
-# JDK again at fresh process bootstrap.  When no target Java version is present,
-# this is a no-op.  java_lsp remains the single canonical resolver/validator.
+# JDK again at fresh process bootstrap. When no target Java version is present,
+# this is a no-op. java_lsp remains the single canonical resolver/validator.
 _jdtls_bootstrap._ensure_project_jdk()
 _validate_runtime_template_authority()
 from . import custom_module_generator as _custom_module_generator
@@ -66,9 +65,8 @@ finalize_runtime()
 # The generation verifier is finalized above. Wrap only its infrastructure-unavailable
 # path with a real pinned Gradle build; source failures remain ordinary verifier FAILs.
 install_generation_verifier_fallback()
-# Explicit pause/resume callers receive a structured pending receipt when every host
-# verifier is unavailable. The normal generate() method remains production fail-closed.
-install_verification_pending_result(_custom_module_generator)
+# Resumable verifier handling is an explicit API in verification_pending_result_installation;
+# production generation remains fail-closed and package import injects no extra method.
 # The outer normalizer runs after atomic aggregation so multi-obligation text summaries
 # retain the fixed {"summary": ...} contract consumed by CustomModuleGenerator.
 install_generation_accuracy_outer(_model_router)
