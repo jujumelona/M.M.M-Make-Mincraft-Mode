@@ -12,7 +12,6 @@ from .generation_accuracy_contract import (
 )
 from .generation_accuracy_contract import install_inner as install_generation_accuracy_inner
 from .generation_accuracy_contract import install_outer as install_generation_accuracy_outer
-from .generation_verifier_fallback_installation import install as install_generation_verifier_fallback
 from .hardware_concurrency_installation import install as install_hardware_concurrency
 from .java_toolchain_separation_installation import install as install_java_toolchain_separation
 from . import jdtls_bootstrap as _jdtls_bootstrap
@@ -33,14 +32,8 @@ def _validate_runtime_template_authority() -> None:
     )
 
 
-# MMM_LLAMA_ACTIVE_PARALLEL describes proven live server capacity. Importing the
-# package must never synthesize that receipt from a desired/default server width.
 install_hardware_concurrency()
 initialize_runtime()
-# A generation/quality MCP child inherits the target-selected MMM_JAVA_VERSION.
-# Colab setup may have run before that value existed, so ensure the exact project
-# JDK again at fresh process bootstrap. When no target Java version is present,
-# this is a no-op. java_lsp remains the single canonical resolver/validator.
 _jdtls_bootstrap._ensure_project_jdk()
 _validate_runtime_template_authority()
 from . import custom_module_generator as _custom_module_generator
@@ -49,26 +42,14 @@ from . import java_lsp as _java_lsp
 from . import model_router as _model_router
 
 install_checkpoint_performance(_custom_module_generator)
-# JDT LS may run on a tooling JDK that differs from the project JDK. Pin the
-# Buildship/Gradle daemon to the already-resolved project JDK before any source-set
-# or generation verifier wrapper can start Java diagnostics.
 install_java_toolchain_separation(_java_lsp)
 install_source_set_boundary(_java_lsp)
-# Install the accuracy verifier before runtime finalization. The atomic coder slicer is
-# finalized later and therefore calls through this boundary once for every obligation.
 install_generation_accuracy_inner(_model_router)
 assert_generation_accuracy_inner(_model_router)
-# Execution feedback must own deterministic base-project diagnostics and its retry
-# termination rule before runtime_finalization installs the durable feedback wrapper.
 install_execution_feedback_semantic_convergence(_execution_feedback_replan_contract)
 finalize_runtime()
-# The generation verifier is finalized above. Wrap only its infrastructure-unavailable
-# path with a real pinned Gradle build; source failures remain ordinary verifier FAILs.
-install_generation_verifier_fallback()
-# Resumable verifier handling is an explicit API in verification_pending_result_installation;
-# production generation remains fail-closed and package import injects no extra method.
-# The outer normalizer runs after atomic aggregation so multi-obligation text summaries
-# retain the fixed {"summary": ...} contract consumed by CustomModuleGenerator.
+# generation_verifier_resilience owns JDT -> Gradle fallback directly; no second
+# AgentToolRuntime._call wrapper is installed after finalization.
 install_generation_accuracy_outer(_model_router)
 assert_generation_accuracy_outer(_model_router)
 install_versioned_reference_context()
