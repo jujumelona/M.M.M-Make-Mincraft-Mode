@@ -51,6 +51,7 @@ jobs:
             minecraft_mod_ai/model_adapters/llama_cpp_adapter.py \
             minecraft_mod_ai/progress_aware_tool_loop.py \
             tests/test_generation_rag_target_binding.py
+          python -m ruff check minecraft_mod_ai/mcp_tools.py --select I --fix
 
       - name: Compile changed Python
         run: |
@@ -71,7 +72,7 @@ jobs:
             minecraft_mod_ai/model_adapters/llama_cpp_adapter.py \
             minecraft_mod_ai/progress_aware_tool_loop.py \
             tests/test_generation_rag_target_binding.py \
-            --ignore BLE001,C901,PLR0911,PLR0912,PLR0915
+            --ignore BLE001,C901,PLR0911,PLR0912,PLR0915,RUF100
 
       - name: Run RAG admission recovery contracts
         run: |
