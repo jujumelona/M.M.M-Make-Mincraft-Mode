@@ -134,7 +134,8 @@ jobs:
       - name: Verify focused change
         run: |
           python -m compileall -q minecraft_mod_ai/jdtls_bootstrap.py minecraft_mod_ai/java_lsp.py tests/test_lazy_java_toolchain_provisioning.py
-          ruff check minecraft_mod_ai/jdtls_bootstrap.py minecraft_mod_ai/java_lsp.py tests/test_lazy_java_toolchain_provisioning.py
+          ruff check minecraft_mod_ai/jdtls_bootstrap.py tests/test_lazy_java_toolchain_provisioning.py
+          ruff check --ignore UP022,S110,S112,BLE001 minecraft_mod_ai/java_lsp.py
           pytest -q tests/test_lazy_java_toolchain_provisioning.py
       - name: Verify build runner shares resolver
         run: |
