@@ -1,4 +1,4 @@
-name: Root-cause API grounding hotfix v2
+name: Root-cause API grounding validation
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 jobs:
-  apply-and-verify:
+  validate-and-clean:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,63 +22,48 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Reuse exact root-cause patch
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          import textwrap
-
-          workflow = Path('.github/workflows/root-cause-api-grounding-hotfix.yml').read_text(encoding='utf-8')
-          start_marker = "          python - <<'PY'\n"
-          end_marker = "\n          PY\n"
-          if start_marker not in workflow:
-              raise SystemExit('patch script start marker missing')
-          body = workflow.split(start_marker, 1)[1]
-          if end_marker not in body:
-              raise SystemExit('patch script end marker missing')
-          body = body.split(end_marker, 1)[0]
-          Path('/tmp/apply_root_cause_fix.py').write_text(textwrap.dedent(body), encoding='utf-8')
-          PY
-          python /tmp/apply_root_cause_fix.py
-
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e . pytest
 
-      - name: Run root-cause regressions
+      - name: Verify package bootstrap and installed wrapper integrity
+        run: |
+          python -c "import minecraft_mod_ai"
+          python - <<'PY'
+          import minecraft_mod_ai
+          from minecraft_mod_ai.runtime_wrapper_integrity import verify_installed_wrappers
+          report = verify_installed_wrappers()
+          assert report.ok, report.issues
+          print(f"wrapper integrity checked={report.checked}")
+          PY
+
+      - name: Run exact root-cause regressions
         shell: bash
         run: |
           set -o pipefail
           python -m pytest -q \
+            tests/test_api_grounding_repair_installation.py \
             tests/test_coder_grounding_repair_regression.py \
             tests/test_agent_tool_verification_terminal.py \
             tests/test_tool_call_admission_contract.py \
-            2>&1 | tee /tmp/root-cause-pytest.log
+            tests/test_colab_debug_fixture_path.py \
+            2>&1 | tee /tmp/root-cause-validation.log
 
-      - name: Compile changed Python
-        run: |
-          python -m py_compile \
-            minecraft_mod_ai/model_router.py \
-            minecraft_mod_ai/progress_aware_tool_loop.py \
-            tests/test_coder_grounding_repair_regression.py
-
-      - name: Upload regression log
+      - name: Upload validation log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: root-cause-api-grounding-v2-log
-          path: /tmp/root-cause-pytest.log
+          name: root-cause-api-grounding-validation
+          path: /tmp/root-cause-validation.log
           if-no-files-found: ignore
 
-      - name: Commit verified fix directly to main
+      - name: Remove temporary hotfix workflows and push clean main
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/workflows/root-cause-api-grounding-hotfix.yml
           git rm .github/workflows/root-cause-api-grounding-hotfix-v2.yml
-          git add minecraft_mod_ai/model_router.py minecraft_mod_ai/progress_aware_tool_loop.py tests/test_coder_grounding_repair_regression.py
-          git commit -m "Fix fresh Java API grounding and repair recovery"
+          git commit -m "Verify API grounding repair and remove temporary workflows"
           git push origin HEAD:main
