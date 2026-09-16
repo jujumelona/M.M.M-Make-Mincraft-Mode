@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from minecraft_mod_ai.model_adapters import ModelConfigurationError
-from minecraft_mod_ai.verification_pending_result_installation import install
+from minecraft_mod_ai.verification_pending_result_installation import generate_resumable
 
 
 class _Module:
@@ -14,14 +12,12 @@ class _Module:
     required_gates = ("CustomGate",)
 
 
-def _generator_module(message: str):
+def _generator(message: str):
     class Generator:
         def generate(self, *args, **kwargs):
             raise ModelConfigurationError(message)
 
-    module = SimpleNamespace(CustomModuleGenerator=Generator)
-    install(module)
-    return module
+    return Generator()
 
 
 @pytest.mark.parametrize(
@@ -38,8 +34,7 @@ def test_resumable_generation_returns_structured_pending_verification(
     message: str,
     code: str,
 ) -> None:
-    module = _generator_module(message)
-    result = module.CustomModuleGenerator().generate_resumable(module=_Module())
+    result = generate_resumable(_generator(message), module=_Module())
 
     assert result["status"] == "VERIFICATION_PENDING"
     assert result["resumable"] is True
@@ -56,15 +51,15 @@ def test_resumable_generation_returns_structured_pending_verification(
 
 
 def test_production_generate_remains_fail_closed() -> None:
-    module = _generator_module("VERIFIER_UNAVAILABLE: no verifier")
-    generator = module.CustomModuleGenerator()
+    generator = _generator("VERIFIER_UNAVAILABLE: no verifier")
 
     with pytest.raises(ModelConfigurationError, match="VERIFIER_UNAVAILABLE"):
         generator.generate(module=_Module())
 
 
 def test_resumable_generation_does_not_swallow_other_configuration_errors() -> None:
-    module = _generator_module("MUTATION_TARGET_DRIFT: wrong file")
-
     with pytest.raises(ModelConfigurationError, match="MUTATION_TARGET_DRIFT"):
-        module.CustomModuleGenerator().generate_resumable(module=_Module())
+        generate_resumable(
+            _generator("MUTATION_TARGET_DRIFT: wrong file"),
+            module=_Module(),
+        )
