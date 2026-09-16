@@ -131,7 +131,7 @@ def test_existing_target_schema_does_not_offer_create_operations() -> None:
     assert operation["enum"] == ["replace_exact", "insert_after"]
 
 
-def test_fresh_java_observe_prefers_workspace_symbols_before_write() -> None:
+def test_fresh_java_observe_prefers_exact_code_before_workspace_symbols() -> None:
     context = TargetMutationContext(
         target_path="src/main/java/dev/mmm/DebugToken.java",
         is_new_file=True,
@@ -153,4 +153,4 @@ def test_fresh_java_observe_prefers_workspace_symbols_before_write() -> None:
         semantic_retrieval_choice=True,
     )
 
-    assert selected[0]["function"]["name"] == "java_workspace_symbols"
+    assert selected[0]["function"]["name"] == "search_code_rag"
