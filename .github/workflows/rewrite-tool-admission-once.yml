@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   rewrite:
-    if: github.event.head_commit.message == 'Finish tool admission rewrite'
+    if: github.event.head_commit.message == 'Fix malformed Qwen wrapper span'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -43,6 +43,7 @@ jobs:
               '7c83b298cda94e53265d8a2ed886e7b87a17d49d': '/tmp/normalize_tool_admission.py',
               '01b8bb3b96c1da58681d64db6904ada4354f63b2': '/tmp/migrate_remaining_tool_tests.py',
               '79715e7e2703c9183b3daf8869362c6567db8da6': '/tmp/fix_source_mutation_lint.py',
+              '90890adcc82784b59c14ab39683c1c8aab0879ac': '/tmp/fix_qwen_malformed_span.py',
           }
           for sha, destination in programs.items():
               req = urllib.request.Request(
@@ -71,6 +72,8 @@ jobs:
         run: python /tmp/migrate_remaining_tool_tests.py
       - name: Narrow source patch exception assertion
         run: python /tmp/fix_source_mutation_lint.py
+      - name: Fix malformed Qwen wrapper span
+        run: python /tmp/fix_qwen_malformed_span.py
       - name: Apply repository formatting fixes
         run: |
           ruff check --fix --exit-zero \
