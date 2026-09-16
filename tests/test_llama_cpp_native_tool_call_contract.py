@@ -3,13 +3,8 @@ from __future__ import annotations
 import pytest
 
 from minecraft_mod_ai.model_adapters import llama_cpp_adapter
-from minecraft_mod_ai.model_adapters.base import (
-    AdapterConfig,
-    GenerationRequest,
-    ModelBackendError,
-)
+from minecraft_mod_ai.model_adapters.base import AdapterConfig, GenerationRequest
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
-from minecraft_mod_ai.model_adapters.qwen_tool_parser import ToolCallValidationError
 
 
 def _tool(name: str = "write_file") -> dict:
@@ -71,6 +66,15 @@ def _raw_call(name: str, arguments: str, *, call_id: str = "call_1") -> dict:
     }
 
 
+def _assert_rejection(response, code: str, original_tool: str | None = None) -> None:
+    assert len(response.tool_calls) == 1
+    rejection = response.tool_calls[0]
+    assert rejection.name == "__mmm_rejected_tool_call__"
+    assert rejection.arguments["failure_code"] == code
+    if original_tool is not None:
+        assert rejection.arguments["original_tool"] == original_tool
+
+
 def test_native_tool_turn_uses_one_completion_and_structured_tool_calls(monkeypatch):
     adapter = _adapter(monkeypatch)
     seen: list[dict] = []
@@ -93,7 +97,7 @@ def test_native_tool_turn_uses_one_completion_and_structured_tool_calls(monkeypa
     assert response.tool_calls[0].arguments == {"path": "src/Main.java"}
 
 
-def test_required_tool_without_native_tool_call_fails_without_retry(monkeypatch):
+def test_required_tool_without_native_tool_call_is_rejection_without_retry(monkeypatch):
     adapter = _adapter(monkeypatch)
     calls = 0
 
@@ -103,15 +107,13 @@ def test_required_tool_without_native_tool_call_fails_without_retry(monkeypatch)
         return {"role": "assistant", "content": "I did not call a tool."}
 
     monkeypatch.setattr(llama_cpp_adapter, "_completion_message", completion)
-    with pytest.raises(ModelBackendError) as exc_info:
-        adapter.generate_turn(_request())
+    response = adapter.generate_turn(_request())
 
     assert calls == 1
-    assert isinstance(exc_info.value.cause, ToolCallValidationError)
-    assert "required" in str(exc_info.value.cause)
+    _assert_rejection(response, "REQUIRED_TOOL_MISSING")
 
 
-def test_invalid_native_argument_json_is_fail_closed_recoverable_observation(monkeypatch):
+def test_invalid_native_argument_json_is_non_executed_rejection(monkeypatch):
     adapter = _adapter(monkeypatch)
     calls = 0
 
@@ -128,14 +130,10 @@ def test_invalid_native_argument_json_is_fail_closed_recoverable_observation(mon
     response = adapter.generate_turn(_request())
 
     assert calls == 1
-    assert len(response.tool_calls) == 1
-    rejection = response.tool_calls[0]
-    assert rejection.name == "__mmm_rejected_tool_call__"
-    assert rejection.arguments["failure_code"] == "TOOL_ARGUMENT_JSON_INVALID"
-    assert rejection.arguments["original_tool"] == "write_file"
+    _assert_rejection(response, "TOOL_CALL_MALFORMED", "write_file")
 
 
-def test_non_visible_native_tool_is_fail_closed_recoverable_observation(monkeypatch):
+def test_non_visible_native_tool_is_non_executed_rejection(monkeypatch):
     adapter = _adapter(monkeypatch)
     monkeypatch.setattr(
         llama_cpp_adapter,
@@ -148,15 +146,10 @@ def test_non_visible_native_tool_is_fail_closed_recoverable_observation(monkeypa
     )
 
     response = adapter.generate_turn(_request(choice="auto"))
-
-    assert len(response.tool_calls) == 1
-    rejection = response.tool_calls[0]
-    assert rejection.name == "__mmm_rejected_tool_call__"
-    assert rejection.arguments["failure_code"] == "TOOL_NOT_VISIBLE"
-    assert rejection.arguments["original_tool"] == "hidden_tool"
+    _assert_rejection(response, "TOOL_NOT_VISIBLE", "hidden_tool")
 
 
-def test_schema_invalid_native_arguments_are_fail_closed_recoverable_observation(monkeypatch):
+def test_schema_invalid_native_arguments_are_non_executed_rejection(monkeypatch):
     adapter = _adapter(monkeypatch)
     monkeypatch.setattr(
         llama_cpp_adapter,
@@ -169,13 +162,10 @@ def test_schema_invalid_native_arguments_are_fail_closed_recoverable_observation
     )
 
     response = adapter.generate_turn(_request())
-
-    rejection = response.tool_calls[0]
-    assert rejection.name == "__mmm_rejected_tool_call__"
-    assert rejection.arguments["failure_code"] == "TOOL_SCHEMA_INVALID"
+    _assert_rejection(response, "TOOL_SCHEMA_INVALID", "write_file")
 
 
-def test_mixed_valid_and_non_visible_calls_preserve_valid_call_and_reject_only_invalid() -> None:
+def test_mixed_valid_and_non_visible_calls_are_transactional() -> None:
     request = GenerationRequest(
         tools=(_tool(),),
         tool_choice="auto",
@@ -191,9 +181,4 @@ def test_mixed_valid_and_non_visible_calls_preserve_valid_call_and_reject_only_i
 
     response = llama_cpp_adapter._native_tool_generation_response(message, request)
 
-    assert [call.name for call in response.tool_calls] == [
-        "write_file",
-        "__mmm_rejected_tool_call__",
-    ]
-    assert response.tool_calls[0].arguments == {"path": "src/Main.java"}
-    assert response.tool_calls[1].arguments["failure_code"] == "TOOL_NOT_VISIBLE"
+    _assert_rejection(response, "TOOL_NOT_VISIBLE", "hidden_tool")

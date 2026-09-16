@@ -302,15 +302,26 @@ def test_e2e_source_edit_alias_payload_project_is_workspace_root(tmp_path: Path)
     assert "// placeholder" not in new_text
 
 
-def test_qwen_tool_parser_rejects_non_enum_operation_aliases() -> None:
+def test_model_tool_admission_rejects_non_enum_operation_aliases() -> None:
     """Model-facing source edits remain bounded by the exposed operation enum."""
-    from minecraft_mod_ai.model_adapters.qwen_tool_parser import (
-        ToolCallValidationError,
-        parse_qwen_tool_markup,
+    from minecraft_mod_ai.model_adapters.base import GenerationRequest
+    from minecraft_mod_ai.model_adapters.llama_cpp_adapter import (
+        _native_tool_generation_response,
     )
     from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
 
-    schemas = {"apply_source_edit": SOURCE_EDIT_SCHEMA}
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "apply_source_edit",
+            "parameters": SOURCE_EDIT_SCHEMA,
+        },
+    }
+    request = GenerationRequest(
+        tools=(tool,),
+        tool_choice="required",
+        parallel_tool_calls=False,
+    )
     markup = (
         "<tool_call>\n"
         "<function=apply_source_edit>\n"
@@ -321,13 +332,14 @@ def test_qwen_tool_parser_rejects_non_enum_operation_aliases() -> None:
         "</function>\n"
         "</tool_call>"
     )
-    try:
-        parse_qwen_tool_markup(markup, schemas)
-    except ToolCallValidationError as exc:
-        assert "outside enum" in str(exc)
-    else:
-        raise AssertionError("create_class must not bypass the exposed operation enum")
 
+    response = _native_tool_generation_response({"content": markup}, request)
+
+    assert len(response.tool_calls) == 1
+    rejection = response.tool_calls[0]
+    assert rejection.name == "__mmm_rejected_tool_call__"
+    assert rejection.arguments["failure_code"] == "TOOL_SCHEMA_INVALID"
+    assert rejection.arguments["original_tool"] == "apply_source_edit"
 
 def test_repair_engine_hydrates_missing_expected_sha256(tmp_path: Path) -> None:
     """RepairEngine automatically hydrates missing expected_sha256 from disk files."""
@@ -346,7 +358,7 @@ def test_repair_engine_hydrates_missing_expected_sha256(tmp_path: Path) -> None:
     ]
 
     # Without hydration, TransactionalSourcePatcher raises SourcePatchError because expected_sha256 is missing
-    with pytest.raises(Exception):
+    with pytest.raises(SourcePatchError):
         TransactionalSourcePatcher(tmp_path).apply(operations)
 
     # With RepairEngine._hydrate_repair_preconditions, expected_sha256 is hydrated

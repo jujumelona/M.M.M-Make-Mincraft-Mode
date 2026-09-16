@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import pytest
-
 from minecraft_mod_ai.model_adapters import llama_cpp_adapter as llama
 from minecraft_mod_ai.model_adapters.base import GenerationRequest
-from minecraft_mod_ai.model_adapters.qwen_tool_parser import ToolCallValidationError
 from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
 
 
@@ -24,7 +21,13 @@ def _request(*, parallel: bool = True, choice=None) -> GenerationRequest:
     )
 
 
-def test_recovers_observed_qwen_payload_markup_when_native_calls_are_empty() -> None:
+def _assert_rejection(response, code: str) -> None:
+    assert len(response.tool_calls) == 1
+    assert response.tool_calls[0].name == "__mmm_rejected_tool_call__"
+    assert response.tool_calls[0].arguments["failure_code"] == code
+
+
+def test_recovers_qwen_payload_markup_when_native_calls_are_empty() -> None:
     message = {
         "tool_calls": [],
         "content": """<tool_call>
@@ -76,31 +79,32 @@ def test_native_tool_calls_remain_authoritative_over_content_markup() -> None:
     assert response.tool_calls[0].arguments["path"] == "src/main/resources/native.txt"
 
 
-def test_plain_prose_is_not_reconstructed_as_a_tool_call_for_auto_choice() -> None:
-    message = {"tool_calls": [], "content": "I would edit the file next."}
-
-    response = llama._native_tool_generation_response(message, _request(choice="auto"))
+def test_plain_prose_is_not_reconstructed_as_tool_call_for_auto_choice() -> None:
+    response = llama._native_tool_generation_response(
+        {"tool_calls": [], "content": "I would edit the file next."},
+        _request(choice="auto"),
+    )
 
     assert response.tool_calls == ()
     assert response.content == "I would edit the file next."
 
 
-def test_required_choice_rejects_plain_prose_without_tool_call() -> None:
-    message = {"tool_calls": [], "content": "I would edit the file next."}
+def test_required_choice_returns_rejection_for_plain_prose() -> None:
+    response = llama._native_tool_generation_response(
+        {"tool_calls": [], "content": "I would edit the file next."},
+        _request(choice="required"),
+    )
+    _assert_rejection(response, "REQUIRED_TOOL_MISSING")
 
-    with pytest.raises(ToolCallValidationError, match="required"):
-        llama._native_tool_generation_response(message, _request(choice="required"))
 
-
-def test_schema_invalid_markup_is_not_silently_downgraded_to_prose() -> None:
+def test_schema_invalid_markup_becomes_admission_rejection() -> None:
     message = {
-        "tool_calls": [],
         "content": """<tool_call>
 <function=apply_source_edit>
-<parameter=payload>{"operation":"append","path":"src/main/resources/debug-token.txt","content":"bad"}</parameter>
+<parameter=payload>{"operation":"not_an_operation","path":"src/main/resources/debug-token.txt","content":"bad"}</parameter>
 </function>
 </tool_call>""",
     }
 
-    with pytest.raises(ToolCallValidationError, match="outside enum"):
-        llama._native_tool_generation_response(message, _request())
+    response = llama._native_tool_generation_response(message, _request())
+    _assert_rejection(response, "TOOL_SCHEMA_INVALID")

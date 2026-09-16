@@ -6,9 +6,9 @@ from minecraft_mod_ai.model_adapters.qwen_tool_parser import parse_qwen_tool_mar
 
 
 def test_llama_adapter_imports_the_canonical_qwen_parser() -> None:
-    assert llama_cpp_adapter._parse_qwen_tool_markup is parse_qwen_tool_markup
+    assert llama_cpp_adapter.parse_qwen_tool_markup is parse_qwen_tool_markup
     assert (
-        llama_cpp_adapter._parse_qwen_tool_markup.__module__
+        llama_cpp_adapter.parse_qwen_tool_markup.__module__
         == "minecraft_mod_ai.model_adapters.qwen_tool_parser"
     )
 

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from minecraft_mod_ai.model_adapters.base import GenerationRequest
+from minecraft_mod_ai.model_adapters.llama_cpp_adapter import (
+    _native_tool_generation_response,
+)
 from minecraft_mod_ai.model_adapters.qwen_tool_parser import parse_qwen_tool_markup
 from minecraft_mod_ai.qwen_family_capabilities import _OFFICIAL_CAPABILITIES
 
@@ -87,9 +91,21 @@ def test_qwen_tool_markup_search_project_rag_defaults_minecraft_version(monkeypa
         "</tool_call>"
     )
 
-    _, calls = parse_qwen_tool_markup(raw, schemas)
-    assert len(calls) == 1
-    call = calls[0]
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "search_project_rag",
+            "parameters": schemas["search_project_rag"],
+        },
+    }
+    request = GenerationRequest(
+        tools=(tool,),
+        tool_choice="required",
+        parallel_tool_calls=False,
+    )
+    response = _native_tool_generation_response({"content": raw}, request)
+    assert len(response.tool_calls) == 1
+    call = response.tool_calls[0]
     assert call.name == "search_project_rag"
     assert call.arguments["query"] == "loadLevel mixin"
     assert call.arguments.get("minecraft_version") == "1.20.1"

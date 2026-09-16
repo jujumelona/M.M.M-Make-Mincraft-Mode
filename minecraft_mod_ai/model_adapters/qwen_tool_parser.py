@@ -1,647 +1,212 @@
-"""Strict Qwen native tool-markup parser with schema-guided argument recovery.
+"""Qwen tool-markup transport parser.
 
-Transport-level aliases and synthetic argument containers are normalized only when the
-currently exposed schema authorizes the canonical parameter. Unknown keys, conflicting
-aliases, malformed values, and enum violations remain validation failures. A malformed
-sibling call is isolated so already-valid independent calls from the same assistant turn
-are not discarded; if the turn contains no valid call, the original validation failure is
-raised and nothing becomes executable.
+This module owns syntax recovery only. It does not know or enforce host tool schemas,
+required fields, enums, defaults, visibility, or execution policy. Every parsed candidate
+is handed to the adapter's single admission boundary before it can execute.
 """
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
-import os
-import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any
 
-from ..model_tool_aliases import resolve_exposed_model_tool
-from ..source_edit_scalar_protocol_contract import SOURCE_EDIT_PARAMETER_ALIASES
 from .base import ToolCall
 
-_TOOL_CALL_OPEN = "<tool_call>"
-_TOOL_CALL_CLOSE = "</tool_call>"
-_FUNCTION_OPEN = "<function="
-_FUNCTION_CLOSE = "</function>"
-_PARAMETER_OPEN = "<parameter="
-_PARAMETER_CLOSE = "</parameter>"
-_STRUCTURAL_MARKERS = (
-    _TOOL_CALL_OPEN,
-    _TOOL_CALL_CLOSE,
-    _FUNCTION_OPEN,
-    _FUNCTION_CLOSE,
-    _PARAMETER_OPEN,
-    _PARAMETER_CLOSE,
-)
-_ARGUMENT_CONTAINER_KEYS = frozenset(
-    {"apply", "arguments", "args", "parameters", "params", "input"}
-)
-_HOST_OWNED_ARGUMENT_KEYS = frozenset({"workspace_root"})
-_APPLY_SOURCE_EDIT_TRANSPORT_ALIASES = {
-    "file_path": "path",
-    "target": "path",
-    "action": "operation",
-    "apply": "operation",
-    "op": "operation",
-    "mode": "operation",
-    "source": "content",
-}
-_APPLY_SOURCE_EDIT_ALIASES = {
-    **SOURCE_EDIT_PARAMETER_ALIASES,
-    **_APPLY_SOURCE_EDIT_TRANSPORT_ALIASES,
-}
-_MAX_CONTAINER_DEPTH = 3
+TOOL_CALL_OPEN = "<tool_call>"
+TOOL_CALL_CLOSE = "</tool_call>"
+FUNCTION_OPEN = "<function="
+FUNCTION_CLOSE = "</function>"
+PARAMETER_OPEN = "<parameter="
+PARAMETER_CLOSE = "</parameter>"
+MALFORMED_TOOL_CALL_NAME = "__mmm_malformed_tool_call__"
+_ARGUMENT_CONTAINER_KEYS = frozenset({"apply", "arguments", "args", "parameters", "params", "input", "payload"})
 
 
-class ToolCallValidationError(RuntimeError):
-    """A model-emitted tool action violates the currently exposed tool contract."""
+def _call_id(index: int, name: str, raw: str) -> str:
+    digest = hashlib.sha256(f"{index}\0{name}\0{raw}".encode()).hexdigest()[:16]
+    return f"call_{digest}"
 
 
-def _malformed_call_end(text: str, start: int, *, wrapped: bool) -> int:
-    """Bound one malformed call without consuming later independent siblings."""
-    if wrapped:
-        close = text.find(_TOOL_CALL_CLOSE, start + len(_TOOL_CALL_OPEN))
-        if close >= 0:
-            return close + len(_TOOL_CALL_CLOSE)
-    function_close = text.find(_FUNCTION_CLOSE, start + 1)
-    if function_close >= 0:
-        end = function_close + len(_FUNCTION_CLOSE)
-        if wrapped:
-            wrapped_close = text.find(_TOOL_CALL_CLOSE, end)
-            if wrapped_close >= 0:
-                between = text[end:wrapped_close]
-                if not between.strip():
-                    end = wrapped_close + len(_TOOL_CALL_CLOSE)
-        return end
-    next_wrapped = text.find(_TOOL_CALL_OPEN, start + 1)
-    next_direct = text.find(_FUNCTION_OPEN, start + len(_FUNCTION_OPEN))
-    candidates = [value for value in (next_wrapped, next_direct) if value > start]
-    return min(candidates) if candidates else len(text)
+def _decode_value(raw: str) -> Any:
+    text = raw.strip()
+    if not text:
+        return ""
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    try:
+        return ast.literal_eval(text)
+    except (ValueError, SyntaxError):
+        pass
+    lowered = text.casefold()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if lowered in {"null", "none"}:
+        return None
+    return text
 
 
-def _malformed_call_label(text: str, start: int, end: int, exc: BaseException) -> str:
-    """Return bounded non-executable feedback for a rejected sibling call."""
-    snippet = " ".join(text[start:end].split())[:180]
-    detail = " ".join(str(exc).split())[:240]
-    return f"[rejected malformed tool call: {detail}; source={snippet!r}]"
+def _malformed(index: int, raw: str, error: str, *, original_tool: str = "") -> ToolCall:
+    payload = {
+        "original_tool": original_tool,
+        "failure_code": "TOOL_MARKUP_MALFORMED",
+        "error": " ".join(str(error).split())[:320],
+        "raw_arguments": raw[:4000],
+    }
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return ToolCall(
+        id=_call_id(index, MALFORMED_TOOL_CALL_NAME, serialized),
+        name=MALFORMED_TOOL_CALL_NAME,
+        arguments=payload,
+        raw_arguments=serialized,
+    )
+
+
+def _next_call_start(text: str, cursor: int) -> int:
+    starts = [
+        pos for pos in (text.find(TOOL_CALL_OPEN, cursor), text.find(FUNCTION_OPEN, cursor))
+        if pos >= 0
+    ]
+    return min(starts) if starts else -1
+
+
+def _bounded_end(text: str, start: int) -> int:
+    """Bound one malformed candidate without leaking wrapper syntax into prose."""
+
+    if text.startswith(TOOL_CALL_OPEN, start):
+        wrapped_end = text.find(TOOL_CALL_CLOSE, start + len(TOOL_CALL_OPEN))
+        if wrapped_end >= 0:
+            return wrapped_end + len(TOOL_CALL_CLOSE)
+
+    function_end = text.find(FUNCTION_CLOSE, start)
+    if function_end >= 0:
+        return function_end + len(FUNCTION_CLOSE)
+
+    next_start = _next_call_start(text, start + 1)
+    if next_start > start:
+        return next_start
+    return len(text)
+
+
+def _parse_function(text: str, function_start: int, index: int) -> tuple[ToolCall, int]:
+    name_start = function_start + len(FUNCTION_OPEN)
+    name_end = text.find(">", name_start)
+    if name_end < 0:
+        raise ValueError("function tag is missing '>'")
+    name = text[name_start:name_end].strip()
+    if not name:
+        raise ValueError("function tag has an empty tool name")
+
+    function_close = text.find(FUNCTION_CLOSE, name_end + 1)
+    if function_close < 0:
+        raise ValueError("function block is missing </function>")
+
+    arguments: dict[str, Any] = {}
+    cursor = name_end + 1
+    while cursor < function_close:
+        parameter_start = text.find(PARAMETER_OPEN, cursor, function_close)
+        if parameter_start < 0:
+            if text[cursor:function_close].strip():
+                raise ValueError("unexpected text exists inside function block")
+            break
+        if text[cursor:parameter_start].strip():
+            raise ValueError("unexpected text exists before parameter tag")
+        key_start = parameter_start + len(PARAMETER_OPEN)
+        key_end = text.find(">", key_start, function_close)
+        if key_end < 0:
+            raise ValueError("parameter tag is missing '>'")
+        key = text[key_start:key_end].strip()
+        if not key:
+            raise ValueError("parameter tag has an empty name")
+        value_end = text.find(PARAMETER_CLOSE, key_end + 1, function_close)
+        if value_end < 0:
+            raise ValueError(f"parameter {key!r} is missing </parameter>")
+        arguments[key] = _decode_value(text[key_end + 1:value_end])
+        cursor = value_end + len(PARAMETER_CLOSE)
+
+    for _depth in range(3):
+        if len(arguments) != 1:
+            break
+        only_key, only_value = next(iter(arguments.items()))
+        if only_key.casefold() not in _ARGUMENT_CONTAINER_KEYS or not isinstance(only_value, Mapping):
+            break
+        arguments = dict(only_value)
+
+    raw_arguments = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"), default=str)
+    return (
+        ToolCall(
+            id=_call_id(index, name, raw_arguments),
+            name=name,
+            arguments=arguments,
+            raw_arguments=raw_arguments,
+        ),
+        function_close + len(FUNCTION_CLOSE),
+    )
 
 
 def parse_qwen_tool_markup(
     text: str,
-    schemas: Mapping[str, Mapping[str, Any]],
+    schemas: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> tuple[str, tuple[ToolCall, ...]]:
-    """Parse native Qwen function tags without weakening the exposed tool schema.
+    """Recover Qwen tool candidates without making admission or schema decisions.
 
-    Independent sibling calls are transactional at call granularity: a malformed sibling
-    is removed from executable output while already-valid siblings remain available to the
-    host. If no call in a tool-bearing turn validates, raise the first validation error so
-    malformed output can never masquerade as a prose-only success.
+    ``schemas`` is accepted only for call-site compatibility. The transport parser never
+    reads it. Malformed markup becomes a non-executable candidate that the adapter rejects
+    through the same admission path as malformed native tool calls.
     """
+    del schemas
     if not text:
         return "", ()
+
     calls: list[ToolCall] = []
     spans: list[tuple[int, int]] = []
-    rejected: list[str] = []
-    first_error: ToolCallValidationError | None = None
-    saw_tool_markup = False
     cursor = 0
     while cursor < len(text):
-        wrapped_at = text.find(_TOOL_CALL_OPEN, cursor)
-        direct_at = text.find(_FUNCTION_OPEN, cursor)
-        starts = [value for value in (wrapped_at, direct_at) if value >= 0]
-        if not starts:
+        start = _next_call_start(text, cursor)
+        if start < 0:
             break
-        start = min(starts)
-        saw_tool_markup = True
-        wrapped = wrapped_at == start
-        function_at = start + len(_TOOL_CALL_OPEN) if wrapped else start
-        function_at = _skip_space(text, function_at)
+        wrapped = text.startswith(TOOL_CALL_OPEN, start)
+        function_start = start + len(TOOL_CALL_OPEN) if wrapped else start
+        while function_start < len(text) and text[function_start].isspace():
+            function_start += 1
+        end = _bounded_end(text, start)
         try:
-            if not text.startswith(_FUNCTION_OPEN, function_at):
-                if wrapped:
-                    raise ToolCallValidationError(
-                        "Qwen tool_call block does not begin with a function"
-                    )
-                cursor = start + 1
-                continue
-            call, end = _parse_qwen_function(
-                text,
-                function_at,
-                schemas,
-                call_index=len(calls),
-            )
+            if not text.startswith(FUNCTION_OPEN, function_start):
+                raise ValueError("tool_call block does not begin with a function")
+            call, function_end = _parse_function(text, function_start, len(calls))
+            end = function_end
             if wrapped:
-                close_at = _skip_space(text, end)
-                if not text.startswith(_TOOL_CALL_CLOSE, close_at):
-                    raise ToolCallValidationError(
-                        "Qwen tool_call block is missing </tool_call>"
-                    )
-                end = close_at + len(_TOOL_CALL_CLOSE)
-        except ToolCallValidationError as exc:
-            if first_error is None:
-                first_error = exc
-            end = _malformed_call_end(text, start, wrapped=wrapped)
-            if end <= start:
-                end = min(len(text), start + 1)
-            spans.append((start, end))
-            rejected.append(_malformed_call_label(text, start, end, exc))
-            cursor = end
-            continue
-        calls.append(call)
-        spans.append((start, end))
-        cursor = end
+                close_at = function_end
+                while close_at < len(text) and text[close_at].isspace():
+                    close_at += 1
+                if not text.startswith(TOOL_CALL_CLOSE, close_at):
+                    raise ValueError("tool_call block is missing </tool_call>")
+                end = close_at + len(TOOL_CALL_CLOSE)
+            calls.append(call)
+        except (TypeError, ValueError) as exc:
+            raw = text[start:end]
+            original_tool = ""
+            if text.startswith(FUNCTION_OPEN, function_start):
+                name_start = function_start + len(FUNCTION_OPEN)
+                name_end = text.find(">", name_start, end)
+                if name_end >= 0:
+                    original_tool = text[name_start:name_end].strip()
+            calls.append(_malformed(len(calls), raw, str(exc), original_tool=original_tool))
+        spans.append((start, max(end, start + 1)))
+        cursor = max(end, start + 1)
 
-    for marker in _STRUCTURAL_MARKERS:
-        pos = text.find(marker)
-        if pos >= 0 and not any(begin <= pos < end for begin, end in spans):
-            exc = ToolCallValidationError(
-                f"unparsed Qwen tool markup begins at {marker!r}"
-            )
-            if not calls:
-                raise exc
-            if first_error is None:
-                first_error = exc
-            rejected.append(_malformed_call_label(text, pos, len(text), exc))
-            spans.append((pos, len(text)))
-            break
-    if saw_tool_markup and not calls and first_error is not None:
-        raise first_error
     if not spans:
         return text, ()
     visible: list[str] = []
     previous = 0
-    for begin, end in sorted(spans):
+    for begin, end in spans:
         if begin > previous:
             visible.append(text[previous:begin])
         previous = max(previous, end)
     visible.append(text[previous:])
-    if rejected:
-        visible.append("\n" + "\n".join(rejected))
-    return "".join(visible), tuple(calls)
-
-
-def _parse_qwen_function(
-    text: str,
-    start: int,
-    schemas: Mapping[str, Mapping[str, Any]],
-    *,
-    call_index: int,
-) -> tuple[ToolCall, int]:
-    name_start = start + len(_FUNCTION_OPEN)
-    name_end = text.find(">", name_start)
-    if name_end < 0:
-        raise ToolCallValidationError("Qwen function tag is missing '>'")
-    emitted_name = text[name_start:name_end].strip()
-    if not emitted_name:
-        raise ToolCallValidationError("Qwen function tag has an empty tool name")
-    name = resolve_exposed_model_tool(emitted_name, schemas.keys())
-    if name is None:
-        name = emitted_name
-        schema: Mapping[str, Any] = {}
-    else:
-        schema = schemas[name]
-
-    properties_value = schema.get("properties", {})
-    properties = properties_value if isinstance(properties_value, Mapping) else {}
-    required_value = schema.get("required", ())
-    required: set[str] = set()
-    if isinstance(required_value, Sequence) and not isinstance(required_value, (str, bytes)):
-        required = {str(value) for value in required_value}
-    additional = schema.get("additionalProperties", True)
-    arguments: dict[str, Any] = {}
-    argument_sources: dict[str, str] = {}
-    pos = name_end + 1
-
-    while True:
-        pos = _skip_space(text, pos)
-        if text.startswith(_FUNCTION_CLOSE, pos):
-            end = pos + len(_FUNCTION_CLOSE)
-            break
-        if not text.startswith(_PARAMETER_OPEN, pos):
-            snippet = " ".join(text[pos : pos + 120].split())
-            raise ToolCallValidationError(
-                f"Qwen tool {name!r} emitted invalid parameter structure near {snippet!r}"
-            )
-        key_start = pos + len(_PARAMETER_OPEN)
-        key_end = text.find(">", key_start)
-        if key_end < 0:
-            raise ToolCallValidationError(
-                f"Qwen tool {name!r} parameter tag is missing '>'"
-            )
-        emitted_key = text[key_start:key_end].strip()
-        if not emitted_key:
-            raise ToolCallValidationError(
-                f"Qwen tool {name!r} emitted an empty parameter name"
-            )
-        value_start = key_end + 1
-        close_at = _find_parameter_close(text, value_start)
-        if close_at >= 0:
-            raw = _unwrap_parameter_text(text[value_start:close_at])
-            next_pos = close_at + len(_PARAMETER_CLOSE)
-        else:
-            next_func = text.find(_FUNCTION_CLOSE, value_start)
-            next_param = text.find(_PARAMETER_OPEN, value_start)
-            next_tool = text.find(_TOOL_CALL_CLOSE, value_start)
-            candidates = [p for p in (next_func, next_param, next_tool) if p >= 0]
-            if candidates:
-                close_at = min(candidates)
-            else:
-                close_at = len(text)
-            raw = _unwrap_parameter_text(text[value_start:close_at])
-            next_pos = close_at
-
-        if emitted_key not in properties and emitted_key in _ARGUMENT_CONTAINER_KEYS:
-            container = _decode_argument_container(raw)
-            if container is not None:
-                _merge_argument_container(
-                    name,
-                    emitted_key,
-                    container,
-                    properties,
-                    additional,
-                    arguments,
-                    argument_sources,
-                    depth=1,
-                )
-                pos = next_pos
-                continue
-        if _is_host_owned_argument(emitted_key, properties):
-            pos = next_pos
-            continue
-        key = _canonical_key(name, emitted_key, properties)
-        if key not in properties and additional is False:
-            raise _unknown_parameter_error(name, emitted_key, properties, required)
-        value_schema = properties.get(key, {})
-        if not isinstance(value_schema, Mapping):
-            value_schema = {}
-        value = _decode_parameter_value(name, key, raw, value_schema)
-        _insert_argument(
-            name,
-            key,
-            value,
-            emitted_key,
-            arguments,
-            argument_sources,
-        )
-        pos = next_pos
-
-    missing = sorted(required - arguments.keys())
-    if missing:
-        if "minecraft_version" in missing:
-            env_ver = os.environ.get("MMM_MINECRAFT_VERSION", "").strip()
-            if env_ver:
-                arguments["minecraft_version"] = env_ver
-            missing.remove("minecraft_version")
-        if missing:
-            allowed = ", ".join(sorted(str(key) for key in properties)) or "<none>"
-            raise ToolCallValidationError(
-                f"Qwen tool {name!r} omitted required parameters: {', '.join(missing)}; "
-                f"allowed parameters: {allowed}"
-            )
-
-    raw_arguments = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
-    digest = hashlib.sha256(
-        f"{call_index}\0{name}\0{raw_arguments}".encode()
-    ).hexdigest()[:16]
-    return ToolCall(
-        id=f"call_{digest}",
-        name=name,
-        arguments=arguments,
-        raw_arguments=raw_arguments,
-    ), end
-
-
-def _is_host_owned_argument(
-    emitted_key: str,
-    properties: Mapping[str, Any],
-) -> bool:
-    return emitted_key in _HOST_OWNED_ARGUMENT_KEYS and emitted_key not in properties
-
-
-def _canonical_key(
-    tool_name: str,
-    emitted_key: str,
-    properties: Mapping[str, Any],
-) -> str:
-    if tool_name == "apply_source_edit":
-        canonical = _APPLY_SOURCE_EDIT_ALIASES.get(emitted_key)
-        if canonical and canonical in properties:
-            return canonical
-    if emitted_key in properties:
-        return emitted_key
-    return emitted_key
-
-
-def _decode_argument_container(raw: str) -> Mapping[str, Any] | None:
-    compact = raw.strip()
-    if not compact.startswith("{"):
-        return None
-    try:
-        value = json.loads(compact)
-    except json.JSONDecodeError:
-        return None
-    return value if isinstance(value, Mapping) else None
-
-
-def _merge_argument_container(
-    tool_name: str,
-    container_name: str,
-    container: Mapping[str, Any],
-    properties: Mapping[str, Any],
-    additional: Any,
-    arguments: dict[str, Any],
-    argument_sources: dict[str, str],
-    *,
-    depth: int,
-) -> None:
-    if depth > _MAX_CONTAINER_DEPTH:
-        raise ToolCallValidationError(
-            f"Qwen tool {tool_name!r} nested argument containers too deeply"
-        )
-    for raw_key, raw_value in container.items():
-        emitted_key = str(raw_key).strip()
-        if not emitted_key:
-            raise ToolCallValidationError(
-                f"Qwen tool {tool_name!r} emitted an empty nested parameter"
-            )
-        if (
-            emitted_key not in properties
-            and emitted_key in _ARGUMENT_CONTAINER_KEYS
-            and isinstance(raw_value, Mapping)
-        ):
-            _merge_argument_container(
-                tool_name,
-                emitted_key,
-                raw_value,
-                properties,
-                additional,
-                arguments,
-                argument_sources,
-                depth=depth + 1,
-            )
-            continue
-        if _is_host_owned_argument(emitted_key, properties):
-            continue
-        key = _canonical_key(tool_name, emitted_key, properties)
-        if key not in properties and additional is False:
-            raise _unknown_parameter_error(tool_name, emitted_key, properties, ())
-        value_schema = properties.get(key, {})
-        if not isinstance(value_schema, Mapping):
-            value_schema = {}
-        value = _validate_decoded_value(tool_name, key, raw_value, value_schema)
-        _insert_argument(
-            tool_name,
-            key,
-            value,
-            f"{container_name}.{emitted_key}",
-            arguments,
-            argument_sources,
-        )
-
-
-def _insert_argument(
-    tool_name: str,
-    key: str,
-    value: Any,
-    source: str,
-    arguments: dict[str, Any],
-    argument_sources: dict[str, str],
-) -> None:
-    if key in arguments:
-        previous = argument_sources[key]
-        raise ToolCallValidationError(
-            f"Qwen tool {tool_name!r} emitted conflicting sources for canonical "
-            f"parameter {key!r}: {previous!r} and {source!r}"
-        )
-    arguments[key] = value
-    argument_sources[key] = source
-
-
-def _unknown_parameter_error(
-    tool_name: str,
-    emitted_key: str,
-    properties: Mapping[str, Any],
-    required: Sequence[str] | set[str],
-) -> ToolCallValidationError:
-    allowed = sorted(str(key) for key in properties)
-    required_names = sorted(str(key) for key in required)
-    aliases: list[str] = []
-    if tool_name == "apply_source_edit":
-        aliases = sorted(
-            alias
-            for alias, canonical in _APPLY_SOURCE_EDIT_ALIASES.items()
-            if canonical in properties and alias not in properties
-        )
-    return ToolCallValidationError(
-        f"Qwen tool {tool_name!r} emitted unknown parameter {emitted_key!r}; "
-        f"allowed={allowed!r}; required={required_names!r}; accepted_aliases={aliases!r}; "
-        f"object_containers={sorted(_ARGUMENT_CONTAINER_KEYS)!r}"
-    )
-
-
-def _find_parameter_close(text: str, start: int) -> int:
-    search = start
-    while True:
-        candidate = text.find(_PARAMETER_CLOSE, search)
-        if candidate < 0:
-            return -1
-        after = _skip_space(text, candidate + len(_PARAMETER_CLOSE))
-        if (
-            after >= len(text)
-            or text.startswith(_PARAMETER_OPEN, after)
-            or text.startswith(_FUNCTION_CLOSE, after)
-            or text.startswith(_TOOL_CALL_CLOSE, after)
-            or text.startswith(_FUNCTION_OPEN, after)
-            or text.startswith(_TOOL_CALL_OPEN, after)
-        ):
-            return candidate
-        search = candidate + len(_PARAMETER_CLOSE)
-
-
-def _unwrap_parameter_text(value: str) -> str:
-    if value.startswith("\r\n"):
-        value = value[2:]
-    elif value.startswith("\n"):
-        value = value[1:]
-    if value.endswith("\r\n"):
-        value = value[:-2]
-    elif value.endswith("\n"):
-        value = value[:-1]
-    return value
-
-
-def _decode_parameter_value(
-    tool_name: str,
-    key: str,
-    raw: str,
-    schema: Mapping[str, Any],
-) -> Any:
-    expected = _schema_value_type(schema)
-    compact = raw.strip()
-    try:
-        if expected == "string":
-            value: Any = raw
-        elif expected == "integer":
-            if not compact or any(ch in compact.lower() for ch in (".", "e")):
-                raise ValueError("not an integer")
-            value = int(compact)
-        elif expected == "number":
-            value = float(compact)
-        elif expected == "boolean":
-            lowered = compact.lower()
-            if lowered not in {"true", "false"}:
-                raise ValueError("not a boolean")
-            value = lowered == "true"
-        elif expected == "null":
-            if compact.lower() != "null":
-                raise ValueError("not null")
-            value = None
-        elif expected in {"object", "array"}:
-            value = json.loads(compact)
-            if expected == "object" and not isinstance(value, Mapping):
-                raise ValueError("not an object")
-            if expected == "array" and not isinstance(value, list):
-                raise ValueError("not an array")
-        else:
-            value = raw
-            if compact.startswith(("{", "[", '"')) or compact in {"true", "false", "null"}:
-                try:
-                    value = json.loads(compact)
-                except json.JSONDecodeError:
-                    pass
-    except (ValueError, json.JSONDecodeError) as exc:
-        raise ToolCallValidationError(
-            f"Qwen tool {tool_name!r} emitted invalid {expected or 'schema'} value "
-            f"for parameter {key!r}"
-        ) from exc
-    return _validate_decoded_value(tool_name, key, value, schema)
-
-
-def _validate_decoded_value(
-    tool_name: str,
-    key: str,
-    value: Any,
-    schema: Mapping[str, Any],
-) -> Any:
-    expected = _schema_value_type(schema)
-    valid = True
-    if expected == "string":
-        valid = isinstance(value, str)
-    elif expected == "integer":
-        valid = isinstance(value, int) and not isinstance(value, bool)
-    elif expected == "number":
-        valid = isinstance(value, (int, float)) and not isinstance(value, bool)
-    elif expected == "boolean":
-        valid = isinstance(value, bool)
-    elif expected == "null":
-        valid = value is None
-    elif expected == "object":
-        valid = isinstance(value, Mapping)
-    elif expected == "array":
-        valid = isinstance(value, list)
-    if not valid:
-        raise ToolCallValidationError(
-            f"Qwen tool {tool_name!r} emitted invalid {expected or 'schema'} value "
-            f"for parameter {key!r}"
-        )
-    enum = schema.get("enum")
-    if isinstance(enum, list) and enum:
-        if isinstance(value, str) and all(isinstance(item, str) for item in enum):
-            canonical = _canonical_string_enum(value, enum)
-            if canonical is None:
-                raise ToolCallValidationError(
-                    f"Qwen tool {tool_name!r} emitted value outside enum for parameter {key!r}"
-                )
-            return canonical
-        if value not in enum:
-            raise ToolCallValidationError(
-                f"Qwen tool {tool_name!r} emitted value outside enum for parameter {key!r}"
-            )
-    return value
-
-
-def _enum_key(value: str) -> str:
-    compact = value.strip()
-    compact = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", compact)
-    compact = re.sub(r"[\s-]+", "_", compact.casefold())
-    return re.sub(r"_+", "_", compact)
-
-
-def _string_enum_candidates(value: str) -> tuple[str, ...]:
-    candidates = [value, value.strip()]
-    compact = value.strip()
-    if len(compact) >= 2 and compact[0] == compact[-1] == '"':
-        try:
-            decoded = json.loads(compact)
-        except json.JSONDecodeError:
-            decoded = None
-        if isinstance(decoded, str):
-            candidates.append(decoded)
-    return tuple(dict.fromkeys(candidates))
-
-
-def _canonical_string_enum(value: str, allowed: Sequence[str]) -> str | None:
-    for candidate in _string_enum_candidates(value):
-        if candidate in allowed:
-            return candidate
-        key = _enum_key(candidate)
-        matches = tuple(item for item in allowed if _enum_key(item) == key)
-        if len(matches) == 1:
-            return matches[0]
-    return None
-
-
-def _schema_value_type(schema: Mapping[str, Any]) -> str:
-    raw_type = schema.get("type")
-    if isinstance(raw_type, str):
-        return raw_type
-    if isinstance(raw_type, list):
-        non_null = [str(value) for value in raw_type if str(value) != "null"]
-        if len(non_null) == 1:
-            return non_null[0]
-    enum = schema.get("enum")
-    if isinstance(enum, list) and enum:
-        kinds = {_json_type(value) for value in enum if value is not None}
-        if len(kinds) == 1:
-            return next(iter(kinds))
-    for keyword in ("oneOf", "anyOf"):
-        choices = schema.get(keyword)
-        if isinstance(choices, list):
-            kinds = {
-                _schema_value_type(choice)
-                for choice in choices
-                if isinstance(choice, Mapping)
-            }
-            kinds.discard("")
-            kinds.discard("null")
-            if len(kinds) == 1:
-                return next(iter(kinds))
-    return ""
-
-
-def _json_type(value: Any) -> str:
-    if isinstance(value, bool):
-        return "boolean"
-    if isinstance(value, str):
-        return "string"
-    if isinstance(value, int):
-        return "integer"
-    if isinstance(value, float):
-        return "number"
-    if isinstance(value, Mapping):
-        return "object"
-    if isinstance(value, list):
-        return "array"
-    if value is None:
-        return "null"
-    return ""
-
-
-def _skip_space(text: str, position: int) -> int:
-    while position < len(text) and text[position].isspace():
-        position += 1
-    return position
-
-
-__all__ = ["ToolCallValidationError", "parse_qwen_tool_markup"]
+    return "".join(visible).strip(), tuple(calls)

@@ -2,38 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from minecraft_mod_ai.model_adapters.qwen_tool_parser import (
-    _canonical_string_enum,
-    _parse_qwen_function,
-)
+from minecraft_mod_ai.model_adapters.llama_cpp_adapter import _admit_model_tool_calls
+from minecraft_mod_ai.model_adapters.qwen_tool_parser import parse_qwen_tool_markup
 
 
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        ("replace_exact", "replace_exact"),
-        ('"replace_exact"', "replace_exact"),
-        ("  REPLACE_EXACT  ", "replace_exact"),
-        ("replace-exact", "replace_exact"),
-        ("replace exact", "replace_exact"),
-        ("replaceExact", "replace_exact"),
-    ],
-)
-def test_canonical_string_enum_recovers_formatting_only(raw: str, expected: str) -> None:
-    allowed = ["replace_exact", "insert_before", "insert_after", "replace"]
-    assert _canonical_string_enum(raw, allowed) == expected
-
-
-def test_canonical_string_enum_does_not_guess_semantic_alias() -> None:
-    allowed = ["replace_exact", "insert_before", "insert_after", "replace"]
-    assert _canonical_string_enum("edit", allowed) is None
-
-
-def test_canonical_string_enum_fails_closed_on_ambiguous_normalization() -> None:
-    assert _canonical_string_enum("FOO BAR", ["foo-bar", "foo_bar"]) is None
-
-
-def _schema():
+def _schema() -> dict[str, dict]:
     return {
         "apply_source_edit": {
             "type": "object",
@@ -49,44 +22,62 @@ def _schema():
     }
 
 
-def test_parser_canonicalizes_quoted_string_enum_without_wrapper() -> None:
-    call, _end = _parse_qwen_function(
-        '<function=apply_source_edit><parameter=operation>"replace_exact"</parameter></function>',
-        0,
-        _schema(),
-        call_index=0,
+def _parse(operation: str, *, name: str = "apply_source_edit"):
+    text = (
+        f"<function={name}>"
+        f"<parameter=operation>{operation}</parameter>"
+        "</function>"
     )
-    assert call.name == "apply_source_edit"
+    visible, calls = parse_qwen_tool_markup(text, _schema())
+    assert visible == ""
+    assert len(calls) == 1
+    return calls[0]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["REPLACE_EXACT", "replace-exact", "replace exact", "replaceExact"],
+)
+def test_parser_preserves_noncanonical_enum_spelling(raw: str) -> None:
+    call = _parse(raw)
+    assert call.arguments == {"operation": raw}
+
+
+def test_parser_decodes_quoted_canonical_enum_as_transport_value() -> None:
+    call = _parse('"replace_exact"')
     assert call.arguments == {"operation": "replace_exact"}
 
 
-def test_removed_whole_file_alias_is_not_canonicalized() -> None:
-    with pytest.raises(RuntimeError, match="value outside enum"):
-        _parse_qwen_function(
-            "<function=apply_source_edit><parameter=operation>update_file</parameter></function>",
-            0,
-            _schema(),
-            call_index=0,
-        )
-
-
-def test_canonical_permission_name_is_rewritten_to_exposed_alias_before_parse() -> None:
-    call, _end = _parse_qwen_function(
-        "<function=apply_source_patch><parameter=operation>delete_file</parameter></function>",
-        0,
-        _schema(),
-        call_index=0,
+def test_admission_canonicalizes_noncanonical_enum_in_one_place() -> None:
+    call = _parse("REPLACE_EXACT")
+    admitted = _admit_model_tool_calls(
+        (call,), _schema(), tool_choice="auto", parallel_tool_calls=False
     )
-    assert call.name == "apply_source_edit"
-    assert call.arguments == {"operation": "delete_file"}
+    assert len(admitted) == 1
+    assert admitted[0].name == "apply_source_edit"
+    assert admitted[0].arguments == {"operation": "replace_exact"}
 
 
-def test_unrelated_unexposed_tool_is_preserved_for_host_phase_validation() -> None:
-    call, _end = _parse_qwen_function(
-        "<function=other_tool></function>",
-        0,
-        _schema(),
-        call_index=0,
+def test_tool_name_alias_is_resolved_at_admission_not_parse_time() -> None:
+    call = _parse("delete_file", name="apply_source_patch")
+    assert call.name == "apply_source_patch"
+
+    admitted = _admit_model_tool_calls(
+        (call,), _schema(), tool_choice="auto", parallel_tool_calls=False
     )
-    assert call.name == "other_tool"
-    assert call.arguments == {}
+    assert len(admitted) == 1
+    assert admitted[0].name == "apply_source_edit"
+    assert admitted[0].arguments == {"operation": "delete_file"}
+
+
+def test_unrelated_unexposed_tool_is_preserved_by_parser_then_rejected_by_admission() -> None:
+    text = "<function=other_tool></function>"
+    visible, calls = parse_qwen_tool_markup(text, _schema())
+    assert visible == ""
+    assert calls[0].name == "other_tool"
+
+    admitted = _admit_model_tool_calls(
+        calls, _schema(), tool_choice="auto", parallel_tool_calls=False
+    )
+    assert admitted[0].name == "__mmm_rejected_tool_call__"
+    assert admitted[0].arguments["failure_code"] == "TOOL_NOT_VISIBLE"

@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-import pytest
-
 from minecraft_mod_ai.model_adapters.base import GenerationRequest
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import (
     _native_tool_generation_response,
 )
-from minecraft_mod_ai.model_adapters.qwen_tool_parser import ToolCallValidationError
-
 
 _APPLY_SOURCE_EDIT = {
     "type": "function",
@@ -16,9 +12,7 @@ _APPLY_SOURCE_EDIT = {
         "description": "Apply one source edit.",
         "parameters": {
             "type": "object",
-            "properties": {
-                "path": {"type": "string"},
-            },
+            "properties": {"path": {"type": "string"}},
             "required": ["path"],
             "additionalProperties": False,
         },
@@ -39,10 +33,7 @@ def _request(
 
 
 def _named_apply_source_edit_choice() -> dict:
-    return {
-        "type": "function",
-        "function": {"name": "apply_source_edit"},
-    }
+    return {"type": "function", "function": {"name": "apply_source_edit"}}
 
 
 def _valid_call(call_id: str, path: str) -> dict:
@@ -56,56 +47,56 @@ def _valid_call(call_id: str, path: str) -> dict:
     }
 
 
-def test_named_tool_choice_does_not_turn_prose_only_completion_into_adapter_failure() -> None:
+def _assert_rejection(response, failure_code: str) -> None:
+    assert len(response.tool_calls) == 1
+    call = response.tool_calls[0]
+    assert call.name == "__mmm_rejected_tool_call__"
+    assert call.arguments["failure_code"] == failure_code
+
+
+def test_named_tool_choice_returns_missing_required_rejection_for_prose_only_completion() -> None:
     response = _native_tool_generation_response(
         {"content": "I cannot make a safe edit from the current evidence."},
         _request(tool_choice=_named_apply_source_edit_choice()),
     )
-
     assert response.content == "I cannot make a safe edit from the current evidence."
-    assert response.tool_calls == ()
+    _assert_rejection(response, "REQUIRED_TOOL_MISSING")
 
 
-def test_required_tool_choice_allows_empty_native_completion_to_reach_orchestrator() -> None:
+def test_required_tool_choice_returns_missing_required_rejection_for_empty_completion() -> None:
     response = _native_tool_generation_response(
         {"content": "", "tool_calls": []},
         _request(tool_choice="required"),
     )
-
     assert response.content == ""
     assert response.reasoning_content == ""
-    assert response.tool_calls == ()
+    _assert_rejection(response, "REQUIRED_TOOL_MISSING")
 
 
-def test_malformed_actual_native_tool_call_still_fails_structural_validation() -> None:
-    with pytest.raises(ToolCallValidationError, match="invalid JSON arguments"):
-        _native_tool_generation_response(
-            {
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "broken",
-                        "type": "function",
-                        "function": {
-                            "name": "apply_source_edit",
-                            "arguments": "{",
-                        },
-                    }
-                ],
-            },
-            _request(),
-        )
+def test_malformed_native_tool_call_is_non_executed_rejection() -> None:
+    response = _native_tool_generation_response(
+        {
+            "content": "",
+            "tool_calls": [{
+                "id": "broken",
+                "type": "function",
+                "function": {"name": "apply_source_edit", "arguments": "{"},
+            }],
+        },
+        _request(),
+    )
+    _assert_rejection(response, "TOOL_CALL_MALFORMED")
 
 
-def test_parallel_native_calls_remain_rejected_when_parallel_calls_are_disabled() -> None:
-    with pytest.raises(ToolCallValidationError, match="parallel tool calls"):
-        _native_tool_generation_response(
-            {
-                "content": "",
-                "tool_calls": [
-                    _valid_call("call_a", "a.py"),
-                    _valid_call("call_b", "b.py"),
-                ],
-            },
-            _request(parallel_tool_calls=False),
-        )
+def test_parallel_native_calls_are_non_executed_rejection_when_disabled() -> None:
+    response = _native_tool_generation_response(
+        {
+            "content": "",
+            "tool_calls": [
+                _valid_call("call_a", "a.py"),
+                _valid_call("call_b", "b.py"),
+            ],
+        },
+        _request(parallel_tool_calls=False),
+    )
+    _assert_rejection(response, "PARALLEL_TOOL_CALLS_DISABLED")

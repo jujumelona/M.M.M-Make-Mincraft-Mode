@@ -833,6 +833,32 @@ class HostRunState:
         return None
 
 
+_MODEL_REJECTED_TOOL_CALL_NAME = "__mmm_rejected_tool_call__"
+
+
+def _model_tool_rejection_feedback(calls: Sequence[Any]) -> str | None:
+    """Convert adapter admission rejections into model feedback, never runtime work."""
+
+    rejected = [call for call in calls if getattr(call, "name", "") == _MODEL_REJECTED_TOOL_CALL_NAME]
+    if not rejected:
+        return None
+    details = []
+    for call in rejected:
+        args = dict(getattr(call, "arguments", {}) or {})
+        details.append({
+            "original_tool": args.get("original_tool", ""),
+            "failure_code": args.get("failure_code", "TOOL_CALL_REJECTED"),
+            "error": args.get("error", "tool call rejected by host admission"),
+        })
+    return (
+        "MMM_TOOL_ADMISSION_REJECTED\n"
+        "The previous assistant tool request was not executed. Correct the call using only "
+        "the currently exposed tool schema and retry in the same phase. Do not treat this "
+        "as a runtime/tool result.\n"
+        + json.dumps(details, ensure_ascii=False, sort_keys=True, default=str)
+    )
+
+
 class RetrievalNoProgressError(ModelConfigurationError):
     pass
 
@@ -2344,6 +2370,41 @@ def _generate_with_tools_impl(
         calls_desc = [f"{c.name}({json.dumps(dict(c.arguments), ensure_ascii=False)[:80]})" for c in turn.tool_calls]
         print(f"  model emitted calls -> {calls_desc}", flush=True)
 
+        rejection_feedback = _model_tool_rejection_feedback(turn.tool_calls)
+        if rejection_feedback is not None:
+            rejection_payloads = [
+                dict(call.arguments)
+                for call in turn.tool_calls
+                if call.name == _MODEL_REJECTED_TOOL_CALL_NAME
+            ]
+            for payload in rejection_payloads:
+                state.record_failure(
+                    str(payload.get("original_tool") or "model_tool_call"),
+                    str(payload.get("error") or payload.get("failure_code") or "tool call rejected"),
+                )
+            state.record_no_progress_result({
+                "phase": state.phase.value,
+                "model_tool_rejections": rejection_payloads,
+            })
+            content = (turn.content or "").strip()
+            if content:
+                messages.append({"role": "assistant", "content": content})
+            messages.append({"role": "system", "content": rejection_feedback})
+            emit_root_cause(
+                "model_tool_call_rejected",
+                stage=stage,
+                operation="coder_turn",
+                gate="tool_admission",
+                result="RETRY",
+                reason="model tool call rejected before phase checks or runtime dispatch",
+                details={
+                    "step_index": state.step_index,
+                    "phase": state.phase.value,
+                    "rejections": rejection_payloads,
+                },
+            )
+            continue
+
         if required_rag_choice:
             if (
                 len(turn.tool_calls) != 1
@@ -2365,12 +2426,14 @@ def _generate_with_tools_impl(
                 )
             forced_rag_tool = None
 
-        if forced_verify_tool is not None:
-            if len(turn.tool_calls) != 1 or turn.tool_calls[0].name != forced_verify_tool:
-                called = ", ".join(call.name for call in turn.tool_calls) or "<none>"
-                raise ModelConfigurationError(
-                    f"VERIFIER_PROTOCOL_VIOLATION: expected exactly {forced_verify_tool!r}; received {called}."
-                )
+        if (
+            forced_verify_tool is not None
+            and (len(turn.tool_calls) != 1 or turn.tool_calls[0].name != forced_verify_tool)
+        ):
+            called = ", ".join(call.name for call in turn.tool_calls) or "<none>"
+            raise ModelConfigurationError(
+                f"VERIFIER_PROTOCOL_VIOLATION: expected exactly {forced_verify_tool!r}; received {called}."
+            )
 
         messages.append({
             "role": "assistant",
@@ -2961,9 +3024,9 @@ def generate_with_tools(
 
 __all__ = [
     "_LOCALIZATION_EVIDENCE_TOOLS",
-    "_RECOVERY_EVIDENCE_TOOLS",
     "_MUTATION_ACT_TOOLS",
     "_READ_OBSERVE_TOOLS",
+    "_RECOVERY_EVIDENCE_TOOLS",
     "_VERIFY_TOOLS",
     "ExecutionStepTrace",
     "HostRunState",

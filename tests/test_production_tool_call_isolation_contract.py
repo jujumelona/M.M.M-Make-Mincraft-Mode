@@ -3,11 +3,8 @@ from __future__ import annotations
 import pytest
 
 from minecraft_mod_ai.model_adapters import llama_cpp_adapter
-from minecraft_mod_ai.model_adapters.base import AdapterConfig, GenerationRequest, ModelBackendError
+from minecraft_mod_ai.model_adapters.base import AdapterConfig, GenerationRequest
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
-from minecraft_mod_ai.model_adapters.qwen_tool_parser import ToolCallValidationError
-
-# Invalid native calls remain non-executable and return protocol observations for recovery.
 
 
 def _tool(name: str = "write_file") -> dict:
@@ -72,7 +69,14 @@ def _valid_call(call_id: str = "call_valid") -> dict:
     }
 
 
-def test_malformed_native_sibling_does_not_discard_valid_call(monkeypatch):
+def _assert_rejection(response, code: str) -> None:
+    assert len(response.tool_calls) == 1
+    rejection = response.tool_calls[0]
+    assert rejection.name == "__mmm_rejected_tool_call__"
+    assert rejection.arguments["failure_code"] == code
+
+
+def test_malformed_native_sibling_prevents_partial_execution(monkeypatch):
     adapter = _adapter(monkeypatch)
     completions = 0
 
@@ -87,10 +91,7 @@ def test_malformed_native_sibling_does_not_discard_valid_call(monkeypatch):
                 {
                     "id": "call_bad",
                     "type": "function",
-                    "function": {
-                        "name": "write_file",
-                        "arguments": '{"path":',
-                    },
+                    "function": {"name": "write_file", "arguments": '{"path":'},
                 },
             ],
         }
@@ -99,19 +100,10 @@ def test_malformed_native_sibling_does_not_discard_valid_call(monkeypatch):
     response = adapter.generate_turn(_request())
 
     assert completions == 1
-    assert [call.name for call in response.tool_calls] == [
-        "write_file",
-        "__mmm_rejected_tool_call__",
-    ]
-    assert response.tool_calls[0].arguments == {"path": "src/Main.java"}
-    rejected = response.tool_calls[1]
-    assert rejected.arguments["original_tool"] == "write_file"
-    assert rejected.arguments["failure_code"] == "TOOL_ARGUMENT_JSON_INVALID"
-    assert "invalid JSON" in rejected.arguments["error"]
-    assert rejected.arguments["raw_arguments"] == '{"path":'
+    _assert_rejection(response, "TOOL_CALL_MALFORMED")
 
 
-def test_schema_invalid_native_sibling_does_not_discard_valid_call(monkeypatch):
+def test_schema_invalid_native_sibling_prevents_partial_execution(monkeypatch):
     adapter = _adapter(monkeypatch)
     monkeypatch.setattr(
         llama_cpp_adapter,
@@ -131,13 +123,7 @@ def test_schema_invalid_native_sibling_does_not_discard_valid_call(monkeypatch):
     )
 
     response = adapter.generate_turn(_request())
-
-    assert response.tool_calls[0].name == "write_file"
-    rejected = response.tool_calls[1]
-    assert rejected.name == "__mmm_rejected_tool_call__"
-    assert rejected.arguments["original_tool"] == "write_file"
-    assert rejected.arguments["failure_code"] == "TOOL_SCHEMA_INVALID"
-    assert "schema-invalid" in rejected.arguments["error"]
+    _assert_rejection(response, "TOOL_SCHEMA_INVALID")
 
 
 def test_all_invalid_native_calls_return_non_executable_rejection(monkeypatch):
@@ -148,30 +134,19 @@ def test_all_invalid_native_calls_return_non_executable_rejection(monkeypatch):
         lambda server_url, payload: {
             "role": "assistant",
             "content": None,
-            "tool_calls": [
-                {
-                    "id": "call_bad",
-                    "type": "function",
-                    "function": {
-                        "name": "write_file",
-                        "arguments": '{"path":',
-                    },
-                }
-            ],
+            "tool_calls": [{
+                "id": "call_bad",
+                "type": "function",
+                "function": {"name": "write_file", "arguments": '{"path":'},
+            }],
         },
     )
 
     response = adapter.generate_turn(_request())
-
-    assert len(response.tool_calls) == 1
-    rejected = response.tool_calls[0]
-    assert rejected.name == "__mmm_rejected_tool_call__"
-    assert rejected.arguments["original_tool"] == "write_file"
-    assert rejected.arguments["failure_code"] == "TOOL_ARGUMENT_JSON_INVALID"
-    assert "invalid JSON" in rejected.arguments["error"]
+    _assert_rejection(response, "TOOL_CALL_MALFORMED")
 
 
-def test_parallel_disabled_does_not_use_isolation_to_bypass_protocol(monkeypatch):
+def test_parallel_disabled_returns_protocol_rejection_before_execution(monkeypatch):
     adapter = _adapter(monkeypatch)
     monkeypatch.setattr(
         llama_cpp_adapter,
@@ -184,17 +159,11 @@ def test_parallel_disabled_does_not_use_isolation_to_bypass_protocol(monkeypatch
                 {
                     "id": "call_bad",
                     "type": "function",
-                    "function": {
-                        "name": "write_file",
-                        "arguments": '{"path":',
-                    },
+                    "function": {"name": "write_file", "arguments": '{"path":'},
                 },
             ],
         },
     )
 
-    with pytest.raises(ModelBackendError) as exc_info:
-        adapter.generate_turn(_request(parallel=False))
-
-    assert isinstance(exc_info.value.cause, ToolCallValidationError)
-    assert "parallel tool calls" in str(exc_info.value.cause)
+    response = adapter.generate_turn(_request(parallel=False))
+    _assert_rejection(response, "PARALLEL_TOOL_CALLS_DISABLED")
