@@ -177,6 +177,13 @@ def source_set_boundary_errors(project_root: str | Path) -> tuple[str, ...]:
         client_packages.setdefault(unit.package, set()).add(unit.simple_name)
 
     findings: set[str] = set()
+    root = Path(project_root).resolve(strict=True)
+    for unit in units:
+        if not (root / unit.relative_path).read_text(encoding="utf-8").strip():
+            findings.add(
+                f"{unit.relative_path}: {unit.source_set} Java source is empty"
+            )
+
     for unit in protected:
         imports = tuple(match.group(1) for match in _IMPORT_RE.finditer(unit.code))
         for target in imports:

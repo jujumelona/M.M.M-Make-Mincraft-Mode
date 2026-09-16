@@ -134,6 +134,30 @@ def _enforce_host_mutation_authority(runtime_module: Any, payload: Mapping[str, 
         raise runtime_module.AgentToolRuntimeError(error)
 
 
+def _reject_empty_java_materialization(
+    runtime_module: Any,
+    patch: Mapping[str, Any],
+) -> None:
+    """Never let a semantic edit turn Java source into an empty file."""
+
+    operations = patch.get("operations")
+    if not isinstance(operations, list):
+        return
+    for operation in operations:
+        if not isinstance(operation, Mapping):
+            continue
+        path = str(operation.get("path") or "").replace("\\", "/")
+        kind = str(operation.get("operation") or "")
+        if not path.endswith(".java") or kind not in {"create", "replace"}:
+            continue
+        content = operation.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise runtime_module.AgentToolRuntimeError(
+                "Java source edits may not materialize an empty source file; "
+                "repair the source or use delete_file when deletion is explicitly intended"
+            )
+
+
 def materialize_model_source_edit(
     runtime_module: Any,
     workspace_root: str | Path,
@@ -144,21 +168,25 @@ def materialize_model_source_edit(
     """Compile one semantic model edit into one strict host-authorized patch."""
 
     if not isinstance(payload, Mapping):
-        return _core.materialize_model_source_edit(
+        patch = _core.materialize_model_source_edit(
             runtime_module,
             workspace_root,
             payload,
             bound_project_root=bound_project_root,
         )
+        _reject_empty_java_materialization(runtime_module, patch)
+        return patch
 
     normalized = _canonicalize_compat_payload(runtime_module, payload)
     _enforce_host_mutation_authority(runtime_module, normalized)
-    return _core.materialize_model_source_edit(
+    patch = _core.materialize_model_source_edit(
         runtime_module,
         workspace_root,
         normalized,
         bound_project_root=bound_project_root,
     )
+    _reject_empty_java_materialization(runtime_module, patch)
+    return patch
 
 
 __all__ = [
