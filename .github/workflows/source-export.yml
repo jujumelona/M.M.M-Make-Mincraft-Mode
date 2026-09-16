@@ -18,10 +18,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Upload source tree
+      - name: Build repository history bundle
+        run: git bundle create mmm-history.bundle --all
+      - name: Upload source and history
         uses: actions/upload-artifact@v4
         with:
-          name: mmm-source-${{ github.sha }}
+          name: mmm-source-history-${{ github.sha }}
           path: |
             .
             !.git/**
