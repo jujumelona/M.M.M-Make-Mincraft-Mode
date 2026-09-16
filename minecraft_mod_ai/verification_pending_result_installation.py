@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-"""Expose verifier-unavailable generation as an explicit resumable result.
+"""Expose verifier-unavailable generation as an explicit resumable API.
 
 The normal ``CustomModuleGenerator.generate`` contract remains fail-closed for production.
-Callers that intentionally support pause/resume may use ``generate_resumable``; only
-verifier-infrastructure exhaustion is converted to a pending receipt. Source defects,
-protocol errors and every unrelated configuration error still raise normally.
+Callers that intentionally support pause/resume call ``generate_resumable`` explicitly;
+no class method is injected at package import time. Only verifier-infrastructure exhaustion
+is converted to a pending receipt. Source defects, protocol errors and every unrelated
+configuration error still raise normally.
 """
 
-from functools import wraps
 from typing import Any
 
 from .model_adapters import ModelConfigurationError
 
-_INSTALL_MARKER = "_mmm_verification_pending_result_installed"
 _PENDING_CODES = (
     "VERIFIER_UNAVAILABLE",
     "VERIFIER_RECOVERY_UNAVAILABLE",
@@ -65,30 +64,19 @@ def _verification_pending_result(module: Any, exc: BaseException) -> dict[str, A
     }
 
 
-def install(custom_module_generator_module: Any) -> None:
-    """Add a resumable entry point without weakening the production generate contract."""
+def generate_resumable(generator: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Run one generation while converting only verifier-unavailable failures to pending."""
 
-    Generator = custom_module_generator_module.CustomModuleGenerator
-    if bool(getattr(Generator, _INSTALL_MARKER, False)):
-        return
-
-    production_generate = Generator.generate
-
-    @wraps(production_generate)
-    def generate_resumable(self: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        try:
-            return self.generate(*args, **kwargs)
-        except ModelConfigurationError as exc:
-            if _pending_reason_code(exc) is None:
-                raise
-            return _verification_pending_result(kwargs.get("module"), exc)
-
-    Generator.generate_resumable = generate_resumable
-    setattr(Generator, _INSTALL_MARKER, True)
+    try:
+        return generator.generate(*args, **kwargs)
+    except ModelConfigurationError as exc:
+        if _pending_reason_code(exc) is None:
+            raise
+        return _verification_pending_result(kwargs.get("module"), exc)
 
 
 __all__ = [
     "_pending_reason_code",
     "_verification_pending_result",
-    "install",
+    "generate_resumable",
 ]
