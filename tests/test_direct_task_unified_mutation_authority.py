@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import minecraft_mod_ai.small_model_write_scope_enforcement as write_scope
 from minecraft_mod_ai.coder_mutation_authority_contract import (
     _install_creation_conflict_classification,
 )
@@ -14,7 +15,6 @@ from minecraft_mod_ai.mutation_authority import (
     MutationAuthorityMode,
     current_mutation_error,
 )
-from minecraft_mod_ai.small_model_write_scope_enforcement import install as install_write_scope
 
 
 def _authored_module():
@@ -80,7 +80,9 @@ def test_ordinary_planir_task_stays_exact_and_cannot_follow_localization_drift()
     assert error.startswith("MUTATION_TARGET_DRIFT:")
 
 
-def test_existing_write_scope_owner_activates_same_authority_for_tool_and_final_guard() -> None:
+def test_existing_write_scope_owner_activates_same_authority_for_tool_and_final_guard(
+    monkeypatch,
+) -> None:
     holder = {}
 
     class Generator:
@@ -144,7 +146,8 @@ def test_existing_write_scope_owner_activates_same_authority_for_tool_and_final_
     loop_module = Loop()
     holder["loop"] = loop_module
     _install_creation_conflict_classification(loop_module)
-    install_write_scope(
+    monkeypatch.setattr(write_scope, "_INSTALLED", False)
+    write_scope.install(
         custom_module_generator_module=custom_module,
         host_grounding_module=HostGrounding,
     )
