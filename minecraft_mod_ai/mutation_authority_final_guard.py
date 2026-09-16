@@ -8,6 +8,8 @@ last and makes their shared invariants explicit:
 * a host-issued task target is immutable for the lifetime of one coder run;
 * retrieval may refine source/symbol evidence, but cannot replace the target or expand
   the writable exact-set;
+* authored-design bounded-root authority is write authority, while localization remains
+  evidence only and therefore cannot collapse the writable set to one evidence anchor;
 * once a mutation tool has parsed its arguments and the host has returned a structured
   non-recoverable semantic rejection, the coder must not re-enter argument generation
   for the same action. Recoverable workspace-state conflicts remain inside the normal
@@ -23,10 +25,12 @@ from dataclasses import replace
 from functools import wraps
 from typing import Any
 
+from .mutation_authority import CURRENT_MUTATION_AUTHORITY, MutationAuthorityMode
 from .mutation_failure_classification import is_recoverable_mutation_failure
 
 _MARKER = "_mmm_mutation_authority_final_guard_v1"
 _SEMANTIC_BOUNDARY_MARKER = "_mmm_post_argument_semantic_boundary_v1"
+_TARGET_GUARD_MARKER = "_mmm_canonical_mutation_authority_target_guard_v1"
 _HOST_ROLES = frozenset({"system", "developer", "tool"})
 _AUTHORITY_PRIORITY = {
     "mmm/direct-task-mutation-authority-v1": 300,
@@ -260,6 +264,45 @@ def _install_semantic_generation_boundary(loop_module: Any) -> None:
     setattr(loop_module, _SEMANTIC_BOUNDARY_MARKER, True)
 
 
+def _install_canonical_target_guard(loop_module: Any) -> None:
+    """Make bounded authored write authority independent from localization anchors."""
+
+    if getattr(loop_module, _TARGET_GUARD_MARKER, False):
+        return
+    original_target_error = loop_module._mutation_target_error
+
+    @wraps(original_target_error)
+    def mutation_target_error(
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        context: Any,
+    ) -> str | None:
+        if tool_name == "apply_source_edit":
+            authority = CURRENT_MUTATION_AUTHORITY.get()
+            if authority is not None:
+                supplied = ""
+                for key in tuple(getattr(loop_module, "_SOURCE_EDIT_PATH_KEYS", ("path",))):
+                    value = arguments.get(key)
+                    if isinstance(value, str) and value.strip():
+                        supplied = value
+                        break
+                error = authority.mutation_error(
+                    supplied,
+                    operation=arguments.get("operation"),
+                )
+                if error is not None:
+                    return error
+                if authority.mode is MutationAuthorityMode.BOUNDED_ROOTS:
+                    # A saved authored design delegates file selection inside fixed host
+                    # roots. Repository localization is evidence and cannot narrow that
+                    # authority to the current evidence anchor (for example fabric.mod.json).
+                    return None
+        return original_target_error(tool_name, arguments, context)
+
+    loop_module._mutation_target_error = mutation_target_error
+    setattr(loop_module, _TARGET_GUARD_MARKER, True)
+
+
 def install(loop_module: Any | None = None) -> None:
     """Install after all runtime wrappers so authority cannot be weakened later."""
 
@@ -338,6 +381,7 @@ def install(loop_module: Any | None = None) -> None:
         loop_module.is_mutation_ready = is_mutation_ready
         setattr(loop_module, _MARKER, True)
 
+    _install_canonical_target_guard(loop_module)
     _install_semantic_generation_boundary(loop_module)
 
 
@@ -346,6 +390,8 @@ def assert_installed(loop_module: Any | None = None) -> None:
         from . import progress_aware_tool_loop as loop_module
     if not getattr(loop_module, _MARKER, False):
         raise RuntimeError("final mutation-authority guard is not installed")
+    if not getattr(loop_module, _TARGET_GUARD_MARKER, False):
+        raise RuntimeError("canonical mutation-authority target guard is not installed")
     if not getattr(loop_module, _SEMANTIC_BOUNDARY_MARKER, False):
         raise RuntimeError("post-argument semantic failure boundary is not installed")
 
