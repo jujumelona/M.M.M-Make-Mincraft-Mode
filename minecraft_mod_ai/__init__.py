@@ -22,6 +22,7 @@ from .source_observation_budget_installation import install as install_source_ob
 from .source_set_boundary_installation import install as install_source_set_boundary
 from .task_template_catalog import RUNTIME_TEMPLATE_ROOT
 from .template_contract_validation import runtime_consumer_roots, validate_catalog
+from .verification_pending_result_installation import install as install_verification_pending_result
 from .versioned_reference_context_installation import install as install_versioned_reference_context
 
 
@@ -65,6 +66,9 @@ finalize_runtime()
 # The generation verifier is finalized above. Wrap only its infrastructure-unavailable
 # path with a real pinned Gradle build; source failures remain ordinary verifier FAILs.
 install_generation_verifier_fallback()
+# Explicit pause/resume callers receive a structured pending receipt when every host
+# verifier is unavailable. The normal generate() method remains production fail-closed.
+install_verification_pending_result(_custom_module_generator)
 # The outer normalizer runs after atomic aggregation so multi-obligation text summaries
 # retain the fixed {"summary": ...} contract consumed by CustomModuleGenerator.
 install_generation_accuracy_outer(_model_router)
