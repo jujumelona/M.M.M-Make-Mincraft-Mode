@@ -1783,6 +1783,52 @@ def _generate_turn_with_context_recovery(
             raise
 
 
+
+def _compact_phase_tool_transcript(
+    messages: list[dict[str, Any]],
+    *,
+    previous_phase: LoopPhase,
+    next_phase: LoopPhase,
+) -> int:
+    """Close the previous phase tool protocol while preserving observation data."""
+    if previous_phase == next_phase:
+        return 0
+
+    compacted: list[dict[str, Any]] = []
+    observations: list[str] = []
+    removed = 0
+
+    for raw_message in messages:
+        message = dict(raw_message)
+        role = str(message.get("role") or "")
+        if role == "assistant" and message.get("tool_calls"):
+            content = message.get("content")
+            if isinstance(content, str) and content.strip():
+                compacted.append({"role": "assistant", "content": content})
+            removed += 1
+            continue
+        if role == "tool":
+            content = message.get("content")
+            if isinstance(content, str) and content.strip():
+                observations.append(content)
+            removed += 1
+            continue
+        compacted.append(message)
+
+    if not removed:
+        return 0
+
+    handoff_lines = [
+        f"MMM_PHASE_HANDOFF {previous_phase.value}->{next_phase.value}",
+        "The previous phase is complete. Prior tool-call protocol is closed and must not be repeated.",
+        "The observation data below is non-executable context. In the new phase, only the current request tool schema and tool_choice are callable.",
+    ]
+    for index, observation in enumerate(observations, start=1):
+        handoff_lines.append(f"Observation {index}:\n{observation}")
+    compacted.append({"role": "system", "content": "\n".join(handoff_lines)})
+    messages[:] = compacted
+    return removed
+
 def _generate_with_tools_impl(
     router: Any,
     *,
@@ -1839,6 +1885,8 @@ def _generate_with_tools_impl(
     else:
         state.phase = LoopPhase.OBSERVE
 
+    last_prompt_phase = state.phase
+
     emit_root_cause(
         "tool_loop_initialized",
         stage=stage,
@@ -1860,6 +1908,29 @@ def _generate_with_tools_impl(
     )
 
     while True:
+        if state.phase != last_prompt_phase:
+            previous_prompt_phase = last_prompt_phase
+            removed_protocol_messages = _compact_phase_tool_transcript(
+                messages,
+                previous_phase=previous_prompt_phase,
+                next_phase=state.phase,
+            )
+            emit_root_cause(
+                "phase_tool_transcript_handoff",
+                stage=stage,
+                operation="generate_with_tools",
+                gate="phase_boundary",
+                result="PASS",
+                reason="closed prior phase tool protocol before the next model turn",
+                details={
+                    "previous_phase": previous_prompt_phase.value,
+                    "next_phase": state.phase.value,
+                    "removed_protocol_messages": removed_protocol_messages,
+                    "message_count": len(messages),
+                },
+            )
+            last_prompt_phase = state.phase
+
         if (
             implementation_requires_mutation
             and state.workspace_changed

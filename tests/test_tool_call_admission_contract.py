@@ -104,3 +104,60 @@ def test_progress_loop_consumes_rejection_as_feedback_not_as_runtime_tool():
     assert feedback is not None
     assert "not executed" in feedback
     assert "TOOL_SCHEMA_INVALID" in feedback
+
+
+
+def test_phase_handoff_closes_old_tool_protocol_and_preserves_observation_data():
+    from minecraft_mod_ai.progress_aware_tool_loop import (
+        LoopPhase,
+        _compact_phase_tool_transcript,
+    )
+
+    messages = [
+        {"role": "user", "content": "implement the target"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_search",
+                    "type": "function",
+                    "function": {
+                        "name": "search_code_rag",
+                        "arguments": "{}",
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_search",
+            "name": "search_code_rag",
+            "content": "public final class DebugToken {}",
+        },
+    ]
+
+    removed = _compact_phase_tool_transcript(
+        messages,
+        previous_phase=LoopPhase.OBSERVE,
+        next_phase=LoopPhase.ACT,
+    )
+
+    assert removed == 2
+    assert all(message.get("role") != "tool" for message in messages)
+    assert all(not message.get("tool_calls") for message in messages)
+    assert messages[-1]["role"] == "system"
+    assert "OBSERVE->ACT" in messages[-1]["content"]
+    assert "public final class DebugToken {}" in messages[-1]["content"]
+    assert "search_code_rag" not in messages[-1]["content"]
+
+
+def test_phase_handoff_is_wired_before_next_model_turn():
+    import inspect
+
+    from minecraft_mod_ai.progress_aware_tool_loop import _generate_with_tools_impl
+
+    source = inspect.getsource(_generate_with_tools_impl)
+    assert "state.phase != last_prompt_phase" in source
+    assert "_compact_phase_tool_transcript(" in source
+    assert "phase_tool_transcript_handoff" in source
