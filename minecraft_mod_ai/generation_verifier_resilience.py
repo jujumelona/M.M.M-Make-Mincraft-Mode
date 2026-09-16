@@ -5,7 +5,8 @@ from __future__ import annotations
 JDT Core owns incremental dependency analysis and completed-build diagnostics.
 The host owns the requested verifier deadline and mutation/model identity. JDT remains
 the primary verifier; when its infrastructure is unavailable, the host may fall back
-to a real Gradle build without inferring a PASS from unchanged source state.
+to a real Gradle build. Dependency-resolution diagnostics are corroborated with the
+pinned Gradle build so a broken JDT classpath is not mistaken for a source defect.
 """
 
 import hashlib
@@ -21,6 +22,12 @@ from .root_cause_trace import emit_root_cause
 _MARKER = "_mmm_host_owned_generation_verifier"
 _VERIFIER_NAME = "java_diagnostics"
 _JDT_SERVICE_ATTR = "_mmm_generation_java_service"
+_EXTERNAL_CODE_PREFIXES = ("net.minecraft.", "net.fabricmc.")
+_DEPENDENCY_FAILURE_MARKERS = (
+    "cannot be resolved",
+    "does not exist",
+    "is not accessible",
+)
 
 
 def _bounded_int_env(name: str, *, default: int, minimum: int, maximum: int) -> int:
@@ -109,6 +116,42 @@ def _normalize_relative_files(raw_files: Any) -> list[str] | None:
     return list(dict.fromkeys(normalized))
 
 
+def _diagnostic_items(result: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    raw = result.get("diagnostics")
+    if isinstance(raw, Mapping):
+        return tuple(
+            item
+            for group in raw.values()
+            if isinstance(group, list)
+            for item in group
+            if isinstance(item, Mapping)
+        )
+    if isinstance(raw, list):
+        return tuple(item for item in raw if isinstance(item, Mapping))
+    return ()
+
+
+def _is_error_diagnostic(item: Mapping[str, Any]) -> bool:
+    try:
+        return int(item.get("severity", 1)) == 1
+    except (TypeError, ValueError, OverflowError):
+        return True
+
+
+def _jdt_dependency_resolution_suspect(result: Mapping[str, Any]) -> bool:
+    """Detect JDT errors that may be project-classpath failures rather than bad source."""
+
+    for item in _diagnostic_items(result):
+        if not _is_error_diagnostic(item):
+            continue
+        message = " ".join(str(item.get("message") or "").casefold().split())
+        if not any(prefix in message for prefix in _EXTERNAL_CODE_PREFIXES):
+            continue
+        if any(marker in message for marker in _DEPENDENCY_FAILURE_MARKERS):
+            return True
+    return False
+
+
 def _close_generation_jdt(runtime: Any) -> None:
     service = getattr(runtime, _JDT_SERVICE_ATTR, None)
     try:
@@ -165,16 +208,7 @@ def _structured_verifier_result(
     *,
     runtime_module: Any,
 ) -> dict[str, Any]:
-    """Sanitize a verifier receipt without destroying its machine-readable schema.
-
-    Generic model-facing tool observations may be replaced by a preview envelope when
-    they exceed the observation byte budget. A verifier receipt is different: the host
-    immediately consumes ``diagnostics`` to decide whether source repair is required.
-    Replacing that mapping with preview text converts real compiler failures into the
-    unrelated ``JDT_DIAGNOSTICS_UNAVAILABLE`` infrastructure error. Keep the structured
-    receipt intact; downstream prompt/context budgeting remains responsible for how much
-    of the observation is shown back to the model.
-    """
+    """Sanitize a verifier receipt without destroying its machine-readable schema."""
 
     sanitized = runtime_module._sanitize_observation(result)
     if not isinstance(sanitized, Mapping):
@@ -188,6 +222,68 @@ def _structured_verifier_result(
         "truncated": False,
     }
     return payload
+
+
+def _run_gradle_corroboration(
+    runtime: Any,
+    root: Path,
+    *,
+    runtime_module: Any,
+    jdt_result: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Use Gradle to distinguish source defects from a JDT dependency-classpath defect."""
+
+    from .generation_verifier_fallback_installation import _gradle_fallback_receipt
+
+    reason = RuntimeError(
+        "JDT reported unresolved Minecraft/Fabric dependency symbols; "
+        "corroborating with the pinned Gradle compile"
+    )
+    emit_root_cause(
+        "generation_verifier_gradle_corroboration_start",
+        stage="generation",
+        operation="run_gradle_build",
+        gate="target_compile",
+        result="START",
+        reason=str(reason),
+        details={"jdt_error_count": jdt_result.get("error_count")},
+    )
+    try:
+        corroborated = _gradle_fallback_receipt(
+            runtime,
+            root,
+            runtime_module=runtime_module,
+            jdt_error=reason,
+            corroboration=True,
+        )
+    except Exception as exc:
+        emit_root_cause(
+            "generation_verifier_gradle_corroboration_unavailable",
+            stage="generation",
+            operation="run_gradle_build",
+            gate="target_compile",
+            result="SKIP",
+            reason=f"{type(exc).__name__}: {exc}",
+            exc=exc,
+        )
+        return _structured_verifier_result(jdt_result, runtime_module=runtime_module)
+
+    status = str(corroborated.get("status") or "").strip().upper()
+    if status == "UNAVAILABLE":
+        # JDT did return a complete diagnostic receipt. If the independent Gradle
+        # cross-check cannot run, retain that real evidence instead of converting a
+        # source diagnostic into a verifier-health failure.
+        emit_root_cause(
+            "generation_verifier_gradle_corroboration_unavailable",
+            stage="generation",
+            operation="run_gradle_build",
+            gate="target_compile",
+            result="SKIP",
+            reason="Gradle corroboration unavailable; retaining complete JDT diagnostics",
+            details={"gradle_result": corroborated},
+        )
+        return _structured_verifier_result(jdt_result, runtime_module=runtime_module)
+    return corroborated
 
 
 def run_generation_verifier(
@@ -254,6 +350,13 @@ def run_generation_verifier(
         result="FAIL" if result.get("error_count") else "PASS",
         details={"result": result},
     )
+    if result.get("error_count") and _jdt_dependency_resolution_suspect(result):
+        return _run_gradle_corroboration(
+            runtime,
+            Path(root),
+            runtime_module=runtime_module,
+            jdt_result=result,
+        )
     return _structured_verifier_result(result, runtime_module=runtime_module)
 
 
