@@ -5,8 +5,9 @@ from __future__ import annotations
 A configured ``max_new_tokens`` can be a request-packing reservation without becoming
 an artificial decode ceiling. Profiles opt into that behavior with
 ``dynamic_output_budget``. Compact reviewed tool calls and host-selected structured
-planning decisions stay finitely bounded, while source mutation/generation actions may
-use the live context that remains after the current request.
+planning decisions stay finitely bounded. Expansive generation actions may use the live
+context that remains after the current request, but a scalar ``apply_source_edit`` call
+is bounded by its serialized action shape rather than by the side effects it causes.
 
 Transport token estimation is intentionally conservative, but it is only an estimate.
 Dynamic forced structural actions retain a generous 4096-token page so an estimated
@@ -58,7 +59,6 @@ _EXPANSIVE_TOOL_EFFECTS = frozenset(
 
 class GenerationOutputBudgetError(RuntimeError):
     """Raised before inference when one complete host-required action cannot fit."""
-
 
 
 def _positive_override(name: str) -> int | None:
@@ -137,6 +137,15 @@ def _structural_tool_floor(config: Any, tools: Sequence[Any], *, structured_outp
     return max(1, min(target, tool_action_token_budget(config)))
 
 
+def _structural_tool_ceiling(config: Any, tools: Sequence[Any]) -> int:
+    """Bound compact serialized actions even when the action has expansive side effects."""
+
+    page = max(1, tool_action_token_budget(config))
+    if _structural_tool_call_is_compact(tools):
+        return min(page, _MIN_STRUCTURAL_TOOL_OUTPUT_TOKENS)
+    return page
+
+
 def _assert_structural_budget_viable(
     config: Any,
     tools: Sequence[Any],
@@ -170,13 +179,12 @@ def _assert_structural_budget_viable(
 
 
 def tools_require_expansive_output(tools: Sequence[Any]) -> bool:
-    """Classify tool effects, not how many tokens its function arguments need.
+    """Classify tool effects, independently from the serialized action size.
 
     ``apply_source_edit`` remains expansive here because it mutates project source and
     preflight/recovery policy depends on that effect classification. Its scalar protocol
-    is nevertheless a compact *call shape* (one type shell, import, or member); output
-    budgeting handles that separately by guaranteeing a minimum page, not by imposing
-    the compact-tool maximum.
+    is nevertheless a compact *call shape* (one type shell, import, or member), so output
+    budgeting applies the compact serialized-action ceiling separately.
 
     Host-selected semantic/retrieval decision functions are intentionally different:
     they have no side effect, execute no external action, and are fully schema validated.
@@ -234,10 +242,13 @@ def generation_output_token_budget(
     else:
         budget = max(floor, _DEFAULT_DYNAMIC_OUTPUT_TOKENS)
 
-    # Only genuinely non-expansive effects receive the compact action ceiling. Source
-    # mutation is allowed to use the remaining context; its scalar protocol is protected
-    # by the structural minimum above rather than by a small hard maximum.
-    if tools and not tools_require_expansive_output(tools):
+    # A compact serialized action gets a bounded function-call page regardless of the
+    # side effects caused after validation. This is what prevents one scalar source edit
+    # from inheriting essentially the entire remaining 32k context. Other non-expansive
+    # tools keep the normal finite function-call page as before.
+    if tools and _structural_tool_call_is_compact(tools):
+        budget = min(budget, _structural_tool_ceiling(config, tools))
+    elif tools and not tools_require_expansive_output(tools):
         budget = min(budget, tool_action_token_budget(config))
 
     from .planner_operation import current_output_limit
