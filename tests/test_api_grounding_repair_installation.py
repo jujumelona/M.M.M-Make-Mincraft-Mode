@@ -107,6 +107,52 @@ def test_fresh_java_does_not_promote_generic_metadata_to_grounding() -> None:
     assert state.has_fresh_evidence is False
 
 
+def test_jdt_failure_then_metadata_rag_cannot_unlock_fresh_java_act() -> None:
+    state = HostRunState(mutation_context=_fresh_context(), phase=LoopPhase.OBSERVE)
+    jdt_args = {"project_root": ".", "query": "DebugToken", "timeout_seconds": 30}
+    metadata_only = {
+        "parsed_text": None,
+        "resources": [],
+        "structured_content": {
+            "schema_version": "mmm/rag-result-v2",
+            "query": "DebugToken.java src/main/java/dev/mmm/debugfixture",
+            "sources": [{"source_id": "provenance-only", "version_scope": "26.2"}],
+            "target": {"minecraft_version": "26.2", "loader": "fabric", "mappings": ""},
+        },
+        "text": [],
+    }
+    tools = (
+        {"type": "function", "function": {"name": "search_project_rag", "parameters": {}}},
+        {"type": "function", "function": {"name": "search_code_rag", "parameters": {}}},
+        {"type": "function", "function": {"name": "external_mcp_call", "parameters": {}}},
+        {"type": "function", "function": {"name": "java_workspace_symbols", "parameters": {}}},
+    )
+
+    # Reproduce the trace boundary: JDT was attempted and unavailable.  That failure
+    # is a route observation, never positive API evidence.
+    assert state.record_query("java_workspace_symbols", jdt_args) is True
+    assert state.has_fresh_evidence is False
+
+    # The next target-neutral catalog response contains provenance/target metadata but
+    # no code or symbols.  It must not unlock ACT.
+    assert strict_usable_rag_result(metadata_only) is False
+    assert state.record_evidence(metadata_only, usable=False) is False
+    assert state.has_fresh_evidence is False
+    assert state.phase is LoopPhase.OBSERVE
+
+    selected = _filter_tools_for_phase(
+        tools,
+        state.phase,
+        "coder",
+        mutation_context=state.mutation_context,
+        attempted_sources=state.attempted_sources,
+        semantic_retrieval_choice=True,
+    )
+    selected_names = [item["function"]["name"] for item in selected]
+    assert "search_project_rag" not in selected_names
+    assert selected_names == ["search_code_rag"]
+
+
 def test_fresh_java_accepts_concrete_workspace_symbols() -> None:
     state = HostRunState(mutation_context=_fresh_context())
     evidence = {
