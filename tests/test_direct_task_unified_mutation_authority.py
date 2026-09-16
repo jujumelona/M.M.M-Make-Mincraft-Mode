@@ -7,7 +7,10 @@ from minecraft_mod_ai.direct_task_mutation_authority_contract import (
     compile_direct_task_mutation_authority,
     install,
 )
-from minecraft_mod_ai.mutation_authority import MutationAuthorityMode
+from minecraft_mod_ai.mutation_authority import (
+    CURRENT_MUTATION_AUTHORITY,
+    MutationAuthorityMode,
+)
 
 
 def _authored_module():
@@ -80,6 +83,7 @@ def test_same_active_authority_guards_tool_call_and_final_staged_operation() -> 
         def generate(self, *args, **kwargs):
             active = _CURRENT_AUTHORITY.get()
             assert active is not None
+            assert CURRENT_MUTATION_AUTHORITY.get() is active.mutation_authority
             tool_error = holder["loop"]._mutation_target_error(
                 "apply_source_edit",
                 {
@@ -131,3 +135,4 @@ def test_same_active_authority_guards_tool_call_and_final_staged_operation() -> 
     generator = custom_module.CustomModuleGenerator()
     assert generator.generate(module=_authored_module()) == {"active": True}
     assert _CURRENT_AUTHORITY.get() is None
+    assert CURRENT_MUTATION_AUTHORITY.get() is None
