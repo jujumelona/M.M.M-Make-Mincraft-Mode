@@ -17,6 +17,12 @@ jobs:
         with:
           ref: main
           fetch-depth: 1
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e ".[dev]"
       - name: Integrate grounding transition into core state machine
         shell: bash
         run: |
@@ -27,14 +33,62 @@ jobs:
           text = loop_path.read_text(encoding='utf-8')
 
           anchor = '''def _filter_tools_for_phase(\n'''
-          helpers = '''def _fresh_java_grounding_required(\n    context: TargetMutationContext | None,\n    *,\n    semantic_retrieval_choice: bool,\n    available_tools: Mapping[str, Any],\n) -> bool:\n    path = _normalized_target_path(context.target_path if context is not None else None)\n    return bool(\n        semantic_retrieval_choice\n        and context is not None\n        and context.is_new_file\n        and context.is_mutation_ready\n        and path.endswith(".java")\n        and "search_code_rag" in available_tools\n    )\n\n\ndef _fresh_java_code_rag_progress(\n    tool_name: str,\n    *,\n    recorded: bool,\n    usable: bool,\n    context: TargetMutationContext | None,\n) -> bool:\n    path = _normalized_target_path(context.target_path if context is not None else None)\n    return bool(\n        tool_name == "search_code_rag"\n        and recorded\n        and usable\n        and context is not None\n        and context.is_new_file\n        and context.is_mutation_ready\n        and path.endswith(".java")\n    )\n\n\n'''
+          helpers = '''def _fresh_java_grounding_required(
+    context: TargetMutationContext | None,
+    *,
+    semantic_retrieval_choice: bool,
+    available_tools: Mapping[str, Any],
+) -> bool:
+    path = _normalized_target_path(context.target_path if context is not None else None)
+    return bool(
+        semantic_retrieval_choice
+        and context is not None
+        and context.is_new_file
+        and context.is_mutation_ready
+        and path.endswith(".java")
+        and "search_code_rag" in available_tools
+    )
+
+
+def _fresh_java_code_rag_progress(
+    tool_name: str,
+    *,
+    recorded: bool,
+    usable: bool,
+    context: TargetMutationContext | None,
+) -> bool:
+    path = _normalized_target_path(context.target_path if context is not None else None)
+    return bool(
+        tool_name == "search_code_rag"
+        and recorded
+        and usable
+        and context is not None
+        and context.is_new_file
+        and context.is_mutation_ready
+        and path.endswith(".java")
+    )
+
+
+'''
           if helpers not in text:
               if text.count(anchor) != 1:
                   raise SystemExit(f'filter anchor count={text.count(anchor)}')
               text = text.replace(anchor, helpers + anchor, 1)
 
-          old_ready = '''            else:\n                selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]\n'''
-          new_ready = '''            else:\n                selected_names = (\n                    ["search_code_rag"]\n                    if _fresh_java_grounding_required(\n                        mutation_context,\n                        semantic_retrieval_choice=semantic_retrieval_choice,\n                        available_tools=by_name,\n                    )\n                    else [name for name in by_name if name in _READ_OBSERVE_TOOLS]\n                )\n'''
+          old_ready = '''            else:
+                selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]
+'''
+          new_ready = '''            else:
+                selected_names = (
+                    ["search_code_rag"]
+                    if _fresh_java_grounding_required(
+                        mutation_context,
+                        semantic_retrieval_choice=semantic_retrieval_choice,
+                        available_tools=by_name,
+                    )
+                    else [name for name in by_name if name in _READ_OBSERVE_TOOLS]
+                )
+'''
           if old_ready in text:
               if text.count(old_ready) != 1:
                   raise SystemExit(f'READY branch count={text.count(old_ready)}')
@@ -42,8 +96,42 @@ jobs:
           elif new_ready not in text:
               raise SystemExit('READY branch patch anchor missing')
 
-          old_progress = '''                if (\n                    ctx_progress\n                    or (state.phase == LoopPhase.RECOVER and recorded)\n                    or (not implementation_requires_mutation and recorded)\n                ):\n                    turn_made_progress = True\n                    if (\n                        state.phase in {LoopPhase.OBSERVE, LoopPhase.RECOVER}\n                        and implementation_requires_mutation\n                        and is_mutation_ready(messages, state)\n                    ):\n                        state.phase = LoopPhase.ACT\n'''
-          new_progress = '''                fresh_java_grounding_progress = _fresh_java_code_rag_progress(\n                    call.name,\n                    recorded=recorded,\n                    usable=usable,\n                    context=state.mutation_context,\n                )\n                if (\n                    ctx_progress\n                    or fresh_java_grounding_progress\n                    or (state.phase == LoopPhase.RECOVER and recorded)\n                    or (not implementation_requires_mutation and recorded)\n                ):\n                    turn_made_progress = True\n                    if fresh_java_grounding_progress:\n                        state.clear_failure()\n                        state.clear_no_progress_result()\n                    if (\n                        state.phase in {LoopPhase.OBSERVE, LoopPhase.RECOVER}\n                        and implementation_requires_mutation\n                        and is_mutation_ready(messages, state)\n                    ):\n                        state.phase = LoopPhase.ACT\n'''
+          old_progress = '''                if (
+                    ctx_progress
+                    or (state.phase == LoopPhase.RECOVER and recorded)
+                    or (not implementation_requires_mutation and recorded)
+                ):
+                    turn_made_progress = True
+                    if (
+                        state.phase in {LoopPhase.OBSERVE, LoopPhase.RECOVER}
+                        and implementation_requires_mutation
+                        and is_mutation_ready(messages, state)
+                    ):
+                        state.phase = LoopPhase.ACT
+'''
+          new_progress = '''                fresh_java_grounding_progress = _fresh_java_code_rag_progress(
+                    call.name,
+                    recorded=recorded,
+                    usable=usable,
+                    context=state.mutation_context,
+                )
+                if (
+                    ctx_progress
+                    or fresh_java_grounding_progress
+                    or (state.phase == LoopPhase.RECOVER and recorded)
+                    or (not implementation_requires_mutation and recorded)
+                ):
+                    turn_made_progress = True
+                    if fresh_java_grounding_progress:
+                        state.clear_failure()
+                        state.clear_no_progress_result()
+                    if (
+                        state.phase in {LoopPhase.OBSERVE, LoopPhase.RECOVER}
+                        and implementation_requires_mutation
+                        and is_mutation_ready(messages, state)
+                    ):
+                        state.phase = LoopPhase.ACT
+'''
           if old_progress in text:
               if text.count(old_progress) != 1:
                   raise SystemExit(f'progress block count={text.count(old_progress)}')
@@ -55,8 +143,18 @@ jobs:
 
           init_path = Path('minecraft_mod_ai/__init__.py')
           init_text = init_path.read_text(encoding='utf-8')
-          init_text = init_text.replace('''from .fresh_java_grounding_transition_installation import (\n    assert_installed as assert_fresh_java_grounding_transition,\n)\nfrom .fresh_java_grounding_transition_installation import (\n    install as install_fresh_java_grounding_transition,\n)\n''', '')
-          init_text = init_text.replace('''from . import progress_aware_tool_loop as _progress_aware_tool_loop\n\ninstall_fresh_java_grounding_transition(_progress_aware_tool_loop)\nassert_fresh_java_grounding_transition(_progress_aware_tool_loop)\n''', '')
+          init_text = init_text.replace('''from .fresh_java_grounding_transition_installation import (
+    assert_installed as assert_fresh_java_grounding_transition,
+)
+from .fresh_java_grounding_transition_installation import (
+    install as install_fresh_java_grounding_transition,
+)
+''', '')
+          init_text = init_text.replace('''from . import progress_aware_tool_loop as _progress_aware_tool_loop
+
+install_fresh_java_grounding_transition(_progress_aware_tool_loop)
+assert_fresh_java_grounding_transition(_progress_aware_tool_loop)
+''', '')
           init_path.write_text(init_text, encoding='utf-8')
 
           installer = Path('minecraft_mod_ai/fresh_java_grounding_transition_installation.py')
@@ -64,7 +162,79 @@ jobs:
               installer.unlink()
 
           test_path = Path('tests/test_fresh_java_grounding_transition.py')
-          test_path.write_text('''from __future__ import annotations\n\nfrom minecraft_mod_ai import progress_aware_tool_loop as loop\n\n\ndef _tool(name: str):\n    return {\n        "type": "function",\n        "function": {\n            "name": name,\n            "description": name,\n            "parameters": {"type": "object", "properties": {}},\n        },\n    }\n\n\ndef _fresh_context():\n    return loop.TargetMutationContext(\n        target_path="src/main/java/dev/mmm/debugfixture/DebugToken.java",\n        target_symbol="DebugToken",\n        is_new_file=True,\n        evidence_source="evidence_fresh_owned_anchor",\n    )\n\n\ndef test_fresh_java_required_grounding_exposes_code_rag_only():\n    selected = loop._filter_tools_for_phase(\n        (\n            _tool("search_project_rag"),\n            _tool("java_workspace_symbols"),\n            _tool("search_code_rag"),\n        ),\n        loop.LoopPhase.OBSERVE,\n        "coder",\n        mutation_context=_fresh_context(),\n        attempted_sources=frozenset(),\n        localization_active=True,\n        semantic_retrieval_choice=True,\n    )\n    assert [schema["function"]["name"] for schema in selected] == ["search_code_rag"]\n\n\ndef test_usable_code_rag_is_progress_for_fresh_java():\n    context = _fresh_context()\n    assert loop._fresh_java_code_rag_progress(\n        "search_code_rag",\n        recorded=True,\n        usable=True,\n        context=context,\n    ) is True\n    assert loop._fresh_java_code_rag_progress(\n        "search_project_rag",\n        recorded=True,\n        usable=True,\n        context=context,\n    ) is False\n\n\ndef test_existing_java_does_not_use_fresh_grounding_shortcut():\n    context = loop.TargetMutationContext(\n        target_path="src/main/java/dev/example/Existing.java",\n        target_symbol="Existing",\n        source_body="public final class Existing {}",\n        is_new_file=False,\n        evidence_source="search_code_rag",\n    )\n    assert loop._fresh_java_code_rag_progress(\n        "search_code_rag",\n        recorded=True,\n        usable=True,\n        context=context,\n    ) is False\n''', encoding='utf-8')
+          test_path.write_text('''from __future__ import annotations
+
+from minecraft_mod_ai import progress_aware_tool_loop as loop
+
+
+def _tool(name: str):
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": name,
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+
+def _fresh_context():
+    return loop.TargetMutationContext(
+        target_path="src/main/java/dev/mmm/debugfixture/DebugToken.java",
+        target_symbol="DebugToken",
+        is_new_file=True,
+        evidence_source="evidence_fresh_owned_anchor",
+    )
+
+
+def test_fresh_java_required_grounding_exposes_code_rag_only():
+    selected = loop._filter_tools_for_phase(
+        (
+            _tool("search_project_rag"),
+            _tool("java_workspace_symbols"),
+            _tool("search_code_rag"),
+        ),
+        loop.LoopPhase.OBSERVE,
+        "coder",
+        mutation_context=_fresh_context(),
+        attempted_sources=frozenset(),
+        localization_active=True,
+        semantic_retrieval_choice=True,
+    )
+    assert [schema["function"]["name"] for schema in selected] == ["search_code_rag"]
+
+
+def test_usable_code_rag_is_progress_for_fresh_java():
+    context = _fresh_context()
+    assert loop._fresh_java_code_rag_progress(
+        "search_code_rag",
+        recorded=True,
+        usable=True,
+        context=context,
+    ) is True
+    assert loop._fresh_java_code_rag_progress(
+        "search_project_rag",
+        recorded=True,
+        usable=True,
+        context=context,
+    ) is False
+
+
+def test_existing_java_does_not_use_fresh_grounding_shortcut():
+    context = loop.TargetMutationContext(
+        target_path="src/main/java/dev/example/Existing.java",
+        target_symbol="Existing",
+        source_body="public final class Existing {}",
+        is_new_file=False,
+        evidence_source="search_code_rag",
+    )
+    assert loop._fresh_java_code_rag_progress(
+        "search_code_rag",
+        recorded=True,
+        usable=True,
+        context=context,
+    ) is False
+''', encoding='utf-8')
 
           workflow = Path('.github/workflows/one-shot-fresh-java-core-fix.yml')
           workflow.unlink()
