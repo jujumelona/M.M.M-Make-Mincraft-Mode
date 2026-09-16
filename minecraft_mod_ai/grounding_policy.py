@@ -5,36 +5,41 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .host_grounding import _SCHEMA_VERSION as _HOST_GROUNDING_SCHEMA
+
 _HOST_BASELINE_CAUSAL_FACTS = frozenset(
     {"project_observed", "code_evidence", "evidence_ready"}
 )
+_TASK_CAPSULE_SCHEMA = "mmm/small-model-task-capsule"
 
 
 def host_baseline_evidence_ready(messages: Sequence[Mapping[str, Any]]) -> bool:
     """Return whether host-validated evidence is actionable before the first coder decode.
 
-    A project snapshot proves repository identity, but it does not by itself prove the
-    Minecraft/Fabric API details needed to author a fresh Java implementation. When the
-    approved research binding contains no selected facts, keep fresh retrieval mandatory
-    so the coder must query the version-pinned code/API evidence surface before mutation.
+    Existing host-owned project grounding remains sufficient for ordinary coder turns.
+    Fresh Java creation is narrower: when the active task capsule says ``reuse_action`` is
+    ``fresh``, repository identity alone does not establish the Minecraft/Fabric API shape
+    needed for a new source file. In that case an empty approved-research selection keeps
+    the existing fresh-retrieval path active before mutation.
     """
-    for message in messages:
-        content = message.get("content")
-        if isinstance(content, Mapping):
-            payload: Any = content
-        elif isinstance(content, str):
-            raw = content.strip()
-            if not raw.startswith("{"):
-                continue
-            try:
-                payload = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
-        else:
+
+    payloads = tuple(_message_payload(message) for message in messages)
+    require_fresh_java_evidence = any(
+        payload is not None and _contains_fresh_java_task(payload)
+        for payload in payloads
+    )
+    for payload in payloads:
+        if payload is None:
             continue
         grounding = _find_host_grounding(payload)
-        if grounding is not None and _grounding_ready(grounding):
-            return True
+        if grounding is None or not _grounding_ready(grounding):
+            continue
+        if require_fresh_java_evidence:
+            bindings = grounding.get("evidence_bindings")
+            if not isinstance(bindings, Mapping):
+                continue
+            if _selected_research_fact_count(bindings) <= 0:
+                continue
+        return True
     return False
 
 
@@ -46,6 +51,21 @@ def host_baseline_causal_facts(
     if not host_baseline_evidence_ready(messages):
         return frozenset()
     return _HOST_BASELINE_CAUSAL_FACTS
+
+
+def _message_payload(message: Mapping[str, Any]) -> Any | None:
+    content = message.get("content")
+    if isinstance(content, Mapping):
+        return content
+    if not isinstance(content, str):
+        return None
+    raw = content.strip()
+    if not raw.startswith("{"):
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return None
 
 
 def _find_host_grounding(value: Any) -> Mapping[str, Any] | None:
@@ -67,6 +87,24 @@ def _find_host_grounding(value: Any) -> Mapping[str, Any] | None:
             if found is not None:
                 return found
     return None
+
+
+def _contains_fresh_java_task(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        if str(value.get("schema_version", "")).strip() == _TASK_CAPSULE_SCHEMA:
+            reuse_action = str(value.get("reuse_action") or "").strip().casefold()
+            target = value.get("mutation_target")
+            path = (
+                str(target.get("path") or "").replace("\\", "/").strip()
+                if isinstance(target, Mapping)
+                else ""
+            )
+            if reuse_action == "fresh" and path.endswith(".java"):
+                return True
+        return any(_contains_fresh_java_task(child) for child in value.values())
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return any(_contains_fresh_java_task(child) for child in value)
+    return False
 
 
 def _selected_research_fact_count(bindings: Mapping[str, Any]) -> int:
@@ -101,18 +139,10 @@ def _grounding_ready(grounding: Mapping[str, Any]) -> bool:
     receipt = project.get("receipt")
     if not isinstance(receipt, Mapping):
         return False
-    project_ready = bool(
+    return bool(
         str(receipt.get("project_sha256", "")).strip()
         and str(receipt.get("observations_sha256", "")).strip()
     )
-    if not project_ready:
-        return False
-
-    # Repository identity alone is not actionable API evidence for fresh generated
-    # Java. CustomModuleGenerator binds require_fresh_evidence=True, so an empty
-    # approved research selection must leave the baseline unsatisfied and force one
-    # version-pinned RAG/API retrieval before ACT.
-    return _selected_research_fact_count(bindings) > 0
 
 
 __all__ = ["host_baseline_causal_facts", "host_baseline_evidence_ready"]
