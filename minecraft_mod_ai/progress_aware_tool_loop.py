@@ -13,6 +13,7 @@ import re
 import threading
 import time
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
@@ -871,17 +872,24 @@ class HostRunState:
                 return None
             self.repair_guidance_fingerprint = self.latest_verifier_fingerprint
             context = self.mutation_context
+            source = context.source_body if context and isinstance(context.source_body, str) else None
             payload = {
                 "verifier": self.latest_verifier_tool,
                 "diagnostics": list(self.latest_verifier_errors),
                 "target_path": context.target_path if context else None,
                 "target_is_new_file": context.is_new_file if context else None,
                 "writable_paths": list(context.writable_paths) if context else [],
+                "current_source_sha256": (
+                    hashlib.sha256(source.encode("utf-8")).hexdigest() if source is not None else None
+                ),
+                "current_source": source,
             }
         return (
-            "MMM_CORE_VERIFIER_REPAIR_V3\n"
+            "MMM_CORE_VERIFIER_REPAIR_V4\n"
             "The verifier failure is the active repair obligation. Do not restart generation, "
             "do not search unrelated ecosystem candidates, and do not recreate an existing path. "
+            "The payload includes the exact host-tracked current source and its SHA-256. "
+            "Edit that existing source with a non-create operation when target_is_new_file is false. "
             "Use the diagnostics below against the host-pinned target and make one materially "
             "different source edit. The next successful mutation goes directly back to VERIFY.\n"
             + json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
@@ -979,6 +987,34 @@ class RetrievalProgress:
         return self._state.next_untried_internal_tool(exposed_tools, preferred=preferred)
 
 
+def _source_edit_schema_for_context(
+    schema: Mapping[str, Any],
+    context: TargetMutationContext | None,
+) -> Mapping[str, Any]:
+    if _tool_name(schema) != "apply_source_edit" or context is None or context.is_new_file:
+        return schema
+    cloned = deepcopy(schema)
+    if not isinstance(cloned, dict):
+        return schema
+    function = cloned.get("function")
+    if not isinstance(function, dict):
+        return cloned
+    parameters = function.get("parameters")
+    properties = parameters.get("properties") if isinstance(parameters, dict) else None
+    operation = properties.get("operation") if isinstance(properties, dict) else None
+    if isinstance(operation, dict):
+        enum = operation.get("enum")
+        if isinstance(enum, list):
+            operation["enum"] = [
+                value for value in enum
+                if str(value).strip().casefold() not in _SOURCE_CREATE_OPERATIONS
+            ]
+    description = str(function.get("description") or "").strip()
+    suffix = "Existing host-pinned target: create/write operations are not permitted; edit the current file."
+    function["description"] = f"{description} {suffix}".strip()
+    return cloned
+
+
 def _filter_tools_for_phase(
     exposed_tools: Sequence[Mapping[str, Any]],
     phase: LoopPhase,
@@ -1009,7 +1045,9 @@ def _filter_tools_for_phase(
     else:
         stage = mutation_context.localization_stage if mutation_context else LocalizationStage.NEED_FILE
         if mutation_context and mutation_context.is_new_file and mutation_context.is_mutation_ready:
-            preferred = ("search_project_rag", "external_mcp_call", "search_code_rag")
+            preferred = (
+                "java_workspace_symbols", "search_project_rag", "external_mcp_call", "search_code_rag"
+            )
         elif stage == LocalizationStage.NEED_FILE:
             preferred = ("search_code_rag", "search_project_rag")
         elif stage == LocalizationStage.NEED_SYMBOL:
@@ -1023,7 +1061,10 @@ def _filter_tools_for_phase(
             names = [names[0]]
         elif names:
             names = [names[0]]
-    return tuple(by_name[name] for name in names if name in by_name)
+    return tuple(
+        _source_edit_schema_for_context(by_name[name], mutation_context)
+        for name in names if name in by_name
+    )
 
 
 def _generate_turn_with_context_recovery(
@@ -1191,13 +1232,21 @@ def _generate_with_tools_impl(
         and implementation_requested(request.messages)
     )
     host_grounded = host_baseline_evidence_ready(request.messages)
-    require_rag = bool(
-        router._agent_require_fresh_evidence
-        and not host_grounded
-        and role in {"coder", "coder_safe"}
-        and all_names & _RAG_EVIDENCE_TOOLS
-    )
     mutation_ready = is_mutation_ready(messages, state)
+    fresh_java_target = bool(
+        implementation
+        and state.mutation_context
+        and state.mutation_context.is_new_file
+        and _canonical_mutation_path(state.mutation_context.target_path).casefold().endswith(".java")
+    )
+    require_rag = bool(
+        role in {"coder", "coder_safe"}
+        and all_names & _RAG_EVIDENCE_TOOLS
+        and (
+            (router._agent_require_fresh_evidence and not host_grounded)
+            or fresh_java_target
+        )
+    )
 
     if require_rag:
         state.phase = LoopPhase.OBSERVE
@@ -1216,6 +1265,7 @@ def _generate_with_tools_impl(
         details={
             "role": role,
             "host_grounded": host_grounded,
+            "fresh_java_target": fresh_java_target,
             "require_rag": require_rag,
             "implementation_requires_mutation": implementation,
             "mutation_ready": mutation_ready,
@@ -1231,7 +1281,7 @@ def _generate_with_tools_impl(
         if state.semantic_fixed_point:
             raise _fixed_point_error(state)
 
-        baseline_ready = host_grounded or state.has_fresh_evidence or not require_rag
+        baseline_ready = state.has_fresh_evidence or not require_rag
         if implementation and state.workspace_changed and state.validation_status == "PASS" and baseline_ready:
             state.termination_reason = "VERIFICATION_PASSED"
             return _finalize_without_tools(
@@ -1317,10 +1367,11 @@ def _generate_with_tools_impl(
             messages.append({
                 "role": "system",
                 "content": (
-                    "The host target is a NEW reserved file and does not exist yet. "
-                    "Do not search for that filename. Retrieve only project conventions, "
-                    "version-pinned API/mapping evidence, or analogous existing code needed "
-                    "to implement it."
+                    "The host target is a NEW reserved Java file and does not exist yet. "
+                    "Do not search for that filename. Before writing code, retrieve task-relevant "
+                    "symbols from the actual Java workspace when available, plus project conventions "
+                    "or version-pinned API/mapping evidence needed to implement the requested behavior. "
+                    "Do not guess Minecraft/Fabric package names from memory."
                 ),
             })
 
@@ -1491,6 +1542,8 @@ def _generate_with_tools_impl(
                     "result": result,
                 }
             except Exception as exc:
+                if is_evidence_tool(call):
+                    state.record_query(call.name, call.arguments)
                 error = f"{type(exc).__name__}: {exc}"
                 lowered = error.casefold()
                 failure_code = "TOOL_RUNTIME_UNAVAILABLE"
@@ -1596,7 +1649,7 @@ def _generate_with_tools_impl(
                         implementation
                         and state.mutation_context
                         and state.mutation_context.is_mutation_ready
-                        and (host_grounded or state.has_fresh_evidence or not require_rag)
+                        and (state.has_fresh_evidence or not require_rag)
                     ):
                         state.phase = LoopPhase.ACT
                 continue
