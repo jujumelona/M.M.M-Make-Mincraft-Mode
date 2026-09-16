@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-"""Host-owned mutation authority shared by localization and final write guards.
+"""Canonical host-owned mutation authority.
 
-Mutation authority is compiled by the host before generation. Model-visible payloads may
-explain the active authority, but they can never create or widen it.
+The host compiles this authority before generation and carries it out-of-band in a
+ContextVar. Model-visible payloads may explain the active authority, but model text,
+retrieval and localization can never create or widen it. The same active value is used
+by loop preflight, source-edit materialization and final staged-patch validation.
 """
 
+import contextvars
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -25,15 +28,7 @@ _DEFAULT_BOUNDED_ROOTS = (
     "src/test/java/",
     "src/gametest/",
 )
-_FORBIDDEN_TOP_LEVEL = frozenset(
-    {
-        ".mmm",
-        ".git",
-        "build",
-        "config",
-        "gradle",
-    }
-)
+_FORBIDDEN_TOP_LEVEL = frozenset({".mmm", ".git", "build", "config", "gradle"})
 _URI_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
 _DRIVE_RE = re.compile(r"^[A-Za-z]:($|[/\\])")
 
@@ -46,31 +41,26 @@ def canonical_mutation_path(value: Any) -> str:
     """Return a safe repository-relative POSIX path, or an empty string when unsafe."""
 
     raw = str(value or "").strip()
-    if not raw:
-        return ""
-    if _URI_RE.match(raw) or _DRIVE_RE.match(raw):
+    if not raw or _URI_RE.match(raw) or _DRIVE_RE.match(raw):
         return ""
     raw = raw.replace("\\", "/")
     while raw.startswith("./"):
         raw = raw[2:]
     if not raw or raw.startswith("/"):
         return ""
-
     parts = PurePosixPath(raw).parts
     if not parts or any(part in {"", ".", ".."} for part in parts):
         return ""
-    if parts[0].casefold() in _FORBIDDEN_TOP_LEVEL:
-        return ""
-    if any(part.casefold() == ".mmm" for part in parts):
+    if parts[0].casefold() in _FORBIDDEN_TOP_LEVEL or any(
+        part.casefold() == ".mmm" for part in parts
+    ):
         return ""
     return PurePosixPath(*parts).as_posix()
 
 
 def _canonical_root(value: Any) -> str:
     path = canonical_mutation_path(value)
-    if not path:
-        return ""
-    return path.rstrip("/") + "/"
+    return path.rstrip("/") + "/" if path else ""
 
 
 def _dedupe(values: Iterable[str]) -> tuple[str, ...]:
@@ -79,11 +69,7 @@ def _dedupe(values: Iterable[str]) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class MutationAuthority:
-    """Immutable host-owned write authority.
-
-    EXACT authorizes only explicit paths. BOUNDED_ROOTS authorizes descendants of the
-    generated source/resource roots and never authorizes delete operations.
-    """
+    """Immutable host-owned write authority."""
 
     mode: MutationAuthorityMode
     paths: tuple[str, ...] = ()
@@ -117,8 +103,7 @@ class MutationAuthority:
             raise MutationAuthorityError(
                 "MUTATION_AUTHORITY_EMPTY: bounded authority requires at least one safe root."
             )
-        allowed = set(_DEFAULT_BOUNDED_ROOTS)
-        if not set(canonical).issubset(allowed):
+        if not set(canonical).issubset(_DEFAULT_BOUNDED_ROOTS):
             raise MutationAuthorityError(
                 "MUTATION_AUTHORITY_ROOT_FORBIDDEN: bounded roots must stay inside generated "
                 "Java/resource/test/gametest source sets."
@@ -170,12 +155,24 @@ class MutationAuthority:
 
 
 AUTHORED_DESIGN_ROOTS = _DEFAULT_BOUNDED_ROOTS
+CURRENT_MUTATION_AUTHORITY: contextvars.ContextVar[MutationAuthority | None] = (
+    contextvars.ContextVar("mmm_mutation_authority", default=None)
+)
+
+
+def current_mutation_error(path: Any, *, operation: Any = "") -> str | None:
+    """Validate a write against the active host authority, if one is bound."""
+
+    authority = CURRENT_MUTATION_AUTHORITY.get()
+    return None if authority is None else authority.mutation_error(path, operation=operation)
 
 
 __all__ = [
     "AUTHORED_DESIGN_ROOTS",
+    "CURRENT_MUTATION_AUTHORITY",
     "MutationAuthority",
     "MutationAuthorityError",
     "MutationAuthorityMode",
     "canonical_mutation_path",
+    "current_mutation_error",
 ]
