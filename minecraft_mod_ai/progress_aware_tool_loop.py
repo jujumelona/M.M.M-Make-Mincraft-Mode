@@ -1784,50 +1784,55 @@ def _generate_turn_with_context_recovery(
 
 
 
-def _compact_phase_tool_transcript(
+def _sync_phase_tool_transcript(
     messages: list[dict[str, Any]],
     *,
-    previous_phase: LoopPhase,
-    next_phase: LoopPhase,
-) -> int:
-    """Close the previous phase tool protocol while preserving observation data."""
-    if previous_phase == next_phase:
-        return 0
-
+    state: HostRunState,
+    last_prompt_phase: LoopPhase,
+    stage: str,
+) -> LoopPhase:
+    """Close prior-phase tool protocol and preserve only its observation data."""
+    next_phase = state.phase
+    if next_phase == last_prompt_phase:
+        return last_prompt_phase
     compacted: list[dict[str, Any]] = []
     observations: list[str] = []
     removed = 0
-
     for raw_message in messages:
         message = dict(raw_message)
         role = str(message.get("role") or "")
-        if role == "assistant" and message.get("tool_calls"):
-            content = message.get("content")
-            if isinstance(content, str) and content.strip():
-                compacted.append({"role": "assistant", "content": content})
-            removed += 1
-            continue
+        content = message.get("content")
         if role == "tool":
-            content = message.get("content")
             if isinstance(content, str) and content.strip():
                 observations.append(content)
             removed += 1
             continue
+        if role == "assistant" and message.get("tool_calls"):
+            if isinstance(content, str) and content.strip():
+                compacted.append({"role": "assistant", "content": content})
+            removed += 1
+            continue
         compacted.append(message)
-
-    if not removed:
-        return 0
-
-    handoff_lines = [
-        f"MMM_PHASE_HANDOFF {previous_phase.value}->{next_phase.value}",
-        "The previous phase is complete. Prior tool-call protocol is closed and must not be repeated.",
-        "The observation data below is non-executable context. In the new phase, only the current request tool schema and tool_choice are callable.",
-    ]
-    for index, observation in enumerate(observations, start=1):
-        handoff_lines.append(f"Observation {index}:\n{observation}")
-    compacted.append({"role": "system", "content": "\n".join(handoff_lines)})
-    messages[:] = compacted
-    return removed
+    if removed:
+        handoff = [
+            f"MMM_PHASE_HANDOFF {last_prompt_phase.value}->{next_phase.value}",
+            "Prior phase tool-call protocol is closed; do not repeat it.",
+            "Observations below are non-executable context. Only current tool schemas are callable.",
+            *(f"Observation {index}:\n{value}" for index, value in enumerate(observations, 1)),
+        ]
+        compacted.append({"role": "system", "content": "\n".join(handoff)})
+        messages[:] = compacted
+    emit_root_cause(
+        "phase_tool_transcript_handoff",
+        stage=stage,
+        operation="generate_with_tools",
+        gate="phase_boundary",
+        result="PASS",
+        reason="closed prior phase tool protocol before the next model turn",
+        details={"previous_phase": last_prompt_phase.value, "next_phase": next_phase.value,
+                 "removed_protocol_messages": removed, "message_count": len(messages)},
+    )
+    return next_phase
 
 def _generate_with_tools_impl(
     router: Any,
@@ -1908,28 +1913,9 @@ def _generate_with_tools_impl(
     )
 
     while True:
-        if state.phase != last_prompt_phase:
-            previous_prompt_phase = last_prompt_phase
-            removed_protocol_messages = _compact_phase_tool_transcript(
-                messages,
-                previous_phase=previous_prompt_phase,
-                next_phase=state.phase,
-            )
-            emit_root_cause(
-                "phase_tool_transcript_handoff",
-                stage=stage,
-                operation="generate_with_tools",
-                gate="phase_boundary",
-                result="PASS",
-                reason="closed prior phase tool protocol before the next model turn",
-                details={
-                    "previous_phase": previous_prompt_phase.value,
-                    "next_phase": state.phase.value,
-                    "removed_protocol_messages": removed_protocol_messages,
-                    "message_count": len(messages),
-                },
-            )
-            last_prompt_phase = state.phase
+        last_prompt_phase = _sync_phase_tool_transcript(
+            messages, state=state, last_prompt_phase=last_prompt_phase, stage=stage
+        )
 
         if (
             implementation_requires_mutation

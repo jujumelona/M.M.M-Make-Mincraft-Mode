@@ -106,100 +106,50 @@ def test_progress_loop_consumes_rejection_as_feedback_not_as_runtime_tool():
     assert "TOOL_SCHEMA_INVALID" in feedback
 
 
-def test_phase_handoff_closes_old_tool_protocol_and_preserves_observation_data():
+def test_phase_handoff_closes_old_protocol_and_preserves_observation_data():
     from minecraft_mod_ai.progress_aware_tool_loop import (
+        HostRunState,
         LoopPhase,
-        _compact_phase_tool_transcript,
+        _sync_phase_tool_transcript,
     )
 
     messages = [
-        {"role": "user", "content": "implement the target"},
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
-                {
-                    "id": "call_search",
-                    "type": "function",
-                    "function": {
-                        "name": "search_code_rag",
-                        "arguments": "{}",
-                    },
-                }
-            ],
-        },
-        {
-            "role": "tool",
-            "tool_call_id": "call_search",
-            "name": "search_code_rag",
-            "content": "public final class DebugToken {}",
-        },
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "search", "type": "function", "function": {"name": "search_code_rag", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "search", "name": "search_code_rag", "content": "public final class DebugToken {}"},
     ]
-
-    removed = _compact_phase_tool_transcript(
-        messages,
-        previous_phase=LoopPhase.OBSERVE,
-        next_phase=LoopPhase.ACT,
+    phase = _sync_phase_tool_transcript(
+        messages, state=HostRunState(phase=LoopPhase.ACT),
+        last_prompt_phase=LoopPhase.OBSERVE, stage="generation",
     )
-
-    assert removed == 2
-    assert all(message.get("role") != "tool" for message in messages)
-    assert all(not message.get("tool_calls") for message in messages)
-    assert messages[-1]["role"] == "system"
-    assert "OBSERVE->ACT" in messages[-1]["content"]
-    assert "public final class DebugToken {}" in messages[-1]["content"]
-    assert "search_code_rag" not in messages[-1]["content"]
+    assert phase == LoopPhase.ACT
+    assert len(messages) == 1 and messages[0]["role"] == "system"
+    assert "OBSERVE->ACT" in messages[0]["content"]
+    assert "public final class DebugToken {}" in messages[0]["content"]
+    assert "search_code_rag" not in messages[0]["content"]
 
 
-def test_phase_handoff_is_generic_through_act_to_verify():
+def test_phase_handoff_is_generic_and_main_loop_has_no_transition_branch():
+    import inspect
+
     from minecraft_mod_ai.progress_aware_tool_loop import (
+        HostRunState,
         LoopPhase,
-        _compact_phase_tool_transcript,
+        _generate_with_tools_impl,
+        _sync_phase_tool_transcript,
     )
 
     messages = [
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
-                {
-                    "id": "call_edit",
-                    "type": "function",
-                    "function": {
-                        "name": "apply_source_edit",
-                        "arguments": "{}",
-                    },
-                }
-            ],
-        },
-        {
-            "role": "tool",
-            "tool_call_id": "call_edit",
-            "name": "apply_source_edit",
-            "content": "workspace_changed=true; sha256=abc123",
-        },
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "edit", "type": "function", "function": {"name": "apply_source_edit", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "edit", "name": "apply_source_edit", "content": "workspace_changed=true; sha256=abc123"},
     ]
-
-    removed = _compact_phase_tool_transcript(
-        messages,
-        previous_phase=LoopPhase.ACT,
-        next_phase=LoopPhase.VERIFY,
+    phase = _sync_phase_tool_transcript(
+        messages, state=HostRunState(phase=LoopPhase.VERIFY),
+        last_prompt_phase=LoopPhase.ACT, stage="generation",
     )
-
-    assert removed == 2
-    assert len(messages) == 1
-    assert messages[0]["role"] == "system"
+    assert phase == LoopPhase.VERIFY
     assert "ACT->VERIFY" in messages[0]["content"]
     assert "workspace_changed=true" in messages[0]["content"]
     assert "apply_source_edit" not in messages[0]["content"]
-
-
-def test_phase_handoff_is_wired_before_next_model_turn():
-    import inspect
-
-    from minecraft_mod_ai.progress_aware_tool_loop import _generate_with_tools_impl
-
     source = inspect.getsource(_generate_with_tools_impl)
-    assert "state.phase != last_prompt_phase" in source
-    assert "_compact_phase_tool_transcript(" in source
-    assert "phase_tool_transcript_handoff" in source
+    assert "last_prompt_phase = _sync_phase_tool_transcript(" in source
+    assert "state.phase != last_prompt_phase" not in source
