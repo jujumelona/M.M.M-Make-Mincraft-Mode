@@ -9,8 +9,9 @@ creation is authorized only for host-reserved destinations.
 
 Creation conflicts remain enforced by the canonical progress-aware mutation authority,
 and file deletion remains rejected by the staged custom-module operation validator before
-anything is committed to the live project. This module only repairs the stale semantic
-assumptions that cannot be expressed by those existing owners.
+anything is committed to the live project. This module also consumes the canonical
+request-scoped MutationAuthority. Exact PlanIR tasks retain localization checks; authored
+design bounded-root authority keeps localization as evidence rather than write scope.
 """
 
 import copy
@@ -18,6 +19,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
+
+from .mutation_authority import CURRENT_MUTATION_AUTHORITY, MutationAuthorityMode
 
 _MARKER = "_mmm_coder_mutation_authority_v1"
 _LOOP_MARKER = "_mmm_coder_target_existence_v1"
@@ -195,8 +198,6 @@ def _status_aware_owned_symbol_context(loop_module: Any, payload: Any) -> Any | 
                 is_new_file = True
                 evidence_source = "evidence_host_reserved_owned_anchor"
             elif not status:
-                # Legacy approved fixtures predate explicit anchor status. Their
-                # fresh production binding is still authoritative creation evidence.
                 is_new_file = True
                 evidence_source = "evidence_fresh_owned_anchor"
             elif status in _EXISTING_STATUSES:
@@ -227,6 +228,24 @@ def _install_creation_conflict_classification(loop_module: Any) -> None:
         arguments: Mapping[str, Any],
         context: Any,
     ) -> str | None:
+        if tool_name == "apply_source_edit":
+            authority = CURRENT_MUTATION_AUTHORITY.get()
+            if authority is not None:
+                supplied = ""
+                for key in tuple(getattr(loop_module, "_SOURCE_EDIT_PATH_KEYS", ("path",))):
+                    value = arguments.get(key)
+                    if isinstance(value, str) and value.strip():
+                        supplied = value
+                        break
+                error = authority.mutation_error(
+                    supplied,
+                    operation=arguments.get("operation"),
+                )
+                if error is not None:
+                    return error
+                if authority.mode is MutationAuthorityMode.BOUNDED_ROOTS:
+                    return None
+
         if tool_name == "apply_source_edit" and context is not None:
             pinned = loop_module._canonical_mutation_path(
                 getattr(context, "target_path", None)
