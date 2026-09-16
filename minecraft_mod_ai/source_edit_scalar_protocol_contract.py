@@ -1,19 +1,13 @@
 from __future__ import annotations
 
-"""Canonical model-facing source edit protocol compatibility facade.
-
-The stable implementation lives in ``_source_edit_scalar_protocol_contract_core``.
-This facade normalizes compatibility-expanded model payloads before delegating to the
-strict core contract.  Operation semantics remain fail-closed: aliases may collapse
-only when they describe one unambiguous value, and unknown fields are still rejected
-by the core validator.
-"""
+"""Canonical model-facing source edit protocol compatibility facade."""
 
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from . import _source_edit_scalar_protocol_contract_core as _core
+from .mutation_authority import current_mutation_error
 
 SOURCE_EDIT_PARAMETER_ALIASES = _core.SOURCE_EDIT_PARAMETER_ALIASES
 SOURCE_EDIT_SCHEMA = _core.SOURCE_EDIT_SCHEMA
@@ -52,8 +46,6 @@ def _consume_alias_group(
                 f"{canonical!r}: {conflict_keys}"
             )
     else:
-        # Empty text is valid for create_file/replacement content.  If every supplied
-        # spelling is merely empty/None, preserve an actual string when available.
         chosen_value = next(
             (value for _, value in present if isinstance(value, str)),
             present[0][1],
@@ -81,16 +73,12 @@ def _canonicalize_create_file_payload(
     runtime_module: Any,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    # Path aliases are normal aliases regardless of operation.
     _consume_alias_group(
         runtime_module,
         payload,
         canonical="path",
         aliases=("file", "target_path", "target_file"),
     )
-
-    # Compatibility adapters historically expanded one create payload into several
-    # equivalent spellings.  For create_file they all mean exactly one thing: content.
     _consume_alias_group(
         runtime_module,
         payload,
@@ -105,10 +93,6 @@ def _canonicalize_create_file_payload(
             "body",
         ),
     )
-
-    # These are schema-known helper slots used by other operations.  Once operation is
-    # explicitly create_file they carry no executable meaning, so compatibility-filled
-    # values must not turn an otherwise unambiguous create into an invalid-field error.
     for helper in (
         "old",
         "old_text",
@@ -120,7 +104,6 @@ def _canonicalize_create_file_payload(
         "member",
     ):
         payload.pop(helper, None)
-
     payload["operation"] = "create_file"
     return payload
 
@@ -135,13 +118,20 @@ def _canonicalize_compat_payload(
         normalized.get("operation"),
         normalized,
     )
-
     if operation == "create_file":
         return _canonicalize_create_file_payload(runtime_module, normalized)
-
     _consume_standard_aliases(runtime_module, normalized)
     normalized["operation"] = operation
     return normalized
+
+
+def _enforce_host_mutation_authority(runtime_module: Any, payload: Mapping[str, Any]) -> None:
+    error = current_mutation_error(
+        payload.get("path"),
+        operation=payload.get("operation"),
+    )
+    if error is not None:
+        raise runtime_module.AgentToolRuntimeError(error)
 
 
 def materialize_model_source_edit(
@@ -151,10 +141,9 @@ def materialize_model_source_edit(
     *,
     bound_project_root: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Compile one semantic model edit into one strict core host patch."""
+    """Compile one semantic model edit into one strict host-authorized patch."""
 
     if not isinstance(payload, Mapping):
-        # Preserve the core contract/error wording for non-object arguments.
         return _core.materialize_model_source_edit(
             runtime_module,
             workspace_root,
@@ -163,6 +152,7 @@ def materialize_model_source_edit(
         )
 
     normalized = _canonicalize_compat_payload(runtime_module, payload)
+    _enforce_host_mutation_authority(runtime_module, normalized)
     return _core.materialize_model_source_edit(
         runtime_module,
         workspace_root,
