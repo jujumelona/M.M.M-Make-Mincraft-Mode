@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import minecraft_mod_ai.progress_aware_tool_loop as progress_loop
 from minecraft_mod_ai.api_grounding_repair_installation import (
     _completion_boundary_error,
     authoritative_java_evidence,
     strict_usable_rag_result,
+)
+from minecraft_mod_ai.coder_mutation_authority_contract import (
+    _same_path_verifier_repair_replacement,
 )
 from minecraft_mod_ai.progress_aware_tool_loop import (
     HostRunState,
@@ -194,6 +198,44 @@ def test_verifier_repair_reuses_create_file_as_same_path_transactional_replace()
         },
         context,
     ) is None
+
+
+def test_mutation_authority_itself_admits_only_same_path_current_run_replacement() -> None:
+    target = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+    repair_context = TargetMutationContext(
+        target_path=target,
+        source_body="public final class DebugToken {}",
+        is_new_file=False,
+        evidence_source="mutation_receipt",
+        writable_paths=(target,),
+        target_pinned=True,
+    )
+    existing_context = TargetMutationContext(
+        target_path=target,
+        source_body="public final class DebugToken {}",
+        is_new_file=False,
+        evidence_source="host_exact_source",
+        writable_paths=(target,),
+        target_pinned=True,
+    )
+    arguments = {
+        "operation": "create_file",
+        "path": target,
+        "content": "public final class DebugToken { int fixed; }",
+    }
+
+    assert _same_path_verifier_repair_replacement(
+        progress_loop, "apply_source_edit", arguments, repair_context
+    ) is True
+    assert _same_path_verifier_repair_replacement(
+        progress_loop, "apply_source_edit", arguments, existing_context
+    ) is False
+    assert _same_path_verifier_repair_replacement(
+        progress_loop,
+        "apply_source_edit",
+        {**arguments, "path": "src/main/java/dev/mmm/debugfixture/Other.java"},
+        repair_context,
+    ) is False
 
 
 def test_create_file_is_still_rejected_for_unrelated_existing_target() -> None:
