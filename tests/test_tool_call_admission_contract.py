@@ -114,12 +114,29 @@ def test_phase_handoff_closes_old_protocol_and_preserves_observation_data():
     )
 
     messages = [
-        {"role": "assistant", "content": None, "tool_calls": [{"id": "search", "type": "function", "function": {"name": "search_code_rag", "arguments": "{}"}}]},
-        {"role": "tool", "tool_call_id": "search", "name": "search_code_rag", "content": "public final class DebugToken {}"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "search",
+                    "type": "function",
+                    "function": {"name": "search_code_rag", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "search",
+            "name": "search_code_rag",
+            "content": "public final class DebugToken {}",
+        },
     ]
     phase = _sync_phase_tool_transcript(
-        messages, state=HostRunState(phase=LoopPhase.ACT),
-        last_prompt_phase=LoopPhase.OBSERVE, stage="generation",
+        messages,
+        state=HostRunState(phase=LoopPhase.ACT),
+        last_prompt_phase=LoopPhase.OBSERVE,
+        stage="generation",
     )
     assert phase == LoopPhase.ACT
     assert len(messages) == 1 and messages[0]["role"] == "system"
@@ -139,12 +156,29 @@ def test_phase_handoff_is_generic_and_main_loop_has_no_transition_branch():
     )
 
     messages = [
-        {"role": "assistant", "content": None, "tool_calls": [{"id": "edit", "type": "function", "function": {"name": "apply_source_edit", "arguments": "{}"}}]},
-        {"role": "tool", "tool_call_id": "edit", "name": "apply_source_edit", "content": "workspace_changed=true; sha256=abc123"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "edit",
+                    "type": "function",
+                    "function": {"name": "apply_source_edit", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "edit",
+            "name": "apply_source_edit",
+            "content": "workspace_changed=true; sha256=abc123",
+        },
     ]
     phase = _sync_phase_tool_transcript(
-        messages, state=HostRunState(phase=LoopPhase.VERIFY),
-        last_prompt_phase=LoopPhase.ACT, stage="generation",
+        messages,
+        state=HostRunState(phase=LoopPhase.VERIFY),
+        last_prompt_phase=LoopPhase.ACT,
+        stage="generation",
     )
     assert phase == LoopPhase.VERIFY
     assert "ACT->VERIFY" in messages[0]["content"]
@@ -153,3 +187,24 @@ def test_phase_handoff_is_generic_and_main_loop_has_no_transition_branch():
     source = inspect.getsource(_generate_with_tools_impl)
     assert "last_prompt_phase = _sync_phase_tool_transcript(" in source
     assert "state.phase != last_prompt_phase" not in source
+
+
+def test_phase_handoff_same_phase_is_a_noop():
+    from minecraft_mod_ai.progress_aware_tool_loop import (
+        HostRunState,
+        LoopPhase,
+        _sync_phase_tool_transcript,
+    )
+
+    messages = [{"role": "system", "content": "unchanged context"}]
+    before = [dict(message) for message in messages]
+
+    phase = _sync_phase_tool_transcript(
+        messages,
+        state=HostRunState(phase=LoopPhase.ACT),
+        last_prompt_phase=LoopPhase.ACT,
+        stage="generation",
+    )
+
+    assert phase == LoopPhase.ACT
+    assert messages == before
