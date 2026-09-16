@@ -202,9 +202,10 @@ def approve_plan(proposal: dict[str, Any], approval_hash: str) -> dict[str, Any]
     return _core().approve_plan(proposal, approval_hash)
 
 @_stage_tool()
-def search_project_rag(query: str, minecraft_version: str | None = None, limit: int = 6) -> dict[str, Any]:
+def search_project_rag(query: str, minecraft_version: str | int | float | None = None, limit: int = 6) -> dict[str, Any]:
     """Search the code-owned, version-pinned primary evidence catalog."""
-    return _core().search_project_rag(query, minecraft_version, limit)
+    normalized_version = None if minecraft_version is None else str(minecraft_version).strip() or None
+    return _core().search_project_rag(query, normalized_version, limit)
 
 @_stage_tool()
 def index_project_rag(roots: list[str], metadata: dict[str, Any], index_path: str='rag/project-index.json', semantic: bool=False) -> dict[str, Any]:
