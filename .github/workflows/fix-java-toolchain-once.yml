@@ -1,0 +1,158 @@
+name: Fix Java toolchain once
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fix-java-toolchain-once
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    if: github.event.head_commit.message == 'Bootstrap lazy Java toolchain provisioning'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Replace Java toolchain ownership
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          bootstrap = Path('minecraft_mod_ai/jdtls_bootstrap.py')
+          text = bootstrap.read_text(encoding='utf-8')
+
+          old_return = '''            return link, checksum.lower()\n'''
+          new_return = '''            download_url = (\n                f"{ADOPTIUM_BASE_URL}/binary/latest/{major}/ga/linux/{architecture}"\n                "/jdk/hotspot/normal/eclipse"\n            )\n            return download_url, checksum.lower()\n'''
+          if text.count(old_return) != 1:
+              raise SystemExit('expected exactly one Adoptium package return')
+          text = text.replace(old_return, new_return, 1)
+
+          old_ensure = '''def _ensure_project_jdk() -> Path | None:\n    major = _requested_project_java_major()\n    if major is None:\n        return None\n    home = _find_matching_jdk(major)\n    if home is None:\n        home = _install_project_jdk(major)\n    java = _jdk_java(home)\n    observed = _java_major(str(java))\n    if observed != major:\n        raise JDTLSBootstrapError(\n            f"Project JDK validation failed: requested Java {major}, found Java {observed} at {home}."\n        )\n    resolved = home.resolve()\n    os.environ["MMM_PROJECT_JAVA_HOME"] = str(resolved)\n    return resolved\n'''
+          new_ensure = '''def ensure_project_jdk(required_major: int | None = None) -> Path | None:\n    """Return the exact project JDK, provisioning it only when verification needs it."""\n    major = required_major if required_major is not None else _requested_project_java_major()\n    if major is None:\n        return None\n    if major <= 0:\n        raise JDTLSBootstrapError(f"Project Java major must be positive; got {major!r}.")\n    home = _find_matching_jdk(major)\n    if home is None:\n        home = _install_project_jdk(major)\n    java = _jdk_java(home)\n    observed = _java_major(str(java))\n    if observed != major:\n        raise JDTLSBootstrapError(\n            f"Project JDK validation failed: requested Java {major}, found Java {observed} at {home}."\n        )\n    resolved = home.resolve()\n    os.environ["MMM_PROJECT_JAVA_HOME"] = str(resolved)\n    return resolved\n\n\ndef _ensure_project_jdk() -> Path | None:\n    return ensure_project_jdk()\n'''
+          if text.count(old_ensure) != 1:
+              raise SystemExit('expected exactly one project JDK ensure function')
+          text = text.replace(old_ensure, new_ensure, 1)
+          bootstrap.write_text(text, encoding='utf-8')
+
+          lsp = Path('minecraft_mod_ai/java_lsp.py')
+          text = lsp.read_text(encoding='utf-8')
+          old_tail = '''    detail = ", ".join(observed) if observed else "no usable Java homes discovered"\n    raise JDTWorkspaceBootstrapError(\n        "JDT workspace bootstrap failure: no project JDK matching "\n        f"MMM_JAVA_VERSION={required} was found ({detail})."\n    )\n'''
+          new_tail = '''    detail = ", ".join(observed) if observed else "no usable Java homes discovered"\n    try:\n        from .jdtls_bootstrap import JDTLSBootstrapError, ensure_project_jdk\n\n        provisioned = ensure_project_jdk(required)\n    except (JDTLSBootstrapError, OSError, ValueError) as exc:\n        raise JDTWorkspaceBootstrapError(\n            "JDT workspace bootstrap failure: no project JDK matching "\n            f"MMM_JAVA_VERSION={required} was found locally ({detail}); "\n            f"lazy provisioning failed: {type(exc).__name__}: {exc}"\n        ) from exc\n    if provisioned is not None:\n        return provisioned.resolve()\n    raise JDTWorkspaceBootstrapError(\n        "JDT workspace bootstrap failure: no project JDK matching "\n        f"MMM_JAVA_VERSION={required} was found ({detail})."\n    )\n'''
+          if text.count(old_tail) != 1:
+              raise SystemExit('expected exactly one java_lsp missing-JDK tail')
+          text = text.replace(old_tail, new_tail, 1)
+          lsp.write_text(text, encoding='utf-8')
+          PY
+      - name: Add focused regression tests
+        run: |
+          cat > tests/test_lazy_java_toolchain_provisioning.py <<'PY'
+          from __future__ import annotations
+
+          from pathlib import Path
+
+          from minecraft_mod_ai import java_lsp, jdtls_bootstrap
+
+
+          def test_java_lsp_resolver_lazy_provisions_missing_major(monkeypatch, tmp_path: Path) -> None:
+              java21 = tmp_path / "java21"
+              java21.mkdir()
+              java25 = tmp_path / "java25"
+              java25.mkdir()
+
+              monkeypatch.setattr(java_lsp, "_candidate_java_homes", lambda required: [java21])
+              monkeypatch.setattr(java_lsp, "_java_major_versions", lambda homes: [21])
+              calls: list[int | None] = []
+
+              def provision(required_major: int | None = None) -> Path:
+                  calls.append(required_major)
+                  return java25
+
+              monkeypatch.setattr(jdtls_bootstrap, "ensure_project_jdk", provision)
+
+              assert java_lsp._resolve_project_java_home(25) == java25.resolve()
+              assert calls == [25]
+
+
+          def test_ensure_project_jdk_sets_shared_project_home(monkeypatch, tmp_path: Path) -> None:
+              java25 = tmp_path / "java25"
+              (java25 / "bin").mkdir(parents=True)
+              java = java25 / "bin" / "java"
+              java.write_text("", encoding="utf-8")
+
+              monkeypatch.setattr(jdtls_bootstrap, "_find_matching_jdk", lambda major: None)
+              monkeypatch.setattr(jdtls_bootstrap, "_install_project_jdk", lambda major: java25)
+              monkeypatch.setattr(jdtls_bootstrap, "_java_major", lambda executable: 25)
+              monkeypatch.delenv("MMM_PROJECT_JAVA_HOME", raising=False)
+
+              resolved = jdtls_bootstrap.ensure_project_jdk(25)
+
+              assert resolved == java25.resolve()
+              assert jdtls_bootstrap.os.environ["MMM_PROJECT_JAVA_HOME"] == str(java25.resolve())
+
+
+          def test_project_jdk_download_uses_adoptium_binary_endpoint(monkeypatch) -> None:
+              checksum = "a" * 64
+              metadata = [
+                  {
+                      "binary": {
+                          "package": {
+                              "link": "https://example.invalid/direct-release-asset.tar.gz",
+                              "checksum": checksum,
+                          }
+                      }
+                  }
+              ]
+              monkeypatch.setattr(jdtls_bootstrap.sys, "platform", "linux")
+              monkeypatch.setattr(jdtls_bootstrap, "_adoptium_architecture", lambda: "x64")
+              monkeypatch.setattr(
+                  jdtls_bootstrap,
+                  "_read_json",
+                  lambda url, max_bytes: metadata,
+              )
+
+              url, observed_checksum = jdtls_bootstrap._project_jdk_package(25)
+
+              assert url == (
+                  "https://api.adoptium.net/v3/binary/latest/25/ga/linux/x64/"
+                  "jdk/hotspot/normal/eclipse"
+              )
+              assert observed_checksum == checksum
+          PY
+      - name: Verify focused change
+        run: |
+          python -m compileall -q minecraft_mod_ai/jdtls_bootstrap.py minecraft_mod_ai/java_lsp.py tests/test_lazy_java_toolchain_provisioning.py
+          ruff check minecraft_mod_ai/jdtls_bootstrap.py minecraft_mod_ai/java_lsp.py tests/test_lazy_java_toolchain_provisioning.py
+          pytest -q tests/test_lazy_java_toolchain_provisioning.py
+      - name: Verify build runner shares resolver
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('minecraft_mod_ai/runner.py').read_text(encoding='utf-8')
+          assert 'from .java_lsp import JDTWorkspaceBootstrapError, _resolve_project_java_home' in text
+          assert 'java_home = _resolve_project_java_home(required_java)' in text
+          PY
+      - name: Commit implementation to main and remove one-shot workflow
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/fix-java-toolchain-once.yml
+          git add minecraft_mod_ai/jdtls_bootstrap.py minecraft_mod_ai/java_lsp.py tests/test_lazy_java_toolchain_provisioning.py
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Provision project JDK lazily for verification'
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
+          git push origin HEAD:main
