@@ -31,7 +31,7 @@ _REPORTED_URL_LOCK = threading.RLock()
 _REPORTED_SERVER_URLS: set[str] = set()
 _DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS = 120.0
 _DEFAULT_TOOL_IDLE_TIMEOUT_SECONDS = 120.0
-_DEFAULT_REQUIRED_TOOL_PREFACE_CHARS = 1024
+_REQUIRED_TOOL_MARKUP_PREFIXES = ("<tool_call>", "<function=")
 
 
 class LlamaToolLivenessTimeout(TimeoutError):
@@ -58,19 +58,6 @@ def _positive_env_float(name: str, default: float) -> float:
     return value
 
 
-def _positive_env_int(name: str, default: int) -> int:
-    raw = os.environ.get(name, "").strip()
-    if not raw:
-        return default
-    try:
-        value = int(raw)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be a positive integer.") from exc
-    if value <= 0:
-        raise ValueError(f"{name} must be a positive integer.")
-    return value
-
-
 def _stream_idle_timeout_seconds() -> float:
     return _positive_env_float(
         "MMM_LLAMA_STREAM_IDLE_TIMEOUT_SECONDS",
@@ -82,13 +69,6 @@ def _tool_idle_timeout_seconds() -> float:
     return _positive_env_float(
         "MMM_LLAMA_TOOL_IDLE_TIMEOUT_SECONDS",
         _DEFAULT_TOOL_IDLE_TIMEOUT_SECONDS,
-    )
-
-
-def _required_tool_preface_chars() -> int:
-    return _positive_env_int(
-        "MMM_LLAMA_REQUIRED_TOOL_PREFACE_CHARS",
-        _DEFAULT_REQUIRED_TOOL_PREFACE_CHARS,
     )
 
 
@@ -240,12 +220,63 @@ def _append_message_delta(message: dict[str, Any], delta: Mapping[str, Any]) -> 
     return progressed
 
 
+def _tool_choice_requires_execution(tool_choice: Any) -> bool:
+    if isinstance(tool_choice, Mapping):
+        if str(tool_choice.get("type", "")).strip().casefold() != "function":
+            return False
+        function = tool_choice.get("function")
+        return isinstance(function, Mapping) and bool(
+            str(function.get("name", "") or "").strip()
+        )
+    return str(tool_choice or "").strip().casefold() in {"required", "any", "force"}
+
+
 def _required_tool_markup_started(message: Mapping[str, Any]) -> bool:
     content = message.get("content")
     if not isinstance(content, str) or not content:
         return False
     stripped = content.lstrip()
-    return "<tool_call>" in content or stripped.startswith("<function=")
+    return any(stripped.startswith(marker) for marker in _REQUIRED_TOOL_MARKUP_PREFIXES)
+
+
+def _required_tool_markup_prefix_pending(message: Mapping[str, Any]) -> bool:
+    content = message.get("content")
+    if not isinstance(content, str):
+        return False
+    stripped = content.lstrip()
+    if not stripped:
+        return False
+    return any(marker.startswith(stripped) for marker in _REQUIRED_TOOL_MARKUP_PREFIXES)
+
+
+def _required_tool_semantic_violation(
+    message: Mapping[str, Any],
+    delta: Mapping[str, Any],
+) -> bool:
+    """Reject a required-tool turn as soon as it emits semantic non-tool output.
+
+    Whitespace and fragmented prefixes of the supported text tool protocol remain
+    admissible while the marker is arriving. Once a native tool call or complete text
+    marker starts, argument streaming is unrestricted. Hidden reasoning/prose before
+    tool invocation is not executable progress and is rejected immediately instead of
+    consuming the remaining decode budget.
+    """
+
+    calls = message.get("tool_calls")
+    if isinstance(calls, list) and calls:
+        return False
+    if _required_tool_markup_started(message):
+        return False
+
+    for key in ("reasoning_content", "reasoning", "thinking"):
+        value = delta.get(key)
+        if isinstance(value, str) and value.strip():
+            return True
+
+    content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
+        return False
+    return not _required_tool_markup_prefix_pending(message)
 
 
 class _StreamingCompletionClient:
@@ -283,11 +314,7 @@ class _StreamingCompletionClient:
             return self._client.post(url, **native_kwargs)
 
         has_tools = bool(payload.get("tools"))
-        requires_tool = (
-            has_tools
-            and str(payload.get("tool_choice", "") or "").strip().casefold()
-            == "required"
-        )
+        requires_tool = has_tools and _tool_choice_requires_execution(payload.get("tool_choice"))
         if has_tools and not hasattr(self._client, "stream"):
             # Compatibility for minimal test/dummy clients. Production httpx.Client
             # always provides stream(), so native tool turns use the SSE path below.
@@ -330,12 +357,8 @@ class _StreamingCompletionClient:
         usage: dict[str, Any] | None = None
         timings: dict[str, Any] | None = None
         saw_done = False
-        host_aborted_required_tool_preface = False
+        host_rejected_required_tool_preface = False
         required_tool_started = False
-        required_tool_preface_progress = 0
-        required_tool_preface_limit = (
-            _required_tool_preface_chars() if requires_tool else 0
-        )
 
         timeout_exc = getattr(httpx, "TimeoutException", None)
         if not (isinstance(timeout_exc, type) and issubclass(timeout_exc, BaseException)):
@@ -395,7 +418,7 @@ class _StreamingCompletionClient:
                         candidate = choice.get("message")
                         delta = candidate if isinstance(candidate, Mapping) else None
                     if delta is not None:
-                        progressed = _append_message_delta(message, delta)
+                        _append_message_delta(message, delta)
                         if requires_tool and not required_tool_started:
                             raw_calls = delta.get("tool_calls")
                             native_tool_started = bool(
@@ -403,21 +426,14 @@ class _StreamingCompletionClient:
                             )
                             if native_tool_started or _required_tool_markup_started(message):
                                 required_tool_started = True
-                            else:
-                                thinking = delta.get("thinking")
-                                if isinstance(thinking, str):
-                                    progressed += len(thinking)
-                                required_tool_preface_progress += progressed
-                                if required_tool_preface_progress > required_tool_preface_limit:
-                                    host_aborted_required_tool_preface = True
-                                    finish_reason = "stop"
-                                    print(
-                                        "llama server: required tool preface aborted",
-                                        f" chars={required_tool_preface_progress}",
-                                        f" limit={required_tool_preface_limit}",
-                                        flush=True,
-                                    )
-                                    break
+                            elif _required_tool_semantic_violation(message, delta):
+                                host_rejected_required_tool_preface = True
+                                finish_reason = "stop"
+                                print(
+                                    "llama server: required tool semantic preface rejected",
+                                    flush=True,
+                                )
+                                break
         except LlamaSseServerError as exc:
             return httpx.Response(
                 exc.status_code,
@@ -432,7 +448,7 @@ class _StreamingCompletionClient:
                 ) from exc
             raise
 
-        if not saw_done and not host_aborted_required_tool_preface:
+        if not saw_done and not host_rejected_required_tool_preface:
             raise RuntimeError("llama server stream ended before the [DONE] marker")
         result: dict[str, Any] = {
             "choices": [
@@ -714,7 +730,6 @@ __all__ = [
     "_client",
     "_native_timing_summary",
     "_report_server_connection",
-    "_required_tool_preface_chars",
     "_stream_idle_timeout_seconds",
     "_tool_idle_timeout_seconds",
     "install",
