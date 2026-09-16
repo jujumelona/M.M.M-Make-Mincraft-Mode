@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   rewrite:
-    if: github.event.head_commit.message == 'Finalize tool admission rewrite'
+    if: github.event.head_commit.message == 'Align admission compatibility tests'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -46,6 +46,7 @@ jobs:
               '90890adcc82784b59c14ab39683c1c8aab0879ac': '/tmp/fix_qwen_malformed_span.py',
               '93110e13693f3c82ecf620f33ef8e303be2f7752': '/tmp/move_qwen_compat_to_admission.py',
               '2685f09987294e0bb7f8d3a8350d2159d8a95b71': '/tmp/fix_admission_conflict_lint.py',
+              'a21e64c2b6d5286c906b33a2e7ee56c607183f7c': '/tmp/align_admission_tests.py',
           }
           for sha, destination in programs.items():
               req = urllib.request.Request(
@@ -80,6 +81,8 @@ jobs:
         run: python /tmp/move_qwen_compat_to_admission.py
       - name: Fix admission conflict lint
         run: python /tmp/fix_admission_conflict_lint.py
+      - name: Align admission compatibility tests
+        run: python /tmp/align_admission_tests.py
       - name: Apply repository formatting fixes
         run: |
           ruff check --fix --exit-zero \
