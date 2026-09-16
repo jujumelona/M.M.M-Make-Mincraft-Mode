@@ -106,7 +106,6 @@ def test_progress_loop_consumes_rejection_as_feedback_not_as_runtime_tool():
     assert "TOOL_SCHEMA_INVALID" in feedback
 
 
-
 def test_phase_handoff_closes_old_tool_protocol_and_preserves_observation_data():
     from minecraft_mod_ai.progress_aware_tool_loop import (
         LoopPhase,
@@ -150,6 +149,49 @@ def test_phase_handoff_closes_old_tool_protocol_and_preserves_observation_data()
     assert "OBSERVE->ACT" in messages[-1]["content"]
     assert "public final class DebugToken {}" in messages[-1]["content"]
     assert "search_code_rag" not in messages[-1]["content"]
+
+
+def test_phase_handoff_is_generic_through_act_to_verify():
+    from minecraft_mod_ai.progress_aware_tool_loop import (
+        LoopPhase,
+        _compact_phase_tool_transcript,
+    )
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_edit",
+                    "type": "function",
+                    "function": {
+                        "name": "apply_source_edit",
+                        "arguments": "{}",
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_edit",
+            "name": "apply_source_edit",
+            "content": "workspace_changed=true; sha256=abc123",
+        },
+    ]
+
+    removed = _compact_phase_tool_transcript(
+        messages,
+        previous_phase=LoopPhase.ACT,
+        next_phase=LoopPhase.VERIFY,
+    )
+
+    assert removed == 2
+    assert len(messages) == 1
+    assert messages[0]["role"] == "system"
+    assert "ACT->VERIFY" in messages[0]["content"]
+    assert "workspace_changed=true" in messages[0]["content"]
+    assert "apply_source_edit" not in messages[0]["content"]
 
 
 def test_phase_handoff_is_wired_before_next_model_turn():
