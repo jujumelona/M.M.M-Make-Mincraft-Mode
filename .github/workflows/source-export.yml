@@ -1,0 +1,30 @@
+name: Source Export
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/source-export.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Upload source tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: mmm-source-${{ github.sha }}
+          path: |
+            .
+            !.git/**
+          include-hidden-files: true
+          if-no-files-found: error
+          compression-level: 6
