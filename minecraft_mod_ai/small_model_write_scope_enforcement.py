@@ -10,7 +10,7 @@ guards consume one canonical value without adding another runtime monkeypatch la
 
 import threading
 from collections.abc import Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from functools import wraps
 from pathlib import PurePosixPath
 from typing import Any
@@ -38,13 +38,6 @@ def _normalize_path(value: Any) -> str:
 
 
 def _declares_evidence_task(module: Any) -> bool:
-    """Return whether this module entered the evidence-owned task pipeline.
-
-    Absence means a legacy/dynamic generation path and must not be converted into a task
-    capsule implicitly. Presence with malformed data remains fail-closed in
-    ``exact_task_writable_paths``.
-    """
-
     config = getattr(module, "config", None)
     return isinstance(config, Mapping) and "evidence_task" in config
 
@@ -115,6 +108,25 @@ def _active_write_scope(paths: Sequence[str]):
             _SCOPE.allowed_paths = previous
 
 
+@contextmanager
+def _active_generation_authority(module: Any):
+    """Bind one host authority to every write guard for exactly one generation call."""
+
+    authority = compile_direct_task_mutation_authority(module)
+    envelope_token = _CURRENT_AUTHORITY.set(authority)
+    mutation_token = CURRENT_MUTATION_AUTHORITY.set(
+        authority.mutation_authority if authority is not None else None
+    )
+    try:
+        with ExitStack() as stack:
+            if _declares_evidence_task(module):
+                stack.enter_context(_active_write_scope(exact_task_writable_paths(module)))
+            yield
+    finally:
+        CURRENT_MUTATION_AUTHORITY.reset(mutation_token)
+        _CURRENT_AUTHORITY.reset(envelope_token)
+
+
 def install(*, custom_module_generator_module: Any, host_grounding_module: Any) -> None:
     """Compose host mutation authority into the existing custom-coder transaction path."""
 
@@ -137,36 +149,16 @@ def install(*, custom_module_generator_module: Any, host_grounding_module: Any) 
         loader: str | None = None,
         mappings: str | None = None,
     ) -> Any:
-        authority = compile_direct_task_mutation_authority(module)
-        authority_token = _CURRENT_AUTHORITY.set(authority)
-        mutation_token = CURRENT_MUTATION_AUTHORITY.set(
-            authority.mutation_authority if authority is not None else None
-        )
-        try:
-            if not _declares_evidence_task(module):
-                return original_generate(
-                    self,
-                    project_root,
-                    module=module,
-                    research_modules=research_modules,
-                    minecraft_version=minecraft_version,
-                    loader=loader,
-                    mappings=mappings,
-                )
-            writable_paths = exact_task_writable_paths(module)
-            with _active_write_scope(writable_paths):
-                return original_generate(
-                    self,
-                    project_root,
-                    module=module,
-                    research_modules=research_modules,
-                    minecraft_version=minecraft_version,
-                    loader=loader,
-                    mappings=mappings,
-                )
-        finally:
-            CURRENT_MUTATION_AUTHORITY.reset(mutation_token)
-            _CURRENT_AUTHORITY.reset(authority_token)
+        with _active_generation_authority(module):
+            return original_generate(
+                self,
+                project_root,
+                module=module,
+                research_modules=research_modules,
+                minecraft_version=minecraft_version,
+                loader=loader,
+                mappings=mappings,
+            )
 
     @wraps(original_validate)
     def exact_validate(self: Any, operations: list[dict[str, Any]]) -> None:
@@ -184,10 +176,6 @@ def install(*, custom_module_generator_module: Any, host_grounding_module: Any) 
     exact_validate._mmm_exact_task_write_scope = True  # type: ignore[attr-defined]
     generator_type.generate = scoped_generate
     generator_type._validate_operations = exact_validate
-
-    # The coarse dynamic/legacy boundary remains host-owned. Evidence-owned tasks are
-    # further narrowed to exact writable paths by the wrapper above; authored designs
-    # are narrowed by CURRENT_MUTATION_AUTHORITY at the same staged-operation boundary.
     custom_module_generator_module._agent_mutable_path = (
         host_grounding_module.custom_module_path_allowed
     )
