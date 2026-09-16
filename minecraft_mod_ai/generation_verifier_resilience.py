@@ -160,6 +160,36 @@ def _run_gradle_fallback(
         ) from fallback_exc
 
 
+def _structured_verifier_result(
+    result: Mapping[str, Any],
+    *,
+    runtime_module: Any,
+) -> dict[str, Any]:
+    """Sanitize a verifier receipt without destroying its machine-readable schema.
+
+    Generic model-facing tool observations may be replaced by a preview envelope when
+    they exceed the observation byte budget. A verifier receipt is different: the host
+    immediately consumes ``diagnostics`` to decide whether source repair is required.
+    Replacing that mapping with preview text converts real compiler failures into the
+    unrelated ``JDT_DIAGNOSTICS_UNAVAILABLE`` infrastructure error. Keep the structured
+    receipt intact; downstream prompt/context budgeting remains responsible for how much
+    of the observation is shown back to the model.
+    """
+
+    sanitized = runtime_module._sanitize_observation(result)
+    if not isinstance(sanitized, Mapping):
+        raise runtime_module.AgentToolRuntimeError(
+            "Generation verifier returned a non-mapping diagnostic receipt"
+        )
+    payload = dict(sanitized)
+    payload["_mmm_observation"] = {
+        "trust": "untrusted_data_only",
+        "sanitized": True,
+        "truncated": False,
+    }
+    return payload
+
+
 def run_generation_verifier(
     runtime: Any,
     arguments: Mapping[str, Any] | None,
@@ -224,7 +254,7 @@ def run_generation_verifier(
         result="FAIL" if result.get("error_count") else "PASS",
         details={"result": result},
     )
-    return runtime_module._bounded_result(result)
+    return _structured_verifier_result(result, runtime_module=runtime_module)
 
 
 setattr(run_generation_verifier, "_mmm_generation_gradle_fallback", True)
