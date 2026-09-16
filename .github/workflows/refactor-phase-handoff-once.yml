@@ -31,6 +31,7 @@ jobs:
       - name: Verify focused behavior
         run: |
           python -m compileall -q minecraft_mod_ai/progress_aware_tool_loop.py tests/test_tool_call_admission_contract.py
+          ruff check --fix tests/test_tool_call_admission_contract.py
           ruff check tests/test_tool_call_admission_contract.py
           pytest -q tests/test_tool_call_admission_contract.py
       - name: Reject regressions introduced by this rewrite
