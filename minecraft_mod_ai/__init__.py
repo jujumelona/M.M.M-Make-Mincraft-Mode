@@ -21,6 +21,10 @@ from .source_observation_budget_installation import install as install_source_ob
 from .source_set_boundary_installation import install as install_source_set_boundary
 from .task_template_catalog import RUNTIME_TEMPLATE_ROOT
 from .template_contract_validation import runtime_consumer_roots, validate_catalog
+from .verifier_repair_final_owner import (
+    assert_installed as assert_verifier_repair_final_owner,
+)
+from .verifier_repair_final_owner import install as install_verifier_repair_final_owner
 from .versioned_reference_context_installation import install as install_versioned_reference_context
 
 
@@ -46,9 +50,14 @@ install_java_toolchain_separation(_java_lsp)
 install_source_set_boundary(_java_lsp)
 install_generation_accuracy_inner(_model_router)
 assert_generation_accuracy_inner(_model_router)
-install_api_grounding_repair(_model_router, _progress_aware_tool_loop)
 install_execution_feedback_semantic_convergence(_execution_feedback_replan_contract)
 finalize_runtime()
+# These two contracts must be installed after runtime finalization.  Finalization installs
+# coder target-existence and verifier wrappers that otherwise overwrite Java grounding and
+# repair semantics, making live behavior depend on import/install order.
+install_api_grounding_repair(_model_router, _progress_aware_tool_loop)
+install_verifier_repair_final_owner(_progress_aware_tool_loop)
+assert_verifier_repair_final_owner(_progress_aware_tool_loop)
 # generation_verifier_resilience owns JDT -> Gradle fallback directly; no second
 # AgentToolRuntime._call wrapper is installed after finalization.
 install_generation_accuracy_outer(_model_router)
