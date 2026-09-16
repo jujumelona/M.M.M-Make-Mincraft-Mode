@@ -1,18 +1,6 @@
 from __future__ import annotations
 
-"""Reconcile coder target existence with the canonical implementation contract.
-
-The implementation contract distinguishes existing targets (modify) from host-reserved
-targets (create-or-modify). The task capsule and live tool loop must preserve that
-distinction: existing owned files are writable and require source localization, while
-creation is authorized only for host-reserved destinations.
-
-Creation conflicts remain enforced by the canonical progress-aware mutation authority,
-and file deletion remains rejected by the staged custom-module operation validator before
-anything is committed to the live project. This module also consumes the canonical
-request-scoped MutationAuthority. Exact PlanIR tasks retain localization checks; authored
-design bounded-root authority keeps localization as evidence rather than write scope.
-"""
+"""Reconcile coder target existence with the canonical implementation contract."""
 
 import copy
 from collections.abc import Mapping, Sequence
@@ -151,8 +139,6 @@ def _task_owned_statuses(loop_module: Any, task: Mapping[str, Any]) -> dict[str,
 
 
 def _status_aware_owned_symbol_context(loop_module: Any, payload: Any) -> Any | None:
-    """Resolve target existence from anchor status, never from donor reuse_action."""
-
     if not isinstance(payload, Mapping):
         return None
     module = payload.get("module")
@@ -191,30 +177,72 @@ def _status_aware_owned_symbol_context(loop_module: Any, payload: Any) -> Any | 
                 or not loop_module._is_workspace_file_path(target_path)
             ):
                 continue
-            status = str(
-                anchor.get("status") or task_statuses.get(target_path) or ""
-            ).strip().casefold()
+            status = str(anchor.get("status") or task_statuses.get(target_path) or "").strip().casefold()
             if status == "host_reserved":
-                is_new_file = True
-                evidence_source = "evidence_host_reserved_owned_anchor"
+                is_new_file, evidence_source = True, "evidence_host_reserved_owned_anchor"
             elif not status:
-                is_new_file = True
-                evidence_source = "evidence_fresh_owned_anchor"
+                is_new_file, evidence_source = True, "evidence_fresh_owned_anchor"
             elif status in _EXISTING_STATUSES:
-                is_new_file = False
-                evidence_source = "evidence_existing_owned_anchor"
+                is_new_file, evidence_source = False, "evidence_existing_owned_anchor"
             else:
                 continue
             return loop_module.TargetMutationContext(
                 target_path=target_path,
-                target_symbol=(
-                    target_symbol.strip()
-                    if separator and target_symbol.strip()
-                    else None
-                ),
+                target_symbol=target_symbol.strip() if separator and target_symbol.strip() else None,
                 is_new_file=is_new_file,
                 evidence_source=evidence_source,
             )
+    return None
+
+
+def _source_edit_path(loop_module: Any, arguments: Mapping[str, Any]) -> str:
+    for key in tuple(getattr(loop_module, "_SOURCE_EDIT_PATH_KEYS", ("path",))):
+        value = arguments.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
+def _authority_target_decision(
+    loop_module: Any,
+    tool_name: str,
+    arguments: Mapping[str, Any],
+) -> tuple[bool, str | None]:
+    if tool_name != "apply_source_edit":
+        return False, None
+    authority = CURRENT_MUTATION_AUTHORITY.get()
+    if authority is None:
+        return False, None
+    error = authority.mutation_error(
+        _source_edit_path(loop_module, arguments),
+        operation=arguments.get("operation"),
+    )
+    if error is not None:
+        return True, error
+    return authority.mode is MutationAuthorityMode.BOUNDED_ROOTS, None
+
+
+def _creation_conflict_error(
+    loop_module: Any,
+    tool_name: str,
+    arguments: Mapping[str, Any],
+    context: Any,
+) -> str | None:
+    if tool_name != "apply_source_edit" or context is None:
+        return None
+    pinned = loop_module._canonical_mutation_path(getattr(context, "target_path", None))
+    supplied = loop_module._canonical_mutation_path(_source_edit_path(loop_module, arguments))
+    operation = str(arguments.get("operation") or "").strip().casefold()
+    if (
+        pinned
+        and supplied == pinned
+        and not bool(getattr(context, "is_new_file", False))
+        and operation in loop_module._SOURCE_CREATE_OPERATIONS
+    ):
+        return (
+            "MUTATION_TARGET_CREATION_CONFLICT: existing localized target "
+            f"{pinned!r} cannot be recreated by {operation!r}."
+        )
     return None
 
 
@@ -228,50 +256,55 @@ def _install_creation_conflict_classification(loop_module: Any) -> None:
         arguments: Mapping[str, Any],
         context: Any,
     ) -> str | None:
-        if tool_name == "apply_source_edit":
-            authority = CURRENT_MUTATION_AUTHORITY.get()
-            if authority is not None:
-                supplied = ""
-                for key in tuple(getattr(loop_module, "_SOURCE_EDIT_PATH_KEYS", ("path",))):
-                    value = arguments.get(key)
-                    if isinstance(value, str) and value.strip():
-                        supplied = value
-                        break
-                error = authority.mutation_error(
-                    supplied,
-                    operation=arguments.get("operation"),
-                )
-                if error is not None:
-                    return error
-                if authority.mode is MutationAuthorityMode.BOUNDED_ROOTS:
-                    return None
-
-        if tool_name == "apply_source_edit" and context is not None:
-            pinned = loop_module._canonical_mutation_path(
-                getattr(context, "target_path", None)
-            )
-            supplied = ""
-            for key in loop_module._SOURCE_EDIT_PATH_KEYS:
-                value = arguments.get(key)
-                if isinstance(value, str) and value.strip():
-                    supplied = loop_module._canonical_mutation_path(value)
-                    break
-            operation = str(arguments.get("operation") or "").strip().casefold()
-            if (
-                pinned
-                and supplied == pinned
-                and not bool(getattr(context, "is_new_file", False))
-                and operation in loop_module._SOURCE_CREATE_OPERATIONS
-            ):
-                return (
-                    "MUTATION_TARGET_CREATION_CONFLICT: existing localized target "
-                    f"{pinned!r} cannot be recreated by {operation!r}."
-                )
-        return original(tool_name, arguments, context)
+        handled, error = _authority_target_decision(loop_module, tool_name, arguments)
+        if handled:
+            return error
+        conflict = _creation_conflict_error(loop_module, tool_name, arguments, context)
+        return conflict if conflict is not None else original(tool_name, arguments, context)
 
     mutation_target_error.__name__ = original.__name__
     loop_module._mutation_target_error = mutation_target_error
     setattr(loop_module, _MUTATION_MARKER, True)
+
+
+def _install_capsule_compile(target_module: Any) -> None:
+    if getattr(target_module, _MARKER, False):
+        return
+    original_compile = target_module.compile_task_capsule
+
+    def compile_task_capsule(module: Any):
+        try:
+            return original_compile(module)
+        except target_module.TaskCapsuleContractError as exc:
+            status = _primary_status(target_module, module)
+            if status in _EXISTING_STATUSES:
+                reconciled = _module_with_reserved_primary(target_module, module)
+                if reconciled is None:
+                    raise
+                proxy, anchors = reconciled
+                capsule = original_compile(proxy)
+                if capsule is None:
+                    return None
+                return _restore_capsule_authority(target_module, capsule, anchors)
+            if status and "PRIMARY_NOT_RESERVED" not in str(exc):
+                raise target_module.TaskCapsuleContractError(
+                    "TASK_CAPSULE_PRIMARY_NOT_RESERVED: approved custom-Java primary "
+                    f"uses unsupported status {status!r}."
+                ) from exc
+            raise
+
+    compile_task_capsule.__name__ = original_compile.__name__
+    target_module.compile_task_capsule = compile_task_capsule
+    setattr(target_module, _MARKER, True)
+
+
+def _install_loop_context(loop_module: Any) -> None:
+    if getattr(loop_module, _LOOP_MARKER, False):
+        return
+    loop_module._fresh_owned_symbol_context = (
+        lambda payload: _status_aware_owned_symbol_context(loop_module, payload)
+    )
+    setattr(loop_module, _LOOP_MARKER, True)
 
 
 def install(target_module: Any | None = None, loop_module: Any | None = None) -> None:
@@ -279,41 +312,8 @@ def install(target_module: Any | None = None, loop_module: Any | None = None) ->
         from . import small_model_task_capsule_contract as target_module
     if loop_module is None:
         from . import progress_aware_tool_loop as loop_module
-
-    if not getattr(target_module, _MARKER, False):
-        original_compile = target_module.compile_task_capsule
-
-        def compile_task_capsule(module: Any):
-            try:
-                return original_compile(module)
-            except target_module.TaskCapsuleContractError as exc:
-                status = _primary_status(target_module, module)
-                if status in _EXISTING_STATUSES:
-                    reconciled = _module_with_reserved_primary(target_module, module)
-                    if reconciled is None:
-                        raise
-                    proxy, anchors = reconciled
-                    capsule = original_compile(proxy)
-                    if capsule is None:
-                        return None
-                    return _restore_capsule_authority(target_module, capsule, anchors)
-                if status and "PRIMARY_NOT_RESERVED" not in str(exc):
-                    raise target_module.TaskCapsuleContractError(
-                        "TASK_CAPSULE_PRIMARY_NOT_RESERVED: approved custom-Java primary "
-                        f"uses unsupported status {status!r}."
-                    ) from exc
-                raise
-
-        compile_task_capsule.__name__ = original_compile.__name__
-        target_module.compile_task_capsule = compile_task_capsule
-        setattr(target_module, _MARKER, True)
-
-    if not getattr(loop_module, _LOOP_MARKER, False):
-        loop_module._fresh_owned_symbol_context = (
-            lambda payload: _status_aware_owned_symbol_context(loop_module, payload)
-        )
-        setattr(loop_module, _LOOP_MARKER, True)
-
+    _install_capsule_compile(target_module)
+    _install_loop_context(loop_module)
     _install_creation_conflict_classification(loop_module)
 
 
