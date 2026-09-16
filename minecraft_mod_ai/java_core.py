@@ -1,6 +1,7 @@
 """Persistent Java semantic owner backed by actual JDT workspace builds."""
 from __future__ import annotations
 
+import os
 import tempfile
 import threading
 from pathlib import Path
@@ -47,13 +48,31 @@ class JavaCoreService:
 
     def _resolve_and_open(self, root: Path, timeout: int) -> dict[str, Any]:
         assert self._rpc is not None
-        raw = self._rpc.request('resolve', {'project_root': str(root)}, timeout=timeout)
+        raw = self._rpc.request('resolve', self._resolve_parameters(root), timeout=timeout)
         model = ResolvedBuildModel.from_dict(raw)
         if Path(model.project_root).resolve() != root:
             raise OwnerRPCError('Resolved model belongs to another project')
         response = self._rpc.request('open', {'model': model.to_dict()}, timeout=timeout)
         self._model = model
         return response
+
+    @staticmethod
+    def _resolve_parameters(root: Path) -> dict[str, str]:
+        from .java_lsp import _requested_project_java_major, _resolve_project_java_home
+        from .platform_catalog import _project_platform_lock, adapter_from_project
+
+        params = {'project_root': str(root)}
+        # Generated/checkpoint projects have an immutable target authority. Generic
+        # Gradle projects retain their own daemon/toolchain configuration unless the
+        # caller explicitly selected a project JDK. Never parse build scripts.
+        if _project_platform_lock(root) is not None:
+            major = adapter_from_project(root).java_version
+        elif os.environ.get('MMM_JAVA_VERSION', '').strip():
+            major = _requested_project_java_major()
+        else:
+            return params
+        params['java_home'] = str(_resolve_project_java_home(int(major)))
+        return params
 
     def _incremental_build(self, owner, revision, timeout: int, full_scan: bool) -> dict[str, Any]:
         assert self._rpc is not None
