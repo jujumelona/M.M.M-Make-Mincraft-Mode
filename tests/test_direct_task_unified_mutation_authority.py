@@ -2,15 +2,19 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from minecraft_mod_ai.coder_mutation_authority_contract import (
+    _install_creation_conflict_classification,
+)
 from minecraft_mod_ai.direct_task_mutation_authority_contract import (
     _CURRENT_AUTHORITY,
     compile_direct_task_mutation_authority,
-    install,
 )
 from minecraft_mod_ai.mutation_authority import (
     CURRENT_MUTATION_AUTHORITY,
     MutationAuthorityMode,
+    current_mutation_error,
 )
+from minecraft_mod_ai.small_model_write_scope_enforcement import install as install_write_scope
 
 
 def _authored_module():
@@ -76,11 +80,20 @@ def test_ordinary_planir_task_stays_exact_and_cannot_follow_localization_drift()
     assert error.startswith("MUTATION_TARGET_DRIFT:")
 
 
-def test_same_active_authority_guards_tool_call_and_final_staged_operation() -> None:
+def test_existing_write_scope_owner_activates_same_authority_for_tool_and_final_guard() -> None:
     holder = {}
 
     class Generator:
-        def generate(self, *args, **kwargs):
+        def generate(
+            self,
+            project_root,
+            *,
+            module,
+            research_modules=(),
+            minecraft_version=None,
+            loader=None,
+            mappings=None,
+        ):
             active = _CURRENT_AUTHORITY.get()
             assert active is not None
             assert CURRENT_MUTATION_AUTHORITY.get() is active.mutation_authority
@@ -93,14 +106,14 @@ def test_same_active_authority_guards_tool_call_and_final_staged_operation() -> 
                 SimpleNamespace(target_path="src/main/resources/fabric.mod.json"),
             )
             assert tool_error is None
-            self._validate_operations(
-                [
-                    {
-                        "operation": "create",
-                        "path": "src/main/java/ai/minecraft/generated/SpaceModeMod.java",
-                    }
-                ]
-            )
+            assert current_mutation_error(
+                "src/main/java/ai/minecraft/generated/SpaceModeMod.java",
+                operation="create",
+            ) is None
+            assert current_mutation_error(
+                "build.gradle",
+                operation="replace",
+            ) is not None
             return {"active": active.is_bounded_authored_design}
 
         def _validate_operations(self, operations):
@@ -108,31 +121,35 @@ def test_same_active_authority_guards_tool_call_and_final_staged_operation() -> 
 
     class Loop:
         _SOURCE_EDIT_PATH_KEYS = ("path",)
+        _SOURCE_CREATE_OPERATIONS = frozenset({"create"})
+
+        @staticmethod
+        def _canonical_mutation_path(value):
+            return str(value or "").replace("\\", "/")
 
         @staticmethod
         def _mutation_target_error(tool_name, arguments, context):
             return "MUTATION_TARGET_DRIFT: localized evidence target differs"
 
+    class HostGrounding:
         @staticmethod
-        def _generate_turn_with_context_recovery(*args, **kwargs):
-            return None
-
-        @staticmethod
-        def generate_with_tools(*args, **kwargs):
-            return "ok"
+        def custom_module_path_allowed(path):
+            return current_mutation_error(path) is None
 
     custom_module = SimpleNamespace(
         CustomModuleGenerator=Generator,
         CustomModuleGenerationError=RuntimeError,
+        _agent_mutable_path=lambda path: True,
     )
     loop_module = Loop()
     holder["loop"] = loop_module
-    install(
+    _install_creation_conflict_classification(loop_module)
+    install_write_scope(
         custom_module_generator_module=custom_module,
-        loop_module=loop_module,
+        host_grounding_module=HostGrounding,
     )
 
     generator = custom_module.CustomModuleGenerator()
-    assert generator.generate(module=_authored_module()) == {"active": True}
+    assert generator.generate(".", module=_authored_module()) == {"active": True}
     assert _CURRENT_AUTHORITY.get() is None
     assert CURRENT_MUTATION_AUTHORITY.get() is None
