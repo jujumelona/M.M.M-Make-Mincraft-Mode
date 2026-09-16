@@ -1,19 +1,21 @@
 from __future__ import annotations
 
-"""Compile host-owned mutation authority before generation and enforce it end-to-end.
+"""Compile host-owned mutation authority before generation.
 
 Ordinary fresh PlanIR tasks keep exact-path authority. Saved authored designs are a
 separate host request shape: the host intentionally delegates file selection inside the
 four generated source/resource roots. That distinction is made from the trusted
 ``ProductionModule`` object before model decode, never by reparsing model-facing text.
+
+Runtime activation is owned by the existing small-model write-scope wrapper. This module
+is intentionally a pure compiler/data contract and performs no runtime method rebinding.
 """
 
 import contextvars
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
-from functools import wraps
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -23,7 +25,6 @@ from .mutation_authority import (
     MutationAuthorityMode,
 )
 
-_MARKER = "_mmm_direct_task_mutation_authority_v1"
 _SCHEMA = "mmm/direct-task-mutation-authority-v1"
 _AUTHORED_SCHEMA = "mmm/authored-design-mutation-authority-v1"
 _ALLOWED_PREFIXES = AUTHORED_DESIGN_ROOTS
@@ -407,148 +408,9 @@ def _validate_operation_with_authority(
     )
 
 
-def install(
-    *,
-    custom_module_generator_module: Any | None = None,
-    loop_module: Any | None = None,
-) -> None:
-    """Install one host authority across loop dispatch and final staged-patch validation."""
-
-    if custom_module_generator_module is None:
-        from . import custom_module_generator as custom_module_generator_module
-    if loop_module is None:
-        from . import progress_aware_tool_loop as loop_module
-
-    if getattr(custom_module_generator_module, _MARKER, False):
-        return
-
-    Generator = custom_module_generator_module.CustomModuleGenerator
-    original_generate = Generator.generate
-    original_validate_operations = Generator._validate_operations
-    original_loop_generate = loop_module.generate_with_tools
-    original_target_error = loop_module._mutation_target_error
-    original_turn = loop_module._generate_turn_with_context_recovery
-
-    @wraps(original_generate)
-    def generate(self, *args: Any, **kwargs: Any):
-        module = kwargs.get("module")
-        authority = compile_direct_task_mutation_authority(module)
-        token = _CURRENT_AUTHORITY.set(authority)
-        try:
-            return original_generate(self, *args, **kwargs)
-        finally:
-            _CURRENT_AUTHORITY.reset(token)
-
-    @wraps(original_validate_operations)
-    def validate_operations(self, operations: list[dict[str, Any]]) -> None:
-        original_validate_operations(self, operations)
-        authority = _CURRENT_AUTHORITY.get()
-        if authority is None:
-            return
-        for operation in operations:
-            error = _validate_operation_with_authority(operation, authority)
-            if error is not None:
-                raise custom_module_generator_module.CustomModuleGenerationError(error)
-
-    @wraps(original_target_error)
-    def mutation_target_error(
-        tool_name: str,
-        arguments: Mapping[str, Any],
-        context: Any,
-    ) -> str | None:
-        authority = _CURRENT_AUTHORITY.get()
-        if authority is None or tool_name != "apply_source_edit":
-            return original_target_error(tool_name, arguments, context)
-        supplied = _mutation_path(arguments, loop_module)
-        error = authority.mutation_authority.mutation_error(
-            supplied,
-            operation=arguments.get("operation"),
-        )
-        if error is not None:
-            return error
-        if authority.is_bounded_authored_design:
-            # Localization can identify fabric.mod.json or another evidence anchor. It is
-            # deliberately separate from the authored design's bounded write authority.
-            return None
-        return original_target_error(tool_name, arguments, context)
-
-    @wraps(original_turn)
-    def generate_turn_with_host_authority(*args: Any, **kwargs: Any):
-        authority = _CURRENT_AUTHORITY.get()
-        tool_choice = kwargs.get("tool_choice")
-        function = tool_choice.get("function") if isinstance(tool_choice, Mapping) else None
-        forced = (
-            str(function.get("name") or "").strip()
-            if isinstance(function, Mapping)
-            else ""
-        )
-        if (
-            authority is not None
-            and authority.is_bounded_authored_design
-            and forced == "apply_source_edit"
-        ):
-            kwargs["parallel_tool_calls"] = True
-            request = kwargs.get("request")
-            if request is not None and hasattr(request, "parallel_tool_calls"):
-                kwargs["request"] = replace(request, parallel_tool_calls=True)
-        return original_turn(*args, **kwargs)
-
-    @wraps(original_loop_generate)
-    def generate_with_tools(
-        router,
-        *,
-        config,
-        adapter,
-        request,
-        runtime,
-        stage,
-        role,
-    ):
-        authority = _CURRENT_AUTHORITY.get()
-        if authority is not None and str(stage) == "generation" and role in {
-            "coder",
-            "coder_safe",
-        }:
-            payload = authority.to_host_payload()
-            if not authority.is_bounded_authored_design:
-                authority_parser = getattr(loop_module, "_planir_owned_anchor_sets", None)
-                if callable(authority_parser):
-                    writable, creatable = authority_parser(payload)
-                    if (
-                        authority.primary_path not in set(writable)
-                        or authority.primary_path not in set(creatable)
-                    ):
-                        raise DirectTaskMutationAuthorityError(
-                            "PLANIR_AUTHORITY_RUNTIME_DRIFT: installed PlanIR parser no longer "
-                            "recognizes the host-bound primary path before coder decode."
-                        )
-            request = replace(
-                request,
-                messages=_insert_authority_message(request.messages, authority),
-            )
-        return original_loop_generate(
-            router,
-            config=config,
-            adapter=adapter,
-            request=request,
-            runtime=runtime,
-            stage=stage,
-            role=role,
-        )
-
-    Generator.generate = generate
-    Generator._validate_operations = validate_operations
-    loop_module._mutation_target_error = mutation_target_error
-    loop_module._generate_turn_with_context_recovery = generate_turn_with_host_authority
-    loop_module.generate_with_tools = generate_with_tools
-    setattr(custom_module_generator_module, _MARKER, True)
-    setattr(loop_module, _MARKER, True)
-
-
 __all__ = [
     "DirectTaskMutationAuthority",
     "DirectTaskMutationAuthorityError",
     "_CURRENT_AUTHORITY",
     "compile_direct_task_mutation_authority",
-    "install",
 ]
