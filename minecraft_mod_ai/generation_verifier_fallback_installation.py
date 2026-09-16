@@ -8,6 +8,7 @@ no runtime method rebinding; the generation verifier already owns fallback selec
 
 import re
 from collections import deque
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -154,6 +155,33 @@ def _fallback_reason(failure_code: str | None) -> str:
     return _FALLBACK_REASONS.get(failure_code, _DEFAULT_FALLBACK_REASON)
 
 
+def _structured_fallback_receipt(
+    receipt: Mapping[str, Any],
+    *,
+    runtime_module: Any,
+) -> dict[str, Any]:
+    """Keep fallback verifier semantics structured for host adjudication.
+
+    Generic tool-result bounding is applied later when the observation is reinjected into
+    the model conversation. Applying it here destroys ``diagnostics`` before the host can
+    classify a real Gradle failure, reproducing the same false verifier-unavailable path
+    that the JDT verifier must avoid.
+    """
+
+    sanitized = runtime_module._sanitize_observation(receipt)
+    if not isinstance(sanitized, Mapping):
+        raise runtime_module.AgentToolRuntimeError(
+            "Gradle fallback returned a non-mapping diagnostic receipt"
+        )
+    payload = dict(sanitized)
+    payload["_mmm_observation"] = {
+        "trust": "untrusted_data_only",
+        "sanitized": True,
+        "truncated": False,
+    }
+    return payload
+
+
 def _gradle_fallback_receipt(
     runtime: Any,
     root: Path,
@@ -195,7 +223,7 @@ def _gradle_fallback_receipt(
         reason=_fallback_reason(failure_code),
         details={"result": receipt},
     )
-    return runtime_module._bounded_result(receipt)
+    return _structured_fallback_receipt(receipt, runtime_module=runtime_module)
 
 
 __all__ = ["_gradle_fallback_receipt"]
