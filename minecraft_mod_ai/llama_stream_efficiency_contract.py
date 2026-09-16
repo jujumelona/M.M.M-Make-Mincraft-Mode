@@ -253,30 +253,16 @@ def _required_tool_semantic_violation(
     message: Mapping[str, Any],
     delta: Mapping[str, Any],
 ) -> bool:
-    """Reject a required-tool turn as soon as it emits semantic non-tool output.
+    """Never abort a required-tool stream merely because reasoning/prose arrives first.
 
-    Whitespace and fragmented prefixes of the supported text tool protocol remain
-    admissible while the marker is arriving. Once a native tool call or complete text
-    marker starts, argument streaming is unrestricted. Hidden reasoning/prose before
-    tool invocation is not executable progress and is rejected immediately instead of
-    consuming the remaining decode budget.
+    A required tool call is adjudicated only after the server completes the response.
+    Transport liveness is already bounded by the read timeout and absolute execution
+    deadline, so semantic preface text is not a reason to truncate a still-progressing
+    stream before the model has a chance to emit its native tool call.
     """
 
-    calls = message.get("tool_calls")
-    if isinstance(calls, list) and calls:
-        return False
-    if _required_tool_markup_started(message):
-        return False
-
-    for key in ("reasoning_content", "reasoning", "thinking"):
-        value = delta.get(key)
-        if isinstance(value, str) and value.strip():
-            return True
-
-    content = message.get("content")
-    if not isinstance(content, str) or not content.strip():
-        return False
-    return not _required_tool_markup_prefix_pending(message)
+    del message, delta
+    return False
 
 
 class _StreamingCompletionClient:
@@ -316,8 +302,6 @@ class _StreamingCompletionClient:
         has_tools = bool(payload.get("tools"))
         requires_tool = has_tools and _tool_choice_requires_execution(payload.get("tool_choice"))
         if has_tools and not hasattr(self._client, "stream"):
-            # Compatibility for minimal test/dummy clients. Production httpx.Client
-            # always provides stream(), so native tool turns use the SSE path below.
             import httpx
 
             native_kwargs = dict(kwargs)
