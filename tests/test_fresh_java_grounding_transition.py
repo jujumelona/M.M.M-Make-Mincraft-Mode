@@ -23,21 +23,6 @@ def _fresh_context():
     )
 
 
-def _code_rag_result():
-    return {
-        "structured_content": {
-            "schema_version": "mmm/code-rag-result-v1",
-            "hits": [
-                {
-                    "path": "src/main/java/dev/example/ExampleMod.java",
-                    "text": "public final class ExampleMod { public static final String ID = \"example\"; }",
-                }
-            ],
-            "receipt": {"result_count": 1, "status": "FOUND"},
-        }
-    }
-
-
 def test_fresh_java_required_grounding_exposes_code_rag_only():
     selected = loop._filter_tools_for_phase(
         (
@@ -52,42 +37,26 @@ def test_fresh_java_required_grounding_exposes_code_rag_only():
         localization_active=True,
         semantic_retrieval_choice=True,
     )
-    names = [schema["function"]["name"] for schema in selected]
-    assert names == ["search_code_rag"]
+    assert [schema["function"]["name"] for schema in selected] == ["search_code_rag"]
 
 
-def test_usable_code_rag_advances_fresh_java_directly_to_act():
-    state = loop.HostRunState(mutation_context=_fresh_context())
-    state.record_failure("java_workspace_symbols", "stale infrastructure failure")
-    state.semantic_fixed_point = True
-    state.no_progress_streak = 1
-    state.seen_no_progress_digests.add("stale")
-
-    assert state.record_evidence(_code_rag_result(), usable=True) is True
-
-    assert state.has_fresh_evidence is True
-    assert state.phase == loop.LoopPhase.ACT
-    assert state.semantic_fixed_point is False
-    assert state.no_progress_streak == 0
-    assert state.seen_no_progress_digests == set()
-    assert state.last_failure_reason is None
-    assert state.last_failure_digest is None
+def test_usable_code_rag_is_progress_for_fresh_java():
+    context = _fresh_context()
+    assert loop._fresh_java_code_rag_progress(
+        "search_code_rag",
+        recorded=True,
+        usable=True,
+        context=context,
+    ) is True
+    assert loop._fresh_java_code_rag_progress(
+        "search_project_rag",
+        recorded=True,
+        usable=True,
+        context=context,
+    ) is False
 
 
-def test_metadata_catalog_alone_does_not_force_act_transition():
-    state = loop.HostRunState(mutation_context=_fresh_context())
-    catalog = {
-        "structured_content": {
-            "schema_version": "mmm/rag-result-v2",
-            "sources": [{"source_id": "fabric-api-maven", "title": "Fabric API"}],
-        }
-    }
-
-    assert state.record_evidence(catalog, usable=True) is True
-    assert state.phase == loop.LoopPhase.OBSERVE
-
-
-def test_existing_target_code_rag_does_not_bypass_localization_contract():
+def test_existing_java_does_not_use_fresh_grounding_shortcut():
     context = loop.TargetMutationContext(
         target_path="src/main/java/dev/example/Existing.java",
         target_symbol="Existing",
@@ -95,7 +64,9 @@ def test_existing_target_code_rag_does_not_bypass_localization_contract():
         is_new_file=False,
         evidence_source="search_code_rag",
     )
-    state = loop.HostRunState(mutation_context=context)
-
-    assert state.record_evidence(_code_rag_result(), usable=True) is True
-    assert state.phase == loop.LoopPhase.OBSERVE
+    assert loop._fresh_java_code_rag_progress(
+        "search_code_rag",
+        recorded=True,
+        usable=True,
+        context=context,
+    ) is False

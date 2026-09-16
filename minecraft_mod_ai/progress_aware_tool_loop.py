@@ -1384,6 +1384,44 @@ def _tool_name(schema: Mapping[str, Any]) -> str:
     return str(fn.get("name", "")).strip() if isinstance(fn, Mapping) else ""
 
 
+def _fresh_java_grounding_required(
+    context: TargetMutationContext | None,
+    *,
+    semantic_retrieval_choice: bool,
+    available_tools: Mapping[str, Any],
+) -> bool:
+    """Require one code-bearing RAG observation before mutating a fresh Java target."""
+    path = _normalized_target_path(context.target_path if context is not None else None)
+    return bool(
+        semantic_retrieval_choice
+        and context is not None
+        and context.is_new_file
+        and context.is_mutation_ready
+        and path.endswith(".java")
+        and "search_code_rag" in available_tools
+    )
+
+
+def _fresh_java_code_rag_progress(
+    tool_name: str,
+    *,
+    recorded: bool,
+    usable: bool,
+    context: TargetMutationContext | None,
+) -> bool:
+    """Treat usable code RAG as semantic progress for an already-localized fresh Java file."""
+    path = _normalized_target_path(context.target_path if context is not None else None)
+    return bool(
+        tool_name == "search_code_rag"
+        and recorded
+        and usable
+        and context is not None
+        and context.is_new_file
+        and context.is_mutation_ready
+        and path.endswith(".java")
+    )
+
+
 def _filter_tools_for_phase(
     exposed_tools: Sequence[Mapping[str, Any]],
     phase: LoopPhase,
@@ -1433,7 +1471,15 @@ def _filter_tools_for_phase(
                 untried = [name for name in preferred if name in by_name and name not in attempted_sources]
                 selected_names = [untried[0]] if untried else []
             else:
-                selected_names = [name for name in by_name if name in _READ_OBSERVE_TOOLS]
+                selected_names = (
+                    ["search_code_rag"]
+                    if _fresh_java_grounding_required(
+                        mutation_context,
+                        semantic_retrieval_choice=semantic_retrieval_choice,
+                        available_tools=by_name,
+                    )
+                    else [name for name in by_name if name in _READ_OBSERVE_TOOLS]
+                )
     elif phase == LoopPhase.ACT:
         # apply_source_edit is the canonical model-facing source mutation surface.
         # Prefer it whenever available so alternate mutators cannot bypass the
@@ -2707,12 +2753,22 @@ def _generate_with_tools_impl(
                 # For implementation, novelty alone is not progress: evidence must
                 # advance file/symbol/body localization. This prevents an unrelated
                 # first RAG hit from resetting a blocked mutation retry.
+                fresh_java_grounding_progress = _fresh_java_code_rag_progress(
+                    call.name,
+                    recorded=recorded,
+                    usable=usable,
+                    context=state.mutation_context,
+                )
                 if (
                     ctx_progress
+                    or fresh_java_grounding_progress
                     or (state.phase == LoopPhase.RECOVER and recorded)
                     or (not implementation_requires_mutation and recorded)
                 ):
                     turn_made_progress = True
+                    if fresh_java_grounding_progress:
+                        state.clear_failure()
+                        state.clear_no_progress_result()
                     if (
                         state.phase in {LoopPhase.OBSERVE, LoopPhase.RECOVER}
                         and implementation_requires_mutation
