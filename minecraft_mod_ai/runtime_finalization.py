@@ -5,6 +5,12 @@ from __future__ import annotations
 Pre-design retrieval is a direct host-owned pipeline and is intentionally absent from
 this runtime mutation phase. Model completion transport is finalized during bootstrap;
 late finalization must not wrap or replay llama.cpp completion calls.
+
+The coder mutation/verification state machine is owned directly by
+``progress_aware_tool_loop``. Legacy PlanIR/repair/final-guard installers are not
+invoked here: allowing runtime finalization to replace functions on that module made
+the executed behavior depend on hidden install order instead of the source file being
+reviewed and tested.
 """
 
 import threading
@@ -52,7 +58,6 @@ def finalize_runtime() -> None:
             planner_template_schema,
             production_contract,
             production_tools,
-            progress_aware_tool_loop,
             quality_evidence,
             reference_source_research,
             repository_grounding,
@@ -97,16 +102,11 @@ def finalize_runtime() -> None:
         from .model_output_atomicity_contract import install as install_model_output_atomicity
         from .model_prefetch_resilience import install as install_prefetch_resilience
         from .model_tool_alias_permission_policy import install as install_model_tool_alias_permissions
-        from .mutation_authority_final_guard import assert_installed as assert_mutation_authority_final_guard
-        from .mutation_authority_final_guard import install as install_mutation_authority_final_guard
-        from .planir_mutation_authority_contract import install as install_planir_mutation_authority
         from .planner_design_readiness_contract import install as install_planner_design_readiness
         from .procedural_skill_identity_contract import install as install_procedural_skill_identity
         from .production_boundary_contract import install_production_boundary_contract
         from .quality_public_acceptance_view_contract import install as install_quality_public_acceptance_view
         from .reference_query_parallelism_contract import install as install_reference_query_parallelism
-        from .repair_mutation_recovery_contract import assert_installed as assert_repair_mutation_recovery
-        from .repair_mutation_recovery_contract import install as install_repair_mutation_recovery
         from .requirement_branch_scope_contract import install_requirement_branch_scope_contract
         from .retrieval_model_residency import install as install_retrieval_residency
         from .runtime_hot_path_contract import assert_installed as assert_runtime_hot_paths
@@ -132,21 +132,29 @@ def finalize_runtime() -> None:
         install_mcp_schema_integrity(agent_tool_runtime, external_agent_bridge, external_mcp_router)
         install_external_mcp_binding(external_agent_bridge, external_mcp_router)
         install_external_mcp_binding_concurrency(external_agent_bridge)
-        install_runtime_hot_paths(mcp_transport_pool_module=mcp_transport_pool, external_mcp_router_module=external_mcp_router, research_rag_performance_module=research_rag_performance)
+        install_runtime_hot_paths(
+            mcp_transport_pool_module=mcp_transport_pool,
+            external_mcp_router_module=external_mcp_router,
+            research_rag_performance_module=research_rag_performance,
+        )
         install_mcp_child_trace(mcp_transport_pool)
         install_prefetch_resilience(parallel_runtime_module=parallel_runtime_contract)
         install_observation_determinism(agent_tool_runtime_module=agent_tool_runtime)
         install_procedural_skill_identity(external_procedural_skill_contract)
-        install_tool_schema_ownership(agent_tool_runtime, expected_parameters={"apply_source_edit": SOURCE_EDIT_SCHEMA})
+        install_tool_schema_ownership(
+            agent_tool_runtime,
+            expected_parameters={"apply_source_edit": SOURCE_EDIT_SCHEMA},
+        )
         install_routing_intent(small_model_module=small_model_max_agent_contract)
         install_generation_safety()
-        install_planir_mutation_authority(progress_aware_tool_loop)
         install_retrieval_residency(model_router_module=model_router)
 
         retrieval_cpu_budget_contract._install_live_hybrid_budget(small_model_hybrid_search_contract)
         retrieval_cpu_budget_contract._install_production_tool_budget(production_tools)
         if not retrieval_cpu_budget_contract._dense_opted_in():
-            repository_grounding._explore_with_degraded_fallback = retrieval_cpu_budget_contract._lexical_repository_exploration
+            repository_grounding._explore_with_degraded_fallback = (
+                retrieval_cpu_budget_contract._lexical_repository_exploration
+            )
         install_repository_grounding()
 
         install_model_tool_alias_permissions(agent_capability_context, model_tool_aliases)
@@ -168,10 +176,18 @@ def finalize_runtime() -> None:
         install_design_resolution_provenance_contract()
         install_production_boundary_contract()
         install_quality_public_acceptance_view(production_contract, quality_evidence)
-        install_implementation_kind_boundary(complete_spec_module=complete_spec, support_module=complete_orchestrator_support, orchestrator_module=complete_orchestrator, template_module=planner_template_schema)
+        install_implementation_kind_boundary(
+            complete_spec_module=complete_spec,
+            support_module=complete_orchestrator_support,
+            orchestrator_module=complete_orchestrator,
+            template_module=planner_template_schema,
+        )
         install_execution_feedback_exception_scope(execution_feedback_replan_contract)
         install_execution_feedback_owner_precision(execution_feedback_replan_contract)
-        execution_feedback_replan_contract.install(orchestrator_module=complete_orchestrator, work_graph_module=work_graph)
+        execution_feedback_replan_contract.install(
+            orchestrator_module=complete_orchestrator,
+            work_graph_module=work_graph,
+        )
 
         install_immutable_platform_execution()
         install_fabric_immutable_rebind()
@@ -186,8 +202,14 @@ def finalize_runtime() -> None:
         assert_small_model_task_capsule()
         install_coder_mutation_authority()
         assert_coder_mutation_authority()
-        install_small_model_write_scope(custom_module_generator_module=custom_module_generator, host_grounding_module=host_grounding)
-        assert_small_model_write_scope(custom_module_generator_module=custom_module_generator, host_grounding_module=host_grounding)
+        install_small_model_write_scope(
+            custom_module_generator_module=custom_module_generator,
+            host_grounding_module=host_grounding,
+        )
+        assert_small_model_write_scope(
+            custom_module_generator_module=custom_module_generator,
+            host_grounding_module=host_grounding,
+        )
         install_small_model_atomic_coder(
             custom_module_generator_module=custom_module_generator,
             model_router_module=model_router,
@@ -200,12 +222,14 @@ def finalize_runtime() -> None:
         install_model_output_atomicity(model_router_module=model_router)
         assert_model_output_atomicity(model_router_module=model_router)
 
-        install_repair_mutation_recovery(progress_aware_tool_loop)
-        assert_repair_mutation_recovery(progress_aware_tool_loop)
-        install_mutation_authority_final_guard(progress_aware_tool_loop)
-        assert_mutation_authority_final_guard(progress_aware_tool_loop)
+        # progress_aware_tool_loop owns mutation authority, repair transitions, verifier
+        # semantics, and convergence directly. Do not monkey-patch it here.
 
-        assert_runtime_hot_paths(mcp_transport_pool_module=mcp_transport_pool, external_mcp_router_module=external_mcp_router, research_rag_performance_module=research_rag_performance)
+        assert_runtime_hot_paths(
+            mcp_transport_pool_module=mcp_transport_pool,
+            external_mcp_router_module=external_mcp_router,
+            research_rag_performance_module=research_rag_performance,
+        )
         verify_installed_wrappers()
         run_context_budget_preflight()
         run_runtime_live_path_preflight()
