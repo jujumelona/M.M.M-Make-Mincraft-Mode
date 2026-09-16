@@ -107,6 +107,17 @@ class _Adapter:
 
 
 def test_verifier_pass_finalizes_without_repeating_verifier(monkeypatch) -> None:
+    # This regression targets VERIFY terminal behavior, not atomic coder lowering.
+    # Keep the already-valid single implementation request intact so a future atomic
+    # schema change cannot mask a verifier-loop regression.
+    from minecraft_mod_ai import small_model_atomic_coder_execution as atomic_coder
+
+    monkeypatch.setattr(
+        atomic_coder,
+        "atomicize_coder_messages",
+        lambda messages: (tuple(dict(message) for message in messages),),
+    )
+
     adapter = _Adapter()
     runtime = _Runtime()
     monkeypatch.setattr(
