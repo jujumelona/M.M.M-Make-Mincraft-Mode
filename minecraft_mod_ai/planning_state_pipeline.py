@@ -599,14 +599,20 @@ def _compile_detailed_plans_resumable_impl(
                 },
             )
             _checkpoint_state(checkpoint, pending_state)
-            return pending_state
+            raise RuntimeError(
+                "DETAILED_PLAN_RUNTIME_STALLED: detailed planning failed without "
+                "new durable obligation progress"
+            ) from exc
 
         if result.get("plan_ready") is not True:
             latest_state, advanced = _handle_nonready_detailed_result(
                 result, progress_before, checkpoint
             )
             if not advanced:
-                return latest_state
+                raise RuntimeError(
+                    "DETAILED_PLAN_NOT_READY: detailed planning returned non-ready "
+                    "without new durable obligation progress"
+                )
             continue
         break
 
