@@ -17,12 +17,24 @@ from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from enum import Enum
+from inspect import getattr_static
 from pathlib import Path
 from typing import Any
 
 from .agent_intent import implementation_requested
+from .llama_finish_reason_contract import (
+    CONTEXT_PRESSURE,
+    OUTPUT_EXHAUSTED,
+    completion_boundary_kind,
+    mark_context_recovery_exhausted,
+)
 from .model_adapters import GenerationRequest, ModelConfigurationError
-from .model_context_budget import bounded_tool_message, fit_messages_to_context
+from .model_context_budget import (
+    bounded_tool_message,
+    emergency_fit_messages,
+    fit_messages_to_context,
+    request_message_budget,
+)
 from .root_cause_trace import emit_root_cause, trace_scope
 from .source_mutation_contract import mutation_history_applied, mutation_payload_applied
 from .value_shapes import as_sequence as _sequence, structured_payload as _structured_payload
@@ -1636,6 +1648,118 @@ def _filter_tools_for_phase(
     )
 
 
+def _replace_live_messages(
+    messages: list[dict[str, Any]],
+    fitted: Sequence[Mapping[str, Any]],
+) -> bool:
+    replacement = [dict(message) for message in fitted]
+    if replacement == messages:
+        return False
+    messages[:] = replacement
+    return True
+
+
+def _retry_atomic_after_output_exhaustion(
+    router: Any,
+    *,
+    config: Any,
+    adapter: Any,
+    request: GenerationRequest,
+    messages: list[dict[str, Any]],
+    media_paths: tuple[Any, ...],
+) -> Any:
+    """Retry one bounded native tool action without resetting HostRunState."""
+
+    already_recovered = any(
+        isinstance(message.get("content"), str)
+        and _ATOMIC_OUTPUT_RECOVERY_MARKER in str(message.get("content"))
+        for message in messages
+        if isinstance(message, Mapping)
+    )
+    if already_recovered:
+        raise ModelConfigurationError(
+            "ATOMIC_ACTION_OUTPUT_STALLED: bounded output recovery was already used "
+            "for this live tool transcript."
+        )
+    messages.append({
+        "role": "system",
+        "content": (
+            _ATOMIC_OUTPUT_RECOVERY_MARKER
+            + "\n"
+            + _atomic_output_recovery_instruction(request)
+        ),
+    })
+    retry_request = replace(
+        request,
+        messages=tuple(messages),
+        media_paths=media_paths,
+        parallel_tool_calls=False if request.tools else request.parallel_tool_calls,
+    )
+    emit_root_cause(
+        "atomic_output_boundary_recovery",
+        operation="generate_with_tools",
+        gate="completion_boundary",
+        result="RETRY",
+        details={"tool_choice": request.tool_choice},
+    )
+    try:
+        return _generate_turn_in_scope(
+            router, config=config, adapter=adapter, turn_request=retry_request
+        )
+    except BaseException as retry_exc:
+        if completion_boundary_kind(retry_exc) == OUTPUT_EXHAUSTED:
+            raise ModelConfigurationError(
+                "ATOMIC_ACTION_OUTPUT_STALLED: the model exceeded the output allowance twice "
+                "without completing one bounded semantic action; refusing to reset agent state."
+            ) from retry_exc
+        raise
+
+
+def _exact_context_recovery_candidate(
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    turn_request: GenerationRequest,
+    exact_accounting: Any,
+    config: Any,
+    tools: Sequence[Any],
+) -> tuple[tuple[Mapping[str, Any], ...], dict[str, int]] | None:
+    """Select the largest deterministic retry with useful live output space."""
+
+    base_budget = max(1, int(request_message_budget(config, tools)))
+    budgets = tuple(
+        dict.fromkeys(
+            max(1, base_budget * numerator // 8)
+            for numerator in (8, 7, 6, 5, 4, 3, 2, 1)
+        )
+    )
+    original = tuple(messages)
+    fallback: tuple[tuple[Mapping[str, Any], ...], dict[str, int]] | None = None
+
+    for budget in budgets:
+        candidate = tuple(emergency_fit_messages(original, budget_bytes=budget))
+        if candidate == original:
+            continue
+        accounting = exact_accounting(replace(turn_request, messages=candidate))
+        input_tokens = int(accounting.input_tokens)
+        context_tokens = int(accounting.context_tokens)
+        remaining_tokens = context_tokens - input_tokens
+        if remaining_tokens <= 0:
+            continue
+        receipt = {
+            "budget_bytes": budget,
+            "input_tokens": input_tokens,
+            "context_tokens": context_tokens,
+            "remaining_tokens": remaining_tokens,
+        }
+        if fallback is None:
+            fallback = (candidate, receipt)
+        configured_output = max(1, int(getattr(config, "max_new_tokens", 0) or 1))
+        desired_reserve = min(configured_output, max(1, context_tokens // 4))
+        if remaining_tokens >= desired_reserve:
+            return candidate, receipt
+    return fallback
+
+
 def _generate_turn_in_scope(
     router: Any, *, config: Any, adapter: Any, turn_request: GenerationRequest
 ) -> Any:
@@ -1655,9 +1779,8 @@ def _generate_turn_with_context_recovery(
     tool_choice: Any,
     parallel_tool_calls: bool,
 ) -> Any:
-    fitted = fit_messages_to_context(messages, config=config, tools=request.tools)
-    if tuple(messages) != tuple(fitted):
-        messages[:] = [dict(message) for message in fitted]
+    """Fit one live turn and recover typed completion boundaries in-place."""
+
     turn_request = replace(
         request,
         messages=tuple(messages),
@@ -1666,46 +1789,98 @@ def _generate_turn_with_context_recovery(
         parallel_tool_calls=parallel_tool_calls,
     )
     try:
+        declared_accounting = getattr_static(adapter, "input_context_accounting")
+    except AttributeError:
+        declared_accounting = None
+    exact_accounting = (
+        getattr(adapter, "input_context_accounting", None)
+        if callable(declared_accounting)
+        else None
+    )
+    if callable(exact_accounting):
+        accounting = exact_accounting(turn_request)
+        fitted = (
+            tuple(messages)
+            if accounting.input_tokens < accounting.context_tokens
+            else fit_messages_to_context(messages, config=config, tools=request.tools)
+        )
+    else:
+        fitted = fit_messages_to_context(messages, config=config, tools=request.tools)
+    _replace_live_messages(messages, fitted)
+    turn_request = replace(turn_request, messages=tuple(messages))
+
+    try:
         return _generate_turn_in_scope(
             router, config=config, adapter=adapter, turn_request=turn_request
         )
-    except Exception as exc:
-        if not _completion_boundary_error(exc):
+    except BaseException as exc:
+        boundary_kind = completion_boundary_kind(exc)
+        if boundary_kind == OUTPUT_EXHAUSTED:
+            return _retry_atomic_after_output_exhaustion(
+                router,
+                config=config,
+                adapter=adapter,
+                request=turn_request,
+                messages=messages,
+                media_paths=media_paths,
+            )
+        if boundary_kind != CONTEXT_PRESSURE:
             raise
-        already_recovered = any(
-            isinstance(message.get("content"), str)
-            and _ATOMIC_OUTPUT_RECOVERY_MARKER in str(message.get("content"))
-            for message in messages
-            if isinstance(message, Mapping)
-        )
-        if already_recovered:
+
+        recovery_receipt: dict[str, int] = {}
+        if callable(exact_accounting):
+            exact_recovery = _exact_context_recovery_candidate(
+                messages,
+                turn_request=turn_request,
+                exact_accounting=exact_accounting,
+                config=config,
+                tools=request.tools,
+            )
+            if exact_recovery is None:
+                mark_context_recovery_exhausted(exc)
+                raise
+            emergency, recovery_receipt = exact_recovery
+        else:
+            active_budget = max(1, request_message_budget(config, request.tools))
+            emergency_budget = max(1, active_budget * 3 // 4)
+            emergency = emergency_fit_messages(messages, budget_bytes=emergency_budget)
+            recovery_receipt = {"budget_bytes": emergency_budget}
+
+        if not _replace_live_messages(messages, emergency):
+            mark_context_recovery_exhausted(exc)
             raise
-        recovery_instruction = (
-            _ATOMIC_OUTPUT_RECOVERY_MARKER
-            + "\n"
-            + _atomic_output_recovery_instruction(turn_request)
-        )
-        recovery_messages = [*messages, {"role": "system", "content": recovery_instruction}]
-        fitted_recovery = fit_messages_to_context(
-            recovery_messages, config=config, tools=request.tools
-        )
-        messages[:] = [dict(message) for message in fitted_recovery]
-        recovery_request = replace(
+        retry_request = replace(
             turn_request,
             messages=tuple(messages),
-            media_paths=(),
+            media_paths=media_paths,
         )
         emit_root_cause(
-            "atomic_output_boundary_recovery",
+            "context_boundary_recovery",
             operation="generate_with_tools",
             gate="completion_boundary",
             result="RETRY",
             reason=f"{type(exc).__name__}: {exc}",
-            details={"tool_choice": tool_choice},
+            details=recovery_receipt,
         )
-        return _generate_turn_in_scope(
-            router, config=config, adapter=adapter, turn_request=recovery_request
-        )
+        try:
+            return _generate_turn_in_scope(
+                router, config=config, adapter=adapter, turn_request=retry_request
+            )
+        except BaseException as retry_exc:
+            retry_kind = completion_boundary_kind(retry_exc)
+            if retry_kind == OUTPUT_EXHAUSTED:
+                return _retry_atomic_after_output_exhaustion(
+                    router,
+                    config=config,
+                    adapter=adapter,
+                    request=retry_request,
+                    messages=messages,
+                    media_paths=media_paths,
+                )
+            if retry_kind == CONTEXT_PRESSURE:
+                mark_context_recovery_exhausted(exc)
+                raise exc from retry_exc
+            raise
 
 
 def _sync_phase_tool_transcript(

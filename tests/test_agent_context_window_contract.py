@@ -345,7 +345,10 @@ def test_runtime_sources_have_no_legacy_unbounded_llama_transport() -> None:
 
     assert "_DEFAULT_COMPLETION_TIMEOUT_SECONDS = 600.0" not in adapter
     assert "read=None" not in hardware
-    assert "install_forced_tool_execution" in bootstrap
+    assert "install_forced_tool_execution" not in bootstrap
+    assert not (root / "forced_tool_execution_contract.py").exists()
+    assert "if request.tools:" in adapter
+    assert "return _native_tool_completion" in adapter
 
 
 def test_superseded_context_and_coder_route_modules_are_deleted() -> None:
