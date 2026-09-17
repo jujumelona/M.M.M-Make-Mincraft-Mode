@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-"""Target-aware Java/JDT diagnostics bootstrap.
+"""Target-aware Java/JDT diagnostics helpers.
 
-The Colab/runtime bootstrap can run before a Minecraft target is selected.  Java
-verification therefore resolves the project's actual Gradle Java requirement again at
-the verifier boundary, where the project files already exist.  A diagnostics retry is
-allowed only when the toolchain environment has materially changed.
+Project Java selection is resolved at the verifier boundary, after project files exist.
+This module contains the reusable implementation only; it never mutates
+``ProductionToolService`` at import or bootstrap time.
 """
 
 import os
 import re
-from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +40,6 @@ _RELEASE_NOT_FOUND = re.compile(
     r"\brelease\s+(?P<major>\d+)\s+is\s+not\s+found\s+in\s+the\s+system\b",
     re.IGNORECASE,
 )
-_JAVA_MAJOR_SETTING = re.compile(r"^(?:JavaSE-)?(?P<major>\d+)$", re.IGNORECASE)
 
 
 class ProjectJavaResolutionError(RuntimeError):
@@ -65,8 +62,7 @@ def _infer_project_java_major(project_root: str | Path) -> int | None:
     majors: set[int] = set()
     evidence: list[str] = []
     for relative in _PROJECT_BUILD_FILES:
-        path = root / relative
-        text = _read_build_file(path)
+        text = _read_build_file(root / relative)
         if not text:
             continue
         for pattern in _PROJECT_JAVA_PATTERNS:
@@ -84,14 +80,6 @@ def _infer_project_java_major(project_root: str | Path) -> int | None:
     return next(iter(majors)) if majors else None
 
 
-def _configured_java_major() -> int | None:
-    raw = os.environ.get("MMM_JAVA_VERSION", "").strip()
-    if not raw:
-        return None
-    match = _JAVA_MAJOR_SETTING.fullmatch(raw)
-    return int(match.group("major")) if match is not None else None
-
-
 def _toolchain_token() -> tuple[str, str]:
     return (
         os.environ.get("MMM_JAVA_VERSION", "").strip(),
@@ -100,19 +88,16 @@ def _toolchain_token() -> tuple[str, str]:
 
 
 def _missing_release_major(exc: BaseException) -> int | None:
-    """Extract javac's missing --release major from a bounded exception chain."""
     current: BaseException | None = exc
     seen: set[int] = set()
-    depth = 0
-    while current is not None and depth < 16 and id(current) not in seen:
+    for _ in range(16):
+        if current is None or id(current) in seen:
+            break
         seen.add(id(current))
         match = _RELEASE_NOT_FOUND.search(str(current))
         if match is not None:
             return int(match.group("major"))
-        cause = current.__cause__
-        context = current.__context__
-        current = cause if cause is not None else context
-        depth += 1
+        current = current.__cause__ if current.__cause__ is not None else current.__context__
     return None
 
 
@@ -127,70 +112,46 @@ def _reset_cached_java_service(service: Any) -> None:
 
 
 def _apply_project_java(service: Any, major: int) -> bool:
-    """Provision the exact project JDK and report whether verifier state changed."""
     before = _toolchain_token()
     os.environ["MMM_JAVA_VERSION"] = str(major)
     ensure_jdtls()
-    after = _toolchain_token()
-    changed = after != before
+    changed = _toolchain_token() != before
     if changed:
-        # JavaLanguageService caches a live JDT process.  A process created under the
-        # old JDK environment must never survive a target-Java transition.
         _reset_cached_java_service(service)
     return changed
 
 
-def install(production_tools_module: Any) -> None:
-    cls = production_tools_module.ProductionToolService
-    current = cls.java_diagnostics
-    if getattr(current, "_mmm_target_java_diagnostics", False):
-        return
+def run_project_java_diagnostics(
+    service: Any,
+    project_root: str,
+    relative_files: list[str] | None = None,
+    timeout_seconds: int = 60,
+) -> dict[str, Any]:
+    root = service._existing_dir(project_root)
+    inferred = _infer_project_java_major(root)
+    if inferred is not None:
+        _apply_project_java(service, inferred)
 
-    @wraps(current)
-    def java_diagnostics(
-        self: Any,
-        project_root: str,
-        relative_files: list[str] | None = None,
-        timeout_seconds: int = 60,
-    ) -> dict[str, Any]:
-        root = self._existing_dir(project_root)
-        inferred = _infer_project_java_major(root)
-        if inferred is not None:
-            _apply_project_java(self, inferred)
-
-        try:
-            return current(
-                self,
-                project_root,
-                relative_files=relative_files,
-                timeout_seconds=timeout_seconds,
-            )
-        except Exception as exc:
-            required = _missing_release_major(exc)
-            if required is None:
-                raise
-
-            # javac supplied stronger evidence than static Gradle extraction.  Retry
-            # diagnostics only if provisioning actually changes the verifier
-            # environment; identical state is semantic no-progress and must escape.
-            changed = _apply_project_java(self, required)
-            if not changed:
-                raise
-            return current(
-                self,
-                project_root,
-                relative_files=relative_files,
-                timeout_seconds=timeout_seconds,
-            )
-
-    java_diagnostics._mmm_target_java_diagnostics = True  # type: ignore[attr-defined]
-    java_diagnostics.__wrapped__ = current
-    cls.java_diagnostics = java_diagnostics
+    try:
+        return service.java.diagnostics(
+            root,
+            relative_files=relative_files,
+            timeout_seconds=timeout_seconds,
+        )
+    except Exception as exc:
+        required = _missing_release_major(exc)
+        if required is None or not _apply_project_java(service, required):
+            raise
+        return service.java.diagnostics(
+            root,
+            relative_files=relative_files,
+            timeout_seconds=timeout_seconds,
+        )
 
 
 __all__ = [
     "ProjectJavaResolutionError",
     "_infer_project_java_major",
     "_missing_release_major",
-    "install",
+    "run_project_java_diagnostics",
 ]
