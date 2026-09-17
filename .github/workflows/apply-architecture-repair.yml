@@ -65,6 +65,7 @@ jobs:
           rm -rf .github/repair
           rm -f .github/workflows/apply-architecture-repair.yml
           rm -f .github/workflows/one-shot-architecture-cycle-fix.yml
+          find . -type d -name __pycache__ -prune -exec rm -rf {} + || true
 
       - name: Install validation dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
@@ -82,9 +83,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin 1983dffcddf15064f388619a070db3ea99d83d2a
+          git fetch --no-tags --depth=1 origin a1018a18a3818bff9458f2a9abfe7f8ccd42166a
           python .github/scripts/audit_code_quality_regression.py \
-            --base-ref 1983dffcddf15064f388619a070db3ea99d83d2a \
+            --base-ref a1018a18a3818bff9458f2a9abfe7f8ccd42166a \
             --output /tmp/code-quality-regression.json
           python - <<'PY'
           import json
