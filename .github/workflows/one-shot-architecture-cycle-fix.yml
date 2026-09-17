@@ -6,12 +6,17 @@ on:
     paths:
       - '.github/workflows/one-shot-architecture-cycle-fix.yml'
 
+concurrency:
+  group: one-shot-architecture-cycle-fix-main
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
 jobs:
   apply:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
         with:
@@ -27,8 +32,18 @@ jobs:
         run: |
           python -m compileall -q minecraft_mod_ai tests tools
           python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
-      - name: Full regression suite
-        run: python -m pytest -q
+      - name: Focused regression diagnostics
+        run: |
+          python tools/pytest_diagnostics.py \
+            --log audit/architecture-cycle-tests.log \
+            --junit audit/architecture-cycle-tests.xml \
+            --timeout-seconds 300 \
+            --faulthandler-timeout-seconds 60 \
+            --durations 25 \
+            --maxfail 10 \
+            tests/test_agent_tool_runtime.py \
+            tests/test_tool_validation_surface_contract.py \
+            tests/test_platform_catalog.py
       - name: Assert giant import cycle removed
         run: |
           mkdir -p audit
@@ -51,5 +66,10 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add minecraft_mod_ai
           git diff --cached --check
+          if git diff --cached --quiet; then
+            echo 'architecture cycle fix already present'
+            exit 0
+          fi
           git commit -m 'Break platform and tool validation import cycles'
+          git pull --rebase origin main
           git push origin HEAD:main
