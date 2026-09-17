@@ -266,7 +266,9 @@ def _jdt_configuration(project_java_home: Path | None = None) -> dict[str, Any]:
                 "updateBuildConfiguration": "automatic",
                 "runtimes": [runtime],
             },
-            "import": {"gradle": {"enabled": True}},
+            "import": {
+                "gradle": {"enabled": True, "java": {"home": runtime["path"]}}
+            },
         }
     }
 

@@ -227,7 +227,7 @@ def diagnostic_items(receipt: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     return _diagnostic_items_from_receipt(normalized)
 
 
-def _is_error(item: Mapping[str, Any]) -> bool:
+def is_error_diagnostic(item: Mapping[str, Any]) -> bool:
     try:
         return int(item.get("severity", 1)) == 1
     except (TypeError, ValueError, OverflowError):
@@ -246,7 +246,7 @@ def _core_runtime_readiness_error(
 
     matches: list[str] = []
     for item in items:
-        if not _is_error(item):
+        if not is_error_diagnostic(item):
             continue
         message = str(item.get("message") or "").strip()
         normalized = " ".join(message.casefold().split())
@@ -273,7 +273,7 @@ def _toolchain_readiness_error(
 
     matches: list[str] = []
     for item in items:
-        if not _is_error(item):
+        if not is_error_diagnostic(item):
             continue
         message = str(item.get("message") or "").strip()
         normalized = " ".join(message.casefold().split())
@@ -298,7 +298,7 @@ def diagnostic_errors(receipt: Mapping[str, Any] | None) -> list[dict[str, Any]]
 
     normalized, path = unwrap_diagnostic_receipt(receipt)
     items = _diagnostic_items_from_receipt(normalized)
-    source_errors = [item for item in items if _is_error(item)]
+    source_errors = [item for item in items if is_error_diagnostic(item)]
     unavailable = _availability_error(normalized)
     readiness = None if unavailable is not None else _core_runtime_readiness_error(items)
     toolchain = (

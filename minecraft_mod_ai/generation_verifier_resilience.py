@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .root_cause_trace import emit_root_cause
+from .validation_diagnostic_contract import is_error_diagnostic
 
 _MARKER = "_mmm_host_owned_generation_verifier"
 _VERIFIER_NAME = "java_diagnostics"
@@ -131,18 +132,11 @@ def _diagnostic_items(result: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...
     return ()
 
 
-def _is_error_diagnostic(item: Mapping[str, Any]) -> bool:
-    try:
-        return int(item.get("severity", 1)) == 1
-    except (TypeError, ValueError, OverflowError):
-        return True
-
-
 def _jdt_dependency_resolution_suspect(result: Mapping[str, Any]) -> bool:
     """Detect JDT errors that may be project-classpath failures rather than bad source."""
 
     for item in _diagnostic_items(result):
-        if not _is_error_diagnostic(item):
+        if not is_error_diagnostic(item):
             continue
         message = " ".join(str(item.get("message") or "").casefold().split())
         if not any(prefix in message for prefix in _EXTERNAL_CODE_PREFIXES):

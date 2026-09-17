@@ -24,6 +24,7 @@ from functools import wraps
 from typing import Any
 
 from .mutation_failure_classification import is_recoverable_mutation_failure
+from .value_shapes import structured_payload as _structured_payload
 
 _MARKER = "_mmm_mutation_authority_final_guard_v1"
 _SEMANTIC_BOUNDARY_MARKER = "_mmm_post_argument_semantic_boundary_v1"
@@ -46,20 +47,6 @@ _POST_ARGUMENT_SEMANTIC_FAILURE_PREFIXES = (
     "MUTATION_TARGET_",
     "WRITE_SCOPE_",
 )
-
-
-def _structured_payload(content: Any) -> Any | None:
-    if isinstance(content, (Mapping, list, tuple)):
-        return content
-    if not isinstance(content, str):
-        return None
-    raw = content.strip()
-    if not raw.startswith(("{", "[")):
-        return None
-    try:
-        return json.loads(raw)
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return None
 
 
 def _explicit_mutation_target(payload: Any, loop_module: Any) -> str:

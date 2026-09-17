@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import threading
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -35,6 +36,7 @@ _ALLOWED_SOURCE_PREFIXES = (
     "https://docs.modrinth.com/",
 )
 _TOKEN_PATTERN = re.compile(r"[a-z0-9_.:+-]+|[가-힣]{2,}", re.IGNORECASE)
+_CORPUS_THREAD_STATE = threading.local()
 
 
 @dataclass(frozen=True)
@@ -580,14 +582,17 @@ def retrieve_official_evidence(
     mappings: str | None = None,
     limit: int = 6,
 ) -> RetrievalReceipt:
-    with OfficialCorpusIndex() as index:
-        return index.retrieve(
-            query,
-            minecraft_version=minecraft_version,
-            loader=loader,
-            mappings=mappings,
-            limit=limit,
-        )
+    index = getattr(_CORPUS_THREAD_STATE, "official_index", None)
+    if index is None:
+        index = OfficialCorpusIndex()
+        _CORPUS_THREAD_STATE.official_index = index
+    return index.retrieve(
+        query,
+        minecraft_version=minecraft_version,
+        loader=loader,
+        mappings=mappings,
+        limit=limit,
+    )
 
 
 def corpus_manifest() -> dict[str, Any]:

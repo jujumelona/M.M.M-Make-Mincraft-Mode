@@ -24,6 +24,7 @@ from .model_adapters import GenerationRequest, ModelConfigurationError
 from .model_context_budget import bounded_tool_message, fit_messages_to_context
 from .root_cause_trace import emit_root_cause, trace_scope
 from .source_mutation_contract import mutation_history_applied, mutation_payload_applied
+from .value_shapes import as_sequence as _sequence, structured_payload as _structured_payload
 
 
 class LoopPhase(str, Enum):
@@ -227,26 +228,6 @@ def evidence_fingerprint(value: Any) -> str | None:
         stable, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def _structured_payload(content: Any) -> Any | None:
-    if isinstance(content, (Mapping, list, tuple)):
-        return content
-    if not isinstance(content, str):
-        return None
-    raw = content.strip()
-    if not raw.startswith(("{", "[")):
-        return None
-    try:
-        return json.loads(raw)
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return None
-
-
-def _sequence(value: Any) -> tuple[Any, ...]:
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return tuple(value)
-    return ()
 
 
 def _evidence_task_from_module(module: Any) -> Mapping[str, Any] | None:

@@ -207,11 +207,7 @@ def _build_research_graph(
         raise SpecValidationError("Central research brief has no domains.")
 
     raw_target = research_brief.get("_mmm_platform_target")
-    try:
-        target = _canonical_platform_target(raw_target) if raw_target is not None else None
-    except SpecValidationError:
-        # Missing/partial/stale platform metadata falls back to target-neutral retrieval.
-        target = None
+    target = _canonical_platform_target(raw_target) if raw_target is not None else None
     adapter = (
         adapter_for_target(target["minecraft_version"], target["loader"])
         if target is not None
@@ -228,6 +224,16 @@ def _build_research_graph(
                 {
                     "domain_id": domain.domain_id,
                     "strategy": "routed_to_other_providers",
+                    "queries": [],
+                }
+            )
+            continue
+        if target is None:
+            deferred.append(domain.domain_id)
+            results.append(
+                {
+                    "domain_id": domain.domain_id,
+                    "strategy": "deferred_until_platform_selected",
                     "queries": [],
                 }
             )

@@ -1,75 +1,44 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
-import pytest
-
-from minecraft_mod_ai.java_lsp import _jdtls_environment
-from minecraft_mod_ai.java_toolchain_separation_installation import install
+from minecraft_mod_ai import java_lsp
 
 
-class _BootstrapError(RuntimeError):
-    pass
-
-
-def _fake_java_lsp(runtime_home: str | None):
-    def configuration(project_java_home=None):
-        runtimes = []
-        if runtime_home is not None:
-            runtimes.append(
-                {
-                    "name": "JavaSE-25",
-                    "path": runtime_home,
-                    "default": True,
-                }
-            )
-        return {
-            "java": {
-                "configuration": {"runtimes": runtimes},
-                "import": {"gradle": {"enabled": True}},
-            }
-        }
-
-    return SimpleNamespace(
-        _jdt_configuration=configuration,
-        JDTWorkspaceBootstrapError=_BootstrapError,
+def test_gradle_daemon_uses_resolved_project_jdk(monkeypatch) -> None:
+    project_home = "/opt/mmm/project-jdk-25"
+    monkeypatch.setattr(
+        java_lsp,
+        "_project_java_runtime",
+        lambda _home=None: {
+            "name": "JavaSE-25",
+            "path": project_home,
+            "default": True,
+        },
     )
 
-
-def test_gradle_daemon_uses_project_jdk_from_jdt_runtime_not_host_java_home() -> None:
-    project_home = "/opt/mmm/project-jdk-25"
-    module = _fake_java_lsp(project_home)
-    install(module)
-
-    result = module._jdt_configuration()
+    result = java_lsp._jdt_configuration()
 
     assert result["java"]["configuration"]["runtimes"][0]["path"] == project_home
     assert result["java"]["import"]["gradle"]["java"]["home"] == project_home
 
 
-def test_explicit_project_jdk_is_used_for_gradle_daemon() -> None:
-    module = _fake_java_lsp("/opt/mmm/default-project-jdk")
-    install(module)
+def test_explicit_project_jdk_is_forwarded_to_runtime_resolution(monkeypatch) -> None:
     explicit = Path("/opt/mmm/selected-jdk-25")
+    observed = []
 
-    result = module._jdt_configuration(explicit)
+    def runtime(home=None):
+        observed.append(home)
+        return {"name": "JavaSE-25", "path": str(explicit), "default": True}
 
-    assert result["java"]["import"]["gradle"]["java"]["home"] == str(explicit.resolve())
+    monkeypatch.setattr(java_lsp, "_project_java_runtime", runtime)
+    result = java_lsp._jdt_configuration(explicit)
 
-
-def test_missing_project_jdk_fails_closed_instead_of_inheriting_launcher_jvm() -> None:
-    module = _fake_java_lsp(None)
-    install(module)
-
-    with pytest.raises(_BootstrapError, match="project JDK"):
-        module._jdt_configuration()
+    assert observed == [explicit]
+    assert result["java"]["import"]["gradle"]["java"]["home"] == str(explicit)
 
 
-def test_jdt_launcher_java_home_is_process_local_and_separate(
-    monkeypatch,
-    tmp_path,
-) -> None:
+def test_jdt_launcher_java_home_is_process_local_and_separate(monkeypatch, tmp_path) -> None:
     launcher = tmp_path / "jdt-launcher"
     binary = launcher / "bin" / ("java.exe" if __import__("os").name == "nt" else "java")
     binary.parent.mkdir(parents=True)
@@ -77,7 +46,7 @@ def test_jdt_launcher_java_home_is_process_local_and_separate(
 
     monkeypatch.setenv("MMM_JDTLS_JAVA_HOME", str(launcher))
     monkeypatch.setenv("JAVA_HOME", "/host/default-java")
-    env = _jdtls_environment()
+    env = java_lsp._jdtls_environment()
 
     assert env["JAVA_HOME"] == str(launcher.resolve())
     assert str(launcher.resolve() / "bin") in env["PATH"].split(__import__("os").pathsep)[0]

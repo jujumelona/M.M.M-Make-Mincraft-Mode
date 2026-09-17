@@ -13,6 +13,7 @@ from .structural_artifact_mapping import (
     validate_artifact_kinds,
 )
 from .task_template_catalog import load_template
+from .value_shapes import as_sequence as _sequence
 
 TRANSLATION_SEQUENCE: tuple[str, ...] = (
     "translation/minecraft_capability_mapping",
@@ -44,12 +45,6 @@ class TranslationPlan:
     ui_artifacts: tuple[str, ...]
     resource_artifacts: tuple[str, ...]
     receipts: tuple[dict[str, Any], ...]
-
-
-def _sequence(value: Any) -> tuple[Any, ...]:
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return tuple(value)
-    return ()
 
 
 def _raw_structural_kinds(requirement: Mapping[str, Any]) -> tuple[str, ...]:

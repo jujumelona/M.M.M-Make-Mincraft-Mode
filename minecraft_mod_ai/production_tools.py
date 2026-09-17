@@ -13,6 +13,7 @@ from .blockbench_client import BlockbenchMCPClient, allowed_blockbench_operation
 from .geckolib_generator import generate_geckolib_entity_assets
 from .java_lsp_trace import TracedJavaLanguageService as JavaLanguageService
 from .model_router import ModelRouter
+from .project_java_diagnostics_installation import run_project_java_diagnostics
 from .model_smoke import run_model_smoke
 from .rag_index import ProjectRAGIndex
 from .spec import Proposal, ProposalStatus, SpecValidationError
@@ -171,8 +172,12 @@ class ProductionToolService:
         }
 
     def java_diagnostics(self, project_root: str, relative_files: list[str] | None=None, timeout_seconds: int=60) -> dict[str, Any]:
-        root = self._existing_dir(project_root)
-        return self.java.diagnostics(root, relative_files=relative_files, timeout_seconds=timeout_seconds)
+        return run_project_java_diagnostics(
+            self,
+            project_root,
+            relative_files=relative_files,
+            timeout_seconds=timeout_seconds,
+        )
 
     def java_workspace_symbols(self, project_root: str, query: str, timeout_seconds: int=60) -> dict[str, Any]:
         return self.java.workspace_symbols(self._existing_dir(project_root), query, timeout_seconds=timeout_seconds)

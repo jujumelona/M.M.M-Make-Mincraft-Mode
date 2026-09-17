@@ -693,18 +693,21 @@ def _parallel_retrieve_domain_evidence_factory(
                 retrieve=selected_retrieve,
             )
 
-        # Platform targeting is an optional refinement. Generic Official RAG remains
-        # active when the target is missing, partial, stale, or otherwise non-executable.
-        try:
-            adapter, verified_domains = _require_parallel_research_contract(
-                central_module,
-                research_brief,
-            )
-        except ParallelResearchContractError:
+        raw_target = research_brief.get("_mmm_platform_target")
+        if raw_target is None:
+            # Official docs are target-specific.  With no selected target the central
+            # graph records those domains as deferred while retaining non-official routes.
             return build_research_graph(
                 research_brief,
                 retrieve=selected_retrieve,
             )
+
+        # A target that exists must be complete and canonical.  Partial or stale
+        # metadata is a contract error, never a reason to silently run generic RAG.
+        adapter, verified_domains = _require_parallel_research_contract(
+            central_module,
+            research_brief,
+        )
         domains = verified_domains
 
         query_criteria, domain_queries, domain_criteria = _coverage_query_plan(
