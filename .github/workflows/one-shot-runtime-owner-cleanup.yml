@@ -1,4 +1,5 @@
 name: One-shot runtime owner cleanup
+# retry: compatibility-hook-restored
 
 on:
   push:
