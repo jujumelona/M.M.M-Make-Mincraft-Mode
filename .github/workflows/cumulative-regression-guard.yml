@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   cumulative-regression:
-    name: Last-good cumulative regression
+    name: Regression ratchet and cumulative debt audit
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -37,14 +37,15 @@ jobs:
       - name: Install audit dependencies
         run: python -m pip install --prefer-binary "build>=1,<2" -e ".[dev]"
 
-      - name: Resolve last known-good cumulative baseline
+      - name: Resolve blocking and cumulative baselines
         id: baseline
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          BASE_SHA=""
+          PARENT_SHA="$(git rev-parse HEAD^)"
+          LAST_GOOD_SHA=""
           for WORKFLOW in cumulative-regression-guard.yml main-ci.yml; do
             while IFS= read -r CANDIDATE; do
               if [[ -z "$CANDIDATE" || "$CANDIDATE" == "$GITHUB_SHA" ]]; then
@@ -56,7 +57,7 @@ jobs:
                   --jq '.status' 2>/dev/null || true
               )"
               if [[ "$STATUS" == "ahead" || "$STATUS" == "identical" ]]; then
-                BASE_SHA="$CANDIDATE"
+                LAST_GOOD_SHA="$CANDIDATE"
                 break 2
               fi
             done < <(
@@ -66,13 +67,40 @@ jobs:
             )
           done
 
-          if [[ -z "$BASE_SHA" ]]; then
-            BASE_SHA="$(git rev-parse HEAD^)"
+          if [[ -z "$LAST_GOOD_SHA" ]]; then
+            LAST_GOOD_SHA="$PARENT_SHA"
           fi
 
-          git fetch --no-tags --depth=1 origin "$BASE_SHA"
-          echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
-          echo "Resolved cumulative regression baseline: $BASE_SHA"
+          git fetch --no-tags --depth=1 origin "$PARENT_SHA"
+          if [[ "$LAST_GOOD_SHA" != "$PARENT_SHA" ]]; then
+            git fetch --no-tags --depth=1 origin "$LAST_GOOD_SHA"
+          fi
+          echo "base_sha=$PARENT_SHA" >> "$GITHUB_OUTPUT"
+          echo "last_good_sha=$LAST_GOOD_SHA" >> "$GITHUB_OUTPUT"
+          printf '%s\n' \
+            "Blocking regression baseline (immediate parent): $PARENT_SHA" \
+            "Cumulative debt reference (last successful guard): $LAST_GOOD_SHA"
+
+      - name: Record baseline provenance
+        env:
+          BASE_SHA: ${{ steps.baseline.outputs.base_sha }}
+          LAST_GOOD_SHA: ${{ steps.baseline.outputs.last_good_sha }}
+        run: |
+          mkdir -p audit/cumulative
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          payload = {
+              "schema": "mmm/regression-ratchet-baselines-v1",
+              "blocking_parent_sha": os.environ["BASE_SHA"],
+              "cumulative_last_good_sha": os.environ["LAST_GOOD_SHA"],
+          }
+          Path("audit/cumulative/baselines.json").write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
 
       - name: Run fast diagnostic contracts
         id: diagnostics
@@ -90,7 +118,7 @@ jobs:
             tests/test_pytest_diagnostics_timeout_evidence.py \
             tests/test_root_cause_audit_wrapper.py
 
-      - name: Run cumulative architecture regression audit
+      - name: Run blocking architecture regression audit
         id: architecture
         continue-on-error: true
         env:
@@ -101,7 +129,18 @@ jobs:
             --base-ref "$BASE_SHA" \
             --output audit/cumulative/code-quality-regression.json
 
-      - name: Run cumulative runtime efficiency regression audit
+      - name: Report cumulative architecture debt
+        id: cumulative_architecture
+        continue-on-error: true
+        env:
+          LAST_GOOD_SHA: ${{ steps.baseline.outputs.last_good_sha }}
+        run: |
+          mkdir -p audit/cumulative
+          python .github/scripts/audit_code_quality_regression.py \
+            --base-ref "$LAST_GOOD_SHA" \
+            --output audit/cumulative/cumulative-code-quality-debt.json
+
+      - name: Run blocking runtime efficiency regression audit
         id: runtime_efficiency
         continue-on-error: true
         shell: bash
@@ -122,13 +161,40 @@ jobs:
           (
             cd "$BASE_DIR"
             python .github/scripts/audit_runtime_efficiency.py \
-              --output /tmp/runtime-efficiency-cumulative-baseline.json
+              --output /tmp/runtime-efficiency-blocking-baseline.json
           )
           python .github/scripts/gate_runtime_efficiency.py \
-            --baseline /tmp/runtime-efficiency-cumulative-baseline.json \
+            --baseline /tmp/runtime-efficiency-blocking-baseline.json \
             --current audit/cumulative/runtime-efficiency.json
 
-      - name: Run cumulative runtime mutation regression audit
+      - name: Report cumulative runtime efficiency debt
+        id: cumulative_runtime_efficiency
+        continue-on-error: true
+        shell: bash
+        env:
+          LAST_GOOD_SHA: ${{ steps.baseline.outputs.last_good_sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p audit/cumulative
+          LAST_GOOD_DIR="$(mktemp -d)"
+          trap 'rm -rf "$LAST_GOOD_DIR"' EXIT
+          AUDIT_PATHS=(.github/scripts/audit_runtime_efficiency.py minecraft_mod_ai tools)
+          if git cat-file -e "$LAST_GOOD_SHA":download_resources.py 2>/dev/null; then
+            AUDIT_PATHS+=(download_resources.py)
+          fi
+          git archive --format=tar "$LAST_GOOD_SHA" -- "${AUDIT_PATHS[@]}" | tar -xf - -C "$LAST_GOOD_DIR"
+          (
+            cd "$LAST_GOOD_DIR"
+            python .github/scripts/audit_runtime_efficiency.py \
+              --output /tmp/runtime-efficiency-last-good.json
+          )
+          python .github/scripts/gate_runtime_efficiency.py \
+            --baseline /tmp/runtime-efficiency-last-good.json \
+            --current audit/cumulative/runtime-efficiency.json \
+            > audit/cumulative/cumulative-runtime-efficiency-debt.log 2>&1
+          cat audit/cumulative/cumulative-runtime-efficiency-debt.log
+
+      - name: Run blocking runtime mutation regression audit
         id: runtime_mutation
         continue-on-error: true
         shell: bash
@@ -158,7 +224,7 @@ jobs:
           retention-days: 30
           path: audit/cumulative/
 
-      - name: Fail on any cumulative regression
+      - name: Fail on any newly introduced regression
         if: ${{ always() }}
         shell: bash
         env:
@@ -166,13 +232,17 @@ jobs:
           ARCHITECTURE: ${{ steps.architecture.outcome }}
           RUNTIME_EFFICIENCY: ${{ steps.runtime_efficiency.outcome }}
           RUNTIME_MUTATION: ${{ steps.runtime_mutation.outcome }}
+          CUMULATIVE_ARCHITECTURE: ${{ steps.cumulative_architecture.outcome }}
+          CUMULATIVE_RUNTIME_EFFICIENCY: ${{ steps.cumulative_runtime_efficiency.outcome }}
         run: |
           set -euo pipefail
           printf '%s\n' \
             "diagnostics=$DIAGNOSTICS" \
-            "architecture=$ARCHITECTURE" \
-            "runtime_efficiency=$RUNTIME_EFFICIENCY" \
-            "runtime_mutation=$RUNTIME_MUTATION"
+            "new_architecture_regression=$ARCHITECTURE" \
+            "new_runtime_efficiency_regression=$RUNTIME_EFFICIENCY" \
+            "new_runtime_mutation=$RUNTIME_MUTATION" \
+            "reported_cumulative_architecture_debt=$CUMULATIVE_ARCHITECTURE" \
+            "reported_cumulative_runtime_efficiency_debt=$CUMULATIVE_RUNTIME_EFFICIENCY"
           if [[ "$DIAGNOSTICS" != "success" || \
                 "$ARCHITECTURE" != "success" || \
                 "$RUNTIME_EFFICIENCY" != "success" || \
