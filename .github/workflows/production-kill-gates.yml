@@ -33,26 +33,34 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for lane in 1 2 3 4; do
-            matrix="$(python -m tools.ci_test_matrix --file-cells --lane "$lane" --lane-count 4 --max-jobs 256)"
-            test "$matrix" != '{"include":[]}'
-            echo "lane${lane}=$matrix" >> "$GITHUB_OUTPUT"
-          done
-          python - <<'PY'
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
           from pathlib import Path
           from tools.ci_test_matrix import build_file_lanes
 
           expected = sorted(path.as_posix() for path in Path("tests").glob("test_*.py"))
-          lanes = build_file_lanes(expected, lane_count=4, max_jobs_per_lane=256)
+          assert expected, "no test files discovered"
+
+          # Four long-lived runners preserve the existing lane topology while avoiding
+          # one hosted runner allocation and one dependency install per test file.
+          # max_jobs_per_lane is deliberately set from the discovered file count here:
+          # these are no longer GitHub matrix cells, so no matrix-capacity limit applies.
+          lanes = build_file_lanes(
+              expected,
+              lane_count=4,
+              max_jobs_per_lane=len(expected),
+          )
           cells = [cell for lane in lanes for cell in lane]
           actual = [cell["files"][0] for cell in cells]
-          assert expected, "no test files discovered"
           assert len(cells) == len(expected), (len(cells), len(expected))
-          assert len(actual) == len(set(actual)), "duplicate test files in CI matrix"
-          assert sorted(actual) == expected, "CI matrix omitted or invented test files"
-          assert all(len(cell["files"]) == 1 for cell in cells), "a CI cell contains multiple files"
-          assert all(len(lane) <= 256 for lane in lanes), "GitHub matrix capacity exceeded"
-          print(f"production kill gates: files={len(expected)} lanes={[len(lane) for lane in lanes]}")
+          assert len(actual) == len(set(actual)), "duplicate test files in kill-gate lanes"
+          assert sorted(actual) == expected, "kill-gate lanes omitted or invented test files"
+          assert all(len(cell["files"]) == 1 for cell in cells), "a kill-gate cell owns multiple files"
+
+          for index, lane in enumerate(lanes, 1):
+              payload = json.dumps(lane, separators=(",", ":"))
+              print(f"lane{index}={payload}")
+          print(f"production kill gates: files={len(expected)} lanes={[len(lane) for lane in lanes]}", file=__import__('sys').stderr)
           PY
 
   collection-contract:
@@ -80,13 +88,13 @@ jobs:
           if-no-files-found: warn
 
   lane1:
-    name: Kill gate L1 / ${{ matrix.id }}
+    name: Kill gate lane L1
     needs: file-plan
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.file-plan.outputs.lane1) }}
+    env:
+      TEST_CELLS_JSON: ${{ needs.file-plan.outputs.lane1 }}
+      LANE_ID: L1
     steps: &test_steps
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -98,65 +106,78 @@ jobs:
           distribution: temurin
           java-version: "17"
       - run: python -m pip install --prefer-binary -e '.[dev,ui]'
-      - name: Run exactly one test file
+      - name: Run every lane file in its own pytest process
         shell: bash
-        env:
-          TEST_FILES_JSON: ${{ toJSON(matrix.files) }}
-          CELL_ID: ${{ matrix.id }}
         run: |
           set -euo pipefail
-          mkdir -p audit/kill-gates
-          python - <<'PY' > /tmp/test-file.txt
+          mkdir -p "audit/kill-gates/${LANE_ID}"
+          python - <<'PY' > /tmp/test-cells.tsv
           import json
           import os
-          files = json.loads(os.environ["TEST_FILES_JSON"])
-          assert len(files) == 1, f"kill gate must own exactly one test file, got {files!r}"
-          print(files[0])
+
+          cells = json.loads(os.environ["TEST_CELLS_JSON"])
+          assert cells, "kill-gate lane is empty"
+          for cell in cells:
+              files = cell["files"]
+              assert len(files) == 1, f"kill-gate cell must own one file, got {files!r}"
+              print(f"{cell['id']}\t{files[0]}")
           PY
-          test_file="$(cat /tmp/test-file.txt)"
-          python tools/pytest_diagnostics.py \
-            --log "audit/kill-gates/${CELL_ID}.log" \
-            --junit "audit/kill-gates/${CELL_ID}.xml" \
-            --durations 25 \
-            --maxfail 100 \
-            "$test_file"
+          test -s /tmp/test-cells.tsv
+
+          failures=0
+          while IFS=$'\t' read -r cell_id test_file; do
+            echo "::group::${LANE_ID}/${cell_id} ${test_file}"
+            if ! python tools/pytest_diagnostics.py \
+              --log "audit/kill-gates/${LANE_ID}/${cell_id}.log" \
+              --junit "audit/kill-gates/${LANE_ID}/${cell_id}.xml" \
+              --durations 25 \
+              --maxfail 100 \
+              "$test_file"; then
+              failures=$((failures + 1))
+              echo "::error file=${test_file}::${LANE_ID}/${cell_id} failed"
+            fi
+            echo "::endgroup::"
+          done < /tmp/test-cells.tsv
+
+          if (( failures > 0 )); then
+            echo "${LANE_ID}: ${failures} isolated test file(s) failed"
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: kill-gate-${{ matrix.id }}-${{ github.sha }}
-          path: |
-            audit/kill-gates/${{ matrix.id }}.log
-            audit/kill-gates/${{ matrix.id }}.xml
+          name: kill-gate-${{ env.LANE_ID }}-${{ github.sha }}
+          path: audit/kill-gates/${{ env.LANE_ID }}/
           if-no-files-found: warn
 
   lane2:
-    name: Kill gate L2 / ${{ matrix.id }}
+    name: Kill gate lane L2
     needs: file-plan
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.file-plan.outputs.lane2) }}
+    env:
+      TEST_CELLS_JSON: ${{ needs.file-plan.outputs.lane2 }}
+      LANE_ID: L2
     steps: *test_steps
 
   lane3:
-    name: Kill gate L3 / ${{ matrix.id }}
+    name: Kill gate lane L3
     needs: file-plan
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.file-plan.outputs.lane3) }}
+    env:
+      TEST_CELLS_JSON: ${{ needs.file-plan.outputs.lane3 }}
+      LANE_ID: L3
     steps: *test_steps
 
   lane4:
-    name: Kill gate L4 / ${{ matrix.id }}
+    name: Kill gate lane L4
     needs: file-plan
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.file-plan.outputs.lane4) }}
+    env:
+      TEST_CELLS_JSON: ${{ needs.file-plan.outputs.lane4 }}
+      LANE_ID: L4
     steps: *test_steps
 
   gate:
