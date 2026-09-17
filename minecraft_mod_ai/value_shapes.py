@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+"""Dependency-free normalization helpers shared by runtime contract modules."""
+
 import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 
-def structured_payload(content: Any) -> Mapping[str, Any] | list[Any] | tuple[Any, ...] | None:
+def structured_payload(
+    content: Any,
+) -> Mapping[str, Any] | list[Any] | tuple[Any, ...] | None:
     if isinstance(content, (Mapping, list, tuple)):
         return content
     if not isinstance(content, str):
