@@ -759,15 +759,65 @@ def _usable_external_rag_result(arguments: Mapping[str, Any], value: Any) -> boo
 
 
 def _usable_rag_result(value: Any) -> bool:
-    """Accept scored RAG receipts and concrete hits when optional scoring is unavailable."""
+    """Accept only RAG results containing concrete semantic evidence.
+
+    Metadata, schema markers, counters, mappings strings, and non-empty containers are not
+    evidence by themselves. A scored receipt can strengthen a result but can never make an
+    otherwise contentless payload usable.
+    """
+
+    content_keys = (
+        "parsed_text",
+        "text",
+        "content",
+        "snippet",
+        "code",
+        "source",
+        "source_text",
+        "body",
+    )
+    collection_keys = (
+        "hits",
+        "results",
+        "records",
+        "documents",
+        "chunks",
+        "resources",
+        "sources",
+        "items",
+    )
+
+    def nonempty_text(item: Any) -> bool:
+        if isinstance(item, str):
+            return bool(item.strip())
+        if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+            return any(nonempty_text(child) for child in item)
+        return False
+
+    def semantic_content(item: Any) -> bool:
+        if isinstance(item, Mapping):
+            if any(nonempty_text(item.get(key)) for key in content_keys):
+                return True
+            for key in collection_keys:
+                child = item.get(key)
+                if isinstance(child, Mapping) and semantic_content(child):
+                    return True
+                if isinstance(child, Sequence) and not isinstance(child, (str, bytes, bytearray)):
+                    if any(semantic_content(entry) or nonempty_text(entry) for entry in child):
+                        return True
+            return False
+        if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+            return any(semantic_content(child) for child in item)
+        return False
+
+    if not semantic_content(value):
+        return False
 
     found_receipt = False
-    positive_receipt = False
     usable_receipt = False
-    found_hits = False
 
-    def visit(item: Any) -> None:
-        nonlocal found_receipt, positive_receipt, usable_receipt, found_hits
+    def inspect_receipts(item: Any) -> None:
+        nonlocal found_receipt, usable_receipt
         if isinstance(item, Mapping):
             receipt = item.get("receipt")
             if isinstance(receipt, Mapping):
@@ -780,33 +830,16 @@ def _usable_rag_result(value: Any) -> bool:
                     result_count = 0
                     coverage_score = 0.0
                     relevance_score = 0.0
-                if result_count > 0:
-                    positive_receipt = True
-                    if coverage_score > 0.0 and relevance_score > 0.0:
-                        usable_receipt = True
-            hits = item.get("hits")
-            if (
-                isinstance(hits, Sequence)
-                and not isinstance(hits, (str, bytes))
-                and hits
-            ):
-                found_hits = True
+                if result_count > 0 and coverage_score > 0.0 and relevance_score > 0.0:
+                    usable_receipt = True
             for child in item.values():
-                visit(child)
-        elif isinstance(item, Sequence) and not isinstance(item, (str, bytes)):
+                inspect_receipts(child)
+        elif isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
             for child in item:
-                visit(child)
+                inspect_receipts(child)
 
-    visit(value)
-    if found_receipt:
-        return usable_receipt or (positive_receipt and found_hits)
-    if found_hits:
-        return True
-    if isinstance(value, Mapping):
-        return bool(value)
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return bool(value)
-    return False
+    inspect_receipts(value)
+    return usable_receipt if found_receipt else True
 
 
 def _inject_system_context(
