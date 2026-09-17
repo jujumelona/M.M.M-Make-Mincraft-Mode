@@ -214,8 +214,9 @@ def _mmm__resolve_project_java_home_impl(required_major: int | None = None) -> P
         seen.add(home)
         homes.append(home)
 
+    majors = _java_major_versions(homes)
     observed: list[str] = []
-    for home, major in zip(homes, _java_major_versions(homes), strict=True):
+    for home, major in zip(homes, majors, strict=True):
         if major is None:
             continue
         observed.append(f"{home}=>{major}")
