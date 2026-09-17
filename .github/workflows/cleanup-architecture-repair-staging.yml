@@ -1,0 +1,35 @@
+name: Cleanup architecture repair staging
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/cleanup-architecture-repair-staging.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cleanup-architecture-repair-staging-main
+  cancel-in-progress: true
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Remove temporary repair payloads
+        run: |
+          rm -rf .github/repair
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A .github/repair
+          if git diff --cached --quiet; then
+            echo 'No repair staging files remain.'
+            exit 0
+          fi
+          git commit -m 'Remove temporary architecture repair payloads'
+          git push origin HEAD:main
