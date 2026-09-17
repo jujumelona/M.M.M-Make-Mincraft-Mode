@@ -120,6 +120,7 @@ _SOURCE_CREATE_OPERATIONS = frozenset({
 })
 _MODEL_REJECTION_TOOL_NAME = "__mmm_rejected_tool_call__"
 _HOST_AUTHORITY_ROLES = frozenset({"system", "developer", "tool"})
+_EXISTING_TARGET_EVIDENCE_SOURCES = frozenset({"host_exact_source", "mutation_receipt"})
 _CODE_MARKERS = frozenset({
     "class ", "interface ", "enum ", "record ", "public ", "private ", "protected ",
     "package ", "import ", "void ", "return ", "final ", "static ", "new ",
@@ -420,17 +421,58 @@ class TargetMutationContext:
             return other
         if left and right and left != right:
             return other
+
         writable = tuple(dict.fromkeys((*self.writable_paths, *other.writable_paths)))
         creatable = tuple(dict.fromkeys((*self.creatable_paths, *other.creatable_paths)))
+        existing: TargetMutationContext | None = None
+        if (
+            not other.is_new_file
+            and str(other.evidence_source or "").strip() in _EXISTING_TARGET_EVIDENCE_SOURCES
+        ):
+            existing = other
+        elif (
+            not self.is_new_file
+            and str(self.evidence_source or "").strip() in _EXISTING_TARGET_EVIDENCE_SOURCES
+        ):
+            existing = self
+
+        target_path = other.target_path or self.target_path
+        target = _canonical_mutation_path(target_path)
+        if existing is not None and target:
+            creatable = tuple(
+                item for item in creatable
+                if _canonical_mutation_path(item) != target
+            )
+
         return TargetMutationContext(
-            target_path=other.target_path or self.target_path,
+            target_path=target_path,
             target_symbol=other.target_symbol or self.target_symbol,
-            source_body=other.source_body or self.source_body,
-            start_line=other.start_line if other.start_line is not None else self.start_line,
-            end_line=other.end_line if other.end_line is not None else self.end_line,
-            is_new_file=other.is_new_file or self.is_new_file,
-            evidence_source=other.evidence_source or self.evidence_source,
-            base_revision_sha=other.base_revision_sha or self.base_revision_sha,
+            source_body=(
+                existing.source_body
+                if existing is not None and existing.source_body is not None
+                else other.source_body or self.source_body
+            ),
+            start_line=(
+                existing.start_line
+                if existing is not None and existing.start_line is not None
+                else other.start_line if other.start_line is not None else self.start_line
+            ),
+            end_line=(
+                existing.end_line
+                if existing is not None and existing.end_line is not None
+                else other.end_line if other.end_line is not None else self.end_line
+            ),
+            is_new_file=False if existing is not None else (other.is_new_file or self.is_new_file),
+            evidence_source=(
+                existing.evidence_source
+                if existing is not None
+                else other.evidence_source or self.evidence_source
+            ),
+            base_revision_sha=(
+                existing.base_revision_sha
+                if existing is not None and existing.base_revision_sha is not None
+                else other.base_revision_sha or self.base_revision_sha
+            ),
             writable_paths=writable,
             creatable_paths=creatable,
             target_pinned=self.target_pinned or other.target_pinned,
@@ -857,8 +899,6 @@ def _authoritative_java_evidence(value: Any) -> bool:
     if not isinstance(value, Mapping) or not value:
         return False
 
-    # The built-in project RAG corpus is target-neutral context. It may inform the
-    # model, but it is never an exact classpath/symbol proof for a fresh Java source.
     if _mapping_schema(value, "mmm/rag-result-v2"):
         return False
 
@@ -878,8 +918,6 @@ def _authoritative_java_evidence(value: Any) -> bool:
     if _mapping_schema(value, "mmm/code-rag-result-v1"):
         return any(_JAVA_API_EVIDENCE_RE.search(text) for text in _java_evidence_texts(value))
 
-    # Reviewed external MCP evidence only authorizes ACT when its payload actually
-    # names Java/Minecraft/Fabric symbols or contains concrete mapping records.
     if any(_JAVA_API_EVIDENCE_RE.search(text) for text in _java_evidence_texts(value)):
         return True
 
@@ -1039,11 +1077,16 @@ class HostRunState:
                     old, new = arguments.get("old"), arguments.get("new")
                     if isinstance(old, str) and isinstance(new, str) and old and body.count(old) == 1:
                         body = body.replace(old, new, 1)
+                remaining_creatable = tuple(
+                    item for item in self.mutation_context.creatable_paths
+                    if _canonical_mutation_path(item) != path
+                )
                 self.mutation_context = replace(
                     self.mutation_context,
                     source_body=body,
                     is_new_file=False,
                     evidence_source="mutation_receipt",
+                    creatable_paths=remaining_creatable,
                 )
             return True
 
@@ -1100,10 +1143,12 @@ class HostRunState:
                 "current_source": source,
             }
         return (
-            "MMM_CORE_VERIFIER_REPAIR_V4\n"
+            "MMM_CORE_VERIFIER_REPAIR_V5\n"
             "The verifier failure is the active repair obligation. Do not restart generation, "
             "do not search unrelated ecosystem candidates, and do not recreate an existing path. "
             "The payload includes the exact host-tracked current source and its SHA-256. "
+            "Any earlier host_reserved/fresh metadata is pre-materialization history only and "
+            "does not authorize a second create after target_is_new_file becomes false. "
             "Edit that existing source with a non-create operation when target_is_new_file is false. "
             "Use the diagnostics below against the host-pinned target and make one materially "
             "different source edit. The next successful mutation goes directly back to VERIFY.\n"
@@ -1870,6 +1915,25 @@ def _generate_with_tools_impl(
                 if applied:
                     progress = True
                     state.clear_failure()
+                    operation = str(call.arguments.get("operation") or "").strip().casefold()
+                    if operation in _SOURCE_CREATE_OPERATIONS:
+                        materialized_path = ""
+                        for key in _SOURCE_EDIT_PATH_KEYS:
+                            value = call.arguments.get(key)
+                            if isinstance(value, str) and value.strip():
+                                materialized_path = _canonical_mutation_path(value)
+                                break
+                        if materialized_path:
+                            messages.append({
+                                "role": "system",
+                                "content": (
+                                    "MMM_TARGET_MATERIALIZED_V1\n"
+                                    f"The host has materialized {materialized_path!r}. It is now an existing "
+                                    "workspace file. Any earlier host_reserved/fresh creation status describes "
+                                    "only the pre-create lifecycle and no longer authorizes create/write operations "
+                                    "for this path. Future repairs must edit the current file in place."
+                                ),
+                            })
                     state.phase = LoopPhase.VERIFY if all_names & _VERIFY_TOOLS else LoopPhase.OBSERVE
                     if not all_names & _VERIFY_TOOLS:
                         state.validation_status = "PASS"
