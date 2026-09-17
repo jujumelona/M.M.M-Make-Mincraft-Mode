@@ -1,5 +1,5 @@
 name: One-shot runtime owner cleanup
-# retry: compatibility-hook-restored
+# retry: strict-research-target-semantics
 
 on:
   push:
@@ -28,7 +28,9 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Apply owner cleanup
-        run: python .github/scripts/apply_runtime_owner_cleanup.py
+        run: |
+          python .github/scripts/apply_runtime_owner_cleanup.py
+          python .github/scripts/apply_research_target_semantics.py
       - name: Compile
         run: python -m compileall -q minecraft_mod_ai tests
       - name: Focused regressions
