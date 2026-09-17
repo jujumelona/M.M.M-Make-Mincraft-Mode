@@ -1,6 +1,7 @@
 name: Source Snapshot Export
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
