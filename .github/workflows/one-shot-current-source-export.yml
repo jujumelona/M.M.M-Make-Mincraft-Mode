@@ -58,7 +58,7 @@ jobs:
           python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
           vulture minecraft_mod_ai tools download_resources.py --min-confidence 100
           python -m pytest -q tests/test_progress_aware_tool_loop_rag_scope.py
-          python tools/ci_test_matrix.py --max-jobs 2 >/tmp/ci-matrix.json
+          python -m tools.ci_test_matrix --max-jobs 2 >/tmp/ci-matrix.json
           python - <<'PY'
           import json
           from pathlib import Path
