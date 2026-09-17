@@ -81,9 +81,11 @@ def test_record_execution_has_no_model_owned_status_loop() -> None:
     batch = (PKG / "task_template_batch_runner.py").read_text(encoding="utf-8")
     assert "record_cardinality_response_schema" in bounded
     assert '"count"' in bounded
+    assert '"minimum": 0' in bounded
     assert "record/done" not in bounded
     assert "authored/applicable records" in bounded
-    assert "count 0 when none apply" in bounded
+    assert "count 0" in bounded
+    assert "no records apply" in bounded
     assert not any(isinstance(node, ast.While) for node in ast.walk(ast.parse(bounded)))
     assert not any(isinstance(node, ast.While) for node in ast.walk(ast.parse(batch)))
     assert '"status"' not in batch
