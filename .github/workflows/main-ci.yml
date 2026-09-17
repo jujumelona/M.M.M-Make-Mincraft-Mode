@@ -292,7 +292,7 @@ jobs:
           if-no-files-found: warn
 
   test-plan:
-    name: Build maximum-parallel test matrix
+    name: Build balanced test matrix
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -303,13 +303,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          MATRIX="$(python -m tools.ci_test_matrix --max-jobs 256)"
+          MATRIX="$(python -m tools.ci_test_matrix --max-jobs 32)"
           test "$MATRIX" != '{"include":[]}'
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
           python - <<'PY'
           import json
           import subprocess
-          payload = json.loads(subprocess.check_output(['python', '-m', 'tools.ci_test_matrix', '--max-jobs', '256'], text=True))
+          payload = json.loads(subprocess.check_output(['python', '-m', 'tools.ci_test_matrix', '--max-jobs', '32'], text=True))
           jobs = payload['include']
           files = [item for job in jobs for item in job['files']]
           assert files
