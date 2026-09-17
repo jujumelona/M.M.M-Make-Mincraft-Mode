@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: apply-architecture-repair-main
@@ -79,13 +80,32 @@ jobs:
           python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
           python .github/scripts/debug_repo_audit.py
 
-      - name: Cumulative architecture audit
+      - name: Cumulative architecture audit with production baseline resolver
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin a1018a18a3818bff9458f2a9abfe7f8ccd42166a
+          BASE_SHA=''
+          for WORKFLOW in cumulative-regression-guard.yml main-ci.yml; do
+            while IFS= read -r CANDIDATE; do
+              if [[ -z "$CANDIDATE" || "$CANDIDATE" == "$GITHUB_SHA" ]]; then
+                continue
+              fi
+              STATUS="$(gh api "repos/$GITHUB_REPOSITORY/compare/$CANDIDATE...$GITHUB_SHA" --jq '.status' 2>/dev/null || true)"
+              if [[ "$STATUS" == 'ahead' || "$STATUS" == 'identical' ]]; then
+                BASE_SHA="$CANDIDATE"
+                break 2
+              fi
+            done < <(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW/runs?branch=main&status=success&per_page=100" --jq '.workflow_runs[].head_sha')
+          done
+          if [[ -z "$BASE_SHA" ]]; then
+            BASE_SHA="$(git rev-parse HEAD^)"
+          fi
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          echo "Resolved cumulative regression baseline: $BASE_SHA"
           python .github/scripts/audit_code_quality_regression.py \
-            --base-ref a1018a18a3818bff9458f2a9abfe7f8ccd42166a \
+            --base-ref "$BASE_SHA" \
             --output /tmp/code-quality-regression.json
           python - <<'PY'
           import json
