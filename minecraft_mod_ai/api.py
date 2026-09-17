@@ -441,6 +441,8 @@ class ModAISession:
 def _saved_proposal_from_data(data: dict[str, Any]) -> CompleteProposal | AuthoredPlan:
     if data.get("schema_version") == "mmm/authored-plan-v1":
         return AuthoredPlan.from_dict(data)
+    from .complete_spec import CompleteProposal
+
     return CompleteProposal.from_dict(data)
 
 
