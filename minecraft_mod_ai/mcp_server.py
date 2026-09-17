@@ -201,7 +201,6 @@ def approve_plan(proposal: dict[str, Any], approval_hash: str) -> dict[str, Any]
     """Approve exactly the immutable proposal hash supplied by the user."""
     return _core().approve_plan(proposal, approval_hash)
 
-@_stage_tool()
 def _normalized_minecraft_version(value: str | int | float | None) -> str | None:
     if value is None:
         return None
@@ -210,7 +209,7 @@ def _normalized_minecraft_version(value: str | int | float | None) -> str | None
         return None
     return normalized
 
-
+@_stage_tool()
 def search_project_rag(query: str, minecraft_version: str | int | float | None = None, limit: int = 6) -> dict[str, Any]:
     """Search the code-owned, version-pinned primary evidence catalog."""
     normalized_version = _normalized_minecraft_version(minecraft_version)
