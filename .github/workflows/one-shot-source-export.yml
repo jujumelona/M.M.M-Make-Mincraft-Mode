@@ -1,4 +1,4 @@
-name: One-shot Fresh Java Grounding Repair
+name: One-shot Source Export
 
 on:
   push:
@@ -7,250 +7,23 @@ on:
       - '.github/workflows/one-shot-source-export.yml'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  repair:
+  export-source:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout current main
         uses: actions/checkout@v6
         with:
-          ref: main
-          fetch-depth: 0
-      - name: Set up Python
-        uses: actions/setup-python@v6
+          persist-credentials: false
+      - name: Remove git metadata
+        shell: bash
+        run: rm -rf .git
+      - name: Upload current source snapshot
+        uses: actions/upload-artifact@v4
         with:
-          python-version: '3.11'
-          cache: pip
-      - name: Install test dependencies
-        run: python -m pip install --prefer-binary "build>=1,<2" -e ".[dev]"
-      - name: Patch fresh-Java authority contracts
-        shell: python
-        run: |
-          from pathlib import Path
-
-          loop_path = Path('minecraft_mod_ai/progress_aware_tool_loop.py')
-          source = loop_path.read_text(encoding='utf-8')
-          old = '''    require_rag = bool(\n        role in {"coder", "coder_safe"}\n        and all_names & _RAG_EVIDENCE_TOOLS\n        and (\n            (router._agent_require_fresh_evidence and not host_grounded)\n            or fresh_java_target\n        )\n    )'''
-          new = '''    require_rag = bool(\n        role in {"coder", "coder_safe"}\n        and all_names & _RAG_EVIDENCE_TOOLS\n        and not host_grounded\n        and (router._agent_require_fresh_evidence or fresh_java_target)\n    )'''
-          if old in source:
-              source = source.replace(old, new, 1)
-          elif new not in source:
-              raise SystemExit('fresh-Java RAG policy shape changed; refusing blind patch')
-          loop_path.write_text(source, encoding='utf-8')
-
-          grounding_path = Path('minecraft_mod_ai/grounding_policy.py')
-          grounding_path.write_text('''from __future__ import annotations
-
-import json
-from collections.abc import Mapping, Sequence
-from typing import Any
-
-from .host_grounding import _SCHEMA_VERSION as _HOST_GROUNDING_SCHEMA
-
-_HOST_BASELINE_CAUSAL_FACTS = frozenset(
-    {"project_observed", "code_evidence", "evidence_ready"}
-)
-_TASK_CAPSULE_SCHEMA = "mmm/small-model-task-capsule"
-
-
-def host_baseline_evidence_ready(messages: Sequence[Mapping[str, Any]]) -> bool:
-    """Return whether host-validated baseline evidence is ready for the coder.
-
-    A fresh Java target can use zero selected research facts only when the host grounding
-    is embedded in the same task capsule that pins the mutation target and exact writable
-    path.  A detached grounding receipt still needs positive approved research evidence.
-    Non-fresh turns preserve the normal host baseline contract.
-    """
-
-    payloads = tuple(
-        payload
-        for message in messages
-        if (payload := _message_payload(message)) is not None
-    )
-    fresh_java = any(_fresh_java_capsule(payload) for payload in payloads)
-    for payload in payloads:
-        grounding = _find_host_grounding(payload)
-        if grounding is None:
-            continue
-        capsule_authority = _fresh_java_capsule_owns_grounding(payload, grounding)
-        if _grounding_ready(
-            grounding,
-            fresh_java=fresh_java,
-            capsule_authority=capsule_authority,
-        ):
-            return True
-    return False
-
-
-def host_baseline_causal_facts(
-    messages: Sequence[Mapping[str, Any]],
-) -> frozenset[str]:
-    """Translate validated host-owned project grounding into causal evidence facts."""
-
-    if not host_baseline_evidence_ready(messages):
-        return frozenset()
-    return _HOST_BASELINE_CAUSAL_FACTS
-
-
-def _message_payload(message: Mapping[str, Any]) -> Any | None:
-    content = message.get("content")
-    if isinstance(content, Mapping):
-        return content
-    if not isinstance(content, str):
-        return None
-    raw = content.strip()
-    if not raw.startswith("{"):
-        return None
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return None
-
-
-def _find_host_grounding(value: Any) -> Mapping[str, Any] | None:
-    if isinstance(value, Mapping):
-        if str(value.get("schema_version", "")).strip() == _HOST_GROUNDING_SCHEMA:
-            return value
-        direct = value.get("host_grounding")
-        if isinstance(direct, Mapping):
-            found = _find_host_grounding(direct)
-            if found is not None:
-                return found
-        for child in value.values():
-            found = _find_host_grounding(child)
-            if found is not None:
-                return found
-    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        for child in value:
-            found = _find_host_grounding(child)
-            if found is not None:
-                return found
-    return None
-
-
-def _fresh_java_capsule(payload: Any) -> bool:
-    if not isinstance(payload, Mapping):
-        return False
-    if str(payload.get("schema_version", "")).strip() != _TASK_CAPSULE_SCHEMA:
-        return False
-    if str(payload.get("reuse_action", "")).strip().lower() != "fresh":
-        return False
-    target = payload.get("mutation_target")
-    if not isinstance(target, Mapping):
-        return False
-    path = str(target.get("path", "")).replace("\\\\", "/").strip()
-    return bool(path and path.lower().endswith(".java"))
-
-
-def _fresh_java_capsule_owns_grounding(
-    payload: Any,
-    grounding: Mapping[str, Any],
-) -> bool:
-    if not _fresh_java_capsule(payload) or not isinstance(payload, Mapping):
-        return False
-    if payload.get("host_grounding") is not grounding:
-        return False
-    target = payload.get("mutation_target")
-    if not isinstance(target, Mapping):
-        return False
-    path = str(target.get("path", "")).replace("\\\\", "/").strip()
-    writable = payload.get("writable_paths")
-    if not isinstance(writable, Sequence) or isinstance(writable, (str, bytes, bytearray)):
-        return False
-    normalized = {
-        str(item).replace("\\\\", "/").strip()
-        for item in writable
-        if str(item).strip()
-    }
-    return bool(path and path in normalized)
-
-
-def _positive_observation_count(receipt: Mapping[str, Any]) -> bool:
-    value = receipt.get("observation_count")
-    return type(value) is int and value > 0
-
-
-def _positive_selected_fact_count(bindings: Mapping[str, Any]) -> bool:
-    research = bindings.get("approved_research_rag")
-    if not isinstance(research, Mapping):
-        return False
-    receipt = research.get("receipt")
-    if not isinstance(receipt, Mapping):
-        return False
-    value = receipt.get("selected_fact_count")
-    return type(value) is int and value > 0
-
-
-def _grounding_ready(
-    grounding: Mapping[str, Any],
-    *,
-    fresh_java: bool,
-    capsule_authority: bool,
-) -> bool:
-    policy = grounding.get("policy")
-    bindings = grounding.get("evidence_bindings")
-    if not isinstance(policy, Mapping) or not isinstance(bindings, Mapping):
-        return False
-    if not (
-        policy.get("resolved_before_first_coder_decode") is True
-        and policy.get("baseline_grounding_owned_by_host") is True
-        and policy.get("baseline_grounding_optional_for_model") is False
-        and policy.get("model_tool_choice_required_for_baseline") is False
-    ):
-        return False
-    project = bindings.get("project_exact_rag")
-    if not isinstance(project, Mapping):
-        return False
-    receipt = project.get("receipt")
-    if not isinstance(receipt, Mapping):
-        return False
-    observation_count = receipt.get("observation_count")
-    if observation_count is not None and not _positive_observation_count(receipt):
-        return False
-    if not (
-        str(receipt.get("project_sha256", "")).strip()
-        and str(receipt.get("observations_sha256", "")).strip()
-    ):
-        return False
-    if fresh_java and not capsule_authority and not _positive_selected_fact_count(bindings):
-        return False
-    return True
-
-
-__all__ = ["host_baseline_causal_facts", "host_baseline_evidence_ready"]
-''', encoding='utf-8')
-
-          host_path = Path('minecraft_mod_ai/host_grounding.py')
-          source = host_path.read_text(encoding='utf-8')
-          old = '''            "This is the coarse dynamic custom-coder boundary. Host mutation authority "\n            "may narrow it further and can never be widened by retrieved/model content."'''
-          new = '''            "This is the coarse dynamic custom-coder boundary. The task capsule exact writable_paths "\n            "and host mutation authority may narrow it further and can never be widened by "\n            "retrieved/model content."'''
-          if old in source:
-              source = source.replace(old, new, 1)
-          elif new not in source:
-              raise SystemExit('write-scope policy shape changed; refusing blind patch')
-          host_path.write_text(source, encoding='utf-8')
-      - name: Run focused grounding regressions
-        shell: bash
-        run: |
-          python -m compileall -q minecraft_mod_ai/progress_aware_tool_loop.py minecraft_mod_ai/grounding_policy.py minecraft_mod_ai/host_grounding.py
-          python -m pytest -q \
-            tests/test_progress_aware_fresh_java_rag_gating.py \
-            tests/test_fresh_java_host_grounding_contract.py \
-            tests/test_fresh_java_grounding_transition.py \
-            tests/test_grounding_policy_actionable_evidence.py \
-            tests/test_host_grounding_write_scope.py
-      - name: Commit repair to main
-        shell: bash
-        run: |
-          if git diff --quiet; then
-            echo 'No repair diff required.'
-            exit 0
-          fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add minecraft_mod_ai/progress_aware_tool_loop.py minecraft_mod_ai/grounding_policy.py minecraft_mod_ai/host_grounding.py
-          git commit -m 'Fix host-grounded fresh Java execution'
-          git pull --rebase origin main
-          git push origin HEAD:main
+          name: current-source-${{ github.sha }}
+          path: .
+          include-hidden-files: true
+          retention-days: 1
