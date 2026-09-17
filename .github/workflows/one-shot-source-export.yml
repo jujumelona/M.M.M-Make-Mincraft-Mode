@@ -10,13 +10,12 @@ permissions:
   contents: read
 
 jobs:
-  export-refactor-source:
+  export-current-source:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout refactor source
+      - name: Checkout current source
         uses: actions/checkout@v6
         with:
-          ref: 4f94ae1dfde85dbf86637ed0889121b1fc15c454
           persist-credentials: false
       - name: Remove git metadata
         shell: bash
@@ -24,7 +23,7 @@ jobs:
       - name: Upload source snapshot
         uses: actions/upload-artifact@v4
         with:
-          name: refactor-source-4f94ae1d
+          name: current-source-${{ github.sha }}
           path: .
           include-hidden-files: true
           retention-days: 1
