@@ -535,13 +535,6 @@ class CustomModuleGenerator:
         mappings = adapter.yarn_mappings
         java_version = adapter.java_version
 
-        if self._cached_root == root and self._cached_index is not None:
-            index = self._cached_index
-        else:
-            index = ProjectIndex(root, policy=self.policy)
-            self._cached_root = root
-            self._cached_index = index
-
         module_contract = _task_local_module_contract(module)
         query = json.dumps(
             module_contract,
@@ -554,53 +547,11 @@ class CustomModuleGenerator:
             fast_mode=self.fast_mode,
         )
 
-        observation_ledger: dict[str, Any] | None = None
-        last_snapshot_error: ValueError | None = None
-        for snapshot_attempt in range(3):
-            try:
-                observation_ledger = _collect_initial_observations(
-                    index,
-                    query=query,
-                    byte_budget=project_context_budget,
-                )
-                break
-            except ValueError as exc:
-                if not _is_stale_project_index_error(exc):
-                    raise
-                last_snapshot_error = exc
-                index = ProjectIndex(root, policy=self.policy)
-                self._cached_index = index
-                self._cached_root = root
-                print(
-                    "custom module: refreshed changing ProjectIndex snapshot",
-                    f"attempt={snapshot_attempt + 1}/3",
-                    flush=True,
-                )
-        if observation_ledger is None:
-            raise CustomModuleGenerationError(
-                "Project source kept changing while custom-module context was captured; "
-                f"last error: {last_snapshot_error}"
-            )
-
-        observation_pages = _observation_context_pages(
-            observation_ledger,
-            query=query,
-            byte_budget=project_context_budget,
-        )
         research_context = select_module_research_context(
             research_modules,
             query=query,
             byte_budget=min(8 * 1024, project_context_budget),
         )
-        host_grounding = build_coder_grounding(
-            module_kind=module.kind,
-            source_observation_receipt=observation_ledger["receipt"],
-            research_context=research_context,
-            minecraft_version=minecraft_version,
-            loader=loader,
-            mappings=mappings,
-        )
-
         before = _project_snapshot(root)
         checkpoint_identity = _generation_checkpoint_identity(
             module_query=query,
@@ -638,6 +589,50 @@ class CustomModuleGenerator:
                     identity_sha256=checkpoint_identity,
                 )
                 checkpoint_resumed = False
+
+        # Initial coder grounding must describe the same checkpoint workspace used
+        # by source mutation and verification. A resumed checkpoint may differ from
+        # the live project root, so build all exact-source context from staged_root.
+        index = ProjectIndex(staged_root, policy=self.policy)
+        observation_ledger: dict[str, Any] | None = None
+        last_snapshot_error: ValueError | None = None
+        for snapshot_attempt in range(3):
+            try:
+                observation_ledger = _collect_initial_observations(
+                    index,
+                    query=query,
+                    byte_budget=project_context_budget,
+                )
+                break
+            except ValueError as exc:
+                if not _is_stale_project_index_error(exc):
+                    raise
+                last_snapshot_error = exc
+                index = ProjectIndex(staged_root, policy=self.policy)
+                print(
+                    "custom module: refreshed changing staged ProjectIndex snapshot",
+                    f"attempt={snapshot_attempt + 1}/3",
+                    flush=True,
+                )
+        if observation_ledger is None:
+            raise CustomModuleGenerationError(
+                "Staged project source kept changing while custom-module context was captured; "
+                f"last error: {last_snapshot_error}"
+            )
+
+        observation_pages = _observation_context_pages(
+            observation_ledger,
+            query=query,
+            byte_budget=project_context_budget,
+        )
+        host_grounding = build_coder_grounding(
+            module_kind=module.kind,
+            source_observation_receipt=observation_ledger["receipt"],
+            research_context=research_context,
+            minecraft_version=minecraft_version,
+            loader=loader,
+            mappings=mappings,
+        )
 
         approved_reuse_context = _materialize_owned_reuse_context(
             staged_root,
