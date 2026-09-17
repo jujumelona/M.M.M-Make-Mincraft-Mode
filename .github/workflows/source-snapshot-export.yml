@@ -1,0 +1,32 @@
+name: Source Snapshot Export
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/source-snapshot-export.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Pack source snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar --exclude=.git -czf source-snapshot.tar.gz .
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-snapshot-${{ github.sha }}
+          path: source-snapshot.tar.gz
+          if-no-files-found: error
+          retention-days: 1
