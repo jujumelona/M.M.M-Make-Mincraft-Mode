@@ -149,9 +149,15 @@ def run_project_java_diagnostics(
         )
 
 
+def install(production_tools_module: Any) -> None:
+    """Compatibility hook; direct ownership lives in ProductionToolService."""
+    _ = production_tools_module
+
+
 __all__ = [
     "ProjectJavaResolutionError",
     "_infer_project_java_major",
     "_missing_release_major",
+    "install",
     "run_project_java_diagnostics",
 ]
