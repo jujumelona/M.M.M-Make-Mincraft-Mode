@@ -4,14 +4,6 @@ from .custom_checkpoint_performance_installation import install as install_check
 from .execution_feedback_semantic_convergence_installation import (
     install as install_execution_feedback_semantic_convergence,
 )
-from .generation_accuracy_contract import (
-    assert_inner_installed as assert_generation_accuracy_inner,
-)
-from .generation_accuracy_contract import (
-    assert_outer_installed as assert_generation_accuracy_outer,
-)
-from .generation_accuracy_contract import install_inner as install_generation_accuracy_inner
-from .generation_accuracy_contract import install_outer as install_generation_accuracy_outer
 from .hardware_concurrency_installation import install as install_hardware_concurrency
 from .java_toolchain_separation_installation import install as install_java_toolchain_separation
 from .runtime_bootstrap import initialize_runtime
@@ -37,17 +29,12 @@ _validate_runtime_template_authority()
 from . import custom_module_generator as _custom_module_generator
 from . import execution_feedback_replan_contract as _execution_feedback_replan_contract
 from . import java_lsp as _java_lsp
-from . import model_router as _model_router
 
 install_checkpoint_performance(_custom_module_generator)
 install_java_toolchain_separation(_java_lsp)
 install_source_set_boundary(_java_lsp)
-install_generation_accuracy_inner(_model_router)
-assert_generation_accuracy_inner(_model_router)
 install_execution_feedback_semantic_convergence(_execution_feedback_replan_contract)
 finalize_runtime()
-install_generation_accuracy_outer(_model_router)
-assert_generation_accuracy_outer(_model_router)
 install_versioned_reference_context()
 
 from . import complete_orchestrator as _complete_orchestrator
