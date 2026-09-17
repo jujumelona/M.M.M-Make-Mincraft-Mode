@@ -17,7 +17,6 @@ Authority is derived structurally from host-role task payloads instead of coupli
 correctness to an ``evidence_source`` string produced by another wrapper.
 """
 
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from functools import wraps
