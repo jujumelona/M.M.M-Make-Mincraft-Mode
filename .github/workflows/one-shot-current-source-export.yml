@@ -47,47 +47,13 @@ jobs:
           python -m pip install --prefer-binary -e '.[dev]'
           python -m pytest -q tests/test_progress_aware_tool_loop_rag_scope.py
           python -m ruff check minecraft_mod_ai/progress_aware_tool_loop.py tests/test_progress_aware_tool_loop_rag_scope.py --select F,E7,E9
-      - name: Restore one-shot workflow and commit repair to main
+      - name: Commit verified repair to main
         shell: bash
         run: |
           set -euo pipefail
-          cat > .github/workflows/one-shot-current-source-export.yml <<'YAML'
-          name: One-shot Current Source Export
-
-          on:
-            push:
-              branches: [main]
-              paths:
-                - '.github/workflows/one-shot-current-source-export.yml'
-
-          permissions:
-            contents: write
-
-          jobs:
-            export:
-              runs-on: ubuntu-latest
-              steps:
-                - name: Checkout current main
-                  uses: actions/checkout@v6
-                  with:
-                    fetch-depth: 0
-                - name: Remove accidental temporary branch
-                  shell: bash
-                  run: git push origin --delete ___do_not_create___ || true
-                - name: Archive exact source tree
-                  shell: bash
-                  run: git archive --format=zip --output=current-source.zip HEAD
-                - name: Upload source archive
-                  uses: actions/upload-artifact@v4
-                  with:
-                    name: current-source-${{ github.sha }}
-                    path: current-source.zip
-                    if-no-files-found: error
-                    retention-days: 1
-          YAML
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add minecraft_mod_ai/progress_aware_tool_loop.py tests/test_progress_aware_tool_loop_rag_scope.py .github/workflows/one-shot-current-source-export.yml
+          git add minecraft_mod_ai/progress_aware_tool_loop.py tests/test_progress_aware_tool_loop_rag_scope.py
           git diff --cached --check
           git commit -m 'Fix RAG evidence helper scope in coder loop'
           git push origin HEAD:main
