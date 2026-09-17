@@ -17,17 +17,20 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
-      - name: Pack source snapshot
+      - name: Pack source snapshot and history
         shell: bash
         run: |
           set -euo pipefail
           tar --exclude=.git -czf "$RUNNER_TEMP/source-snapshot.tar.gz" .
+          git bundle create "$RUNNER_TEMP/repository.bundle" --all
       - name: Upload source snapshot
         uses: actions/upload-artifact@v4
         with:
           name: source-snapshot-${{ github.sha }}
-          path: ${{ runner.temp }}/source-snapshot.tar.gz
+          path: |
+            ${{ runner.temp }}/source-snapshot.tar.gz
+            ${{ runner.temp }}/repository.bundle
           if-no-files-found: error
           retention-days: 1
