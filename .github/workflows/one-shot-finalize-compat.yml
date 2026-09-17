@@ -39,22 +39,31 @@ jobs:
 
           repo = os.environ['GITHUB_REPOSITORY']
           token = os.environ['GITHUB_TOKEN']
-          blob_sha = '5929e5d197d8d428b94e769365de6e14a96fe3da'
-          req = urllib.request.Request(
-              f'https://api.github.com/repos/{repo}/git/blobs/{blob_sha}',
-              headers={
-                  'Authorization': f'Bearer {token}',
-                  'Accept': 'application/vnd.github+json',
-                  'X-GitHub-Api-Version': '2022-11-28',
-              },
-          )
-          with urllib.request.urlopen(req) as response:
-              payload = json.load(response)
-          data = base64.b64decode(payload['content'])
+          blob_shas = [
+              '5d22e602d074e282705c1bd64883d81662b1435f',
+              '8c23acc991bd7fbdde1510f57c40df7fece8d438',
+              '935488f97f91eb4bdd05420bb17568d6479d803b',
+          ]
+          chunks = []
+          for blob_sha in blob_shas:
+              req = urllib.request.Request(
+                  f'https://api.github.com/repos/{repo}/git/blobs/{blob_sha}',
+                  headers={
+                      'Authorization': f'Bearer {token}',
+                      'Accept': 'application/vnd.github+json',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                  },
+              )
+              with urllib.request.urlopen(req) as response:
+                  payload = json.load(response)
+              chunks.append(base64.b64decode(payload['content']).decode('utf-8'))
+          encoded = ''.join(chunks)
+          data = base64.b64decode(encoded, validate=True)
           with open('/tmp/final-compat.patch.xz', 'wb') as fh:
               fh.write(data)
-          print(f'patch_blob_bytes={len(data)}')
+          print(f'encoded_chars={len(encoded)} patch_blob_bytes={len(data)}')
           PY
+          xz -t /tmp/final-compat.patch.xz
           xz -dc /tmp/final-compat.patch.xz > /tmp/final-compat.patch
           git apply --check /tmp/final-compat.patch
           git apply /tmp/final-compat.patch
