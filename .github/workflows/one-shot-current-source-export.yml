@@ -1,0 +1,32 @@
+name: One-shot Current Source Export
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-current-source-export.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Remove accidental temporary branch
+        shell: bash
+        run: git push origin --delete ___do_not_create___ || true
+      - name: Archive exact source tree
+        shell: bash
+        run: git archive --format=zip --output=current-source.zip HEAD
+      - name: Upload source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: current-source-${{ github.sha }}
+          path: current-source.zip
+          if-no-files-found: error
+          retention-days: 1
