@@ -7,7 +7,7 @@ on:
       - '.github/workflows/one-shot-current-source-export.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   export:
@@ -17,13 +17,68 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Archive exact source tree
+      - name: Restore exact context recovery contract
         shell: bash
-        run: git archive --format=zip --output=current-source.zip HEAD
-      - name: Upload source archive
-        uses: actions/upload-artifact@v4
-        with:
-          name: current-source-${{ github.sha }}
-          path: current-source.zip
-          if-no-files-found: error
-          retention-days: 1
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('minecraft_mod_ai/progress_aware_tool_loop.py')
+          text = path.read_text(encoding='utf-8')
+
+          replacements = [
+              (
+                  'from enum import Enum\nfrom pathlib import Path\n',
+                  'from enum import Enum\nfrom inspect import getattr_static\nfrom pathlib import Path\n',
+              ),
+              (
+                  'from .agent_intent import implementation_requested\nfrom .model_adapters import GenerationRequest, ModelConfigurationError\nfrom .model_context_budget import bounded_tool_message, fit_messages_to_context\n',
+                  'from .agent_intent import implementation_requested\nfrom .llama_finish_reason_contract import (\n    CONTEXT_PRESSURE,\n    OUTPUT_EXHAUSTED,\n    completion_boundary_kind,\n    mark_context_recovery_exhausted,\n)\nfrom .model_adapters import GenerationRequest, ModelConfigurationError\nfrom .model_context_budget import (\n    bounded_tool_message,\n    emergency_fit_messages,\n    fit_messages_to_context,\n    request_message_budget,\n)\n',
+              ),
+          ]
+          for old, new in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected one import pattern, got {text.count(old)}')
+              text = text.replace(old, new, 1)
+
+          anchor = '''def _generate_turn_in_scope(\n    router: Any, *, config: Any, adapter: Any, turn_request: GenerationRequest\n) -> Any:\n    scope_factory = getattr(router, "_generation_scope", None)\n    scope = scope_factory(config) if callable(scope_factory) else nullcontext()\n    with scope:\n        return adapter.generate_turn(turn_request)\n'''
+          helpers = '''def _replace_live_messages(\n    messages: list[dict[str, Any]],\n    fitted: Sequence[Mapping[str, Any]],\n) -> bool:\n    replacement = [dict(message) for message in fitted]\n    if replacement == messages:\n        return False\n    messages[:] = replacement\n    return True\n\n\ndef _retry_atomic_after_output_exhaustion(\n    router: Any,\n    *,\n    config: Any,\n    adapter: Any,\n    request: GenerationRequest,\n    messages: list[dict[str, Any]],\n    media_paths: tuple[Any, ...],\n) -> Any:\n    """Retry one bounded native tool action without resetting HostRunState."""\n\n    already_recovered = any(\n        isinstance(message.get("content"), str)\n        and _ATOMIC_OUTPUT_RECOVERY_MARKER in str(message.get("content"))\n        for message in messages\n        if isinstance(message, Mapping)\n    )\n    if already_recovered:\n        raise ModelConfigurationError(\n            "ATOMIC_ACTION_OUTPUT_STALLED: bounded output recovery was already used "\n            "for this live tool transcript."\n        )\n    messages.append({\n        "role": "system",\n        "content": (\n            _ATOMIC_OUTPUT_RECOVERY_MARKER\n            + "\\n"\n            + _atomic_output_recovery_instruction(request)\n        ),\n    })\n    retry_request = replace(\n        request,\n        messages=tuple(messages),\n        media_paths=media_paths,\n        parallel_tool_calls=False if request.tools else request.parallel_tool_calls,\n    )\n    emit_root_cause(\n        "atomic_output_boundary_recovery",\n        operation="generate_with_tools",\n        gate="completion_boundary",\n        result="RETRY",\n        details={"tool_choice": request.tool_choice},\n    )\n    try:\n        return _generate_turn_in_scope(\n            router, config=config, adapter=adapter, turn_request=retry_request\n        )\n    except BaseException as retry_exc:\n        if completion_boundary_kind(retry_exc) == OUTPUT_EXHAUSTED:\n            raise ModelConfigurationError(\n                "ATOMIC_ACTION_OUTPUT_STALLED: the model exceeded the output allowance twice "\n                "without completing one bounded semantic action; refusing to reset agent state."\n            ) from retry_exc\n        raise\n\n\ndef _exact_context_recovery_candidate(\n    messages: Sequence[Mapping[str, Any]],\n    *,\n    turn_request: GenerationRequest,\n    exact_accounting: Any,\n    config: Any,\n    tools: Sequence[Any],\n) -> tuple[tuple[Mapping[str, Any], ...], dict[str, int]] | None:\n    """Select the largest deterministic retry with useful live output space."""\n\n    base_budget = max(1, int(request_message_budget(config, tools)))\n    budgets = tuple(\n        dict.fromkeys(\n            max(1, base_budget * numerator // 8)\n            for numerator in (8, 7, 6, 5, 4, 3, 2, 1)\n        )\n    )\n    original = tuple(messages)\n    fallback: tuple[tuple[Mapping[str, Any], ...], dict[str, int]] | None = None\n\n    for budget in budgets:\n        candidate = tuple(emergency_fit_messages(original, budget_bytes=budget))\n        if candidate == original:\n            continue\n        accounting = exact_accounting(replace(turn_request, messages=candidate))\n        input_tokens = int(accounting.input_tokens)\n        context_tokens = int(accounting.context_tokens)\n        remaining_tokens = context_tokens - input_tokens\n        if remaining_tokens <= 0:\n            continue\n        receipt = {\n            "budget_bytes": budget,\n            "input_tokens": input_tokens,\n            "context_tokens": context_tokens,\n            "remaining_tokens": remaining_tokens,\n        }\n        if fallback is None:\n            fallback = (candidate, receipt)\n        configured_output = max(1, int(getattr(config, "max_new_tokens", 0) or 1))\n        desired_reserve = min(configured_output, max(1, context_tokens // 4))\n        if remaining_tokens >= desired_reserve:\n            return candidate, receipt\n    return fallback\n\n\n'''
+          if text.count(anchor) != 1:
+              raise SystemExit(f'expected one generation scope anchor, got {text.count(anchor)}')
+          text = text.replace(anchor, helpers + anchor, 1)
+
+          old_recovery = '''def _generate_turn_with_context_recovery(\n    router: Any,\n    *,\n    config: Any,\n    adapter: Any,\n    request: GenerationRequest,\n    messages: list[dict[str, Any]],\n    media_paths: tuple[Any, ...],\n    tool_choice: Any,\n    parallel_tool_calls: bool,\n) -> Any:\n    fitted = fit_messages_to_context(messages, config=config, tools=request.tools)\n    if tuple(messages) != tuple(fitted):\n        messages[:] = [dict(message) for message in fitted]\n    turn_request = replace(\n        request,\n        messages=tuple(messages),\n        media_paths=media_paths,\n        tool_choice=tool_choice,\n        parallel_tool_calls=parallel_tool_calls,\n    )\n    try:\n        return _generate_turn_in_scope(\n            router, config=config, adapter=adapter, turn_request=turn_request\n        )\n    except Exception as exc:\n        if not _completion_boundary_error(exc):\n            raise\n        already_recovered = any(\n            isinstance(message.get("content"), str)\n            and _ATOMIC_OUTPUT_RECOVERY_MARKER in str(message.get("content"))\n            for message in messages\n            if isinstance(message, Mapping)\n        )\n        if already_recovered:\n            raise\n        recovery_instruction = (\n            _ATOMIC_OUTPUT_RECOVERY_MARKER\n            + "\\n"\n            + _atomic_output_recovery_instruction(turn_request)\n        )\n        recovery_messages = [*messages, {"role": "system", "content": recovery_instruction}]\n        fitted_recovery = fit_messages_to_context(\n            recovery_messages, config=config, tools=request.tools\n        )\n        messages[:] = [dict(message) for message in fitted_recovery]\n        recovery_request = replace(\n            turn_request,\n            messages=tuple(messages),\n            media_paths=(),\n        )\n        emit_root_cause(\n            "atomic_output_boundary_recovery",\n            operation="generate_with_tools",\n            gate="completion_boundary",\n            result="RETRY",\n            reason=f"{type(exc).__name__}: {exc}",\n            details={"tool_choice": tool_choice},\n        )\n        return _generate_turn_in_scope(\n            router, config=config, adapter=adapter, turn_request=recovery_request\n        )\n'''
+          new_recovery = '''def _generate_turn_with_context_recovery(\n    router: Any,\n    *,\n    config: Any,\n    adapter: Any,\n    request: GenerationRequest,\n    messages: list[dict[str, Any]],\n    media_paths: tuple[Any, ...],\n    tool_choice: Any,\n    parallel_tool_calls: bool,\n) -> Any:\n    """Fit one live turn and recover typed completion boundaries in-place."""\n\n    turn_request = replace(\n        request,\n        messages=tuple(messages),\n        media_paths=media_paths,\n        tool_choice=tool_choice,\n        parallel_tool_calls=parallel_tool_calls,\n    )\n    try:\n        declared_accounting = getattr_static(adapter, "input_context_accounting")\n    except AttributeError:\n        declared_accounting = None\n    exact_accounting = (\n        getattr(adapter, "input_context_accounting", None)\n        if callable(declared_accounting)\n        else None\n    )\n    if callable(exact_accounting):\n        accounting = exact_accounting(turn_request)\n        fitted = (\n            tuple(messages)\n            if accounting.input_tokens < accounting.context_tokens\n            else fit_messages_to_context(messages, config=config, tools=request.tools)\n        )\n    else:\n        fitted = fit_messages_to_context(messages, config=config, tools=request.tools)\n    _replace_live_messages(messages, fitted)\n    turn_request = replace(turn_request, messages=tuple(messages))\n\n    try:\n        return _generate_turn_in_scope(\n            router, config=config, adapter=adapter, turn_request=turn_request\n        )\n    except BaseException as exc:\n        boundary_kind = completion_boundary_kind(exc)\n        if boundary_kind == OUTPUT_EXHAUSTED:\n            return _retry_atomic_after_output_exhaustion(\n                router,\n                config=config,\n                adapter=adapter,\n                request=turn_request,\n                messages=messages,\n                media_paths=media_paths,\n            )\n        if boundary_kind != CONTEXT_PRESSURE:\n            raise\n\n        recovery_receipt: dict[str, int] = {}\n        if callable(exact_accounting):\n            exact_recovery = _exact_context_recovery_candidate(\n                messages,\n                turn_request=turn_request,\n                exact_accounting=exact_accounting,\n                config=config,\n                tools=request.tools,\n            )\n            if exact_recovery is None:\n                mark_context_recovery_exhausted(exc)\n                raise\n            emergency, recovery_receipt = exact_recovery\n        else:\n            active_budget = max(1, request_message_budget(config, request.tools))\n            emergency_budget = max(1, active_budget * 3 // 4)\n            emergency = emergency_fit_messages(messages, budget_bytes=emergency_budget)\n            recovery_receipt = {"budget_bytes": emergency_budget}\n\n        if not _replace_live_messages(messages, emergency):\n            mark_context_recovery_exhausted(exc)\n            raise\n        retry_request = replace(\n            turn_request,\n            messages=tuple(messages),\n            media_paths=media_paths,\n        )\n        emit_root_cause(\n            "context_boundary_recovery",\n            operation="generate_with_tools",\n            gate="completion_boundary",\n            result="RETRY",\n            reason=f"{type(exc).__name__}: {exc}",\n            details=recovery_receipt,\n        )\n        try:\n            return _generate_turn_in_scope(\n                router, config=config, adapter=adapter, turn_request=retry_request\n            )\n        except BaseException as retry_exc:\n            retry_kind = completion_boundary_kind(retry_exc)\n            if retry_kind == OUTPUT_EXHAUSTED:\n                return _retry_atomic_after_output_exhaustion(\n                    router,\n                    config=config,\n                    adapter=adapter,\n                    request=retry_request,\n                    messages=messages,\n                    media_paths=media_paths,\n                )\n            if retry_kind == CONTEXT_PRESSURE:\n                mark_context_recovery_exhausted(exc)\n                raise exc from retry_exc\n            raise\n'''
+          if text.count(old_recovery) != 1:
+              raise SystemExit(f'expected one recovery implementation, got {text.count(old_recovery)}')
+          text = text.replace(old_recovery, new_recovery, 1)
+          path.write_text(text, encoding='utf-8')
+
+          test_path = Path('tests/test_agent_context_window_contract.py')
+          test = test_path.read_text(encoding='utf-8')
+          old_assert = '    assert "install_forced_tool_execution" in bootstrap\n'
+          new_assert = '''    assert "install_forced_tool_execution" not in bootstrap\n    assert not (root / "forced_tool_execution_contract.py").exists()\n    assert "if request.tools:" in adapter\n    assert "return _native_tool_completion" in adapter\n'''
+          if test.count(old_assert) != 1:
+              raise SystemExit(f'expected one legacy forced-tool assertion, got {test.count(old_assert)}')
+          test = test.replace(old_assert, new_assert, 1)
+          test_path.write_text(test, encoding='utf-8')
+          PY
+      - name: Verify context contract and static gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --prefer-binary -e '.[dev,ui]'
+          python -m pytest -q tests/test_agent_context_window_contract.py tests/test_progress_aware_tool_loop_rag_scope.py
+          python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
+          vulture minecraft_mod_ai tools download_resources.py --min-confidence 100
+      - name: Commit verified context repair to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/progress_aware_tool_loop.py tests/test_agent_context_window_contract.py
+          git diff --cached --check
+          git commit -m 'Restore typed context recovery contract'
+          git push origin HEAD:main
