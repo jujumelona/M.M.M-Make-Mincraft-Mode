@@ -1,26 +1,18 @@
 from __future__ import annotations
 
-import minecraft_mod_ai.progress_aware_tool_loop as progress_loop
-from minecraft_mod_ai.api_grounding_repair_installation import (
-    _completion_boundary_error,
-    authoritative_java_evidence,
-    strict_usable_rag_result,
-)
-from minecraft_mod_ai.coder_mutation_authority_contract import (
-    _same_path_verifier_repair_replacement,
-)
-from minecraft_mod_ai.progress_aware_tool_loop import (
-    HostRunState,
-    LoopPhase,
-    TargetMutationContext,
-    _filter_tools_for_phase,
-    _mutation_target_error,
-)
+from types import SimpleNamespace
+
+import pytest
+
+import minecraft_mod_ai.progress_aware_tool_loop as loop
+from minecraft_mod_ai.model_adapters import GenerationRequest, GenerationResponse
+from minecraft_mod_ai.model_router import _usable_rag_result
 
 
-def _fresh_context() -> TargetMutationContext:
-    return TargetMutationContext(
+def _fresh_context() -> loop.TargetMutationContext:
+    return loop.TargetMutationContext(
         target_path="src/main/java/dev/mmm/debugfixture/DebugToken.java",
+        target_symbol="DebugToken",
         is_new_file=True,
         writable_paths=("src/main/java/dev/mmm/debugfixture/DebugToken.java",),
         creatable_paths=("src/main/java/dev/mmm/debugfixture/DebugToken.java",),
@@ -29,284 +21,181 @@ def _fresh_context() -> TargetMutationContext:
     )
 
 
-def _source_edit_tool() -> dict[str, object]:
+def _tool(name: str) -> dict[str, object]:
     return {
         "type": "function",
         "function": {
-            "name": "apply_source_edit",
-            "description": "Apply one source mutation.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "operation": {
-                        "type": "string",
-                        "enum": [
-                            "create_file",
-                            "create_java_type",
-                            "replace_exact",
-                            "insert_before",
-                            "insert_after",
-                        ],
-                    },
-                    "path": {"type": "string"},
-                    "content": {"type": "string"},
-                },
-            },
+            "name": name,
+            "description": name,
+            "parameters": {"type": "object", "properties": {}},
         },
     }
 
 
-def test_metadata_only_project_rag_from_failure_trace_is_not_usable() -> None:
+def test_metadata_only_project_rag_from_trace_is_not_usable() -> None:
     payload = {
-        "_mmm_observation": {
-            "sanitized": True,
-            "truncated": False,
-            "trust": "untrusted_data_only",
-        },
-        "parsed_text": None,
-        "resources": [],
-        "structured_content": {
-            "query": "DebugToken.java src/main/java/dev/mmm/debugfixture",
-            "schema_version": "mmm/rag-result-v2",
-            "sources": [
-                {
-                    "authority": "official",
-                    "record_sha256": "sha256:deadbeef",
-                    "retrieval_policy": "primary",
-                    "source_id": "catalog-entry",
-                    "title": "metadata only",
-                    "trust_tier": "primary",
-                    "url": "https://example.invalid",
-                    "verified_on": "2026-09-16",
-                    "version_scope": "26.2",
-                }
-            ],
-            "target": {
-                "loader": "fabric",
-                "mappings": "",
-                "minecraft_version": "26.2",
-            },
-        },
-        "text": [],
-    }
-
-    assert strict_usable_rag_result(payload) is False
-    assert authoritative_java_evidence(payload) is False
-
-
-def test_fresh_java_does_not_promote_generic_metadata_to_grounding() -> None:
-    state = HostRunState(mutation_context=_fresh_context())
-    metadata = {
-        "schema_version": "mmm/rag-result-v2",
-        "query": "debug token item",
-        "sources": [{"source_id": "only-provenance"}],
-        "target": {"minecraft_version": "26.2", "loader": "fabric"},
-    }
-
-    assert state.record_evidence(metadata, usable=True) is False
-    assert state.has_fresh_evidence is False
-
-
-def test_jdt_failure_then_metadata_rag_cannot_unlock_fresh_java_act() -> None:
-    state = HostRunState(mutation_context=_fresh_context(), phase=LoopPhase.OBSERVE)
-    jdt_args = {"project_root": ".", "query": "DebugToken", "timeout_seconds": 30}
-    metadata_only = {
         "parsed_text": None,
         "resources": [],
         "structured_content": {
             "schema_version": "mmm/rag-result-v2",
-            "query": "DebugToken.java src/main/java/dev/mmm/debugfixture",
             "sources": [{"source_id": "provenance-only", "version_scope": "26.2"}],
             "target": {"minecraft_version": "26.2", "loader": "fabric", "mappings": ""},
         },
         "text": [],
     }
-    tools = (
-        {"type": "function", "function": {"name": "search_project_rag", "parameters": {}}},
-        {"type": "function", "function": {"name": "search_code_rag", "parameters": {}}},
-        {"type": "function", "function": {"name": "external_mcp_call", "parameters": {}}},
-        {"type": "function", "function": {"name": "java_workspace_symbols", "parameters": {}}},
-    )
-
-    # Reproduce the trace boundary: JDT was attempted and unavailable.  That failure
-    # is a route observation, never positive API evidence.
-    assert state.record_query("java_workspace_symbols", jdt_args) is True
-    assert state.has_fresh_evidence is False
-
-    # The next target-neutral catalog response contains provenance/target metadata but
-    # no code or symbols.  It must not unlock ACT.
-    assert strict_usable_rag_result(metadata_only) is False
-    assert state.record_evidence(metadata_only, usable=False) is False
-    assert state.has_fresh_evidence is False
-    assert state.phase is LoopPhase.OBSERVE
-
-    selected = _filter_tools_for_phase(
-        tools,
-        state.phase,
-        "coder",
-        mutation_context=state.mutation_context,
-        attempted_sources=state.attempted_sources,
-        semantic_retrieval_choice=True,
-    )
-    selected_names = [item["function"]["name"] for item in selected]
-    assert "search_project_rag" not in selected_names
-    assert selected_names == ["search_code_rag"]
+    assert _usable_rag_result(payload) is False
+    assert loop._authoritative_java_evidence(payload) is False
 
 
-def test_fresh_java_accepts_concrete_workspace_symbols() -> None:
-    state = HostRunState(mutation_context=_fresh_context())
-    evidence = {
-        "schema_version": "mmm/java-symbols-v1",
-        "project_root": ".",
-        "query": "Item",
-        "symbols": [
-            {
-                "name": "Item",
-                "kind": 5,
-                "location": {"uri": "file:///workspace/src/main/java/example/Items.java"},
-            }
-        ],
+def test_generic_evidence_cannot_authorize_fresh_java_act() -> None:
+    state = loop.HostRunState(mutation_context=_fresh_context())
+    generic = {
+        "schema_version": "other/evidence-v1",
+        "content": "general project convention without exact API symbols",
     }
-
-    assert authoritative_java_evidence(evidence) is True
-    assert state.record_evidence(evidence, usable=True) is True
+    assert state.record_evidence(generic, usable=True) is True
     assert state.has_fresh_evidence is True
+    assert state.has_authoritative_java_evidence is False
+    assert loop._target_evidence_ready(
+        state, require_rag=True, fresh_java_target=True
+    ) is False
 
 
-def test_fresh_java_accepts_contentful_code_rag() -> None:
-    evidence = {
+def test_target_neutral_project_rag_never_authorizes_fresh_java() -> None:
+    state = loop.HostRunState(mutation_context=_fresh_context())
+    payload = {
+        "schema_version": "mmm/rag-result-v2",
+        "content": "Fabric items are registered during initialization.",
+    }
+    assert state.record_evidence(payload, usable=True) is True
+    assert state.has_authoritative_java_evidence is False
+
+
+def test_code_rag_with_concrete_minecraft_api_authorizes_fresh_java() -> None:
+    state = loop.HostRunState(mutation_context=_fresh_context())
+    payload = {
         "schema_version": "mmm/code-rag-result-v1",
-        "query": "item registration",
         "hits": [
             {
                 "source_path": "src/main/java/dev/mmm/ExistingItems.java",
-                "text": "package dev.mmm; import net.minecraft.world.item.Item; final class ExistingItems {}",
+                "text": "import net.minecraft.world.item.Item; final class ExistingItems {}",
             }
         ],
-        "receipt": {"result_count": 1},
+        "receipt": {"result_count": 1, "coverage_score": 1.0, "relevance_score": 1.0},
     }
+    assert _usable_rag_result(payload) is True
+    assert state.record_evidence(payload, usable=True) is True
+    assert state.has_authoritative_java_evidence is True
+    assert loop._target_evidence_ready(
+        state, require_rag=True, fresh_java_target=True
+    ) is True
 
-    assert strict_usable_rag_result(evidence) is True
-    assert authoritative_java_evidence(evidence) is True
+
+def test_jdt_symbols_authorize_fresh_java_only_when_symbols_exist() -> None:
+    state = loop.HostRunState(mutation_context=_fresh_context())
+    empty = {"schema_version": "mmm/java-symbols-v1", "symbols": []}
+    assert state.record_evidence(empty, usable=True) is True
+    assert state.has_authoritative_java_evidence is False
+
+    concrete = {
+        "schema_version": "mmm/java-symbols-v1",
+        "symbols": [{"name": "Item", "location": {"uri": "file:///workspace/Item.java"}}],
+    }
+    assert state.record_evidence(concrete, usable=True) is True
+    assert state.has_authoritative_java_evidence is True
 
 
-def test_fresh_java_never_falls_back_to_target_neutral_project_rag_authority() -> None:
-    context = _fresh_context()
-    tools = (
-        {"type": "function", "function": {"name": "search_project_rag", "parameters": {}}},
-        {"type": "function", "function": {"name": "search_code_rag", "parameters": {}}},
-        {"type": "function", "function": {"name": "external_mcp_call", "parameters": {}}},
-        {"type": "function", "function": {"name": "java_workspace_symbols", "parameters": {}}},
-    )
-
-    selected = _filter_tools_for_phase(
-        tools,
-        LoopPhase.OBSERVE,
+def test_fresh_java_observe_skips_target_neutral_project_rag() -> None:
+    selected = loop._filter_tools_for_phase(
+        (
+            _tool("search_project_rag"),
+            _tool("search_code_rag"),
+            _tool("external_mcp_call"),
+            _tool("java_workspace_symbols"),
+        ),
+        loop.LoopPhase.OBSERVE,
         "coder",
-        mutation_context=context,
-        attempted_sources={
-            "search_code_rag",
-            "external_mcp_call:source_search",
-            "java_workspace_symbols",
-        },
+        mutation_context=_fresh_context(),
+        attempted_sources=frozenset(),
         semantic_retrieval_choice=True,
     )
-
-    assert selected == ()
-
-
-def test_verifier_repair_reuses_create_file_as_same_path_transactional_replace() -> None:
-    target = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
-    context = TargetMutationContext(
-        target_path=target,
-        source_body="package dev.mmm.debugfixture;\npublic final class DebugToken {}\n",
-        is_new_file=False,
-        evidence_source="mutation_receipt",
-        writable_paths=(target,),
-        target_pinned=True,
-    )
-
-    selected = _filter_tools_for_phase(
-        (_source_edit_tool(),),
-        LoopPhase.ACT,
-        "coder",
-        mutation_context=context,
-    )
-    operation = selected[0]["function"]["parameters"]["properties"]["operation"]
-
-    assert "create_file" in operation["enum"]
-    assert _mutation_target_error(
-        "apply_source_edit",
-        {
-            "operation": "create_file",
-            "path": target,
-            "content": "package dev.mmm.debugfixture;\npublic final class DebugToken { int fixed; }\n",
-        },
-        context,
-    ) is None
+    assert [item["function"]["name"] for item in selected] == ["search_code_rag"]
 
 
-def test_mutation_authority_itself_admits_only_same_path_current_run_replacement() -> None:
-    target = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
-    repair_context = TargetMutationContext(
-        target_path=target,
-        source_body="public final class DebugToken {}",
-        is_new_file=False,
-        evidence_source="mutation_receipt",
-        writable_paths=(target,),
-        target_pinned=True,
-    )
-    existing_context = TargetMutationContext(
-        target_path=target,
-        source_body="public final class DebugToken {}",
-        is_new_file=False,
-        evidence_source="host_exact_source",
-        writable_paths=(target,),
-        target_pinned=True,
-    )
-    arguments = {
-        "operation": "create_file",
-        "path": target,
-        "content": "public final class DebugToken { int fixed; }",
-    }
-
-    assert _same_path_verifier_repair_replacement(
-        progress_loop, "apply_source_edit", arguments, repair_context
-    ) is True
-    assert _same_path_verifier_repair_replacement(
-        progress_loop, "apply_source_edit", arguments, existing_context
-    ) is False
-    assert _same_path_verifier_repair_replacement(
-        progress_loop,
-        "apply_source_edit",
-        {**arguments, "path": "src/main/java/dev/mmm/debugfixture/Other.java"},
-        repair_context,
-    ) is False
-
-
-def test_create_file_is_still_rejected_for_unrelated_existing_target() -> None:
-    target = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
-    context = TargetMutationContext(
-        target_path=target,
-        source_body="public final class DebugToken {}",
-        is_new_file=False,
-        evidence_source="host_exact_source",
-        writable_paths=(target,),
-        target_pinned=True,
-    )
-
-    error = _mutation_target_error(
-        "apply_source_edit",
-        {"operation": "create_file", "path": target, "content": "class DebugToken {}"},
-        context,
-    )
-    assert error is not None
-    assert error.startswith("MUTATION_TARGET_CREATION_CONFLICT")
-
-
-def test_completion_boundary_detection_is_semantic_not_retry_count_based() -> None:
+def test_completion_boundary_gets_one_in_state_recovery(monkeypatch) -> None:
     class LlamaCompletionBoundaryError(RuntimeError):
         pass
 
-    assert _completion_boundary_error(LlamaCompletionBoundaryError("token boundary")) is True
-    assert _completion_boundary_error(RuntimeError("ordinary backend failure")) is False
+    class Adapter:
+        def __init__(self) -> None:
+            self.requests: list[GenerationRequest] = []
+
+        def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                raise LlamaCompletionBoundaryError("completion token limit")
+            return GenerationResponse(content="recovered")
+
+    monkeypatch.setattr(
+        loop,
+        "fit_messages_to_context",
+        lambda messages, *, config, tools: tuple(messages),
+    )
+    adapter = Adapter()
+    request = GenerationRequest(
+        messages=({"role": "user", "content": "repair"},),
+        tools=(_tool("apply_source_edit"),),
+        tool_choice={"type": "function", "function": {"name": "apply_source_edit"}},
+        parallel_tool_calls=False,
+    )
+    messages = [dict(message) for message in request.messages]
+    result = loop._generate_turn_with_context_recovery(
+        SimpleNamespace(),
+        config=SimpleNamespace(),
+        adapter=adapter,
+        request=request,
+        messages=messages,
+        media_paths=(),
+        tool_choice=request.tool_choice,
+        parallel_tool_calls=False,
+    )
+    assert result.content == "recovered"
+    assert len(adapter.requests) == 2
+    recovery_text = str(adapter.requests[1].messages[-1]["content"])
+    assert "MMM_ATOMIC_OUTPUT_RECOVERY_V1" in recovery_text
+    assert "one small semantic edit" in recovery_text
+
+
+def test_completion_boundary_recovery_does_not_loop(monkeypatch) -> None:
+    class LlamaCompletionBoundaryError(RuntimeError):
+        pass
+
+    class Adapter:
+        def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
+            raise LlamaCompletionBoundaryError("completion token limit")
+
+    monkeypatch.setattr(
+        loop,
+        "fit_messages_to_context",
+        lambda messages, *, config, tools: tuple(messages),
+    )
+    request = GenerationRequest(
+        messages=(
+            {"role": "user", "content": "repair"},
+            {"role": "system", "content": "MMM_ATOMIC_OUTPUT_RECOVERY_V1 already attempted"},
+        ),
+        tools=(_tool("apply_source_edit"),),
+        tool_choice={"type": "function", "function": {"name": "apply_source_edit"}},
+        parallel_tool_calls=False,
+    )
+    with pytest.raises(LlamaCompletionBoundaryError):
+        loop._generate_turn_with_context_recovery(
+            SimpleNamespace(),
+            config=SimpleNamespace(),
+            adapter=Adapter(),
+            request=request,
+            messages=[dict(message) for message in request.messages],
+            media_paths=(),
+            tool_choice=request.tool_choice,
+            parallel_tool_calls=False,
+        )

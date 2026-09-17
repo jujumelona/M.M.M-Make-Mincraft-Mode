@@ -802,6 +802,136 @@ def format_trajectory_summary(trajectory: Sequence[ExecutionStepTrace]) -> str:
     return "\n".join(lines)
 
 
+_JAVA_API_EVIDENCE_RE = re.compile(
+    r"(?:\b(?:net\.minecraft|net\.fabricmc|com\.mojang|org\.quiltmc)\.[A-Za-z0-9_.$]+"
+    r"|\b(?:package|import)\s+[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+"
+    r"|\b(?:class|interface|record|enum)\s+[A-Za-z_$][\w$]*)"
+)
+_ATOMIC_OUTPUT_RECOVERY_MARKER = "MMM_ATOMIC_OUTPUT_RECOVERY_V1"
+
+
+def _fresh_java_context(context: TargetMutationContext | None) -> bool:
+    if context is None or not context.is_new_file:
+        return False
+    return _canonical_mutation_path(context.target_path).casefold().endswith(".java")
+
+
+def _mapping_schema(value: Any, schema: str) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    if str(value.get("schema_version") or "").strip() == schema:
+        return True
+    for key in ("structured_content", "result", "data"):
+        child = value.get(key)
+        if isinstance(child, Mapping) and _mapping_schema(child, schema):
+            return True
+    return False
+
+
+def _java_evidence_texts(value: Any) -> tuple[str, ...]:
+    texts: list[str] = []
+    if isinstance(value, Mapping):
+        for key in ("parsed_text", "text", "content", "snippet", "code", "source", "source_text", "body"):
+            raw = value.get(key)
+            if isinstance(raw, str) and raw.strip():
+                texts.append(raw)
+            elif isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
+                texts.extend(str(item) for item in raw if isinstance(item, str) and item.strip())
+        for key in ("hits", "results", "records", "documents", "chunks", "resources", "symbols", "evidence"):
+            raw = value.get(key)
+            if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
+                for item in raw:
+                    texts.extend(_java_evidence_texts(item))
+        for key in ("structured_content", "result", "data"):
+            child = value.get(key)
+            if child is not None:
+                texts.extend(_java_evidence_texts(child))
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for item in value:
+            texts.extend(_java_evidence_texts(item))
+    return tuple(texts)
+
+
+def _authoritative_java_evidence(value: Any) -> bool:
+    """Return whether evidence is strong enough to authorize a fresh Java mutation."""
+    if not isinstance(value, Mapping) or not value:
+        return False
+
+    # The built-in project RAG corpus is target-neutral context. It may inform the
+    # model, but it is never an exact classpath/symbol proof for a fresh Java source.
+    if _mapping_schema(value, "mmm/rag-result-v2"):
+        return False
+
+    if _mapping_schema(value, "mmm/java-symbols-v1"):
+        def has_symbols(item: Any) -> bool:
+            if isinstance(item, Mapping):
+                symbols = item.get("symbols")
+                if isinstance(symbols, Sequence) and not isinstance(symbols, (str, bytes, bytearray)):
+                    if any(isinstance(symbol, Mapping) and bool(symbol) for symbol in symbols):
+                        return True
+                return any(has_symbols(child) for child in item.values())
+            if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+                return any(has_symbols(child) for child in item)
+            return False
+        return has_symbols(value)
+
+    if _mapping_schema(value, "mmm/code-rag-result-v1"):
+        return any(_JAVA_API_EVIDENCE_RE.search(text) for text in _java_evidence_texts(value))
+
+    # Reviewed external MCP evidence only authorizes ACT when its payload actually
+    # names Java/Minecraft/Fabric symbols or contains concrete mapping records.
+    if any(_JAVA_API_EVIDENCE_RE.search(text) for text in _java_evidence_texts(value)):
+        return True
+
+    def has_mapping_records(item: Any) -> bool:
+        if isinstance(item, Mapping):
+            mappings = item.get("mappings")
+            if isinstance(mappings, Mapping) and bool(mappings):
+                return True
+            if isinstance(mappings, Sequence) and not isinstance(mappings, (str, bytes, bytearray)):
+                if any(isinstance(entry, Mapping) and bool(entry) for entry in mappings):
+                    return True
+            return any(has_mapping_records(child) for child in item.values())
+        if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+            return any(has_mapping_records(child) for child in item)
+        return False
+
+    return has_mapping_records(value)
+
+
+def _target_evidence_ready(
+    state: "HostRunState",
+    *,
+    require_rag: bool,
+    fresh_java_target: bool,
+) -> bool:
+    if not require_rag:
+        return True
+    if fresh_java_target:
+        return state.has_authoritative_java_evidence
+    return state.has_fresh_evidence
+
+
+def _completion_boundary_error(exc: BaseException) -> bool:
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        name = type(current).__name__
+        text = str(current).casefold()
+        if name == "LlamaCompletionBoundaryError":
+            return True
+        if (
+            "completion boundary" in text
+            or "completion token limit" in text
+            or "maximum completion" in text
+            or ("finish_reason" in text and "length" in text)
+        ):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 @dataclass
 class HostRunState:
     phase: LoopPhase = LoopPhase.OBSERVE
@@ -812,6 +942,7 @@ class HostRunState:
     attempted_queries: set[str] = field(default_factory=set)
     attempted_sources: set[str] = field(default_factory=set)
     evidence_fingerprints: set[str] = field(default_factory=set)
+    authoritative_java_evidence_fingerprints: set[str] = field(default_factory=set)
     mutation_context: TargetMutationContext | None = None
     applied_mutations: list[str] = field(default_factory=list)
     mutation_fingerprints: set[str] = field(default_factory=set)
@@ -832,6 +963,11 @@ class HostRunState:
     def has_fresh_evidence(self) -> bool:
         with self._lock:
             return bool(self.evidence_fingerprints)
+
+    @property
+    def has_authoritative_java_evidence(self) -> bool:
+        with self._lock:
+            return bool(self.authoritative_java_evidence_fingerprints)
 
     def record_query(self, tool_name: str, arguments: Mapping[str, Any]) -> bool:
         sig = retrieval_query_signature(tool_name, arguments)
@@ -857,6 +993,8 @@ class HostRunState:
             if fp in self.evidence_fingerprints:
                 return False
             self.evidence_fingerprints.add(fp)
+            if _fresh_java_context(self.mutation_context) and _authoritative_java_evidence(value):
+                self.authoritative_java_evidence_fingerprints.add(fp)
             context = _extract_mutation_context_from_payload(value)
             if context is not None and self.mutation_context is not None:
                 self.mutation_context = self.mutation_context.merge(context)
@@ -1123,7 +1261,7 @@ def _filter_tools_for_phase(
         stage = mutation_context.localization_stage if mutation_context else LocalizationStage.NEED_FILE
         if mutation_context and mutation_context.is_new_file and mutation_context.is_mutation_ready:
             preferred = (
-                "java_workspace_symbols", "search_project_rag", "external_mcp_call", "search_code_rag"
+                "search_code_rag", "external_mcp_call", "java_workspace_symbols"
             )
         elif stage == LocalizationStage.NEED_FILE:
             preferred = ("search_code_rag", "search_project_rag")
@@ -1166,7 +1304,43 @@ def _generate_turn_with_context_recovery(
         tool_choice=tool_choice,
         parallel_tool_calls=parallel_tool_calls,
     )
-    return adapter.generate_turn(turn_request)
+    try:
+        return adapter.generate_turn(turn_request)
+    except Exception as exc:
+        if not _completion_boundary_error(exc):
+            raise
+        already_recovered = any(
+            isinstance(message.get("content"), str)
+            and _ATOMIC_OUTPUT_RECOVERY_MARKER in str(message.get("content"))
+            for message in messages
+            if isinstance(message, Mapping)
+        )
+        if already_recovered:
+            raise
+        recovery_instruction = (
+            _ATOMIC_OUTPUT_RECOVERY_MARKER
+            + "\n"
+            + _atomic_output_recovery_instruction(turn_request)
+        )
+        recovery_messages = [*messages, {"role": "system", "content": recovery_instruction}]
+        fitted_recovery = fit_messages_to_context(
+            recovery_messages, config=config, tools=request.tools
+        )
+        messages[:] = [dict(message) for message in fitted_recovery]
+        recovery_request = replace(
+            turn_request,
+            messages=tuple(messages),
+            media_paths=(),
+        )
+        emit_root_cause(
+            "atomic_output_boundary_recovery",
+            operation="generate_with_tools",
+            gate="completion_boundary",
+            result="RETRY",
+            reason=f"{type(exc).__name__}: {exc}",
+            details={"tool_choice": tool_choice},
+        )
+        return adapter.generate_turn(recovery_request)
 
 
 def _sync_phase_tool_transcript(
@@ -1358,7 +1532,9 @@ def _generate_with_tools_impl(
         if state.semantic_fixed_point:
             raise _fixed_point_error(state)
 
-        baseline_ready = state.has_fresh_evidence or not require_rag
+        baseline_ready = _target_evidence_ready(
+            state, require_rag=require_rag, fresh_java_target=fresh_java_target
+        )
         if implementation and state.workspace_changed and state.validation_status == "PASS" and baseline_ready:
             state.termination_reason = "VERIFICATION_PASSED"
             return _finalize_without_tools(
@@ -1389,7 +1565,7 @@ def _generate_with_tools_impl(
             mutation_context=state.mutation_context,
             attempted_sources=state.attempted_sources,
             localization_active=implementation,
-            semantic_retrieval_choice=bool(require_rag and not state.has_fresh_evidence),
+            semantic_retrieval_choice=bool(require_rag and not baseline_ready),
         )
 
         forced_verifier: str | None = None
@@ -1439,7 +1615,7 @@ def _generate_with_tools_impl(
             and state.mutation_context.is_new_file
             and state.mutation_context.is_mutation_ready
             and require_rag
-            and not state.has_fresh_evidence
+            and not baseline_ready
         ):
             messages.append({
                 "role": "system",
@@ -1756,6 +1932,10 @@ def _generate_with_tools_impl(
                     and require_rag
                     and recorded
                     and usable
+                    and (
+                        not fresh_java_target
+                        or state.has_authoritative_java_evidence
+                    )
                 )
                 if localization_progress or baseline_progress:
                     progress = True
@@ -1763,7 +1943,11 @@ def _generate_with_tools_impl(
                         implementation
                         and state.mutation_context
                         and state.mutation_context.is_mutation_ready
-                        and (state.has_fresh_evidence or not require_rag)
+                        and _target_evidence_ready(
+                            state,
+                            require_rag=require_rag,
+                            fresh_java_target=fresh_java_target,
+                        )
                     ):
                         state.phase = LoopPhase.ACT
                 continue
