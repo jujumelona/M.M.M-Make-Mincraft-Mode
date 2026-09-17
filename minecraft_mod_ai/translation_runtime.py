@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Deterministic execution of the fixed translation template sequence."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
