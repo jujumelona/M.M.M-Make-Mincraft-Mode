@@ -28,7 +28,7 @@ jobs:
           python-version: '3.11'
           cache: pip
 
-      - name: Reconstruct verified repair payload
+      - name: Reconstruct verified repair payloads
         shell: bash
         run: |
           set -euo pipefail
@@ -47,6 +47,11 @@ jobs:
           base64 -d /tmp/repair.b64 | gzip -dc > /tmp/repair.patch
           git apply --check /tmp/repair.patch
           git apply /tmp/repair.patch
+
+          echo '93fa99a03dc7b0feb208ec94f05c761557b88aca4d4a8960bea33ef1d2769998  .github/repair/correction_00' | sha256sum -c -
+          base64 -d .github/repair/correction_00 | gzip -dc > /tmp/correction.patch
+          git apply --check /tmp/correction.patch
+          git apply /tmp/correction.patch
 
       - name: Remove transient repair assets before validation
         shell: bash
