@@ -1,0 +1,30 @@
+name: One-shot Source Export
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-source-export.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  export-refactor-source:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout refactor source
+        uses: actions/checkout@v6
+        with:
+          ref: 4f94ae1dfde85dbf86637ed0889121b1fc15c454
+          persist-credentials: false
+      - name: Remove git metadata
+        shell: bash
+        run: rm -rf .git
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: refactor-source-4f94ae1d
+          path: .
+          include-hidden-files: true
+          retention-days: 1
