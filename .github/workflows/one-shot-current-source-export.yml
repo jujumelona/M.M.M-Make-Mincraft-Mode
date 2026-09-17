@@ -17,43 +17,16 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Patch RAG evidence helper scope regression
+      - name: Remove accidental temporary branch
         shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path('minecraft_mod_ai/progress_aware_tool_loop.py')
-          text = path.read_text(encoding='utf-8')
-          old_helper = '''def _call_is_evidence_tool(call: Any, phase: LoopPhase) -> bool:\n    if call.name in _LOCALIZATION_EVIDENCE_TOOLS:\n        return True\n    if call.name in _RAG_EVIDENCE_TOOLS:\n        return True\n    if phase == LoopPhase.RECOVER and call.name in _RECOVERY_EVIDENCE_TOOLS:\n        return True\n    if call.name != "external_mcp_call":\n        return False\n    return bool(_external_rag_capability(call.arguments))\n'''
-          new_helper = '''def _call_is_evidence_tool(\n    call: Any,\n    phase: LoopPhase,\n    rag_evidence_tools: frozenset[str],\n    external_rag_capability: Any,\n) -> bool:\n    if call.name in _LOCALIZATION_EVIDENCE_TOOLS:\n        return True\n    if call.name in rag_evidence_tools:\n        return True\n    if phase == LoopPhase.RECOVER and call.name in _RECOVERY_EVIDENCE_TOOLS:\n        return True\n    if call.name != "external_mcp_call":\n        return False\n    return bool(external_rag_capability(call.arguments))\n'''
-          old_call = '''        def is_evidence_tool(call: Any) -> bool:\n            return _call_is_evidence_tool(call, state.phase)\n'''
-          new_call = '''        def is_evidence_tool(call: Any) -> bool:\n            return _call_is_evidence_tool(\n                call,\n                state.phase,\n                _RAG_EVIDENCE_TOOLS,\n                _external_rag_capability,\n            )\n'''
-          if text.count(old_helper) != 1:
-              raise SystemExit(f'expected exactly one helper pattern, got {text.count(old_helper)}')
-          if text.count(old_call) != 1:
-              raise SystemExit(f'expected exactly one call-site pattern, got {text.count(old_call)}')
-          text = text.replace(old_helper, new_helper, 1).replace(old_call, new_call, 1)
-          path.write_text(text, encoding='utf-8')
-
-          test_path = Path('tests/test_progress_aware_tool_loop_rag_scope.py')
-          test_path.write_text('''from types import SimpleNamespace\n\nfrom minecraft_mod_ai.progress_aware_tool_loop import LoopPhase, _call_is_evidence_tool\n\n\ndef test_non_rag_external_mcp_call_uses_explicit_classifier() -> None:\n    call = SimpleNamespace(name="external_mcp_call", arguments={"capability": "read_file"})\n    seen = []\n\n    def classify(arguments):\n        seen.append(arguments)\n        return False\n\n    assert _call_is_evidence_tool(call, LoopPhase.OBSERVE, frozenset(), classify) is False\n    assert seen == [{"capability": "read_file"}]\n\n\ndef test_external_rag_call_uses_explicit_classifier() -> None:\n    call = SimpleNamespace(name="external_mcp_call", arguments={"capability": "source_search"})\n    assert _call_is_evidence_tool(\n        call, LoopPhase.OBSERVE, frozenset(), lambda arguments: True\n    ) is True\n\n\ndef test_explicit_rag_tool_set_is_honored_without_classifier_call() -> None:\n    call = SimpleNamespace(name="future_rag_tool", arguments={})\n\n    def should_not_run(_arguments):\n        raise AssertionError("external classifier must not run for explicit RAG tools")\n\n    assert _call_is_evidence_tool(\n        call, LoopPhase.OBSERVE, frozenset({"future_rag_tool"}), should_not_run\n    ) is True\n''', encoding='utf-8')
-          PY
-      - name: Run focused regression test
+        run: git push origin --delete ___do_not_create___ || true
+      - name: Archive exact source tree
         shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install --prefer-binary -e '.[dev]'
-          python -m pytest -q tests/test_progress_aware_tool_loop_rag_scope.py
-          python -m ruff check minecraft_mod_ai/progress_aware_tool_loop.py tests/test_progress_aware_tool_loop_rag_scope.py --select F,E7,E9
-      - name: Commit verified repair to main
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add minecraft_mod_ai/progress_aware_tool_loop.py tests/test_progress_aware_tool_loop_rag_scope.py
-          git diff --cached --check
-          git commit -m 'Fix RAG evidence helper scope in coder loop'
-          git push origin HEAD:main
+        run: git archive --format=zip --output=current-source.zip HEAD
+      - name: Upload source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: current-source-${{ github.sha }}
+          path: current-source.zip
+          if-no-files-found: error
+          retention-days: 1
