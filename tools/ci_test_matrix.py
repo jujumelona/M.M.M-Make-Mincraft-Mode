@@ -117,14 +117,6 @@ def main() -> int:
     print(json.dumps(payload, separators=(",", ":")))
     return 0
 
-    matrix = build_matrix(
-        paths,
-        max_jobs=args.max_jobs,
-        durations=_load_durations(args.durations),
-    )
-    print(json.dumps({"include": matrix}, separators=(",", ":")))
-    return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

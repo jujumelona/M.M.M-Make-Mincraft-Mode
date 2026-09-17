@@ -593,8 +593,6 @@ class CompleteModAISession:
         self.brief = updated_brief
         self.complete_proposal = proposal
         self.save_plan()
-        from .plan_render import render_complete_plan
-
         return CompleteChatReply(
             message=_loaded_proposal_message(proposal),
             approval_hash=proposal.calculate_hash(),
@@ -621,9 +619,6 @@ class CompleteModAISession:
         return path
 
     def load_plan(self, source_path: str | Path | None = None) -> CompleteChatReply:
-        from .complete_spec import CompleteProposal
-        from .plan_render import render_complete_plan
-
         path = (
             Path(source_path)
             if source_path is not None

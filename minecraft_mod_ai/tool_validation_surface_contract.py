@@ -13,9 +13,6 @@ contains only deterministic schema-surface helpers plus a runtime assertion; it 
 not monkey-patch completion, continuation, parser, retry, or transport functions.
 """
 
-from collections.abc import Mapping, Sequence
-from typing import Any
-
 from .tool_validation_surface import (
     assert_unique_schema_names,
     tool_name,
