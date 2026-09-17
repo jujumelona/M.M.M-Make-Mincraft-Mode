@@ -217,16 +217,30 @@ class RuntimeVisitor(ast.NodeVisitor):
         self.functions.pop()
 
     def visit_For(self, node: ast.For) -> Any:
+        # Python evaluates the iterable exactly once before entering the loop. Calls in
+        # ``for item in expensive_batch()`` are therefore not serial per-iteration
+        # calls and must not be reported as loop-body hotspots.
+        self.visit(node.iter)
+        self.visit(node.target)
         self.loops.append(int(node.lineno))
-        self.generic_visit(node)
+        for statement in node.body:
+            self.visit(statement)
         self.loops.pop()
+        for statement in node.orelse:
+            self.visit(statement)
 
     visit_AsyncFor = visit_For
 
     def visit_While(self, node: ast.While) -> Any:
+        # The while condition is evaluated for every iteration, whereas ``else`` runs
+        # only once after normal loop termination.
         self.loops.append(int(node.lineno))
-        self.generic_visit(node)
+        self.visit(node.test)
+        for statement in node.body:
+            self.visit(statement)
         self.loops.pop()
+        for statement in node.orelse:
+            self.visit(statement)
 
     def visit_Call(self, node: ast.Call) -> Any:
         call_name = _name(node.func)
