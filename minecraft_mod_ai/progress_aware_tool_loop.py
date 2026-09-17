@@ -1816,16 +1816,21 @@ def _finalize_without_tools(
 
 
 
-def _call_is_evidence_tool(call: Any, phase: LoopPhase) -> bool:
+def _call_is_evidence_tool(
+    call: Any,
+    phase: LoopPhase,
+    rag_evidence_tools: frozenset[str],
+    external_rag_capability: Any,
+) -> bool:
     if call.name in _LOCALIZATION_EVIDENCE_TOOLS:
         return True
-    if call.name in _RAG_EVIDENCE_TOOLS:
+    if call.name in rag_evidence_tools:
         return True
     if phase == LoopPhase.RECOVER and call.name in _RECOVERY_EVIDENCE_TOOLS:
         return True
     if call.name != "external_mcp_call":
         return False
-    return bool(_external_rag_capability(call.arguments))
+    return bool(external_rag_capability(call.arguments))
 
 
 def _generate_with_tools_impl(
@@ -2192,7 +2197,12 @@ def _generate_with_tools_impl(
         })
 
         def is_evidence_tool(call: Any) -> bool:
-            return _call_is_evidence_tool(call, state.phase)
+            return _call_is_evidence_tool(
+                call,
+                state.phase,
+                _RAG_EVIDENCE_TOOLS,
+                _external_rag_capability,
+            )
 
         def execute(call: Any) -> tuple[Any, Mapping[str, Any]]:
             metadata = {"skills": list(skills_for_tool(stage, call.name, model_role=role))}
