@@ -18,6 +18,13 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install test dependencies
+        run: python -m pip install --prefer-binary "build>=1,<2" -e ".[dev,ui]"
       - name: Patch grounding and fresh-Java RAG gating
         shell: python
         run: |
