@@ -1619,10 +1619,8 @@ def _generate_with_tools_impl(
     require_rag = bool(
         role in {"coder", "coder_safe"}
         and all_names & _RAG_EVIDENCE_TOOLS
-        and (
-            (router._agent_require_fresh_evidence and not host_grounded)
-            or fresh_java_target
-        )
+        and not host_grounded
+        and (router._agent_require_fresh_evidence or fresh_java_target)
     )
 
     if require_rag:
