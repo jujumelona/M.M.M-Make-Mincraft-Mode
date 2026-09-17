@@ -1306,7 +1306,7 @@ def _filter_tools_for_phase(
         stage = mutation_context.localization_stage if mutation_context else LocalizationStage.NEED_FILE
         if mutation_context and mutation_context.is_new_file and mutation_context.is_mutation_ready:
             preferred = (
-                "search_code_rag", "external_mcp_call", "java_workspace_symbols"
+                "search_code_rag", "java_workspace_symbols", "external_mcp_call"
             )
         elif stage == LocalizationStage.NEED_FILE:
             preferred = ("search_code_rag", "search_project_rag")
@@ -1317,10 +1317,24 @@ def _filter_tools_for_phase(
         else:
             preferred = ("search_project_rag", "search_code_rag")
         names = [name for name in preferred if name in by_name and name not in attempted]
-        if semantic_retrieval_choice and names:
-            names = [names[0]]
-        elif names:
-            names = [names[0]]
+        if names:
+            fresh_reserved = bool(
+                mutation_context
+                and mutation_context.is_new_file
+                and mutation_context.is_mutation_ready
+            )
+            if (
+                semantic_retrieval_choice
+                and fresh_reserved
+                and "search_code_rag" in names
+                and "search_code_rag" not in attempted
+            ):
+                # Fresh Java starts with current-project code evidence, but once that
+                # route is exhausted the model must be allowed to choose among the
+                # remaining reviewed evidence routes instead of being force-fed one.
+                names = ["search_code_rag"]
+            elif not semantic_retrieval_choice:
+                names = [names[0]]
     return tuple(
         _source_edit_schema_for_context(by_name[name], mutation_context)
         for name in names if name in by_name
@@ -1522,6 +1536,7 @@ def _generate_with_tools_impl(
     reviewed_external_servers = reviewed_mcp_servers_for_model_role(stage, role)
     state = HostRunState()
     unavailable_verifiers: set[str] = set()
+    required_evidence_choice = False
     implementation = bool(
         role in {"coder", "coder_safe"}
         and stage == "generation"
@@ -1636,7 +1651,18 @@ def _generate_with_tools_impl(
         tool_choice = request.tool_choice
         parallel = request.parallel_tool_calls
 
-        if state.phase == LoopPhase.ACT:
+        if (
+            required_evidence_choice
+            and require_rag
+            and not baseline_ready
+            and state.phase in {LoopPhase.OBSERVE, LoopPhase.RECOVER}
+            and len(phase_names) > 1
+        ):
+            # The host requires evidence, not a particular semantic route. Force one
+            # visible tool call while leaving route selection to the model.
+            tool_choice = "required"
+            parallel = False
+        elif state.phase == LoopPhase.ACT:
             mutation_names = [name for name in phase_names if name in _MUTATION_ACT_TOOLS]
             if len(mutation_names) == 1:
                 tool_choice = {"type": "function", "function": {"name": mutation_names[0]}}
@@ -1738,6 +1764,8 @@ def _generate_with_tools_impl(
                     "rejections": rejection_payloads,
                 },
             )
+            if require_rag and not baseline_ready:
+                required_evidence_choice = True
             if repeated:
                 raise _fixed_point_error(state)
             continue
@@ -1746,6 +1774,29 @@ def _generate_with_tools_impl(
             content = turn.content.strip()
             if not content:
                 raise ModelConfigurationError("Tool-capable model returned an empty final response.")
+            if require_rag and not baseline_ready:
+                repeated = state.record_no_progress_result({
+                    "phase": state.phase.value,
+                    "validation": state.validation_status,
+                    "verifier": state.latest_verifier_fingerprint,
+                    "missing_required_evidence": True,
+                    "prose": content,
+                })
+                messages.extend([
+                    {"role": "assistant", "content": content},
+                    {
+                        "role": "system",
+                        "content": (
+                            "Reviewed production evidence is still required. Select exactly one "
+                            "currently exposed evidence function that best matches the information "
+                            "need and call it. Do not answer in prose and do not invent tool names."
+                        ),
+                    },
+                ])
+                required_evidence_choice = True
+                if repeated:
+                    raise _fixed_point_error(state)
+                continue
             if implementation and state.phase in {LoopPhase.ACT, LoopPhase.VERIFY, LoopPhase.RECOVER}:
                 repeated = state.record_no_progress_result({
                     "phase": state.phase.value,
@@ -2027,6 +2078,10 @@ def _generate_with_tools_impl(
 
         if progress:
             state.clear_no_progress_result()
+            if _target_evidence_ready(
+                state, require_rag=require_rag, fresh_java_target=fresh_java_target
+            ):
+                required_evidence_choice = False
         else:
             state.record_no_progress_result({
                 "phase_before": phase_before.value,
@@ -2039,6 +2094,10 @@ def _generate_with_tools_impl(
                 "calls": call_info,
                 "results": result_info,
             })
+            if require_rag and not _target_evidence_ready(
+                state, require_rag=require_rag, fresh_java_target=fresh_java_target
+            ):
+                required_evidence_choice = True
 
         trace = ExecutionStepTrace(
             step_index=state.step_index,

@@ -45,6 +45,27 @@ def test_fresh_java_required_grounding_exposes_code_rag_first():
     assert [schema["function"]["name"] for schema in selected] == ["search_code_rag"]
 
 
+def test_fresh_java_after_weak_code_rag_exposes_remaining_semantic_routes():
+    selected = loop._filter_tools_for_phase(
+        (
+            _tool("search_project_rag"),
+            _tool("java_workspace_symbols"),
+            _tool("external_mcp_call"),
+            _tool("search_code_rag"),
+        ),
+        loop.LoopPhase.OBSERVE,
+        "coder",
+        mutation_context=_fresh_context(),
+        attempted_sources={"search_code_rag"},
+        localization_active=True,
+        semantic_retrieval_choice=True,
+    )
+    assert [schema["function"]["name"] for schema in selected] == [
+        "java_workspace_symbols",
+        "external_mcp_call",
+    ]
+
+
 def test_generic_fresh_evidence_does_not_unlock_fresh_java():
     state = loop.HostRunState(mutation_context=_fresh_context())
     assert state.record_evidence(
