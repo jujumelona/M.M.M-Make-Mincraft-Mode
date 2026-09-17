@@ -265,6 +265,65 @@ def _required_tool_semantic_violation(
     return False
 
 
+
+def _requires_native_post(url: str, payload: Any) -> bool:
+    return (
+        not isinstance(payload, Mapping)
+        or not url.rstrip("/").endswith("/chat/completions")
+        or payload.get("stream") is True
+    )
+
+
+def _native_post_with_stream_timeout(client: Any, url: str, kwargs: Mapping[str, Any]) -> Any:
+    native_kwargs = dict(kwargs)
+    native_kwargs["timeout"] = _bounded_timeout(
+        native_kwargs.get("timeout"),
+        read_seconds=_stream_idle_timeout_seconds(),
+    )
+    return client.post(url, **native_kwargs)
+
+
+def _native_tool_post_without_stream(
+    client: Any, url: str, kwargs: Mapping[str, Any]
+) -> Any:
+    import httpx
+
+    native_kwargs = dict(kwargs)
+    deadline = _tool_idle_timeout_seconds()
+    native_kwargs["timeout"] = _bounded_timeout(
+        native_kwargs.get("timeout"),
+        read_seconds=deadline,
+    )
+    timeout_exc = getattr(httpx, "TimeoutException", None)
+    if not (isinstance(timeout_exc, type) and issubclass(timeout_exc, BaseException)):
+        timeout_exc = ()
+    try:
+        return client.post(url, **native_kwargs)
+    except timeout_exc as exc:
+        raise LlamaToolLivenessTimeout(
+            "native llama-server tool completion produced no readable transport "
+            f"progress for {deadline:.0f}s; request aborted"
+        ) from exc
+
+def _decode_sse_line(raw_line: str) -> tuple[str, Any]:
+    parsed_error = sse_error_from_line(raw_line)
+    if parsed_error is not None:
+        return "error", parsed_error
+    line = raw_line.strip()
+    if not line or line.startswith(":") or not line.startswith("data:"):
+        return "ignore", None
+    data = line[5:].strip()
+    if not data:
+        return "ignore", None
+    if data == "[DONE]":
+        return "done", None
+    try:
+        chunk = json.loads(data)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("llama server returned malformed SSE JSON") from exc
+    return ("chunk", chunk) if isinstance(chunk, dict) else ("ignore", None)
+
+
 class _StreamingCompletionClient:
     """Reuse one HTTP client and aggregate every chat completion through SSE."""
 
@@ -287,39 +346,13 @@ class _StreamingCompletionClient:
 
     def post(self, url: str, **kwargs: Any) -> Any:
         payload = kwargs.get("json")
-        if (
-            not isinstance(payload, Mapping)
-            or not url.rstrip("/").endswith("/chat/completions")
-            or payload.get("stream") is True
-        ):
-            native_kwargs = dict(kwargs)
-            native_kwargs["timeout"] = _bounded_timeout(
-                native_kwargs.get("timeout"),
-                read_seconds=_stream_idle_timeout_seconds(),
-            )
-            return self._client.post(url, **native_kwargs)
+        if _requires_native_post(url, payload):
+            return _native_post_with_stream_timeout(self._client, url, kwargs)
 
         has_tools = bool(payload.get("tools"))
         requires_tool = has_tools and _tool_choice_requires_execution(payload.get("tool_choice"))
         if has_tools and not hasattr(self._client, "stream"):
-            import httpx
-
-            native_kwargs = dict(kwargs)
-            deadline = _tool_idle_timeout_seconds()
-            native_kwargs["timeout"] = _bounded_timeout(
-                native_kwargs.get("timeout"),
-                read_seconds=deadline,
-            )
-            timeout_exc = getattr(httpx, "TimeoutException", None)
-            if not (isinstance(timeout_exc, type) and issubclass(timeout_exc, BaseException)):
-                timeout_exc = ()
-            try:
-                return self._client.post(url, **native_kwargs)
-            except timeout_exc as exc:
-                raise LlamaToolLivenessTimeout(
-                    "native llama-server tool completion produced no readable transport "
-                    f"progress for {deadline:.0f}s; request aborted"
-                ) from exc
+            return _native_tool_post_without_stream(self._client, url, kwargs)
 
         import httpx
 
@@ -359,29 +392,16 @@ class _StreamingCompletionClient:
                     )
                 for raw_line in response.iter_lines():
                     _remaining_transport_budget()
-                    parsed_error = sse_error_from_line(raw_line)
-                    if parsed_error is not None:
-                        status, error = parsed_error
-                        return httpx.Response(
-                            status,
-                            json={"error": error},
-                            request=request,
-                        )
-                    line = raw_line.strip()
-                    if not line or line.startswith(":") or not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if not data:
-                        continue
-                    if data == "[DONE]":
+                    event, value = _decode_sse_line(raw_line)
+                    if event == "error":
+                        status, error = value
+                        return httpx.Response(status, json={"error": error}, request=request)
+                    if event == "done":
                         saw_done = True
                         break
-                    try:
-                        chunk = json.loads(data)
-                    except json.JSONDecodeError as exc:
-                        raise RuntimeError("llama server returned malformed SSE JSON") from exc
-                    if not isinstance(chunk, dict):
+                    if event != "chunk":
                         continue
+                    chunk = value
                     chunk_usage = chunk.get("usage")
                     if isinstance(chunk_usage, dict):
                         usage = chunk_usage

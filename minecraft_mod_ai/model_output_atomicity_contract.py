@@ -257,6 +257,67 @@ def _template_messages(
     )
 
 
+def _structured_text_result(
+    current_text: Any,
+    model_router_module: Any,
+    self: Any,
+    role: str,
+    messages: Sequence[Mapping[str, Any]],
+    kwargs: Mapping[str, Any],
+) -> str:
+    response_format = str(kwargs.get("response_format", "text") or "text").strip().casefold()
+    if response_format != "json":
+        return current_text(self, role, messages, **dict(kwargs))
+    response_schema = kwargs.get("response_schema")
+    if not isinstance(response_schema, Mapping):
+        raise _configuration_error(
+            "MODEL_JSON_SCHEMA_REQUIRED: "
+            f"JSON response for role {role!r} has no explicit response_schema. "
+            "All model-authored structured output must use a fixed template."
+        )
+    assert_atomic_model_schema(response_schema, surface=f"JSON response for role {role!r}")
+    if role == "planner":
+        return current_text(self, role, messages, **dict(kwargs))
+    try:
+        config = self.registry.role(self.profile, role)
+        adapter_name = str(getattr(config, "adapter", "") or "")
+    except Exception:
+        adapter_name = ""
+    if adapter_name == "mock":
+        return current_text(self, role, messages, **dict(kwargs))
+    semantic_output = ""
+    if _semantic_prelude_required(self, role, kwargs, model_router_module):
+        semantic_kwargs = dict(kwargs)
+        semantic_kwargs["response_format"] = "text"
+        semantic_kwargs["response_schema"] = None
+        semantic_output = current_text(self, role, messages, **semantic_kwargs)
+    parameters, unwrap_value = _tool_template_schema(response_schema)
+    arguments = self.generate_tool_decision(
+        role,
+        _template_messages(messages, semantic_output=semantic_output),
+        tool_name=_TEMPLATE_TOOL_NAME,
+        parameters=parameters,
+        description=(
+            "Fill the host-supplied fixed response template exactly once. "
+            "Populate only declared fields; do not answer in prose."
+        ),
+    )
+    if unwrap_value:
+        if "value" not in arguments:
+            raise _configuration_error(
+                "MODEL_TEMPLATE_RESULT_INVALID: fixed template call omitted value"
+            )
+        value: Any = arguments["value"]
+    else:
+        value = arguments
+    encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    from .structured_output import validate_structured_output
+
+    return validate_structured_output(
+        encoded, response_format="json", response_schema=response_schema
+    )
+
+
 def _install_router_boundary(model_router_module: Any) -> None:
     """Force every real structured response through fixed function arguments."""
 
@@ -267,96 +328,10 @@ def _install_router_boundary(model_router_module: Any) -> None:
 
         @wraps(current_text)
         def generate_text(
-            self: Any,
-            role: str,
-            messages: Sequence[Mapping[str, Any]],
-            **kwargs: Any,
+            self: Any, role: str, messages: Sequence[Mapping[str, Any]], **kwargs: Any
         ) -> str:
-            response_format = str(
-                kwargs.get("response_format", "text") or "text"
-            ).strip().casefold()
-            if response_format != "json":
-                return current_text(self, role, messages, **kwargs)
-
-            response_schema = kwargs.get("response_schema")
-            if not isinstance(response_schema, Mapping):
-                raise _configuration_error(
-                    "MODEL_JSON_SCHEMA_REQUIRED: "
-                    f"JSON response for role {role!r} has no explicit response_schema. "
-                    "All model-authored structured output must use a fixed template."
-                )
-            assert_atomic_model_schema(
-                response_schema,
-                surface=f"JSON response for role {role!r}",
-            )
-
-            # Planning authors data; it does not execute an action. In particular,
-            # Qwen may return the requested design as content without tool_calls.
-            # Keep that content on the structured-text route instead of forcing a
-            # function call and feeding protocol rejections back into the design.
-            if role == "planner":
-                return current_text(self, role, messages, **kwargs)
-
-            # The deterministic mock profile is not a model and has no native function
-            # transport. Keep its existing fixture behavior while forbidding this escape
-            # hatch for every real generation adapter.
-            try:
-                config = self.registry.role(self.profile, role)
-                adapter_name = str(getattr(config, "adapter", "") or "")
-            except Exception:
-                adapter_name = ""
-            if adapter_name == "mock":
-                return current_text(self, role, messages, **kwargs)
-
-            semantic_output = ""
-            if _semantic_prelude_required(
-                self, role, kwargs, model_router_module
-            ):
-                semantic_kwargs = dict(kwargs)
-                semantic_kwargs["response_format"] = "text"
-                semantic_kwargs["response_schema"] = None
-                semantic_output = current_text(
-                    self,
-                    role,
-                    messages,
-                    **semantic_kwargs,
-                )
-
-            parameters, unwrap_value = _tool_template_schema(response_schema)
-            arguments = self.generate_tool_decision(
-                role,
-                _template_messages(
-                    messages,
-                    semantic_output=semantic_output,
-                ),
-                tool_name=_TEMPLATE_TOOL_NAME,
-                parameters=parameters,
-                description=(
-                    "Fill the host-supplied fixed response template exactly once. "
-                    "Populate only declared fields; do not answer in prose."
-                ),
-            )
-            value: Any
-            if unwrap_value:
-                if "value" not in arguments:
-                    raise _configuration_error(
-                        "MODEL_TEMPLATE_RESULT_INVALID: fixed template call omitted value"
-                    )
-                value = arguments["value"]
-            else:
-                value = arguments
-
-            encoded = json.dumps(
-                value,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-            from .structured_output import validate_structured_output
-
-            return validate_structured_output(
-                encoded,
-                response_format="json",
-                response_schema=response_schema,
+            return _structured_text_result(
+                current_text, model_router_module, self, role, messages, kwargs
             )
 
         setattr(generate_text, _TEXT_MARKER, True)

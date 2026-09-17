@@ -83,6 +83,9 @@ def _load_durations(path: Path | None) -> dict[str, float] | None:
 
 
 def main() -> int:
+    return _mmm_main_impl()
+
+def _mmm_main_impl() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tests-dir", type=Path, default=Path("tests"))
     parser.add_argument("--max-jobs", type=int, default=256)

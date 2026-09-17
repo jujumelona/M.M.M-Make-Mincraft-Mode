@@ -350,6 +350,81 @@ def _canonical_query(query: str, family: str) -> str:
     return " ".join(terms[:32])
 
 
+def _resolve_retrieval_adapter(
+    minecraft_version: str | None, loader: str | None, mappings: str | None
+) -> Any:
+    version = str(minecraft_version or "").strip()
+    loader_id = str(loader or "").strip().casefold()
+    mapping_id = str(mappings or "").strip()
+    if not (version and loader_id and mapping_id):
+        return None
+    try:
+        candidate = adapter_for_target(version, loader_id)
+    except ValueError:
+        return None
+    return candidate if mapping_id == candidate.yarn_mappings else None
+
+
+def _score_eligible_documents(
+    eligible: dict[str, CorpusDocument], canonical: str, family: str
+) -> tuple[dict[str, float], dict[str, tuple[str, ...]]]:
+    query_terms = frozenset(_tokens(canonical))
+    query_grams = _trigrams(canonical)
+    graph_boost = {document_id: 0.0 for document_id in eligible}
+    lexical: dict[str, float] = {}
+    semantic: dict[str, float] = {}
+    family_score: dict[str, float] = {}
+    for document_id, document in eligible.items():
+        searchable = " ".join((document.title, document.content, *document.topics))
+        document_terms = frozenset(_tokens(searchable))
+        lexical[document_id] = len(query_terms & document_terms) / max(1, len(query_terms))
+        semantic[document_id] = _jaccard(query_grams, _trigrams(searchable))
+        family_score[document_id] = 1.0 if family in document.families else 0.0
+    lexical_order = sorted(eligible, key=lambda document_id: (-lexical[document_id], document_id))
+    for rank, document_id in enumerate(lexical_order[:5], start=1):
+        graph_boost[document_id] += 1.0 / rank
+        for related_id in eligible[document_id].related_ids:
+            if related_id in graph_boost:
+                graph_boost[related_id] += 0.45 / rank
+    score: dict[str, float] = {}
+    channels: dict[str, tuple[str, ...]] = {}
+    for document_id in eligible:
+        score[document_id] = (
+            0.42 * lexical[document_id]
+            + 0.28 * semantic[document_id]
+            + 0.20 * family_score[document_id]
+            + 0.10 * min(1.0, graph_boost[document_id])
+        )
+        active = tuple(
+            name
+            for name, enabled in (
+                ("lexical", lexical[document_id] > 0),
+                ("semantic", semantic[document_id] > 0),
+                ("family", family_score[document_id] > 0),
+                ("graph", graph_boost[document_id] > 0),
+            )
+            if enabled
+        )
+        channels[document_id] = active
+    return score, channels
+
+
+def _retrieval_quality(
+    hits: list[RetrievalHit], eligible: dict[str, CorpusDocument], family: str
+) -> tuple[str, float]:
+    family_hits = sum(family in eligible[hit.document_id].families for hit in hits)
+    signal_hits = sum(bool(hit.channels) for hit in hits)
+    coverage = min(
+        1.0,
+        0.6 * family_hits / max(1, min(2, len(hits)))
+        + 0.4 * signal_hits / max(1, min(3, len(hits))),
+    )
+    strong = bool(hits) and signal_hits >= min(2, len(hits)) and (
+        family_hits > 0 or family == "project"
+    )
+    return ("strong" if strong else "weak"), coverage
+
+
 class OfficialCorpusIndex:
     """Deterministic multi-signal ranking over target-neutral primary sources."""
 
@@ -411,17 +486,7 @@ class OfficialCorpusIndex:
         if type(limit) is not int or not 1 <= limit <= 12:
             raise SpecValidationError("RAG result limit must be between 1 and 12.")
 
-        version = str(minecraft_version or "").strip()
-        loader_id = str(loader or "").strip().casefold()
-        mapping_id = str(mappings or "").strip()
-        adapter = None
-        if version and loader_id and mapping_id:
-            try:
-                candidate = adapter_for_target(version, loader_id)
-            except ValueError:
-                candidate = None
-            if candidate is not None and mapping_id == candidate.yarn_mappings:
-                adapter = candidate
+        adapter = _resolve_retrieval_adapter(minecraft_version, loader, mappings)
 
         target_version = adapter.minecraft_version if adapter is not None else ""
         target_loader = adapter.loader if adapter is not None else ""
@@ -434,47 +499,7 @@ class OfficialCorpusIndex:
             for document in self.documents
             if adapter is None or document.loader in {adapter.loader, "agnostic"}
         }
-        query_terms = frozenset(_tokens(canonical))
-        query_grams = _trigrams(canonical)
-        graph_boost: dict[str, float] = {document_id: 0.0 for document_id in eligible}
-        lexical: dict[str, float] = {}
-        semantic: dict[str, float] = {}
-        family_score: dict[str, float] = {}
-        for document_id, document in eligible.items():
-            searchable = " ".join((document.title, document.content, *document.topics))
-            document_terms = frozenset(_tokens(searchable))
-            lexical[document_id] = len(query_terms & document_terms) / max(1, len(query_terms))
-            semantic[document_id] = _jaccard(query_grams, _trigrams(searchable))
-            family_score[document_id] = 1.0 if family in document.families else 0.0
-        lexical_order = sorted(
-            eligible,
-            key=lambda document_id: (-lexical[document_id], document_id),
-        )
-        for rank, document_id in enumerate(lexical_order[:5], start=1):
-            graph_boost[document_id] += 1.0 / rank
-            for related_id in eligible[document_id].related_ids:
-                if related_id in graph_boost:
-                    graph_boost[related_id] += 0.45 / rank
-
-        score: dict[str, float] = {}
-        channels: dict[str, tuple[str, ...]] = {}
-        for document_id in eligible:
-            score[document_id] = (
-                0.42 * lexical[document_id]
-                + 0.28 * semantic[document_id]
-                + 0.20 * family_score[document_id]
-                + 0.10 * min(1.0, graph_boost[document_id])
-            )
-            active: list[str] = []
-            if lexical[document_id] > 0:
-                active.append("lexical")
-            if semantic[document_id] > 0:
-                active.append("semantic")
-            if family_score[document_id] > 0:
-                active.append("family")
-            if graph_boost[document_id] > 0:
-                active.append("graph")
-            channels[document_id] = tuple(active)
+        score, channels = _score_eligible_documents(eligible, canonical, family)
         ordered = sorted(
             eligible,
             key=lambda document_id: (-score[document_id], document_id),
@@ -517,18 +542,7 @@ class OfficialCorpusIndex:
                 )
             )
 
-        family_hits = sum(family in eligible[hit.document_id].families for hit in hits)
-        signal_hits = sum(bool(hit.channels) for hit in hits)
-        coverage = min(
-            1.0,
-            0.6 * family_hits / max(1, min(2, len(hits)))
-            + 0.4 * signal_hits / max(1, min(3, len(hits))),
-        )
-        quality = (
-            "strong"
-            if hits and signal_hits >= min(2, len(hits)) and (family_hits > 0 or family == "project")
-            else "weak"
-        )
+        quality, coverage = _retrieval_quality(hits, eligible, family)
         correction_required = quality != "strong"
         if correction_required and adapter is not None:
             corrections = (
@@ -574,7 +588,10 @@ class OfficialCorpusIndex:
         )
 
 
-def retrieve_official_evidence(
+def retrieve_official_evidence(query: str, *, minecraft_version: str | None=None, loader: str | None=None, mappings: str | None=None, limit: int=6) -> RetrievalReceipt:
+    return _mmm_retrieve_official_evidence_impl(query, minecraft_version=minecraft_version, loader=loader, mappings=mappings, limit=limit)
+
+def _mmm_retrieve_official_evidence_impl(
     query: str,
     *,
     minecraft_version: str | None = None,

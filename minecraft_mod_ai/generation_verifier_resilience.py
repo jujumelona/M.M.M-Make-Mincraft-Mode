@@ -280,7 +280,10 @@ def _run_gradle_corroboration(
     return corroborated
 
 
-def run_generation_verifier(
+def run_generation_verifier(runtime: Any, arguments: Mapping[str, Any] | None, *, runtime_module: Any, java_service_factory: Any | None=None) -> dict[str, Any]:
+    return _mmm_run_generation_verifier_impl(runtime, arguments, runtime_module=runtime_module, java_service_factory=java_service_factory)
+
+def _mmm_run_generation_verifier_impl(
     runtime: Any,
     arguments: Mapping[str, Any] | None,
     *,

@@ -106,7 +106,10 @@ class PlanningPipeline:
         self.planning_state: dict[str, Any] | None = None
         self.design_progress: dict[str, Any] = {}
 
-    def prepare(
+    def prepare(self, prompt: str, *, media_paths: Sequence[str | Path]=(), existing_state: Mapping[str, Any] | None=None, checkpoint: Callable[[dict[str, Any]], None] | None=None, detail_section_applicability_resolver: DetailSectionApplicabilityResolver | None=None) -> PlanningArtifacts:
+        return self._mmm_prepare_impl(prompt, media_paths=media_paths, existing_state=existing_state, checkpoint=checkpoint, detail_section_applicability_resolver=detail_section_applicability_resolver)
+
+    def _mmm_prepare_impl(
         self,
         prompt: str,
         *,
@@ -364,7 +367,10 @@ class PlanningPipeline:
             }
         return design
 
-    def _bind_platform(
+    def _bind_platform(self, prompt: str, design: dict[str, Any], base_proposal: Proposal) -> tuple[dict[str, Any], Proposal, dict[str, Any], dict[str, Any]]:
+        return self._mmm__bind_platform_impl(prompt, design, base_proposal)
+
+    def _mmm__bind_platform_impl(
         self,
         prompt: str,
         design: dict[str, Any],

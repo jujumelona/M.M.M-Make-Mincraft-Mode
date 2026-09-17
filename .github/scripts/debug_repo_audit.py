@@ -72,6 +72,37 @@ def _resolve_from(path: Path, node: ast.ImportFrom) -> list[str] | None:
     return base
 
 
+def _sibling_import_errors(path: Path, node: ast.ImportFrom) -> list[str]:
+    if not node.level or node.module is not None:
+        return []
+    package = _current_package(path)
+    base = package[: len(package) - node.level + 1]
+    errors: list[str] = []
+    for alias in node.names:
+        candidate = [*base, alias.name]
+        candidate_file = PKG.joinpath(*candidate[1:]).with_suffix(".py")
+        candidate_pkg = PKG.joinpath(*candidate[1:], "__init__.py")
+        module_like = alias.name.islower() and "_" in alias.name
+        if module_like and not candidate_file.is_file() and not candidate_pkg.is_file():
+            errors.append(
+                f"MISSING_SIBLING_IMPORT {path.relative_to(ROOT)}:{node.lineno}: "
+                f"from {'.' * node.level} import {alias.name}"
+            )
+    return errors
+
+
+def _import_node_errors(path: Path, node: ast.ImportFrom) -> list[str]:
+    target = _resolve_from(path, node)
+    if target is None:
+        return []
+    if target == ["<invalid-relative-depth>"] or not _module_exists(target):
+        return [
+            f"MISSING_IMPORT {path.relative_to(ROOT)}:{node.lineno}: "
+            f"from {'.' * node.level}{node.module or ''} import ... -> {'.'.join(target)}"
+        ]
+    return _sibling_import_errors(path, node)
+
+
 def audit_internal_imports() -> list[str]:
     errors: list[str] = []
     for path in sorted(PKG.rglob("*.py")):
@@ -81,32 +112,8 @@ def audit_internal_imports() -> list[str]:
             errors.append(f"SYNTAX {path.relative_to(ROOT)}:{exc.lineno}: {exc.msg}")
             continue
         for node in ast.walk(tree):
-            if not isinstance(node, ast.ImportFrom):
-                continue
-            target = _resolve_from(path, node)
-            if target is None:
-                continue
-            if target == ["<invalid-relative-depth>"] or not _module_exists(target):
-                errors.append(
-                    f"MISSING_IMPORT {path.relative_to(ROOT)}:{node.lineno}: "
-                    f"from {'.' * node.level}{node.module or ''} import ... -> "
-                    f"{'.'.join(target)}"
-                )
-                continue
-            if node.level and node.module is None:
-                package = _current_package(path)
-                up = node.level - 1
-                base = package[: len(package) - up]
-                for alias in node.names:
-                    candidate = [*base, alias.name]
-                    candidate_file = PKG.joinpath(*candidate[1:]).with_suffix(".py")
-                    candidate_pkg = PKG.joinpath(*candidate[1:], "__init__.py")
-                    if alias.name.islower() and "_" in alias.name:
-                        if not candidate_file.is_file() and not candidate_pkg.is_file():
-                            errors.append(
-                                f"MISSING_SIBLING_IMPORT {path.relative_to(ROOT)}:{node.lineno}: "
-                                f"from {'.' * node.level} import {alias.name}"
-                            )
+            if isinstance(node, ast.ImportFrom):
+                errors.extend(_import_node_errors(path, node))
     return errors
 
 
@@ -167,57 +174,67 @@ def _contains_unwrap_read(node: ast.AST) -> bool:
     return False
 
 
+def _marker_lookup_count(node: ast.AST) -> int:
+    return sum(
+        1
+        for item in ast.walk(node)
+        if (name := _getattr_name(item)) is not None and name.startswith("_mmm_")
+    )
+
+
+def _conservative_marker_branch(node: ast.AST) -> tuple[int, bool]:
+    if not isinstance(node, ast.If) or not _contains_marker_getattr(node.test):
+        return 0, True
+    marker_count = _marker_lookup_count(node.test)
+    if marker_count == 0:
+        return 0, True
+    body_unwrap = any(_contains_unwrap_read(item) for item in node.body)
+    else_unwrap = any(_contains_unwrap_read(item) for item in node.orelse)
+    return marker_count, not body_unwrap and else_unwrap
+
+
 def _all_marker_tests_conservatively_preserve_outer(
     function: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> bool:
-    """Recognize marker-copy-safe branches without hard-coded file exceptions.
-
-    An inherited truthy marker is dangerous when it *causes* an unwrap. It is
-    conservative when the truthy branch preserves the current outer callable and only
-    the false branch unwraps. In that shape copied metadata can suppress an unwrap but
-    cannot skip an outer safety contract. Other marker/unwrap data flows remain subject
-    to the strict ownership audit.
-    """
+    """Recognize marker-copy-safe branches without hard-coded file exceptions."""
 
     nodes = _local_function_nodes(function)
-    marker_lookups = sum(
-        1
-        for node in nodes
-        if isinstance(_getattr_name(node), str)
-        and str(_getattr_name(node)).startswith("_mmm_")
-    )
+    marker_lookups = sum(_marker_lookup_count(node) for node in nodes if isinstance(node, ast.Call))
     if marker_lookups == 0:
         return False
-
     conservative_lookups = 0
     for node in nodes:
-        if not isinstance(node, ast.If) or not _contains_marker_getattr(node.test):
-            continue
-        marker_count = sum(
-            1
-            for item in ast.walk(node.test)
-            if isinstance(_getattr_name(item), str)
-            and str(_getattr_name(item)).startswith("_mmm_")
-        )
-        if marker_count == 0:
-            continue
-        body_unwrap = any(_contains_unwrap_read(item) for item in node.body)
-        else_unwrap = any(_contains_unwrap_read(item) for item in node.orelse)
-        if body_unwrap or not else_unwrap:
+        marker_count, conservative = _conservative_marker_branch(node)
+        if marker_count and not conservative:
             return False
         conservative_lookups += marker_count
     return conservative_lookups == marker_lookups
 
 
-def audit_marker_controlled_unwraps() -> list[str]:
-    """Reject inherited marker tests that can choose the wrong wrapped layer.
+def _function_has_marker_and_unwrap(nodes: list[ast.AST]) -> bool:
+    marker_lookup = any(
+        (name := _getattr_name(node)) is not None and name.startswith("_mmm_")
+        for node in nodes
+    )
+    unwrap_lookup = any(
+        _getattr_name(node) == "__wrapped__"
+        or (isinstance(node, ast.Attribute) and node.attr == "__wrapped__" and isinstance(node.ctx, ast.Load))
+        for node in nodes
+    )
+    return marker_lookup and unwrap_lookup
 
-    Default ``functools.wraps`` copies function ``__dict__`` metadata, so direct
-    ``getattr(current, '_mmm_*')`` cannot establish exact ownership. Marker=true paths
-    that can unwrap must use ``owns_contract_marker``. A marker=true branch that keeps
-    the outer callable while only marker=false unwraps is conservative under copied
-    metadata and is not an unsafe owner bypass. Nested functions are audited separately.
-    """
+
+def _unsafe_marker_unwrap(function: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    nodes = _local_function_nodes(function)
+    return (
+        _function_has_marker_and_unwrap(nodes)
+        and not _nodes_call_named(nodes, "owns_contract_marker")
+        and not _all_marker_tests_conservatively_preserve_outer(function)
+    )
+
+
+def audit_marker_controlled_unwraps() -> list[str]:
+    """Reject inherited marker tests that can choose the wrong wrapped layer."""
 
     errors: list[str] = []
     for path in sorted(PKG.rglob("*.py")):
@@ -226,29 +243,7 @@ def audit_marker_controlled_unwraps() -> list[str]:
         except SyntaxError:
             continue
         for function in ast.walk(tree):
-            if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            nodes = _local_function_nodes(function)
-            marker_lookup = False
-            unwrap_lookup = False
-            for node in nodes:
-                name = _getattr_name(node)
-                if isinstance(name, str) and name.startswith("_mmm_"):
-                    marker_lookup = True
-                if name == "__wrapped__":
-                    unwrap_lookup = True
-                if (
-                    isinstance(node, ast.Attribute)
-                    and node.attr == "__wrapped__"
-                    and isinstance(node.ctx, ast.Load)
-                ):
-                    unwrap_lookup = True
-            if (
-                marker_lookup
-                and unwrap_lookup
-                and not _nodes_call_named(nodes, "owns_contract_marker")
-                and not _all_marker_tests_conservatively_preserve_outer(function)
-            ):
+            if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)) and _unsafe_marker_unwrap(function):
                 errors.append(
                     f"UNSAFE_MARKER_CONTROLLED_UNWRAP {path.relative_to(ROOT)}:"
                     f"{function.lineno}: {function.name} must use owns_contract_marker"
@@ -256,12 +251,10 @@ def audit_marker_controlled_unwraps() -> list[str]:
     return errors
 
 
-def audit_bootstrap_owner_modules() -> list[str]:
-    path = PKG / "runtime_bootstrap.py"
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    errors: list[str] = []
+def _bootstrap_imports_and_calls(tree: ast.AST) -> tuple[set[str], Counter[str], list[str]]:
     installer_aliases: set[str] = set()
     called_installers: Counter[str] = Counter()
+    errors: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.level == 1 and node.module:
             target = ["minecraft_mod_ai", *node.module.split(".")]
@@ -269,19 +262,23 @@ def audit_bootstrap_owner_modules() -> list[str]:
                 errors.append(
                     f"BOOTSTRAP_MISSING_MODULE runtime_bootstrap.py:{node.lineno}: {node.module}"
                 )
-            for alias in node.names:
-                if alias.name == "install":
-                    installer_aliases.add(alias.asname or alias.name)
-        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            if node.func.id.startswith("install_"):
-                called_installers[node.func.id] += 1
+            installer_aliases.update(
+                alias.asname or alias.name for alias in node.names if alias.name == "install"
+            )
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id.startswith("install_"):
+            called_installers[node.func.id] += 1
+    return installer_aliases, called_installers, errors
+
+
+def audit_bootstrap_owner_modules() -> list[str]:
+    path = PKG / "runtime_bootstrap.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    installer_aliases, called_installers, errors = _bootstrap_imports_and_calls(tree)
     missing_calls = sorted(name for name in installer_aliases if called_installers[name] == 0)
     if missing_calls:
         errors.append("BOOTSTRAP_IMPORTED_NOT_CALLED " + ",".join(missing_calls))
     duplicate_calls = sorted(
-        (name, called_installers[name])
-        for name in installer_aliases
-        if called_installers[name] > 1
+        (name, called_installers[name]) for name in installer_aliases if called_installers[name] > 1
     )
     if duplicate_calls:
         errors.append(

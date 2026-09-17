@@ -210,7 +210,42 @@ def _shutdown_pool(
     pool.shutdown(wait=False, cancel_futures=True)
 
 
-def _iter_completed_with_deadlines_impl(
+def _next_completed_or_report_timeout(
+    active: dict[Future[_Result], _ActiveTask[_Item]],
+    *,
+    stage: str,
+    unit_timeout: float,
+    stage_deadline: float | None,
+    on_error: Callable[[_Item, BaseException], None] | None,
+) -> set[Future[_Result]] | None:
+    try:
+        return _next_completed_batch(
+            active, stage=stage, unit_timeout=unit_timeout, stage_deadline=stage_deadline
+        )
+    except ParallelExecutionTimeout as exc:
+        if on_error is None:
+            raise
+        on_error(exc.item, exc)
+        return None
+
+
+def _completed_result_or_report_error(
+    future: Future[_Result],
+    meta: _ActiveTask[_Item],
+    *,
+    stage: str,
+    on_error: Callable[[_Item, BaseException], None] | None,
+) -> tuple[bool, _Result | None]:
+    try:
+        return True, _completed_result(future, meta, stage=stage)
+    except ParallelTaskError as exc:
+        if on_error is None:
+            raise
+        on_error(meta.item, exc.cause)
+        return False, None
+
+
+def _iter_completed_with_deadlines_core(
     items: Iterable[_Item],
     worker: Callable[[_Item], _Result],
     *,
@@ -251,17 +286,14 @@ def _iter_completed_with_deadlines_impl(
             stage_deadline=stage_deadline,
         )
         while active:
-            try:
-                done = _next_completed_batch(
-                    active,
-                    stage=stage,
-                    unit_timeout=unit_timeout,
-                    stage_deadline=stage_deadline,
-                )
-            except ParallelExecutionTimeout as exc:
-                if on_error is None:
-                    raise
-                on_error(exc.item, exc)
+            done = _next_completed_or_report_timeout(
+                active,
+                stage=stage,
+                unit_timeout=unit_timeout,
+                stage_deadline=stage_deadline,
+                on_error=on_error,
+            )
+            if done is None:
                 return
 
             ordered = sorted(
@@ -270,13 +302,12 @@ def _iter_completed_with_deadlines_impl(
             )
             for future in ordered:
                 meta = active.pop(future)
-                try:
-                    result = _completed_result(future, meta, stage=stage)
-                except ParallelTaskError as exc:
-                    if on_error is None:
-                        raise
-                    on_error(meta.item, exc.cause)
+                ok, result = _completed_result_or_report_error(
+                    future, meta, stage=stage, on_error=on_error
+                )
+                if not ok:
                     continue
+                assert result is not None
                 if on_result is not None:
                     on_result(meta.item, result)
                 yield meta.item, result
@@ -292,6 +323,27 @@ def _iter_completed_with_deadlines_impl(
             )
     finally:
         _shutdown_pool(pool, active)
+
+
+def _iter_completed_with_deadlines_impl(
+    items: Iterable[_Item],
+    worker: Callable[[_Item], _Result],
+    *,
+    max_workers: int,
+    stage: str,
+    sort_key: Callable[[_Item], object] | None,
+    on_result: Callable[[_Item, _Result], None] | None,
+    on_error: Callable[[_Item, BaseException], None] | None,
+) -> Iterator[tuple[_Item, _Result]]:
+    yield from _iter_completed_with_deadlines_core(
+        items,
+        worker,
+        max_workers=max_workers,
+        stage=stage,
+        sort_key=sort_key,
+        on_result=on_result,
+        on_error=on_error,
+    )
 
 
 def iter_completed_with_deadlines(

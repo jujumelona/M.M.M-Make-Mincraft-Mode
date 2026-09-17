@@ -13,58 +13,13 @@ contains only deterministic schema-surface helpers plus a runtime assertion; it 
 not monkey-patch completion, continuation, parser, retry, or transport functions.
 """
 
-from collections.abc import Mapping, Sequence
-from typing import Any
+from .tool_validation_surface import assert_unique_schema_names, tool_name, validation_surface
 
 
-def _tool_name(schema: Any) -> str:
-    if not isinstance(schema, Mapping):
-        return ""
-    function = schema.get("function")
-    if not isinstance(function, Mapping):
-        return ""
-    return str(function.get("name", "")).strip()
 
-
-def _assert_unique_schema_names(
-    schemas: Sequence[Any],
-    *,
-    surface: str,
-) -> None:
-    """Reject ambiguous same-name ownership inside one schema surface."""
-
-    seen: set[str] = set()
-    for schema in schemas:
-        name = _tool_name(schema)
-        if not name:
-            continue
-        if name in seen:
-            raise RuntimeError(
-                f"duplicate tool schema name {name!r} in {surface} surface"
-            )
-        seen.add(name)
-
-
-def _validation_surface(
-    visible: Sequence[Any],
-    authorized: Sequence[Any],
-) -> tuple[Any, ...]:
-    """Merge parse-only schemas without overriding schemas shown this turn."""
-
-    _assert_unique_schema_names(visible, surface="model-visible")
-    _assert_unique_schema_names(authorized, surface="authorized-validation")
-    result = list(visible)
-    visible_names = {
-        name
-        for schema in visible
-        if (name := _tool_name(schema))
-    }
-    for schema in authorized:
-        name = _tool_name(schema)
-        if name and name in visible_names:
-            continue
-        result.append(schema)
-    return tuple(result)
+_tool_name = tool_name
+_assert_unique_schema_names = assert_unique_schema_names
+_validation_surface = validation_surface
 
 
 def install() -> None:

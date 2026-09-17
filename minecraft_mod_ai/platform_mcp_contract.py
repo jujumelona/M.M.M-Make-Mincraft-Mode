@@ -70,6 +70,57 @@ def _service_adapter(
     return _required_adapter(module, minecraft_version, loader)
 
 
+def _plan_complete_game_bound(
+    module: Any,
+    self: Any,
+    prompt: str,
+    media_paths: Any = (),
+    existing_input_sha256: str = "",
+    minecraft_version: str = "",
+    loader: str = "fabric",
+    existing_minecraft_version: str = "",
+    existing_loader: str = "",
+) -> dict[str, Any]:
+    router = self.router_factory()
+    if minecraft_version:
+        adapter = _required_adapter(module, minecraft_version, loader)
+        router._mmm_requested_minecraft_version = adapter.minecraft_version
+        router._mmm_requested_loader = adapter.loader
+    if existing_minecraft_version:
+        adapter = _required_adapter(module, existing_minecraft_version, existing_loader or loader)
+        router._mmm_existing_minecraft_version = adapter.minecraft_version
+        router._mmm_existing_loader = adapter.loader
+    proposal = module.CompleteGameDesignPlanner(router).plan(
+        prompt,
+        media_paths=self._scoped_media_paths(media_paths),
+        existing_input_sha256=existing_input_sha256,
+    )
+    from .authored_plan import AuthoredPlan
+
+    if isinstance(proposal, AuthoredPlan):
+        return self._authored_plan_result(proposal)
+    adapter = adapter_for_lock_values(proposal.base_proposal.spec.platform)
+    self._mmm_last_platform_adapter = adapter
+    os.environ["MMM_MCP_MINECRAFT_VERSION"] = adapter.minecraft_version
+    os.environ["MMM_MCP_LOADER"] = adapter.loader
+    proposal_ref = self._store_complete_proposal(proposal)
+    return {
+        "schema_version": "mmm/complete-plan-result-v4",
+        "profile": self.profile,
+        "message": module.render_complete_plan(
+            requested_prompt=proposal.requested_prompt,
+            game_design=proposal.game_design,
+            modules=proposal.modules,
+            acceptance_tests=proposal.acceptance_tests,
+        ),
+        "proposal_ref": proposal_ref,
+        "approval_hash": proposal.calculate_hash(),
+        "counts": self._complete_proposal_counts(proposal),
+        "detail_tool": "read_complete_plan_section",
+        "platform": proposal.base_proposal.spec.platform.__dict__,
+    }
+
+
 def _install_core_tools(module: Any) -> None:
     cls = module.MMMToolService
 
@@ -187,48 +238,10 @@ def _install_core_tools(module: Any) -> None:
         existing_minecraft_version: str = "",
         existing_loader: str = "",
     ) -> dict[str, Any]:
-        router = self.router_factory()
-        if minecraft_version:
-            adapter = _required_adapter(module, minecraft_version, loader)
-            router._mmm_requested_minecraft_version = adapter.minecraft_version
-            router._mmm_requested_loader = adapter.loader
-        if existing_minecraft_version:
-            adapter = _required_adapter(
-                module,
-                existing_minecraft_version,
-                existing_loader or loader,
-            )
-            router._mmm_existing_minecraft_version = adapter.minecraft_version
-            router._mmm_existing_loader = adapter.loader
-        proposal = module.CompleteGameDesignPlanner(router).plan(
-            prompt,
-            media_paths=self._scoped_media_paths(media_paths),
-            existing_input_sha256=existing_input_sha256,
+        return _plan_complete_game_bound(
+            module, self, prompt, media_paths, existing_input_sha256, minecraft_version,
+            loader, existing_minecraft_version, existing_loader
         )
-        from .authored_plan import AuthoredPlan
-
-        if isinstance(proposal, AuthoredPlan):
-            return self._authored_plan_result(proposal)
-        adapter = adapter_for_lock_values(proposal.base_proposal.spec.platform)
-        self._mmm_last_platform_adapter = adapter
-        os.environ["MMM_MCP_MINECRAFT_VERSION"] = adapter.minecraft_version
-        os.environ["MMM_MCP_LOADER"] = adapter.loader
-        proposal_ref = self._store_complete_proposal(proposal)
-        return {
-            "schema_version": "mmm/complete-plan-result-v4",
-            "profile": self.profile,
-            "message": module.render_complete_plan(
-                requested_prompt=proposal.requested_prompt,
-                game_design=proposal.game_design,
-                modules=proposal.modules,
-                acceptance_tests=proposal.acceptance_tests,
-            ),
-            "proposal_ref": proposal_ref,
-            "approval_hash": proposal.calculate_hash(),
-            "counts": self._complete_proposal_counts(proposal),
-            "detail_tool": "read_complete_plan_section",
-            "platform": proposal.base_proposal.spec.platform.__dict__,
-        }
 
     plan_complete_game._mmm_platform_bound = True
     cls.plan_complete_game = plan_complete_game

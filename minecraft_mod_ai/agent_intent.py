@@ -91,6 +91,9 @@ def structured_user_intent(
 
 
 def is_implementation_intent(intent: str) -> bool:
+    return _mmm_is_implementation_intent_impl(intent)
+
+def _mmm_is_implementation_intent_impl(intent: str) -> bool:
     return any(phase in str(intent).casefold() for phase in IMPLEMENTATION_PHASES)
 
 

@@ -12,20 +12,14 @@ from collections.abc import Mapping, Sequence
 from functools import wraps
 from typing import Any
 
+from .tool_validation_surface import tool_name
+
 _MARKER = "_mmm_tool_schema_ownership_v1"
 
 
 class ToolSchemaOwnershipError(RuntimeError):
     """The composed tool surface has ambiguous or incompatible ownership."""
 
-
-def _schema_name(schema: Any) -> str:
-    if not isinstance(schema, Mapping):
-        return ""
-    function = schema.get("function")
-    if not isinstance(function, Mapping):
-        return ""
-    return str(function.get("name", "")).strip()
 
 
 def _schema_parameters(schema: Any) -> Mapping[str, Any] | None:
@@ -60,7 +54,7 @@ def validate_tool_schema_surface(
             raise ToolSchemaOwnershipError(
                 f"{surface} tool schema at index {index} is not a function tool"
             )
-        name = _schema_name(raw)
+        name = tool_name(raw)
         if not name:
             raise ToolSchemaOwnershipError(
                 f"{surface} tool schema at index {index} has no function name"
@@ -114,7 +108,7 @@ def install(
         reserved = {
             name: row
             for row in external_rows
-            if (name := _schema_name(row))
+            if (name := tool_name(row))
         }
         return validate_tool_schema_surface(
             rows,

@@ -65,23 +65,10 @@ def _qualified_name(node: ast.AST) -> str:
     return ""
 
 
-def executor_ownership_violations(path: Path, tree: ast.AST) -> list[tuple[int, str]]:
-    """Return direct executor ownership by an unreviewed module.
-
-    Ordinary planning/research/fan-out callers must use deadline_executor so deadline,
-    cancellation, context propagation, and shutdown policy stay single-sourced. Modules
-    with genuinely different scheduler semantics are admitted only through the explicit
-    reviewed-owner set above, making new scattered pools a CI failure by default.
-    """
-
-    relative = path.relative_to(ROOT)
-    if relative in REVIEWED_EXECUTOR_OWNERS:
-        return []
-
-    findings: set[tuple[int, str]] = set()
+def _executor_import_ownership(tree: ast.AST) -> tuple[set[str], set[str], set[tuple[int, str]]]:
     imported_aliases: set[str] = set()
     module_aliases: set[str] = set()
-
+    findings: set[tuple[int, str]] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == "concurrent.futures":
             for alias in node.names:
@@ -90,21 +77,40 @@ def executor_ownership_violations(path: Path, tree: ast.AST) -> list[tuple[int, 
                     imported_aliases.add(local_name)
                     findings.add((node.lineno, f"imports {alias.name} as {local_name}"))
         elif isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.name == "concurrent.futures":
-                    module_aliases.add(alias.asname or "concurrent.futures")
+            module_aliases.update(
+                alias.asname or "concurrent.futures"
+                for alias in node.names
+                if alias.name == "concurrent.futures"
+            )
+    return imported_aliases, module_aliases, findings
 
+
+def _executor_construction_findings(
+    tree: ast.AST, imported_aliases: set[str], module_aliases: set[str]
+) -> set[tuple[int, str]]:
+    findings: set[tuple[int, str]] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         name = _qualified_name(node.func)
         tail = name.rsplit(".", 1)[-1]
-        if name in imported_aliases or tail in EXECUTOR_TYPES:
+        direct = name in imported_aliases or tail in EXECUTOR_TYPES
+        qualified = any(
+            name.startswith(f"{alias}.") and tail in EXECUTOR_TYPES
+            for alias in module_aliases
+        )
+        if direct or qualified:
             findings.add((node.lineno, f"constructs {name or tail}"))
-            continue
-        if any(name.startswith(f"{alias}.") and tail in EXECUTOR_TYPES for alias in module_aliases):
-            findings.add((node.lineno, f"constructs {name}"))
+    return findings
 
+
+def executor_ownership_violations(path: Path, tree: ast.AST) -> list[tuple[int, str]]:
+    """Return direct executor ownership by an unreviewed module."""
+
+    if path.relative_to(ROOT) in REVIEWED_EXECUTOR_OWNERS:
+        return []
+    imported_aliases, module_aliases, findings = _executor_import_ownership(tree)
+    findings.update(_executor_construction_findings(tree, imported_aliases, module_aliases))
     return sorted(findings)
 
 

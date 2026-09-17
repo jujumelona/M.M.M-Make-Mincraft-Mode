@@ -13,6 +13,7 @@ import re
 import threading
 import time
 from collections.abc import Mapping, Sequence
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -90,6 +91,7 @@ _READ_OBSERVE_TOOLS = frozenset({
 _RECOVERY_EVIDENCE_TOOLS = frozenset({
     "search_code_rag",
     "search_project_rag",
+    "inspect_modrinth_project",
     "java_workspace_symbols",
     "external_mcp_call",
     "read_reuse_source",
@@ -135,6 +137,9 @@ def _tool_name(schema: Mapping[str, Any]) -> str:
 
 
 def _canonical_mutation_path(value: Any) -> str:
+    return _mmm__canonical_mutation_path_impl(value)
+
+def _mmm__canonical_mutation_path_impl(value: Any) -> str:
     clean = str(value or "").strip().replace("\\", "/")
     while clean.startswith("./"):
         clean = clean[2:]
@@ -253,94 +258,91 @@ def _anchor_path_and_symbol(anchor: Mapping[str, Any]) -> tuple[str, str]:
     return path, symbol.strip() if sep else ""
 
 
+def _record_task_anchor(
+    raw: Any,
+    *,
+    reuse: str,
+    writable: list[str],
+    creatable: list[str],
+    candidates: list[tuple[str, str, bool]],
+) -> None:
+    if not isinstance(raw, Mapping):
+        return
+    path, symbol = _anchor_path_and_symbol(raw)
+    if not path:
+        return
+    if path not in writable:
+        writable.append(path)
+    fresh = (
+        str(raw.get("status") or "").strip().casefold() == "host_reserved"
+        or reuse == "fresh"
+    )
+    if fresh and path not in creatable:
+        creatable.append(path)
+    if str(raw.get("kind") or "").strip().casefold() == "symbol":
+        candidates.append((path, symbol, fresh))
+
+
+def _task_anchor_candidates(
+    task: Mapping[str, Any], direct_reuse: str, writable: list[str], creatable: list[str]
+) -> list[tuple[str, str, bool]]:
+    candidates: list[tuple[str, str, bool]] = []
+    task_reuse = str(task.get("reuse_action") or "").strip().casefold()
+    bindings = [
+        item for item in _sequence(task.get("production_bindings")) if isinstance(item, Mapping)
+    ]
+    for binding in bindings:
+        reuse = str(binding.get("reuse_action") or task_reuse or direct_reuse).strip().casefold()
+        for anchor in _sequence(binding.get("owned_anchors")):
+            _record_task_anchor(
+                anchor, reuse=reuse, writable=writable, creatable=creatable, candidates=candidates
+            )
+    for anchor in _sequence(task.get("owned_anchors")):
+        _record_task_anchor(
+            anchor, reuse=task_reuse or direct_reuse, writable=writable,
+            creatable=creatable, candidates=candidates
+        )
+    return candidates
+
+
+def _choose_task_candidate(
+    direct_primary: str, direct_reuse: str, candidates: Sequence[tuple[str, str, bool]]
+) -> tuple[str, str, bool] | None:
+    if direct_primary:
+        matched = next((item for item in candidates if item[0] == direct_primary), None)
+        return matched or (direct_primary, "", direct_reuse == "fresh")
+    unique = list(dict.fromkeys(candidates))
+    return unique[0] if len(unique) == 1 else None
+
+
 def _task_authority_context(payload: Mapping[str, Any]) -> TargetMutationContext | None:
-    module = payload.get("module")
-    task = _evidence_task_from_module(module)
+    task = _evidence_task_from_module(payload.get("module"))
     direct_primary = _canonical_mutation_path(payload.get("primary_path"))
-    direct_writable = tuple(
+    writable = [
         path for path in (
             _canonical_mutation_path(item) for item in _sequence(payload.get("writable_paths"))
         ) if _is_workspace_file_path(path)
-    )
-    direct_reuse = str(payload.get("reuse_action") or "").strip().casefold()
-
-    candidates: list[tuple[str, str, bool]] = []
-    writable: list[str] = list(direct_writable)
+    ]
     creatable: list[str] = []
-
-    if isinstance(task, Mapping):
-        task_reuse = str(task.get("reuse_action") or "").strip().casefold()
-        bindings = [
-            item for item in _sequence(task.get("production_bindings"))
-            if isinstance(item, Mapping)
-        ]
-        for binding in bindings:
-            reuse = str(binding.get("reuse_action") or task_reuse or direct_reuse).strip().casefold()
-            for anchor in _sequence(binding.get("owned_anchors")):
-                if not isinstance(anchor, Mapping):
-                    continue
-                path, symbol = _anchor_path_and_symbol(anchor)
-                if not path:
-                    continue
-                if path not in writable:
-                    writable.append(path)
-                fresh = (
-                    str(anchor.get("status") or "").strip().casefold() == "host_reserved"
-                    or reuse == "fresh"
-                )
-                if fresh and path not in creatable:
-                    creatable.append(path)
-                if str(anchor.get("kind") or "").strip().casefold() == "symbol":
-                    candidates.append((path, symbol, fresh))
-        for anchor in _sequence(task.get("owned_anchors")):
-            if not isinstance(anchor, Mapping):
-                continue
-            path, symbol = _anchor_path_and_symbol(anchor)
-            if not path:
-                continue
-            if path not in writable:
-                writable.append(path)
-            fresh = str(anchor.get("status") or "").strip().casefold() == "host_reserved"
-            if fresh and path not in creatable:
-                creatable.append(path)
-            if str(anchor.get("kind") or "").strip().casefold() == "symbol":
-                candidates.append((path, symbol, fresh))
-
+    direct_reuse = str(payload.get("reuse_action") or "").strip().casefold()
+    candidates = (
+        _task_anchor_candidates(task, direct_reuse, writable, creatable)
+        if isinstance(task, Mapping) else []
+    )
     if direct_primary and direct_primary not in writable:
         writable.insert(0, direct_primary)
-
-    chosen: tuple[str, str, bool] | None = None
-    if direct_primary:
-        for item in candidates:
-            if item[0] == direct_primary:
-                chosen = item
-                break
-        if chosen is None:
-            chosen = (direct_primary, "", direct_reuse == "fresh")
-    else:
-        unique = []
-        for item in candidates:
-            if item not in unique:
-                unique.append(item)
-        if len(unique) == 1:
-            chosen = unique[0]
-
+    chosen = _choose_task_candidate(direct_primary, direct_reuse, candidates)
     if chosen is None:
         return None
-
     path, symbol, fresh = chosen
     if path not in writable:
         writable.insert(0, path)
     if fresh and path not in creatable:
         creatable.append(path)
     return TargetMutationContext(
-        target_path=path,
-        target_symbol=symbol or None,
-        is_new_file=fresh,
-        evidence_source="host_task_authority",
-        writable_paths=tuple(writable),
-        creatable_paths=tuple(creatable),
-        target_pinned=True,
+        target_path=path, target_symbol=symbol or None, is_new_file=fresh,
+        evidence_source="host_task_authority", writable_paths=tuple(writable),
+        creatable_paths=tuple(creatable), target_pinned=True,
     )
 
 
@@ -392,98 +394,126 @@ class TargetMutationContext:
         return self.localization_stage == LocalizationStage.READY
 
     def merge(self, other: TargetMutationContext) -> TargetMutationContext:
-        if other is None:
-            return self
-        left = _canonical_mutation_path(self.target_path)
-        right = _canonical_mutation_path(other.target_path)
-        if self.target_pinned and left and right and left != right:
-            return self
-        if other.target_pinned and right and left and left != right:
-            return other
-        if left and right and left != right:
-            return other
+        return _merge_target_context(self, other)
 
-        writable = tuple(dict.fromkeys((*self.writable_paths, *other.writable_paths)))
-        creatable = tuple(dict.fromkeys((*self.creatable_paths, *other.creatable_paths)))
-        existing: TargetMutationContext | None = None
-        if (
-            not other.is_new_file
-            and str(other.evidence_source or "").strip() in _EXISTING_TARGET_EVIDENCE_SOURCES
-        ):
-            existing = other
-        elif (
-            not self.is_new_file
-            and str(self.evidence_source or "").strip() in _EXISTING_TARGET_EVIDENCE_SOURCES
-        ):
-            existing = self
 
-        target_path = other.target_path or self.target_path
-        target = _canonical_mutation_path(target_path)
-        if existing is not None and target:
-            creatable = tuple(
-                item for item in creatable
-                if _canonical_mutation_path(item) != target
-            )
+def _conflicting_target_context(
+    left: TargetMutationContext, right: TargetMutationContext, left_path: str, right_path: str
+) -> TargetMutationContext | None:
+    if not left_path or not right_path or left_path == right_path:
+        return None
+    if left.target_pinned:
+        return left
+    return right
 
-        return TargetMutationContext(
-            target_path=target_path,
-            target_symbol=other.target_symbol or self.target_symbol,
-            source_body=(
-                existing.source_body
-                if existing is not None and existing.source_body is not None
-                else other.source_body or self.source_body
-            ),
-            start_line=(
-                existing.start_line
-                if existing is not None and existing.start_line is not None
-                else other.start_line if other.start_line is not None else self.start_line
-            ),
-            end_line=(
-                existing.end_line
-                if existing is not None and existing.end_line is not None
-                else other.end_line if other.end_line is not None else self.end_line
-            ),
-            is_new_file=False if existing is not None else (other.is_new_file or self.is_new_file),
-            evidence_source=(
-                existing.evidence_source
-                if existing is not None
-                else other.evidence_source or self.evidence_source
-            ),
-            base_revision_sha=(
-                existing.base_revision_sha
-                if existing is not None and existing.base_revision_sha is not None
-                else other.base_revision_sha or self.base_revision_sha
-            ),
-            writable_paths=writable,
-            creatable_paths=creatable,
-            target_pinned=self.target_pinned or other.target_pinned,
-        )
+
+def _existing_target_context(
+    left: TargetMutationContext, right: TargetMutationContext
+) -> TargetMutationContext | None:
+    if not right.is_new_file and str(right.evidence_source or "").strip() in _EXISTING_TARGET_EVIDENCE_SOURCES:
+        return right
+    if not left.is_new_file and str(left.evidence_source or "").strip() in _EXISTING_TARGET_EVIDENCE_SOURCES:
+        return left
+    return None
+
+
+def _existing_or_value(existing_value: Any, right_value: Any, left_value: Any) -> Any:
+    if existing_value is not None:
+        return existing_value
+    return right_value if right_value is not None else left_value
+
+
+def _filtered_creatable_paths(
+    creatable: tuple[str, ...], existing: TargetMutationContext | None, target: str
+) -> tuple[str, ...]:
+    if existing is None or not target:
+        return creatable
+    return tuple(
+        item for item in creatable if _canonical_mutation_path(item) != target
+    )
+
+
+def _existing_attr(existing: TargetMutationContext | None, name: str) -> Any:
+    return getattr(existing, name) if existing is not None else None
+
+
+def _merge_target_context(
+    left_ctx: TargetMutationContext, right_ctx: TargetMutationContext | None
+) -> TargetMutationContext:
+    if right_ctx is None:
+        return left_ctx
+    left = _canonical_mutation_path(left_ctx.target_path)
+    right = _canonical_mutation_path(right_ctx.target_path)
+    conflict = _conflicting_target_context(left_ctx, right_ctx, left, right)
+    if conflict is not None:
+        return conflict
+    writable = tuple(dict.fromkeys((*left_ctx.writable_paths, *right_ctx.writable_paths)))
+    creatable = tuple(dict.fromkeys((*left_ctx.creatable_paths, *right_ctx.creatable_paths)))
+    existing = _existing_target_context(left_ctx, right_ctx)
+    target_path = right_ctx.target_path or left_ctx.target_path
+    target = _canonical_mutation_path(target_path)
+    creatable = _filtered_creatable_paths(creatable, existing, target)
+    existing_source = _existing_attr(existing, "source_body")
+    existing_start = _existing_attr(existing, "start_line")
+    existing_end = _existing_attr(existing, "end_line")
+    existing_revision = _existing_attr(existing, "base_revision_sha")
+    return TargetMutationContext(
+        target_path=target_path,
+        target_symbol=right_ctx.target_symbol or left_ctx.target_symbol,
+        source_body=_existing_or_value(existing_source, right_ctx.source_body, left_ctx.source_body),
+        start_line=_existing_or_value(existing_start, right_ctx.start_line, left_ctx.start_line),
+        end_line=_existing_or_value(existing_end, right_ctx.end_line, left_ctx.end_line),
+        is_new_file=False if existing is not None else (right_ctx.is_new_file or left_ctx.is_new_file),
+        evidence_source=(existing.evidence_source if existing is not None else right_ctx.evidence_source or left_ctx.evidence_source),
+        base_revision_sha=_existing_or_value(existing_revision, right_ctx.base_revision_sha, left_ctx.base_revision_sha),
+        writable_paths=writable, creatable_paths=creatable,
+        target_pinned=left_ctx.target_pinned or right_ctx.target_pinned,
+    )
+
+
+def _first_present(mapping: Mapping[str, Any], keys: Sequence[str]) -> Any:
+    for key in keys:
+        value = mapping.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _search_hit_context(hit: Any) -> TargetMutationContext | None:
+    if not isinstance(hit, Mapping):
+        return None
+    metadata = hit.get("metadata")
+    meta = metadata if isinstance(metadata, Mapping) else {}
+    path_value = _first_present(hit, ("source_path", "path", "file", "uri"))
+    if path_value in (None, ""):
+        path_value = _first_present(meta, ("path", "source_path"))
+    path = _canonical_mutation_path(path_value)
+    if not _is_workspace_file_path(path):
+        return None
+    text = _first_present(hit, ("text", "snippet", "code", "content", "source"))
+    if isinstance(text, (list, tuple)):
+        text = "\n".join(str(item) for item in text)
+    symbol_value = _first_present(hit, ("symbol", "function", "name"))
+    if symbol_value in (None, ""):
+        symbol_value = meta.get("symbol")
+    symbol = str(symbol_value or "").strip()
+    start_line = hit.get("start_line")
+    end_line = hit.get("end_line")
+    return TargetMutationContext(
+        target_path=path, target_symbol=symbol or None,
+        source_body=text if _is_code_bearing_text(text) else None,
+        start_line=start_line if isinstance(start_line, int) else None,
+        end_line=end_line if isinstance(end_line, int) else None,
+        evidence_source="search_code_rag",
+    )
 
 
 def _extract_search_context(payload: Mapping[str, Any]) -> TargetMutationContext | None:
     hits = payload.get("hits") or payload.get("results")
     for hit in _sequence(hits):
-        if not isinstance(hit, Mapping):
-            continue
-        meta = hit.get("metadata") if isinstance(hit.get("metadata"), Mapping) else {}
-        path = _canonical_mutation_path(
-            hit.get("source_path") or hit.get("path") or hit.get("file") or hit.get("uri")
-            or meta.get("path") or meta.get("source_path")
-        )
-        if not _is_workspace_file_path(path):
-            continue
-        text = hit.get("text") or hit.get("snippet") or hit.get("code") or hit.get("content") or hit.get("source")
-        if isinstance(text, (list, tuple)):
-            text = "\n".join(str(item) for item in text)
-        symbol = str(hit.get("symbol") or hit.get("function") or hit.get("name") or meta.get("symbol") or "").strip()
-        return TargetMutationContext(
-            target_path=path,
-            target_symbol=symbol or None,
-            source_body=text if _is_code_bearing_text(text) else None,
-            start_line=hit.get("start_line") if isinstance(hit.get("start_line"), int) else None,
-            end_line=hit.get("end_line") if isinstance(hit.get("end_line"), int) else None,
-            evidence_source="search_code_rag",
-        )
+        context = _search_hit_context(hit)
+        if context is not None:
+            return context
     return None
 
 
@@ -585,51 +615,78 @@ def _mutation_context_dict(ctx: TargetMutationContext | None) -> dict[str, Any] 
     }
 
 
-def is_mutation_ready(messages: Sequence[Mapping[str, Any]], state: HostRunState) -> bool:
+def _authority_message_context(message: Any) -> TargetMutationContext | None:
+    if not isinstance(message, Mapping):
+        return None
+    role = str(message.get("role") or "").strip().casefold()
+    payload = _structured_payload(message.get("content"))
+    if not isinstance(payload, Mapping):
+        return None
+    authority_allowed = role in _HOST_AUTHORITY_ROLES or (
+        role == "user" and _trusted_internal_user_payload(payload)
+    )
+    return _task_authority_context(payload) if authority_allowed else None
+
+
+def _apply_authority_messages(
+    messages: Sequence[Mapping[str, Any]], state: HostRunState
+) -> None:
     for message in messages:
-        if not isinstance(message, Mapping):
-            continue
-        role = str(message.get("role") or "").strip().casefold()
-        payload = _structured_payload(message.get("content"))
-        if not isinstance(payload, Mapping):
-            continue
-        authority_allowed = role in _HOST_AUTHORITY_ROLES or (
-            role == "user" and _trusted_internal_user_payload(payload)
-        )
-        if not authority_allowed:
-            continue
-        context = _task_authority_context(payload)
+        context = _authority_message_context(message)
         if context is None:
             continue
         with state._lock:
-            if state.mutation_context is None or not state.mutation_context.target_pinned:
+            current = state.mutation_context
+            if current is None or not current.target_pinned:
                 state.mutation_context = context
-            elif (
-                _canonical_mutation_path(state.mutation_context.target_path)
-                == _canonical_mutation_path(context.target_path)
-            ):
-                state.mutation_context = state.mutation_context.merge(context)
+            elif _canonical_mutation_path(current.target_path) == _canonical_mutation_path(context.target_path):
+                state.mutation_context = current.merge(context)
 
+
+def _observation_message_context(message: Any) -> tuple[str, TargetMutationContext | None]:
+    if not isinstance(message, Mapping):
+        return "", None
+    payload = _structured_payload(message.get("content"))
+    if payload is None:
+        return "", None
+    role = str(message.get("role") or "").strip().casefold()
+    return role, _extract_mutation_context_from_payload(payload)
+
+
+def _apply_observation_messages(
+    messages: Sequence[Mapping[str, Any]], state: HostRunState
+) -> None:
     for message in messages:
-        if not isinstance(message, Mapping):
-            continue
-        payload = _structured_payload(message.get("content"))
-        if payload is None:
-            continue
-        context = _extract_mutation_context_from_payload(payload)
+        role, context = _observation_message_context(message)
         if context is None:
             continue
         with state._lock:
             if state.mutation_context is None:
-                role = str(message.get("role") or "").strip().casefold()
-                if role not in _HOST_AUTHORITY_ROLES:
-                    continue
-                state.mutation_context = context
+                if role in _HOST_AUTHORITY_ROLES:
+                    state.mutation_context = context
             else:
                 state.mutation_context = state.mutation_context.merge(context)
 
+
+def is_mutation_ready(messages: Sequence[Mapping[str, Any]], state: HostRunState) -> bool:
+    _apply_authority_messages(messages, state)
+    _apply_observation_messages(messages, state)
     with state._lock:
         return bool(state.mutation_context and state.mutation_context.is_mutation_ready)
+
+
+def _source_edit_path(arguments: Mapping[str, Any]) -> str:
+    for key in _SOURCE_EDIT_PATH_KEYS:
+        value = arguments.get(key)
+        if isinstance(value, str) and value.strip():
+            return _canonical_mutation_path(value)
+    return ""
+
+
+def _creation_authorized(
+    supplied: str, pinned: str, context: TargetMutationContext
+) -> bool:
+    return supplied in set(context.creatable_paths) or (supplied == pinned and context.is_new_file)
 
 
 def _mutation_target_error(
@@ -641,12 +698,7 @@ def _mutation_target_error(
         return None
     if context is None or not context.is_mutation_ready:
         return "MUTATION_TARGET_UNBOUND: no host-pinned mutation target is READY"
-    supplied = ""
-    for key in _SOURCE_EDIT_PATH_KEYS:
-        value = arguments.get(key)
-        if isinstance(value, str) and value.strip():
-            supplied = _canonical_mutation_path(value)
-            break
+    supplied = _source_edit_path(arguments)
     pinned = _canonical_mutation_path(context.target_path)
     allowed = set(context.writable_paths) or ({pinned} if pinned else set())
     if not supplied or not pinned:
@@ -657,15 +709,11 @@ def _mutation_target_error(
             f"does not authorize {supplied!r}"
         )
     operation = str(arguments.get("operation") or "").strip().casefold()
-    if operation in _SOURCE_CREATE_OPERATIONS:
-        can_create = supplied in set(context.creatable_paths) or (
-            supplied == pinned and context.is_new_file
+    if operation in _SOURCE_CREATE_OPERATIONS and not _creation_authorized(supplied, pinned, context):
+        return (
+            "MUTATION_TARGET_CREATION_CONFLICT: create operation is not authorized "
+            f"for existing target {supplied!r}"
         )
-        if not can_create:
-            return (
-                "MUTATION_TARGET_CREATION_CONFLICT: create operation is not authorized "
-                f"for existing target {supplied!r}"
-            )
     return None
 
 
@@ -851,21 +899,32 @@ def _mapping_schema(value: Any, schema: str) -> bool:
     return False
 
 
+_JAVA_TEXT_FIELDS = ("parsed_text", "text", "content", "snippet", "code", "source", "source_text", "body")
+_JAVA_COLLECTION_FIELDS = ("hits", "results", "records", "documents", "chunks", "resources", "symbols", "evidence")
+_JAVA_WRAPPER_FIELDS = ("structured_content", "result", "data")
+
+
+def _java_direct_texts(value: Mapping[str, Any]) -> list[str]:
+    texts: list[str] = []
+    for key in _JAVA_TEXT_FIELDS:
+        raw = value.get(key)
+        if isinstance(raw, str) and raw.strip():
+            texts.append(raw)
+        elif isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
+            texts.extend(str(item) for item in raw if isinstance(item, str) and item.strip())
+    return texts
+
+
 def _java_evidence_texts(value: Any) -> tuple[str, ...]:
     texts: list[str] = []
     if isinstance(value, Mapping):
-        for key in ("parsed_text", "text", "content", "snippet", "code", "source", "source_text", "body"):
-            raw = value.get(key)
-            if isinstance(raw, str) and raw.strip():
-                texts.append(raw)
-            elif isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
-                texts.extend(str(item) for item in raw if isinstance(item, str) and item.strip())
-        for key in ("hits", "results", "records", "documents", "chunks", "resources", "symbols", "evidence"):
+        texts.extend(_java_direct_texts(value))
+        for key in _JAVA_COLLECTION_FIELDS:
             raw = value.get(key)
             if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
                 for item in raw:
                     texts.extend(_java_evidence_texts(item))
-        for key in ("structured_content", "result", "data"):
+        for key in _JAVA_WRAPPER_FIELDS:
             child = value.get(key)
             if child is not None:
                 texts.extend(_java_evidence_texts(child))
@@ -875,47 +934,44 @@ def _java_evidence_texts(value: Any) -> tuple[str, ...]:
     return tuple(texts)
 
 
+def _has_java_symbols(item: Any) -> bool:
+    if isinstance(item, Mapping):
+        symbols = item.get("symbols")
+        if isinstance(symbols, Sequence) and not isinstance(symbols, (str, bytes, bytearray)):
+            if any(isinstance(symbol, Mapping) and bool(symbol) for symbol in symbols):
+                return True
+        return any(_has_java_symbols(child) for child in item.values())
+    if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+        return any(_has_java_symbols(child) for child in item)
+    return False
+
+
+def _has_mapping_records(item: Any) -> bool:
+    if isinstance(item, Mapping):
+        mappings = item.get("mappings")
+        if isinstance(mappings, Mapping) and bool(mappings):
+            return True
+        if isinstance(mappings, Sequence) and not isinstance(mappings, (str, bytes, bytearray)):
+            if any(isinstance(entry, Mapping) and bool(entry) for entry in mappings):
+                return True
+        return any(_has_mapping_records(child) for child in item.values())
+    if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+        return any(_has_mapping_records(child) for child in item)
+    return False
+
+
 def _authoritative_java_evidence(value: Any) -> bool:
     """Return whether evidence is strong enough to authorize a fresh Java mutation."""
     if not isinstance(value, Mapping) or not value:
         return False
-
     if _mapping_schema(value, "mmm/rag-result-v2"):
         return False
-
     if _mapping_schema(value, "mmm/java-symbols-v1"):
-        def has_symbols(item: Any) -> bool:
-            if isinstance(item, Mapping):
-                symbols = item.get("symbols")
-                if isinstance(symbols, Sequence) and not isinstance(symbols, (str, bytes, bytearray)):
-                    if any(isinstance(symbol, Mapping) and bool(symbol) for symbol in symbols):
-                        return True
-                return any(has_symbols(child) for child in item.values())
-            if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
-                return any(has_symbols(child) for child in item)
-            return False
-        return has_symbols(value)
-
+        return _has_java_symbols(value)
+    api_evidence = any(_JAVA_API_EVIDENCE_RE.search(text) for text in _java_evidence_texts(value))
     if _mapping_schema(value, "mmm/code-rag-result-v1"):
-        return any(_JAVA_API_EVIDENCE_RE.search(text) for text in _java_evidence_texts(value))
-
-    if any(_JAVA_API_EVIDENCE_RE.search(text) for text in _java_evidence_texts(value)):
-        return True
-
-    def has_mapping_records(item: Any) -> bool:
-        if isinstance(item, Mapping):
-            mappings = item.get("mappings")
-            if isinstance(mappings, Mapping) and bool(mappings):
-                return True
-            if isinstance(mappings, Sequence) and not isinstance(mappings, (str, bytes, bytearray)):
-                if any(isinstance(entry, Mapping) and bool(entry) for entry in mappings):
-                    return True
-            return any(has_mapping_records(child) for child in item.values())
-        if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
-            return any(has_mapping_records(child) for child in item)
-        return False
-
-    return has_mapping_records(value)
+        return api_evidence
+    return api_evidence or _has_mapping_records(value)
 
 
 def _target_evidence_ready(
@@ -949,6 +1005,37 @@ def _completion_boundary_error(exc: BaseException) -> bool:
             return True
         current = current.__cause__ or current.__context__
     return False
+
+
+def _record_unapplied_mutation(state: "HostRunState", signature: str) -> bool:
+    if signature:
+        repeated = signature in state.unchanged_mutation_fingerprints
+        state.unchanged_mutation_fingerprints.add(signature)
+        if repeated:
+            state.semantic_fixed_point = True
+    return False
+
+
+def _mutation_context_after_edit(
+    context: TargetMutationContext,
+    path: str,
+    operation: str,
+    arguments: Mapping[str, Any],
+) -> TargetMutationContext:
+    body = context.source_body
+    if operation in _SOURCE_CREATE_OPERATIONS and isinstance(arguments.get("content"), str):
+        body = str(arguments["content"])
+    elif operation == "replace_exact" and isinstance(body, str):
+        old, new = arguments.get("old"), arguments.get("new")
+        if isinstance(old, str) and isinstance(new, str) and old and body.count(old) == 1:
+            body = body.replace(old, new, 1)
+    remaining_creatable = tuple(
+        item for item in context.creatable_paths if _canonical_mutation_path(item) != path
+    )
+    return replace(
+        context, source_body=body, is_new_file=False, evidence_source="mutation_receipt",
+        creatable_paths=remaining_creatable,
+    )
 
 
 @dataclass
@@ -1003,6 +1090,9 @@ class HostRunState:
             return sig in self.attempted_queries
 
     def record_evidence(self, value: Any, *, usable: bool) -> bool:
+        return self._mmm_record_evidence_impl(value, usable=usable)
+
+    def _mmm_record_evidence_impl(self, value: Any, *, usable: bool) -> bool:
         if not usable:
             return False
         fp = evidence_fingerprint(value)
@@ -1029,45 +1119,23 @@ class HostRunState:
         applied = mutation_payload_applied(tool_name, payload)
         with self._lock:
             if not applied:
-                if signature:
-                    repeated = signature in self.unchanged_mutation_fingerprints
-                    self.unchanged_mutation_fingerprints.add(signature)
-                    if repeated:
-                        self.semantic_fixed_point = True
-                return False
+                return _record_unapplied_mutation(self, signature)
             if signature:
                 self.mutation_fingerprints.add(signature)
             self.applied_mutations.append(tool_name)
             self.workspace_changed = True
             self.validation_status = "PENDING"
+            self.latest_verifier_tool = None
+            self.latest_verifier_errors = ()
+            self.latest_verifier_fingerprint = None
             self.repair_guidance_fingerprint = None
             operation = str(arguments.get("operation") or "").strip().casefold()
-            path = ""
-            for key in _SOURCE_EDIT_PATH_KEYS:
-                value = arguments.get(key)
-                if isinstance(value, str) and value.strip():
-                    path = _canonical_mutation_path(value)
-                    break
+            path = _source_edit_path(arguments)
             if path and operation in _SOURCE_CREATE_OPERATIONS:
                 self.created_paths.add(path)
             if self.mutation_context is not None and path == _canonical_mutation_path(self.mutation_context.target_path):
-                body = self.mutation_context.source_body
-                if operation in _SOURCE_CREATE_OPERATIONS and isinstance(arguments.get("content"), str):
-                    body = str(arguments["content"])
-                elif operation == "replace_exact" and isinstance(body, str):
-                    old, new = arguments.get("old"), arguments.get("new")
-                    if isinstance(old, str) and isinstance(new, str) and old and body.count(old) == 1:
-                        body = body.replace(old, new, 1)
-                remaining_creatable = tuple(
-                    item for item in self.mutation_context.creatable_paths
-                    if _canonical_mutation_path(item) != path
-                )
-                self.mutation_context = replace(
-                    self.mutation_context,
-                    source_body=body,
-                    is_new_file=False,
-                    evidence_source="mutation_receipt",
-                    creatable_paths=remaining_creatable,
+                self.mutation_context = _mutation_context_after_edit(
+                    self.mutation_context, path, operation, arguments
                 )
             return True
 
@@ -1102,6 +1170,9 @@ class HostRunState:
             return changed
 
     def take_verifier_repair_guidance(self) -> str | None:
+        return self._mmm_take_verifier_repair_guidance_impl()
+
+    def _mmm_take_verifier_repair_guidance_impl(self) -> str | None:
         with self._lock:
             if (
                 self.validation_status != "FAIL"
@@ -1276,18 +1347,22 @@ def _filter_tools_for_phase(
     elif phase == LoopPhase.VERIFY:
         names = [name for name in by_name if name in _VERIFY_TOOLS]
     elif phase == LoopPhase.RECOVER:
+        recover_candidates = (
+            "search_code_rag", "java_workspace_symbols", "search_project_rag",
+            "external_mcp_call", "read_reuse_source",
+        )
+        if mutation_context is None:
+            recover_candidates = (*recover_candidates, "inspect_modrinth_project")
         names = [
-            name for name in (
-                "search_code_rag", "java_workspace_symbols", "search_project_rag",
-                "external_mcp_call", "read_reuse_source",
-            )
+            name for name in recover_candidates
             if name in by_name and name not in attempted
         ]
     else:
         stage = mutation_context.localization_stage if mutation_context else LocalizationStage.NEED_FILE
         if mutation_context and mutation_context.is_new_file and mutation_context.is_mutation_ready:
             preferred = (
-                "search_code_rag", "java_workspace_symbols", "external_mcp_call"
+                "search_code_rag", "java_workspace_symbols", "search_project_rag",
+                "external_mcp_call",
             )
         elif stage == LocalizationStage.NEED_FILE:
             preferred = ("search_code_rag", "search_project_rag")
@@ -1304,22 +1379,30 @@ def _filter_tools_for_phase(
                 and mutation_context.is_new_file
                 and mutation_context.is_mutation_ready
             )
-            if (
-                semantic_retrieval_choice
-                and fresh_reserved
-                and "search_code_rag" in names
-                and "search_code_rag" not in attempted
-            ):
-                # Fresh Java starts with current-project code evidence, but once that
-                # route is exhausted the model must be allowed to choose among the
-                # remaining reviewed evidence routes instead of being force-fed one.
-                names = ["search_code_rag"]
+            if semantic_retrieval_choice and fresh_reserved:
+                rich_authority_names = [
+                    name for name in ("java_workspace_symbols", "external_mcp_call")
+                    if name in names
+                ]
+                if "search_code_rag" in names and rich_authority_names:
+                    names = ["search_code_rag"]
+                elif rich_authority_names:
+                    names = rich_authority_names
+                elif "search_project_rag" in names:
+                    # With only RAG routes exposed, the reserved file cannot exist yet;
+                    # retrieve project conventions instead of searching its own filename.
+                    names = ["search_project_rag"]
             elif not semantic_retrieval_choice:
                 names = [names[0]]
     return tuple(
         _source_edit_schema_for_context(by_name[name], mutation_context)
         for name in names if name in by_name
     )
+
+
+def _generation_scope_for_turn(router: Any, config: Any) -> Any:
+    scope = getattr(router, "_generation_scope", None)
+    return scope(config) if callable(scope) else nullcontext()
 
 
 def _generate_turn_with_context_recovery(
@@ -1333,7 +1416,6 @@ def _generate_turn_with_context_recovery(
     tool_choice: Any,
     parallel_tool_calls: bool,
 ) -> Any:
-    del router
     fitted = fit_messages_to_context(messages, config=config, tools=request.tools)
     if tuple(messages) != tuple(fitted):
         messages[:] = [dict(message) for message in fitted]
@@ -1345,7 +1427,8 @@ def _generate_turn_with_context_recovery(
         parallel_tool_calls=parallel_tool_calls,
     )
     try:
-        return adapter.generate_turn(turn_request)
+        with _generation_scope_for_turn(router, config):
+            return adapter.generate_turn(turn_request)
     except Exception as exc:
         if not _completion_boundary_error(exc):
             raise
@@ -1380,7 +1463,8 @@ def _generate_turn_with_context_recovery(
             reason=f"{type(exc).__name__}: {exc}",
             details={"tool_choice": tool_choice},
         )
-        return adapter.generate_turn(recovery_request)
+        with _generation_scope_for_turn(router, config):
+            return adapter.generate_turn(recovery_request)
 
 
 def _sync_phase_tool_transcript(
@@ -1523,6 +1607,7 @@ def _generate_with_tools_impl(
         and stage == "generation"
         and implementation_requested(request.messages)
     )
+    implementation_requires_mutation = implementation
     host_grounded = host_baseline_evidence_ready(request.messages)
     mutation_ready = is_mutation_ready(messages, state)
     fresh_java_target = bool(
@@ -1637,23 +1722,27 @@ def _generate_with_tools_impl(
             and require_rag
             and not baseline_ready
             and state.phase in {LoopPhase.OBSERVE, LoopPhase.RECOVER}
-            and len(phase_names) > 1
+            and phase_names
         ):
-            # The host requires evidence, not a particular semantic route. Force one
-            # visible tool call while leaving route selection to the model.
-            tool_choice = "required"
+            # After a prose/refusal turn, require one reviewed evidence call. Keep
+            # semantic route choice open when multiple routes remain; force the exact
+            # function only when a single reviewed route is available.
+            if len(phase_names) > 1:
+                tool_choice = "required"
+            else:
+                name = next(iter(phase_names))
+                tool_choice = {"type": "function", "function": {"name": name}}
             parallel = False
         elif state.phase == LoopPhase.ACT:
             mutation_names = [name for name in phase_names if name in _MUTATION_ACT_TOOLS]
             if len(mutation_names) == 1:
                 tool_choice = {"type": "function", "function": {"name": mutation_names[0]}}
                 parallel = False
+        elif state.phase == LoopPhase.RECOVER:
+            tool_choice = "required"
+            parallel = False
         elif forced_verifier:
             tool_choice = {"type": "function", "function": {"name": forced_verifier}}
-            parallel = False
-        elif state.phase in {LoopPhase.OBSERVE, LoopPhase.RECOVER} and len(phase_names) == 1:
-            name = next(iter(phase_names))
-            tool_choice = {"type": "function", "function": {"name": name}}
             parallel = False
 
         if state.phase == LoopPhase.ACT:
@@ -1755,6 +1844,17 @@ def _generate_with_tools_impl(
             content = turn.content.strip()
             if not content:
                 raise ModelConfigurationError("Tool-capable model returned an empty final response.")
+            if required_evidence_choice and require_rag and not baseline_ready:
+                forced_names = sorted(name for name in phase_names if name in _RAG_EVIDENCE_TOOLS)
+                if len(forced_names) == 1:
+                    raise ModelConfigurationError(
+                        f"Production coder did not honor host-forced RAG tool choice {forced_names[0]!r} "
+                        "by returning prose instead of the required tool call."
+                    )
+                raise ModelConfigurationError(
+                    "Production coder did not honor the host-required evidence invariant: "
+                    "one reviewed RAG tool call was required, but the model returned prose."
+                )
             if require_rag and not baseline_ready:
                 repeated = state.record_no_progress_result({
                     "phase": state.phase.value,
@@ -1835,6 +1935,9 @@ def _generate_with_tools_impl(
         })
 
         def is_evidence_tool(call: Any) -> bool:
+            return _mmm_is_evidence_tool_impl(call)
+
+        def _mmm_is_evidence_tool_impl(call: Any) -> bool:
             return (
                 call.name in _LOCALIZATION_EVIDENCE_TOOLS
                 or call.name in _RAG_EVIDENCE_TOOLS
@@ -2001,12 +2104,11 @@ def _generate_with_tools_impl(
                     continue
                 if state.record_verification(call.name, payload, status):
                     progress = True
-                if status == "FAIL":
+                if status == "FAIL" and implementation_requires_mutation:
                     state.record_failure(call.name, "verification reported source defects")
-                    if state.mutation_context and state.mutation_context.is_mutation_ready:
-                        state.phase = LoopPhase.ACT
-                    else:
-                        state.phase = LoopPhase.RECOVER
+                    state.phase = LoopPhase.RECOVER
+                elif status == "FAIL":
+                    state.record_failure(call.name, "verification reported source defects")
                 continue
 
             if is_evidence_tool(call):

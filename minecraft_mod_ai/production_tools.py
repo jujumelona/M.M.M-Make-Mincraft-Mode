@@ -80,6 +80,9 @@ class ProductionToolService:
         )
 
     def search_code_rag(self, query: str, *, index_path: str='rag/project-index.json', limit: int=8, semantic: bool=False, rerank: bool=False, required_metadata: dict[str, Any] | None=None) -> dict[str, Any]:
+        return self._mmm_search_code_rag_impl(query, index_path=index_path, limit=limit, semantic=semantic, rerank=rerank, required_metadata=required_metadata)
+
+    def _mmm_search_code_rag_impl(self, query: str, *, index_path: str='rag/project-index.json', limit: int=8, semantic: bool=False, rerank: bool=False, required_metadata: dict[str, Any] | None=None) -> dict[str, Any]:
         target = self._resolve(index_path, allow_root=True)
         if not target.exists() and target == self._resolve('rag/project-index.json', allow_root=True):
             from .agent_tool_runtime import _looks_like_bound_project

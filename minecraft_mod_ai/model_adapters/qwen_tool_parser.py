@@ -149,6 +149,14 @@ def _parse_function(text: str, function_start: int, index: int) -> tuple[ToolCal
     )
 
 
+def _original_tool_name(text: str, function_start: int, end: int) -> str:
+    if not text.startswith(FUNCTION_OPEN, function_start):
+        return ""
+    name_start = function_start + len(FUNCTION_OPEN)
+    name_end = text.find(">", name_start, end)
+    return text[name_start:name_end].strip() if name_end >= 0 else ""
+
+
 def parse_qwen_tool_markup(
     text: str,
     schemas: Mapping[str, Mapping[str, Any]] | None = None,
@@ -190,12 +198,7 @@ def parse_qwen_tool_markup(
             calls.append(call)
         except (TypeError, ValueError) as exc:
             raw = text[start:end]
-            original_tool = ""
-            if text.startswith(FUNCTION_OPEN, function_start):
-                name_start = function_start + len(FUNCTION_OPEN)
-                name_end = text.find(">", name_start, end)
-                if name_end >= 0:
-                    original_tool = text[name_start:name_end].strip()
+            original_tool = _original_tool_name(text, function_start, end)
             calls.append(_malformed(len(calls), raw, str(exc), original_tool=original_tool))
         spans.append((start, max(end, start + 1)))
         cursor = max(end, start + 1)

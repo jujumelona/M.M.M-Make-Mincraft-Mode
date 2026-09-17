@@ -56,6 +56,9 @@ class DirectTaskMutationAuthority:
 
     @property
     def creatable_paths(self) -> tuple[str, ...]:
+        return self._mmm_creatable_paths_impl()
+
+    def _mmm_creatable_paths_impl(self) -> tuple[str, ...]:
         if self.mutation_authority.mode is MutationAuthorityMode.BOUNDED_ROOTS:
             return self.mutation_authority.roots
         return tuple(
@@ -69,6 +72,9 @@ class DirectTaskMutationAuthority:
         return self.mutation_authority.mode is MutationAuthorityMode.BOUNDED_ROOTS
 
     def to_host_payload(self) -> dict[str, Any]:
+        return self._mmm_to_host_payload_impl()
+
+    def _mmm_to_host_payload_impl(self) -> dict[str, Any]:
         if self.is_bounded_authored_design:
             return {
                 "schema_version": _AUTHORED_SCHEMA,
@@ -263,20 +269,33 @@ def _compile_authored_authority(module: Any) -> DirectTaskMutationAuthority:
     )
 
 
+_NO_DIRECT_AUTHORITY = object()
+
+
+def _special_direct_authority(module: Any) -> DirectTaskMutationAuthority | None | object:
+    if module is None:
+        return None
+    if _is_authored_design(module):
+        return _compile_authored_authority(module)
+    return _NO_DIRECT_AUTHORITY
+
+
+def _custom_java_task(module: Any) -> Mapping[str, Any] | None:
+    module_kind = str(getattr(module, "kind", "") or "").strip()
+    return _module_evidence_task(module) if module_kind == "custom_java" else None
+
+
 def compile_direct_task_mutation_authority(
     module: Any,
 ) -> DirectTaskMutationAuthority | None:
     """Compile host authority from the trusted module object before model generation."""
 
-    if module is None:
-        return None
-    if _is_authored_design(module):
-        return _compile_authored_authority(module)
+    special = _special_direct_authority(module)
+    if special is not _NO_DIRECT_AUTHORITY:
+        return special  # type: ignore[return-value]
 
     module_kind = str(getattr(module, "kind", "") or "").strip()
-    if module_kind != "custom_java":
-        return None
-    task = _module_evidence_task(module)
+    task = _custom_java_task(module)
     if task is None:
         return None
 

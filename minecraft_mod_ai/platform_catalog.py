@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .project_platform_identity import _read_gradle_properties
 """Executable Minecraft platform-provider registry.
 
 A loader name alone is not support. A target is selectable only when its provider
@@ -415,18 +416,6 @@ def _fabric_adapter(minecraft_version: str) -> TargetContract:
 
     return host_target(minecraft_version)
 
-
-def _read_gradle_properties(path: Path) -> dict[str, str]:
-    if not path.is_file() or path.is_symlink():
-        raise ValueError(f"gradle.properties is missing: {path}")
-    result: dict[str, str] = {}
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        result[key.strip()] = value.strip()
-    return result
 
 
 def _loader_id(value: str) -> str:
