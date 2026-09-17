@@ -6,6 +6,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import anyio
+
+from minecraft_mod_ai.mcp_child_trace_contract import traced_stdio_session
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MCP_SERVER = ROOT / "minecraft_mod_ai" / "mcp_server.py"
@@ -76,3 +80,26 @@ def test_generation_stage_mcp_server_imports_in_clean_child_process() -> None:
         f"stdout:\n{result.stdout}\n"
         f"stderr:\n{result.stderr}"
     )
+
+
+def test_generation_stage_mcp_stdio_initializes_and_lists_tools(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        env = os.environ.copy()
+        env["MMM_MCP_STAGE"] = "generation"
+        env["MMM_WORKSPACE"] = str(tmp_path)
+        async with traced_stdio_session(
+            "generation",
+            env,
+            timeout_seconds=30.0,
+        ) as session:
+            listed = await session.list_tools()
+            names = {
+                str(getattr(tool, "name", ""))
+                for tool in (getattr(listed, "tools", ()) or ())
+            }
+            assert "search_project_rag" in names
+            assert "apply_source_patch" in names
+            assert "java_diagnostics" in names
+            assert "_normalized_minecraft_version" not in names
+
+    anyio.run(exercise)
