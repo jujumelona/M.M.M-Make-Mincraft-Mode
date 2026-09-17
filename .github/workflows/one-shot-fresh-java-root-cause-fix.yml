@@ -33,14 +33,25 @@ jobs:
         run: python -m pip install --prefer-binary -e ".[dev]"
 
       - name: Apply root-cause fix to current main
-        run: python .github/scripts/apply_fresh_java_root_cause_fix.py
+        run: python .github/scripts/apply_fresh_java_root_cause_fix_v2.py
 
       - name: Run focused regressions
-        run: >-
-          python -m pytest -q
-          tests/test_api_grounding_repair_installation.py
-          tests/test_fresh_java_grounding_transition.py
-          tests/test_agent_tool_verification_terminal.py
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q \
+            tests/test_api_grounding_repair_installation.py \
+            tests/test_fresh_java_grounding_transition.py \
+            tests/test_agent_tool_verification_terminal.py \
+            2>&1 | tee /tmp/focused-pytest.log
+
+      - name: Upload focused regression log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fresh-java-root-cause-focused-log
+          path: /tmp/focused-pytest.log
+          if-no-files-found: ignore
 
       - name: Compile Python package
         run: python -m compileall -q minecraft_mod_ai
@@ -52,7 +63,13 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add minecraft_mod_ai/progress_aware_tool_loop.py tests/test_api_grounding_repair_installation.py
-          git diff --cached --exit-code && { echo "Expected root-cause patch produced no diff"; exit 1; } || true
+          git add \
+            minecraft_mod_ai/progress_aware_tool_loop.py \
+            tests/test_api_grounding_repair_installation.py \
+            tests/test_fresh_java_grounding_transition.py
+          if git diff --cached --quiet; then
+            echo "Expected root-cause patch produced no diff"
+            exit 1
+          fi
           git commit -m "Close fresh Java grounding and output recovery gaps"
           git push origin HEAD:main
