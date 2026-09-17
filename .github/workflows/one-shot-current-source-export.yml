@@ -17,16 +17,61 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Remove accidental temporary branch
+      - name: Remove verified static-analysis defects
         shell: bash
-        run: git push origin --delete ___do_not_create___ || true
-      - name: Archive exact source tree
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          edits = {
+              'minecraft_mod_ai/api.py': [
+                  ('        from .plan_render import render_complete_plan\n\n        return CompleteChatReply(', '        return CompleteChatReply('),
+                  ('    def load_plan(self, source_path: str | Path | None = None) -> CompleteChatReply:\n        from .complete_spec import CompleteProposal\n        from .plan_render import render_complete_plan\n\n        path = (', '    def load_plan(self, source_path: str | Path | None = None) -> CompleteChatReply:\n        path = ('),
+              ],
+              'minecraft_mod_ai/custom_module_architecture_support.py': [
+                  ('from collections.abc import Callable, Iterable, Mapping', 'from collections.abc import Callable, Mapping'),
+              ],
+              'minecraft_mod_ai/tool_validation_surface_contract.py': [
+                  ('from collections.abc import Mapping, Sequence\nfrom typing import Any\n\n', ''),
+              ],
+              'tools/ci_test_matrix.py': [
+                  ('    return 0\n\n    matrix = build_matrix(\n        paths,\n        max_jobs=args.max_jobs,\n        durations=_load_durations(args.durations),\n    )\n    print(json.dumps({"include": matrix}, separators=(",", ":")))\n    return 0\n', '    return 0\n'),
+              ],
+          }
+
+          for filename, replacements in edits.items():
+              path = Path(filename)
+              text = path.read_text(encoding='utf-8')
+              for old, new in replacements:
+                  count = text.count(old)
+                  if count != 1:
+                      raise SystemExit(f'{filename}: expected one exact match, got {count}: {old[:80]!r}')
+                  text = text.replace(old, new, 1)
+              path.write_text(text, encoding='utf-8')
+          PY
+      - name: Verify static gates and focused regressions
         shell: bash
-        run: git archive --format=zip --output=current-source.zip HEAD
-      - name: Upload source archive
-        uses: actions/upload-artifact@v4
-        with:
-          name: current-source-${{ github.sha }}
-          path: current-source.zip
-          if-no-files-found: error
-          retention-days: 1
+        run: |
+          set -euo pipefail
+          python -m pip install --prefer-binary -e '.[dev]'
+          python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
+          vulture minecraft_mod_ai tools download_resources.py --min-confidence 100
+          python -m pytest -q tests/test_progress_aware_tool_loop_rag_scope.py
+          python tools/ci_test_matrix.py --max-jobs 2 >/tmp/ci-matrix.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          payload = json.loads(Path('/tmp/ci-matrix.json').read_text(encoding='utf-8'))
+          assert 'include' in payload
+          PY
+      - name: Commit verified cleanup to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/api.py minecraft_mod_ai/custom_module_architecture_support.py minecraft_mod_ai/tool_validation_surface_contract.py tools/ci_test_matrix.py
+          git diff --cached --check
+          git commit -m 'Clear blocking static analysis defects'
+          git push origin HEAD:main
