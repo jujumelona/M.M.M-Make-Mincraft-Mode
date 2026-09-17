@@ -90,9 +90,6 @@ class OwnerRPC:
             return
 
     def _timeout_error(self, method: str, timeout: float) -> OwnerRPCError:
-        return self._mmm__timeout_error_impl(method, timeout)
-
-    def _mmm__timeout_error_impl(self, method: str, timeout: float) -> OwnerRPCError:
         noise = list(self._stdout_noise)
         suffix = f'; non-protocol stdout tail={noise!r}' if noise else ''
         stderr = list(self._stderr)

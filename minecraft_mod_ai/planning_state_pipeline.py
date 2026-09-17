@@ -494,10 +494,7 @@ def _detail_progress_strictly_advanced(
     return any(old != new for old, new in monotone_pairs)
 
 
-def _compile_detailed_plans_resumable(router: Any, prompt: str, state: dict[str, Any], section_selection: Mapping[str, Any], checkpoint: PlanningCheckpoint | None) -> dict[str, Any]:
-    return _mmm__compile_detailed_plans_resumable_impl(router, prompt, state, section_selection, checkpoint)
-
-def _mmm__compile_detailed_plans_resumable_impl(
+def _compile_detailed_plans_resumable(
     router: Any,
     prompt: str,
     state: dict[str, Any],

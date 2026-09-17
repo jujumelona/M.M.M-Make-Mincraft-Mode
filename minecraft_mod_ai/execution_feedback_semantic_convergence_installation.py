@@ -208,153 +208,6 @@ def _install_base_project_owner(feedback_module: Any) -> None:
     feedback_module._derive_impacted_seeds = derive_impacted_seeds
 
 
-
-def _run_feedback_loop(
-    self: Any,
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
-    current_execute: Any,
-    feedback_module: Any,
-    orchestrator_module: Any,
-) -> Any:
-    seen: set[str] = set()
-    call_kwargs = dict(kwargs)
-    while True:
-        try:
-            return current_execute(self, *args, **call_kwargs)
-        except orchestrator_module.CompleteProductionError as exc:
-            emit_root_cause(
-                "execution_feedback_failure_observed",
-                stage="generation",
-                operation="execute_with_feedback",
-                gate="adjudication",
-                result="FAIL",
-                reason=f"{type(exc).__name__}: {exc}",
-                details={"seen_fingerprints": sorted(seen)},
-                exc=exc,
-            )
-            ledger = getattr(self, "_mmm_feedback_ledger", None)
-            if ledger is None or not hasattr(ledger, "invalidate_execution_feedback"):
-                raise
-            feedback = feedback_module._latest_failed_feedback(ledger)
-            if not isinstance(feedback, Mapping):
-                raise
-
-            infrastructure_failure = _verifier_infrastructure_failure(feedback)
-            if infrastructure_failure is not None:
-                fingerprint = str(infrastructure_failure["fingerprint"])
-                seen.add(fingerprint)
-                emit_root_cause(
-                    "execution_feedback_abort",
-                    stage="generation",
-                    operation="execute_with_feedback",
-                    gate="retry_eligibility",
-                    result="FAIL",
-                    reason=(
-                        "verifier infrastructure failure is not source-repairable; "
-                        "generation replay is forbidden"
-                    ),
-                    details={
-                        "feedback": feedback,
-                        "infrastructure_failure": infrastructure_failure,
-                        "seen_fingerprints": sorted(seen),
-                    },
-                )
-                raise
-
-            receipt = ledger.invalidate_execution_feedback(feedback)
-            fingerprint = str(receipt.get("feedback_fingerprint") or "")
-            emit_root_cause(
-                "execution_feedback_adjudicated",
-                stage="generation",
-                operation="execute_with_feedback",
-                gate="impact_analysis",
-                result="PASS",
-                details={
-                    "feedback": feedback,
-                    "invalidation_receipt": receipt,
-                    "fingerprint": fingerprint,
-                },
-            )
-            if (
-                receipt.get("global_replan_required") is True
-                or not receipt.get("impacted_generation_node_ids")
-                or not fingerprint
-                or fingerprint in seen
-            ):
-                emit_root_cause(
-                    "execution_feedback_abort",
-                    stage="generation",
-                    operation="execute_with_feedback",
-                    gate="retry_eligibility",
-                    result="FAIL",
-                    reason="feedback cannot produce a novel owner-bound retry",
-                    details={"receipt": receipt, "seen_fingerprints": sorted(seen)},
-                )
-                raise
-            seen.add(fingerprint)
-            options = call_kwargs.get("options")
-            if options is None:
-                options = orchestrator_module.CompleteExecutionOptions(resume=True)
-            else:
-                try:
-                    options = replace(options, resume=True)
-                except TypeError:
-                    raise
-            call_kwargs["options"] = options
-            emit_root_cause(
-                "execution_feedback_retry",
-                stage="generation",
-                operation="execute_with_feedback",
-                gate="retry_eligibility",
-                result="START",
-                reason="novel impacted nodes invalidated",
-                details={
-                    "fingerprint": fingerprint,
-                    "options": options,
-                    "seen_fingerprint_count": len(seen),
-                },
-            )
-
-
-def _trace_feedback_execution(
-    self: Any,
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
-    execute_feedback_loop: Any,
-) -> Any:
-    with trace_scope("complete_production"):
-        emit_root_cause(
-            "pipeline_boundary_start",
-            stage="runtime",
-            operation="complete_production",
-            gate="end_to_end_execution",
-            result="START",
-            details={"args": args, "kwargs": kwargs, "semantic_convergence": True},
-        )
-        try:
-            result = execute_feedback_loop(self, *args, **kwargs)
-        except BaseException as exc:
-            emit_root_cause(
-                "pipeline_boundary_failure",
-                stage="runtime",
-                operation="complete_production",
-                gate="end_to_end_execution",
-                result="FAIL",
-                reason=f"{type(exc).__name__}: {exc}",
-                exc=exc,
-            )
-            raise
-        emit_root_cause(
-            "pipeline_boundary_result",
-            stage="runtime",
-            operation="complete_production",
-            gate="end_to_end_execution",
-            result="PASS",
-            details={"result": result},
-        )
-        return result
-
 def _semantic_install_run_context(feedback_module: Any, orchestrator_module: Any) -> None:
     cls = orchestrator_module.CompleteProductionOrchestrator
     current_open = cls._open_run
@@ -377,13 +230,147 @@ def _semantic_install_run_context(feedback_module: Any, orchestrator_module: Any
         return
 
     def execute_feedback_loop(self: Any, *args: Any, **kwargs: Any):
-        return _run_feedback_loop(
-            self, args, kwargs, current_execute, feedback_module, orchestrator_module
-        )
+        # Semantic convergence criterion: a retry is legal only while validation
+        # produces a novel, owner-bound feedback fingerprint. Repeated evidence proves
+        # that the previous repair made no relevant progress and terminates immediately.
+        seen: set[str] = set()
+        call_kwargs = dict(kwargs)
+        while True:
+            try:
+                return current_execute(self, *args, **call_kwargs)
+            except orchestrator_module.CompleteProductionError as exc:
+                emit_root_cause(
+                    "execution_feedback_failure_observed",
+                    stage="generation",
+                    operation="execute_with_feedback",
+                    gate="adjudication",
+                    result="FAIL",
+                    reason=f"{type(exc).__name__}: {exc}",
+                    details={"seen_fingerprints": sorted(seen)},
+                    exc=exc,
+                )
+                ledger = getattr(self, "_mmm_feedback_ledger", None)
+                if ledger is None or not hasattr(ledger, "invalidate_execution_feedback"):
+                    raise
+                feedback = feedback_module._latest_failed_feedback(ledger)
+                if not isinstance(feedback, Mapping):
+                    raise
+
+                infrastructure_failure = _verifier_infrastructure_failure(feedback)
+                if infrastructure_failure is not None:
+                    # This is deliberately before ledger invalidation.  A verifier/JDK
+                    # outage says nothing about source ownership and cannot make a
+                    # successful ACT eligible for fresh generation or source repair.
+                    fingerprint = str(infrastructure_failure["fingerprint"])
+                    seen.add(fingerprint)
+                    emit_root_cause(
+                        "execution_feedback_abort",
+                        stage="generation",
+                        operation="execute_with_feedback",
+                        gate="retry_eligibility",
+                        result="FAIL",
+                        reason=(
+                            "verifier infrastructure failure is not source-repairable; "
+                            "generation replay is forbidden"
+                        ),
+                        details={
+                            "feedback": feedback,
+                            "infrastructure_failure": infrastructure_failure,
+                            "seen_fingerprints": sorted(seen),
+                        },
+                    )
+                    raise
+
+                receipt = ledger.invalidate_execution_feedback(feedback)
+                fingerprint = str(receipt.get("feedback_fingerprint") or "")
+                emit_root_cause(
+                    "execution_feedback_adjudicated",
+                    stage="generation",
+                    operation="execute_with_feedback",
+                    gate="impact_analysis",
+                    result="PASS",
+                    details={
+                        "feedback": feedback,
+                        "invalidation_receipt": receipt,
+                        "fingerprint": fingerprint,
+                    },
+                )
+                if (
+                    receipt.get("global_replan_required") is True
+                    or not receipt.get("impacted_generation_node_ids")
+                    or not fingerprint
+                    or fingerprint in seen
+                ):
+                    emit_root_cause(
+                        "execution_feedback_abort",
+                        stage="generation",
+                        operation="execute_with_feedback",
+                        gate="retry_eligibility",
+                        result="FAIL",
+                        reason="feedback cannot produce a novel owner-bound retry",
+                        details={
+                            "receipt": receipt,
+                            "seen_fingerprints": sorted(seen),
+                        },
+                    )
+                    raise
+                seen.add(fingerprint)
+                options = call_kwargs.get("options")
+                if options is None:
+                    options = orchestrator_module.CompleteExecutionOptions(resume=True)
+                else:
+                    try:
+                        options = replace(options, resume=True)
+                    except TypeError:
+                        raise
+                call_kwargs["options"] = options
+                emit_root_cause(
+                    "execution_feedback_retry",
+                    stage="generation",
+                    operation="execute_with_feedback",
+                    gate="retry_eligibility",
+                    result="START",
+                    reason="novel impacted nodes invalidated",
+                    details={
+                        "fingerprint": fingerprint,
+                        "options": options,
+                        "seen_fingerprint_count": len(seen),
+                    },
+                )
 
     @wraps(current_execute)
     def execute_with_feedback(self: Any, *args: Any, **kwargs: Any):
-        return _trace_feedback_execution(self, args, kwargs, execute_feedback_loop)
+        with trace_scope("complete_production"):
+            emit_root_cause(
+                "pipeline_boundary_start",
+                stage="runtime",
+                operation="complete_production",
+                gate="end_to_end_execution",
+                result="START",
+                details={"args": args, "kwargs": kwargs},
+            )
+            try:
+                result = execute_feedback_loop(self, *args, **kwargs)
+            except BaseException as exc:
+                emit_root_cause(
+                    "pipeline_boundary_failure",
+                    stage="runtime",
+                    operation="complete_production",
+                    gate="end_to_end_execution",
+                    result="FAIL",
+                    reason=f"{type(exc).__name__}: {exc}",
+                    exc=exc,
+                )
+                raise
+            emit_root_cause(
+                "pipeline_boundary_result",
+                stage="runtime",
+                operation="complete_production",
+                gate="end_to_end_execution",
+                result="PASS",
+                details={"result": result},
+            )
+            return result
 
     execute_with_feedback._mmm_impacted_feedback_loop = True  # type: ignore[attr-defined]
     execute_with_feedback._mmm_semantic_convergence = True  # type: ignore[attr-defined]

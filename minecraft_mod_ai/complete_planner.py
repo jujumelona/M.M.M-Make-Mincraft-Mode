@@ -95,10 +95,7 @@ class CompleteGameDesignPlanner:
     def __init__(self, router: ModelRouter) -> None:
         self.router = router
 
-    def plan(self, prompt: str, *, media_paths: Sequence[str | Path]=(), existing_input_sha256: str='') -> AuthoredPlan:
-        return self._mmm_plan_impl(prompt, media_paths=media_paths, existing_input_sha256=existing_input_sha256)
-
-    def _mmm_plan_impl(
+    def plan(
         self,
         prompt: str,
         *,

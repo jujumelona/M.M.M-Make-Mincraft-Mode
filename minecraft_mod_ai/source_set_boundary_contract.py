@@ -159,14 +159,6 @@ def _is_external_client_reference(target: str) -> bool:
     )
 
 
-def _empty_source_findings(units: tuple[JavaSourceUnit, ...], root: Path) -> set[str]:
-    return {
-        f"{unit.relative_path}: {unit.source_set} Java source is empty"
-        for unit in units
-        if not (root / unit.relative_path).read_text(encoding="utf-8").strip()
-    }
-
-
 def source_set_boundary_errors(project_root: str | Path) -> tuple[str, ...]:
     """Return deterministic common/server -> client-only dependency violations.
 
@@ -184,8 +176,13 @@ def source_set_boundary_errors(project_root: str | Path) -> tuple[str, ...]:
     for unit in client_units:
         client_packages.setdefault(unit.package, set()).add(unit.simple_name)
 
+    findings: set[str] = set()
     root = Path(project_root).resolve(strict=True)
-    findings = _empty_source_findings(units, root)
+    for unit in units:
+        if not (root / unit.relative_path).read_text(encoding="utf-8").strip():
+            findings.add(
+                f"{unit.relative_path}: {unit.source_set} Java source is empty"
+            )
 
     for unit in protected:
         imports = tuple(match.group(1) for match in _IMPORT_RE.finditer(unit.code))

@@ -512,60 +512,6 @@ def _canonical_admission_enum(value: str, allowed: Sequence[str]) -> str | None:
     return None
 
 
-def _admission_argument_key(
-    call_name: str, emitted_key: str, properties: Mapping[str, Any]
-) -> str:
-    if call_name != "apply_source_edit":
-        return emitted_key
-    canonical = _SOURCE_EDIT_ADMISSION_ALIASES.get(emitted_key)
-    return canonical if canonical and canonical in properties else emitted_key
-
-
-def _admission_argument_value(value: Any, value_schema: Any) -> Any:
-    if not isinstance(value_schema, Mapping) or not isinstance(value, str):
-        return value
-    enum_value = value_schema.get("enum")
-    valid_enum = (
-        isinstance(enum_value, Sequence)
-        and not isinstance(enum_value, (str, bytes, bytearray))
-        and bool(enum_value)
-        and all(isinstance(item, str) for item in enum_value)
-    )
-    if not valid_enum:
-        return value
-    recovered = _canonical_admission_enum(value, tuple(enum_value))
-    return recovered if recovered is not None else value
-
-
-def _admission_required_names(schema: Mapping[str, Any]) -> set[str]:
-    required = schema.get("required", ())
-    if not isinstance(required, Sequence) or isinstance(required, (str, bytes, bytearray)):
-        return set()
-    return {str(item) for item in required}
-
-
-def _normalize_admission_mapping(
-    call: ToolCall, properties: Mapping[str, Any]
-) -> tuple[dict[str, Any], tuple[str, str] | None]:
-    normalized: dict[str, Any] = {}
-    sources: dict[str, str] = {}
-    for raw_key, raw_value in call.arguments.items():
-        emitted_key = str(raw_key).strip()
-        if emitted_key in _HOST_OWNED_MODEL_ARGUMENTS and emitted_key not in properties:
-            continue
-        key = _admission_argument_key(call.name, emitted_key, properties)
-        if key in normalized:
-            previous = sources[key]
-            error = (
-                f"tool {call.name!r} emitted conflicting sources for canonical parameter "
-                f"{key!r}: {previous!r} and {emitted_key!r}"
-            )
-            return normalized, ("TOOL_ARGUMENT_CONFLICT", error)
-        normalized[key] = _admission_argument_value(raw_value, properties.get(key, {}))
-        sources[key] = emitted_key
-    return normalized, None
-
-
 def _normalize_admission_arguments(
     call: ToolCall,
     schemas: Mapping[str, Mapping[str, Any]],
@@ -577,22 +523,59 @@ def _normalize_admission_arguments(
         return call, None
     properties_value = schema.get("properties", {})
     properties = properties_value if isinstance(properties_value, Mapping) else {}
-    normalized, rejection = _normalize_admission_mapping(call, properties)
-    if rejection is not None:
-        return call, rejection
-    required = _admission_required_names(schema)
-    needs_version = (
+    normalized: dict[str, Any] = {}
+    sources: dict[str, str] = {}
+
+    for raw_key, raw_value in call.arguments.items():
+        emitted_key = str(raw_key).strip()
+        if emitted_key in _HOST_OWNED_MODEL_ARGUMENTS and emitted_key not in properties:
+            continue
+        key = emitted_key
+        if call.name == "apply_source_edit":
+            canonical = _SOURCE_EDIT_ADMISSION_ALIASES.get(emitted_key)
+            if canonical and canonical in properties:
+                key = canonical
+        if key in normalized:
+            previous = sources[key]
+            error = (
+                f"tool {call.name!r} emitted conflicting sources for canonical parameter "
+                f"{key!r}: {previous!r} and {emitted_key!r}"
+            )
+            return call, ("TOOL_ARGUMENT_CONFLICT", error)
+
+        value = raw_value
+        value_schema = properties.get(key, {})
+        if isinstance(value_schema, Mapping) and isinstance(value, str):
+            enum_value = value_schema.get("enum")
+            if (
+                isinstance(enum_value, Sequence)
+                and not isinstance(enum_value, (str, bytes, bytearray))
+                and enum_value
+                and all(isinstance(item, str) for item in enum_value)
+            ):
+                recovered = _canonical_admission_enum(value, tuple(enum_value))
+                if recovered is not None:
+                    value = recovered
+        normalized[key] = value
+        sources[key] = emitted_key
+
+    required_value = schema.get("required", ())
+    if isinstance(required_value, Sequence) and not isinstance(
+        required_value, (str, bytes, bytearray)
+    ):
+        required = {str(item) for item in required_value}
+    else:
+        required = set()
+    if (
         "minecraft_version" in required
         and "minecraft_version" not in normalized
         and "minecraft_version" in properties
-    )
-    if needs_version:
+    ):
         minecraft_version = os.environ.get("MMM_MINECRAFT_VERSION", "").strip()
         if minecraft_version:
             normalized["minecraft_version"] = minecraft_version
-    raw_arguments = json.dumps(
-        normalized, ensure_ascii=False, separators=(",", ":"), default=str
-    )
+
+    raw_arguments = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"), default=str)
     return replace(call, arguments=normalized, raw_arguments=raw_arguments), None
 
 
@@ -714,9 +697,6 @@ def _admit_model_tool_calls(
     return tuple(canonical)
 
 def _completion_message(server_url: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
-    return _mmm__completion_message_impl(server_url, payload)
-
-def _mmm__completion_message_impl(server_url: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
     from ..llama_finish_reason_contract import (
         CONTEXT_PRESSURE,
         LlamaCompletionBoundaryError,

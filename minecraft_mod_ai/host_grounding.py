@@ -109,10 +109,7 @@ def custom_module_path_allowed(path: str) -> bool:
     )
 
 
-def build_coder_grounding(*, module_kind: str, source_observation_receipt: Mapping[str, Any], research_context: Mapping[str, Any], minecraft_version: str, loader: str, mappings: str) -> dict[str, Any]:
-    return _mmm_build_coder_grounding_impl(module_kind=module_kind, source_observation_receipt=source_observation_receipt, research_context=research_context, minecraft_version=minecraft_version, loader=loader, mappings=mappings)
-
-def _mmm_build_coder_grounding_impl(
+def build_coder_grounding(
     *,
     module_kind: str,
     source_observation_receipt: Mapping[str, Any],

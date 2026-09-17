@@ -123,25 +123,6 @@ def _canonical_platform_target(raw_target: Any) -> dict[str, str]:
     }
 
 
-def _research_platform_target(game_design: Mapping[str, Any]) -> dict[str, str] | None:
-    selection = game_design.get("_platform_selection")
-    target = selection.get("target") if isinstance(selection, Mapping) else None
-    if target is None:
-        direct_target = {
-            "minecraft_version": game_design.get("minecraft_version"),
-            "loader": game_design.get("loader"),
-            "mappings": game_design.get("mappings"),
-        }
-        if any(value not in (None, "") for value in direct_target.values()):
-            target = direct_target
-    if target is None:
-        return None
-    try:
-        return _canonical_platform_target(target)
-    except SpecValidationError:
-        return None
-
-
 def normalize_research_brief(
     prompt: str,
     game_design: dict[str, Any],
@@ -196,9 +177,22 @@ def normalize_research_brief(
             "continue with cursors and production batches."
         ),
     }
-    target = _research_platform_target(game_design)
+    selection = game_design.get("_platform_selection")
+    target = selection.get("target") if isinstance(selection, Mapping) else None
+    if target is None:
+        direct_target = {
+            "minecraft_version": game_design.get("minecraft_version"),
+            "loader": game_design.get("loader"),
+            "mappings": game_design.get("mappings"),
+        }
+        if any(value not in (None, "") for value in direct_target.values()):
+            target = direct_target
     if target is not None:
-        payload["_mmm_platform_target"] = target
+        try:
+            payload["_mmm_platform_target"] = _canonical_platform_target(target)
+        except SpecValidationError:
+            # Platform metadata refines research when executable; it never gates research.
+            pass
     payload["brief_sha256"] = _sha256(canonical_json(payload))
     return payload
 
@@ -308,16 +302,6 @@ def _build_research_graph(
 _serial_retrieve_domain_evidence = _build_research_graph
 
 
-def _retrieve_domain_evidence_with_platform_policy(
-    research_brief: dict[str, Any],
-    retrieve: Callable[..., RetrievalReceipt],
-    parallel_retrieve: Callable[..., dict[str, Any]],
-) -> dict[str, Any]:
-    if "_mmm_platform_target" not in research_brief:
-        return _build_research_graph(research_brief, retrieve=retrieve)
-    return parallel_retrieve(research_brief, retrieve=retrieve)
-
-
 def retrieve_domain_evidence(
     research_brief: dict[str, Any],
     *,
@@ -325,9 +309,7 @@ def retrieve_domain_evidence(
 ) -> dict[str, Any]:
     from .parallel_runtime_contract import retrieve_domain_evidence as parallel_retrieve
 
-    return _retrieve_domain_evidence_with_platform_policy(
-        research_brief, retrieve, parallel_retrieve
-    )
+    return parallel_retrieve(research_brief, retrieve=retrieve)
 
 
 retrieve_domain_evidence._mmm_parallel_rag = True  # type: ignore[attr-defined]

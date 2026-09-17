@@ -86,9 +86,6 @@ def _positive_observation_count(receipt: Mapping[str, Any]) -> bool:
 
 
 def _grounding_ready(grounding: Mapping[str, Any]) -> bool:
-    return _mmm__grounding_ready_impl(grounding)
-
-def _mmm__grounding_ready_impl(grounding: Mapping[str, Any]) -> bool:
     policy = grounding.get("policy")
     bindings = grounding.get("evidence_bindings")
     if not isinstance(policy, Mapping) or not isinstance(bindings, Mapping):

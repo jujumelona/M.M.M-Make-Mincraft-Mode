@@ -19,10 +19,6 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .coder_execution_contract import project_task_for_coder
-from .custom_module_request_contract import (
-    build_output_exhaustion_continuation_messages,
-    build_task_local_module_contract,
-)
 from .complete_spec import ProductionModule
 from .host_grounding import build_coder_grounding, custom_module_path_protected
 from .llama_finish_reason_contract import OUTPUT_EXHAUSTED, completion_boundary_kind
@@ -302,12 +298,8 @@ def _verify_reuse_application(
 
 
 def _task_local_module_contract(module: ProductionModule) -> dict[str, Any]:
-    """Project one immutable semantic work item into the coder request."""
-    return build_task_local_module_contract(
-        module,
-        project_task_for_coder=project_task_for_coder,
-        error_type=CustomModuleGenerationError,
-    )
+    'Project one immutable semantic work item into the coder request.\n\n    Evidence-first planning already owns global proposal state. Generation receives only\n    the host-projected coder execution contract rather than replaying the complete\n    semantic task/proposal configuration into every model turn.\n    '
+    return _architecture_impl__task_local_module_contract((module,))
 
 
 _AGENT_MUTABLE_PREFIXES = (
@@ -458,21 +450,6 @@ def _coder_project_context_budget(
     if live_request_bytes <= 0:
         return hard_cap
     return min(hard_cap, max(1024, live_request_bytes // 2))
-
-
-
-def _export_target_environment(
-    minecraft_version: str, loader: str, mappings: str, java_version: int
-) -> None:
-    values = {
-        "MMM_MINECRAFT_VERSION": minecraft_version,
-        "MMM_LOADER": loader,
-        "MMM_YARN_MAPPINGS": mappings,
-        "MMM_JAVA_VERSION": java_version,
-    }
-    for name, value in values.items():
-        if value:
-            os.environ[name] = str(value).strip()
 
 
 class CustomModuleGenerator:
@@ -672,7 +649,14 @@ class CustomModuleGenerator:
                 "evidence_bindings": evidence_bindings,
             }
 
-        _export_target_environment(minecraft_version, loader, mappings, java_version)
+        if minecraft_version:
+            os.environ["MMM_MINECRAFT_VERSION"] = str(minecraft_version).strip()
+        if loader:
+            os.environ["MMM_LOADER"] = str(loader).strip()
+        if mappings:
+            os.environ["MMM_YARN_MAPPINGS"] = str(mappings).strip()
+        if java_version:
+            os.environ["MMM_JAVA_VERSION"] = str(java_version).strip()
 
         self.router.bind_agent_workspace(staged_root, require_fresh_evidence=True)
         request = {
@@ -1331,27 +1315,7 @@ def _output_exhaustion_continuation_messages(
     source_observation_receipt: Mapping[str, Any] | None = None,
     host_grounding: Mapping[str, Any] | None = None,
 ) -> list[dict[str, str]]:
-    return build_output_exhaustion_continuation_messages(
-        {
-            "module_contract": _task_local_module_contract(module),
-            "phase": (
-                "implement_authored_design"
-                if "authored_plan" in module.config
-                else "implement_module"
-            ),
-            "minecraft_version": minecraft_version,
-            "loader": loader,
-            "mappings": mappings,
-            "java_version": java_version,
-            "continuation_index": continuation_index,
-            "state_sha256": state_sha256,
-            "touched_paths": touched_paths,
-            "discarded_paths": discarded_paths,
-            "source_observation_receipt": source_observation_receipt,
-            "host_grounding": host_grounding,
-            "path_preview": _CONTINUATION_PATH_PREVIEW,
-        }
-    )
+    return _architecture_impl__output_exhaustion_continuation_messages((module, minecraft_version, loader, mappings, java_version, continuation_index, state_sha256, touched_paths, discarded_paths, source_observation_receipt, host_grounding))
 
 
 def _collect_staged_operations(
@@ -1652,3 +1616,91 @@ def _update_digest(digest: Any, value: Any) -> None:
 
 def _json_size(value: Any) -> int:
     return len(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+
+def _architecture_impl__task_local_module_contract(_ctx):
+    (module,) = _ctx
+    """Project one immutable semantic work item into the coder request.
+
+    Evidence-first planning already owns global proposal state. Generation receives only
+    the host-projected coder execution contract rather than replaying the complete
+    semantic task/proposal configuration into every model turn.
+    """
+
+    config = module.config if isinstance(module.config, dict) else {}
+    authored = config.get("authored_plan")
+    if isinstance(authored, dict):
+        return {
+            "module_id": module.module_id,
+            "kind": module.kind,
+            "authored_plan": dict(authored),
+        }
+    evidence_task = config.get("evidence_task")
+    if not isinstance(evidence_task, dict):
+        raise CustomModuleGenerationError(
+            "TASK_LOCAL_CONTRACT_REQUIRED: "
+            f"module {module.module_id!r} is missing config.evidence_task"
+        )
+    return {
+        "module_id": module.module_id,
+        "kind": module.kind,
+        "evidence_task": project_task_for_coder(evidence_task),
+    }
+
+
+def _architecture_impl__output_exhaustion_continuation_messages(_ctx):
+    (module, minecraft_version, loader, mappings, java_version, continuation_index, state_sha256, touched_paths, discarded_paths, source_observation_receipt, host_grounding) = _ctx
+    touched = sorted({str(path) for path in touched_paths})
+    discarded = sorted({str(path) for path in discarded_paths})
+    request = {
+        "phase": (
+            "implement_authored_design" if "authored_plan" in module.config
+            else "implement_module"
+        ),
+        "task": "Continue the approved module from the preserved staged workspace; do not restart completed work.",
+        "workspace_project_root": ".",
+        "target": {
+            "minecraft_version": minecraft_version,
+            "loader": loader,
+            "mappings": mappings,
+            "java": java_version,
+        },
+        "module": _task_local_module_contract(module),
+        "continuation": {
+            "reason": "previous_tool_enabled_page_exhausted_output",
+            "continuation_index": continuation_index,
+            "preserved_source_state_sha256": state_sha256,
+            "preserved_path_count": len(touched),
+            "preserved_paths_preview": touched[:_CONTINUATION_PATH_PREVIEW],
+            "discarded_out_of_scope_path_count": len(discarded),
+        },
+        "rules": [
+            "Inspect the current staged workspace before editing; correct prior edits are already persisted.",
+            "Retrieve source by path/symbol/RAG only as needed; never reconstruct the whole repository in context.",
+            "Use bounded tool actions and continue across tool turns until the module is complete.",
+            "Do not repeat an exhausted action and do not put source code in the final summary.",
+        ],
+    }
+    if source_observation_receipt is not None and host_grounding is not None:
+        receipt = dict(source_observation_receipt)
+        request["source_observation_receipt"] = receipt
+        request["initial_exact_source_context"] = {
+            "schema_version": "mmm/source-observation-context-v1",
+            "ledger_receipt": receipt,
+            "global_anchors": [],
+            "page_observations": [],
+        }
+        request["host_grounding"] = dict(host_grounding)
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Continue one interrupted Minecraft mod implementation. The host preserved "
+                "and hash-checked the staged workspace; resume with normal source/RAG tools."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(request, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        },
+    ]
+

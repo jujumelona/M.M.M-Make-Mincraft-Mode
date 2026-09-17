@@ -406,9 +406,6 @@ class AgentToolRuntime:
         return value
 
     def _child_env(self, stage: str) -> dict[str, str]:
-        return self._mmm__child_env_impl(stage)
-
-    def _mmm__child_env_impl(self, stage: str) -> dict[str, str]:
         env = os.environ.copy()
         env.update(
             {
@@ -419,11 +416,11 @@ class AgentToolRuntime:
             }
         )
         if stage == "generation" and _looks_like_bound_project(Path(self.workspace_root)):
-            from .project_platform_identity import project_platform_identity
+            from .platform_catalog import adapter_from_project
 
             # Child services cannot see the parent's selected adapter. Bind from this
             # runtime's project lock, never a process-global target from another worker.
-            target = project_platform_identity(Path(self.workspace_root))
+            target = adapter_from_project(Path(self.workspace_root))
             env["MMM_MCP_MINECRAFT_VERSION"] = target.minecraft_version
             env["MMM_MCP_LOADER"] = target.loader
         return env

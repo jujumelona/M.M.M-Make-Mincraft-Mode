@@ -230,46 +230,6 @@ def _search_cache_put(key: tuple[Any, ...], result: Mapping[str, Any]) -> None:
         _SEARCH_CACHE[key] = copy.deepcopy(dict(result))
 
 
-
-def _cached_search_with_snapshot_policy(
-    self: Any,
-    query: str,
-    searched: Any,
-    *,
-    index_path: str = "rag/project-index.json",
-    limit: int = 8,
-    semantic: bool = False,
-    rerank: bool = False,
-    required_metadata: dict[str, Any] | None = None,
-):
-    key = _search_cache_key(
-        self,
-        query=query,
-        index_path=index_path,
-        limit=limit,
-        semantic=semantic,
-        rerank=rerank,
-        required_metadata=required_metadata,
-    )
-    # A missing index has no immutable snapshot. Source-backed searches must read
-    # current files after every mutation, not reuse the missing-file cache key.
-    cacheable = _resolve_index_target(self, index_path).is_file()
-    cached = _search_cache_get(key) if cacheable else None
-    if cached is not None:
-        return cached
-    result = searched(
-        self,
-        query,
-        index_path=index_path,
-        limit=limit,
-        semantic=semantic,
-        rerank=rerank,
-        required_metadata=required_metadata,
-    )
-    if cacheable:
-        _search_cache_put(key, result)
-    return result
-
 def install(production_tools_module: Any) -> None:
     cls = production_tools_module.ProductionToolService
     current = cls.search_code_rag
@@ -454,16 +414,33 @@ def install(production_tools_module: Any) -> None:
         rerank: bool = False,
         required_metadata: dict[str, Any] | None = None,
     ):
-        return _cached_search_with_snapshot_policy(
+        key = _search_cache_key(
             self,
-            query,
-            searched,
+            query=query,
             index_path=index_path,
             limit=limit,
             semantic=semantic,
             rerank=rerank,
             required_metadata=required_metadata,
         )
+        # A missing index has no immutable snapshot. Source-backed searches must
+        # read current files after every mutation, not reuse the missing-file key.
+        cacheable = _resolve_index_target(self, index_path).is_file()
+        cached = _search_cache_get(key) if cacheable else None
+        if cached is not None:
+            return cached
+        result = searched(
+            self,
+            query,
+            index_path=index_path,
+            limit=limit,
+            semantic=semantic,
+            rerank=rerank,
+            required_metadata=required_metadata,
+        )
+        if cacheable:
+            _search_cache_put(key, result)
+        return result
 
     cached_search._mmm_task_routed_code_search = True  # type: ignore[attr-defined]
     cached_search._mmm_snapshot_search_reuse = True  # type: ignore[attr-defined]

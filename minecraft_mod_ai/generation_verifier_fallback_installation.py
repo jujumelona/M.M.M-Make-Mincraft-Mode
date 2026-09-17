@@ -177,10 +177,7 @@ def _structured_fallback_receipt(
     return payload
 
 
-def _gradle_fallback_receipt(runtime: Any, root: Path, *, runtime_module: Any, jdt_error: BaseException, gradle_runner_factory: Any | None=None, corroboration: bool=False) -> dict[str, Any]:
-    return _mmm__gradle_fallback_receipt_impl(runtime, root, runtime_module=runtime_module, jdt_error=jdt_error, gradle_runner_factory=gradle_runner_factory, corroboration=corroboration)
-
-def _mmm__gradle_fallback_receipt_impl(
+def _gradle_fallback_receipt(
     runtime: Any,
     root: Path,
     *,

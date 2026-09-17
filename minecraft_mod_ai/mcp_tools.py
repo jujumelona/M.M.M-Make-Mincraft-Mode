@@ -99,9 +99,6 @@ class MMMToolService:
         return {'schema_version': 'mmm/plan-result-v2', 'profile': self.profile, 'game_design': design, 'proposal': proposal.to_dict(), 'approval_hash': proposal.calculate_hash()}
 
     def plan_complete_game(self, prompt: str, media_paths: Sequence[str]=(), existing_input_sha256: str='') -> dict[str, Any]:
-        return self._mmm_plan_complete_game_impl(prompt, media_paths, existing_input_sha256)
-
-    def _mmm_plan_complete_game_impl(self, prompt: str, media_paths: Sequence[str]=(), existing_input_sha256: str='') -> dict[str, Any]:
         proposal = CompleteGameDesignPlanner(self.router_factory()).plan(prompt, media_paths=self._scoped_media_paths(media_paths), existing_input_sha256=existing_input_sha256)
         if isinstance(proposal, AuthoredPlan):
             return self._authored_plan_result(proposal)
@@ -116,9 +113,6 @@ class MMMToolService:
         return self.plan_complete_game(merged, media_paths=media_paths, existing_input_sha256=existing_input_sha256)
 
     def approve_complete_plan(self, complete_proposal: dict[str, Any] | None=None, approval_hash: str='', proposal_ref: str='') -> dict[str, Any]:
-        return self._mmm_approve_complete_plan_impl(complete_proposal, approval_hash, proposal_ref)
-
-    def _mmm_approve_complete_plan_impl(self, complete_proposal: dict[str, Any] | None=None, approval_hash: str='', proposal_ref: str='') -> dict[str, Any]:
         parsed, stored_ref = self._resolve_complete_proposal(complete_proposal=complete_proposal, proposal_ref=proposal_ref)
         if isinstance(parsed, AuthoredPlan):
             return {'schema_version': 'mmm/authored-plan-receipt-v1', 'status': 'SAVED', 'proposal_ref': stored_ref, 'approval_hash': parsed.calculate_hash()}
@@ -126,9 +120,6 @@ class MMMToolService:
         return {'schema_version': 'mmm/complete-plan-approval-v2', 'status': approved.status.value, 'proposal_ref': stored_ref, 'approval_hash': approved.calculate_hash(), 'counts': self._complete_proposal_counts(approved)}
 
     def execute_complete_project(self, complete_proposal: dict[str, Any] | None=None, approval_hash: str='', run_name: str='', options: dict[str, Any] | None=None, existing_input: str | None=None, proposal_ref: str='') -> dict[str, Any]:
-        return self._mmm_execute_complete_project_impl(complete_proposal, approval_hash, run_name, options, existing_input, proposal_ref)
-
-    def _mmm_execute_complete_project_impl(self, complete_proposal: dict[str, Any] | None=None, approval_hash: str='', run_name: str='', options: dict[str, Any] | None=None, existing_input: str | None=None, proposal_ref: str='') -> dict[str, Any]:
         parsed, _ = self._resolve_complete_proposal(complete_proposal=complete_proposal, proposal_ref=proposal_ref)
         scoped_options = dict(options or {})
         if scoped_options.get('server_launcher'):
@@ -149,9 +140,6 @@ class MMMToolService:
         return CompleteProductionOrchestrator(workspace_root=self.workspace_root, profile=self.profile, router_factory=self.router_factory, policy=self.policy).execute(parsed, approval_hash=approval_hash, run_name=run_name, options=parsed_options, existing_input=scoped_existing).to_dict()
 
     def read_complete_plan_section(self, proposal_ref: str, section: str='overview', cursor: str='', limit: int=100) -> dict[str, Any]:
-        return self._mmm_read_complete_plan_section_impl(proposal_ref, section, cursor, limit)
-
-    def _mmm_read_complete_plan_section_impl(self, proposal_ref: str, section: str='overview', cursor: str='', limit: int=100) -> dict[str, Any]:
         """Read one bounded proposal page without transferring the full plan."""
         index, expected_hash, expected_index_hash = self._proposal_index_for_ref(proposal_ref, require_existing=True)
         if _sha256(index) != expected_index_hash:
@@ -169,9 +157,6 @@ class MMMToolService:
         return {**result, 'proposal_ref': proposal_ref}
 
     def read_quality_contract(self, proposal_ref: str) -> dict[str, Any]:
-        return self._mmm_read_quality_contract_impl(proposal_ref)
-
-    def _mmm_read_quality_contract_impl(self, proposal_ref: str) -> dict[str, Any]:
         """Read the bounded completion contract for one stored proposal."""
         proposal, stored_ref = self._resolve_complete_proposal(complete_proposal=None, proposal_ref=proposal_ref)
         if isinstance(proposal, AuthoredPlan):
@@ -356,9 +341,6 @@ class MMMToolService:
         return approved
 
     def _store_complete_proposal(self, proposal: CompleteProposal) -> str:
-        return self._mmm__store_complete_proposal_impl(proposal)
-
-    def _mmm__store_complete_proposal_impl(self, proposal: CompleteProposal) -> str:
         if isinstance(proposal, AuthoredPlan):
             digest = proposal.calculate_hash()
             index = self._proposal_index_for_digest(digest, require_existing=False)
@@ -388,9 +370,6 @@ class MMMToolService:
         return f"plan_{digest}_{_sha256(index).removeprefix('sha256:')}"
 
     def _resolve_complete_proposal(self, *, complete_proposal: dict[str, Any] | None, proposal_ref: str) -> tuple[CompleteProposal, str]:
-        return self._mmm__resolve_complete_proposal_impl(complete_proposal=complete_proposal, proposal_ref=proposal_ref)
-
-    def _mmm__resolve_complete_proposal_impl(self, *, complete_proposal: dict[str, Any] | None, proposal_ref: str) -> tuple[CompleteProposal, str]:
         has_inline = complete_proposal is not None
         has_ref = bool(proposal_ref)
         if has_inline == has_ref:
@@ -466,10 +445,6 @@ class MMMToolService:
 
     @staticmethod
     def _complete_proposal_counts(proposal: CompleteProposal) -> dict[str, int]:
-        return MMMToolService._mmm__complete_proposal_counts_impl(proposal)
-
-    @staticmethod
-    def _mmm__complete_proposal_counts_impl(proposal: CompleteProposal) -> dict[str, int]:
         if isinstance(proposal, AuthoredPlan):
             return {'characters': len(proposal.text)}
         counts = {'production_batches': len(proposal.game_design.get('production_outline', ())) if isinstance(proposal.game_design.get('production_outline'), list) else 0, 'modules': len(proposal.modules), 'assets': len(proposal.assets), 'acceptance_tests': len(proposal.acceptance_tests)}

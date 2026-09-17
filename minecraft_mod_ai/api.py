@@ -573,10 +573,7 @@ class CompleteModAISession:
         )
         return path
 
-    def load_plan(self, source_path: str | Path | None=None) -> CompleteChatReply:
-        return self._mmm_load_plan_impl(source_path)
-
-    def _mmm_load_plan_impl(self, source_path: str | Path | None = None) -> CompleteChatReply:
+    def load_plan(self, source_path: str | Path | None = None) -> CompleteChatReply:
         from .complete_spec import CompleteProposal
         from .plan_render import render_complete_plan
 
@@ -635,10 +632,7 @@ class CompleteModAISession:
             updates[field_name] = str(destination)
         return replace(result, **updates) if updates else result
 
-    def build(self, candidate: CompleteChatReply | CompleteProposal | AuthoredPlan | None=None, *, run_name: str='complete-run', source_only: bool=False, options: CompleteExecutionOptions | None=None) -> CompletePipelineResult:
-        return self._mmm_build_impl(candidate, run_name=run_name, source_only=source_only, options=options)
-
-    def _mmm_build_impl(
+    def build(
         self,
         candidate: CompleteChatReply | CompleteProposal | AuthoredPlan | None = None,
         *,

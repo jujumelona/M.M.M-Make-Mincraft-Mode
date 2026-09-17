@@ -651,113 +651,6 @@ def _require_parallel_research_contract(
     return adapter, domains
 
 
-def _parallel_domains(central_module: Any, raw_domains: Any) -> list[Any]:
-    if not isinstance(raw_domains, list) or not raw_domains:
-        raise ParallelResearchContractError(
-            "official-doc research requires at least one research domain"
-        )
-    domains: list[Any] = []
-    for index, raw_domain in enumerate(raw_domains):
-        try:
-            domain = central_module._research_domain(raw_domain)
-        except Exception as exc:  # noqa: BLE001 - contract boundary
-            raise ParallelResearchContractError(
-                f"invalid research domain at index {index}"
-            ) from exc
-        domains.append(domain)
-    return domains
-
-
-def _augmented_research_brief(
-    research_brief: Mapping[str, Any], raw_domains: list[Any], domains: list[Any], domain_queries: Mapping[str, Any]
-) -> dict[str, Any]:
-    augmented_domains: list[dict[str, Any]] = []
-    for raw_domain, domain in zip(raw_domains, domains, strict=True):
-        if not isinstance(raw_domain, Mapping):
-            raise ParallelResearchContractError(
-                f"research domain {domain.domain_id!r} must be a mapping"
-            )
-        updated = dict(raw_domain)
-        if "official_docs" in domain.providers:
-            updated["queries"] = domain_queries[domain.domain_id]
-        augmented_domains.append(updated)
-    augmented = dict(research_brief)
-    augmented["domains"] = augmented_domains
-    return augmented
-
-
-def _primary_official_queries(domains: list[Any], domain_queries: Mapping[str, Any]) -> list[str]:
-    queries = list(
-        dict.fromkeys(
-            query
-            for domain in domains
-            if "official_docs" in domain.providers
-            for query in domain_queries[domain.domain_id]
-        )
-    )
-    if not queries:
-        raise ParallelResearchContractError("official-doc research produced no primary queries")
-    return queries
-
-
-def _run_parallel_research_graph(
-    build_research_graph: Callable[..., dict[str, Any]],
-    selected_retrieve: Callable[..., Any],
-    augmented_brief: dict[str, Any],
-    adapter: Any,
-    query_criteria: Mapping[str, Any],
-    primary_queries: list[str],
-) -> dict[str, Any]:
-    workers = _env_workers("MMM_RESEARCH_WORKERS", 8, maximum=32)
-    pool = ThreadPoolExecutor(
-        max_workers=min(workers, len(primary_queries)),
-        thread_name_prefix="mmm_official_rag",
-    )
-    prefetched = _PrefetchedRetriever(
-        selected_retrieve, pool,
-        minecraft_version=adapter.minecraft_version,
-        loader=adapter.loader,
-        mappings=adapter.yarn_mappings,
-        query_criteria=query_criteria,
-    )
-    try:
-        if workers > 1:
-            for query in primary_queries:
-                prefetched.prefetch_primary(query)
-        return build_research_graph(augmented_brief, retrieve=prefetched)
-    finally:
-        for future in tuple(prefetched._futures.values()):
-            future.cancel()
-        pool.shutdown(wait=False, cancel_futures=True)
-
-
-def _retrieve_domain_evidence_parallel_impl(
-    central_module: Any,
-    build_research_graph: Callable[..., dict[str, Any]],
-    original_default_retrieve: Callable[..., Any],
-    research_brief: dict[str, Any],
-    retrieve: Callable[..., Any] | None,
-) -> dict[str, Any]:
-    if not isinstance(research_brief, Mapping):
-        raise ParallelResearchContractError("research_brief must be a mapping")
-    selected_retrieve = retrieve or original_default_retrieve
-    raw_domains = research_brief.get("domains")
-    domains = _parallel_domains(central_module, raw_domains)
-    official_domains = [domain for domain in domains if "official_docs" in domain.providers]
-    if not official_domains:
-        return build_research_graph(research_brief, retrieve=selected_retrieve)
-    adapter, domains = _require_parallel_research_contract(central_module, research_brief)
-    query_criteria, domain_queries, domain_criteria = _coverage_query_plan(central_module, domains)
-    augmented_brief = _augmented_research_brief(research_brief, raw_domains, domains, domain_queries)
-    primary_queries = _primary_official_queries(domains, domain_queries)
-    graph = _run_parallel_research_graph(
-        build_research_graph, selected_retrieve, augmented_brief, adapter, query_criteria, primary_queries
-    )
-    return _attach_coverage_status(
-        graph, query_criteria=query_criteria, domain_criteria=domain_criteria
-    )
-
-
 def _parallel_retrieve_domain_evidence_factory(
     central_module: Any,
     build_research_graph: Callable[..., dict[str, Any]],
@@ -771,8 +664,109 @@ def _parallel_retrieve_domain_evidence_factory(
         *,
         retrieve: Callable[..., Any] | None = None,
     ) -> dict[str, Any]:
-        return _retrieve_domain_evidence_parallel_impl(
-            central_module, build_research_graph, original_default_retrieve, research_brief, retrieve
+        if not isinstance(research_brief, Mapping):
+            raise ParallelResearchContractError("research_brief must be a mapping")
+
+        selected_retrieve = retrieve or original_default_retrieve
+        raw_domains = research_brief.get("domains")
+        if not isinstance(raw_domains, list) or not raw_domains:
+            raise ParallelResearchContractError(
+                "official-doc research requires at least one research domain"
+            )
+
+        domains: list[Any] = []
+        for index, raw_domain in enumerate(raw_domains):
+            try:
+                domain = central_module._research_domain(raw_domain)
+            except Exception as exc:  # noqa: BLE001 - contract boundary
+                raise ParallelResearchContractError(
+                    f"invalid research domain at index {index}"
+                ) from exc
+            domains.append(domain)
+
+        official_domains = [
+            domain for domain in domains if "official_docs" in domain.providers
+        ]
+        if not official_domains:
+            return build_research_graph(
+                research_brief,
+                retrieve=selected_retrieve,
+            )
+
+        raw_target = research_brief.get("_mmm_platform_target")
+        if raw_target is None:
+            # Official docs are target-specific.  With no selected target the central
+            # graph records those domains as deferred while retaining non-official routes.
+            return build_research_graph(
+                research_brief,
+                retrieve=selected_retrieve,
+            )
+
+        # A target that exists must be complete and canonical.  Partial or stale
+        # metadata is a contract error, never a reason to silently run generic RAG.
+        adapter, verified_domains = _require_parallel_research_contract(
+            central_module,
+            research_brief,
+        )
+        domains = verified_domains
+
+        query_criteria, domain_queries, domain_criteria = _coverage_query_plan(
+            central_module,
+            domains,
+        )
+        augmented_brief = dict(research_brief)
+        augmented_domains: list[dict[str, Any]] = []
+        for raw_domain, domain in zip(raw_domains, domains, strict=True):
+            if not isinstance(raw_domain, Mapping):
+                raise ParallelResearchContractError(
+                    f"research domain {domain.domain_id!r} must be a mapping"
+                )
+            updated = dict(raw_domain)
+            if "official_docs" in domain.providers:
+                updated["queries"] = domain_queries[domain.domain_id]
+            augmented_domains.append(updated)
+        augmented_brief["domains"] = augmented_domains
+
+        primary_queries = list(
+            dict.fromkeys(
+                query
+                for domain in domains
+                if "official_docs" in domain.providers
+                for query in domain_queries[domain.domain_id]
+            )
+        )
+        if not primary_queries:
+            raise ParallelResearchContractError(
+                "official-doc research produced no primary queries"
+            )
+
+        workers = _env_workers("MMM_RESEARCH_WORKERS", 8, maximum=32)
+        pool = ThreadPoolExecutor(
+            max_workers=min(workers, len(primary_queries)),
+            thread_name_prefix="mmm_official_rag",
+        )
+        prefetched = _PrefetchedRetriever(
+            selected_retrieve,
+            pool,
+            minecraft_version=adapter.minecraft_version,
+            loader=adapter.loader,
+            mappings=adapter.yarn_mappings,
+            query_criteria=query_criteria,
+        )
+        try:
+            if workers > 1:
+                for query in primary_queries:
+                    prefetched.prefetch_primary(query)
+            graph = build_research_graph(augmented_brief, retrieve=prefetched)
+        finally:
+            for future in tuple(prefetched._futures.values()):
+                future.cancel()
+            pool.shutdown(wait=False, cancel_futures=True)
+
+        return _attach_coverage_status(
+            graph,
+            query_criteria=query_criteria,
+            domain_criteria=domain_criteria,
         )
 
     retrieve_domain_evidence_parallel._mmm_parallel_rag = True

@@ -293,37 +293,19 @@ def _toolchain_readiness_error(
     }
 
 
-def _infrastructure_diagnostic(
-    normalized: Mapping[str, Any], items: list[dict[str, Any]]
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
-    unavailable = _availability_error(normalized)
-    readiness = None if unavailable is not None else _core_runtime_readiness_error(items)
-    toolchain = None if unavailable is not None or readiness is not None else _toolchain_readiness_error(items)
-    return unavailable, readiness, toolchain
-
-
-def _diagnostic_classification_reason(
-    unavailable: Mapping[str, Any] | None,
-    readiness: Mapping[str, Any] | None,
-    toolchain: Mapping[str, Any] | None,
-    errors: list[dict[str, Any]],
-) -> str:
-    if unavailable is not None:
-        return "JDT receipt is unavailable or malformed"
-    if readiness is not None:
-        return "JDT core runtime symbols are unresolved; verifier workspace is not ready"
-    if toolchain is not None:
-        return "JDT requested Java release/toolchain is unavailable"
-    return "JDT published severity-1 diagnostics" if errors else "JDT receipt is healthy"
-
-
 def diagnostic_errors(receipt: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     """Return source errors, or one fail-closed verifier/readiness diagnostic."""
 
     normalized, path = unwrap_diagnostic_receipt(receipt)
     items = _diagnostic_items_from_receipt(normalized)
     source_errors = [item for item in items if is_error_diagnostic(item)]
-    unavailable, readiness, toolchain = _infrastructure_diagnostic(normalized, items)
+    unavailable = _availability_error(normalized)
+    readiness = None if unavailable is not None else _core_runtime_readiness_error(items)
+    toolchain = (
+        None
+        if unavailable is not None or readiness is not None
+        else _toolchain_readiness_error(items)
+    )
 
     if unavailable is not None:
         errors = [unavailable]
@@ -342,8 +324,18 @@ def diagnostic_errors(receipt: Mapping[str, Any] | None) -> list[dict[str, Any]]
         operation="java_diagnostics",
         gate="verifier_semantics",
         result=("FAIL" if infrastructure_error is not None or errors else "PASS"),
-        reason=_diagnostic_classification_reason(
-            unavailable, readiness, toolchain, errors
+        reason=(
+            "JDT receipt is unavailable or malformed"
+            if unavailable is not None
+            else (
+                "JDT core runtime symbols are unresolved; verifier workspace is not ready"
+                if readiness is not None
+                else (
+                    "JDT requested Java release/toolchain is unavailable"
+                    if toolchain is not None
+                    else ("JDT published severity-1 diagnostics" if errors else "JDT receipt is healthy")
+                )
+            )
         ),
         details={
             "envelope_path": list(path),
@@ -385,16 +377,6 @@ def unavailable_receipt(exc: BaseException) -> dict[str, Any]:
     }
 
 
-def _diagnostic_invocation_kwargs(
-    callback: Any, relative_files: Any, timeout_seconds: int
-) -> tuple[dict[str, Any], bool]:
-    accepts_relative_files = _accepts_keyword(callback, "relative_files")
-    kwargs: dict[str, Any] = {"timeout_seconds": timeout_seconds}
-    if relative_files is not None and accepts_relative_files:
-        kwargs["relative_files"] = relative_files
-    return kwargs, accepts_relative_files
-
-
 def run_diagnostics(
     diagnostics_factory: Any,
     project_root: str | Path,
@@ -429,9 +411,10 @@ def run_diagnostics(
     try:
         service = diagnostics_factory()
         callback = service.diagnostics
-        kwargs, accepts_relative_files = _diagnostic_invocation_kwargs(
-            callback, relative_files, timeout_seconds
-        )
+        kwargs: dict[str, Any] = {"timeout_seconds": timeout_seconds}
+        accepts_relative_files = _accepts_keyword(callback, "relative_files")
+        if relative_files is not None and accepts_relative_files:
+            kwargs["relative_files"] = relative_files
         emit_root_cause(
             "diagnostic_service_ready",
             stage="verify",
@@ -499,7 +482,13 @@ def run_diagnostics(
     result = dict(receipt)
     normalized, path = unwrap_diagnostic_receipt(result)
     items = _diagnostic_items_from_receipt(normalized)
-    unavailable, readiness, toolchain = _infrastructure_diagnostic(normalized, items)
+    unavailable = _availability_error(normalized)
+    readiness = None if unavailable is not None else _core_runtime_readiness_error(items)
+    toolchain = (
+        None
+        if unavailable is not None or readiness is not None
+        else _toolchain_readiness_error(items)
+    )
     infrastructure_error = unavailable or readiness or toolchain
     emit_root_cause(
         "diagnostic_run_result",

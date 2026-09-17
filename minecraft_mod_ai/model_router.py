@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import os
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -229,10 +228,7 @@ class ModelRouter:
             return None
         return counter(request)
 
-    def generate_text(self, role: str, messages: Sequence[Mapping[str, Any]], *, media_paths: Sequence[str | Path]=(), response_format: str='text', response_schema: Mapping[str, Any] | None=None, tool_stage: str | None=None, enable_tools: bool=True) -> str:
-        return self._mmm_generate_text_impl(role, messages, media_paths=media_paths, response_format=response_format, response_schema=response_schema, tool_stage=tool_stage, enable_tools=enable_tools)
-
-    def _mmm_generate_text_impl(
+    def generate_text(
         self,
         role: str,
         messages: Sequence[Mapping[str, Any]],
@@ -283,10 +279,7 @@ class ModelRouter:
             response_schema=request.response_schema,
         )
 
-    def generate_tool_decision(self, role: str, messages: Sequence[Mapping[str, Any]], *, tool_name: str, parameters: Mapping[str, Any], description: str='') -> dict[str, Any]:
-        return self._mmm_generate_tool_decision_impl(role, messages, tool_name=tool_name, parameters=parameters, description=description)
-
-    def _mmm_generate_tool_decision_impl(
+    def generate_tool_decision(
         self,
         role: str,
         messages: Sequence[Mapping[str, Any]],
@@ -364,10 +357,7 @@ class ModelRouter:
             f"{name!r} tool call."
         )
 
-    def _prepare_generation_request(self, role: str, messages: Sequence[Mapping[str, Any]], *, config: Any, media_paths: Sequence[str | Path]=(), response_format: str='text', response_schema: Mapping[str, Any] | None=None, tool_stage: str | None=None, enable_tools: bool=True) -> tuple[str, Any | None, tuple[Mapping[str, Any], ...], GenerationRequest]:
-        return self._mmm__prepare_generation_request_impl(role, messages, config=config, media_paths=media_paths, response_format=response_format, response_schema=response_schema, tool_stage=tool_stage, enable_tools=enable_tools)
-
-    def _mmm__prepare_generation_request_impl(
+    def _prepare_generation_request(
         self,
         role: str,
         messages: Sequence[Mapping[str, Any]],
@@ -768,78 +758,88 @@ def _usable_external_rag_result(arguments: Mapping[str, Any], value: Any) -> boo
     return False
 
 
-_RAG_CONTENT_KEYS = (
-    "parsed_text", "text", "content", "snippet", "code", "source", "source_text", "body"
-)
-_RAG_COLLECTION_KEYS = (
-    "hits", "results", "records", "documents", "chunks", "resources", "sources", "items"
-)
-
-
-def _rag_nonempty_text(item: Any) -> bool:
-    if isinstance(item, str):
-        return bool(item.strip())
-    if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
-        return any(_rag_nonempty_text(child) for child in item)
-    return False
-
-
-def _rag_semantic_content(item: Any) -> bool:
-    if isinstance(item, Mapping):
-        if any(_rag_nonempty_text(item.get(key)) for key in _RAG_CONTENT_KEYS):
-            return True
-        return any(
-            _rag_semantic_content(item.get(key))
-            for key in _RAG_COLLECTION_KEYS
-            if item.get(key) is not None
-        )
-    if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
-        return any(_rag_semantic_content(child) for child in item)
-    return False
-
-
-def _rag_locator_evidence(item: Any) -> bool:
-    if isinstance(item, Mapping):
-        path = item.get("source_path") or item.get("path") or item.get("file")
-        if isinstance(path, str) and path.strip() and item.get("line") is not None:
-            return True
-        return any(
-            _rag_locator_evidence(item.get(key))
-            for key in _RAG_COLLECTION_KEYS
-            if item.get(key) is not None
-        )
-    if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
-        return any(_rag_locator_evidence(child) for child in item)
-    return False
-
-
-def _rag_receipt_metrics(receipt: Mapping[str, Any]) -> tuple[int, bool, bool]:
-    try:
-        result_count = int(receipt.get("result_count", 0) or 0)
-        coverage = float(receipt.get("coverage_score", 0.0) or 0.0)
-        relevance = float(receipt.get("relevance_score", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        return 0, False, False
-    finite = math.isfinite(coverage) and math.isfinite(relevance)
-    return result_count, finite, finite and coverage > 0.0 and relevance > 0.0
-
-
 def _usable_rag_result(value: Any) -> bool:
-    """Accept concrete RAG evidence while rejecting stale or metadata-only receipts."""
+    """Accept only RAG results containing concrete semantic evidence.
 
-    semantic = _rag_semantic_content(value)
-    locator = _rag_locator_evidence(value)
-    receipt = value.get("receipt") if isinstance(value, Mapping) else None
-    if not isinstance(receipt, Mapping):
-        return semantic or locator
-    result_count, finite_scores, positive_scores = _rag_receipt_metrics(receipt)
-    if result_count <= 0 or not finite_scores:
+    Metadata, schema markers, counters, mappings strings, and non-empty containers are not
+    evidence by themselves. A scored receipt can strengthen a result but can never make an
+    otherwise contentless payload usable.
+    """
+
+    content_keys = (
+        "parsed_text",
+        "text",
+        "content",
+        "snippet",
+        "code",
+        "source",
+        "source_text",
+        "body",
+    )
+    collection_keys = (
+        "hits",
+        "results",
+        "records",
+        "documents",
+        "chunks",
+        "resources",
+        "sources",
+        "items",
+    )
+
+    def nonempty_text(item: Any) -> bool:
+        if isinstance(item, str):
+            return bool(item.strip())
+        if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+            return any(nonempty_text(child) for child in item)
         return False
-    if locator:
-        return True
-    if semantic:
-        return positive_scores
-    return positive_scores
+
+    def semantic_content(item: Any) -> bool:
+        if isinstance(item, Mapping):
+            if any(nonempty_text(item.get(key)) for key in content_keys):
+                return True
+            for key in collection_keys:
+                child = item.get(key)
+                if isinstance(child, Mapping) and semantic_content(child):
+                    return True
+                if isinstance(child, Sequence) and not isinstance(child, (str, bytes, bytearray)):
+                    if any(semantic_content(entry) or nonempty_text(entry) for entry in child):
+                        return True
+            return False
+        if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+            return any(semantic_content(child) for child in item)
+        return False
+
+    if not semantic_content(value):
+        return False
+
+    found_receipt = False
+    usable_receipt = False
+
+    def inspect_receipts(item: Any) -> None:
+        nonlocal found_receipt, usable_receipt
+        if isinstance(item, Mapping):
+            receipt = item.get("receipt")
+            if isinstance(receipt, Mapping):
+                found_receipt = True
+                try:
+                    result_count = int(receipt.get("result_count", 0) or 0)
+                    coverage_score = float(receipt.get("coverage_score", 0.0) or 0.0)
+                    relevance_score = float(receipt.get("relevance_score", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    result_count = 0
+                    coverage_score = 0.0
+                    relevance_score = 0.0
+                if result_count > 0 and coverage_score > 0.0 and relevance_score > 0.0:
+                    usable_receipt = True
+            for child in item.values():
+                inspect_receipts(child)
+        elif isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+            for child in item:
+                inspect_receipts(child)
+
+    inspect_receipts(value)
+    return usable_receipt if found_receipt else True
 
 
 def _inject_system_context(

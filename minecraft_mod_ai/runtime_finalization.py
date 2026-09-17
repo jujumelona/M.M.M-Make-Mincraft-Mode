@@ -141,7 +141,10 @@ def finalize_runtime() -> None:
         install_prefetch_resilience(parallel_runtime_module=parallel_runtime_contract)
         install_observation_determinism(agent_tool_runtime_module=agent_tool_runtime)
         install_procedural_skill_identity(external_procedural_skill_contract)
-        install_tool_schema_ownership(agent_tool_runtime, expected_parameters={"apply_source_edit": SOURCE_EDIT_SCHEMA})
+        install_tool_schema_ownership(
+            agent_tool_runtime,
+            expected_parameters={"apply_source_edit": SOURCE_EDIT_SCHEMA},
+        )
         install_routing_intent(small_model_module=small_model_max_agent_contract)
         install_generation_safety()
         install_retrieval_residency(model_router_module=model_router)
@@ -181,7 +184,10 @@ def finalize_runtime() -> None:
         )
         install_execution_feedback_exception_scope(execution_feedback_replan_contract)
         install_execution_feedback_owner_precision(execution_feedback_replan_contract)
-        execution_feedback_replan_contract.install(orchestrator_module=complete_orchestrator, work_graph_module=work_graph)
+        execution_feedback_replan_contract.install(
+            orchestrator_module=complete_orchestrator,
+            work_graph_module=work_graph,
+        )
 
         install_immutable_platform_execution()
         install_fabric_immutable_rebind()

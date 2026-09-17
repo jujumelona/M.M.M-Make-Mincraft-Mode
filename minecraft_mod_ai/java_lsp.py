@@ -197,10 +197,7 @@ def _java_major_versions(java_homes: list[Path]) -> list[int | None]:
     return [versions_by_home[home] for home in java_homes]
 
 
-def _resolve_project_java_home(required_major: int | None=None) -> Path:
-    return _mmm__resolve_project_java_home_impl(required_major)
-
-def _mmm__resolve_project_java_home_impl(required_major: int | None = None) -> Path:
+def _resolve_project_java_home(required_major: int | None = None) -> Path:
     required = required_major if required_major is not None else _requested_project_java_major()
     seen: set[Path] = set()
     homes: list[Path] = []
@@ -214,9 +211,8 @@ def _mmm__resolve_project_java_home_impl(required_major: int | None = None) -> P
         seen.add(home)
         homes.append(home)
 
-    majors = _java_major_versions(homes)
     observed: list[str] = []
-    for home, major in zip(homes, majors, strict=True):
+    for home, major in zip(homes, _java_major_versions(homes), strict=True):
         if major is None:
             continue
         observed.append(f"{home}=>{major}")
