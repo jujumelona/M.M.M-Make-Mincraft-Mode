@@ -81,6 +81,7 @@ def _install_model_runtime_contracts() -> None:
     from .model_adapters import llama_cpp_adapter
     from .model_output_atomicity_contract import install as install_model_output_atomicity
     from .model_runtime_performance import install as install_model_runtime_performance
+    from .qwen_agent_family_contract import install as install_qwen_agent_family
 
     install_gpu_resource(model_registry)
     install_model_runtime_performance()
@@ -99,6 +100,7 @@ def _install_model_runtime_contracts() -> None:
     install_completion_liveness(llama_stream_efficiency_contract, llama_cpp_adapter)
     install_context_safety(model_context_budget)
     install_model_output_atomicity()
+    install_qwen_agent_family()
     start_colab_prefetch(model_registry)
 
 
