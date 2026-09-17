@@ -438,6 +438,56 @@ class ModAISession:
         )
 
 
+def _saved_proposal_from_data(data: dict[str, Any]) -> CompleteProposal | AuthoredPlan:
+    if data.get("schema_version") == "mmm/authored-plan-v1":
+        return AuthoredPlan.from_dict(data)
+    return CompleteProposal.from_dict(data)
+
+
+def _proposal_message(proposal: CompleteProposal | AuthoredPlan) -> str:
+    if isinstance(proposal, AuthoredPlan):
+        return proposal.text
+    from .plan_render import render_complete_plan
+
+    return render_complete_plan(
+        requested_prompt=proposal.requested_prompt,
+        game_design=proposal.game_design,
+        modules=proposal.modules,
+        acceptance_tests=proposal.acceptance_tests,
+        quality_contract=proposal.quality_contract,
+    )
+
+
+def _loaded_proposal_message(proposal: CompleteProposal | AuthoredPlan) -> str:
+    if isinstance(proposal, AuthoredPlan):
+        return proposal.text
+    from .plan_render import render_complete_plan
+    return render_complete_plan(
+        requested_prompt=proposal.requested_prompt,
+        game_design=proposal.game_design,
+        modules=proposal.modules,
+        acceptance_tests=proposal.acceptance_tests,
+    )
+
+
+def _production_proposal(
+    session: "CompleteModAISession",
+    proposal: CompleteProposal | AuthoredPlan,
+) -> CompleteProposal:
+    if not isinstance(proposal, AuthoredPlan):
+        return proposal
+    existing_hash = ""
+    if session.existing_input is not None:
+        existing_hash = _verified_existing_input_sha256(
+            session.router, session.existing_input, await_inventory=True,
+        )
+    return session.planner.compile_for_production(
+        proposal,
+        media_paths=proposal.media_paths,
+        existing_input_sha256=existing_hash,
+    )
+
+
 @dataclass(frozen=True)
 class CompleteChatReply:
     """Natural-language complete-production plan with hidden execution state."""
@@ -544,12 +594,7 @@ class CompleteModAISession:
         from .plan_render import render_complete_plan
 
         return CompleteChatReply(
-            message=proposal.text if isinstance(proposal, AuthoredPlan) else render_complete_plan(
-                requested_prompt=proposal.requested_prompt,
-                game_design=proposal.game_design,
-                modules=proposal.modules,
-                acceptance_tests=proposal.acceptance_tests,
-            ),
+            message=_loaded_proposal_message(proposal),
             approval_hash=proposal.calculate_hash(),
             complete_proposal=proposal,
         )
@@ -585,20 +630,11 @@ class CompleteModAISession:
         if not path.is_file():
             raise FileNotFoundError(f"No saved proposal JSON found at {path}")
         data = json.loads(path.read_text(encoding="utf-8"))
-        proposal = (
-            AuthoredPlan.from_dict(data)
-            if data.get("schema_version") == "mmm/authored-plan-v1"
-            else CompleteProposal.from_dict(data)
-        )
+        proposal = _saved_proposal_from_data(data)
         self.complete_proposal = proposal
         self.brief = proposal.requested_prompt
         return CompleteChatReply(
-            message=proposal.text if isinstance(proposal, AuthoredPlan) else render_complete_plan(
-                requested_prompt=proposal.requested_prompt,
-                game_design=proposal.game_design,
-                modules=proposal.modules,
-                acceptance_tests=proposal.acceptance_tests,
-            ),
+            message=_loaded_proposal_message(proposal),
             approval_hash=proposal.calculate_hash(),
             complete_proposal=proposal,
         )
@@ -655,19 +691,7 @@ class CompleteModAISession:
             )
         if proposal is None:
             raise SpecValidationError("Create a complete plan before building.")
-        if isinstance(proposal, AuthoredPlan):
-            existing_hash = ""
-            if self.existing_input is not None:
-                existing_hash = _verified_existing_input_sha256(
-                    self.router, self.existing_input, await_inventory=True,
-                )
-            # Compile only after build is requested. Keep the saved design intact
-            # even if platform binding or executable-contract compilation stops.
-            proposal = self.planner.compile_for_production(
-                proposal,
-                media_paths=proposal.media_paths,
-                existing_input_sha256=existing_hash,
-            )
+        proposal = _production_proposal(self, proposal)
         selected = options or CompleteExecutionOptions(source_only=source_only)
         if source_only and not selected.source_only:
             selected = CompleteExecutionOptions(

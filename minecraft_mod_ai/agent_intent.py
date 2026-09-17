@@ -90,8 +90,13 @@ def structured_user_intent(
     return "\n".join(reversed(parts))[-limit:]
 
 
+def _contains_implementation_phase(intent: str) -> bool:
+    folded = str(intent).casefold()
+    return any(phase in folded for phase in IMPLEMENTATION_PHASES)
+
+
 def is_implementation_intent(intent: str) -> bool:
-    return any(phase in str(intent).casefold() for phase in IMPLEMENTATION_PHASES)
+    return _contains_implementation_phase(intent)
 
 
 def implementation_requested(messages: Sequence[Mapping[str, Any]]) -> bool:

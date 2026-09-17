@@ -197,6 +197,24 @@ def _java_major_versions(java_homes: list[Path]) -> list[int | None]:
     return [versions_by_home[home] for home in java_homes]
 
 
+def _provision_project_java_home(required: int, detail: str) -> Path:
+    try:
+        from .jdtls_bootstrap import JDTLSBootstrapError, ensure_project_jdk
+        provisioned = ensure_project_jdk(required)
+    except (JDTLSBootstrapError, OSError, ValueError) as exc:
+        raise JDTWorkspaceBootstrapError(
+            "JDT workspace bootstrap failure: no project JDK matching "
+            f"MMM_JAVA_VERSION={required} was found locally ({detail}); "
+            f"lazy provisioning failed: {type(exc).__name__}: {exc}"
+        ) from exc
+    if provisioned is not None:
+        return provisioned.resolve()
+    raise JDTWorkspaceBootstrapError(
+        "JDT workspace bootstrap failure: no project JDK matching "
+        f"MMM_JAVA_VERSION={required} was found locally ({detail})"
+    )
+
+
 def _resolve_project_java_home(required_major: int | None = None) -> Path:
     required = required_major if required_major is not None else _requested_project_java_major()
     seen: set[Path] = set()
@@ -219,22 +237,7 @@ def _resolve_project_java_home(required_major: int | None = None) -> Path:
         if major == required:
             return home
     detail = ", ".join(observed) if observed else "no usable Java homes discovered"
-    try:
-        from .jdtls_bootstrap import JDTLSBootstrapError, ensure_project_jdk
-
-        provisioned = ensure_project_jdk(required)
-    except (JDTLSBootstrapError, OSError, ValueError) as exc:
-        raise JDTWorkspaceBootstrapError(
-            "JDT workspace bootstrap failure: no project JDK matching "
-            f"MMM_JAVA_VERSION={required} was found locally ({detail}); "
-            f"lazy provisioning failed: {type(exc).__name__}: {exc}"
-        ) from exc
-    if provisioned is not None:
-        return provisioned.resolve()
-    raise JDTWorkspaceBootstrapError(
-        "JDT workspace bootstrap failure: no project JDK matching "
-        f"MMM_JAVA_VERSION={required} was found ({detail})."
-    )
+    return _provision_project_java_home(required, detail)
 
 
 def _java_runtime_name(major: int) -> str:

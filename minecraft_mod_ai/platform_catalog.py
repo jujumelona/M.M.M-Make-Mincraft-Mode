@@ -15,6 +15,8 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
+from .gradle_properties import read_gradle_properties
+
 from .platform_live_discovery import (
     PlatformDiscoveryError,
     _emit_discovery_log,
@@ -358,7 +360,7 @@ def adapter_from_project(project_root: str | Path) -> TargetContract:
                 )
         return adapter
 
-    properties = _read_gradle_properties(root / "gradle.properties")
+    properties = read_gradle_properties(root / "gradle.properties")
     minecraft_version = properties.get("minecraft_version", "").strip()
     loader = properties.get("loader", "").strip().casefold()
     if not loader:
@@ -415,18 +417,6 @@ def _fabric_adapter(minecraft_version: str) -> TargetContract:
 
     return host_target(minecraft_version)
 
-
-def _read_gradle_properties(path: Path) -> dict[str, str]:
-    if not path.is_file() or path.is_symlink():
-        raise ValueError(f"gradle.properties is missing: {path}")
-    result: dict[str, str] = {}
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        result[key.strip()] = value.strip()
-    return result
 
 
 def _loader_id(value: str) -> str:

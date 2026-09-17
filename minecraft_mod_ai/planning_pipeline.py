@@ -62,6 +62,19 @@ class PlanningGenerationInterrupted(RuntimeError):
         super().__init__(f"Planning generation interrupted; draft saved: {reason}")
 
 
+def _raise_generation_interruption(state: Mapping[str, Any]) -> None:
+    if state.get("generation_interruption"):
+        raise PlanningGenerationInterrupted(state)
+
+
+def _attach_reuse_plan(selection_dict: dict[str, Any], design: Mapping[str, Any]) -> None:
+    if "authored_plan" in design:
+        return
+    from .grounded_source_reuse import build_repository_reuse_plan
+    reuse_design = {**design, "_platform_selection": selection_dict}
+    selection_dict["reuse_plan"] = build_repository_reuse_plan(reuse_design)
+
+
 @dataclass(frozen=True)
 class PlanningArtifacts:
     planning_state: dict[str, Any]
@@ -147,8 +160,7 @@ class PlanningPipeline:
                 cause=exc,
             ) from exc
 
-        if planning_state.get("generation_interruption"):
-            raise PlanningGenerationInterrupted(planning_state)
+        _raise_generation_interruption(planning_state)
 
         try:
             game_design, base_proposal = _host_operation(
@@ -404,11 +416,7 @@ class PlanningPipeline:
                 "loader": str(existing_loader or "unknown").strip().casefold(),
             }
 
-        from .grounded_source_reuse import build_repository_reuse_plan
-
-        if "authored_plan" not in design:
-            reuse_design = {**design, "_platform_selection": selection_dict}
-            selection_dict["reuse_plan"] = build_repository_reuse_plan(reuse_design)
+        _attach_reuse_plan(selection_dict, design)
         target = dict(selection_dict["target"])
         bound_brief = {**research_brief, "_mmm_platform_target": target}
 

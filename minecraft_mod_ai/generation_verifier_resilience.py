@@ -280,6 +280,16 @@ def _run_gradle_corroboration(
     return corroborated
 
 
+def _finalize_jdt_result(
+    runtime: Any, root: Path, result: Mapping[str, Any], *, runtime_module: Any
+) -> dict[str, Any]:
+    if result.get("error_count") and _jdt_dependency_resolution_suspect(result):
+        return _run_gradle_corroboration(
+            runtime, root, runtime_module=runtime_module, jdt_result=result
+        )
+    return _structured_verifier_result(result, runtime_module=runtime_module)
+
+
 def run_generation_verifier(
     runtime: Any,
     arguments: Mapping[str, Any] | None,
@@ -344,14 +354,7 @@ def run_generation_verifier(
         result="FAIL" if result.get("error_count") else "PASS",
         details={"result": result},
     )
-    if result.get("error_count") and _jdt_dependency_resolution_suspect(result):
-        return _run_gradle_corroboration(
-            runtime,
-            Path(root),
-            runtime_module=runtime_module,
-            jdt_result=result,
-        )
-    return _structured_verifier_result(result, runtime_module=runtime_module)
+    return _finalize_jdt_result(runtime, Path(root), result, runtime_module=runtime_module)
 
 
 setattr(run_generation_verifier, "_mmm_generation_gradle_fallback", True)

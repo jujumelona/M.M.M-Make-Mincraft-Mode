@@ -230,6 +230,18 @@ def _search_cache_put(key: tuple[Any, ...], result: Mapping[str, Any]) -> None:
         _SEARCH_CACHE[key] = copy.deepcopy(dict(result))
 
 
+def _cache_lookup_for_index(owner: Any, index_path: str, key: Any) -> tuple[Any, bool]:
+    cacheable = _resolve_index_target(owner, index_path).is_file()
+    if not cacheable:
+        return None, False
+    return _search_cache_get(key), True
+
+
+def _cache_store_for_index(key: Any, result: Any, cacheable: bool) -> None:
+    if cacheable:
+        _search_cache_put(key, result)
+
+
 def install(production_tools_module: Any) -> None:
     cls = production_tools_module.ProductionToolService
     current = cls.search_code_rag
@@ -423,10 +435,7 @@ def install(production_tools_module: Any) -> None:
             rerank=rerank,
             required_metadata=required_metadata,
         )
-        # A missing index has no immutable snapshot. Source-backed searches must
-        # read current files after every mutation, not reuse the missing-file key.
-        cacheable = _resolve_index_target(self, index_path).is_file()
-        cached = _search_cache_get(key) if cacheable else None
+        cached, cacheable = _cache_lookup_for_index(self, index_path, key)
         if cached is not None:
             return cached
         result = searched(
@@ -438,8 +447,7 @@ def install(production_tools_module: Any) -> None:
             rerank=rerank,
             required_metadata=required_metadata,
         )
-        if cacheable:
-            _search_cache_put(key, result)
+        _cache_store_for_index(key, result, cacheable)
         return result
 
     cached_search._mmm_task_routed_code_search = True  # type: ignore[attr-defined]

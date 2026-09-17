@@ -293,28 +293,56 @@ def _toolchain_readiness_error(
     }
 
 
+def _diagnostic_classification(
+    normalized: Mapping[str, Any], items: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
+    source_errors = [item for item in items if is_error_diagnostic(item)]
+    unavailable = _availability_error(normalized)
+    readiness = None if unavailable is not None else _core_runtime_readiness_error(items)
+    toolchain = None if unavailable is not None or readiness is not None else _toolchain_readiness_error(items)
+    return source_errors, unavailable, readiness, toolchain
+
+
+def _classified_errors(
+    source_errors: list[dict[str, Any]],
+    unavailable: dict[str, Any] | None,
+    readiness: dict[str, Any] | None,
+    toolchain: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if unavailable is not None:
+        return [unavailable]
+    if readiness is not None:
+        return [readiness]
+    if toolchain is not None:
+        return [toolchain]
+    return source_errors
+
+
+def _classification_reason(
+    errors: list[dict[str, Any]],
+    unavailable: dict[str, Any] | None,
+    readiness: dict[str, Any] | None,
+    toolchain: dict[str, Any] | None,
+) -> str:
+    if unavailable is not None:
+        return "JDT diagnostic service is unavailable"
+    if readiness is not None:
+        return "JDT core runtime symbols are unresolved; verifier workspace is not ready"
+    if toolchain is not None:
+        return "JDT requested Java release/toolchain is unavailable"
+    return "JDT published severity-1 diagnostics" if errors else "JDT receipt is healthy"
+
+
 def diagnostic_errors(receipt: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     """Return source errors, or one fail-closed verifier/readiness diagnostic."""
 
     normalized, path = unwrap_diagnostic_receipt(receipt)
     items = _diagnostic_items_from_receipt(normalized)
-    source_errors = [item for item in items if is_error_diagnostic(item)]
-    unavailable = _availability_error(normalized)
-    readiness = None if unavailable is not None else _core_runtime_readiness_error(items)
-    toolchain = (
-        None
-        if unavailable is not None or readiness is not None
-        else _toolchain_readiness_error(items)
+    source_errors, unavailable, readiness, toolchain = _diagnostic_classification(
+        normalized, items
     )
+    errors = _classified_errors(source_errors, unavailable, readiness, toolchain)
 
-    if unavailable is not None:
-        errors = [unavailable]
-    elif readiness is not None:
-        errors = [readiness]
-    elif toolchain is not None:
-        errors = [toolchain]
-    else:
-        errors = source_errors
 
     status = str(normalized.get("status") or "").strip().upper()
     infrastructure_error = unavailable or readiness or toolchain
@@ -375,6 +403,14 @@ def unavailable_receipt(exc: BaseException) -> dict[str, Any]:
         "error_type": type(exc).__name__,
         "diagnostics": {},
     }
+
+
+def _diagnostic_run_reason(
+    readiness: Mapping[str, Any] | None, toolchain: Mapping[str, Any] | None
+) -> str:
+    if readiness is not None or toolchain is not None:
+        return "diagnostic service returned an unready verifier receipt"
+    return "diagnostic service returned a receipt"
 
 
 def run_diagnostics(
@@ -482,12 +518,8 @@ def run_diagnostics(
     result = dict(receipt)
     normalized, path = unwrap_diagnostic_receipt(result)
     items = _diagnostic_items_from_receipt(normalized)
-    unavailable = _availability_error(normalized)
-    readiness = None if unavailable is not None else _core_runtime_readiness_error(items)
-    toolchain = (
-        None
-        if unavailable is not None or readiness is not None
-        else _toolchain_readiness_error(items)
+    _source_errors, unavailable, readiness, toolchain = _diagnostic_classification(
+        normalized, items
     )
     infrastructure_error = unavailable or readiness or toolchain
     emit_root_cause(
@@ -496,11 +528,7 @@ def run_diagnostics(
         operation="java_diagnostics",
         gate="diagnostic_service",
         result="UNAVAILABLE" if infrastructure_error is not None else "PASS",
-        reason=(
-            "diagnostic service returned an unready verifier receipt"
-            if readiness is not None or toolchain is not None
-            else "diagnostic service returned a receipt"
-        ),
+        reason=_diagnostic_run_reason(readiness, toolchain),
         details={
             "elapsed_ms": round((time.monotonic() - started) * 1000.0, 3),
             "outer_keys": _mapping_keys(result),

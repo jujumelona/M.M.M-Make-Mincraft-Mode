@@ -202,14 +202,8 @@ def finalize_runtime() -> None:
         assert_small_model_task_capsule()
         install_coder_mutation_authority()
         assert_coder_mutation_authority()
-        install_small_model_write_scope(
-            custom_module_generator_module=custom_module_generator,
-            host_grounding_module=host_grounding,
-        )
-        assert_small_model_write_scope(
-            custom_module_generator_module=custom_module_generator,
-            host_grounding_module=host_grounding,
-        )
+        install_small_model_write_scope(custom_module_generator_module=custom_module_generator, host_grounding_module=host_grounding)
+        assert_small_model_write_scope(custom_module_generator_module=custom_module_generator, host_grounding_module=host_grounding)
         install_small_model_atomic_coder(
             custom_module_generator_module=custom_module_generator,
             model_router_module=model_router,
@@ -225,11 +219,7 @@ def finalize_runtime() -> None:
         # progress_aware_tool_loop owns mutation authority, repair transitions, verifier
         # semantics, and convergence directly. Do not monkey-patch it here.
 
-        assert_runtime_hot_paths(
-            mcp_transport_pool_module=mcp_transport_pool,
-            external_mcp_router_module=external_mcp_router,
-            research_rag_performance_module=research_rag_performance,
-        )
+        assert_runtime_hot_paths(mcp_transport_pool_module=mcp_transport_pool, external_mcp_router_module=external_mcp_router, research_rag_performance_module=research_rag_performance)
         verify_installed_wrappers()
         run_context_budget_preflight()
         run_runtime_live_path_preflight()

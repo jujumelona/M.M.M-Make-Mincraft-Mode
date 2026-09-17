@@ -210,6 +210,66 @@ def _shutdown_pool(
     pool.shutdown(wait=False, cancel_futures=True)
 
 
+@dataclass
+class _DrainContext(Generic[_Item, _Result]):
+    state: _SubmissionState[_Item]
+    active: dict[Future[_Result], _ActiveTask[_Item]]
+    pool: ThreadPoolExecutor
+    worker: Callable[[_Item], _Result]
+    workers: int
+    unit_timeout: float
+    stage_deadline: float | None
+    stage: str
+    sort_key: Callable[[_Item], object] | None
+    on_result: Callable[[_Item, _Result], None] | None
+    on_error: Callable[[_Item, BaseException], None] | None
+
+
+def _drain_active_tasks(
+    context: _DrainContext[_Item, _Result],
+) -> Iterator[tuple[_Item, _Result]]:
+    while context.active:
+        try:
+            done = _next_completed_batch(
+                context.active,
+                stage=context.stage,
+                unit_timeout=context.unit_timeout,
+                stage_deadline=context.stage_deadline,
+            )
+        except ParallelExecutionTimeout as exc:
+            if context.on_error is None:
+                raise
+            context.on_error(exc.item, exc)
+            return
+        ordered = sorted(
+            done,
+            key=lambda future: _completion_order(
+                future, context.active, context.sort_key
+            ),
+        )
+        for future in ordered:
+            meta = context.active.pop(future)
+            try:
+                result = _completed_result(future, meta, stage=context.stage)
+            except ParallelTaskError as exc:
+                if context.on_error is None:
+                    raise
+                context.on_error(meta.item, exc.cause)
+                continue
+            if context.on_result is not None:
+                context.on_result(meta.item, result)
+            yield meta.item, result
+        _fill_active_slots(
+            context.state,
+            context.active,
+            context.pool,
+            context.worker,
+            workers=context.workers,
+            unit_timeout=context.unit_timeout,
+            stage_deadline=context.stage_deadline,
+        )
+
+
 def _iter_completed_with_deadlines_impl(
     items: Iterable[_Item],
     worker: Callable[[_Item], _Result],
@@ -250,46 +310,20 @@ def _iter_completed_with_deadlines_impl(
             unit_timeout=unit_timeout,
             stage_deadline=stage_deadline,
         )
-        while active:
-            try:
-                done = _next_completed_batch(
-                    active,
-                    stage=stage,
-                    unit_timeout=unit_timeout,
-                    stage_deadline=stage_deadline,
-                )
-            except ParallelExecutionTimeout as exc:
-                if on_error is None:
-                    raise
-                on_error(exc.item, exc)
-                return
-
-            ordered = sorted(
-                done,
-                key=lambda future: _completion_order(future, active, sort_key),
-            )
-            for future in ordered:
-                meta = active.pop(future)
-                try:
-                    result = _completed_result(future, meta, stage=stage)
-                except ParallelTaskError as exc:
-                    if on_error is None:
-                        raise
-                    on_error(meta.item, exc.cause)
-                    continue
-                if on_result is not None:
-                    on_result(meta.item, result)
-                yield meta.item, result
-
-            _fill_active_slots(
-                state,
-                active,
-                pool,
-                worker,
-                workers=workers,
-                unit_timeout=unit_timeout,
-                stage_deadline=stage_deadline,
-            )
+        context = _DrainContext(
+            state=state,
+            active=active,
+            pool=pool,
+            worker=worker,
+            workers=workers,
+            unit_timeout=unit_timeout,
+            stage_deadline=stage_deadline,
+            stage=stage,
+            sort_key=sort_key,
+            on_result=on_result,
+            on_error=on_error,
+        )
+        yield from _drain_active_tasks(context)
     finally:
         _shutdown_pool(pool, active)
 

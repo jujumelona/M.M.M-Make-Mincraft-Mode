@@ -494,7 +494,42 @@ def _detail_progress_strictly_advanced(
     return any(old != new for old, new in monotone_pairs)
 
 
-def _compile_detailed_plans_resumable(
+def _handle_nonready_detailed_result(
+    result: dict[str, Any],
+    progress_before: _DetailProgressPosition,
+    checkpoint: PlanningCheckpoint | None,
+) -> tuple[dict[str, Any], bool]:
+    progress_after = _detail_progress_position(result)
+    advanced = _detail_progress_strictly_advanced(progress_before, progress_after)
+    if advanced:
+        _observe(
+            "detailed_planning_resume_after_progress",
+            stage="planning_runtime", operation="compile_progress_monotone_detailed_plans",
+            result="CONTINUE",
+            reason="compiler produced durable progress; requeue remaining obligations",
+            details={**_state_summary(result), "policy": "continue_while_durable_progress_advances"},
+        )
+    else:
+        _observe(
+            "detailed_planning_pending",
+            stage="planning_runtime", operation="compile_progress_monotone_detailed_plans",
+            result="RESUMABLE",
+            reason="compiler returned a truthful non-ready state without new durable progress",
+            details={**_state_summary(result), "policy": "persist_pending_state_without_synthetic_completion"},
+        )
+    _checkpoint_state(checkpoint, result)
+    return (deepcopy(result) if advanced else result), advanced
+
+
+def _clear_generation_interruption(result: dict[str, Any]) -> dict[str, Any]:
+    if "generation_interruption" not in result:
+        return result
+    cleaned = dict(result)
+    cleaned.pop("generation_interruption", None)
+    return _rehash(cleaned)
+
+
+def _compile_detailed_plans_resumable_impl(
     router: Any,
     prompt: str,
     state: dict[str, Any],
@@ -546,62 +581,36 @@ def _compile_detailed_plans_resumable(
                 )
                 continue
 
+            pending_state = deepcopy(latest_state)
+            pending_state["plan_ready"] = False
+            pending_state["generation_interruption"] = {
+                "type": type(exc).__name__,
+                "reason": str(exc),
+            }
             _observe(
-                "detailed_planning_stalled",
+                "detailed_planning_pending",
                 stage="planning_runtime",
                 operation="compile_progress_monotone_detailed_plans",
-                result="FAIL",
-                reason=f"{type(exc).__name__}: {exc}",
+                result="RESUMABLE",
+                reason=str(exc),
                 details={
-                    **_state_summary(latest_state),
-                    "policy": "fail_closed_without_new_durable_obligation_progress",
+                    **_state_summary(pending_state),
+                    "policy": "persist_recoverable_interruption_without_synthetic_completion",
                 },
             )
-            _checkpoint_state(checkpoint, latest_state)
-            raise RuntimeError(
-                "DETAILED_PLAN_RUNTIME_STALLED: "
-                f"compiler failed without new durable obligation progress: {type(exc).__name__}: {exc}"
-            ) from exc
+            _checkpoint_state(checkpoint, pending_state)
+            return pending_state
 
         if result.get("plan_ready") is not True:
-            progress_after = _detail_progress_position(result)
-            if _detail_progress_strictly_advanced(progress_before, progress_after):
-                latest_state = deepcopy(result)
-                _observe(
-                    "detailed_planning_resume_after_progress",
-                    stage="planning_runtime",
-                    operation="compile_progress_monotone_detailed_plans",
-                    result="CONTINUE",
-                    reason="compiler produced durable progress; requeue remaining obligations",
-                    details={
-                        **_state_summary(result),
-                        "policy": "continue_while_durable_progress_advances",
-                    },
-                )
-                _checkpoint_state(checkpoint, result)
-                continue
-
-            _observe(
-                "detailed_planning_not_ready",
-                stage="planning_runtime",
-                operation="compile_progress_monotone_detailed_plans",
-                result="FAIL",
-                reason="compiler returned before all validated obligations were complete",
-                details={
-                    **_state_summary(result),
-                    "policy": "fail_closed_without_ready_plan_or_new_durable_progress",
-                },
+            latest_state, advanced = _handle_nonready_detailed_result(
+                result, progress_before, checkpoint
             )
-            _checkpoint_state(checkpoint, result)
-            raise RuntimeError(
-                "DETAILED_PLAN_NOT_READY: compiler returned a non-ready plan without "
-                "new durable obligation progress"
-            )
+            if not advanced:
+                return latest_state
+            continue
         break
 
-    if "generation_interruption" in result:
-        result.pop("generation_interruption")
-        result = _rehash(result)
+    result = _clear_generation_interruption(result)
     _trace_state_snapshot(
         "planning_state_transition_output",
         "compile_progress_monotone_detailed_plans",
@@ -610,6 +619,18 @@ def _compile_detailed_plans_resumable(
     _observe_goal_satisfied(result)
     _checkpoint_state(checkpoint, result)
     return result
+
+
+def _compile_detailed_plans_resumable(
+    router: Any,
+    prompt: str,
+    state: dict[str, Any],
+    section_selection: Mapping[str, Any],
+    checkpoint: PlanningCheckpoint | None,
+) -> dict[str, Any]:
+    return _compile_detailed_plans_resumable_impl(
+        router, prompt, state, section_selection, checkpoint
+    )
 
 
 def prepare_planning_state(

@@ -16,8 +16,41 @@ class _ReachedProjectIndex(RuntimeError):
     pass
 
 
-def _module() -> ProductionModule:
-    return ProductionModule(module_id="target_probe", kind="custom_java", config={})
+def _module(*, minecraft_version: str = "26.2", mappings: str = "", java_version: int = 25) -> ProductionModule:
+    anchor = {
+        "kind": "symbol",
+        "locator": "src/main/java/example/TargetProbe.java#TargetProbe",
+        "status": "host_reserved",
+        "source_set": "main",
+    }
+    return ProductionModule(
+        module_id="target_probe",
+        kind="custom_java",
+        config={
+            "evidence_task": {
+                "task_id": "target_probe",
+                "semantic_outcome": "Exercise the generation target boundary.",
+                "target_cell": {
+                    "minecraft_version": minecraft_version,
+                    "loader": "fabric",
+                    "mappings": mappings,
+                    "java_version": java_version,
+                },
+                "owned_anchors": [anchor],
+                "implementation_obligations": [
+                    "Materialize the owned TargetProbe type at the exact host-reserved target."
+                ],
+                "production_bindings": [
+                    {
+                        "task_ref": "target_probe",
+                        "reuse_action": "fresh",
+                        "owned_anchors": [anchor],
+                    }
+                ],
+                "required_gates": ["source_static_validation"],
+            }
+        },
+    )
 
 
 def test_native_26_2_blank_mappings_crosses_generation_target_gate(monkeypatch, tmp_path) -> None:

@@ -30,6 +30,19 @@ from .research_derived_requirements import (
 from .root_cause_trace import emit_root_cause, trace_scope
 
 
+def _design_writing_template(
+    detail_records: Mapping[str, Mapping[str, Sequence[str]]],
+) -> str:
+    sections: list[str] = []
+    for section, records in detail_records.items():
+        concerns = [
+            "- " + concern + ": " + ", ".join(fields)
+            for concern, fields in records.items()
+        ]
+        sections.append("# " + section + "\n" + "\n".join(concerns))
+    return "\n".join(sections)
+
+
 @dataclass(frozen=True)
 class _ProductionBatch:
     batch_id: str
@@ -106,13 +119,7 @@ class CompleteGameDesignPlanner:
         from .planner_operation import planner_operation
         from .planning_detail_slots import DETAIL_RECORDS
 
-        template = "\n".join(
-            "# " + section + "\n" + "\n".join(
-                "- " + concern + ": " + ", ".join(fields)
-                for concern, fields in records.items()
-            )
-            for section, records in DETAIL_RECORDS.items()
-        )
+        template = _design_writing_template(DETAIL_RECORDS)
 
         with planner_operation("author_game_plan"):
             text = self.router.generate_text(

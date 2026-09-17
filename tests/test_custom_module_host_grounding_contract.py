@@ -3,7 +3,7 @@ from __future__ import annotations
 import inspect
 
 from minecraft_mod_ai.agent_roles import skills_for_model_role
-from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
+from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator, _implementation_phase
 from minecraft_mod_ai.host_grounding import build_coder_grounding
 
 
@@ -59,7 +59,8 @@ def test_generator_resolves_grounding_before_agentic_coder_decode() -> None:
     assert 'tool_stage="generation"' in source
     assert "enable_tools=True" in source
     assert "generate_tool_decision" not in source
-    assert '"phase": "implement_module"' in source
+    assert '"phase": _implementation_phase(module_contract)' in source
+    assert _implementation_phase({"evidence_task": {}}) == "implement_module"
     assert "plan_files" not in source
     budget_guard = source.index("project_context_budget = _coder_project_context_budget(")
     exact_observation = source.index("_collect_initial_observations(")

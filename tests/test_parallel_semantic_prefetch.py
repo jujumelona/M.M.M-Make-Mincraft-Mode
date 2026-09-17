@@ -45,6 +45,7 @@ def test_discovery_prefetch_preserves_native_v2_target_semantics(monkeypatch) ->
         "_mmm_platform_target": {
             "minecraft_version": "1.20.1",
             "loader": "fabric",
+            "mappings": "mojang",
         },
         "domains": [
             {
@@ -123,6 +124,7 @@ def test_official_rag_prefetch_delegates_graph_payload_to_native_code(monkeypatc
         "_mmm_platform_target": {
             "minecraft_version": "1.20.1",
             "loader": "fabric",
+            "mappings": "mojang",
         },
         "domains": [
             {

@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from .gradle_properties import read_gradle_properties
+
 
 @dataclass(frozen=True)
 class ProjectPlatformIdentity:
@@ -37,18 +39,6 @@ def _project_platform_lock(root: Path) -> Path | None:
     inherited = metadata_root / "platform-lock.json"
     return inherited if inherited.is_file() and not inherited.is_symlink() else None
 
-
-def _read_gradle_properties(path: Path) -> dict[str, str]:
-    if not path.is_file() or path.is_symlink():
-        raise ValueError(f"gradle.properties is missing: {path}")
-    result: dict[str, str] = {}
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        result[key.strip()] = value.strip()
-    return result
 
 
 def _fabric_descriptor_identifies_project(root: Path) -> bool:
@@ -84,7 +74,7 @@ def project_platform_identity(project_root: str | Path) -> ProjectPlatformIdenti
             raise ValueError("Generated platform lock must bind minecraft_version and loader.")
         return ProjectPlatformIdentity(version, loader, raw, {})
 
-    properties = _read_gradle_properties(root / "gradle.properties")
+    properties = read_gradle_properties(root / "gradle.properties")
     version = properties.get("minecraft_version", "").strip()
     if not version:
         raise ValueError("Existing project minecraft_version is missing.")

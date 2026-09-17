@@ -239,6 +239,22 @@ class ModelRouter:
         tool_stage: str | None = None,
         enable_tools: bool = True,
     ) -> str:
+        return self._generate_text_impl(
+            role, messages, media_paths=media_paths, response_format=response_format,
+            response_schema=response_schema, tool_stage=tool_stage, enable_tools=enable_tools,
+        )
+
+    def _generate_text_impl(
+        self,
+        role: str,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        media_paths: Sequence[str | Path] = (),
+        response_format: str = "text",
+        response_schema: Mapping[str, Any] | None = None,
+        tool_stage: str | None = None,
+        enable_tools: bool = True,
+    ) -> str:
         config, adapter = self._generation_adapter(role)
         stage, runtime, tools, request = self._prepare_generation_request(
             role,
@@ -280,6 +296,19 @@ class ModelRouter:
         )
 
     def generate_tool_decision(
+        self,
+        role: str,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        tool_name: str,
+        parameters: Mapping[str, Any],
+        description: str = "",
+    ) -> dict[str, Any]:
+        return self._generate_tool_decision_impl(
+            role, messages, tool_name=tool_name, parameters=parameters, description=description
+        )
+
+    def _generate_tool_decision_impl(
         self,
         role: str,
         messages: Sequence[Mapping[str, Any]],
@@ -358,6 +387,24 @@ class ModelRouter:
         )
 
     def _prepare_generation_request(
+        self,
+        role: str,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        config: Any,
+        media_paths: Sequence[str | Path] = (),
+        response_format: str = "text",
+        response_schema: Mapping[str, Any] | None = None,
+        tool_stage: str | None = None,
+        enable_tools: bool = True,
+    ) -> tuple[str, Any | None, tuple[Mapping[str, Any], ...], GenerationRequest]:
+        return self._prepare_generation_request_impl(
+            role, messages, config=config, media_paths=media_paths,
+            response_format=response_format, response_schema=response_schema,
+            tool_stage=tool_stage, enable_tools=enable_tools,
+        )
+
+    def _prepare_generation_request_impl(
         self,
         role: str,
         messages: Sequence[Mapping[str, Any]],
@@ -758,88 +805,136 @@ def _usable_external_rag_result(arguments: Mapping[str, Any], value: Any) -> boo
     return False
 
 
-def _usable_rag_result(value: Any) -> bool:
-    """Accept only RAG results containing concrete semantic evidence.
+_RAG_CONTENT_KEYS = (
+    "parsed_text", "text", "content", "snippet", "code", "source", "source_text", "body",
+)
+_RAG_COLLECTION_KEYS = (
+    "hits", "results", "records", "documents", "chunks", "resources", "sources", "items",
+)
+_RAG_HIT_LOCATOR_KEYS = ("path", "source_path", "file", "uri", "line", "location")
 
-    Metadata, schema markers, counters, mappings strings, and non-empty containers are not
-    evidence by themselves. A scored receipt can strengthen a result but can never make an
-    otherwise contentless payload usable.
-    """
 
-    content_keys = (
-        "parsed_text",
-        "text",
-        "content",
-        "snippet",
-        "code",
-        "source",
-        "source_text",
-        "body",
+def _rag_nonempty_text(item: Any) -> bool:
+    if isinstance(item, str):
+        return bool(item.strip())
+    if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+        return any(_rag_nonempty_text(child) for child in item)
+    return False
+
+
+def _rag_concrete_hit(item: Any) -> bool:
+    if isinstance(item, Mapping):
+        if any(_rag_nonempty_text(item.get(key)) for key in _RAG_CONTENT_KEYS):
+            return True
+        return any(item.get(key) not in (None, "", [], {}) for key in _RAG_HIT_LOCATOR_KEYS)
+    return _rag_nonempty_text(item)
+
+
+def _rag_hit_collection_has_evidence(item: Mapping[str, Any]) -> bool:
+    hits = item.get("hits")
+    return bool(
+        isinstance(hits, Sequence)
+        and not isinstance(hits, (str, bytes, bytearray))
+        and any(_rag_concrete_hit(entry) for entry in hits)
     )
-    collection_keys = (
-        "hits",
-        "results",
-        "records",
-        "documents",
-        "chunks",
-        "resources",
-        "sources",
-        "items",
-    )
 
-    def nonempty_text(item: Any) -> bool:
-        if isinstance(item, str):
-            return bool(item.strip())
-        if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
-            return any(nonempty_text(child) for child in item)
-        return False
 
-    def semantic_content(item: Any) -> bool:
-        if isinstance(item, Mapping):
-            if any(nonempty_text(item.get(key)) for key in content_keys):
+def _rag_nested_collection_has_evidence(item: Mapping[str, Any]) -> bool:
+    for key in _RAG_COLLECTION_KEYS:
+        if key == "hits":
+            continue
+        child = item.get(key)
+        if isinstance(child, Mapping) and _rag_semantic_content(child):
+            return True
+        if isinstance(child, Sequence) and not isinstance(child, (str, bytes, bytearray)):
+            if any(_rag_semantic_content(entry) or _rag_nonempty_text(entry) for entry in child):
                 return True
-            for key in collection_keys:
-                child = item.get(key)
-                if isinstance(child, Mapping) and semantic_content(child):
-                    return True
-                if isinstance(child, Sequence) and not isinstance(child, (str, bytes, bytearray)):
-                    if any(semantic_content(entry) or nonempty_text(entry) for entry in child):
-                        return True
+    return False
+
+
+def _rag_semantic_content(item: Any) -> bool:
+    if isinstance(item, Mapping):
+        return bool(
+            any(_rag_nonempty_text(item.get(key)) for key in _RAG_CONTENT_KEYS)
+            or _rag_hit_collection_has_evidence(item)
+            or _rag_nested_collection_has_evidence(item)
+        )
+    if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+        return any(_rag_semantic_content(child) for child in item)
+    return False
+
+
+def _rag_receipt_metrics(receipt: Mapping[str, Any]) -> tuple[int, float, float] | None:
+    import math
+
+    try:
+        result_count = int(receipt.get("result_count", 0) or 0)
+        coverage_score = float(receipt.get("coverage_score", 0.0) or 0.0)
+        relevance_score = float(receipt.get("relevance_score", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(coverage_score) or not math.isfinite(relevance_score):
+        return None
+    return result_count, coverage_score, relevance_score
+
+
+def _scored_rag_receipt_usable(receipt: Mapping[str, Any]) -> bool:
+    metrics = _rag_receipt_metrics(receipt)
+    if metrics is None:
+        return False
+    result_count, coverage_score, relevance_score = metrics
+    return result_count > 0 and coverage_score > 0.0 and relevance_score > 0.0
+
+
+def _rag_receipt_state(item: Any) -> tuple[bool, bool]:
+    found = False
+    usable = False
+    if isinstance(item, Mapping):
+        receipt = item.get("receipt")
+        if isinstance(receipt, Mapping):
+            found = True
+            usable = _scored_rag_receipt_usable(receipt)
+        for child in item.values():
+            child_found, child_usable = _rag_receipt_state(child)
+            found = found or child_found
+            usable = usable or child_usable
+        return found, usable
+    if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+        for child in item:
+            child_found, child_usable = _rag_receipt_state(child)
+            found = found or child_found
+            usable = usable or child_usable
+    return found, usable
+
+
+def _usable_rag_result(value: Any) -> bool:
+    """Accept concrete hits while rejecting metadata-only or contradictory receipts."""
+
+    semantic_content = _rag_semantic_content(value)
+    if isinstance(value, Mapping):
+        receipt = value.get("receipt")
+        if isinstance(receipt, Mapping):
+            metrics = _rag_receipt_metrics(receipt)
+            if metrics is None:
+                return False
+            result_count, coverage_score, relevance_score = metrics
+            if result_count <= 0:
+                return False
+            if coverage_score > 0.0 and relevance_score > 0.0:
+                return True
+            if coverage_score == 0.0 and relevance_score == 0.0:
+                hits = value.get("hits")
+                return bool(
+                    isinstance(hits, Sequence)
+                    and not isinstance(hits, (str, bytes, bytearray))
+                    and any(_rag_concrete_hit(entry) for entry in hits)
+                )
             return False
-        if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
-            return any(semantic_content(child) for child in item)
-        return False
 
-    if not semantic_content(value):
-        return False
-
-    found_receipt = False
-    usable_receipt = False
-
-    def inspect_receipts(item: Any) -> None:
-        nonlocal found_receipt, usable_receipt
-        if isinstance(item, Mapping):
-            receipt = item.get("receipt")
-            if isinstance(receipt, Mapping):
-                found_receipt = True
-                try:
-                    result_count = int(receipt.get("result_count", 0) or 0)
-                    coverage_score = float(receipt.get("coverage_score", 0.0) or 0.0)
-                    relevance_score = float(receipt.get("relevance_score", 0.0) or 0.0)
-                except (TypeError, ValueError):
-                    result_count = 0
-                    coverage_score = 0.0
-                    relevance_score = 0.0
-                if result_count > 0 and coverage_score > 0.0 and relevance_score > 0.0:
-                    usable_receipt = True
-            for child in item.values():
-                inspect_receipts(child)
-        elif isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
-            for child in item:
-                inspect_receipts(child)
-
-    inspect_receipts(value)
-    return usable_receipt if found_receipt else True
+    found_receipt, usable_receipt = _rag_receipt_state(value)
+    if found_receipt:
+        return semantic_content and usable_receipt
+    return semantic_content
 
 
 def _inject_system_context(

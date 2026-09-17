@@ -265,6 +265,49 @@ def _required_tool_semantic_violation(
     return False
 
 
+def _required_tool_stream_state(
+    *,
+    requires_tool: bool,
+    required_tool_started: bool,
+    message: Mapping[str, Any],
+    delta: Mapping[str, Any],
+) -> tuple[bool, bool]:
+    """Return ``(tool_started, semantic_rejection)`` for one streamed delta."""
+    if not requires_tool or required_tool_started:
+        return required_tool_started, False
+    raw_calls = delta.get("tool_calls")
+    native_tool_started = bool(isinstance(raw_calls, list) and raw_calls)
+    if native_tool_started or _required_tool_markup_started(message):
+        return True, False
+    return False, _required_tool_semantic_violation(message, delta)
+
+
+def _stream_missing_done_marker(*, saw_done: bool, semantic_rejection: bool) -> bool:
+    return not saw_done and not semantic_rejection
+
+
+def _post_native_tool_completion(client: Any, url: str, kwargs: Mapping[str, Any]) -> Any:
+    """Bound liveness for minimal clients that do not expose streaming."""
+    import httpx
+
+    native_kwargs = dict(kwargs)
+    deadline = _tool_idle_timeout_seconds()
+    native_kwargs["timeout"] = _bounded_timeout(
+        native_kwargs.get("timeout"),
+        read_seconds=deadline,
+    )
+    timeout_exc = getattr(httpx, "TimeoutException", None)
+    if not (isinstance(timeout_exc, type) and issubclass(timeout_exc, BaseException)):
+        timeout_exc = ()
+    try:
+        return client.post(url, **native_kwargs)
+    except timeout_exc as exc:
+        raise LlamaToolLivenessTimeout(
+            "native llama-server tool completion produced no readable transport "
+            f"progress for {deadline:.0f}s; request aborted"
+        ) from exc
+
+
 class _StreamingCompletionClient:
     """Reuse one HTTP client and aggregate every chat completion through SSE."""
 
@@ -302,24 +345,7 @@ class _StreamingCompletionClient:
         has_tools = bool(payload.get("tools"))
         requires_tool = has_tools and _tool_choice_requires_execution(payload.get("tool_choice"))
         if has_tools and not hasattr(self._client, "stream"):
-            import httpx
-
-            native_kwargs = dict(kwargs)
-            deadline = _tool_idle_timeout_seconds()
-            native_kwargs["timeout"] = _bounded_timeout(
-                native_kwargs.get("timeout"),
-                read_seconds=deadline,
-            )
-            timeout_exc = getattr(httpx, "TimeoutException", None)
-            if not (isinstance(timeout_exc, type) and issubclass(timeout_exc, BaseException)):
-                timeout_exc = ()
-            try:
-                return self._client.post(url, **native_kwargs)
-            except timeout_exc as exc:
-                raise LlamaToolLivenessTimeout(
-                    "native llama-server tool completion produced no readable transport "
-                    f"progress for {deadline:.0f}s; request aborted"
-                ) from exc
+            return _post_native_tool_completion(self._client, url, kwargs)
 
         import httpx
 
@@ -341,8 +367,7 @@ class _StreamingCompletionClient:
         usage: dict[str, Any] | None = None
         timings: dict[str, Any] | None = None
         saw_done = False
-        host_rejected_required_tool_preface = False
-        required_tool_started = False
+        host_rejected_required_tool_preface = required_tool_started = False
 
         timeout_exc = getattr(httpx, "TimeoutException", None)
         if not (isinstance(timeout_exc, type) and issubclass(timeout_exc, BaseException)):
@@ -403,21 +428,20 @@ class _StreamingCompletionClient:
                         delta = candidate if isinstance(candidate, Mapping) else None
                     if delta is not None:
                         _append_message_delta(message, delta)
-                        if requires_tool and not required_tool_started:
-                            raw_calls = delta.get("tool_calls")
-                            native_tool_started = bool(
-                                isinstance(raw_calls, list) and raw_calls
+                        required_tool_started, rejected = _required_tool_stream_state(
+                            requires_tool=requires_tool,
+                            required_tool_started=required_tool_started,
+                            message=message,
+                            delta=delta,
+                        )
+                        if rejected:
+                            host_rejected_required_tool_preface = True
+                            finish_reason = "stop"
+                            print(
+                                "llama server: required tool semantic preface rejected",
+                                flush=True,
                             )
-                            if native_tool_started or _required_tool_markup_started(message):
-                                required_tool_started = True
-                            elif _required_tool_semantic_violation(message, delta):
-                                host_rejected_required_tool_preface = True
-                                finish_reason = "stop"
-                                print(
-                                    "llama server: required tool semantic preface rejected",
-                                    flush=True,
-                                )
-                                break
+                            break
         except LlamaSseServerError as exc:
             return httpx.Response(
                 exc.status_code,
@@ -432,7 +456,10 @@ class _StreamingCompletionClient:
                 ) from exc
             raise
 
-        if not saw_done and not host_rejected_required_tool_preface:
+        if _stream_missing_done_marker(
+            saw_done=saw_done,
+            semantic_rejection=host_rejected_required_tool_preface,
+        ):
             raise RuntimeError("llama server stream ended before the [DONE] marker")
         result: dict[str, Any] = {
             "choices": [

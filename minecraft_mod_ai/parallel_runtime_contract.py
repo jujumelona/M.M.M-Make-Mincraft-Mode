@@ -651,6 +651,39 @@ def _require_parallel_research_contract(
     return adapter, domains
 
 
+def _parallel_research_inputs(
+    central_module: Any,
+    research_brief: Mapping[str, Any],
+) -> tuple[list[Any], list[Any], Any | None]:
+    """Parse domains and resolve a target only when official-doc work needs one."""
+    raw_domains = research_brief.get("domains")
+    if not isinstance(raw_domains, list) or not raw_domains:
+        raise ParallelResearchContractError(
+            "official-doc research requires at least one research domain"
+        )
+    domains = []
+    for index, raw_domain in enumerate(raw_domains):
+        try:
+            domains.append(central_module._research_domain(raw_domain))
+        except Exception as exc:  # noqa: BLE001 - contract boundary
+            raise ParallelResearchContractError(
+                f"invalid research domain at index {index}"
+            ) from exc
+    if not any("official_docs" in domain.providers for domain in domains):
+        return raw_domains, domains, None
+    if research_brief.get("_mmm_platform_target") is None:
+        if research_brief.get("schema_version") == "mmm/central-research-brief-v1":
+            return raw_domains, domains, None
+        raise ParallelResearchContractError(
+            "official-doc research requires _mmm_platform_target"
+        )
+    adapter, verified_domains = _require_parallel_research_contract(
+        central_module,
+        research_brief,
+    )
+    return raw_domains, verified_domains, adapter
+
+
 def _parallel_retrieve_domain_evidence_factory(
     central_module: Any,
     build_research_graph: Callable[..., dict[str, Any]],
@@ -668,47 +701,15 @@ def _parallel_retrieve_domain_evidence_factory(
             raise ParallelResearchContractError("research_brief must be a mapping")
 
         selected_retrieve = retrieve or original_default_retrieve
-        raw_domains = research_brief.get("domains")
-        if not isinstance(raw_domains, list) or not raw_domains:
-            raise ParallelResearchContractError(
-                "official-doc research requires at least one research domain"
-            )
-
-        domains: list[Any] = []
-        for index, raw_domain in enumerate(raw_domains):
-            try:
-                domain = central_module._research_domain(raw_domain)
-            except Exception as exc:  # noqa: BLE001 - contract boundary
-                raise ParallelResearchContractError(
-                    f"invalid research domain at index {index}"
-                ) from exc
-            domains.append(domain)
-
-        official_domains = [
-            domain for domain in domains if "official_docs" in domain.providers
-        ]
-        if not official_domains:
-            return build_research_graph(
-                research_brief,
-                retrieve=selected_retrieve,
-            )
-
-        raw_target = research_brief.get("_mmm_platform_target")
-        if raw_target is None:
-            # Official docs are target-specific.  With no selected target the central
-            # graph records those domains as deferred while retaining non-official routes.
-            return build_research_graph(
-                research_brief,
-                retrieve=selected_retrieve,
-            )
-
-        # A target that exists must be complete and canonical.  Partial or stale
-        # metadata is a contract error, never a reason to silently run generic RAG.
-        adapter, verified_domains = _require_parallel_research_contract(
+        raw_domains, domains, adapter = _parallel_research_inputs(
             central_module,
             research_brief,
         )
-        domains = verified_domains
+        if adapter is None:
+            return build_research_graph(
+                research_brief,
+                retrieve=selected_retrieve,
+            )
 
         query_criteria, domain_queries, domain_criteria = _coverage_query_plan(
             central_module,

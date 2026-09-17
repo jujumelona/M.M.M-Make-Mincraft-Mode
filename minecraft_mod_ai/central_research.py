@@ -123,6 +123,25 @@ def _canonical_platform_target(raw_target: Any) -> dict[str, str]:
     }
 
 
+def _research_platform_target(game_design: Mapping[str, Any]) -> dict[str, Any] | None:
+    selection = game_design.get("_platform_selection")
+    target = selection.get("target") if isinstance(selection, Mapping) else None
+    if target is None:
+        direct_target = {
+            "minecraft_version": game_design.get("minecraft_version"),
+            "loader": game_design.get("loader"),
+            "mappings": game_design.get("mappings"),
+        }
+        if any(value not in (None, "") for value in direct_target.values()):
+            target = direct_target
+    if target is None:
+        return None
+    try:
+        return _canonical_platform_target(target)
+    except SpecValidationError:
+        return None
+
+
 def normalize_research_brief(
     prompt: str,
     game_design: dict[str, Any],
@@ -177,22 +196,9 @@ def normalize_research_brief(
             "continue with cursors and production batches."
         ),
     }
-    selection = game_design.get("_platform_selection")
-    target = selection.get("target") if isinstance(selection, Mapping) else None
-    if target is None:
-        direct_target = {
-            "minecraft_version": game_design.get("minecraft_version"),
-            "loader": game_design.get("loader"),
-            "mappings": game_design.get("mappings"),
-        }
-        if any(value not in (None, "") for value in direct_target.values()):
-            target = direct_target
+    target = _research_platform_target(game_design)
     if target is not None:
-        try:
-            payload["_mmm_platform_target"] = _canonical_platform_target(target)
-        except SpecValidationError:
-            # Platform metadata refines research when executable; it never gates research.
-            pass
+        payload["_mmm_platform_target"] = target
     payload["brief_sha256"] = _sha256(canonical_json(payload))
     return payload
 

@@ -24,6 +24,13 @@ class OwnerRPCError(RuntimeError):
     pass
 
 
+def _stderr_timeout_suffix(stderr: object) -> str:
+    values = list(stderr) if stderr is not None else []
+    if not values:
+        return ""
+    return f"; backend stderr tail={values!r}"
+
+
 class OwnerRPC:
     def __init__(self, command: Sequence[str], *, cwd: Path | None = None) -> None:
         if not command or isinstance(command, str):
@@ -92,9 +99,7 @@ class OwnerRPC:
     def _timeout_error(self, method: str, timeout: float) -> OwnerRPCError:
         noise = list(self._stdout_noise)
         suffix = f'; non-protocol stdout tail={noise!r}' if noise else ''
-        stderr = list(self._stderr)
-        if stderr:
-            suffix += f'; backend stderr tail={stderr!r}'
+        suffix += _stderr_timeout_suffix(self._stderr)
         return OwnerRPCError(f'Owner {method} timed out after {timeout}s{suffix}')
 
     def _raise_transport_failure(

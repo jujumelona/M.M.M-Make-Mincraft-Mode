@@ -39,6 +39,73 @@ _TOKEN_PATTERN = re.compile(r"[a-z0-9_.:+-]+|[가-힣]{2,}", re.IGNORECASE)
 _CORPUS_THREAD_STATE = threading.local()
 
 
+def _optional_retrieval_target(
+    minecraft_version: str | None,
+    loader: str | None,
+    mappings: str | None,
+) -> tuple[Any | None, str, str, str]:
+    version = str(minecraft_version or "").strip()
+    loader_id = str(loader or "").strip().casefold()
+    mapping_id = str(mappings or "").strip()
+    if not (version and loader_id and mapping_id):
+        return None, "", "", ""
+    try:
+        adapter = adapter_for_target(version, loader_id)
+    except ValueError:
+        return None, "", "", ""
+    if mapping_id != adapter.yarn_mappings:
+        return None, "", "", ""
+    return adapter, adapter.minecraft_version, adapter.loader, adapter.yarn_mappings
+
+
+def _eligible_official_documents(
+    documents: Iterable[CorpusDocument],
+    adapter: Any | None,
+) -> dict[str, CorpusDocument]:
+    if adapter is None:
+        return {document.document_id: document for document in documents}
+    return {
+        document.document_id: document
+        for document in documents
+        if document.loader in {adapter.loader, "agnostic"}
+    }
+
+
+def _retrieval_target_receipt(
+    adapter: Any | None,
+    version: str,
+    loader: str,
+    mappings: str,
+) -> dict[str, str] | None:
+    if adapter is None:
+        return None
+    return {"minecraft_version": version, "loader": loader, "mappings": mappings}
+
+
+def _retrieval_correction_queries(
+    *,
+    family: str,
+    correction_required: bool,
+    adapter: Any | None,
+    version: str,
+    loader: str,
+    mappings: str,
+) -> tuple[str, ...]:
+    if not correction_required:
+        return ()
+    if adapter is None:
+        return (
+            f"{family} official API concepts",
+            f"{family} compatibility and mapping constraints",
+            f"{family} deterministic runtime validation",
+        )
+    return (
+        f"{family} official API for Minecraft {version} {loader}",
+        f"{family} mapping symbols for {mappings}",
+        f"{family} deterministic runtime validation",
+    )
+
+
 @dataclass(frozen=True)
 class CorpusDocument:
     document_id: str
@@ -411,29 +478,15 @@ class OfficialCorpusIndex:
         if type(limit) is not int or not 1 <= limit <= 12:
             raise SpecValidationError("RAG result limit must be between 1 and 12.")
 
-        version = str(minecraft_version or "").strip()
-        loader_id = str(loader or "").strip().casefold()
-        mapping_id = str(mappings or "").strip()
-        adapter = None
-        if version and loader_id and mapping_id:
-            try:
-                candidate = adapter_for_target(version, loader_id)
-            except ValueError:
-                candidate = None
-            if candidate is not None and mapping_id == candidate.yarn_mappings:
-                adapter = candidate
-
-        target_version = adapter.minecraft_version if adapter is not None else ""
-        target_loader = adapter.loader if adapter is not None else ""
-        target_mappings = adapter.yarn_mappings if adapter is not None else ""
+        adapter, target_version, target_loader, target_mappings = _optional_retrieval_target(
+            minecraft_version,
+            loader,
+            mappings,
+        )
 
         family = _classify_query(query)
         canonical = _canonical_query(query, family)
-        eligible = {
-            document.document_id: document
-            for document in self.documents
-            if adapter is None or document.loader in {adapter.loader, "agnostic"}
-        }
+        eligible = _eligible_official_documents(self.documents, adapter)
         query_terms = frozenset(_tokens(canonical))
         query_grams = _trigrams(canonical)
         graph_boost: dict[str, float] = {document_id: 0.0 for document_id in eligible}
@@ -480,14 +533,11 @@ class OfficialCorpusIndex:
             key=lambda document_id: (-score[document_id], document_id),
         )[:limit]
 
-        target_receipt = (
-            {
-                "minecraft_version": target_version,
-                "loader": target_loader,
-                "mappings": target_mappings,
-            }
-            if adapter is not None
-            else None
+        target_receipt = _retrieval_target_receipt(
+            adapter,
+            target_version,
+            target_loader,
+            target_mappings,
         )
         hits: list[RetrievalHit] = []
         for rank, document_id in enumerate(ordered, start=1):
@@ -530,20 +580,14 @@ class OfficialCorpusIndex:
             else "weak"
         )
         correction_required = quality != "strong"
-        if correction_required and adapter is not None:
-            corrections = (
-                f"{family} official API for Minecraft {target_version} {target_loader}",
-                f"{family} mapping symbols for {target_mappings}",
-                f"{family} deterministic runtime validation",
-            )
-        elif correction_required:
-            corrections = (
-                f"{family} official API concepts",
-                f"{family} compatibility and mapping constraints",
-                f"{family} deterministic runtime validation",
-            )
-        else:
-            corrections = ()
+        corrections = _retrieval_correction_queries(
+            family=family,
+            correction_required=correction_required,
+            adapter=adapter,
+            version=target_version,
+            loader=target_loader,
+            mappings=target_mappings,
+        )
         query_hash = "sha256:" + hashlib.sha256(
             canonical_json(
                 {
@@ -575,6 +619,19 @@ class OfficialCorpusIndex:
 
 
 def retrieve_official_evidence(
+    query: str,
+    *,
+    minecraft_version: str | None = None,
+    loader: str | None = None,
+    mappings: str | None = None,
+    limit: int = 6,
+) -> RetrievalReceipt:
+    return _retrieve_official_evidence_impl(
+        query, minecraft_version=minecraft_version, loader=loader, mappings=mappings, limit=limit
+    )
+
+
+def _retrieve_official_evidence_impl(
     query: str,
     *,
     minecraft_version: str | None = None,

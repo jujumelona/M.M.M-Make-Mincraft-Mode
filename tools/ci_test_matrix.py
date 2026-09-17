@@ -82,10 +82,23 @@ def _load_durations(path: Path | None) -> dict[str, float] | None:
     return {str(key): float(value) for key, value in payload.items()}
 
 
-def main() -> int:
-    return _mmm_main_impl()
+def _matrix_payload(args: argparse.Namespace, paths: list[str]) -> object:
+    if not args.file_cells:
+        matrix = build_matrix(
+            paths, max_jobs=args.max_jobs, durations=_load_durations(args.durations)
+        )
+        return {"include": matrix}
+    lanes = build_file_lanes(
+        paths, lane_count=args.lane_count, max_jobs_per_lane=args.max_jobs
+    )
+    if args.lane is None:
+        return {"lanes": [{"include": lane} for lane in lanes]}
+    if not 1 <= args.lane <= len(lanes):
+        raise SystemExit(f"--lane must be between 1 and {len(lanes)}, got {args.lane}")
+    return {"include": lanes[args.lane - 1]}
 
-def _mmm_main_impl() -> int:
+
+def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tests-dir", type=Path, default=Path("tests"))
     parser.add_argument("--max-jobs", type=int, default=256)
@@ -100,22 +113,9 @@ def _mmm_main_impl() -> int:
     args = parser.parse_args()
 
     paths = sorted(str(path) for path in args.tests_dir.glob("test_*.py"))
-    if args.file_cells:
-        lanes = build_file_lanes(
-            paths,
-            lane_count=args.lane_count,
-            max_jobs_per_lane=args.max_jobs,
-        )
-        if args.lane is not None:
-            if not 1 <= args.lane <= len(lanes):
-                raise SystemExit(
-                    f"--lane must be between 1 and {len(lanes)}, got {args.lane}"
-                )
-            payload: object = {"include": lanes[args.lane - 1]}
-        else:
-            payload = {"lanes": [{"include": lane} for lane in lanes]}
-        print(json.dumps(payload, separators=(",", ":")))
-        return 0
+    payload = _matrix_payload(args, paths)
+    print(json.dumps(payload, separators=(",", ":")))
+    return 0
 
     matrix = build_matrix(
         paths,

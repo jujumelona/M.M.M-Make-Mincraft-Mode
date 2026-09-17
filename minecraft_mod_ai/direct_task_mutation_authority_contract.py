@@ -56,70 +56,93 @@ class DirectTaskMutationAuthority:
 
     @property
     def creatable_paths(self) -> tuple[str, ...]:
-        if self.mutation_authority.mode is MutationAuthorityMode.BOUNDED_ROOTS:
-            return self.mutation_authority.roots
-        return tuple(
-            _anchor_path(anchor)
-            for anchor in self.writable_anchors
-            if str(anchor.get("status") or "").strip().casefold() == "host_reserved"
-        )
+        return _authority_creatable_paths(self)
 
     @property
     def is_bounded_authored_design(self) -> bool:
         return self.mutation_authority.mode is MutationAuthorityMode.BOUNDED_ROOTS
 
     def to_host_payload(self) -> dict[str, Any]:
-        if self.is_bounded_authored_design:
-            return {
-                "schema_version": _AUTHORED_SCHEMA,
-                "task_id": self.task_id,
-                "authority_sha256": self.authority_sha256,
-                "mutation_authority": {
-                    "mode": self.mutation_authority.mode.value,
-                    "roots": list(self.mutation_authority.roots),
-                    "delete_allowed": False,
-                },
-                "instruction": (
-                    "Host-authored design authority is already fixed. You may create or edit "
-                    "files only below the declared roots. Build configuration, host state and "
-                    "deletes are forbidden. Retrieval/localization does not widen this authority."
-                ),
-            }
+        return _authority_host_payload(self)
 
-        primary_anchor = next(
-            anchor
-            for anchor in self.writable_anchors
-            if _anchor_path(anchor) == self.primary_path
-            and str(anchor.get("kind") or "").strip() == "symbol"
-        )
-        task: dict[str, Any] = {
-            "task_id": self.task_id,
-            "owned_anchors": [dict(anchor) for anchor in self.writable_anchors],
-            "production_bindings": [
-                {
-                    "task_ref": self.task_id,
-                    "reuse_action": "fresh",
-                    "owned_anchors": [dict(primary_anchor)],
-                }
-            ],
-        }
-        if self.task_sha256:
-            task["task_sha256"] = self.task_sha256
+
+def _authority_creatable_paths(authority: DirectTaskMutationAuthority) -> tuple[str, ...]:
+    if authority.mutation_authority.mode is MutationAuthorityMode.BOUNDED_ROOTS:
+        return authority.mutation_authority.roots
+    return tuple(
+        _anchor_path(anchor)
+        for anchor in authority.writable_anchors
+        if str(anchor.get("status") or "").strip().casefold() == "host_reserved"
+    )
+
+
+def _authority_host_payload(authority: DirectTaskMutationAuthority) -> dict[str, Any]:
+    if authority.is_bounded_authored_design:
         return {
-            "schema_version": _SCHEMA,
-            "task_id": self.task_id,
-            "authority_sha256": self.authority_sha256,
-            "mutation_target": {
-                "path": self.primary_path,
-                "symbol": self.primary_symbol,
-                "mode": "create_or_edit_exact_host_binding",
+            "schema_version": _AUTHORED_SCHEMA,
+            "task_id": authority.task_id,
+            "authority_sha256": authority.authority_sha256,
+            "mutation_authority": {
+                "mode": authority.mutation_authority.mode.value,
+                "roots": list(authority.mutation_authority.roots),
+                "delete_allowed": False,
             },
-            "module": {
-                "module_id": self.task_id,
-                "kind": self.module_kind,
-                "config": {"evidence_task": task},
-            },
+            "instruction": (
+                "Host-authored design authority is already fixed. You may create or edit "
+                "files only below the declared roots. Build configuration, host state and "
+                "deletes are forbidden. Retrieval/localization does not widen this authority."
+            ),
         }
+    primary_anchor = next(
+        anchor
+        for anchor in authority.writable_anchors
+        if _anchor_path(anchor) == authority.primary_path
+        and str(anchor.get("kind") or "").strip() == "symbol"
+    )
+    task: dict[str, Any] = {
+        "task_id": authority.task_id,
+        "owned_anchors": [dict(anchor) for anchor in authority.writable_anchors],
+        "production_bindings": [{
+            "task_ref": authority.task_id,
+            "reuse_action": "fresh",
+            "owned_anchors": [dict(primary_anchor)],
+        }],
+    }
+    if authority.task_sha256:
+        task["task_sha256"] = authority.task_sha256
+    return {
+        "schema_version": _SCHEMA,
+        "task_id": authority.task_id,
+        "authority_sha256": authority.authority_sha256,
+        "mutation_target": {
+            "path": authority.primary_path,
+            "symbol": authority.primary_symbol,
+            "mode": "create_or_edit_exact_host_binding",
+        },
+        "module": {
+            "module_id": authority.task_id,
+            "kind": authority.module_kind,
+            "config": {"evidence_task": task},
+        },
+    }
+
+
+def _special_authority(module: Any) -> tuple[bool, DirectTaskMutationAuthority | None]:
+    if module is None:
+        return True, None
+    if _is_authored_design(module):
+        return True, _compile_authored_authority(module)
+    return False, None
+
+
+def _custom_java_task(module: Any) -> tuple[str, Mapping[str, Any]] | None:
+    module_kind = str(getattr(module, "kind", "") or "").strip()
+    if module_kind != "custom_java":
+        return None
+    task = _module_evidence_task(module)
+    if task is None:
+        return None
+    return module_kind, task
 
 
 def _canonical_path(locator: Any) -> str:
@@ -268,17 +291,13 @@ def compile_direct_task_mutation_authority(
 ) -> DirectTaskMutationAuthority | None:
     """Compile host authority from the trusted module object before model generation."""
 
-    if module is None:
+    handled, special = _special_authority(module)
+    if handled:
+        return special
+    custom_task = _custom_java_task(module)
+    if custom_task is None:
         return None
-    if _is_authored_design(module):
-        return _compile_authored_authority(module)
-
-    module_kind = str(getattr(module, "kind", "") or "").strip()
-    if module_kind != "custom_java":
-        return None
-    task = _module_evidence_task(module)
-    if task is None:
-        return None
+    module_kind, task = custom_task
 
     module_id = str(getattr(module, "module_id", "") or "").strip()
     task_id = str(task.get("task_id") or "").strip()
@@ -330,8 +349,8 @@ def compile_direct_task_mutation_authority(
             "PLANIR_AUTHORITY_PRIMARY_NOT_JAVA: custom_java primary mutation target must be .java."
         )
 
-    writable_paths = {_anchor_path(anchor) for anchor in anchors}
-    creatable_paths = {_anchor_path(anchor) for anchor in host_reserved}
+    writable_paths = tuple(dict.fromkeys(_anchor_path(anchor) for anchor in anchors))
+    creatable_paths = tuple(dict.fromkeys(_anchor_path(anchor) for anchor in host_reserved))
     if primary_path not in writable_paths or primary_path not in creatable_paths:
         raise DirectTaskMutationAuthorityError(
             "PLANIR_AUTHORITY_PRIMARY_NOT_OWNED: production-binding primary must be a "

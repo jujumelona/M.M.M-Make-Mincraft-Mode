@@ -20,6 +20,22 @@ from .spec import Proposal, ProposalStatus, SpecValidationError
 from .system_pack_generator import generate_system_pack, supported_system_packs
 
 
+def _code_rag_target_or_workspace_result(
+    service: Any, target: Path, query: str, limit: int, required_metadata: dict[str, Any] | None
+) -> tuple[Path, dict[str, Any] | None]:
+    canonical = service._resolve("rag/project-index.json", allow_root=True)
+    if not target.exists() and target == canonical:
+        from .agent_tool_runtime import _looks_like_bound_project
+        from .workspace_code_search import search_workspace_source
+        if _looks_like_bound_project(service.workspace_root):
+            return target, search_workspace_source(
+                service.workspace_root, query, limit=limit, required_metadata=required_metadata
+            )
+    if target.is_dir():
+        target = canonical if canonical.is_file() else target
+    return target, None
+
+
 class ProductionToolService:
     """Additional production tools separated from the core proposal pipeline."""
 
@@ -81,17 +97,11 @@ class ProductionToolService:
 
     def search_code_rag(self, query: str, *, index_path: str='rag/project-index.json', limit: int=8, semantic: bool=False, rerank: bool=False, required_metadata: dict[str, Any] | None=None) -> dict[str, Any]:
         target = self._resolve(index_path, allow_root=True)
-        if not target.exists() and target == self._resolve('rag/project-index.json', allow_root=True):
-            from .agent_tool_runtime import _looks_like_bound_project
-            from .workspace_code_search import search_workspace_source
-
-            if _looks_like_bound_project(self.workspace_root):
-                return search_workspace_source(
-                    self.workspace_root, query, limit=limit, required_metadata=required_metadata,
-                )
-        if target.is_dir():
-            canonical = self._resolve('rag/project-index.json', allow_root=True)
-            target = canonical if canonical.is_file() else target
+        target, workspace_result = _code_rag_target_or_workspace_result(
+            self, target, query, limit, required_metadata
+        )
+        if workspace_result is not None:
+            return workspace_result
         elif not target.exists():
             canonical = self._resolve('rag/project-index.json', allow_root=True)
             if canonical.is_file():

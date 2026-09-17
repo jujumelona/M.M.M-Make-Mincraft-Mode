@@ -9,30 +9,40 @@ from .host_grounding import _SCHEMA_VERSION as _HOST_GROUNDING_SCHEMA
 _HOST_BASELINE_CAUSAL_FACTS = frozenset(
     {"project_observed", "code_evidence", "evidence_ready"}
 )
+_HOST_AUTHORITY_ROLES = frozenset({"developer", "system", "tool"})
+_TASK_CAPSULE_SCHEMA = "mmm/small-model-task-capsule"
 
 
 def host_baseline_evidence_ready(messages: Sequence[Mapping[str, Any]]) -> bool:
-    """Return whether host-validated baseline evidence is ready for the coder.
+    """Return whether host-validated baseline evidence is actionable for this turn.
 
-    A host receipt is baseline evidence only when it proves that at least one project
-    observation was actually collected. A hash of an empty observation set is a valid
-    integrity receipt, but it is not evidence and must not suppress the coder's retrieval
-    phase.
-
-    Target localization and write authority remain separate concerns and are enforced by
-    the task capsule/tool loop. Additional retrieval remains available whenever the host
-    baseline is incomplete.
+    A project receipt with explicit ``observation_count`` must prove at least one
+    observation. Older receipts that predate the counter remain valid when both integrity
+    hashes are present. Fresh targets transported separately from their grounding still
+    need at least one host-approved research fact; a host-authored task capsule that embeds
+    its grounding is already one atomic host decision and does not need that extra receipt.
     """
 
-    for message in messages:
-        payload = _message_payload(message)
+    decoded = tuple(_decoded_message(message) for message in messages)
+    fresh_task_present = _fresh_task_present(decoded)
+    for role, payload in decoded:
         if payload is None:
             continue
         grounding = _find_host_grounding(payload)
-        if grounding is not None and _grounding_ready(grounding):
+        if grounding is None:
+            continue
+        embedded_fresh_authority = bool(
+            role in _HOST_AUTHORITY_ROLES and _fresh_task_payload(payload)
+        )
+        require_research = fresh_task_present and not embedded_fresh_authority
+        if _grounding_ready(grounding, require_research=require_research):
             return True
     return False
 
+
+
+def _fresh_task_present(decoded: Sequence[tuple[str, Any | None]]) -> bool:
+    return any(_fresh_task_payload(payload) for _, payload in decoded)
 
 def host_baseline_causal_facts(
     messages: Sequence[Mapping[str, Any]],
@@ -42,6 +52,10 @@ def host_baseline_causal_facts(
     if not host_baseline_evidence_ready(messages):
         return frozenset()
     return _HOST_BASELINE_CAUSAL_FACTS
+
+
+def _decoded_message(message: Mapping[str, Any]) -> tuple[str, Any | None]:
+    return str(message.get("role") or "").strip().casefold(), _message_payload(message)
 
 
 def _message_payload(message: Mapping[str, Any]) -> Any | None:
@@ -80,33 +94,62 @@ def _find_host_grounding(value: Any) -> Mapping[str, Any] | None:
     return None
 
 
-def _positive_observation_count(receipt: Mapping[str, Any]) -> bool:
-    value = receipt.get("observation_count")
-    return type(value) is int and value > 0
+def _fresh_task_payload(payload: Any) -> bool:
+    if not isinstance(payload, Mapping):
+        return False
+    if str(payload.get("schema_version") or "").strip() != _TASK_CAPSULE_SCHEMA:
+        return False
+    if str(payload.get("reuse_action") or "").strip().casefold() != "fresh":
+        return False
+    target = payload.get("mutation_target")
+    return isinstance(target, Mapping) and bool(str(target.get("path") or "").strip())
 
 
-def _grounding_ready(grounding: Mapping[str, Any]) -> bool:
-    policy = grounding.get("policy")
-    bindings = grounding.get("evidence_bindings")
-    if not isinstance(policy, Mapping) or not isinstance(bindings, Mapping):
+def _receipt_hashes_ready(receipt: Any) -> bool:
+    if not isinstance(receipt, Mapping):
         return False
-    if not (
-        policy.get("resolved_before_first_coder_decode") is True
-        and policy.get("baseline_grounding_owned_by_host") is True
-        and policy.get("baseline_grounding_optional_for_model") is False
-        and policy.get("model_tool_choice_required_for_baseline") is False
-    ):
-        return False
-    project = bindings.get("project_exact_rag")
-    if not isinstance(project, Mapping):
-        return False
-    receipt = project.get("receipt")
-    if not isinstance(receipt, Mapping) or not _positive_observation_count(receipt):
-        return False
+    if "observation_count" in receipt:
+        count = receipt.get("observation_count")
+        if type(count) is not int or count <= 0:
+            return False
     return bool(
         str(receipt.get("project_sha256", "")).strip()
         and str(receipt.get("observations_sha256", "")).strip()
     )
+
+
+def _research_receipt_ready(bindings: Mapping[str, Any]) -> bool:
+    research = bindings.get("approved_research_rag")
+    if not isinstance(research, Mapping):
+        return False
+    receipt = research.get("receipt")
+    if not isinstance(receipt, Mapping):
+        return False
+    count = receipt.get("selected_fact_count")
+    return type(count) is int and count > 0
+
+
+def _grounding_policy_ready(policy: Any) -> bool:
+    return bool(
+        isinstance(policy, Mapping)
+        and policy.get("resolved_before_first_coder_decode") is True
+        and policy.get("baseline_grounding_owned_by_host") is True
+        and policy.get("baseline_grounding_optional_for_model") is False
+        and policy.get("model_tool_choice_required_for_baseline") is False
+    )
+
+
+def _grounding_ready(
+    grounding: Mapping[str, Any], *, require_research: bool = False
+) -> bool:
+    policy = grounding.get("policy")
+    bindings = grounding.get("evidence_bindings")
+    if not _grounding_policy_ready(policy) or not isinstance(bindings, Mapping):
+        return False
+    project = bindings.get("project_exact_rag")
+    if not isinstance(project, Mapping) or not _receipt_hashes_ready(project.get("receipt")):
+        return False
+    return not require_research or _research_receipt_ready(bindings)
 
 
 __all__ = ["host_baseline_causal_facts", "host_baseline_evidence_ready"]

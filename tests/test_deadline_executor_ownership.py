@@ -36,7 +36,7 @@ def _install_tracking_executor(monkeypatch) -> None:
     monkeypatch.setattr(deadline_executor, "ThreadPoolExecutor", _TrackingExecutor)
 
 
-def test_iterator_is_executor_detached_before_first_result(monkeypatch) -> None:
+def test_iterator_owns_executor_until_stream_exhaustion(monkeypatch) -> None:
     _install_tracking_executor(monkeypatch)
 
     results = deadline_executor.iter_completed_with_deadlines(
@@ -46,10 +46,12 @@ def test_iterator_is_executor_detached_before_first_result(monkeypatch) -> None:
         stage="lifecycle-test",
     )
 
+    assert _TrackingExecutor.instances == []
+    assert next(results) == (1, 10)
     assert len(_TrackingExecutor.instances) == 1
     executor = _TrackingExecutor.instances[0]
-    assert executor.shutdown_calls == [(False, True)]
-    assert list(results) == [(1, 10), (2, 20), (3, 30)]
+    assert executor.shutdown_calls == []
+    assert list(results) == [(2, 20), (3, 30)]
     assert executor.shutdown_calls == [(False, True)]
 
 

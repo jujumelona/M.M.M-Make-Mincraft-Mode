@@ -143,6 +143,35 @@ def _verifier_infrastructure_failure(feedback: Any) -> dict[str, Any] | None:
     return canonical
 
 
+def _abort_verifier_infrastructure_retry(
+    feedback: Mapping[str, Any],
+    seen: set[str],
+    exc: BaseException,
+) -> None:
+    infrastructure_failure = _verifier_infrastructure_failure(feedback)
+    if infrastructure_failure is None:
+        return
+    fingerprint = str(infrastructure_failure["fingerprint"])
+    seen.add(fingerprint)
+    emit_root_cause(
+        "execution_feedback_abort",
+        stage="generation",
+        operation="execute_with_feedback",
+        gate="retry_eligibility",
+        result="FAIL",
+        reason=(
+            "verifier infrastructure failure is not source-repairable; "
+            "generation replay is forbidden"
+        ),
+        details={
+            "feedback": feedback,
+            "infrastructure_failure": infrastructure_failure,
+            "seen_fingerprints": sorted(seen),
+        },
+    )
+    raise exc
+
+
 def _install_base_project_owner(feedback_module: Any) -> None:
     current = feedback_module._derive_impacted_seeds
     if getattr(current, "_mmm_host_base_project_owner", False):
@@ -230,9 +259,6 @@ def _semantic_install_run_context(feedback_module: Any, orchestrator_module: Any
         return
 
     def execute_feedback_loop(self: Any, *args: Any, **kwargs: Any):
-        # Semantic convergence criterion: a retry is legal only while validation
-        # produces a novel, owner-bound feedback fingerprint. Repeated evidence proves
-        # that the previous repair made no relevant progress and terminates immediately.
         seen: set[str] = set()
         call_kwargs = dict(kwargs)
         while True:
@@ -256,31 +282,7 @@ def _semantic_install_run_context(feedback_module: Any, orchestrator_module: Any
                 if not isinstance(feedback, Mapping):
                     raise
 
-                infrastructure_failure = _verifier_infrastructure_failure(feedback)
-                if infrastructure_failure is not None:
-                    # This is deliberately before ledger invalidation.  A verifier/JDK
-                    # outage says nothing about source ownership and cannot make a
-                    # successful ACT eligible for fresh generation or source repair.
-                    fingerprint = str(infrastructure_failure["fingerprint"])
-                    seen.add(fingerprint)
-                    emit_root_cause(
-                        "execution_feedback_abort",
-                        stage="generation",
-                        operation="execute_with_feedback",
-                        gate="retry_eligibility",
-                        result="FAIL",
-                        reason=(
-                            "verifier infrastructure failure is not source-repairable; "
-                            "generation replay is forbidden"
-                        ),
-                        details={
-                            "feedback": feedback,
-                            "infrastructure_failure": infrastructure_failure,
-                            "seen_fingerprints": sorted(seen),
-                        },
-                    )
-                    raise
-
+                _abort_verifier_infrastructure_retry(feedback, seen, exc)
                 receipt = ledger.invalidate_execution_feedback(feedback)
                 fingerprint = str(receipt.get("feedback_fingerprint") or "")
                 emit_root_cause(

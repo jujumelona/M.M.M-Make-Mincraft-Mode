@@ -177,7 +177,45 @@ def _structured_fallback_receipt(
     return payload
 
 
+def _fallback_variant_fields(corroboration: bool, reason_text: str) -> dict[str, Any]:
+    if corroboration:
+        return {
+            "session_id": "gradle-corroboration",
+            "corroboration_from": "java_diagnostics",
+            "jdt_corroboration_reason": reason_text,
+        }
+    return {
+        "session_id": "gradle-fallback",
+        "fallback_from": "java_diagnostics",
+        "jdt_unavailable_reason": reason_text,
+    }
+
+
+def _fallback_event(corroboration: bool) -> tuple[str, str]:
+    if corroboration:
+        return (
+            "generation_verifier_gradle_corroboration_result",
+            "JDT dependency-resolution diagnostics corroborated with pinned Gradle build",
+        )
+    return "generation_verifier_gradle_fallback_result", ""
+
+
 def _gradle_fallback_receipt(
+    runtime: Any,
+    root: Path,
+    *,
+    runtime_module: Any,
+    jdt_error: BaseException,
+    gradle_runner_factory: Any | None = None,
+    corroboration: bool = False,
+) -> dict[str, Any]:
+    return _gradle_fallback_receipt_impl(
+        runtime, root, runtime_module=runtime_module, jdt_error=jdt_error,
+        gradle_runner_factory=gradle_runner_factory, corroboration=corroboration,
+    )
+
+
+def _gradle_fallback_receipt_impl(
     runtime: Any,
     root: Path,
     *,
@@ -201,43 +239,22 @@ def _gradle_fallback_receipt(
     receipt: dict[str, Any] = {
         "status": status,
         "complete": True,
-        "session_id": "gradle-corroboration" if corroboration else "gradle-fallback",
         "model_id": f"gradle:{report.gradle_version}",
         "diagnostics": diagnostics,
         "error_count": len(diagnostics),
         "verifier_backend": "gradle_build",
         "build": report_dict,
     }
-    if corroboration:
-        receipt.update(
-            {
-                "corroboration_from": "java_diagnostics",
-                "jdt_corroboration_reason": reason_text,
-            }
-        )
-    else:
-        receipt.update(
-            {
-                "fallback_from": "java_diagnostics",
-                "jdt_unavailable_reason": reason_text,
-            }
-        )
+    receipt.update(_fallback_variant_fields(corroboration, reason_text))
     receipt.update(_failure_fields(failure_code))
+    event, corroboration_reason = _fallback_event(corroboration)
     emit_root_cause(
-        (
-            "generation_verifier_gradle_corroboration_result"
-            if corroboration
-            else "generation_verifier_gradle_fallback_result"
-        ),
+        event,
         stage="generation",
         operation="run_gradle_build",
         gate="target_compile",
         result=status,
-        reason=(
-            "JDT dependency-resolution diagnostics corroborated with pinned Gradle build"
-            if corroboration
-            else _fallback_reason(failure_code)
-        ),
+        reason=corroboration_reason or _fallback_reason(failure_code),
         details={"result": receipt},
     )
     return _structured_fallback_receipt(receipt, runtime_module=runtime_module)

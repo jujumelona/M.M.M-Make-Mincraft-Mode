@@ -64,8 +64,10 @@ def custom_module_write_scope() -> dict[str, Any]:
         "protected_prefixes": list(_PROTECTED_WRITE_PREFIXES),
         "examples_rejected": list(_REJECTED_WRITE_EXAMPLES),
         "policy": (
-            "This is the coarse dynamic custom-coder boundary. Host mutation authority "
-            "may narrow it further and can never be widened by retrieved/model content."
+            "This is the coarse dynamic custom-coder boundary. The task capsule exact "
+            "writable_paths/creatable_paths are the authoritative narrowed write set; "
+            "host mutation authority may narrow it further and can never be widened by "
+            "retrieved/model content."
         ),
     }
 
@@ -109,6 +111,12 @@ def custom_module_path_allowed(path: str) -> bool:
     )
 
 
+def _target_java_major(target: Any) -> int:
+    if target.minimum_java_major is None:
+        return 17
+    return int(target.minimum_java_major)
+
+
 def build_coder_grounding(
     *,
     module_kind: str,
@@ -125,7 +133,7 @@ def build_coder_grounding(
         raise ValueError("module_kind must be non-empty")
 
     target = validate_target_coordinates(minecraft_version, loader, mappings)
-    java_major = target.minimum_java_major or 17
+    java_major = _target_java_major(target)
 
     eligible_skills = tuple(skills_for_model_role("coder"))
     eligible_set = set(eligible_skills)

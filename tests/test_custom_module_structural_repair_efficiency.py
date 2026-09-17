@@ -32,6 +32,15 @@ from minecraft_mod_ai.platform_catalog import adapter_for_target
 from minecraft_mod_ai.scale_policy import ScalePolicy
 
 
+@pytest.fixture(autouse=True)
+def _isolate_structural_repair_tests_from_external_reference_network(monkeypatch):
+    from minecraft_mod_ai.versioned_mod_reference_retriever import (
+        VersionedModReferenceRetriever,
+    )
+
+    monkeypatch.setattr(VersionedModReferenceRetriever, "retrieve", lambda *_args, **_kwargs: [])
+
+
 def _implement_request(messages) -> dict:
     for message in reversed(messages):
         if message.get("role") != "user":

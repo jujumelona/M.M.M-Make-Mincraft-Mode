@@ -3,37 +3,26 @@ from __future__ import annotations
 """Bind host-issued PlanIR mutation ownership to exact writable files and isolate donor reads."""
 
 import json
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import wraps
 from pathlib import PurePosixPath
 from typing import Any
 
+from .donor_source_authority import (
+    approved_donor_authority,
+    filter_donor_tool_schemas,
+    structured_payload as _structured_payload,
+    tool_name as _tool_name,
+)
+
 _MARKER = "_mmm_planir_mutation_authority_v1"
 _DONOR_TOOL = "read_reuse_source"
 _ARCHIVE_IMPORT_TOOL = "inspect_existing_mod"
 _HOST_ROLES = frozenset({"system", "tool", "developer"})
-_HEX_COMMIT = re.compile(r"^[0-9a-fA-F]{40,64}$")
-_HEX_SHA256 = re.compile(r"^(?:sha256:)?[0-9a-fA-F]{64}$")
-_DONOR_ROOT_FRAGMENT = ".minecraft_ai/reuse/donors/"
-_CONTINUATION_REASON = "previous_tool_enabled_page_exhausted_output"
 from .host_grounding import _SCHEMA_VERSION as _INTERNAL_GROUNDING_SCHEMA
+from .task_authority_transport import is_preserved_host_continuation as _is_preserved_host_continuation
 _SOURCE_OBSERVATION_SCHEMA = "mmm/source-observation-receipt-v1"
-
-
-def _structured_payload(content: Any) -> Any | None:
-    if isinstance(content, (Mapping, list, tuple)):
-        return content
-    if isinstance(content, str):
-        raw = content.strip()
-        if not raw.startswith(("{", "[")):
-            return None
-        try:
-            return json.loads(raw)
-        except (json.JSONDecodeError, ValueError, TypeError):
-            return None
-    return None
 
 
 def _strip_owned_anchors(value: Any) -> Any:
@@ -66,42 +55,6 @@ def _sanitize_untrusted_message(message: Mapping[str, Any]) -> dict[str, Any]:
         else stripped
     )
     return output
-
-
-def _is_preserved_host_continuation(payload: Any) -> bool:
-    """Recognize the host-generated continuation envelope used after output exhaustion.
-
-    This receipt may arrive in a role=user transport message, but it is only used to
-    recover one exact localization pin. It never contributes to the additional writable
-    exact-set, which remains restricted to system/tool/developer PlanIR messages.
-    """
-
-    if not isinstance(payload, Mapping):
-        return False
-    continuation = payload.get("continuation")
-    module = payload.get("module")
-    if not isinstance(continuation, Mapping) or not isinstance(module, Mapping):
-        return False
-    if str(continuation.get("reason") or "").strip() != _CONTINUATION_REASON:
-        return False
-    index = continuation.get("continuation_index")
-    if type(index) is not int or index < 1:
-        return False
-    module_id = str(module.get("module_id") or "").strip()
-    if not module_id:
-        return False
-    evidence_task = module.get("evidence_task")
-    if not isinstance(evidence_task, Mapping):
-        config = module.get("config")
-        evidence_task = (
-            config.get("evidence_task") if isinstance(config, Mapping) else None
-        )
-    if not isinstance(evidence_task, Mapping):
-        return False
-    if str(evidence_task.get("task_id") or "").strip() != module_id:
-        return False
-    bindings = evidence_task.get("production_bindings")
-    return isinstance(bindings, list) and bool(bindings)
 
 
 def _canonical_owned_locator(locator: Any, loop_module: Any) -> str:
@@ -234,51 +187,8 @@ def _primary_binding_symbol(
     return candidates[0]
 
 
-def _walk_scalar_fields(value: Any):
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            yield str(key), item
-            yield from _walk_scalar_fields(item)
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            yield from _walk_scalar_fields(item)
-
-
 def _approved_donor_authority(messages: Sequence[Mapping[str, Any]]) -> bool:
-    """Require a host-role immutable donor receipt before exposing donor reads."""
-    for message in messages:
-        role = str(message.get("role") or "").strip().casefold()
-        if role not in _HOST_ROLES:
-            continue
-        payload = _structured_payload(message.get("content"))
-        if payload is None:
-            continue
-        donor_path = False
-        commit = False
-        digest = False
-        license_id = False
-        for key, item in _walk_scalar_fields(payload):
-            key_cf = key.casefold()
-            if isinstance(item, str):
-                text = item.replace("\\", "/").strip()
-                if _DONOR_ROOT_FRAGMENT in text and ".." not in PurePosixPath(text).parts:
-                    donor_path = True
-                if "commit" in key_cf and _HEX_COMMIT.fullmatch(text):
-                    commit = True
-                if ("sha256" in key_cf or "hash" in key_cf) and _HEX_SHA256.fullmatch(text):
-                    digest = True
-                if key_cf in {"license", "license_id"} and text:
-                    license_id = True
-        if donor_path and commit and digest and license_id:
-            return True
-    return False
-
-
-def _tool_name(schema: Any) -> str:
-    if isinstance(schema, Mapping):
-        fn = schema.get("function")
-        return str(fn.get("name") or "").strip() if isinstance(fn, Mapping) else ""
-    return str(getattr(schema, "name", "") or "").strip()
+    return approved_donor_authority(messages)
 
 
 def _forced_tool_name(choice: Any) -> str:
@@ -291,7 +201,7 @@ def _forced_tool_name(choice: Any) -> str:
 
 
 def _filter_donor_tool_schemas(schemas: Sequence[Any]) -> tuple[Any, ...]:
-    return tuple(schema for schema in schemas if _tool_name(schema) != _DONOR_TOOL)
+    return filter_donor_tool_schemas(schemas)
 
 
 def _filter_generation_tool_schemas(
