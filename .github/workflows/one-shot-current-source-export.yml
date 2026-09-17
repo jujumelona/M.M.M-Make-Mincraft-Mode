@@ -17,16 +17,76 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Remove accidental temporary branch
+      - name: Patch RAG evidence helper scope regression
         shell: bash
-        run: git push origin --delete ___do_not_create___ || true
-      - name: Archive exact source tree
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('minecraft_mod_ai/progress_aware_tool_loop.py')
+          text = path.read_text(encoding='utf-8')
+          old_helper = '''def _call_is_evidence_tool(call: Any, phase: LoopPhase) -> bool:\n    if call.name in _LOCALIZATION_EVIDENCE_TOOLS:\n        return True\n    if call.name in _RAG_EVIDENCE_TOOLS:\n        return True\n'''
+          new_helper = '''def _call_is_evidence_tool(\n    call: Any,\n    phase: LoopPhase,\n    rag_evidence_tools: frozenset[str],\n) -> bool:\n    if call.name in _LOCALIZATION_EVIDENCE_TOOLS:\n        return True\n    if call.name in rag_evidence_tools:\n        return True\n'''
+          old_call = '''        def is_evidence_tool(call: Any) -> bool:\n            return _call_is_evidence_tool(call, state.phase)\n'''
+          new_call = '''        def is_evidence_tool(call: Any) -> bool:\n            return _call_is_evidence_tool(call, state.phase, _RAG_EVIDENCE_TOOLS)\n'''
+          if text.count(old_helper) != 1:
+              raise SystemExit(f'expected exactly one helper pattern, got {text.count(old_helper)}')
+          if text.count(old_call) != 1:
+              raise SystemExit(f'expected exactly one call-site pattern, got {text.count(old_call)}')
+          text = text.replace(old_helper, new_helper, 1).replace(old_call, new_call, 1)
+          path.write_text(text, encoding='utf-8')
+
+          test_path = Path('tests/test_progress_aware_tool_loop_rag_scope.py')
+          test_path.write_text('''from types import SimpleNamespace\n\nfrom minecraft_mod_ai.progress_aware_tool_loop import LoopPhase, _call_is_evidence_tool\n\n\ndef test_non_rag_external_mcp_call_does_not_use_hidden_router_global() -> None:\n    call = SimpleNamespace(name="external_mcp_call", arguments={"capability": "read_file"})\n    assert _call_is_evidence_tool(call, LoopPhase.OBSERVE, frozenset()) is False\n\n\ndef test_explicit_rag_tool_set_is_honored() -> None:\n    call = SimpleNamespace(name="future_rag_tool", arguments={})\n    assert _call_is_evidence_tool(\n        call, LoopPhase.OBSERVE, frozenset({"future_rag_tool"})\n    ) is True\n''', encoding='utf-8')
+          PY
+      - name: Run focused regression test
         shell: bash
-        run: git archive --format=zip --output=current-source.zip HEAD
-      - name: Upload source archive
-        uses: actions/upload-artifact@v4
-        with:
-          name: current-source-${{ github.sha }}
-          path: current-source.zip
-          if-no-files-found: error
-          retention-days: 1
+        run: |
+          set -euo pipefail
+          python -m pip install --prefer-binary -e '.[dev]'
+          python -m pytest -q tests/test_progress_aware_tool_loop_rag_scope.py
+      - name: Restore one-shot workflow and commit repair to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > .github/workflows/one-shot-current-source-export.yml <<'YAML'
+          name: One-shot Current Source Export
+
+          on:
+            push:
+              branches: [main]
+              paths:
+                - '.github/workflows/one-shot-current-source-export.yml'
+
+          permissions:
+            contents: write
+
+          jobs:
+            export:
+              runs-on: ubuntu-latest
+              steps:
+                - name: Checkout current main
+                  uses: actions/checkout@v6
+                  with:
+                    fetch-depth: 0
+                - name: Remove accidental temporary branch
+                  shell: bash
+                  run: git push origin --delete ___do_not_create___ || true
+                - name: Archive exact source tree
+                  shell: bash
+                  run: git archive --format=zip --output=current-source.zip HEAD
+                - name: Upload source archive
+                  uses: actions/upload-artifact@v4
+                  with:
+                    name: current-source-${{ github.sha }}
+                    path: current-source.zip
+                    if-no-files-found: error
+                    retention-days: 1
+          YAML
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/progress_aware_tool_loop.py tests/test_progress_aware_tool_loop_rag_scope.py .github/workflows/one-shot-current-source-export.yml
+          git diff --cached --check
+          git commit -m 'Fix RAG evidence helper scope in coder loop'
+          git push origin HEAD:main
