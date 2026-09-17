@@ -11,65 +11,23 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply:
+  export:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v6
+      - name: Build source snapshot
+        run: |
+          tar -czf /tmp/mmm-source.tar.gz \
+            minecraft_mod_ai tests tools .github pyproject.toml download_resources.py README.md
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
         with:
-          python-version: '3.11'
-      - name: Install test dependencies
-        run: python -m pip install --prefer-binary -e '.[dev]'
-      - name: Apply cycle ownership fix
-        run: python .github/scripts/apply_architecture_cycle_fix.py
-      - name: Compile and lint
-        run: |
-          python -m compileall -q minecraft_mod_ai tests tools
-          python -m ruff check minecraft_mod_ai tests tools download_resources.py --select F,E7,E9
-      - name: Focused regression diagnostics
-        run: |
-          python tools/pytest_diagnostics.py \
-            --log audit/architecture-cycle-tests.log \
-            --junit audit/architecture-cycle-tests.xml \
-            --timeout-seconds 300 \
-            --faulthandler-timeout-seconds 60 \
-            --durations 25 \
-            --maxfail 10 \
-            tests/test_agent_tool_runtime.py \
-            tests/test_tool_validation_surface_contract.py \
-            tests/test_platform_catalog.py
-      - name: Assert giant import cycle removed
-        run: |
-          mkdir -p audit
-          python .github/scripts/audit_code_quality_regression.py \
-            --base-ref 9c1a538b3c0d9062356e6192bf991e7ce2cc8f53 \
-            --output audit/architecture-after-cycle-fix.json || true
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          report = json.loads(Path('audit/architecture-after-cycle-fix.json').read_text())
-          cycles = [v for v in report['violations'] if v['category'] == 'new_import_cycle']
-          if cycles:
-              raise SystemExit(f'new import cycle remains: {cycles}')
-          print('new_import_cycle=0')
-          PY
-      - name: Commit architecture fix
-        shell: bash
-        run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add minecraft_mod_ai
-          git diff --cached --check
-          if git diff --cached --quiet; then
-            echo 'architecture cycle fix already present'
-            exit 0
-          fi
-          git commit -m 'Break platform and tool validation import cycles'
-          git pull --rebase origin main
-          git push origin HEAD:main
+          name: mmm-source-${{ github.sha }}
+          path: /tmp/mmm-source.tar.gz
+          retention-days: 1
