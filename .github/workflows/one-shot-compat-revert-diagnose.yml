@@ -1,0 +1,126 @@
+name: One-shot compatibility revert diagnose
+
+on:
+  push:
+    paths:
+      - .github/workflows/one-shot-compat-revert-diagnose.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install
+        run: python -m pip install --prefer-binary -e '.[dev,ui]'
+      - name: Restore pre-refactor implementations in workspace only
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE=fcb982e9f01efc302e64845604204ad3467a56b5
+          files=(
+            minecraft_mod_ai/agent_intent.py
+            minecraft_mod_ai/agent_tool_runtime.py
+            minecraft_mod_ai/api.py
+            minecraft_mod_ai/central_research.py
+            minecraft_mod_ai/complete_planner.py
+            minecraft_mod_ai/custom_module_generator.py
+            minecraft_mod_ai/deadline_executor.py
+            minecraft_mod_ai/direct_task_mutation_authority_contract.py
+            minecraft_mod_ai/execution_feedback_semantic_convergence_installation.py
+            minecraft_mod_ai/generation_verifier_fallback_installation.py
+            minecraft_mod_ai/generation_verifier_resilience.py
+            minecraft_mod_ai/grounding_policy.py
+            minecraft_mod_ai/host_grounding.py
+            minecraft_mod_ai/java_lsp.py
+            minecraft_mod_ai/llama_stream_efficiency_contract.py
+            minecraft_mod_ai/mcp_server.py
+            minecraft_mod_ai/mcp_tools.py
+            minecraft_mod_ai/model_adapters/llama_cpp_adapter.py
+            minecraft_mod_ai/model_adapters/qwen_tool_parser.py
+            minecraft_mod_ai/model_output_atomicity_contract.py
+            minecraft_mod_ai/model_router.py
+            minecraft_mod_ai/owner_rpc.py
+            minecraft_mod_ai/parallel_runtime_contract.py
+            minecraft_mod_ai/planning_pipeline.py
+            minecraft_mod_ai/planning_state_pipeline.py
+            minecraft_mod_ai/platform_catalog.py
+            minecraft_mod_ai/platform_mcp_contract.py
+            minecraft_mod_ai/production_tools.py
+            minecraft_mod_ai/progress_aware_tool_loop.py
+            minecraft_mod_ai/retrieval.py
+            minecraft_mod_ai/runtime_finalization.py
+            minecraft_mod_ai/small_model_hybrid_search_contract.py
+            minecraft_mod_ai/source_set_boundary_contract.py
+            minecraft_mod_ai/tool_schema_ownership_contract.py
+            minecraft_mod_ai/tool_validation_surface_contract.py
+            minecraft_mod_ai/validation_diagnostic_contract.py
+          )
+          git checkout "$BASE" -- "${files[@]}"
+          git diff --stat
+      - name: Run all previously failing test modules
+        continue-on-error: true
+        run: >-
+          python -m pytest -q
+          tests/test_agent_context_window_contract.py
+          tests/test_agent_tool_calling.py
+          tests/test_atomic_design_pipeline.py
+          tests/test_bottleneck_elimination.py
+          tests/test_coder_grounding_repair_regression.py
+          tests/test_coder_liveness_boundaries.py
+          tests/test_complete_session_public_e2e.py
+          tests/test_content_design_graph_expansion.py
+          tests/test_core_request_preservation.py
+          tests/test_custom_module_host_grounding_contract.py
+          tests/test_custom_module_target_contract.py
+          tests/test_deadline_executor_ownership.py
+          tests/test_direct_task_mutation_authority_contract.py
+          tests/test_external_mcp_role_scope.py
+          tests/test_feature_template_pipeline.py
+          tests/test_fresh_java_host_grounding_contract.py
+          tests/test_fresh_mutation_target_grounding.py
+          tests/test_generation_verifier_gradle_fallback.py
+          tests/test_gradle_cache_lock_scope.py
+          tests/test_grounding_policy_actionable_evidence.py
+          tests/test_hidden_bottleneck_efficiency.py
+          tests/test_host_grounding_write_scope.py
+          tests/test_java_lsp_readiness.py
+          tests/test_java_lsp_scaling.py
+          tests/test_jdtls_bootstrap.py
+          tests/test_live_agent_context_budget.py
+          tests/test_live_rag_target_submission_guard.py
+          tests/test_llama_cpp_adapter_request_contract.py
+          tests/test_llama_host_tool_boundary.py
+          tests/test_llama_parallel_runtime_contract.py
+          tests/test_llama_prefill_calibration_cache.py
+          tests/test_llama_stream_deadline.py
+          tests/test_localization_bottleneck_contract.py
+          tests/test_model_runtime_performance_digest.py
+          tests/test_model_tool_alias_permissions.py
+          tests/test_no_direct_structured_text_generation.py
+          tests/test_parallel_semantic_prefetch.py
+          tests/test_pipeline_liveness_regressions.py
+          tests/test_planir_mutation_authority_contract.py
+          tests/test_planner_log_replay_2026_09.py
+          tests/test_planning_criterion_fixed_templates.py
+          tests/test_planning_criterion_fragment_repair.py
+          tests/test_planning_missing_section_targeted_repair.py
+          tests/test_planning_state_pipeline_resumable.py
+      - name: Architecture audit after compatibility restore
+        continue-on-error: true
+        run: python .github/scripts/audit_code_quality_regression.py --output /tmp/architecture.json
+      - name: Runtime efficiency audit after compatibility restore
+        continue-on-error: true
+        run: python .github/scripts/audit_runtime_efficiency_regression.py --output /tmp/runtime-efficiency.json
