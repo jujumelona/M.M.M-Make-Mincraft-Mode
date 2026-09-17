@@ -21,13 +21,15 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Build source snapshot
+      - name: Build current and baseline snapshots
         run: |
-          tar -czf /tmp/mmm-source.tar.gz \
-            minecraft_mod_ai tests tools .github pyproject.toml download_resources.py README.md
+          mkdir -p /tmp/mmm-export/current /tmp/mmm-export/baseline
+          cp -a minecraft_mod_ai tests tools .github pyproject.toml download_resources.py README.md /tmp/mmm-export/current/
+          git archive 9c1a538b3c0d9062356e6192bf991e7ce2cc8f53 minecraft_mod_ai tools | tar -x -C /tmp/mmm-export/baseline
+          tar -czf /tmp/mmm-source-with-baseline.tar.gz -C /tmp/mmm-export current baseline
       - name: Upload source snapshot
         uses: actions/upload-artifact@v4
         with:
-          name: mmm-source-${{ github.sha }}
-          path: /tmp/mmm-source.tar.gz
+          name: mmm-source-with-baseline-${{ github.sha }}
+          path: /tmp/mmm-source-with-baseline.tar.gz
           retention-days: 1
