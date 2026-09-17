@@ -53,6 +53,11 @@ jobs:
           git apply --check /tmp/correction.patch
           git apply /tmp/correction.patch
 
+          echo 'a4895e0c4f2eb836b776cb7a8ad46823d13b6fad8825f76fa4127b41c8f7d99e  .github/repair/correction_01' | sha256sum -c -
+          base64 -d .github/repair/correction_01 | gzip -dc > /tmp/correction2.patch
+          git apply --check /tmp/correction2.patch
+          git apply /tmp/correction2.patch
+
       - name: Remove transient repair assets before validation
         shell: bash
         run: |
