@@ -143,14 +143,6 @@ _CODE_MARKERS = frozenset({
     "package ", "import ", "void ", "return ", "final ", "static ", "new ",
     "extends ", "implements ", "override", "{", "}", ";", "(", ")",
 })
-_FRESH_JAVA_EXTERNAL_CAPABILITIES = (
-    "official_mod_docs",
-    "source_search",
-    "mod_examples",
-    "mapping_resolution",
-)
-
-
 def _tool_name(schema: Mapping[str, Any]) -> str:
     fn = schema.get("function")
     return str(fn.get("name", "")).strip() if isinstance(fn, Mapping) else ""
@@ -1664,111 +1656,6 @@ def _unattempted_tools(
     return [name for name in preferred if name in by_name and name not in attempted]
 
 
-def _next_fresh_java_external_step(
-    by_name: Mapping[str, Mapping[str, Any]],
-    attempted: set[str],
-) -> tuple[str, str] | None:
-    if (
-        "external_mcp_capabilities" in by_name
-        and "external_mcp_capabilities" not in attempted
-    ):
-        return "external_mcp_capabilities", ""
-    if "external_mcp_call" not in by_name:
-        return None
-    for capability in _FRESH_JAVA_EXTERNAL_CAPABILITIES:
-        call_key = f"external_mcp_call:{capability}"
-        if call_key not in attempted:
-            return "external_mcp_call", capability
-    return None
-
-
-def _fresh_java_external_schema(
-    schema: Mapping[str, Any],
-    attempted: set[str],
-    by_name: Mapping[str, Mapping[str, Any]],
-) -> Mapping[str, Any]:
-    name = _tool_name(schema)
-    if name != "external_mcp_call":
-        return schema
-    step = _next_fresh_java_external_step(by_name, attempted)
-    if step is None or step[0] != name or not step[1]:
-        return schema
-    cloned = deepcopy(schema)
-    function = cloned.get("function") if isinstance(cloned, dict) else None
-    parameters = function.get("parameters") if isinstance(function, dict) else None
-    properties = parameters.get("properties") if isinstance(parameters, dict) else None
-    capability = properties.get("capability") if isinstance(properties, dict) else None
-    if isinstance(capability, dict):
-        capability["enum"] = [step[1]]
-        capability["description"] = (
-            "Host-selected fresh-Java evidence capability. Use exactly this value."
-        )
-    return cloned
-
-
-def _single_external_capability(schema: Mapping[str, Any]) -> str:
-    function = schema.get("function")
-    parameters = function.get("parameters") if isinstance(function, Mapping) else None
-    properties = parameters.get("properties") if isinstance(parameters, Mapping) else None
-    capability = properties.get("capability") if isinstance(properties, Mapping) else None
-    enum = capability.get("enum") if isinstance(capability, Mapping) else None
-    if (
-        isinstance(enum, Sequence)
-        and not isinstance(enum, (str, bytes, bytearray))
-        and len(enum) == 1
-    ):
-        return str(enum[0]).strip()
-    return ""
-
-
-def _external_call_schema_with_live_arguments(
-    schema: Mapping[str, Any],
-    live_schema: Mapping[str, Any],
-) -> Mapping[str, Any]:
-    """Bind model-visible call arguments to the live provider schema.
-
-    Provider target coordinates are host-owned. Remove those provider argument names
-    from the model-visible nested schema while preserving every other live constraint.
-    """
-
-    cloned = deepcopy(schema)
-    function = cloned.get("function") if isinstance(cloned, dict) else None
-    parameters = function.get("parameters") if isinstance(function, dict) else None
-    properties = parameters.get("properties") if isinstance(parameters, dict) else None
-    arguments = properties.get("arguments") if isinstance(properties, dict) else None
-    provider_schema = live_schema.get("input_schema")
-    if not isinstance(arguments, dict) or not isinstance(provider_schema, Mapping):
-        return cloned
-
-    bound = deepcopy(dict(provider_schema))
-    reserved = {
-        str(value).strip()
-        for value in dict(live_schema.get("target_args_injected_by_router", {}) or {}).values()
-        if str(value).strip()
-    }
-    provider_properties = bound.get("properties")
-    if isinstance(provider_properties, dict):
-        for name in reserved:
-            provider_properties.pop(name, None)
-    required = bound.get("required")
-    if isinstance(required, list):
-        bound["required"] = [
-            name for name in required if str(name).strip() not in reserved
-        ]
-    bound["description"] = (
-        "Arguments for the host-bound live provider schema. Minecraft target/version/"
-        "mapping coordinates are injected by the host and must not be supplied here."
-    )
-    properties["arguments"] = bound
-    description = str(function.get("description") or "").strip()
-    provider_description = str(live_schema.get("description") or "").strip()
-    if provider_description:
-        function["description"] = (
-            f"{description} Live provider contract: {provider_description}"
-        ).strip()
-    return cloned
-
-
 def _fresh_observe_names(
     by_name: Mapping[str, Mapping[str, Any]],
     attempted: set[str],
@@ -1776,26 +1663,10 @@ def _fresh_observe_names(
     *,
     semantic_retrieval_choice: bool,
 ) -> list[str]:
-    if not semantic_retrieval_choice:
-        preferred = ("search_project_rag", "search_code_rag", "java_workspace_symbols")
-        return _unattempted_tools(by_name, attempted, preferred)[:1]
-
-    # The target path is already host-localized. Ground Java/API semantics from
-    # concrete source/API content, not catalog metadata. search_project_rag returns
-    # code-owned official source descriptors (URLs/titles/version scope) rather than
-    # Java declarations, so it cannot authorize implementation of a fresh Java file.
-    # External MCP walks a capability-specific frontier instead of spending its only
-    # call on whichever capability the model happens to choose.
-    if "search_code_rag" in by_name and "search_code_rag" not in attempted:
-        return ["search_code_rag"]
-
-    external = _next_fresh_java_external_step(by_name, attempted)
-    if external is not None:
-        return [external[0]]
-
-    if "java_workspace_symbols" in by_name and "java_workspace_symbols" not in attempted:
-        return ["java_workspace_symbols"]
-    return []
+    del mutation_context
+    preferred = ("search_code_rag", "java_workspace_symbols")
+    names = _unattempted_tools(by_name, attempted, preferred)
+    return names if semantic_retrieval_choice else names[:1]
 
 
 def _localized_observe_names(
@@ -1868,21 +1739,11 @@ def _filter_tools_for_phase(
                 by_name, attempted, mutation_context,
                 semantic_retrieval_choice=semantic_retrieval_choice,
             )
-    selected: list[Mapping[str, Any]] = []
-    for name in names:
-        if name not in by_name:
-            continue
-        schema = _source_edit_schema_for_context(by_name[name], mutation_context)
-        if (
-            phase == LoopPhase.OBSERVE
-            and semantic_retrieval_choice
-            and mutation_context is not None
-            and mutation_context.is_new_file
-            and mutation_context.is_mutation_ready
-        ):
-            schema = _fresh_java_external_schema(schema, attempted, by_name)
-        selected.append(schema)
-    return tuple(selected)
+    return tuple(
+        _source_edit_schema_for_context(by_name[name], mutation_context)
+        for name in names
+        if name in by_name
+    )
 
 
 def _replace_live_messages(
@@ -2468,75 +2329,6 @@ def _generate_with_tools_impl(
             localization_active=implementation_requires_mutation,
             semantic_retrieval_choice=bool(require_rag and not baseline_ready),
         )
-
-        if (
-            fresh_java_target
-            and require_rag
-            and not baseline_ready
-            and state.phase == LoopPhase.OBSERVE
-            and len(phase_tools) == 1
-            and _tool_name(phase_tools[0]) == "external_mcp_call"
-        ):
-            capability = _single_external_capability(phase_tools[0])
-            if capability:
-                host_schema = getattr(runtime, "host_external_schema", None)
-                if not callable(host_schema):
-                    state.record_source_attempt(
-                        "external_mcp_call", {"capability": capability}
-                    )
-                    emit_root_cause(
-                        "host_external_mcp_schema_unavailable",
-                        stage=stage,
-                        operation="external_mcp_call",
-                        gate="host_schema_binding",
-                        result="SKIP",
-                        reason="runtime does not expose host-owned external schema binding",
-                        details={"capability": capability},
-                    )
-                    continue
-                try:
-                    live_schema = host_schema(
-                        stage,
-                        capability,
-                        external_server_ids=reviewed_external_servers,
-                    )
-                except Exception as exc:
-                    state.record_source_attempt(
-                        "external_mcp_call", {"capability": capability}
-                    )
-                    state.record_failure("external_mcp_schema", exc)
-                    emit_root_cause(
-                        "host_external_mcp_schema_unavailable",
-                        stage=stage,
-                        operation="external_mcp_call",
-                        gate="host_schema_binding",
-                        result="SKIP",
-                        reason=f"{type(exc).__name__}: {exc}",
-                        details={"capability": capability},
-                    )
-                    continue
-                if str(live_schema.get("status", "")).strip() != "PASS":
-                    state.record_source_attempt(
-                        "external_mcp_call", {"capability": capability}
-                    )
-                    emit_root_cause(
-                        "host_external_mcp_schema_unavailable",
-                        stage=stage,
-                        operation="external_mcp_call",
-                        gate="host_schema_binding",
-                        result="SKIP",
-                        reason="no live provider schema is available for this capability",
-                        details={
-                            "capability": capability,
-                            "attempts": live_schema.get("attempts", []),
-                        },
-                    )
-                    continue
-                phase_tools = (
-                    _external_call_schema_with_live_arguments(
-                        phase_tools[0], live_schema
-                    ),
-                )
 
         forced_verifier: str | None = None
         if state.phase == LoopPhase.VERIFY:
