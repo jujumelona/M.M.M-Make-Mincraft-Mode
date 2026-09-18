@@ -2073,7 +2073,9 @@ def _host_coder_summary(*, verification: str) -> str:
         raise ModelConfigurationError(
             f"HOST_SUMMARY_STATE_INVALID: unsupported terminal verification state {verification!r}"
         )
-    return json.dumps({"summary": summary}, ensure_ascii=False, separators=(",", ":"))
+    from .model_response_templates import serialize_response
+
+    return serialize_response("coder_summary", {"summary": summary})
 
 
 
