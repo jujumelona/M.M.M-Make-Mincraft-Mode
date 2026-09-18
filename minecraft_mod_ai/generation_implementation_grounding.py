@@ -13,6 +13,7 @@ from typing import Any
 
 from .host_version_catalog import host_target
 from .minecraft_template_steps import steps_for_artifact
+from .registered_leaf_binding import require_registered_leaf_binding
 from .structural_routing_contract import validate_artifact_kinds
 from .task_template_catalog import load_template
 
@@ -95,49 +96,59 @@ def build_generation_implementation_grounding(
         responsibility = step.template_id.rsplit("/", 1)[-1]
         if responsibility not in responsibilities and step.template_id not in responsibilities:
             continue
-        try:
-            binding = context.require_leaf_binding(step.template_id)
-        except Exception:
-            continue
-        implementation = binding.get("implementation")
-        if not isinstance(implementation, Mapping):
-            continue
 
-        required = dict(step.host_requirements)
+        # Candidate generation may consume a structurally registered implementation
+        # without pretending that an unreviewed leaf is production-admitted.
+        binding = require_registered_leaf_binding(context, step.template_id)
+        implementation = binding["implementation"]
+
+        template_ids = tuple(
+            dict.fromkeys(
+                str(value).strip()
+                for value in (
+                    implementation.get("template"),
+                    *implementation.get("prerequisite_templates", ()),
+                    *implementation.get("extra_templates", ()),
+                )
+                if str(value or "").strip()
+            )
+        )
+        templates: list[dict[str, Any]] = []
         symbols: dict[str, Any] = {}
-        for name in required.get("symbols", ()):
-            try:
-                symbols[str(name)] = context.require_fact("api_symbols", str(name))
-            except Exception:
-                continue
-
-        template_id = str(implementation.get("template") or "").strip()
-        template_fact: dict[str, Any] | None = None
-        if template_id:
-            try:
-                template = load_template(template_id)
-                context.admit_template(template)
-            except Exception:
-                template = None
-            if isinstance(template, Mapping):
-                render = template.get("render")
-                body = render.get("body") if isinstance(render, Mapping) else None
-                template_fact = {
+        for template_id in template_ids:
+            template = load_template(template_id)
+            rule = context.admit_template(template)
+            for name in rule.get("required_symbols", ()):
+                symbol_name = str(name).strip()
+                if symbol_name:
+                    symbols[symbol_name] = context.require_fact(
+                        "api_symbols", symbol_name
+                    )
+            render = template.get("render")
+            body = render.get("body") if isinstance(render, Mapping) else None
+            templates.append(
+                {
                     "template_id": template_id,
                     "target": template.get("target"),
                     "requires": list(template.get("requires") or ()),
                     "dependencies": list(template.get("dependencies") or ()),
                     "render_body": body if isinstance(body, str) else "",
+                    "required_symbols": list(rule.get("required_symbols") or ()),
+                    "requires_capabilities": list(
+                        rule.get("requires_capabilities") or ()
+                    ),
                 }
+            )
 
         facts.append(
             {
                 "responsibility": step.template_id,
+                "registration_state": binding.get("state"),
                 "outcome": step.outcome,
                 "implementation_id": implementation.get("implementation_id"),
                 "executor_type": implementation.get("executor_type"),
                 "api_symbols": symbols,
-                "template": template_fact,
+                "templates": templates,
                 "validators": list(step.validators),
                 "postconditions": list(step.postconditions),
             }
