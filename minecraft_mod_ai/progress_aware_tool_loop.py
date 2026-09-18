@@ -2423,6 +2423,22 @@ def _generate_with_tools_impl(
             guidance = state.take_verifier_repair_guidance()
             if guidance:
                 messages.append({"role": "system", "content": guidance})
+            if compile_backed_java and not any(
+                isinstance(message.get("content"), str)
+                and "MMM_COMPILE_BACKED_JAVA_V1" in message["content"]
+                for message in messages
+            ):
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "MMM_COMPILE_BACKED_JAVA_V1\n"
+                        "The host owns the exact Java target and target_compile is mandatory. "
+                        "Do not call retrieval, RAG, MCP discovery, or workspace-symbol tools in "
+                        "this phase. Implement the approved task now using the single exposed "
+                        "source-edit action. The real target compiler is the API authority; any "
+                        "compile diagnostics will be fed back to the same owned source for repair."
+                    ),
+                })
 
         if (
             state.phase == LoopPhase.OBSERVE
