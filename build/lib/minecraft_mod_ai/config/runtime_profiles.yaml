@@ -1,4 +1,0 @@
-schema_version: mmm/runtime-profiles-v1
-# Runtime profiles are generated from the approved PlatformLock for each run.
-# No repository-level Minecraft version is a production default.
-profiles: {}

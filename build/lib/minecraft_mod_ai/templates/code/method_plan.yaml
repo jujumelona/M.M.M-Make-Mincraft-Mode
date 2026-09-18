@@ -1,9 +1,0 @@
-id: code/method_plan
-execution: host
-input:
-  class_contract:
-  behavior_step:
-output:
-  method_contract:
-proof:
-  predicate: one method contract implements exactly one supplied behavior step

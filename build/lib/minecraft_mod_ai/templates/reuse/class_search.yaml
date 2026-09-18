@@ -1,9 +1,0 @@
-id: reuse/class_search
-execution: host
-input:
-  file_hit:
-  class_need:
-output:
-  class_hits:
-proof:
-  predicate: every hit resolves to a concrete declaration locator

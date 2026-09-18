@@ -1,9 +1,0 @@
-id: integration/registration
-execution: host
-input:
-  registration_operations:
-output:
-  registration_edges:
-  conflicts:
-proof:
-  predicate: every registration has one owner and conflict-free initialization path

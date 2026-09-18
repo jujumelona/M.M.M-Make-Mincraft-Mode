@@ -1,9 +1,0 @@
-id: asset/asset_requirement
-execution: host
-input:
-  atomic_feature:
-  resource_mapping:
-output:
-  asset_requirements:
-proof:
-  predicate: every asset requirement traces to one explicit feature or resource requirement
