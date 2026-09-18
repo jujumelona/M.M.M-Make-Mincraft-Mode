@@ -300,33 +300,65 @@ def _run_terminal_verification_flow(monkeypatch, *, verifier_result, defer):
 
     target = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
 
-    class OneMutationAdapter:
+    class EvidenceThenMutationAdapter:
         def __init__(self):
             self.calls = 0
 
-        def generate_turn(self, _request):
+        def generate_turn(self, request):
             self.calls += 1
-            if self.calls != 1:
-                raise AssertionError("terminal host state must not invoke the coder again")
-            arguments = {
-                "operation": "create_file",
-                "path": target,
-                "content": "package dev.mmm.debugfixture; public final class DebugToken {}\n",
-            }
-            return GenerationResponse(
-                tool_calls=(
-                    ToolCall(
-                        id="edit-1",
-                        name="apply_source_edit",
-                        arguments=arguments,
-                        raw_arguments=json.dumps(arguments, separators=(",", ":")),
-                    ),
+            names = {item["function"]["name"] for item in request.tools}
+            if self.calls == 1:
+                assert names == {"search_project_rag"}
+                arguments = {"query": "reviewed Java implementation evidence"}
+                return GenerationResponse(
+                    tool_calls=(
+                        ToolCall(
+                            id="evidence-1",
+                            name="search_project_rag",
+                            arguments=arguments,
+                            raw_arguments=json.dumps(arguments, separators=(",", ":")),
+                        ),
+                    )
                 )
-            )
+            if self.calls == 2:
+                assert names == {"apply_source_edit"}
+                arguments = {
+                    "operation": "create_file",
+                    "path": target,
+                    "content": "package dev.mmm.debugfixture; public final class DebugToken {}\n",
+                }
+                return GenerationResponse(
+                    tool_calls=(
+                        ToolCall(
+                            id="edit-1",
+                            name="apply_source_edit",
+                            arguments=arguments,
+                            raw_arguments=json.dumps(arguments, separators=(",", ":")),
+                        ),
+                    )
+                )
+            raise AssertionError("terminal host state must not invoke the coder again")
 
     class Runtime:
         def call(self, stage, name, _arguments):
             assert stage == "generation"
+            if name == "search_project_rag":
+                return {
+                    "receipt": {
+                        "result_count": 1,
+                        "coverage_score": 1.0,
+                        "relevance_score": 1.0,
+                    },
+                    "hits": [
+                        {
+                            "path": "src/main/java/dev/mmm/Existing.java",
+                            "text": (
+                                "package dev.mmm; import net.fabricmc.api.ModInitializer; "
+                                "public final class Existing {}"
+                            ),
+                        }
+                    ],
+                }
             if name == "apply_source_edit":
                 return {
                     "schema_version": "mmm/source-patch-receipt-v1",
@@ -370,6 +402,18 @@ def _run_terminal_verification_flow(monkeypatch, *, verifier_result, defer):
             {
                 "type": "function",
                 "function": {
+                    "name": "search_project_rag",
+                    "description": "search reviewed project evidence",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "apply_source_edit",
                     "description": "edit source",
                     "parameters": {"type": "object", "properties": {}},
@@ -392,7 +436,7 @@ def _run_terminal_verification_flow(monkeypatch, *, verifier_result, defer):
             lambda: True,
         )
 
-    adapter = OneMutationAdapter()
+    adapter = EvidenceThenMutationAdapter()
     result = loop.generate_with_tools(
         SimpleNamespace(_agent_require_fresh_evidence=False),
         config=SimpleNamespace(
@@ -431,7 +475,7 @@ def test_deferred_verification_terminates_without_second_model_turn(monkeypatch)
 
     assert set(payload) == {"summary"}
     assert "target_compile" in payload["summary"]
-    assert calls == 1
+    assert calls == 2
 
 
 def test_passed_verification_terminates_without_formatting_model_turn(monkeypatch):
@@ -451,4 +495,4 @@ def test_passed_verification_terminates_without_formatting_model_turn(monkeypatc
     )
 
     assert "passed generation-time host verification" in payload["summary"]
-    assert calls == 1
+    assert calls == 2
