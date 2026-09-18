@@ -1,8 +1,6 @@
 """The owner must bind Gradle to the selected project JDK, not its launcher."""
 from pathlib import Path
 
-import pytest
-
 from minecraft_mod_ai import java_lsp, platform_catalog
 from minecraft_mod_ai.java_core import JavaCoreService
 
