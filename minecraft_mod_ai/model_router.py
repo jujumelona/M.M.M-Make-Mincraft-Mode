@@ -876,6 +876,31 @@ def _scored_rag_receipt_usable(receipt: Mapping[str, Any]) -> bool:
     return result_count > 0 and coverage_score > 0.0 and relevance_score > 0.0
 
 
+def _rag_receipt_usable_in_container(
+    container: Mapping[str, Any],
+    receipt: Mapping[str, Any],
+) -> bool:
+    """Accept unscored workspace RAG receipts when concrete hits are present.
+
+    search_code_rag can be wrapped under structured_content and its current-project
+    backend intentionally reports only status/result_count. The old recursive receipt
+    walk treated missing coverage/relevance scores as zeros and rejected those concrete
+    hits, so a successful source search could never advance fresh-Java grounding.
+    """
+
+    metrics = _rag_receipt_metrics(receipt)
+    if metrics is None:
+        return False
+    result_count, coverage_score, relevance_score = metrics
+    if result_count <= 0:
+        return False
+    if coverage_score > 0.0 and relevance_score > 0.0:
+        return True
+    if coverage_score == 0.0 and relevance_score == 0.0:
+        return _rag_hit_collection_has_evidence(container)
+    return False
+
+
 def _rag_receipt_state(item: Any) -> tuple[bool, bool]:
     found = False
     usable = False
@@ -883,7 +908,7 @@ def _rag_receipt_state(item: Any) -> tuple[bool, bool]:
         receipt = item.get("receipt")
         if isinstance(receipt, Mapping):
             found = True
-            usable = _scored_rag_receipt_usable(receipt)
+            usable = _rag_receipt_usable_in_container(item, receipt)
         for child in item.values():
             child_found, child_usable = _rag_receipt_state(child)
             found = found or child_found
@@ -904,22 +929,7 @@ def _usable_rag_result(value: Any) -> bool:
     if isinstance(value, Mapping):
         receipt = value.get("receipt")
         if isinstance(receipt, Mapping):
-            metrics = _rag_receipt_metrics(receipt)
-            if metrics is None:
-                return False
-            result_count, coverage_score, relevance_score = metrics
-            if result_count <= 0:
-                return False
-            if coverage_score > 0.0 and relevance_score > 0.0:
-                return True
-            if coverage_score == 0.0 and relevance_score == 0.0:
-                hits = value.get("hits")
-                return bool(
-                    isinstance(hits, Sequence)
-                    and not isinstance(hits, (str, bytes, bytearray))
-                    and any(_rag_concrete_hit(entry) for entry in hits)
-                )
-            return False
+            return _rag_receipt_usable_in_container(value, receipt)
 
     found_receipt, usable_receipt = _rag_receipt_state(value)
     if found_receipt:
