@@ -294,13 +294,24 @@ def test_terminal_coder_summary_rejects_unknown_host_state():
         loop._host_coder_summary(verification="UNKNOWN")
 
 
-def _run_terminal_verification_flow(monkeypatch, *, verifier_result, defer):
+def _run_compile_backed_generation_flow(
+    monkeypatch,
+    *,
+    compile_results,
+    expect_repairs: int = 0,
+):
     import json
 
     from minecraft_mod_ai import progress_aware_tool_loop as loop
+    from minecraft_mod_ai import small_model_task_capsule_contract as capsules
     from minecraft_mod_ai.model_adapters import GenerationRequest, GenerationResponse, ToolCall
 
     target = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+    monkeypatch.setattr(
+        capsules,
+        "current_task_required_gates",
+        lambda: ("target_compile",),
+    )
 
     class MutationAdapter:
         def __init__(self):
@@ -309,17 +320,30 @@ def _run_terminal_verification_flow(monkeypatch, *, verifier_result, defer):
         def generate_turn(self, request):
             self.calls += 1
             names = {item["function"]["name"] for item in request.tools}
-            assert self.calls == 1
             assert names == {"apply_source_edit"}
+            if self.calls > 1:
+                rendered = "\n".join(
+                    str(message.get("content") or "") for message in request.messages
+                )
+                assert "target_compile" in rendered
+                assert "package net.minecraft.item does not exist" in rendered
+            operation = "create_file" if self.calls == 1 else "replace_file"
+            source = (
+                "package dev.mmm.debugfixture; "
+                "import net.minecraft.item.Item; "
+                "public final class DebugToken {}\n"
+                if self.calls == 1
+                else "package dev.mmm.debugfixture; public final class DebugToken {}\n"
+            )
             arguments = {
-                "operation": "create_file",
+                "operation": operation,
                 "path": target,
-                "content": "package dev.mmm.debugfixture; public final class DebugToken {}\n",
+                "content": source,
             }
             return GenerationResponse(
                 tool_calls=(
                     ToolCall(
-                        id="edit-1",
+                        id=f"edit-{self.calls}",
                         name="apply_source_edit",
                         arguments=arguments,
                         raw_arguments=json.dumps(arguments, separators=(",", ":")),
@@ -328,40 +352,29 @@ def _run_terminal_verification_flow(monkeypatch, *, verifier_result, defer):
             )
 
     class Runtime:
+        def __init__(self):
+            self.compile_results = list(compile_results)
+            self.compile_calls = 0
+
         def call(self, stage, name, _arguments):
             assert stage == "generation"
-            if name == "search_project_rag":
-                return {
-                    "receipt": {
-                        "result_count": 1,
-                        "coverage_score": 1.0,
-                        "relevance_score": 1.0,
-                    },
-                    "hits": [
-                        {
-                            "path": "src/main/java/dev/mmm/Existing.java",
-                            "text": (
-                                "package dev.mmm; import net.fabricmc.api.ModInitializer; "
-                                "public final class Existing {}"
-                            ),
-                        }
-                    ],
-                }
             if name == "apply_source_edit":
                 return {
                     "schema_version": "mmm/source-patch-receipt-v1",
                     "status": "APPLIED",
                     "operations": [
                         {
-                            "operation": "create",
+                            "operation": "create" if self.compile_calls == 0 else "replace",
                             "path": target,
                             "before_sha256": None,
-                            "after_sha256": "sha256:" + "1" * 64,
+                            "after_sha256": "sha256:" + str(self.compile_calls + 1) * 64,
                         }
                     ],
                 }
-            if name == "java_diagnostics":
-                return verifier_result
+            if name == "target_compile":
+                result = self.compile_results[self.compile_calls]
+                self.compile_calls += 1
+                return result
             raise AssertionError(name)
 
     request = GenerationRequest(
@@ -390,41 +403,16 @@ def _run_terminal_verification_flow(monkeypatch, *, verifier_result, defer):
             {
                 "type": "function",
                 "function": {
-                    "name": "search_project_rag",
-                    "description": "search reviewed project evidence",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"query": {"type": "string"}},
-                        "required": ["query"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
                     "name": "apply_source_edit",
                     "description": "edit source",
                     "parameters": {"type": "object", "properties": {}},
                 },
             },
-            {
-                "type": "function",
-                "function": {
-                    "name": "java_diagnostics",
-                    "description": "verify Java",
-                    "parameters": {"type": "object", "properties": {}},
-                },
-            },
         ),
     )
-    if defer:
-        monkeypatch.setattr(
-            loop,
-            "_generation_verification_can_defer_to_required_compile_gate",
-            lambda: True,
-        )
 
     adapter = MutationAdapter()
+    runtime = Runtime()
     result = loop.generate_with_tools(
         SimpleNamespace(_agent_require_fresh_evidence=False),
         config=SimpleNamespace(
@@ -435,52 +423,83 @@ def _run_terminal_verification_flow(monkeypatch, *, verifier_result, defer):
         ),
         adapter=adapter,
         request=request,
-        runtime=Runtime(),
+        runtime=runtime,
         stage="generation",
         role="coder",
     )
-    return json.loads(result), adapter.calls
+    assert adapter.calls == expect_repairs + 1
+    return json.loads(result), runtime.compile_calls
 
 
-def test_deferred_verification_terminates_without_second_model_turn(monkeypatch):
-    payload, calls = _run_terminal_verification_flow(
+def test_compile_backed_generation_defers_only_when_target_compiler_unavailable(monkeypatch):
+    payload, compile_calls = _run_compile_backed_generation_flow(
         monkeypatch,
-        defer=True,
-        verifier_result={
-            "schema_version": "mmm/java-diagnostics-v3",
-            "status": "UNAVAILABLE",
-            "available": False,
-            "complete": False,
-            "diagnostics": [
-                {
-                    "severity": "error",
-                    "code": "JDT_DIAGNOSTICS_UNAVAILABLE",
-                    "message": "owner unavailable",
-                }
-            ],
-        },
+        compile_results=[
+            {
+                "schema_version": "mmm/generation-target-compile-v1",
+                "status": "UNAVAILABLE",
+                "target_path": "src/main/java/dev/mmm/debugfixture/DebugToken.java",
+                "diagnostics": [],
+                "reason": "compiler unavailable",
+            }
+        ],
     )
 
     assert set(payload) == {"summary"}
     assert "target_compile" in payload["summary"]
-    assert calls == 1
+    assert compile_calls == 1
 
 
-def test_passed_verification_terminates_without_formatting_model_turn(monkeypatch):
-    payload, calls = _run_terminal_verification_flow(
+def test_compile_failure_is_repaired_by_same_coder_before_generation_completes(monkeypatch):
+    target = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+    payload, compile_calls = _run_compile_backed_generation_flow(
         monkeypatch,
-        defer=False,
-        verifier_result={
-            "schema_version": "mmm/java-diagnostics-v3",
-            "status": "PASS",
-            "available": True,
-            "complete": True,
-            "files_opened": 1,
-            "error_count": 0,
-            "warning_count": 0,
-            "diagnostics": {},
-        },
+        compile_results=[
+            {
+                "schema_version": "mmm/generation-target-compile-v1",
+                "status": "FAIL",
+                "target_path": target,
+                "diagnostics": [
+                    {
+                        "path": target,
+                        "severity": 1,
+                        "source": "javac",
+                        "code": "javac:error:2",
+                        "message": "package net.minecraft.item does not exist",
+                    }
+                ],
+                "reason": "target compiler reported task-owned source defects",
+            },
+            {
+                "schema_version": "mmm/generation-target-compile-v1",
+                "status": "PASS",
+                "target_path": target,
+                "diagnostics": [],
+                "reason": "target compiler passed",
+            },
+        ],
+        expect_repairs=1,
     )
 
     assert "passed generation-time host verification" in payload["summary"]
-    assert calls == 1
+    assert compile_calls == 2
+
+
+def test_compile_pass_terminates_without_repair_or_jdt_turn(monkeypatch):
+    target = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+    payload, compile_calls = _run_compile_backed_generation_flow(
+        monkeypatch,
+        compile_results=[
+            {
+                "schema_version": "mmm/generation-target-compile-v1",
+                "status": "PASS",
+                "target_path": target,
+                "diagnostics": [],
+                "reason": "target compiler passed",
+            }
+        ],
+    )
+
+    assert "passed generation-time host verification" in payload["summary"]
+    assert compile_calls == 1
+
