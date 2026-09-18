@@ -344,6 +344,7 @@ def write_debug_example_plan(
                 config={
                     "summary": "Deterministic debug_token implementation fixture.",
                     "semantic_kind": "item",
+                    "implementation_responsibilities": ["registry"],
                     "registry_path": "debug_token",
                     "evidence_task": evidence_task,
                     "coder_execution_contract": coder_contract,
