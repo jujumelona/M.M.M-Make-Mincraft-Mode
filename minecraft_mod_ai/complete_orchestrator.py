@@ -598,6 +598,15 @@ class CompleteProductionOrchestrator:
             )
         build = dict(build)
         build['artifact_receipt'] = artifact_receipt
+        gametest_attestation = _gametest_attestation_status(
+            build,
+            spec,
+            requested=options.run_gametest,
+        )
+        if options.run_gametest and gametest_attestation != 'PASS':
+            raise CompleteProductionError(
+                'GameTest was requested but no passing structured GameTest evidence was produced.'
+            )
         build_receipt = {
             'schema_version': 'mmm/final-build-receipt-v1',
             'status': 'PASS',
@@ -605,11 +614,7 @@ class CompleteProductionOrchestrator:
             'compile_java': 'PASS',
             'tests': 'PASS',
             'gradle_build': 'PASS',
-            'gametest': _gametest_attestation_status(
-                build,
-                spec,
-                requested=options.run_gametest,
-            ),
+            'gametest': gametest_attestation,
             'production_jar': 'PASS',
             'jar_integrity': artifact_receipt['integrity'],
             'mod_metadata': 'PASS',
