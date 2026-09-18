@@ -2433,6 +2433,34 @@ def _generate_with_tools_impl(
             )
             if require_rag and not baseline_ready:
                 required_evidence_choice = True
+            if repeated and state.phase in {LoopPhase.OBSERVE, LoopPhase.RECOVER}:
+                rejected_routes = {
+                    str(payload.get("original_tool") or "").strip()
+                    for payload in rejection_payloads
+                    if str(payload.get("original_tool") or "").strip() in phase_names
+                }
+                if rejected_routes:
+                    # A repeated schema/protocol rejection means this evidence route
+                    # has reached a semantic fixed point. Consume only that route and
+                    # continue through the remaining evidence frontier instead of
+                    # aborting the whole generation task.
+                    for rejected_route in sorted(rejected_routes):
+                        state.record_source_attempt(rejected_route, {})
+                    state.clear_no_progress_result()
+                    emit_root_cause(
+                        "rejected_evidence_route_exhausted",
+                        stage=stage,
+                        operation="generate_with_tools",
+                        gate="semantic_fixed_point",
+                        result="SKIP",
+                        reason="repeated rejected evidence call; advancing to next reviewed route",
+                        details={
+                            "step_index": state.step_index,
+                            "phase": state.phase.value,
+                            "routes": sorted(rejected_routes),
+                        },
+                    )
+                    continue
             if repeated:
                 raise _fixed_point_error(state)
             continue
