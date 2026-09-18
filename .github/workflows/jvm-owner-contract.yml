@@ -93,6 +93,7 @@ jobs:
       - name: Live owner incremental diagnostics
         env: &live_owner_env
           MMM_JVM_OWNER_LIVE: '1'
+          MMM_JDT_DIAGNOSTIC_STARTUP_TIMEOUT_SECONDS: '90'
         run: python -m pytest -vv tests/test_jvm_owner_integration.py::test_incremental_dependent_diagnostics
       - name: Live owner Gradle project model
         env: *live_owner_env
