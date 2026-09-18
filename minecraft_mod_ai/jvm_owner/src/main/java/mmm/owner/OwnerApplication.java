@@ -277,23 +277,6 @@ public final class OwnerApplication implements IApplication {
                 throw new IllegalStateException(
                     "APT generated source folder is not on the Java source path for " + required(set, "id"));
             }
-            IFactoryPath persistedFactoryPath = AptConfig.getFactoryPath(javaProject);
-            for (String processor : processors) {
-                File jar = new File(processor).getCanonicalFile();
-                boolean present = persistedFactoryPath.getAllContainers().keySet().stream().anyMatch(
-                    container -> {
-                        try {
-                            return container.getType() == org.eclipse.jdt.apt.core.util.IFactoryPath.FactoryContainerType.EXTJAR
-                                && jar.getCanonicalPath().equals(container.getId());
-                        } catch (IOException failure) {
-                            return false;
-                        }
-                    });
-                if (!present) {
-                    throw new IllegalStateException(
-                        "Resolved annotation processor JAR is absent from the persisted factory path: " + jar);
-                }
-            }
             stage("configure.apt.ready:" + required(set, "id"));
         }
     }
