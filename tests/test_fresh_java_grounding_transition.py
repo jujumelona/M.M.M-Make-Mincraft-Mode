@@ -127,7 +127,19 @@ def test_created_host_target_keeps_execution_authority_through_verification():
             "path": path,
             "content": "package dev.mmm.debugfixture; public final class DebugToken {}",
         },
-        {"ok": True, "result": {"status": "APPLIED"}},
+        {
+            "ok": True,
+            "result": {
+                "schema_version": "mmm/source-patch-receipt-v1",
+                "status": "APPLIED",
+                "operations": [
+                    {
+                        "before_sha256": None,
+                        "after_sha256": "sha256:created-debug-token",
+                    }
+                ],
+            },
+        },
     )
     assert applied is True
     assert state.mutation_context is not None
