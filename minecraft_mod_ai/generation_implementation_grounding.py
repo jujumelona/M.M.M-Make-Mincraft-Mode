@@ -52,6 +52,40 @@ def _template_type_names(templates: list[dict[str, Any]]) -> set[str]:
     return set(re.findall(r"\b[A-Z][A-Za-z0-9_$]*\b", body))
 
 
+def _template_symbol_usage(
+    body: str,
+    symbols: Mapping[str, Any],
+) -> list[str]:
+    """Bind admitted API symbols to the exact template body that uses them."""
+
+    usage: list[str] = []
+    for name, symbol in symbols.items():
+        if not isinstance(symbol, Mapping):
+            continue
+        owner = _import_owner(symbol)
+        owner_simple = owner.rsplit(".", 1)[-1] if owner else ""
+        member = str(symbol.get("name") or "").strip()
+        owner_used = bool(owner_simple and re.search(rf"\b{re.escape(owner_simple)}\b", body))
+        member_used = bool(member and re.search(rf"\b{re.escape(member)}\b", body))
+        if owner_used and member_used:
+            usage.append(str(name))
+    return usage
+
+
+def _bind_template_symbol_usage(
+    templates: list[dict[str, Any]],
+    symbols: Mapping[str, Any],
+) -> None:
+    for template in templates:
+        body = str(template.get("render_body") or "")
+        template["symbol_usage"] = _template_symbol_usage(body, symbols)
+        template["topology_policy"] = (
+            "Preserve this template's receiver/member/argument relationships exactly. "
+            "Do not move a registry, key, identifier, owner, receiver, or method argument "
+            "to a different admitted template merely because its Java type is compatible."
+        )
+
+
 def _complete_template_symbol_authority(
     context: Any,
     symbols: dict[str, Any],
@@ -217,6 +251,7 @@ def build_generation_implementation_grounding(
             templates,
             artifact_kind=kind,
         )
+        _bind_template_symbol_usage(templates, symbols)
         required_imports = list(
             dict.fromkeys(
                 owner
@@ -237,6 +272,12 @@ def build_generation_implementation_grounding(
                 "import_policy": (
                     "Use these exact HOST owners for unqualified template types; do not "
                     "substitute Yarn, intermediary, neighbouring-version, or remembered names."
+                ),
+                "call_topology_policy": (
+                    "Treat each template render_body plus symbol_usage as one host-owned API "
+                    "call topology. When composing templates into a single source file, preserve "
+                    "which receiver/member/argument belongs to which template; never interchange "
+                    "similarly typed registry/key/identifier symbols across templates."
                 ),
                 "templates": templates,
                 "validators": list(step.validators),
@@ -261,6 +302,7 @@ def build_generation_implementation_grounding(
         "policy": {
             "host_owned": True,
             "model_must_not_substitute_api_names": True,
+            "model_must_preserve_template_call_topology": True,
             "prefer_minimal_required_responsibilities": True,
             "do_not_invent_entrypoints": True,
             "compile_feedback_repairs_same_generation": True,
