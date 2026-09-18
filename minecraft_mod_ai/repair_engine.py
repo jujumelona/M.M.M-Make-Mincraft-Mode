@@ -130,9 +130,9 @@ class RepairEngine:
     """Diagnostics -> indexed context -> exact patch -> rebuild loop.
 
     No file-count truncation is used. The whole project is indexed and relevant files
-    are selected within an explicit byte budget. Repair remains progress-sensitive;
-    host control owns termination. ``max_attempts`` can lower the per-call budget but
-    can never raise the host hard cap.
+    are selected within an explicit byte budget. Repair remains progress-sensitive:
+    repeated verifier signatures terminate semantic fixed points. ``max_attempts``
+    is an optional explicit caller policy; None means no arbitrary attempt-count cap.
     """
 
     def __init__(
@@ -227,7 +227,7 @@ class RepairEngine:
                         print("  [!] Repair operations empty after scope validation (retrying)", flush=True)
                         continue
                     receipt = TransactionalSourcePatcher(root).apply(patch)
-                except (RepairEngineError, SourcePatchError, Exception) as exc:
+                except Exception as exc:
                     print(
                         f"  [!] Repair patch application failed (retrying next attempt): {exc}",
                         flush=True,
