@@ -93,13 +93,23 @@ class JavaCoreService:
     def _resolve_parameters(root: Path) -> dict[str, str]:
         from .java_lsp import _requested_project_java_major, _resolve_project_java_home
         from .platform_catalog import _project_platform_lock, adapter_from_project
+        from .runner import GradleRunner
 
         params = {'project_root': str(root)}
-        # Generated/checkpoint projects have an immutable target authority. Generic
-        # Gradle projects retain their own daemon/toolchain configuration unless the
-        # caller explicitly selected a project JDK. Never parse build scripts.
-        if _project_platform_lock(root) is not None:
-            major = adapter_from_project(root).java_version
+        # Generated/checkpoint projects have an immutable target authority. Resolve
+        # both Java and Gradle from that same authority so the JDT project model and
+        # the production build cannot silently use different toolchains.
+        platform_lock = _project_platform_lock(root)
+        if platform_lock is not None:
+            adapter = adapter_from_project(root)
+            major = adapter.java_version
+            cache = Path.home() / '.cache' / 'mmm' / 'project-model-gradle'
+            gradle_executable = GradleRunner(cache).ensure_gradle(
+                adapter.gradle,
+                adapter.gradle_sha256,
+            )
+            params['gradle_home'] = str(gradle_executable.parent.parent.resolve())
+            params['gradle_user_home'] = str((cache / 'gradle-user-home').resolve())
         elif os.environ.get('MMM_JAVA_VERSION', '').strip():
             major = _requested_project_java_major()
         else:
