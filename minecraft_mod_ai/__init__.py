@@ -5,14 +5,11 @@ from .execution_feedback_semantic_convergence_installation import (
     install as install_execution_feedback_semantic_convergence,
 )
 from .hardware_concurrency_installation import install as install_hardware_concurrency
-from .java_toolchain_separation_installation import install as install_java_toolchain_separation
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
 from .source_observation_budget_installation import install as install_source_observation_budget
-from .source_set_boundary_installation import install as install_source_set_boundary
 from .task_template_catalog import RUNTIME_TEMPLATE_ROOT
 from .template_contract_validation import runtime_consumer_roots, validate_catalog
-from .versioned_reference_context_installation import install as install_versioned_reference_context
 
 
 def _validate_runtime_template_authority() -> None:
@@ -28,19 +25,10 @@ initialize_runtime()
 _validate_runtime_template_authority()
 from . import custom_module_generator as _custom_module_generator
 from . import execution_feedback_replan_contract as _execution_feedback_replan_contract
-from . import java_lsp as _java_lsp
 
 install_checkpoint_performance(_custom_module_generator)
-install_java_toolchain_separation(_java_lsp)
-install_source_set_boundary(_java_lsp)
 install_execution_feedback_semantic_convergence(_execution_feedback_replan_contract)
 finalize_runtime()
-install_versioned_reference_context()
-
-from . import complete_orchestrator as _complete_orchestrator
-from .prepared_project_resume_integrity import install as install_prepared_project_resume_integrity
-
-install_prepared_project_resume_integrity(_complete_orchestrator)
 
 from .api import (
     ChatReply,
