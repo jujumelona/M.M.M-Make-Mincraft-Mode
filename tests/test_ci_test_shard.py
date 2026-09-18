@@ -65,7 +65,7 @@ def test_invalid_shard_parameters_fail_closed() -> None:
 
 def test_ci_workflow_uses_dynamic_duration_aware_matrix() -> None:
     workflow = Path(".github/workflows/main-ci.yml").read_text(encoding="utf-8")
-    assert "python -m tools.ci_test_matrix --max-jobs 256" in workflow
+    assert "python -m tools.ci_test_matrix --max-jobs 32" in workflow
     assert "${{ fromJSON(needs.test-plan.outputs.matrix) }}" in workflow
     assert "TEST_FILES_JSON" in workflow
     assert "from tools.ci_test_shard import select_shard" not in workflow
