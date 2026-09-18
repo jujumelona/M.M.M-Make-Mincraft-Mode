@@ -253,7 +253,7 @@ def test_fabric_manifest_observation_cannot_become_task_mutation_target() -> Non
     assert state.mutation_context.target_pinned is True
 
 
-def test_fresh_host_reserved_java_target_authority_overrides_router_fresh_evidence() -> None:
+def test_fresh_host_reserved_java_target_separates_write_and_api_evidence_authority() -> None:
     capsule = compile_task_capsule(_module(reuse_action="fresh"))
     assert capsule is not None
     messages = [
@@ -285,7 +285,7 @@ def test_fresh_host_reserved_java_target_authority_overrides_router_fresh_eviden
         router_requires_fresh_evidence=True,
         implementation_requires_mutation=True,
         initial_execution_authority=True,
-    ) is False
+    ) is True
     assert tool_loop._requires_rag_evidence(
         role="coder",
         host_grounded=False,
@@ -300,6 +300,60 @@ def test_fresh_host_reserved_java_target_authority_overrides_router_fresh_eviden
         implementation_requires_mutation=False,
         initial_execution_authority=False,
     ) is True
+
+
+def test_fresh_java_evidence_frontier_reaches_external_mcp_before_stalling() -> None:
+    schemas = {
+        name: {
+            "type": "function",
+            "function": {"name": name, "parameters": {"type": "object", "properties": {}}},
+        }
+        for name in (
+            "search_code_rag",
+            "external_mcp_capabilities",
+            "external_mcp_schema",
+            "external_mcp_call",
+            "java_workspace_symbols",
+            "search_project_rag",
+            "inspect_modrinth_project",
+        )
+    }
+    context = tool_loop.TargetMutationContext(
+        target_path=JAVA_PATH,
+        target_symbol=SYMBOL,
+        is_new_file=True,
+        evidence_source="evidence_fresh_owned_anchor",
+        writable_paths=(JAVA_PATH,),
+        creatable_paths=(JAVA_PATH,),
+        target_pinned=True,
+    )
+
+    attempted: set[str] = set()
+    expected = (
+        "search_code_rag",
+        "external_mcp_capabilities",
+        "external_mcp_schema",
+        "external_mcp_call",
+        "java_workspace_symbols",
+        "search_project_rag",
+        "inspect_modrinth_project",
+    )
+    for name in expected:
+        selected = tool_loop._fresh_observe_names(
+            schemas,
+            attempted,
+            context,
+            semantic_retrieval_choice=True,
+        )
+        assert selected == [name]
+        attempted.add(name)
+
+    assert tool_loop._fresh_observe_names(
+        schemas,
+        attempted,
+        context,
+        semantic_retrieval_choice=True,
+    ) == []
 
 
 def test_compact_coder_contract_drops_planner_provenance_blob() -> None:
