@@ -399,3 +399,76 @@ def test_fresh_java_requires_reviewed_evidence_before_source_mutation() -> None:
         "apply_source_edit",
         "java_diagnostics",
     ]
+
+
+
+def test_fresh_java_without_reviewed_evidence_tool_fails_before_model_mutation() -> None:
+    from types import SimpleNamespace
+
+    import pytest
+
+    from minecraft_mod_ai.model_adapters import GenerationRequest, ModelConfigurationError
+
+    target = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+
+    class NeverCalledAdapter:
+        def generate_turn(self, _request):
+            raise AssertionError("fresh Java must not reach ACT without reviewed evidence")
+
+    request = GenerationRequest(
+        messages=(
+            {
+                "role": "developer",
+                "content": json.dumps(
+                    {
+                        "primary_path": target,
+                        "writable_paths": [target],
+                        "reuse_action": "fresh",
+                    }
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "phase": "implement_module",
+                        "task": "Implement the approved debug token item.",
+                    }
+                ),
+            },
+        ),
+        tools=(
+            {
+                "type": "function",
+                "function": {
+                    "name": "apply_source_edit",
+                    "description": "edit source",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "java_diagnostics",
+                    "description": "verify Java",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ),
+    )
+
+    with pytest.raises(ModelConfigurationError, match="MUTATION_LOCALIZATION_STALLED"):
+        loop.generate_with_tools(
+            SimpleNamespace(_agent_require_fresh_evidence=False),
+            config=SimpleNamespace(
+                adapter="test",
+                max_context=32768,
+                max_input_tokens=0,
+                max_new_tokens=512,
+            ),
+            adapter=NeverCalledAdapter(),
+            request=request,
+            runtime=SimpleNamespace(),
+            stage="generation",
+            role="coder",
+        )
