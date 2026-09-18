@@ -177,6 +177,26 @@ def _unavailable_verifier_result(
     return _structured_verifier_result(result, runtime_module=runtime_module)
 
 
+def _generation_verifier_session(
+    runtime: Any,
+    requested_timeout: float,
+    *,
+    java_service_factory: Any | None,
+) -> tuple[Any, float, bool]:
+    """Return the persistent verifier service and the deadline for this call."""
+
+    service = getattr(runtime, _JDT_SERVICE_ATTR, None)
+    if service is not None:
+        return service, requested_timeout, False
+
+    from .java_core import JavaCoreService
+
+    service = (java_service_factory or JavaCoreService)()
+    setattr(runtime, _JDT_SERVICE_ATTR, service)
+    startup_timeout = float(host_jdt_startup_timeout_seconds())
+    return service, max(requested_timeout, startup_timeout), True
+
+
 def run_generation_verifier(
     runtime: Any,
     arguments: Mapping[str, Any] | None,
@@ -186,7 +206,6 @@ def run_generation_verifier(
 ) -> dict[str, Any]:
     """Return one completed host verifier result for the current project state."""
 
-    from .java_core import JavaCoreService
     from .java_lsp import JDTLanguageServerError
     from .owner_rpc import OwnerRPCError
 
@@ -195,15 +214,10 @@ def run_generation_verifier(
     try:
         relative_files = _normalize_relative_files(payload.get("relative_files"))
         requested_timeout = _requested_timeout_seconds(payload)
-        service = getattr(runtime, _JDT_SERVICE_ATTR, None)
-        cold_start = service is None
-        if cold_start:
-            service = (java_service_factory or JavaCoreService)()
-            setattr(runtime, _JDT_SERVICE_ATTR, service)
-        effective_timeout = (
-            max(requested_timeout, float(host_jdt_startup_timeout_seconds()))
-            if cold_start
-            else requested_timeout
+        service, effective_timeout, cold_start = _generation_verifier_session(
+            runtime,
+            requested_timeout,
+            java_service_factory=java_service_factory,
         )
         emit_root_cause(
             "generation_verifier_deadline_selected",
