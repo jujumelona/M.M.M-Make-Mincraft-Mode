@@ -382,15 +382,10 @@ def compile_task_capsule(module: Any) -> TaskCapsule | None:
             [
                 *_strings(task.get("required_gates")),
                 *_strings(getattr(module, "required_gates", ()) or ()),
+                "target_compile",
             ]
         )
     )
-    if "target_compile" not in required_gates:
-        raise TaskCapsuleContractError(
-            "TASK_CAPSULE_COMPILE_GATE_MISSING: every custom_java task must carry "
-            "the mandatory target_compile gate; Java API validity is proven by the "
-            "real target compiler, not by availability of optional retrieval services."
-        )
     task_sha = str(task.get("task_sha256") or "").strip()
     digest_input = {
         "task_id": task_id,
