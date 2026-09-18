@@ -25,8 +25,8 @@ class _RuntimeModule:
 
 
 class _LargeDiagnosticService:
-    def diagnostics(self, root, *, timeout_seconds, full_scan):
-        del root, timeout_seconds, full_scan
+    def diagnostics(self, root, *, relative_files=None, timeout_seconds, full_scan):
+        del root, relative_files, timeout_seconds, full_scan
         padding = "x" * (20 * 1024)
         return {
             "schema_version": "mmm/java-diagnostics-v3",
@@ -79,8 +79,8 @@ def test_large_generation_diagnostics_remain_structured_and_actionable(tmp_path)
 
 
 class _UnavailableService:
-    def diagnostics(self, root, *, timeout_seconds, full_scan):
-        del root, timeout_seconds, full_scan
+    def diagnostics(self, root, *, relative_files=None, timeout_seconds, full_scan):
+        del root, relative_files, timeout_seconds, full_scan
         raise TimeoutError("JDT owner deadline exceeded")
 
     def close(self):
