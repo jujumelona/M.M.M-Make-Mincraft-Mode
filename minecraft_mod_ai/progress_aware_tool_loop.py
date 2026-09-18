@@ -2300,22 +2300,17 @@ def _generate_with_tools_impl(
         if (
             implementation_requires_mutation
             and state.workspace_changed
-            and state.validation_status in {"COMPILE_REQUIRED", "DEFERRED"}
+            and state.validation_status == "DEFERRED"
             and baseline_ready
         ):
             state.termination_reason = "VERIFICATION_DEFERRED_TO_TARGET_COMPILE"
-            intentional_compile_handoff = state.validation_status == "COMPILE_REQUIRED"
             emit_root_cause(
                 "generation_verifier_deferred_to_required_gate",
                 stage=stage,
                 operation="generate_with_tools",
                 gate="generation_verifier",
                 result="SKIP",
-                reason=(
-                    "compile-backed Java uses mandatory target_compile as the canonical verifier"
-                    if intentional_compile_handoff
-                    else "generation-time Java verifier unavailable; target_compile remains mandatory"
-                ),
+                reason="generation verifier unavailable; downstream target_compile remains mandatory",
                 details={
                     "target_path": (
                         state.mutation_context.target_path
@@ -2323,7 +2318,6 @@ def _generate_with_tools_impl(
                         else None
                     ),
                     "required_gate": "target_compile",
-                    "intentional_compile_handoff": intentional_compile_handoff,
                 },
             )
             return _host_coder_summary(verification="DEFERRED_TO_TARGET_COMPILE")
@@ -2347,6 +2341,31 @@ def _generate_with_tools_impl(
                 state.phase = LoopPhase.ACT
             else:
                 raise _fixed_point_error(state)
+
+        if (
+            state.phase == LoopPhase.VERIFY
+            and compile_backed_java
+            and state.validation_status == "COMPILE_REQUIRED"
+        ):
+            from .generation_compile_state import verify_compile_backed_java
+
+            compile_status, _compile_receipt = verify_compile_backed_java(
+                runtime,
+                state,
+                stage=stage,
+            )
+            if compile_status == "PASS":
+                continue
+            if compile_status == "FAIL":
+                state.record_failure(
+                    "target_compile",
+                    "target compiler reported task-owned source defects",
+                )
+                state.phase = LoopPhase.ACT
+                continue
+            state.validation_status = "DEFERRED"
+            state.phase = LoopPhase.VERIFY
+            continue
 
         state.step_index += 1
         phase_before = state.phase
