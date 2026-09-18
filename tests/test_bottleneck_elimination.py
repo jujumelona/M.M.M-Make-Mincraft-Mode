@@ -25,18 +25,16 @@ class _AtomicRouter:
         **kwargs,
     ):
         del role, parameters, description, kwargs
-        prefix = "READ_ONLY_INPUT_CONTEXT:\n"
         context_message = next(
             (
                 str(message.get("content", ""))
                 for message in messages
                 if message.get("role") == "user"
-                and str(message.get("content", "")).startswith(prefix)
             ),
             None,
         )
         assert context_message is not None
-        context = json.loads(context_message[len(prefix) :])
+        context = json.loads(context_message)
         self.calls.append((tool_name, context))
         if tool_name == "submit_one_design_content_property":
             requested = str(context["requested_property"])
