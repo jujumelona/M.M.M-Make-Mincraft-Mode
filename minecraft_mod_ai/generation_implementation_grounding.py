@@ -8,6 +8,7 @@ It never searches, guesses API names, or asks the model to choose a retriever.
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -39,32 +40,27 @@ def _json_native(value: Any) -> Any:
     return value
 
 
-_ITEM_REGISTRY_GROUNDING_SYMBOLS = (
-    "register_item",
-    "builtin_item_registry",
-    "resource_key_create",
-    "registries_item",
-    "identifier_factory",
-    "item_stacks_to",
-)
+def _template_type_names(templates: list[dict[str, Any]]) -> set[str]:
+    body = "\n".join(str(item.get("render_body") or "") for item in templates)
+    return set(re.findall(r"\b[A-Z][A-Za-z0-9_$]*\b", body))
 
 
-def _import_owner(symbol: Any) -> str:
-    if not isinstance(symbol, Mapping):
-        return ""
-    owner = str(symbol.get("owner") or "").strip()
-    if not owner:
-        return ""
-    return owner.split("$", 1)[0]
+def _complete_template_symbol_authority(
+    context: Any,
+    symbols: dict[str, Any],
+    templates: list[dict[str, Any]],
+) -> None:
+    """Add immutable HOST owners for external types actually named by templates."""
 
-
-def _complete_item_registry_symbols(context: Any, symbols: dict[str, Any]) -> None:
-    """Project every exact HOST owner needed by the item-registry templates."""
-
-    for name in _ITEM_REGISTRY_GROUNDING_SYMBOLS:
-        if name in symbols:
-            continue
-        symbols[name] = _json_native(context.require_fact("api_symbols", name))
+    mentioned = _template_type_names(templates)
+    catalog = getattr(context, "api_symbols", None)
+    if not mentioned or not isinstance(catalog, Mapping):
+        return
+    for name, raw_symbol in catalog.items():
+        owner = _import_owner(raw_symbol)
+        simple = owner.rsplit(".", 1)[-1] if owner else ""
+        if simple and simple in mentioned and str(name) not in symbols:
+            symbols[str(name)] = _json_native(raw_symbol)
 
 
 def _module_config(module: Any) -> Mapping[str, Any]:
@@ -178,8 +174,7 @@ def build_generation_implementation_grounding(
                 }
             )
 
-        if step.template_id == "minecraft/item/registry":
-            _complete_item_registry_symbols(context, symbols)
+        _complete_template_symbol_authority(context, symbols, templates)
         required_imports = list(
             dict.fromkeys(
                 owner
