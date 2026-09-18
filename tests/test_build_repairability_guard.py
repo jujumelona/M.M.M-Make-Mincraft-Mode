@@ -120,8 +120,10 @@ def test_source_failure_still_enters_repair(monkeypatch, tmp_path: Path) -> None
         def __init__(self, **kwargs):
             assert kwargs["router"] is router
 
-        def repair(self, _root, *, run_gametest, max_attempts):
+        def repair(self, _root, *, run_gametest, max_attempts, initial_build):
             calls["repair"] += 1
+            assert initial_build["status"] == "FAIL"
+            assert initial_build["error"] == "Gradle build failed."
             return {
                 "schema_version": "mmm/repair-result-v2",
                 "status": "PASS",
