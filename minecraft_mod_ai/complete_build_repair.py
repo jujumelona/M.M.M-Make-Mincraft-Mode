@@ -72,6 +72,7 @@ def _run_source_repair(
         project_root,
         run_gametest=run_gametest,
         max_attempts=max_repair_attempts,
+        initial_build=build,
     )
     attested = _attested_repair_build(repair)
     if attested is not None:
