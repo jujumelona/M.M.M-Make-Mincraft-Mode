@@ -79,6 +79,39 @@ class GradleRunner:
         self.download_timeout_seconds = download_timeout_seconds
         self.command_timeout_seconds = command_timeout_seconds
 
+    def compile_java(self, project_root: Path) -> BuildReport:
+        """Run only the Java compilation task for fast in-generation source feedback.
+
+        Full build/GameTest remains a downstream project gate. The coder loop needs the
+        compiler oracle only, so it must not repeatedly package artifacts or run tests.
+        """
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        prepared = self._prepare_build_context(project_root.resolve())
+        if isinstance(prepared, BuildReport):
+            return prepared
+        result = self._run(
+            name="compile_java",
+            executable=prepared.gradle,
+            arguments=("--no-daemon", "compileJava", "--stacktrace"),
+            cwd=prepared.project_root,
+            env=prepared.environment,
+            log_path=prepared.logs / "gradle-compile-java.log",
+        )
+        if result.exit_code != 0:
+            return self._failed_build(
+                prepared,
+                [result],
+                "Gradle Java compilation failed.",
+            )
+        return BuildReport(
+            status="PASS",
+            gradle_version=prepared.gradle_version,
+            commands=(result,),
+            jar_path=None,
+            gametest_report=None,
+            error=None,
+        )
+
     def build(self, project_root: Path, *, run_gametest: bool = True) -> BuildReport:
         """Build without serializing independent projects on the distribution lock.
 
