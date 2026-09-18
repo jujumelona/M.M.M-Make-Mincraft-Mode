@@ -12,13 +12,13 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from .filesystem_copy import reflink_or_copy
 from .project_write_lock import project_path_write_locks, project_write_lock
 
 _SHARED_WRITER_FALLBACK_LOCK = threading.RLock()
 _SNAPSHOT_WAVE_LOCK = threading.RLock()
 _SNAPSHOT_WAVES: dict[Path, dict[str, Any]] = {}
 _CAPTURE = threading.local()
-_FICLONE = 1074041865
 _SKIP_STAGE_SUFFIXES = {'.class', '.jar', '.ogg', '.png', '.wav', '.mp3', '.zip'}
 _SKIP_STAGE_DIRS = {'.gradle', 'build', 'logs', 'run'}
 _MISSING = object()
@@ -186,7 +186,7 @@ def _clone_snapshot_tree(source_root: Path, *, parent: Path, prefix: str) -> Pat
                 ignored.add(name)
         return ignored
     try:
-        shutil.copytree(source_root, stage, copy_function=_reflink_or_copy, ignore=ignore)
+        shutil.copytree(source_root, stage, copy_function=reflink_or_copy, ignore=ignore)
     except BaseException:
         shutil.rmtree(stage, ignore_errors=True)
         raise
@@ -229,21 +229,6 @@ def _release_wave_source_snapshot(live_root: Path, snapshot: Path) -> None:
             cleanup = snapshot
     if cleanup is not None:
         shutil.rmtree(cleanup, ignore_errors=True)
-
-def _reflink_or_copy(source: str, target: str) -> str:
-    if os.name == 'posix':
-        try:
-            import fcntl
-            with open(source, 'rb') as src, open(target, 'wb') as dst:
-                fcntl.ioctl(dst.fileno(), _FICLONE, src.fileno())
-            shutil.copystat(source, target)
-            return target
-        except (OSError, ImportError):
-            try:
-                os.unlink(target)
-            except FileNotFoundError:
-                pass
-    return shutil.copy2(source, target)
 
 def _select_custom_patch_capture(records: list[dict[str, Any]], result: dict[str, Any]) -> dict[str, Any]:
     receipt = result.get('patch_receipt')
