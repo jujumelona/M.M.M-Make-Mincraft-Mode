@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from minecraft_mod_ai import platform_live_execution_contract as contract
+from minecraft_mod_ai import platform_validation_contract as validation_contract
 
 
 def _adapter(*, loader="fabric", source_api_family="mojang", deterministic_module_kinds=()):
@@ -19,6 +20,21 @@ def test_host_authoritative_fabric_without_reviewed_deterministic_kinds_uses_off
     )
 
     assert contract._uses_official_scaffold(_adapter()) is True
+
+
+def test_provider_scaffold_target_uses_same_live_validation_route(monkeypatch):
+    monkeypatch.setattr(
+        contract,
+        "provider_for_loader",
+        lambda loader: SimpleNamespace(host_authoritative=True),
+    )
+
+    adapter = _adapter(
+        source_api_family="mojang",
+        deterministic_module_kinds=(),
+    )
+    assert contract._uses_official_scaffold(adapter) is True
+    assert validation_contract._uses_provider_owned_scaffold(adapter) is True
 
 
 def test_reviewed_deterministic_target_keeps_deterministic_generation_path(monkeypatch):
