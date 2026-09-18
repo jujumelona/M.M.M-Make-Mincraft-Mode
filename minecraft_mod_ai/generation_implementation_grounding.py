@@ -54,6 +54,26 @@ def _explicit_artifact_kind(module: Any) -> str:
     return validate_artifact_kinds((value,))[0]
 
 
+def _explicit_responsibilities(module: Any) -> tuple[str, ...]:
+    config = _module_config(module)
+    task = _evidence_task(module)
+    raw = (
+        config.get("implementation_responsibilities")
+        or task.get("implementation_responsibilities")
+        or ()
+    )
+    if isinstance(raw, str):
+        raw = (raw,)
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    values: list[str] = []
+    for item in raw:
+        value = str(item or "").strip()
+        if value and value not in values:
+            values.append(value)
+    return tuple(values)
+
+
 def build_generation_implementation_grounding(
     module: Any,
     *,
@@ -62,8 +82,9 @@ def build_generation_implementation_grounding(
     """Return exact target API/template facts for an explicitly typed artifact task."""
 
     kind = _explicit_artifact_kind(module)
+    responsibilities = _explicit_responsibilities(module)
     version = str(minecraft_version or "").strip()
-    if not kind or not version:
+    if not kind or not responsibilities or not version:
         return None
 
     target = host_target(version)
@@ -71,6 +92,9 @@ def build_generation_implementation_grounding(
     facts: list[dict[str, Any]] = []
 
     for step in steps_for_artifact(kind):
+        responsibility = step.template_id.rsplit("/", 1)[-1]
+        if responsibility not in responsibilities and step.template_id not in responsibilities:
+            continue
         try:
             binding = context.require_leaf_binding(step.template_id)
         except Exception:
@@ -125,6 +149,7 @@ def build_generation_implementation_grounding(
     core = {
         "schema_version": "mmm/generation-implementation-grounding-v1",
         "artifact_kind": kind,
+        "responsibilities": list(responsibilities),
         "minecraft_version": target.minecraft_version,
         "loader": target.loader,
         "naming_regime": (
