@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from minecraft_mod_ai import external_agent_bridge, external_mcp_router
 from minecraft_mod_ai.external_mcp import ExternalMCPRegistry
-from minecraft_mod_ai.external_mcp_binding_contract import _route_fingerprint
+from minecraft_mod_ai.external_mcp_binding_contract import (
+    _route_fingerprint,
+    install as install_binding,
+)
 from minecraft_mod_ai.external_mcp_router import ExternalMCPRouter
 
 
@@ -36,6 +40,7 @@ def test_bound_provider_runtime_failure_is_unavailable_evidence(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    install_binding(external_agent_bridge, external_mcp_router)
     router = ExternalMCPRouter(_registry(tmp_path))
     route = router.registry.routes(
         "source_search",
