@@ -199,8 +199,8 @@ def _verify_repair_candidate(self: Any, root: Path | None, operations: Sequence[
     score, verifier = _static_repair_score(operations, evidence)
     if root is None or not root.is_dir():
         return (score, verifier)
-    mode = os.environ.get('MMM_REPAIR_CANDIDATE_JDT', 'auto').strip().lower()
-    if mode == 'off':
+    mode = os.environ.get('MMM_REPAIR_CANDIDATE_JDT', 'off').strip().lower()
+    if mode != 'on':
         return (score, verifier)
     stage: Path | None = None
     try:
