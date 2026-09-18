@@ -6,7 +6,9 @@ from .custom_module_architecture_support import (
     output_exhaustion_continuation_messages as _architecture_continuation_messages,
     task_local_module_contract as _architecture_task_contract,
 )
+from .filesystem_copy import reflink_or_copy
 from .model_response_templates import parse_response_text, response_template_prompt
+from .research_validation_fingerprint_performance import content_digest
 
 
 import hashlib
@@ -1070,7 +1072,7 @@ def _checkpoint_tree_state_sha256(root: Path) -> str:
         if path.is_symlink():
             rows.append((normalized, "symlink", str(path.readlink())))
         elif path.is_file():
-            rows.append((normalized, "file", "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()))
+            rows.append((normalized, "file", "sha256:" + content_digest(path).hex()))
         elif path.is_dir():
             rows.append((normalized, "directory", ""))
     return _sha256_json(rows)
@@ -1225,8 +1227,8 @@ def _initialize_generation_checkpoint(root: Path, checkpoint_root: Path, *, iden
     base_root = _checkpoint_base(checkpoint_root)
     staged_root = checkpoint_root / "project"
     try:
-        shutil.copytree(root, base_root, symlinks=True, ignore=_stage_ignore)
-        shutil.copytree(base_root, staged_root, symlinks=True)
+        shutil.copytree(root, base_root, symlinks=True, ignore=_stage_ignore, copy_function=reflink_or_copy)
+        shutil.copytree(base_root, staged_root, symlinks=True, copy_function=reflink_or_copy)
         _persist_generation_checkpoint(checkpoint_root, staged_root, identity_sha256=identity_sha256)
     except BaseException:
         if checkpoint_root.exists() and not checkpoint_root.is_symlink():
@@ -1253,8 +1255,8 @@ def _rebase_generation_checkpoint(root: Path, checkpoint_root: Path, *, identity
     next_base.rmdir()
     next_stage.rmdir()
     try:
-        shutil.copytree(root, next_base, symlinks=True, ignore=_stage_ignore)
-        shutil.copytree(next_base, next_stage, symlinks=True)
+        shutil.copytree(root, next_base, symlinks=True, ignore=_stage_ignore, copy_function=reflink_or_copy)
+        shutil.copytree(next_base, next_stage, symlinks=True, copy_function=reflink_or_copy)
         if operations:
             TransactionalSourcePatcher(next_stage).apply(operations)
         shutil.rmtree(base_root)
@@ -1324,7 +1326,7 @@ def _project_snapshot(root: Path) -> dict[str, str]:
             continue
         if path.is_symlink() or not path.is_file():
             continue
-        snapshot[relative.as_posix()] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+        snapshot[relative.as_posix()] = "sha256:" + content_digest(path).hex()
     return snapshot
 
 
