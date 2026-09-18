@@ -105,3 +105,29 @@ def test_repeated_rejected_evidence_route_advances_frontier() -> None:
     assert "external_mcp_capabilities" in state.attempted_sources
     assert state.semantic_fixed_point is False
     assert state.no_progress_streak == 0
+
+
+def test_repeated_nonvisible_tool_consumes_forced_reviewed_route() -> None:
+    state = tool_loop.HostRunState(phase=tool_loop.LoopPhase.OBSERVE)
+    state.semantic_fixed_point = True
+    state.no_progress_streak = 1
+    state.seen_no_progress_digests.add("same-rejection")
+
+    routes = tool_loop._consume_rejected_evidence_fixed_point(
+        state,
+        (
+            {
+                "failure_code": "TOOL_NOT_VISIBLE",
+                "original_tool": "java_file_read",
+                "error": "model emitted non-visible tool 'java_file_read'",
+            },
+        ),
+        {"search_project_rag"},
+        forced_evidence_tool="search_project_rag",
+    )
+
+    assert routes == ("search_project_rag",)
+    assert "search_project_rag" in state.attempted_sources
+    assert "java_file_read" not in state.attempted_sources
+    assert state.semantic_fixed_point is False
+    assert state.no_progress_streak == 0
