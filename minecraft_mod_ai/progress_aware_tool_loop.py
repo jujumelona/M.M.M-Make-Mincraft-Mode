@@ -851,18 +851,14 @@ def _reconcile_materialized_target_from_workspace(
     state: HostRunState,
     runtime: Any,
 ) -> TargetMutationContext | None:
-    """Narrow stale create authority when an earlier atomic step already materialized the target."""
+    """Refresh the exact pinned target from the staged workspace when it exists."""
 
     root_value = getattr(runtime, "workspace_root", None)
     if root_value in (None, ""):
         return None
     with state._lock:
         context = state.mutation_context
-        if (
-            context is None
-            or not context.target_pinned
-            or not context.is_new_file
-        ):
+        if context is None or not context.target_pinned:
             return None
         target = _canonical_mutation_path(context.target_path)
     if not target or not target.casefold().endswith((".java", ".kt")):
@@ -880,7 +876,6 @@ def _reconcile_materialized_target_from_workspace(
         current = state.mutation_context
         if (
             current is None
-            or not current.is_new_file
             or _canonical_mutation_path(current.target_path) != target
         ):
             return None
@@ -1034,6 +1029,48 @@ def _fixed_point_tool_results(
                 "failure_code": payload.get("failure_code"),
             })
     return stable
+
+
+def _fixed_point_tool_calls(calls: Sequence[Any]) -> list[dict[str, Any]]:
+    """Strip source payload bytes while preserving semantic action identity."""
+
+    stable: list[dict[str, Any]] = []
+    for call in calls:
+        arguments = call.arguments if isinstance(call.arguments, Mapping) else {}
+        item: dict[str, Any] = {"name": call.name}
+        for key in (
+            "operation",
+            "path",
+            "target_path",
+            "file_path",
+            "query",
+            "capability",
+        ):
+            value = arguments.get(key)
+            if value not in (None, "", [], {}, ()):
+                item[key] = _stable_value(value)
+        stable.append(item)
+    return stable
+
+
+def _runtime_failure_code(tool_name: str, error: str) -> str:
+    lowered = str(error or "").casefold()
+    if tool_name in _MUTATION_ACT_TOOLS:
+        if "exact source-edit precondition failed" in lowered:
+            return "MUTATION_STALE_PRECONDITION"
+        if "target already exists" in lowered or "creation_conflict" in lowered:
+            return "MUTATION_TARGET_CREATION_CONFLICT"
+        if "source edit requires an existing regular file" in lowered:
+            return "MUTATION_TARGET_UNBOUND"
+    if tool_name in _VERIFY_TOOLS:
+        if any(
+            marker in lowered
+            for marker in ("no such file", "not found", "does not exist", "outside", "unsafe path")
+        ):
+            return "VERIFIER_TARGET_INVALID"
+        if any(marker in lowered for marker in ("argument", "schema", "invalid")):
+            return "VERIFIER_ARGUMENT_INVALID"
+    return "TOOL_RUNTIME_UNAVAILABLE"
 
 
 def _atomic_output_recovery_instruction(request: GenerationRequest) -> str:
@@ -1614,7 +1651,7 @@ class HostRunState:
             repeated = digest in self.seen_no_progress_digests
             self.seen_no_progress_digests.add(digest)
             self.semantic_fixed_point = repeated
-            self.no_progress_streak = int(repeated)
+            self.no_progress_streak += 1
             return repeated
 
     def clear_no_progress_result(self) -> None:
@@ -2431,10 +2468,8 @@ def _generate_with_tools_impl(
                 implementation_requires_mutation
                 and baseline_ready
                 and is_mutation_ready(messages, state)
-                and (
-                    not state.workspace_changed
-                    or state.validation_status == "FAIL"
-                )
+                and state.workspace_changed
+                and state.validation_status == "FAIL"
             )
             if actionable_mutation:
                 state.clear_no_progress_result()
@@ -2880,18 +2915,11 @@ def _generate_with_tools_impl(
                 if is_evidence_tool(call):
                     state.record_query(call.name, call.arguments)
                 error = f"{type(exc).__name__}: {exc}"
-                lowered = error.casefold()
-                failure_code = "TOOL_RUNTIME_UNAVAILABLE"
-                if call.name in _VERIFY_TOOLS:
-                    if any(marker in lowered for marker in ("no such file", "not found", "does not exist", "outside", "unsafe path")):
-                        failure_code = "VERIFIER_TARGET_INVALID"
-                    elif any(marker in lowered for marker in ("argument", "schema", "invalid")):
-                        failure_code = "VERIFIER_ARGUMENT_INVALID"
                 return call, {
                     "ok": False,
                     "tool": call.name,
                     **metadata,
-                    "failure_code": failure_code,
+                    "failure_code": _runtime_failure_code(call.name, error),
                     "error": error,
                 }
 
@@ -2948,7 +2976,16 @@ def _generate_with_tools_impl(
                     code = str(payload.get("failure_code") or "")
                     error = str(payload.get("error") or "MUTATION_UNCHANGED: no source-byte change")
                     state.record_failure(call.name, error)
-                    if code in {
+                    if code == "MUTATION_STALE_PRECONDITION":
+                        refreshed = _reconcile_materialized_target_from_workspace(state, runtime)
+                        if refreshed is not None:
+                            messages.append(_existing_target_refresh_message(refreshed))
+                        state.phase = (
+                            LoopPhase.ACT
+                            if state.mutation_context and state.mutation_context.is_mutation_ready
+                            else LoopPhase.OBSERVE
+                        )
+                    elif code in {
                         "MUTATION_TARGET_DRIFT",
                         "MUTATION_TARGET_UNBOUND",
                         "MUTATION_TARGET_CREATION_CONFLICT",
@@ -3041,6 +3078,7 @@ def _generate_with_tools_impl(
             if state.mutation_context else LocalizationStage.NEED_FILE.value
         )
         call_info = [{"name": call.name, "arguments": dict(call.arguments)} for call in turn.tool_calls]
+        fixed_point_calls = _fixed_point_tool_calls(turn.tool_calls)
         result_info = _fixed_point_tool_results(executed)
 
         if progress:
@@ -3061,7 +3099,7 @@ def _generate_with_tools_impl(
                 "target": ctx_after,
                 "validation": state.validation_status,
                 "verifier": state.latest_verifier_fingerprint,
-                "calls": call_info,
+                "calls": fixed_point_calls,
                 "results": result_info,
             })
             if require_rag and not _target_evidence_ready(
