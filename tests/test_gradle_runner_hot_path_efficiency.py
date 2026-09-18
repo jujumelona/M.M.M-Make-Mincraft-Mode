@@ -99,3 +99,46 @@ def test_build_hot_path_is_incremental_and_skips_current_wrapper(
     assert "clean" not in calls[-1][1]
     assert "--build-cache" in calls[-1][1]
     assert "clean" not in calls[0][1]
+
+def test_compile_java_runs_only_compile_task(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    cache = tmp_path / "cache"
+    gradle = cache / "gradle-8.11" / "bin" / ("gradle.bat" if os.name == "nt" else "gradle")
+    logs = project / ".minecraft_ai" / "logs"
+    logs.mkdir(parents=True)
+
+    prepared = runner_module._PreparedBuild(
+        project_root=project,
+        gradle_version="8.11",
+        gradle_sha256="e" * 64,
+        gradle=gradle,
+        logs=logs,
+        environment={},
+    )
+    runner = GradleRunner(cache)
+    monkeypatch.setattr(runner, "_prepare_build_context", lambda _root: prepared)
+
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def fake_run(*, name, executable, arguments, cwd, env, log_path):
+        calls.append((name, tuple(arguments)))
+        return CommandResult(
+            name=name,
+            command=(str(executable), *arguments),
+            exit_code=0,
+            duration_seconds=0.01,
+            log_path=str(log_path),
+        )
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+
+    report = runner.compile_java(project)
+
+    assert report.status == "PASS"
+    assert report.jar_path is None
+    assert report.gametest_report is None
+    assert calls == [
+        ("compile_java", ("--no-daemon", "compileJava", "--stacktrace"))
+    ]
+
