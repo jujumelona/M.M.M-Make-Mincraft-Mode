@@ -40,16 +40,17 @@ def test_prose_cannot_be_promoted_to_state_or_test_records():
 
 
 def test_unknown_evidence_is_rejected_instead_of_removed():
-    row = authored('state_model')
+    row = authored('behavior_contract')
     row['constraint_evidence_refs'] = ['invented']
     with pytest.raises(ValueError, match='evidence'):
         fragments.validate_criterion_fragment({'section_updates': [row]}, selected_sections=CORE_WORKSHEET_SECTIONS, allowed_refs=set())
 
 
 def test_missing_concern_is_not_automatically_marked_inapplicable():
-    row = authored('state_model')
-    row['specification']['transitions'] = []
-    with pytest.raises(ValueError, match='inapplicable'):
+    row = authored('behavior_contract')
+    concern = next(iter(DETAIL_RECORDS['behavior_contract']))
+    row['specification'][concern] = []
+    with pytest.raises(ValueError, match='fixed specification template'):
         fragments.validate_criterion_fragment({'section_updates': [row]}, selected_sections=CORE_WORKSHEET_SECTIONS, allowed_refs=set())
 
 
