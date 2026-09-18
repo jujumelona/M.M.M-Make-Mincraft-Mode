@@ -66,9 +66,16 @@ tasks.register('installDist') {
         def jars = new File(target, 'plugins').listFiles().findAll { it.name.endsWith('.jar') }
         def framework = jars.find { it.name.startsWith('org.eclipse.osgi-') }
         def bundles = jars.findAll { it != framework && !it.name.startsWith('org.eclipse.equinox.launcher-') }
+        def eagerStart = { File jar ->
+            if (jar.name.startsWith('org.eclipse.equinox.common-')) return '@2:start'
+            if (jar.name.startsWith('org.apache.felix.scr-')) return '@2:start'
+            if (jar.name.startsWith('org.eclipse.core.runtime-')) return '@4:start'
+            if (jar.name.startsWith('org.eclipse.equinox.app-')) return '@4:start'
+            return ''
+        }
         def config = new File(target, 'configuration'); config.mkdirs()
         new File(config, 'config.ini').text = 'osgi.framework=' + framework.toURI() + '\n' +
-            'osgi.bundles=' + bundles.collect { 'reference:' + it.toURI() + '@start' }.join(',') + '\n' +
+            'osgi.bundles=' + bundles.collect { 'reference:' + it.toURI() + eagerStart(it) }.join(',') + '\n' +
             'osgi.bundles.defaultStartLevel=4\nosgi.configuration.cascaded=false\neclipse.application=mmm.owner.application\n'
     }
 }
