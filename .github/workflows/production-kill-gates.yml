@@ -183,6 +183,7 @@ jobs:
   gate:
     name: Production Kill Gate
     if: ${{ always() }}
+    timeout-minutes: 5
     needs: [file-plan, collection-contract, lane1, lane2, lane3, lane4]
     runs-on: ubuntu-latest
     steps:
