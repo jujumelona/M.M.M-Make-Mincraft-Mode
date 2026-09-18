@@ -228,12 +228,38 @@ def install(external_agent_bridge_module: Any, external_mcp_router_module: Any) 
             call_args = self._arguments_for_route(
                 dict(arguments or {}), route_spec, resolved
             )
-            called = self._call_provider(
-                server,
-                entry,
-                tool=tool,
-                arguments=call_args,
-            )
+            try:
+                called = self._call_provider(
+                    server,
+                    entry,
+                    tool=tool,
+                    arguments=call_args,
+                )
+            except Exception as exc:
+                # Match the canonical multi-route invoke() contract: a provider
+                # transport/tool failure is evidence unavailability, not a host
+                # execution-authority failure. Route/schema drift above still fails
+                # closed; only the actual provider invocation is downgraded.
+                bundle = {
+                    "schema_version": "mmm/external-mcp-evidence-bundle-v1",
+                    "capability": capability,
+                    "stage": stage,
+                    "target": target_dict,
+                    "required_corroboration": 1,
+                    "status": "UNAVAILABLE",
+                    "evidence": [],
+                    "attempts": [
+                        {
+                            "server": server,
+                            "tool": tool,
+                            "status": "ERROR",
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+                    ],
+                }
+                bundle["bundle_sha256"] = external_mcp_router_module._sha256(bundle)
+                return bundle
+
             self._validate_reported_target(called["result"], route_spec, resolved)
             receipt = {
                 "schema_version": "mmm/external-mcp-call-receipt-v1",
