@@ -444,12 +444,11 @@ __all__ = ["generate_fixed_template_text", "generate_fixed_template_value"]
 
 def _architecture_impl__structured_text_transport_required(_ctx):
     (router, role) = _ctx
-    del role
     # Native structured decisions have one owner: generate_tool_decision(). Text JSON
     # remains only for deterministic mock/text-only routers that have no native tool
     # admission surface.
     return (
-        _adapter_name(router, "planner") == "mock"
+        _adapter_name(router, role) == "mock"
         or not callable(getattr(router, "generate_tool_decision", None))
     )
 
