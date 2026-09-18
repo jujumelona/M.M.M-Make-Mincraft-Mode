@@ -148,24 +148,6 @@ def _tool_name(schema: Mapping[str, Any]) -> str:
     return str(fn.get("name", "")).strip() if isinstance(fn, Mapping) else ""
 
 
-def _normalize_gate_name(value: Any) -> str:
-    return " ".join(
-        "".join(character.casefold() if character.isalnum() else " " for character in str(value)).split()
-    )
-
-
-def _generation_verification_can_defer_to_required_compile_gate() -> bool:
-    """Defer only when the active task is guaranteed a downstream compile gate."""
-
-    try:
-        from .small_model_task_capsule_contract import current_task_required_gates
-    except ImportError:
-        return False
-    return "target compile" in {
-        _normalize_gate_name(gate) for gate in current_task_required_gates()
-    }
-
-
 def _canonical_mutation_path(value: Any) -> str:
     clean = str(value or "").strip().replace("\\", "/")
     return re.sub(r"^(?:\./)+", "", clean)
@@ -2891,13 +2873,6 @@ def _generate_with_tools_impl(
                     )
                 if status == "UNAVAILABLE":
                     state.record_failure(call.name, payload.get("error", "verifier unavailable"))
-                    if (
-                        call.name in {"java_diagnostics", "jdt_diagnostics"}
-                        and _generation_verification_can_defer_to_required_compile_gate()
-                    ):
-                        state.validation_status = "DEFERRED"
-                        state.phase = LoopPhase.VERIFY
-                        continue
                     unavailable_verifiers.add(call.name)
                     state.validation_status = "UNAVAILABLE"
                     state.phase = LoopPhase.VERIFY
