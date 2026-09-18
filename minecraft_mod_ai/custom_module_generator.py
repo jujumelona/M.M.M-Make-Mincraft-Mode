@@ -712,7 +712,7 @@ class CustomModuleGenerator:
             },
             "rules": [
                 "Implement the feature directly; do not return a file-plan protocol.",
-                "Use host_grounding.evidence_bindings.implementation_contract first when present; its API symbols and admitted templates are target authority, not examples to rewrite from memory.",
+                "Use host_grounding.evidence_bindings.implementation_contract first when present; its API symbols and admitted templates are target authority, not examples to rewrite from memory. When a grounding fact supplies required_imports, import those exact fully-qualified owners and never substitute Yarn, intermediary, neighbouring-version, or remembered package names.",
                 "Keep the first implementation minimal: do not invent extra entrypoints, registries, helper classes, creative tabs/groups, logging, or lifecycle hooks unless the approved task explicitly requires them.",
                 "Use workspace/RAG/MCP retrieval only when the host implementation grounding and exact project context do not contain a fact required by the approved task.",
                 "Apply real edits with the source-edit tool; target compile feedback is handled inside this same generation run before any fallback repair stage.",
