@@ -25,6 +25,7 @@ on:
       - 'tests/test_production_tool_call_isolation_contract.py'
       - 'tests/test_production_path_contract.py'
       - 'tests/test_small_model_atomic_coder_execution.py'
+      - 'tests/test_custom_generation_efficiency_contract.py'
       - 'tests/test_platform_dynamic_coder_contract.py'
       - 'tests/test_debug_mode_fixture_roundtrip.py'
       - 'tests/test_debug_mode_task_contract.py'
@@ -55,6 +56,7 @@ on:
       - 'tests/test_production_tool_call_isolation_contract.py'
       - 'tests/test_production_path_contract.py'
       - 'tests/test_small_model_atomic_coder_execution.py'
+      - 'tests/test_custom_generation_efficiency_contract.py'
       - 'tests/test_platform_dynamic_coder_contract.py'
       - 'tests/test_debug_mode_fixture_roundtrip.py'
       - 'tests/test_debug_mode_task_contract.py'
@@ -108,6 +110,7 @@ jobs:
             tests/test_production_tool_call_isolation_contract.py \
             tests/test_production_path_contract.py \
             tests/test_small_model_atomic_coder_execution.py \
+            tests/test_custom_generation_efficiency_contract.py \
             tests/test_platform_dynamic_coder_contract.py \
             tests/test_debug_mode_fixture_roundtrip.py \
             tests/test_debug_mode_task_contract.py \
