@@ -266,8 +266,10 @@ def test_graph_rejects_unsupported_relation_instead_of_ignoring_it():
 
 
 @pytest.mark.parametrize("capability", ["UNSUPPORTED"])
-def test_unsupported_capability_never_becomes_item(capability):
-    with pytest.raises(SlotFillError, match="CAPABILITY_UNSUPPORTED"):
+def test_unsupported_capability_is_rejected_at_host_bound_schema(capability):
+    from minecraft_mod_ai.structured_output import StructuredOutputValidationError
+
+    with pytest.raises(StructuredOutputValidationError, match="ITEM_EXISTS"):
         compile_atomic_design("requested feature", GraphRouter(capability=capability))
 
 
@@ -423,7 +425,7 @@ def test_recipe_content_graph_reaches_artifact_files(tmp_path, monkeypatch):
         ]
     )
     router.nodes.append(
-        {"entity_id": "conversion", "kind": "process", "role": "Convert materials"}
+        {"entity_id": "conversion", "kind": "crafting_recipe", "role": "Convert materials"}
     )
     design = compile_atomic_design("materials", router)
     ensure_artifact_scaffolding(
