@@ -138,6 +138,7 @@ _EXISTING_TARGET_EVIDENCE_SOURCES = frozenset({
     "host_exact_source",
     "mutation_receipt",
     "search_code_rag",
+    "workspace_existing_target",
 })
 _CODE_MARKERS = frozenset({
     "class ", "interface ", "enum ", "record ", "public ", "private ", "protected ",
@@ -844,6 +845,73 @@ def is_mutation_ready(messages: Sequence[Mapping[str, Any]], state: HostRunState
     with state._lock:
         context = state.mutation_context
         return bool(context and context.is_mutation_ready)
+
+
+def _reconcile_materialized_target_from_workspace(
+    state: HostRunState,
+    runtime: Any,
+) -> TargetMutationContext | None:
+    """Narrow stale create authority when an earlier atomic step already materialized the target."""
+
+    root_value = getattr(runtime, "workspace_root", None)
+    if root_value in (None, ""):
+        return None
+    with state._lock:
+        context = state.mutation_context
+        if (
+            context is None
+            or not context.target_pinned
+            or not context.is_new_file
+        ):
+            return None
+        target = _canonical_mutation_path(context.target_path)
+    if not target or not target.casefold().endswith((".java", ".kt")):
+        return None
+
+    try:
+        root = Path(str(root_value)).expanduser().resolve()
+        candidate = (root / target).resolve()
+        candidate.relative_to(root)
+        source = candidate.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError, UnicodeError, ValueError):
+        return None
+
+    with state._lock:
+        current = state.mutation_context
+        if (
+            current is None
+            or not current.is_new_file
+            or _canonical_mutation_path(current.target_path) != target
+        ):
+            return None
+        reconciled = replace(
+            current,
+            source_body=source,
+            is_new_file=False,
+            evidence_source="workspace_existing_target",
+            creatable_paths=_without_target_path(current.creatable_paths, target),
+        )
+        state.mutation_context = reconciled
+        state.created_paths.add(target)
+        return reconciled
+
+
+def _existing_target_refresh_message(context: TargetMutationContext) -> dict[str, str]:
+    source = context.source_body or ""
+    return {
+        "role": "system",
+        "content": (
+            "MMM_EXISTING_TARGET_REFRESH_V1\n"
+            "The host found that this exact task-owned target was already materialized in the "
+            "current staged workspace by an earlier atomic step or resumed checkpoint. Treat it "
+            "as an existing file, not a fresh creation target. Work from the exact current source "
+            "below and make only the current obligation's required delta.\n"
+            f"TARGET_PATH={_canonical_mutation_path(context.target_path)}\n"
+            "CURRENT_SOURCE_BEGIN\n"
+            + source
+            + "\nCURRENT_SOURCE_END"
+        ),
+    }
 
 
 def _source_edit_path(arguments: Mapping[str, Any]) -> str:
@@ -2243,6 +2311,22 @@ def _generate_with_tools_impl(
     )
     host_grounded = host_baseline_evidence_ready(request.messages)
     mutation_ready = is_mutation_ready(messages, state)
+    reconciled_target = _reconcile_materialized_target_from_workspace(state, runtime)
+    if reconciled_target is not None:
+        mutation_ready = reconciled_target.is_mutation_ready
+        messages.append(_existing_target_refresh_message(reconciled_target))
+        emit_root_cause(
+            "generation_target_materialization_reconciled",
+            stage=stage,
+            operation="generate_with_tools",
+            gate="mutation_target_lifecycle",
+            result="PASS",
+            reason="host-reserved target already exists in the bound staged workspace",
+            details={
+                "target_path": reconciled_target.target_path,
+                "source_bytes": len((reconciled_target.source_body or "").encode("utf-8")),
+            },
+        )
     java_target = bool(
         implementation_requires_mutation
         and state.mutation_context
