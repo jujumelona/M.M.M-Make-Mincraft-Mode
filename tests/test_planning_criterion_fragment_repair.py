@@ -85,5 +85,4 @@ def test_omitted_required_sections_are_not_inferred_inapplicable() -> None:
             fragments={0: fragment},
             allowed_refs=set(),
         )
-    assert "reuse_assessment" in caught.value.sections
-    assert "verification" in caught.value.sections
+    assert caught.value.sections == ("integration", "verification")
