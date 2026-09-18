@@ -265,3 +265,28 @@ def test_generation_verifier_defers_only_to_required_target_compile(monkeypatch)
         lambda: ("source_static_validation",),
     )
     assert loop._generation_verification_can_defer_to_required_compile_gate() is False
+
+
+
+def test_terminal_coder_summary_is_host_owned_and_fixed_contract():
+    import json
+    from minecraft_mod_ai import progress_aware_tool_loop as loop
+
+    passed = json.loads(loop._host_coder_summary(verification="PASS"))
+    deferred = json.loads(
+        loop._host_coder_summary(verification="DEFERRED_TO_TARGET_COMPILE")
+    )
+
+    assert set(passed) == {"summary"}
+    assert "passed generation-time host verification" in passed["summary"]
+    assert set(deferred) == {"summary"}
+    assert "target_compile" in deferred["summary"]
+
+
+def test_terminal_coder_summary_rejects_unknown_host_state():
+    import pytest
+    from minecraft_mod_ai import progress_aware_tool_loop as loop
+    from minecraft_mod_ai.model_adapters import ModelConfigurationError
+
+    with pytest.raises(ModelConfigurationError, match="HOST_SUMMARY_STATE_INVALID"):
+        loop._host_coder_summary(verification="UNKNOWN")
