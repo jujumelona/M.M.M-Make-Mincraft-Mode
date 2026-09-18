@@ -2141,8 +2141,8 @@ def _host_coder_summary(*, verification: str) -> str:
         summary = "Applied the approved source mutation and passed generation-time host verification."
     elif verification == "DEFERRED_TO_TARGET_COMPILE":
         summary = (
-            "Applied the approved source mutation; generation-time Java verification was "
-            "unavailable and verification is deferred to the mandatory target_compile gate."
+            "Applied the approved source mutation; the mandatory target_compile gate is "
+            "the canonical Java verifier."
         )
     else:
         raise ModelConfigurationError(
