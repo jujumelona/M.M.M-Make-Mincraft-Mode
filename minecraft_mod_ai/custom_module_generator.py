@@ -436,6 +436,18 @@ def persist_active_generation_checkpoint(project_root: str | Path) -> bool:
     return True
 
 
+def _generate_coder_text(
+    router: ModelRouter,
+    role: str,
+    messages: Sequence[Mapping[str, Any]],
+    *args: Any,
+    **kwargs: Any,
+) -> str:
+    """Single custom-generation call seam for coder-specific execution policies."""
+
+    return router.generate_text(role, messages, *args, **kwargs)
+
+
 def _coder_project_context_budget(
     router: ModelRouter,
     policy: ScalePolicy,
@@ -754,7 +766,8 @@ class CustomModuleGenerator:
                 staged_root,
                 checkpoint_identity,
             ):
-                summary = self.router.generate_text(
+                summary = _generate_coder_text(
+                    self.router,
                     "coder",
                     initial_messages,
                     response_format="text",
