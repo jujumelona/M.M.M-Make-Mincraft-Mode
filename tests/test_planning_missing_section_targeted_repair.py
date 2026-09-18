@@ -157,7 +157,11 @@ def test_repairs_only_missing_criterion_section_and_preserves_existing_records(m
     adaptive._finish_requirement(job, None, working_state=state, requirement_order=('req',),
                                  completed_details={}, checkpoint=snapshots.append)
     assert calls == [(criteria[1], 'persistence')]
-    assert job['fragments'][0] == first
+    assert any(
+        row['criterion_index'] == 0 and row['fragment'] == first
+        for snapshot in snapshots
+        for row in snapshot.get('detail_progress', [])
+    )
     assert any(row['criterion_index'] == 1 and any(
         r['section'] == 'persistence' for r in row['fragment']['section_updates'])
         for snapshot in snapshots for row in snapshot.get('detail_progress', []))
