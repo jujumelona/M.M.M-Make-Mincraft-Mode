@@ -4,10 +4,10 @@ from __future__ import annotations
 
 The planner may keep a multi-step host task for dependency and verification purposes, but
 one small coder decode must never be responsible for every implementation obligation at
-once. This runtime contract slices the already-approved task at the ModelRouter boundary,
-keeps each decode on one obligation, preserves the canonical context required to execute
-that obligation, and preserves the shared staged workspace between slices. The outer
-custom-module generator still owns the final transaction and gates.
+once. This runtime contract slices the already-approved task at the custom-module coder
+call seam, keeps each decode on one obligation, preserves the canonical context required
+to execute that obligation, and preserves the shared staged workspace between slices.
+The outer custom-module generator still owns the final transaction and gates.
 """
 
 import copy
@@ -436,13 +436,13 @@ def _bounded_reuse_context(
 
 
 def install(*, custom_module_generator_module: Any, model_router_module: Any) -> None:
-    """Install the atomic coder boundary after task/write authority contracts."""
+    """Install atomic coding only on the custom-module coder call seam."""
 
-    Router = model_router_module.ModelRouter
-    if getattr(Router.generate_text, _MARKER, False):
+    del model_router_module  # Bootstrap compatibility; global ModelRouter stays untouched.
+    if getattr(custom_module_generator_module._generate_coder_text, _MARKER, False):
         return
 
-    original_generate_text = Router.generate_text
+    original_generate_text = custom_module_generator_module._generate_coder_text
     original_collect = custom_module_generator_module._collect_initial_observations
     original_reuse = custom_module_generator_module._materialize_owned_reuse_context
 
@@ -545,14 +545,15 @@ def install(*, custom_module_generator_module: Any, model_router_module: Any) ->
     if getattr(original_collect, "__mmm_repository_grounding_live_context__", False):
         setattr(collect_initial_observations, "__mmm_repository_grounding_live_context__", True)
     setattr(materialize_owned_reuse_context, _MARKER, True)
-    Router.generate_text = generate_text
+    custom_module_generator_module._generate_coder_text = generate_text
     custom_module_generator_module._collect_initial_observations = collect_initial_observations
     custom_module_generator_module._materialize_owned_reuse_context = materialize_owned_reuse_context
 
 
 def assert_installed(*, custom_module_generator_module: Any, model_router_module: Any) -> None:
+    del model_router_module
     checks = (
-        getattr(model_router_module.ModelRouter.generate_text, _MARKER, False),
+        getattr(custom_module_generator_module._generate_coder_text, _MARKER, False),
         getattr(custom_module_generator_module._collect_initial_observations, _MARKER, False),
         getattr(custom_module_generator_module._materialize_owned_reuse_context, _MARKER, False),
     )
