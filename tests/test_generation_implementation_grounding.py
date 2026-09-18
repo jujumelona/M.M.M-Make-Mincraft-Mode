@@ -31,13 +31,54 @@ class _Context:
 
     def require_fact(self, category, name):
         assert category == "api_symbols"
-        return MappingProxyType(
-            {
+        symbols = {
+            "register_item": {
                 "owner": "net.minecraft.core.Registry",
                 "name": "register",
                 "descriptor": "(...)Item",
                 "kind": "method",
                 "static": True,
+            },
+            "builtin_item_registry": {
+                "owner": "net.minecraft.core.registries.BuiltInRegistries",
+                "name": "ITEM",
+                "descriptor": "Lnet/minecraft/core/DefaultedRegistry;",
+                "kind": "field",
+                "static": True,
+            },
+            "resource_key_create": {
+                "owner": "net.minecraft.resources.ResourceKey",
+                "name": "create",
+                "descriptor": "(...)ResourceKey",
+                "kind": "method",
+                "static": True,
+            },
+            "registries_item": {
+                "owner": "net.minecraft.core.registries.Registries",
+                "name": "ITEM",
+                "descriptor": "Lnet/minecraft/resources/ResourceKey;",
+                "kind": "field",
+                "static": True,
+            },
+            "identifier_factory": {
+                "owner": "net.minecraft.resources.Identifier",
+                "name": "fromNamespaceAndPath",
+                "descriptor": "(...)Identifier",
+                "kind": "method",
+                "static": True,
+            },
+            "item_stacks_to": {
+                "owner": "net.minecraft.world.item.Item$Properties",
+                "name": "stacksTo",
+                "descriptor": "(I)Item$Properties",
+                "kind": "method",
+                "static": False,
+            },
+        }
+        symbol = symbols[name]
+        return MappingProxyType(
+            {
+                **symbol,
                 "side": "common",
                 "namespace": "minecraft",
                 "metadata": MappingProxyType({"source": "host_catalog"}),
@@ -147,14 +188,51 @@ def test_generation_grounding_projects_only_explicit_host_responsibility(monkeyp
     assert "BuiltInRegistries.ITEM" in fact["templates"][0]["render_body"]
     assert set(fact["api_symbols"]) == {
         "register_item",
+        "builtin_item_registry",
         "resource_key_create",
+        "registries_item",
         "identifier_factory",
+        "item_stacks_to",
     }
+    assert set(fact["required_imports"]) == {
+        "net.minecraft.core.Registry",
+        "net.minecraft.core.registries.BuiltInRegistries",
+        "net.minecraft.resources.ResourceKey",
+        "net.minecraft.core.registries.Registries",
+        "net.minecraft.resources.Identifier",
+        "net.minecraft.world.item.Item",
+    }
+    assert "do not substitute Yarn" in fact["import_policy"]
     assert result["policy"]["model_must_not_substitute_api_names"] is True
     assert isinstance(fact["api_symbols"]["register_item"], dict)
     assert fact["api_symbols"]["register_item"]["metadata"] == {"source": "host_catalog"}
     json.dumps(result, ensure_ascii=False)
 
+
+
+def test_real_26_2_item_registry_grounding_has_complete_native_import_authority() -> None:
+    result = grounding.build_generation_implementation_grounding(
+        _module(),
+        minecraft_version="26.2",
+    )
+
+    assert result is not None
+    assert result["minecraft_version"] == "26.2"
+    fact = result["facts"][0]
+    assert fact["responsibility"] == "minecraft/item/registry"
+    assert set(fact["required_imports"]) == {
+        "net.minecraft.core.Registry",
+        "net.minecraft.core.registries.BuiltInRegistries",
+        "net.minecraft.resources.ResourceKey",
+        "net.minecraft.core.registries.Registries",
+        "net.minecraft.resources.Identifier",
+        "net.minecraft.world.item.Item",
+    }
+    assert all(
+        not owner.startswith(("net.minecraft.item.", "net.minecraft.registry.", "net.minecraft.util."))
+        for owner in fact["required_imports"]
+    )
+    json.dumps(result, ensure_ascii=False)
 
 def test_generation_grounding_requires_explicit_structural_responsibility() -> None:
     module = SimpleNamespace(
