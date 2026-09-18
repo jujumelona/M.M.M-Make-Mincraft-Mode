@@ -14,6 +14,15 @@ on:
       - 'minecraft_mod_ai/model_adapters/**'
       - 'minecraft_mod_ai/model_router.py'
       - 'minecraft_mod_ai/progress_aware_tool_loop.py'
+      - 'minecraft_mod_ai/custom_module_generator.py'
+      - 'minecraft_mod_ai/custom_generation_research.py'
+      - 'minecraft_mod_ai/small_model_atomic_coder_execution.py'
+      - 'minecraft_mod_ai/platform_custom_coder_contract.py'
+      - 'minecraft_mod_ai/agent_tool_runtime.py'
+      - 'minecraft_mod_ai/generation_verifier_resilience.py'
+      - 'minecraft_mod_ai/generation_target_compile.py'
+      - 'minecraft_mod_ai/runtime_finalization.py'
+      - 'minecraft_mod_ai/colab_run_modes.py'
       - 'minecraft_mod_ai/planning_pipeline.py'
       - 'minecraft_mod_ai/fixed_template_generation.py'
       - 'minecraft_mod_ai/planner.py'
@@ -43,6 +52,11 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
 
       - name: Configure runner-local checkpoint directory
         shell: bash
@@ -146,6 +160,139 @@ jobs:
           print(json.dumps(evidence, ensure_ascii=False, indent=2, sort_keys=True))
           PY
 
+      - name: Run deterministic DebugToken generation and real compile path
+        timeout-minutes: 35
+        shell: bash
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+
+          from minecraft_mod_ai.api import CompleteModAISession
+          from minecraft_mod_ai.colab_run_modes import FULL_MODE, run_plan_dialog
+          from minecraft_mod_ai.complete_orchestrator import CompleteExecutionOptions
+
+          target_rel = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+          output_root = Path("audit/real-model-colab-e2e/debug-fixture").resolve()
+          output_root.mkdir(parents=True, exist_ok=True)
+          plan_path = output_root / "proposal.json"
+          profile = os.environ["MMM_MODEL_PROFILE"]
+
+          session = CompleteModAISession(
+              output_root=output_root,
+              model_profile=profile,
+              fast_mode=False,
+              kv_cache_quant="q4_0",
+          )
+          dialog = run_plan_dialog(
+              session=session,
+              run_mode=FULL_MODE,
+              prompt="",
+              plan_path=plan_path,
+              debug_mode=True,
+              minecraft_version="1.21.8",
+              loader="fabric",
+              print_fn=lambda *args, **kwargs: print(*args, **kwargs),
+          )
+          proposal = dialog.reply.complete_proposal
+          proposal.validate()
+          if len(proposal.modules) != 1:
+              raise AssertionError(f"debug fixture module count changed: {len(proposal.modules)}")
+          module = proposal.modules[0]
+          if module.module_id != "debug_token" or module.kind != "custom_java":
+              raise AssertionError(
+                  f"debug fixture task drifted: {module.module_id!r} / {module.kind!r}"
+              )
+          if tuple(module.required_gates) != ("target_compile",):
+              raise AssertionError(
+                  f"debug fixture required gates drifted: {module.required_gates!r}"
+              )
+
+          options = CompleteExecutionOptions(
+              source_only=False,
+              run_jdt=False,
+              run_gametest=False,
+              auto_repair=False,
+              run_blockbench=False,
+              run_runtime=False,
+              run_client=False,
+              run_mineflayer=False,
+              run_visual_review=False,
+              cleanup_runtime=True,
+              eula_accepted=False,
+          )
+          result = session.build(
+              dialog.reply,
+              run_name="real-model-debug-token-compile",
+              options=options,
+          )
+
+          target = Path(result.project_root).resolve() / target_rel
+          if not target.is_file():
+              raise AssertionError(f"fresh DebugToken target was not created: {target}")
+
+          build = result.build_report or {}
+          if build.get("status") != "PASS":
+              raise AssertionError(f"DebugToken Gradle build did not pass: {build!r}")
+          commands = [
+              command for command in build.get("commands", [])
+              if isinstance(command, dict)
+              and command.get("name") in {"build", "clean_build"}
+              and command.get("exit_code") == 0
+              and command.get("timed_out") is not True
+          ]
+          if not commands:
+              raise AssertionError("DebugToken target_compile has no successful Gradle receipt")
+
+          required_gate_failures = [
+              value for value in result.unresolved_gates
+              if str(value).startswith("required-gate:debug_token:target_compile:")
+          ]
+          if required_gate_failures:
+              raise AssertionError(
+                  f"DebugToken target_compile remained unresolved: {required_gate_failures!r}"
+              )
+
+          module_receipt = next(
+              (
+                  receipt for receipt in result.module_receipts
+                  if isinstance(receipt, dict)
+                  and receipt.get("module_id") == "debug_token"
+              ),
+              None,
+          )
+          if not isinstance(module_receipt, dict):
+              raise AssertionError("DebugToken generation receipt is missing")
+          touched = {str(path) for path in module_receipt.get("touched_paths", [])}
+          if target_rel not in touched:
+              raise AssertionError(
+                  f"DebugToken receipt does not own the fresh target: {sorted(touched)!r}"
+              )
+
+          evidence = {
+              "schema_version": "mmm/debug-token-real-build-e2e-v1",
+              "status": "PASS",
+              "profile": profile,
+              "debug_mode": True,
+              "module_id": module.module_id,
+              "target_path": target_rel,
+              "pipeline_status": result.status,
+              "build_status": build.get("status"),
+              "successful_build_commands": [command.get("name") for command in commands],
+              "unresolved_gates": list(result.unresolved_gates),
+              "release_ready": result.release_ready,
+              "work_graph_hash": result.work_graph_hash,
+          }
+          (output_root / "DEBUG_TOKEN_REAL_BUILD_E2E.json").write_text(
+              json.dumps(evidence, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(evidence, ensure_ascii=False, indent=2, sort_keys=True))
+          PY
+
       - name: Upload E2E evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -157,3 +304,4 @@ jobs:
             audit/real-model-colab-e2e/REAL_MODEL_COLAB_E2E.json
             audit/real-model-colab-e2e/proposal.json
             audit/real-model-colab-e2e/runs/**/*.zip
+            audit/real-model-colab-e2e/debug-fixture/**
