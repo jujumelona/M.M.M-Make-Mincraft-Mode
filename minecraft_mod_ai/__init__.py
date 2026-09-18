@@ -3,7 +3,6 @@
 from .execution_feedback_semantic_convergence_installation import (
     install as install_execution_feedback_semantic_convergence,
 )
-from .hardware_concurrency_installation import install as install_hardware_concurrency
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
 from .task_template_catalog import RUNTIME_TEMPLATE_ROOT
@@ -18,7 +17,6 @@ def _validate_runtime_template_authority() -> None:
     )
 
 
-install_hardware_concurrency()
 initialize_runtime()
 _validate_runtime_template_authority()
 from . import execution_feedback_replan_contract as _execution_feedback_replan_contract
