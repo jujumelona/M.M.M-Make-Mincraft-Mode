@@ -324,8 +324,45 @@ def test_atomic_summary_aggregation_preserves_host_summary_in_production_text_mo
     summary = _parse_coder_summary(result)
     assert summary.count(
         "Applied the approved source mutation and passed generation-time host verification."
-    ) == 3
-    assert "atomic step 3/3" in summary
+    ) == 1
+    assert "atomic steps 1-3/3" in summary
+    assert len(summary) <= 256
+
+
+def test_atomic_summary_aggregation_truncates_distinct_contract_summaries_to_schema_limit():
+    from types import SimpleNamespace
+
+    from minecraft_mod_ai.custom_module_generator import _parse_coder_summary
+    from minecraft_mod_ai.small_model_atomic_coder_execution import install
+
+    class Router:
+        calls = 0
+
+        def generate_text(self, role, messages, **kwargs):
+            self.calls += 1
+            return json.dumps({
+                "summary": f"step-{self.calls}-" + ("x" * 220)
+            })
+
+    custom = SimpleNamespace(
+        _coder_project_context_budget=lambda *a, **k: 4096,
+        _collect_initial_observations=lambda *a, **k: {},
+        _materialize_owned_reuse_context=lambda *a, **k: {},
+    )
+    install(
+        custom_module_generator_module=custom,
+        model_router_module=SimpleNamespace(ModelRouter=Router),
+    )
+    result = Router().generate_text(
+        "coder",
+        _messages(step_count=3),
+        response_format="text",
+        tool_stage="generation",
+        enable_tools=True,
+    )
+    summary = _parse_coder_summary(result)
+    assert len(summary) <= 256
+    assert summary.endswith("…")
 
 
 def test_atomic_summary_aggregation_rejects_mixed_summary_transport():
