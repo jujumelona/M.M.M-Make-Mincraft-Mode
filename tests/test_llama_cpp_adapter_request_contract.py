@@ -198,40 +198,19 @@ def test_generate_turn_accepts_host_validated_server_parsed_openai_tool_calls(mo
     assert captured["payload"]["tool_choice"] == "auto"
 
 
-def test_reasoning_only_turn_is_completed_once_into_a_semantic_action(monkeypatch) -> None:
+def test_reasoning_only_turn_is_returned_without_semantic_regeneration(monkeypatch) -> None:
     payloads: list[dict[str, object]] = []
-    responses = [
-        _CompletionResponse(
-            status_code=200,
-            payload={
-                "choices": [{
-                    "message": {
-                        "content": "",
-                        "reasoning_content": "I need exact evidence before answering.",
-                    }
-                }]
-            },
-        ),
-        _CompletionResponse(
-            status_code=200,
-            payload={
-                "choices": [{
-                    "message": {
-                        "content": (
-                            "<tool_call><function=lookup>"
-                            "<parameter=q>exact api</parameter>"
-                            "</function></tool_call>"
-                        ),
-                    }
-                }]
-            },
-        ),
-    ]
     monkeypatch.setenv("LLAMA_SERVER_URL", "http://127.0.0.1:8910/v1")
 
     def post(url, *, json, timeout):
         payloads.append(json)
-        return responses.pop(0)
+        return _CompletionResponse(
+            status_code=200,
+            payload={"choices": [{"message": {
+                "content": "",
+                "reasoning_content": "I need exact evidence before answering.",
+            }}]},
+        )
 
     monkeypatch.setattr(httpx, "post", post)
     turn = _adapter().generate_turn(
@@ -242,42 +221,24 @@ def test_reasoning_only_turn_is_completed_once_into_a_semantic_action(monkeypatc
         )
     )
 
-    assert len(payloads) == 2
-    assert len(turn.tool_calls) == 1
-    assert turn.tool_calls[0].name == "lookup"
-    assert turn.tool_calls[0].arguments == {"q": "exact api"}
+    assert len(payloads) == 1
+    assert turn.tool_calls == ()
+    assert turn.content == ""
     assert turn.reasoning_content == "I need exact evidence before answering."
-    continuation_messages = payloads[1]["messages"]
-    assert continuation_messages[-2]["role"] == "assistant"
-    assert continuation_messages[-2]["reasoning_content"] == "I need exact evidence before answering."
-    assert continuation_messages[-1]["role"] == "user"
-    assert "Do not return another reasoning-only response" in continuation_messages[-1]["content"]
-    assert payloads[1]["tools"] == [_tool()]
-    assert payloads[1]["tool_choice"] == "auto"
 
 
-def test_pure_content_qwen_reasoning_is_split_before_host_tool_parse(monkeypatch) -> None:
+def test_qwen_tool_markup_is_recovered_once_without_semantic_regeneration(monkeypatch) -> None:
     monkeypatch.setenv("LLAMA_SERVER_URL", "http://127.0.0.1:8910/v1")
-    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: _HealthResponse())
     monkeypatch.setattr(
         httpx,
         "post",
         lambda *args, **kwargs: _CompletionResponse(
             status_code=200,
-            payload={
-                "choices": [
-                    {
-                        "message": {
-                            "content": (
-                                "<think>inspect the current schema</think>\n"
-                                "<tool_call><function=lookup>"
-                                "<parameter=q>exact api</parameter>"
-                                "</function></tool_call>"
-                            )
-                        }
-                    }
-                ]
-            },
+            payload={"choices": [{"message": {"content": (
+                "<tool_call><function=lookup>"
+                "<parameter=q>exact api</parameter>"
+                "</function></tool_call>"
+            )}}]},
         ),
     )
 
@@ -290,60 +251,28 @@ def test_pure_content_qwen_reasoning_is_split_before_host_tool_parse(monkeypatch
     )
 
     assert turn.content == ""
-    assert turn.reasoning_content == "inspect the current schema"
     assert [call.name for call in turn.tool_calls] == ["lookup"]
     assert turn.tool_calls[0].arguments == {"q": "exact api"}
 
 
-def test_apply_source_edit_uses_discriminator_then_operation_detail_recovery(monkeypatch) -> None:
+def test_apply_source_edit_uses_one_native_request_and_exact_host_schema(monkeypatch) -> None:
     from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
 
-    stream_values = {
-        "path": "src/main/java/Example.java",
-        "old": "before();",
-        "new": "after();",
-    }
     posts: list[dict[str, object]] = []
-    streamed_fields: list[str] = []
 
     def post(url, *, json, timeout):
         del url, timeout
-        index = len(posts)
         posts.append(dict(json))
-        function = json["tools"][0]["function"]
-        properties = function["parameters"]["properties"]
-        if set(properties) == {"operation"}:
-            arguments = '{"operation":"replace_exact"}'
-        else:
-            assert set(properties) == {"chunk", "done"}
-            instruction = str(json["messages"][-1]["content"])
-            field_name = next(
-                name for name in stream_values if f"field {name!r}" in instruction
-            )
-            streamed_fields.append(field_name)
-            arguments = (
-                '{"chunk":'
-                + __import__("json").dumps(stream_values[field_name])
-                + ',"done":true}'
-            )
         return _CompletionResponse(
             status_code=200,
-            payload={
-                "choices": [{
-                    "message": {
-                        "content": "",
-                        "tool_calls": [{
-                            "id": f"call_{index}",
-                            "type": "function",
-                            "function": {
-                                "name": "apply_source_edit",
-                                "arguments": arguments,
-                            },
-                        }],
-                    },
-                    "finish_reason": "tool_calls",
-                }]
-            },
+            payload={"choices": [{"message": {"content": "", "tool_calls": [{
+                "id": "call_0",
+                "type": "function",
+                "function": {
+                    "name": "apply_source_edit",
+                    "arguments": '{"operation":"replace_exact","path":"src/main/java/Example.java","old":"before();","new":"after();"}',
+                },
+            }]}, "finish_reason": "tool_calls"}]},
         )
 
     monkeypatch.setattr(httpx, "post", post)
@@ -359,15 +288,11 @@ def test_apply_source_edit_uses_discriminator_then_operation_detail_recovery(mon
         GenerationRequest(
             messages=({"role": "user", "content": "apply one edit"},),
             tools=(source_edit_tool,),
-            tool_choice={
-                "type": "function",
-                "function": {"name": "apply_source_edit"},
-            },
+            tool_choice={"type": "function", "function": {"name": "apply_source_edit"}},
         )
     )
-    assert len(posts) == 4
-    assert streamed_fields == ["path", "old", "new"]
-    assert len(turn.tool_calls) == 1
+    assert len(posts) == 1
+    assert posts[0]["tools"] == [source_edit_tool]
     assert turn.tool_calls[0].arguments == {
         "operation": "replace_exact",
         "path": "src/main/java/Example.java",
@@ -379,134 +304,60 @@ def test_apply_source_edit_uses_discriminator_then_operation_detail_recovery(mon
 @pytest.mark.parametrize(
     "parameters",
     [
-        (
-            "<parameter=action>replace_exact</parameter>"
-            "<parameter=operation>replace_exact</parameter>"
-        ),
-        (
-            "<parameter=operation>replace_exact</parameter>"
-            "<parameter=action>replace_exact</parameter>"
-        ),
+        "<parameter=action>replace_exact</parameter><parameter=operation>replace_exact</parameter>",
+        "<parameter=operation>replace_exact</parameter><parameter=action>replace_exact</parameter>",
     ],
 )
-def test_apply_source_edit_rejects_canonical_alias_collision(
-    monkeypatch,
-    parameters: str,
-) -> None:
-    posts = 0
-
-    def post(url, *, json, timeout):
-        nonlocal posts
-        posts += 1
-        return _CompletionResponse(
+def test_apply_source_edit_alias_collision_is_rejected_without_execution(monkeypatch, parameters: str) -> None:
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        lambda *args, **kwargs: _CompletionResponse(
             status_code=200,
-            payload={
-                "choices": [
-                    {
-                        "message": {
-                            "content": (
-                                "<tool_call><function=apply_source_edit>"
-                                + parameters
-                                + "<parameter=path>Example.java</parameter>"
-                                "</function></tool_call>"
-                            )
-                        }
-                    }
-                ]
-            },
+            payload={"choices": [{"message": {"content": (
+                "<tool_call><function=apply_source_edit>" + parameters
+                + "<parameter=path>Example.java</parameter></function></tool_call>"
+            )}}]},
+        ),
+    )
+    turn = _adapter().generate_turn(
+        GenerationRequest(
+            messages=({"role": "user", "content": "apply one edit"},),
+            tools=(_source_edit_tool(),),
+            tool_choice="auto",
         )
-
-    monkeypatch.setattr(httpx, "post", post)
-    with pytest.raises(ModelBackendError, match="conflicting sources.*parameter 'operation'"):
-        _adapter().generate_turn(
-            GenerationRequest(
-                messages=({"role": "user", "content": "apply one edit"},),
-                tools=(_source_edit_tool(),),
-                tool_choice="auto",
-            )
-        )
-    assert posts == 1
+    )
+    assert [call.name for call in turn.tool_calls] == ["__mmm_rejected_tool_call__"]
+    assert turn.tool_calls[0].arguments["failure_code"] == "TOOL_ARGUMENT_ALIAS_COLLISION"
 
 
 @pytest.mark.parametrize(
-    ("tool_name", "include_action", "parameter", "expected"),
-    [
-        ("lookup", False, "action", "unknown parameter 'action'"),
-        ("apply_source_edit", False, "strategy", "unknown parameter 'strategy'"),
-    ],
+    ("tool_name", "parameter"),
+    [("lookup", "action"), ("apply_source_edit", "strategy")],
 )
-def test_action_alias_does_not_weaken_other_schema_boundaries(
-    monkeypatch,
-    tool_name: str,
-    include_action: bool,
-    parameter: str,
-    expected: str,
-) -> None:
-    schema = _source_edit_tool(include_action=include_action)
+def test_unknown_arguments_are_rejected_without_execution(monkeypatch, tool_name: str, parameter: str) -> None:
+    schema = _source_edit_tool()
     schema["function"]["name"] = tool_name
     monkeypatch.setattr(
         httpx,
         "post",
         lambda *args, **kwargs: _CompletionResponse(
             status_code=200,
-            payload={
-                "choices": [
-                    {
-                        "message": {
-                            "content": (
-                                f"<tool_call><function={tool_name}>"
-                                f"<parameter={parameter}>replace_exact</parameter>"
-                                "<parameter=path>Example.java</parameter>"
-                                "</function></tool_call>"
-                            )
-                        }
-                    }
-                ]
-            },
+            payload={"choices": [{"message": {"content": (
+                f"<tool_call><function={tool_name}><parameter={parameter}>replace_exact</parameter>"
+                "<parameter=path>Example.java</parameter></function></tool_call>"
+            )}}]},
         ),
     )
-
-    with pytest.raises(ModelBackendError, match=expected):
-        _adapter().generate_turn(
-            GenerationRequest(
-                messages=({"role": "user", "content": "one tool"},),
-                tools=(schema,),
-                tool_choice="auto",
-            )
+    turn = _adapter().generate_turn(
+        GenerationRequest(
+            messages=({"role": "user", "content": "one tool"},),
+            tools=(schema,),
+            tool_choice="auto",
         )
-
-
-def test_repeated_reasoning_only_turn_fails_closed_after_one_continuation(monkeypatch) -> None:
-    calls = 0
-    monkeypatch.setenv("LLAMA_SERVER_URL", "http://127.0.0.1:8910/v1")
-
-    def post(url, *, json, timeout):
-        nonlocal calls
-        calls += 1
-        return _CompletionResponse(
-            status_code=200,
-            payload={
-                "choices": [{
-                    "message": {
-                        "content": "",
-                        "reasoning_content": f"reasoning pass {calls}",
-                    }
-                }]
-            },
-        )
-
-    monkeypatch.setattr(httpx, "post", post)
-    with pytest.raises(ModelBackendError) as caught:
-        _adapter().generate_turn(
-            GenerationRequest(
-                messages=({"role": "user", "content": "inspect then act"},),
-                tools=(_tool(),),
-                tool_choice="auto",
-            )
-        )
-
-    assert calls == 2
-    assert "reasoning-only tool continuation without a semantic action" in str(caught.value)
+    )
+    assert [call.name for call in turn.tool_calls] == ["__mmm_rejected_tool_call__"]
+    assert turn.tool_calls[0].arguments["failure_code"] == "TOOL_SCHEMA_INVALID"
 
 
 def test_fully_empty_native_turn_still_fails_immediately(monkeypatch) -> None:
@@ -516,23 +367,20 @@ def test_fully_empty_native_turn_still_fails_immediately(monkeypatch) -> None:
     def post(url, *, json, timeout):
         nonlocal calls
         calls += 1
-        return _CompletionResponse(
-            status_code=200,
-            payload={"choices": [{"message": {"content": ""}}]},
-        )
+        return _CompletionResponse(status_code=200, payload={"choices": [{"message": {"content": ""}}]})
 
     monkeypatch.setattr(httpx, "post", post)
-    with pytest.raises(ModelBackendError) as caught:
-        _adapter().generate_turn(
-            GenerationRequest(
-                messages=({"role": "user", "content": "inspect then act"},),
-                tools=(_tool(),),
-                tool_choice="auto",
-            )
+    turn = _adapter().generate_turn(
+        GenerationRequest(
+            messages=({"role": "user", "content": "inspect then act"},),
+            tools=(_tool(),),
+            tool_choice="auto",
         )
-
+    )
     assert calls == 1
-    assert "neither visible content, reasoning, nor Qwen tool calls" in str(caught.value)
+    assert turn.content == ""
+    assert turn.reasoning_content == ""
+    assert turn.tool_calls == ()
 
 
 def test_generate_turn_preserves_llama_server_400_body_without_prompt(monkeypatch) -> None:
