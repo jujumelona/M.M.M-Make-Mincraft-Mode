@@ -2636,6 +2636,28 @@ def _generate_with_tools_impl(
 
             if call.name in _VERIFY_TOOLS:
                 status = _verification_outcome(call.name, payload)
+                emit_root_cause(
+                    "verification_adjudicated",
+                    stage=stage,
+                    operation=call.name,
+                    gate="generation_verifier",
+                    result=(
+                        "PASS"
+                        if status == "PASS"
+                        else "FAIL"
+                        if status in {"FAIL", "UNAVAILABLE"}
+                        else "SKIP"
+                    ),
+                    reason=status,
+                    details={
+                        "status": status,
+                        "target_path": (
+                            state.mutation_context.target_path
+                            if state.mutation_context is not None
+                            else None
+                        ),
+                    },
+                )
                 if status in {"VERIFIER_ARGUMENT_INVALID", "VERIFIER_TARGET_INVALID"}:
                     raise ModelConfigurationError(
                         f"{status}: {payload.get('error', '')}"

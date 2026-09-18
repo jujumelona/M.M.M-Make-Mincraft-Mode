@@ -94,7 +94,7 @@ def test_apply_source_edit_rejects_file_and_path_together() -> None:
         "<parameter=file>src/A.java</parameter>"
         "<parameter=path>src/B.java</parameter>"
         "<parameter=operation>replace</parameter>",
-        "TOOL_ARGUMENT_CONFLICT",
+        "TOOL_ARGUMENT_ALIAS_COLLISION",
     )
     assert "canonical parameter 'path'" in call.arguments["error"]
 
