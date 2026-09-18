@@ -14,11 +14,18 @@ class _Context:
         if leaf_id != "minecraft/item/registry":
             raise ValueError("not admitted")
         return {
-            "state": "admitted",
+            "state": "not_reviewed",
             "implementation": {
-                "implementation_id": "impl:item-registry",
-                "executor_type": "template",
-                "template": "fabric/item/register_direct_resource_location_factory",
+                "implementation_id": "fabric/item/register_keyed",
+                "executor_type": "deterministic_renderer",
+                "implementation_sha256": "sha256:impl",
+                "validator_profile": "java_syntax",
+                "validator_sha256": "sha256:validator",
+                "input_schema_sha256": "sha256:input",
+                "output_schema_sha256": "sha256:output",
+                "authority_sha256": "sha256:authority",
+                "template": "fabric/item/register_keyed",
+                "prerequisite_templates": ["fabric/item/key_identifier"],
             },
         }
 
@@ -35,8 +42,19 @@ class _Context:
         }
 
     def admit_template(self, template):
-        assert template["id"] == "fabric/item/register_direct_resource_location_factory"
-        return {"template_sha256": "sha256:fixture"}
+        assert template["id"] in {
+            "fabric/item/register_keyed",
+            "fabric/item/key_identifier",
+        }
+        return {
+            "template_sha256": "sha256:fixture",
+            "required_symbols": (
+                ["register_item"]
+                if template["id"] == "fabric/item/register_keyed"
+                else ["resource_key_create", "identifier_factory"]
+            ),
+            "requires_capabilities": ["REGISTER_ITEM"],
+        }
 
 
 class _Target:
@@ -90,14 +108,18 @@ def test_generation_grounding_projects_only_explicit_host_responsibility(monkeyp
     monkeypatch.setattr(
         grounding,
         "load_template",
-        lambda _template_id: {
-            "id": "fabric/item/register_direct_resource_location_factory",
+        lambda template_id: {
+            "id": template_id,
             "requires": ["mod_id", "registry_path"],
             "dependencies": [],
             "target": {"operation": "JAVA_PATCH"},
             "render": {
                 "language": "java",
-                "body": "Registry.register(BuiltInRegistries.ITEM, ResourceLocation.fromNamespaceAndPath(...));",
+                "body": (
+                    "Registry.register(BuiltInRegistries.ITEM, KEY, new Item(new Item.Properties().setId(KEY)));"
+                    if template_id == "fabric/item/register_keyed"
+                    else "ResourceKey.create(Registries.ITEM, Identifier.fromNamespaceAndPath(...));"
+                ),
             },
         },
     )
@@ -112,8 +134,19 @@ def test_generation_grounding_projects_only_explicit_host_responsibility(monkeyp
     assert result["responsibilities"] == ["registry"]
     assert result["selected_fact_count"] == 1
     assert len(result["facts"]) == 1
-    assert result["facts"][0]["responsibility"] == "minecraft/item/registry"
-    assert "BuiltInRegistries.ITEM" in result["facts"][0]["template"]["render_body"]
+    fact = result["facts"][0]
+    assert fact["responsibility"] == "minecraft/item/registry"
+    assert fact["registration_state"] == "not_reviewed"
+    assert [item["template_id"] for item in fact["templates"]] == [
+        "fabric/item/register_keyed",
+        "fabric/item/key_identifier",
+    ]
+    assert "BuiltInRegistries.ITEM" in fact["templates"][0]["render_body"]
+    assert set(fact["api_symbols"]) == {
+        "register_item",
+        "resource_key_create",
+        "identifier_factory",
+    }
     assert result["policy"]["model_must_not_substitute_api_names"] is True
 
 
