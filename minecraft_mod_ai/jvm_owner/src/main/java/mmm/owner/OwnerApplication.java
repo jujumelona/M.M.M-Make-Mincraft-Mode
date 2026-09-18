@@ -187,9 +187,14 @@ public final class OwnerApplication implements IApplication {
         options.put(JavaCore.COMPILER_CODEGEN_TARGET_PLATFORM, target);
         if (release != null) options.put(JavaCore.COMPILER_RELEASE, JavaCore.ENABLED);
         if (args.contains("-parameters")) options.put(JavaCore.COMPILER_CODEGEN_METHOD_PARAMETERS_ATTR, JavaCore.GENERATE);
+        boolean processingEnabled = !processors.isEmpty() && !args.contains("-proc:none");
+        options.put(
+            JavaCore.COMPILER_PROCESS_ANNOTATIONS,
+            processingEnabled ? JavaCore.ENABLED : JavaCore.DISABLED
+        );
         javaProject.setOptions(options);
         stage("configure.options.end:" + required(set, "id"));
-        if (!processors.isEmpty() && !args.contains("-proc:none")) {
+        if (processingEnabled) {
             startBundle("org.eclipse.jdt.apt.core");
             startBundle("org.eclipse.jdt.apt.pluggable.core");
             IFactoryPath factoryPath = AptConfig.getDefaultFactoryPath(javaProject);
@@ -204,6 +209,26 @@ public final class OwnerApplication implements IApplication {
             AptConfig.setProcessorOptions(processorOptions, javaProject);
             AptConfig.setGenSrcDir(javaProject, ".apt_generated");
             AptConfig.setEnabled(javaProject, true);
+
+            if (!AptConfig.isEnabled(javaProject)) {
+                throw new IllegalStateException("APT did not enable for " + required(set, "id"));
+            }
+            if (!JavaCore.ENABLED.equals(
+                    javaProject.getOption(JavaCore.COMPILER_PROCESS_ANNOTATIONS, true))) {
+                throw new IllegalStateException(
+                    "JDT compiler annotation processing did not enable for " + required(set, "id"));
+            }
+            if (!AptConfig.hasProjectSpecificFactoryPath(javaProject)) {
+                throw new IllegalStateException(
+                    "Resolved annotation processor path was not persisted for " + required(set, "id"));
+            }
+            IExtensionPoint managerPoint = Platform.getExtensionRegistry().getExtensionPoint(
+                JavaCore.PLUGIN_ID, "annotationProcessorManager");
+            if (managerPoint == null || managerPoint.getExtensions().length == 0) {
+                throw new IllegalStateException(
+                    "JDT annotation processor manager extension is unavailable");
+            }
+            stage("configure.apt.ready:" + required(set, "id"));
         }
     }
 
