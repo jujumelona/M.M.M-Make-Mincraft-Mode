@@ -48,7 +48,7 @@ jar {
     manifest {
         attributes('Bundle-ManifestVersion': '2', 'Bundle-SymbolicName': 'mmm.owner;singleton:=true',
             'Bundle-Version': '1.0.0', 'Bundle-RequiredExecutionEnvironment': 'JavaSE-17',
-            'Require-Bundle': 'org.eclipse.core.runtime,org.eclipse.core.resources,org.eclipse.jdt.core,org.eclipse.jdt.apt.core,org.eclipse.equinox.app',
+            'Require-Bundle': 'org.eclipse.core.runtime,org.eclipse.core.resources,org.eclipse.jdt.core,org.eclipse.jdt.core.compiler.batch,org.eclipse.jdt.apt.core,org.eclipse.jdt.apt.pluggable.core,org.eclipse.equinox.app',
             'Bundle-ClassPath': (['.'] + configurations.embedded.collect { 'lib/' + it.name }).join(','))
     }
 }
