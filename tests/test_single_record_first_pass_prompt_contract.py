@@ -32,8 +32,9 @@ _EXPECTED = {
 def _assert_native_contract(messages, schema, tool_name: str) -> None:
     assert tool_name == "submit_one_feature_algorithm_atomic_mutations"
     assert len(messages) == 2
-    assert str(messages[1]["content"]).startswith("READ_ONLY_INPUT_CONTEXT:\n")
-    assert "req_004" in str(messages[1]["content"])
+    import json
+    context = json.loads(str(messages[1]["content"]))
+    assert context["requirement_id"] == "req_004"
     assert all(
         "CURRENT_FIXED_OUTPUT_FIELDS" not in str(message.get("content", ""))
         for message in messages
@@ -104,7 +105,7 @@ class _NativeToolRouter:
         return dict(_EXPECTED)
 
 
-def test_atomic_mutations_first_pass_writes_design_without_a_tool_call() -> None:
+def test_atomic_mutations_first_pass_uses_one_native_tool_decision() -> None:
     router = _NativeToolRouter()
 
     result = run_single_record_template(
@@ -114,5 +115,6 @@ def test_atomic_mutations_first_pass_writes_design_without_a_tool_call() -> None
     )
 
     assert result == _EXPECTED
-    assert router.text_calls == 1
-    assert router.tool_calls == []
+    assert router.text_calls == 0
+    assert len(router.tool_calls) == 1
+    assert router.tool_calls[0]["tool_name"] == "submit_one_feature_algorithm_atomic_mutations"
