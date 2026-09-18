@@ -43,7 +43,13 @@ def _bind_generation_platform_env(
 def _generation_external_target(workspace_root: str | Path) -> dict[str, str]:
     """Read immutable generation target coordinates from the bound project itself."""
 
-    root, _ = _discover_model_project_root(workspace_root)
+    try:
+        root, _ = _discover_model_project_root(workspace_root)
+    except AgentToolRuntimeError:
+        # Some generation utilities can run before a concrete project exists.
+        # Preserve their prior target-discovery behavior rather than inventing
+        # project coordinates; once a project is bound, the host always overrides.
+        return {}
     from .project_platform_identity import project_platform_identity
 
     identity = project_platform_identity(root)
