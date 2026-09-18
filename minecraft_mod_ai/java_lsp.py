@@ -10,7 +10,7 @@ import subprocess
 import threading
 import time
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
