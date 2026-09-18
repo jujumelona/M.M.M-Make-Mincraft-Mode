@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from minecraft_mod_ai.complete_orchestrator import (
     _blocking_jdt_errors,
     _final_validation_failure,
+    _gametest_attestation_status,
 )
 
 
@@ -62,3 +65,46 @@ def test_jdt_receipt_is_ignored_when_jdt_was_not_requested() -> None:
         jdt_receipt=_jdt_error_receipt(),
         run_jdt=False,
     ) is None
+
+
+def test_requested_gametest_requires_structured_matching_evidence(tmp_path) -> None:
+    report = tmp_path / "gametest-report.xml"
+    report.write_text(
+        '<testsuites><testsuite tests="1" failures="0" errors="0" skipped="0">'
+        '<testcase name="DemoModGameTests.generatedRegistriesAreLive"/>'
+        '</testsuite></testsuites>',
+        encoding="utf-8",
+    )
+    build = {
+        "status": "PASS",
+        "commands": [
+            {"name": "build", "exit_code": 0, "timed_out": False},
+            {"name": "gametest", "exit_code": 0, "timed_out": False},
+        ],
+        "gametest_report": str(report),
+    }
+
+    assert _gametest_attestation_status(
+        build,
+        SimpleNamespace(mod_id="demo"),
+        requested=True,
+    ) == "PASS"
+
+
+def test_requested_gametest_without_report_is_not_attested() -> None:
+    build = {
+        "status": "PASS",
+        "commands": [{"name": "gametest", "exit_code": 0, "timed_out": False}],
+        "gametest_report": None,
+    }
+
+    assert _gametest_attestation_status(
+        build,
+        SimpleNamespace(mod_id="demo"),
+        requested=True,
+    ) == "NO_EVIDENCE"
+    assert _gametest_attestation_status(
+        build,
+        SimpleNamespace(mod_id="demo"),
+        requested=False,
+    ) == "NOT_REQUIRED"
