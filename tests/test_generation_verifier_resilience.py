@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from minecraft_mod_ai import agent_tool_runtime, java_lsp
 from minecraft_mod_ai.generation_verifier_resilience import (
+    host_jdt_startup_timeout_seconds,
     run_generation_verifier,
     synthesized_verifier_turn,
 )
@@ -39,6 +40,48 @@ def test_synthesized_verifier_turn_is_host_owned(monkeypatch):
     assert call.name == "java_diagnostics"
     assert dict(call.arguments) == {"timeout_seconds": 77}
     assert call.id.startswith("host_verify_")
+
+
+def test_generation_verifier_uses_bootstrap_budget_only_for_cold_owner(
+    monkeypatch, tmp_path
+):
+    project, _source = _project(tmp_path)
+    monkeypatch.setenv("MMM_JDT_DIAGNOSTIC_STARTUP_TIMEOUT_SECONDS", "240")
+    calls = []
+
+    class JavaOwner:
+        def diagnostics(
+            self, root, *, relative_files=None, timeout_seconds, full_scan=False
+        ):
+            calls.append(timeout_seconds)
+            return {
+                "complete": True,
+                "session_id": "owner",
+                "model_id": "model",
+                "error_count": 0,
+                "warning_count": 0,
+                "diagnostics": {},
+            }
+
+    runtime = SimpleNamespace(workspace_root=str(project))
+    for _ in range(2):
+        result = run_generation_verifier(
+            runtime,
+            {"timeout_seconds": 77},
+            runtime_module=agent_tool_runtime,
+            java_service_factory=JavaOwner,
+        )
+        assert result["error_count"] == 0
+
+    assert calls == [240.0, 77.0]
+
+
+def test_generation_verifier_bootstrap_budget_is_bounded(monkeypatch):
+    monkeypatch.setenv("MMM_JDT_DIAGNOSTIC_STARTUP_TIMEOUT_SECONDS", "30")
+    assert host_jdt_startup_timeout_seconds() == 90
+
+    monkeypatch.setenv("MMM_JDT_DIAGNOSTIC_STARTUP_TIMEOUT_SECONDS", "999")
+    assert host_jdt_startup_timeout_seconds() == 600
 
 
 def test_generation_verifier_preserves_completed_owner_diagnostics(tmp_path):

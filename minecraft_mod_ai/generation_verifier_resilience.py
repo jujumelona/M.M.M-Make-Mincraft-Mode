@@ -42,6 +42,17 @@ def host_jdt_idle_timeout_seconds() -> int:
     )
 
 
+def host_jdt_startup_timeout_seconds() -> int:
+    """Hard budget for creating and importing a cold generation JDT owner."""
+
+    return _bounded_int_env(
+        "MMM_JDT_DIAGNOSTIC_STARTUP_TIMEOUT_SECONDS",
+        default=300,
+        minimum=90,
+        maximum=600,
+    )
+
+
 def _requested_timeout_seconds(payload: Mapping[str, Any]) -> float:
     raw = payload.get("timeout_seconds", host_jdt_idle_timeout_seconds())
     if isinstance(raw, bool):
@@ -185,13 +196,30 @@ def run_generation_verifier(
         relative_files = _normalize_relative_files(payload.get("relative_files"))
         requested_timeout = _requested_timeout_seconds(payload)
         service = getattr(runtime, _JDT_SERVICE_ATTR, None)
-        if service is None:
+        cold_start = service is None
+        if cold_start:
             service = (java_service_factory or JavaCoreService)()
             setattr(runtime, _JDT_SERVICE_ATTR, service)
+        effective_timeout = (
+            max(requested_timeout, float(host_jdt_startup_timeout_seconds()))
+            if cold_start
+            else requested_timeout
+        )
+        emit_root_cause(
+            "generation_verifier_deadline_selected",
+            stage="generation",
+            operation=_VERIFIER_NAME,
+            result="PASS",
+            details={
+                "cold_start": cold_start,
+                "requested_timeout_seconds": requested_timeout,
+                "effective_timeout_seconds": effective_timeout,
+            },
+        )
         result = service.diagnostics(
             root,
             relative_files=relative_files,
-            timeout_seconds=requested_timeout,
+            timeout_seconds=effective_timeout,
             full_scan=bool(payload.get("full_scan", False)),
         )
         if (
@@ -235,6 +263,7 @@ def run_generation_verifier(
 
 __all__ = [
     "host_jdt_idle_timeout_seconds",
+    "host_jdt_startup_timeout_seconds",
     "run_generation_verifier",
     "synthesized_verifier_turn",
 ]
