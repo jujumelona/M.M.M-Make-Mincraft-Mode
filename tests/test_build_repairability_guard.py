@@ -191,6 +191,27 @@ def test_classifier_blocks_timeout_unsupported_release_and_validation_mutation()
     )
 
 
+def test_deferred_postbuild_jdt_does_not_block_compile_repair() -> None:
+    assert (
+        source_repair_block_reason(
+            build={
+                "status": "FAIL",
+                "error": "Gradle build failed.",
+                "commands": [
+                    {"name": "build", "exit_code": 1, "timed_out": False}
+                ],
+            },
+            diagnostics={
+                "status": "DEFERRED_TO_POST_BUILD",
+                "available": False,
+                "complete": False,
+                "diagnostics": {},
+            },
+        )
+        is None
+    )
+
+
 def test_guarded_repair_engine_never_calls_coder_for_unavailable_jdt(monkeypatch) -> None:
     called = {"base": 0}
 
