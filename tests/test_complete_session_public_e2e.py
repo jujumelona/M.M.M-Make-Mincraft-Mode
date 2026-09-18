@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
+import minecraft_mod_ai.complete_build_repair as build_repair_module
 import minecraft_mod_ai.complete_orchestrator as orchestrator_module
 import minecraft_mod_ai.generator as generator_module
 import minecraft_mod_ai.mcp_tools as mcp_tools_module
@@ -212,8 +213,8 @@ def test_complete_session_build_uses_real_orchestrator_and_repair_path(
         "adapter_for_lock_values",
         lambda value: SimpleNamespace(resource_pack_format=value.resource_pack_format),
     )
-    monkeypatch.setattr(orchestrator_module, "GradleRunner", _FakeGradleRunner)
-    monkeypatch.setattr(orchestrator_module, "RepairEngine", _FakeRepairEngine)
+    monkeypatch.setattr(build_repair_module, "GradleRunner", _FakeGradleRunner)
+    monkeypatch.setattr(build_repair_module, "RepairEngine", _FakeRepairEngine)
 
     def fake_verify_final_mod_artifact(project_root: Path, **expected: str) -> _DictReport:
         jar = Path(project_root) / "build" / "libs" / "public-e2e-1.0.0.jar"
