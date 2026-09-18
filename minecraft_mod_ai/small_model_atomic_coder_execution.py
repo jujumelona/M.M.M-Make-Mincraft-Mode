@@ -463,26 +463,39 @@ def install(*, custom_module_generator_module: Any, model_router_module: Any) ->
         if len(batches) == 1:
             return original_generate_text(self, role, batches[0], *args, **kwargs)
 
-        from .model_response_templates import response_schema
+        from .model_response_templates import (
+            parse_response_text,
+            response_schema,
+            serialize_response,
+        )
 
         structured_summary = kwargs.get("response_schema") == response_schema("coder_summary")
         summaries: list[str] = []
+        contract_results: list[bool] = []
         for index, batch in enumerate(batches, start=1):
             result = original_generate_text(self, role, batch, *args, **kwargs)
-            summary = (
-                json.loads(result)["summary"]
-                if structured_summary
-                else str(result or "").strip()
-            )
+            try:
+                parsed = parse_response_text("coder_summary", result)
+            except ValueError:
+                if structured_summary:
+                    raise
+                summary = str(result or "").strip()
+                contract_results.append(False)
+            else:
+                summary = str(parsed["summary"]).strip()
+                contract_results.append(True)
             if len(summary) > _MAX_SUMMARY_CHARS_PER_STEP:
                 summary = summary[:_MAX_SUMMARY_CHARS_PER_STEP] + "…"
             summaries.append(f"atomic step {index}/{len(batches)}: {summary}")
         combined = "\n".join(summaries)
-        return (
-            json.dumps({"summary": combined}, ensure_ascii=False)
-            if structured_summary
-            else combined
-        )
+        if contract_results and all(contract_results):
+            return serialize_response("coder_summary", {"summary": combined})
+        if any(contract_results):
+            raise AtomicCoderContractError(
+                "CODER_SUMMARY_TRANSPORT_MIXED: atomic coder steps returned a mixture "
+                "of fixed coder_summary JSON and free text"
+            )
+        return combined
 
     def collect_initial_observations(
         index: Any,
