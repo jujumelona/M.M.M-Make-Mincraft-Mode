@@ -15,8 +15,6 @@ import org.eclipse.jdt.core.*;
 import org.eclipse.jdt.apt.core.util.AptConfig;
 import org.eclipse.jdt.apt.core.util.IFactoryPath;
 import org.osgi.framework.Bundle;
-import org.osgi.framework.BundleContext;
-import org.osgi.framework.FrameworkUtil;
 
 /** Single-writer, persistent Eclipse resource workspace. stdout is exclusively JSON lines. */
 public final class OwnerApplication implements IApplication {
@@ -34,21 +32,15 @@ public final class OwnerApplication implements IApplication {
     }
 
     private static void startBundle(String symbolicName) throws Exception {
-        Bundle owner = FrameworkUtil.getBundle(OwnerApplication.class);
-        if (owner == null || owner.getBundleContext() == null) {
-            throw new IllegalStateException("Owner OSGi bundle context is unavailable");
+        Bundle bundle = Platform.getBundle(symbolicName);
+        if (bundle == null) {
+            throw new IllegalStateException("Required OSGi bundle is not installed: " + symbolicName);
         }
-        BundleContext context = owner.getBundleContext();
-        for (Bundle bundle : context.getBundles()) {
-            if (!symbolicName.equals(bundle.getSymbolicName())) continue;
-            if (bundle.getState() != Bundle.ACTIVE) {
-                stage("bundle.start.begin:" + symbolicName);
-                bundle.start(Bundle.START_TRANSIENT);
-                stage("bundle.start.end:" + symbolicName);
-            }
-            return;
+        if (bundle.getState() != Bundle.ACTIVE) {
+            stage("bundle.start.begin:" + symbolicName);
+            bundle.start(Bundle.START_TRANSIENT);
+            stage("bundle.start.end:" + symbolicName);
         }
-        throw new IllegalStateException("Required OSGi bundle is not installed: " + symbolicName);
     }
 
     @Override public Object start(IApplicationContext context) throws Exception {
