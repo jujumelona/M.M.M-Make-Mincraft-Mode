@@ -271,14 +271,20 @@ def test_atomic_summary_aggregation_preserves_response_template():
 
     custom = SimpleNamespace(
         _coder_project_context_budget=lambda *a, **k: 4096,
+        _generate_coder_text=(
+            lambda router, role, messages, *args, **kwargs:
+            router.generate_text(role, messages, *args, **kwargs)
+        ),
         _collect_initial_observations=lambda *a, **k: {},
         _materialize_owned_reuse_context=lambda *a, **k: {},
     )
+    original_router_generate_text = Router.generate_text
     install(
         custom_module_generator_module=custom,
         model_router_module=SimpleNamespace(ModelRouter=Router),
     )
-    result = Router().generate_text(
+    assert Router.generate_text is original_router_generate_text
+    result = custom._generate_coder_text(Router(),
         "coder",
         _messages(step_count=3),
         response_format="json",
@@ -307,6 +313,10 @@ def test_atomic_summary_aggregation_preserves_host_summary_in_production_text_mo
 
     custom = SimpleNamespace(
         _coder_project_context_budget=lambda *a, **k: 4096,
+        _generate_coder_text=(
+            lambda router, role, messages, *args, **kwargs:
+            router.generate_text(role, messages, *args, **kwargs)
+        ),
         _collect_initial_observations=lambda *a, **k: {},
         _materialize_owned_reuse_context=lambda *a, **k: {},
     )
@@ -314,7 +324,7 @@ def test_atomic_summary_aggregation_preserves_host_summary_in_production_text_mo
         custom_module_generator_module=custom,
         model_router_module=SimpleNamespace(ModelRouter=Router),
     )
-    result = Router().generate_text(
+    result = custom._generate_coder_text(Router(),
         "coder",
         _messages(step_count=3),
         response_format="text",
@@ -346,6 +356,10 @@ def test_atomic_summary_aggregation_truncates_distinct_contract_summaries_to_sch
 
     custom = SimpleNamespace(
         _coder_project_context_budget=lambda *a, **k: 4096,
+        _generate_coder_text=(
+            lambda router, role, messages, *args, **kwargs:
+            router.generate_text(role, messages, *args, **kwargs)
+        ),
         _collect_initial_observations=lambda *a, **k: {},
         _materialize_owned_reuse_context=lambda *a, **k: {},
     )
@@ -353,7 +367,7 @@ def test_atomic_summary_aggregation_truncates_distinct_contract_summaries_to_sch
         custom_module_generator_module=custom,
         model_router_module=SimpleNamespace(ModelRouter=Router),
     )
-    result = Router().generate_text(
+    result = custom._generate_coder_text(Router(),
         "coder",
         _messages(step_count=3),
         response_format="text",
@@ -384,6 +398,10 @@ def test_atomic_summary_aggregation_rejects_mixed_summary_transport():
 
     custom = SimpleNamespace(
         _coder_project_context_budget=lambda *a, **k: 4096,
+        _generate_coder_text=(
+            lambda router, role, messages, *args, **kwargs:
+            router.generate_text(role, messages, *args, **kwargs)
+        ),
         _collect_initial_observations=lambda *a, **k: {},
         _materialize_owned_reuse_context=lambda *a, **k: {},
     )
@@ -392,7 +410,7 @@ def test_atomic_summary_aggregation_rejects_mixed_summary_transport():
         model_router_module=SimpleNamespace(ModelRouter=Router),
     )
     with pytest.raises(AtomicCoderContractError, match="CODER_SUMMARY_TRANSPORT_MIXED"):
-        Router().generate_text(
+        custom._generate_coder_text(Router(),
             "coder",
             _messages(step_count=3),
             response_format="text",
