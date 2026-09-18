@@ -1242,16 +1242,16 @@ def _target_evidence_ready(
     *,
     require_rag: bool,
     fresh_java_target: bool,
+    compile_backed_java: bool = False,
 ) -> bool:
-    """Keep mutation authority separate from factual implementation evidence.
+    """Decide whether implementation may proceed.
 
-    A host-reserved path proves where the coder may write; it does not prove that the
-    coder knows the target Minecraft/Fabric API. Fresh Java targets therefore require
-    reviewed Java/API evidence whenever RAG is required, even when the destination is
-    already host-authorized.
+    Fresh Java never depends on optional retrieval services when the host owns the exact
+    target and the task carries mandatory target_compile. In that case the real target
+    compiler is the authoritative API gate and retrieval remains advisory only.
     """
 
-    if not require_rag:
+    if not require_rag or compile_backed_java:
         return True
     if fresh_java_target:
         return state.has_authoritative_java_evidence
@@ -2349,6 +2349,12 @@ def _generate_with_tools_impl(
         and _canonical_mutation_path(state.mutation_context.target_path).casefold().endswith(".java")
     )
     initial_execution_authority = _host_target_execution_authority(state)
+    from .small_model_task_capsule_contract import current_task_required_gates
+    compile_backed_java = bool(
+        fresh_java_target
+        and initial_execution_authority
+        and "target_compile" in current_task_required_gates()
+    )
     router_requires_fresh_evidence = bool(router._agent_require_fresh_evidence)
     require_rag = _requires_rag_evidence(
         role=role,
@@ -2357,9 +2363,11 @@ def _generate_with_tools_impl(
         implementation_requires_mutation=implementation_requires_mutation,
         initial_execution_authority=initial_execution_authority,
     )
-    required_evidence_choice = require_rag
+    required_evidence_choice = bool(require_rag and not compile_backed_java)
 
-    if require_rag:
+    if compile_backed_java:
+        state.phase = LoopPhase.ACT
+    elif require_rag:
         state.phase = LoopPhase.OBSERVE
     elif implementation_requires_mutation and mutation_ready and not mutation_history_applied(messages):
         state.phase = LoopPhase.ACT
@@ -2382,6 +2390,7 @@ def _generate_with_tools_impl(
             "host_target_execution_authority": initial_execution_authority,
             "implementation_requires_mutation": implementation_requires_mutation,
             "mutation_ready": mutation_ready,
+            "compile_backed_java": compile_backed_java,
             "initial_phase": state.phase.value,
         },
     )
@@ -2392,7 +2401,10 @@ def _generate_with_tools_impl(
         )
 
         baseline_ready = _target_evidence_ready(
-            state, require_rag=require_rag, fresh_java_target=fresh_java_target
+            state,
+            require_rag=require_rag,
+            fresh_java_target=fresh_java_target,
+            compile_backed_java=compile_backed_java,
         )
         if (
             implementation_requires_mutation
