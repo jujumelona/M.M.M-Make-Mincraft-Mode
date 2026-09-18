@@ -30,7 +30,7 @@ class ExpansionGraphRouter:
             ]
             return {"count": len(selected)}
         if tool_name == "submit_design_decision_count":
-            return {"count": 0, "blocked_reason": ""}
+            return {"count": 0}
         if tool_name == "submit_design_research_fact_count":
             return {"count": 0, "blocked_reason": ""}
         if tool_name == "submit_one_design_continue_record":
