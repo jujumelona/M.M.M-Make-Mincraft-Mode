@@ -771,9 +771,7 @@ class CustomModuleGenerator:
                 "would reset HostRunState over an already-mutated staged workspace."
             ) from exc
 
-        summary_text = json.loads(summary)["summary"]
-        if not isinstance(summary_text, str):
-            raise CustomModuleGenerationError("Coder summary must be a string in the fixed JSON template.")
+        summary_text = _parse_coder_summary(summary)
 
         operations, touched_paths, discarded_paths = _collect_staged_operations(
             root,
@@ -1391,6 +1389,22 @@ def _extract_json(text: str) -> dict[str, Any]:
         if isinstance(value, dict):
             return value
     raise CustomModuleGenerationError("Model output did not contain one parseable JSON object.")
+
+
+def _parse_coder_summary(text: str) -> str:
+    """Parse the fixed coder-summary object even when the backend leaks reasoning wrappers."""
+
+    payload = _extract_json(text)
+    if set(payload) != {"summary"}:
+        raise CustomModuleGenerationError(
+            "Coder summary must contain exactly the fixed JSON field 'summary'."
+        )
+    summary = payload["summary"]
+    if not isinstance(summary, str):
+        raise CustomModuleGenerationError(
+            "Coder summary must be a string in the fixed JSON template."
+        )
+    return summary
 
 
 def _is_stale_project_index_error(exc: ValueError) -> bool:
