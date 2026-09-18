@@ -15,6 +15,7 @@ jobs:
   build_and_publish:
     name: CUDA SM${{ inputs.cuda_arch }}
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
     container: nvidia/cuda:12.4.1-devel-ubuntu22.04
     env:
       LLAMA_SOURCE_REF: 1d2869c6e54d5003f3927a79efbca0fefa034a6d
