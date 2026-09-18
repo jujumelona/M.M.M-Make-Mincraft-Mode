@@ -174,7 +174,7 @@ def run_generation_verifier(
     payload = dict(arguments or {})
     root, _ = runtime_module._discover_model_project_root(runtime.workspace_root)
     try:
-        _normalize_relative_files(payload.get("relative_files"))
+        relative_files = _normalize_relative_files(payload.get("relative_files"))
         requested_timeout = _requested_timeout_seconds(payload)
         service = getattr(runtime, _JDT_SERVICE_ATTR, None)
         if service is None:
@@ -182,6 +182,7 @@ def run_generation_verifier(
             setattr(runtime, _JDT_SERVICE_ATTR, service)
         result = service.diagnostics(
             root,
+            relative_files=relative_files,
             timeout_seconds=requested_timeout,
             full_scan=bool(payload.get("full_scan", False)),
         )
