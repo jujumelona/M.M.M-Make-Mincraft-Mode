@@ -1392,14 +1392,38 @@ def _extract_json(text: str) -> dict[str, Any]:
 
 
 def _parse_coder_summary(text: str) -> str:
-    """Parse the fixed coder-summary object even when the backend leaks reasoning wrappers."""
+    """Parse exactly one fixed coder-summary object from possibly wrapped model text."""
 
-    payload = _extract_json(text)
-    if set(payload) != {"summary"}:
+    decoder = json.JSONDecoder()
+    parseable_objects: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
+    for index, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(value, dict):
+            continue
+        parseable_objects.append(value)
+        if set(value) == {"summary"}:
+            candidates.append(value)
+
+    if not candidates:
+        if parseable_objects:
+            raise CustomModuleGenerationError(
+                "Coder summary must contain exactly the fixed JSON field 'summary'."
+            )
         raise CustomModuleGenerationError(
-            "Coder summary must contain exactly the fixed JSON field 'summary'."
+            "Coder summary output did not contain a parseable fixed JSON object."
         )
-    summary = payload["summary"]
+    if len(candidates) != 1:
+        raise CustomModuleGenerationError(
+            "Coder summary output contained multiple fixed JSON summary objects."
+        )
+
+    summary = candidates[0]["summary"]
     if not isinstance(summary, str):
         raise CustomModuleGenerationError(
             "Coder summary must be a string in the fixed JSON template."
