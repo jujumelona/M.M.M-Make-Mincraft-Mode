@@ -169,7 +169,19 @@ def test_agent_can_exceed_eight_tool_rounds_when_evidence_keeps_changing(monkeyp
         def call(self, stage: str, name: str, arguments):
             payload = dict(arguments)
             self.calls.append((stage, name, payload))
-            return {"hits": [{"path": f"{payload['query']}.java", "line": len(self.calls)}]}
+            ordinal = len(self.calls)
+            return {
+                "schema_version": "mmm/code-rag-result-v1",
+                "hits": [{
+                    "source_path": f"src/main/java/example/Evidence{ordinal}.java",
+                    "text": f"package example; final class Evidence{ordinal} {{ void register() {{}} }}",
+                }],
+                "receipt": {
+                    "result_count": 1,
+                    "coverage_score": 1.0,
+                    "relevance_score": 1.0,
+                },
+            }
 
     adapter = LongAdapter()
     runtime = NovelRuntime()
@@ -274,7 +286,10 @@ def test_required_rag_exhaustion_fails_before_hard_round_budget(monkeypatch) -> 
     monkeypatch.setattr(ModelRouter, "_new_text_adapter", staticmethod(lambda config, *, role: adapter))
     router = ModelRouter(profile="test", registry=_Registry(), agent_tool_runtime_factory=lambda **_: runtime)
     router._agent_require_fresh_evidence = True
-    with pytest.raises(ModelConfigurationError, match="Required production evidence is unavailable"):
+    with pytest.raises(
+        ModelConfigurationError,
+        match="did not honor host-forced RAG tool choice",
+    ):
         router.generate_text("coder", [{"role": "user", "content": "implement unknown API"}])
     assert len(runtime.calls) == 1
     assert len(adapter.requests) == 3
