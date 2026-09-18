@@ -174,6 +174,7 @@ def test_agent_runtime_owns_generation_verifier_dispatch_directly(monkeypatch, t
     from minecraft_mod_ai import generation_verifier_resilience
 
     (tmp_path / "build.gradle").write_text("plugins {}\n", encoding="utf-8")
+    (tmp_path / "src" / "main" / "java").mkdir(parents=True)
     runtime = agent_tool_runtime.AgentToolRuntime(
         profile="test",
         workspace_root=tmp_path,
