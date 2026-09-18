@@ -3,7 +3,7 @@ name: Full Debug Gate
 on:
   workflow_dispatch:
   workflow_run:
-    workflows: [CI, Windows Debug, Workflow Lint, Audit Runtime Bottleneck Candidates, Cumulative Regression Guard, Production Kill Gates]
+    workflows: [CI, Windows Debug, Workflow Lint, Audit Runtime Bottleneck Candidates, Cumulative Regression Guard, Production Kill Gates, JVM Owner Contract]
     types: [completed]
 
 permissions:
