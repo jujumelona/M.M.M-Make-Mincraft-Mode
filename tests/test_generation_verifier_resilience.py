@@ -175,6 +175,7 @@ def test_progress_loop_elides_forced_verifier_model_turn_without_runtime_rebind(
 def test_agent_runtime_owns_generation_verifier_dispatch_directly(monkeypatch, tmp_path):
     from minecraft_mod_ai import generation_verifier_resilience
 
+    (tmp_path / "build.gradle").write_text("plugins {}\n", encoding="utf-8")
     runtime = agent_tool_runtime.AgentToolRuntime(
         profile="test",
         workspace_root=tmp_path,
