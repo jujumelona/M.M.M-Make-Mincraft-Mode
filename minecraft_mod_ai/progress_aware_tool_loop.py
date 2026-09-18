@@ -1209,24 +1209,18 @@ def _requires_rag_evidence(
 ) -> bool:
     """Decide whether the coder must retrieve evidence before acting.
 
-    A fresh host-reserved file is already localized and executable when the host
-    owns the exact creatable target. Freshness alone must not force retrieval:
-    otherwise deterministic local-only files can exhaust every evidence route
-    without ever reaching ACT. Explicit router evidence policy and missing host
-    execution authority still require retrieval.
+    Exact host execution authority is the final localization decision for an approved
+    mutation target. A router-wide fresh-evidence preference may still require retrieval
+    when the host has not authorized an executable target, but it must not demote an
+    already mutation-ready PlanIR target back into OBSERVE. Otherwise deterministic
+    host-specified files can exhaust irrelevant evidence routes and never reach ACT.
     """
 
-    return bool(
-        role in {"coder", "coder_safe"}
-        and not host_grounded
-        and (
-            router_requires_fresh_evidence
-            or (
-                implementation_requires_mutation
-                and not initial_execution_authority
-            )
-        )
-    )
+    if role not in {"coder", "coder_safe"} or host_grounded:
+        return False
+    if implementation_requires_mutation and initial_execution_authority:
+        return False
+    return bool(router_requires_fresh_evidence or implementation_requires_mutation)
 
 
 def _target_evidence_ready(
@@ -2173,10 +2167,11 @@ def _generate_with_tools_impl(
         and _canonical_mutation_path(state.mutation_context.target_path).casefold().endswith(".java")
     )
     initial_execution_authority = _host_target_execution_authority(state)
+    router_requires_fresh_evidence = bool(router._agent_require_fresh_evidence)
     require_rag = _requires_rag_evidence(
         role=role,
         host_grounded=host_grounded,
-        router_requires_fresh_evidence=bool(router._agent_require_fresh_evidence),
+        router_requires_fresh_evidence=router_requires_fresh_evidence,
         implementation_requires_mutation=implementation_requires_mutation,
         initial_execution_authority=initial_execution_authority,
     )
@@ -2200,6 +2195,7 @@ def _generate_with_tools_impl(
             "role": role,
             "host_grounded": host_grounded,
             "fresh_java_target": fresh_java_target,
+            "router_requires_fresh_evidence": router_requires_fresh_evidence,
             "require_rag": require_rag,
             "host_target_execution_authority": initial_execution_authority,
             "implementation_requires_mutation": implementation_requires_mutation,
