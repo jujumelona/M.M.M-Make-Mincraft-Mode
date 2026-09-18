@@ -1,6 +1,5 @@
 """M.M.M Make Mincraft Mode: scalable multimodal Minecraft mod production tools."""
 
-from .custom_checkpoint_performance_installation import install as install_checkpoint_performance
 from .execution_feedback_semantic_convergence_installation import (
     install as install_execution_feedback_semantic_convergence,
 )
@@ -23,10 +22,8 @@ def _validate_runtime_template_authority() -> None:
 install_hardware_concurrency()
 initialize_runtime()
 _validate_runtime_template_authority()
-from . import custom_module_generator as _custom_module_generator
 from . import execution_feedback_replan_contract as _execution_feedback_replan_contract
 
-install_checkpoint_performance(_custom_module_generator)
 install_execution_feedback_semantic_convergence(_execution_feedback_replan_contract)
 finalize_runtime()
 
