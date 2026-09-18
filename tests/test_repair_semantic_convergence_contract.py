@@ -7,6 +7,13 @@ from minecraft_mod_ai import repair_engine
 from minecraft_mod_ai.repair_engine import RepairEngine
 
 
+def _bind_test_platform(root: Path) -> None:
+    (root / "gradle.properties").write_text(
+        "minecraft_version=1.21.1\nloader=fabric\n",
+        encoding="utf-8",
+    )
+
+
 def test_unbounded_repair_uses_semantic_convergence_not_two_attempt_cap(
     tmp_path: Path,
     monkeypatch,
@@ -15,6 +22,7 @@ def test_unbounded_repair_uses_semantic_convergence_not_two_attempt_cap(
     source = root / "src/main/java/demo/Example.java"
     source.parent.mkdir(parents=True)
     source.write_text("package demo; final class Example { int value = 0; }\n", encoding="utf-8")
+    _bind_test_platform(root)
 
     class Index:
         def __init__(self, _root, policy=None):
@@ -103,6 +111,7 @@ def test_repeated_verifier_signature_still_terminates_unbounded_repair(
 ) -> None:
     root = tmp_path / "project"
     root.mkdir()
+    _bind_test_platform(root)
 
     class Index:
         def __init__(self, _root, policy=None):
