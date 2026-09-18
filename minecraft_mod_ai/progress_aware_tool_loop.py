@@ -1217,8 +1217,6 @@ def _target_evidence_ready(
         return True
     if fresh_java_target:
         return state.has_authoritative_java_evidence
-    if _host_target_execution_authority(state):
-        return True
     return state.has_fresh_evidence
 
 
@@ -2159,7 +2157,7 @@ def _generate_with_tools_impl(
     )
     required_evidence_choice = require_rag
 
-    if require_rag and (fresh_java_target or not initial_execution_authority):
+    if require_rag:
         state.phase = LoopPhase.OBSERVE
     elif implementation_requires_mutation and mutation_ready and not mutation_history_applied(messages):
         state.phase = LoopPhase.ACT
