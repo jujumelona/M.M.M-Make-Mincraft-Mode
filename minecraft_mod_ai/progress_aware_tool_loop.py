@@ -1718,15 +1718,14 @@ def _fresh_observe_names(
         preferred = ("search_project_rag", "search_code_rag", "java_workspace_symbols")
         return _unattempted_tools(by_name, attempted, preferred)[:1]
 
-    # The target path is already host-localized. Ground Java/API semantics using the
-    # cheapest version-pinned project evidence first. External MCP then walks a
-    # capability-specific frontier instead of spending its only call on whichever
-    # capability the model happens to choose. Modrinth project lookup is deliberately
-    # excluded: a task id is not a Modrinth project id and that lookup cannot prove the
-    # Java API needed to implement a fresh source file.
-    for local_name in ("search_code_rag", "search_project_rag"):
-        if local_name in by_name and local_name not in attempted:
-            return [local_name]
+    # The target path is already host-localized. Ground Java/API semantics from
+    # concrete source/API content, not catalog metadata. search_project_rag returns
+    # code-owned official source descriptors (URLs/titles/version scope) rather than
+    # Java declarations, so it cannot authorize implementation of a fresh Java file.
+    # External MCP walks a capability-specific frontier instead of spending its only
+    # call on whichever capability the model happens to choose.
+    if "search_code_rag" in by_name and "search_code_rag" not in attempted:
+        return ["search_code_rag"]
 
     external = _next_fresh_java_external_step(by_name, attempted)
     if external is not None:
