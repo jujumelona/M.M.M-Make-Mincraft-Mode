@@ -131,3 +131,27 @@ def test_repeated_nonvisible_tool_consumes_forced_reviewed_route() -> None:
     assert "java_file_read" not in state.attempted_sources
     assert state.semantic_fixed_point is False
     assert state.no_progress_streak == 0
+
+
+def test_rejected_forced_external_route_consumes_only_selected_capability() -> None:
+    state = tool_loop.HostRunState(phase=tool_loop.LoopPhase.OBSERVE)
+    state.semantic_fixed_point = True
+    state.no_progress_streak = 1
+    state.seen_no_progress_digests.add("same-external-rejection")
+
+    routes = tool_loop._consume_rejected_evidence_fixed_point(
+        state,
+        (
+            {
+                "failure_code": "TOOL_SCHEMA_INVALID",
+                "original_tool": "external_mcp_schema",
+            },
+        ),
+        {"external_mcp_schema"},
+        forced_evidence_tool="external_mcp_schema",
+        forced_evidence_arguments={"capability": "source_search"},
+    )
+
+    assert routes == ("external_mcp_schema",)
+    assert "external_mcp_schema:source_search" in state.attempted_sources
+    assert "external_mcp_schema:official_mod_docs" not in state.attempted_sources
