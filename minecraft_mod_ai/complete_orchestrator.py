@@ -360,6 +360,37 @@ def _unchanged_postbuild_validation(
     return source_report, jdt_receipt, False
 
 
+_JDT_INFRASTRUCTURE_CODES = frozenset({
+    "JDT_DIAGNOSTICS_UNAVAILABLE",
+    "JDT_WORKSPACE_NOT_READY",
+})
+
+
+def _blocking_jdt_errors(
+    receipt: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Return only source diagnostics that remain actionable after build verification."""
+
+    return [
+        item
+        for item in jdt_diagnostic_errors(receipt)
+        if str(item.get("code") or "").strip().upper() not in _JDT_INFRASTRUCTURE_CODES
+    ]
+
+
+def _final_validation_failure(
+    *,
+    source_report: dict[str, Any],
+    jdt_receipt: dict[str, Any] | None,
+    run_jdt: bool,
+) -> str | None:
+    if source_report.get("status") != "PASS":
+        return "Final project failed deterministic source validation after build/repair."
+    if run_jdt and jdt_receipt is not None and _blocking_jdt_errors(jdt_receipt):
+        return "Final JDT validation still reports source errors after build/repair."
+    return None
+
+
 def _refresh_validation_after_build(
     *,
     prebuild_manifest: str,
@@ -498,10 +529,13 @@ class CompleteProductionOrchestrator:
         if jdt_receipt is not None:
             module_receipts.append({'schema_version': 'mmm/jdt-gate-v1', **jdt_receipt})
             print('[JDT RECEIPT] ' + json.dumps(jdt_receipt, ensure_ascii=False, sort_keys=True, default=str), flush=True)
-            # JDT is auxiliary; actual diagnostics may fail closed when repair is disabled.
-            errors = jdt_diagnostic_errors(jdt_receipt)
-            if errors and (not options.auto_repair):
-                raise CompleteProductionError('JDT reported errors and automatic repair is disabled.')
+            # Infrastructure-unavailable JDT remains auxiliary, but real source diagnostics
+            # cannot be packaged in source-only mode and must be repaired before a full build exits.
+            errors = _blocking_jdt_errors(jdt_receipt)
+            if errors and (options.source_only or not options.auto_repair):
+                raise CompleteProductionError(
+                    'JDT reported source errors that cannot be left unresolved.'
+                )
         if options.source_only:
             release = run_named_checkpoint(ledger, 'package-source', stage='package:source', input_value={'graph_hash': work_plan.graph_hash, 'project_manifest': self._project_manifest_hash(project_root)}, action=lambda: self._package_source_only(run_root, project_root, approved), encode=lambda value: {'release_zip': value}, decode=lambda cached: str(cached['release_zip']), validate_cached=lambda value: Path(value).is_file())
             unresolved.extend(_external_gates(approved, options))
@@ -643,6 +677,13 @@ class CompleteProductionOrchestrator:
                 module_receipts.append(
                     {'schema_version': 'mmm/jdt-gate-v1', 'phase': 'final', **jdt_receipt}
                 )
+        final_validation_failure = _final_validation_failure(
+            source_report=source_report,
+            jdt_receipt=jdt_receipt,
+            run_jdt=options.run_jdt,
+        )
+        if final_validation_failure is not None:
+            raise CompleteProductionError(final_validation_failure)
         self._succeed_work_node(
             ledger,
             'validate-source-final',
