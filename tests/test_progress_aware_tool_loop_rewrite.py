@@ -36,6 +36,55 @@ def test_fresh_host_reserved_target_is_ready_without_searching_its_own_filename(
     assert [item["function"]["name"] for item in selected] == ["search_project_rag"]
 
 
+def test_materialized_atomic_target_reconciles_stale_fresh_authority(tmp_path) -> None:
+    from types import SimpleNamespace
+
+    target = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+    source = (
+        "package dev.mmm.debugfixture;\n"
+        "public final class DebugToken { static final int VALUE = 1; }\n"
+    )
+    target_file = tmp_path / target
+    target_file.parent.mkdir(parents=True)
+    target_file.write_text(source, encoding="utf-8")
+
+    payload = {
+        "primary_path": target,
+        "writable_paths": [target],
+        "reuse_action": "fresh",
+    }
+    messages = [{"role": "developer", "content": json.dumps(payload)}]
+    state = loop.HostRunState()
+
+    assert loop.is_mutation_ready(messages, state) is True
+    assert state.mutation_context is not None
+    assert state.mutation_context.is_new_file is True
+
+    reconciled = loop._reconcile_materialized_target_from_workspace(
+        state,
+        SimpleNamespace(workspace_root=str(tmp_path)),
+    )
+
+    assert reconciled is not None
+    assert reconciled.is_new_file is False
+    assert reconciled.evidence_source == "workspace_existing_target"
+    assert reconciled.source_body == source
+    assert target not in reconciled.creatable_paths
+    assert target in state.created_paths
+    assert loop._host_target_execution_authority(state) is True
+
+    # Rebinding the original host-reserved authority must not resurrect stale
+    # create semantics once the exact staged file has been observed.
+    assert loop.is_mutation_ready(messages, state) is True
+    assert state.mutation_context is not None
+    assert state.mutation_context.is_new_file is False
+    assert state.mutation_context.source_body == source
+
+    refresh = loop._existing_target_refresh_message(state.mutation_context)
+    assert target in refresh["content"]
+    assert source.strip() in refresh["content"]
+
+
 def test_recovery_frontier_excludes_unrelated_ecosystem_discovery() -> None:
     tools = tuple(
         _schema(name)
