@@ -45,6 +45,7 @@ jobs:
   gate:
     name: Model-realistic replay gate
     if: ${{ always() }}
+    timeout-minutes: 5
     needs: [plan, replay]
     runs-on: ubuntu-latest
     steps:
