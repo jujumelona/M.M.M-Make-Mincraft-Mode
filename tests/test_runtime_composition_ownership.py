@@ -67,8 +67,9 @@ def test_finalization_rechecks_wrapper_integrity_after_late_installers() -> None
     calls = _direct_call_names(function)
 
     assert calls.count("verify_installed_wrappers") == 1
-    assert calls.index("install_llama_server_response_resilience") < calls.index(
-        "verify_installed_wrappers"
+    assert "install_llama_server_response_resilience" not in calls
+    assert calls.index("verify_installed_wrappers") < calls.index(
+        "run_context_budget_preflight"
     )
     assert calls.index("verify_installed_wrappers") < calls.index(
         "run_runtime_live_path_preflight"
