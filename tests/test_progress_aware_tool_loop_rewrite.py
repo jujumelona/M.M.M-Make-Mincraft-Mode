@@ -140,3 +140,236 @@ def test_failed_external_mcp_route_is_consumed_for_recovery_frontier() -> None:
     )
     names = {item["function"]["name"] for item in selected}
     assert "external_mcp_call" not in names
+
+
+
+def test_fresh_java_write_authority_does_not_replace_api_evidence() -> None:
+    path = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+    state = loop.HostRunState(
+        mutation_context=loop.TargetMutationContext(
+            target_path=path,
+            target_symbol="DebugToken",
+            is_new_file=True,
+            evidence_source="evidence_fresh_owned_anchor",
+            writable_paths=(path,),
+            creatable_paths=(path,),
+            target_pinned=True,
+        )
+    )
+
+    assert loop._host_target_execution_authority(state) is True
+    assert loop._target_evidence_ready(
+        state,
+        require_rag=True,
+        fresh_java_target=True,
+    ) is False
+
+    assert state.record_evidence(
+        {
+            "receipt": {
+                "result_count": 1,
+                "coverage_score": 1.0,
+                "relevance_score": 1.0,
+            },
+            "hits": [
+                {
+                    "path": "src/main/java/dev/mmm/Example.java",
+                    "text": (
+                        "package dev.mmm; import net.fabricmc.api.ModInitializer; "
+                        "public final class Example {}"
+                    ),
+                }
+            ],
+        },
+        usable=True,
+    ) is True
+    assert loop._target_evidence_ready(
+        state,
+        require_rag=True,
+        fresh_java_target=True,
+    ) is True
+
+
+def test_fresh_java_requires_reviewed_evidence_before_source_mutation() -> None:
+    from types import SimpleNamespace
+
+    from minecraft_mod_ai.model_adapters import GenerationRequest, GenerationResponse, ToolCall
+
+    target = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+
+    class Adapter:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate_turn(self, request):
+            self.calls += 1
+            names = {item["function"]["name"] for item in request.tools}
+            if self.calls == 1:
+                assert names == {"search_project_rag"}
+                assert request.tool_choice == {
+                    "type": "function",
+                    "function": {"name": "search_project_rag"},
+                }
+                arguments = {"query": "Fabric item registration example"}
+                return GenerationResponse(
+                    tool_calls=(
+                        ToolCall(
+                            id="evidence-1",
+                            name="search_project_rag",
+                            arguments=arguments,
+                            raw_arguments=json.dumps(arguments, separators=(",", ":")),
+                        ),
+                    )
+                )
+            if self.calls == 2:
+                assert names == {"apply_source_edit"}
+                arguments = {
+                    "operation": "create_file",
+                    "path": target,
+                    "content": (
+                        "package dev.mmm.debugfixture; "
+                        "public final class DebugToken {}\n"
+                    ),
+                }
+                return GenerationResponse(
+                    tool_calls=(
+                        ToolCall(
+                            id="edit-1",
+                            name="apply_source_edit",
+                            arguments=arguments,
+                            raw_arguments=json.dumps(arguments, separators=(",", ":")),
+                        ),
+                    )
+                )
+            raise AssertionError("terminal verifier state must not invoke the coder again")
+
+    class Runtime:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def call(self, stage, name, _arguments):
+            assert stage == "generation"
+            self.calls.append(name)
+            if name == "search_project_rag":
+                return {
+                    "receipt": {
+                        "result_count": 1,
+                        "coverage_score": 1.0,
+                        "relevance_score": 1.0,
+                    },
+                    "hits": [
+                        {
+                            "path": "src/main/java/dev/mmm/Existing.java",
+                            "text": (
+                                "package dev.mmm; import net.fabricmc.api.ModInitializer; "
+                                "public final class Existing {}"
+                            ),
+                        }
+                    ],
+                }
+            if name == "apply_source_edit":
+                return {
+                    "schema_version": "mmm/source-patch-receipt-v1",
+                    "status": "APPLIED",
+                    "operations": [
+                        {
+                            "operation": "create",
+                            "path": target,
+                            "before_sha256": None,
+                            "after_sha256": "sha256:" + "4" * 64,
+                        }
+                    ],
+                }
+            if name == "java_diagnostics":
+                return {
+                    "schema_version": "mmm/java-diagnostics-v3",
+                    "status": "PASS",
+                    "available": True,
+                    "complete": True,
+                    "session_id": "session",
+                    "model_id": "model",
+                    "files_opened": 1,
+                    "error_count": 0,
+                    "warning_count": 0,
+                    "diagnostics": {},
+                }
+            raise AssertionError(name)
+
+    request = GenerationRequest(
+        messages=(
+            {
+                "role": "developer",
+                "content": json.dumps(
+                    {
+                        "primary_path": target,
+                        "writable_paths": [target],
+                        "reuse_action": "fresh",
+                    }
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "phase": "implement_module",
+                        "task": "Implement the approved debug token item.",
+                    }
+                ),
+            },
+        ),
+        tools=(
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_project_rag",
+                    "description": "search project evidence",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "apply_source_edit",
+                    "description": "edit source",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "java_diagnostics",
+                    "description": "verify Java",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ),
+    )
+    adapter = Adapter()
+    runtime = Runtime()
+
+    result = loop.generate_with_tools(
+        SimpleNamespace(_agent_require_fresh_evidence=False),
+        config=SimpleNamespace(
+            adapter="test",
+            max_context=32768,
+            max_input_tokens=0,
+            max_new_tokens=512,
+        ),
+        adapter=adapter,
+        request=request,
+        runtime=runtime,
+        stage="generation",
+        role="coder",
+    )
+
+    assert json.loads(result)["summary"]
+    assert adapter.calls == 2
+    assert runtime.calls == [
+        "search_project_rag",
+        "apply_source_edit",
+        "java_diagnostics",
+    ]
