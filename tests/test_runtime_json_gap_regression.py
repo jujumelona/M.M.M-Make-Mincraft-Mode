@@ -1,7 +1,5 @@
 from types import SimpleNamespace
 
-import pytest
-
 from minecraft_mod_ai.llama_server_hardware_policy import _server_payload
 from minecraft_mod_ai.model_adapters.base import AdapterConfig, GenerationRequest
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
