@@ -2131,7 +2131,6 @@ def _generate_with_tools_impl(
     reviewed_external_servers = reviewed_mcp_servers_for_model_role(stage, role)
     state = HostRunState()
     unavailable_verifiers: set[str] = set()
-    required_evidence_choice = False
     implementation_requires_mutation = bool(
         role in {"coder", "coder_safe"}
         and stage == "generation"
