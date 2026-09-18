@@ -2159,6 +2159,7 @@ def _generate_with_tools_impl(
             )
         )
     )
+    required_evidence_choice = require_rag
 
     if require_rag and (fresh_java_target or not initial_execution_authority):
         state.phase = LoopPhase.OBSERVE
