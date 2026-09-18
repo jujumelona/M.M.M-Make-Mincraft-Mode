@@ -40,6 +40,13 @@ def _json_native(value: Any) -> Any:
     return value
 
 
+def _import_owner(symbol: Any) -> str:
+    if not isinstance(symbol, Mapping):
+        return ""
+    owner = str(symbol.get("owner") or "").strip()
+    return owner.split("$", 1)[0] if owner else ""
+
+
 def _template_type_names(templates: list[dict[str, Any]]) -> set[str]:
     body = "\n".join(str(item.get("render_body") or "") for item in templates)
     return set(re.findall(r"\b[A-Z][A-Za-z0-9_$]*\b", body))
