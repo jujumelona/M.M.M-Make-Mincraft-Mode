@@ -47,7 +47,7 @@ def run_generation_target_compile(
         details={"project_root": str(root), "target_path": target, "gradle_cache": str(cache)},
     )
     try:
-        build = GradleRunner(cache).build(root, run_gametest=False).to_dict()
+        build = GradleRunner(cache).compile_java(root).to_dict()
     except (BuildRunnerError, OSError, TimeoutError) as exc:
         build = {
             "status": "UNAVAILABLE",
