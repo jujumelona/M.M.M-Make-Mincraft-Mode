@@ -81,7 +81,7 @@ class JavaCoreService:
 
     def _resolve_and_open(self, root: Path, timeout: int) -> dict[str, Any]:
         assert self._rpc is not None
-        raw = self._rpc.request('resolve', self._resolve_parameters(root), timeout=timeout)
+        raw = self._rpc.request('resolve', self._owner_resolve_parameters(root), timeout=timeout)
         model = ResolvedBuildModel.from_dict(raw)
         if Path(model.project_root).resolve() != root:
             raise OwnerRPCError('Resolved model belongs to another project')
@@ -93,28 +93,43 @@ class JavaCoreService:
     def _resolve_parameters(root: Path) -> dict[str, str]:
         from .java_lsp import _requested_project_java_major, _resolve_project_java_home
         from .platform_catalog import _project_platform_lock, adapter_from_project
-        from .runner import GradleRunner
 
         params = {'project_root': str(root)}
-        # Generated/checkpoint projects have an immutable target authority. Resolve
-        # both Java and Gradle from that same authority so the JDT project model and
-        # the production build cannot silently use different toolchains.
+        # This method is coordinate resolution only: no downloads, builds, or cache
+        # mutation. Materialization belongs to the execution boundary below.
         platform_lock = _project_platform_lock(root)
         if platform_lock is not None:
             adapter = adapter_from_project(root)
             major = adapter.java_version
-            cache = Path.home() / '.cache' / 'mmm' / 'project-model-gradle'
-            gradle_executable = GradleRunner(cache).ensure_gradle(
-                adapter.gradle,
-                adapter.gradle_sha256,
-            )
-            params['gradle_home'] = str(gradle_executable.parent.parent.resolve())
-            params['gradle_user_home'] = str((cache / 'gradle-user-home').resolve())
+            params['gradle_version'] = adapter.gradle
+            params['gradle_sha256'] = adapter.gradle_sha256
         elif os.environ.get('MMM_JAVA_VERSION', '').strip():
             major = _requested_project_java_major()
         else:
             return params
         params['java_home'] = str(_resolve_project_java_home(int(major)))
+        return params
+
+    def _owner_resolve_parameters(self, root: Path) -> dict[str, str]:
+        """Materialize execution dependencies after pure target resolution."""
+
+        params = self._resolve_parameters(root)
+        gradle_version = params.pop('gradle_version', None)
+        gradle_sha256 = params.pop('gradle_sha256', None)
+        if gradle_version is None and gradle_sha256 is None:
+            return params
+        if not gradle_version or not gradle_sha256:
+            raise OwnerRPCError('Pinned Gradle target coordinates are incomplete')
+
+        from .runner import GradleRunner
+
+        cache = Path.home() / '.cache' / 'mmm' / 'project-model-gradle'
+        executable = GradleRunner(cache).ensure_gradle(
+            gradle_version,
+            gradle_sha256,
+        )
+        params['gradle_home'] = str(executable.parent.parent.resolve())
+        params['gradle_user_home'] = str((cache / 'gradle-user-home').resolve())
         return params
 
     def _incremental_build(self, owner, revision, timeout: int, full_scan: bool) -> dict[str, Any]:
