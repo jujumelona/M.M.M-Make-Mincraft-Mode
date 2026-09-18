@@ -2873,6 +2873,7 @@ def _generate_with_tools_impl(
                             state,
                             require_rag=require_rag,
                             fresh_java_target=fresh_java_target,
+                            compile_backed_java=compile_backed_java,
                         )
                     ):
                         state.phase = LoopPhase.ACT
@@ -2890,7 +2891,10 @@ def _generate_with_tools_impl(
         if progress:
             state.clear_no_progress_result()
             if _target_evidence_ready(
-                state, require_rag=require_rag, fresh_java_target=fresh_java_target
+                state,
+                require_rag=require_rag,
+                fresh_java_target=fresh_java_target,
+                compile_backed_java=compile_backed_java,
             ):
                 required_evidence_choice = False
         else:
@@ -2906,7 +2910,10 @@ def _generate_with_tools_impl(
                 "results": result_info,
             })
             if require_rag and not _target_evidence_ready(
-                state, require_rag=require_rag, fresh_java_target=fresh_java_target
+                state,
+                require_rag=require_rag,
+                fresh_java_target=fresh_java_target,
+                compile_backed_java=compile_backed_java,
             ):
                 required_evidence_choice = True
 
