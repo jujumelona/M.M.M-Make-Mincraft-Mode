@@ -40,6 +40,35 @@ def _bind_generation_platform_env(
     env["MMM_MCP_LOADER"] = target.loader
 
 
+def _generation_external_target(workspace_root: str | Path) -> dict[str, str]:
+    """Read immutable generation target coordinates from the bound project itself."""
+
+    root, _ = _discover_model_project_root(workspace_root)
+    from .project_platform_identity import project_platform_identity
+
+    identity = project_platform_identity(root)
+    mappings = ""
+    lock_values = identity.lock_values
+    if isinstance(lock_values, Mapping):
+        mappings = str(
+            lock_values.get("yarn_mappings")
+            or lock_values.get("mappings_version")
+            or lock_values.get("mappings_kind")
+            or ""
+        ).strip()
+    if not mappings:
+        mappings = str(
+            identity.gradle_properties.get("yarn_mappings")
+            or identity.gradle_properties.get("mappings")
+            or ""
+        ).strip()
+    return {
+        "minecraft_version": identity.minecraft_version,
+        "loader": identity.loader,
+        "mappings": mappings,
+    }
+
+
 class AgentToolRuntimeError(RuntimeError):
     pass
 
@@ -318,6 +347,12 @@ class AgentToolRuntime:
 
         payload = dict(arguments or {})
         raw_payload = dict(payload)
+        if selected == "generation" and tool_name in EXTERNAL_TOOL_NAMES:
+            # Platform coordinates are execution authority, not model-authored data.
+            # Accept whatever harmless representation the model emitted, then replace
+            # it with the exact coordinates read from the staged project's PlatformLock.
+            payload.update(_generation_external_target(self.workspace_root))
+            payload["max_access"] = "read"
         if selected == "generation" and tool_name == "java_diagnostics":
             project_root, _project_argument = _discover_model_project_root(self.workspace_root)
             raw_files = payload.get("relative_files")
