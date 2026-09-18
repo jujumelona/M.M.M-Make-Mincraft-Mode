@@ -65,6 +65,7 @@ jobs:
       - name: Install package and test dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Build owner through production bootstrap
+        timeout-minutes: 5
         shell: bash
         run: |
           set -euo pipefail
@@ -85,25 +86,31 @@ jobs:
               print("owner bootstrap compiled and materialized:", command[0])
           PY
       - name: Run owner/toolchain unit contracts
+        timeout-minutes: 5
         run: |
           python -m pytest -q \
             tests/test_java_core_toolchain.py \
             tests/test_owner_rpc.py \
             tests/test_generation_verifier_resilience.py
       - name: Live owner incremental diagnostics
+        timeout-minutes: 3
         env: &live_owner_env
           MMM_JVM_OWNER_LIVE: '1'
           MMM_JDT_DIAGNOSTIC_STARTUP_TIMEOUT_SECONDS: '90'
         run: python -m pytest -vv tests/test_jvm_owner_integration.py::test_incremental_dependent_diagnostics
       - name: Live owner Gradle project model
+        timeout-minutes: 5
         env: *live_owner_env
         run: python -m pytest -vv tests/test_jvm_owner_integration.py::test_tooling_model_and_core_project_dependencies
       - name: Live generation verifier persistence
+        timeout-minutes: 3
         env: *live_owner_env
         run: python -m pytest -vv tests/test_jvm_owner_integration.py::test_generation_service_preserves_errors_after_unchanged_check
       - name: Live annotation processor model
+        timeout-minutes: 3
         env: *live_owner_env
         run: python -m pytest -vv tests/test_jvm_owner_integration.py::test_core_runs_resolved_annotation_processor
       - name: Live Debug Fabric project model
+        timeout-minutes: 7
         env: *live_owner_env
         run: python -m pytest -vv tests/test_jvm_owner_integration.py::test_debug_fixture_fabric_project_resolves_through_production_java_core
