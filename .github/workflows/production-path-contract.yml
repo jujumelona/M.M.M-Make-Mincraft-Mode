@@ -7,6 +7,7 @@ on:
       - 'minecraft_mod_ai/model_adapters/**'
       - 'minecraft_mod_ai/custom_module_generator.py'
       - 'minecraft_mod_ai/custom_generation_research.py'
+      - 'minecraft_mod_ai/complete_orchestrator.py'
       - 'minecraft_mod_ai/small_model_atomic_coder_execution.py'
       - 'minecraft_mod_ai/platform_custom_coder_contract.py'
       - 'minecraft_mod_ai/agent_tool_runtime.py'
@@ -33,6 +34,7 @@ on:
       - 'tests/test_fresh_mutation_target_grounding.py'
       - 'tests/test_generation_implementation_grounding.py'
       - 'tests/test_required_target_compile_gate.py'
+      - 'tests/test_complete_final_validation_contract.py'
       - '.github/workflows/production-path-contract.yml'
   push:
     branches: [main]
@@ -40,6 +42,7 @@ on:
       - 'minecraft_mod_ai/model_adapters/**'
       - 'minecraft_mod_ai/custom_module_generator.py'
       - 'minecraft_mod_ai/custom_generation_research.py'
+      - 'minecraft_mod_ai/complete_orchestrator.py'
       - 'minecraft_mod_ai/small_model_atomic_coder_execution.py'
       - 'minecraft_mod_ai/platform_custom_coder_contract.py'
       - 'minecraft_mod_ai/agent_tool_runtime.py'
@@ -66,6 +69,7 @@ on:
       - 'tests/test_fresh_mutation_target_grounding.py'
       - 'tests/test_generation_implementation_grounding.py'
       - 'tests/test_required_target_compile_gate.py'
+      - 'tests/test_complete_final_validation_contract.py'
       - '.github/workflows/production-path-contract.yml'
 
 permissions:
@@ -97,6 +101,7 @@ jobs:
             minecraft_mod_ai/progress_aware_tool_loop.py \
             minecraft_mod_ai/custom_module_generator.py \
             minecraft_mod_ai/custom_generation_research.py \
+            minecraft_mod_ai/complete_orchestrator.py \
             minecraft_mod_ai/small_model_atomic_coder_execution.py \
             minecraft_mod_ai/platform_custom_coder_contract.py \
             minecraft_mod_ai/agent_tool_runtime.py \
@@ -121,4 +126,5 @@ jobs:
             tests/test_debug_mode_task_contract.py \
             tests/test_fresh_mutation_target_grounding.py \
             tests/test_generation_implementation_grounding.py \
-            tests/test_required_target_compile_gate.py
+            tests/test_required_target_compile_gate.py \
+            tests/test_complete_final_validation_contract.py
