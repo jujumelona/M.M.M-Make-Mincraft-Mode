@@ -278,6 +278,11 @@ class ExternalMCPRouter:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
+            running_loop = False
+        else:
+            running_loop = True
+
+        if not running_loop:
             return anyio.run(run)
 
         # Each call owns an independent MCP transport/session, so serializing the
