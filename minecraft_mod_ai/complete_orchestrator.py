@@ -58,6 +58,10 @@ from .production_contract import (
     persist_quality_report,
     quality_unresolved,
 )
+from .prepared_project_resume_integrity import (
+    prepared_project_cache_valid,
+    prepared_project_matches_spec,
+)
 from .project_edit import ProjectEditError, inspect_fabric_project
 from .project_index import ProjectIndex
 from .project_index_execution_reuse_contract import (
@@ -1362,14 +1366,7 @@ class CompleteProductionOrchestrator:
 
     @staticmethod
     def _project_matches_spec(project_root: Path, spec: Any) -> bool:
-        if not project_root.is_dir() or project_root.is_symlink():
-            return False
-        try:
-            info = inspect_fabric_project(project_root)
-        except (OSError, ValueError, json.JSONDecodeError, ProjectEditError):
-            return False
-        has_build = any((project_root / name).is_file() and (not (project_root / name).is_symlink()) for name in ('build.gradle', 'build.gradle.kts'))
-        return has_build and info.main_java.is_file() and (not info.main_java.is_symlink()) and (info.mod_id == spec.mod_id) and (info.package_name == spec.package_name)
+        return prepared_project_matches_spec(project_root, spec)
 
     @staticmethod
     def _write_base_proposal(project_root: Path, base: Any) -> None:
@@ -1459,15 +1456,7 @@ class CompleteProductionOrchestrator:
 
     @staticmethod
     def _valid_project_root(path: Path) -> bool:
-        if not path.is_dir() or path.is_symlink():
-            return False
-        if not any((path / name).is_file() and (not (path / name).is_symlink()) for name in ('build.gradle', 'build.gradle.kts')):
-            return False
-        try:
-            info = inspect_fabric_project(path)
-        except (OSError, ValueError, json.JSONDecodeError, ProjectEditError):
-            return False
-        return info.main_java.is_file() and (not info.main_java.is_symlink())
+        return prepared_project_cache_valid(path)
 
     @staticmethod
     def _receipt_outputs_exist(receipt: dict[str, Any], *, project_root: Path) -> bool:
