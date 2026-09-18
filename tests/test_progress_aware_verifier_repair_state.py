@@ -44,7 +44,7 @@ def _failed_diagnostics(message: str) -> dict:
     }
 
 
-def test_applied_create_converts_target_to_existing_file_authority():
+def test_applied_create_converts_target_to_atomic_rewrite_authority():
     state = HostRunState(
         mutation_context=TargetMutationContext(
             target_path=PATH,
@@ -62,7 +62,17 @@ def test_applied_create_converts_target_to_existing_file_authority():
     assert state.mutation_context is not None
     assert state.mutation_context.is_new_file is False
     assert PATH in state.created_paths
-    error = _mutation_target_error("apply_source_edit", args, state.mutation_context)
+    assert _mutation_target_error("apply_source_edit", args, state.mutation_context) is None
+
+    structural_create = {
+        "operation": "create_java_type",
+        "path": PATH,
+        "package_name": "dev.mmm.debugfixture",
+        "declaration": "public final class DebugToken",
+    }
+    error = _mutation_target_error(
+        "apply_source_edit", structural_create, state.mutation_context
+    )
     assert error is not None
     assert error.startswith("MUTATION_TARGET_CREATION_CONFLICT")
 
@@ -108,6 +118,8 @@ def test_repair_guidance_tracks_verifier_fingerprint_not_message_history():
     assert first is not None
     assert PATH in first
     assert "RegistryWrapper cannot be resolved to a type" in first
+    assert "atomic whole-file repair" in first
+    assert "expected-SHA replace" in first
     assert state.take_verifier_repair_guidance() is None
 
     state.record_verification(
