@@ -80,12 +80,14 @@ jobs:
               assert config.is_file(), config
               print("owner bootstrap compiled and materialized:", command[0])
           PY
-      - name: Run owner/toolchain contract tests
-        env:
-          MMM_JVM_OWNER_LIVE: '1'
+      - name: Run owner/toolchain unit contracts
         run: |
           python -m pytest -q \
             tests/test_java_core_toolchain.py \
             tests/test_owner_rpc.py \
-            tests/test_generation_verifier_resilience.py \
-            tests/test_jvm_owner_integration.py
+            tests/test_generation_verifier_resilience.py
+      - name: Run live production-owner integration
+        timeout-minutes: 15
+        env:
+          MMM_JVM_OWNER_LIVE: '1'
+        run: python -m pytest -vv tests/test_jvm_owner_integration.py
