@@ -196,10 +196,12 @@ public class Generator extends AbstractProcessor {
 def test_debug_fixture_fabric_project_resolves_through_production_java_core(tmp_path):
     """Exercise the same Fabric/Loom project-model path used by Debug Mode."""
 
+    from minecraft_mod_ai import fabric_immutable_rebind_contract
+    from minecraft_mod_ai import fabric_official_template_provider as fabric_provider
     from minecraft_mod_ai.colab_run_modes import write_debug_example_plan
     from minecraft_mod_ai.complete_spec import CompleteProposal
     from minecraft_mod_ai.java_core import JavaCoreService
-    from minecraft_mod_ai.scalable_generator import ScalableFabricProjectGenerator
+    from minecraft_mod_ai.platform_catalog import adapter_for_lock_values
 
     plan = write_debug_example_plan(
         tmp_path / "debug-proposal.json",
@@ -208,7 +210,19 @@ def test_debug_fixture_fabric_project_resolves_through_production_java_core(tmp_
     )
     proposal = CompleteProposal.from_dict(json.loads(plan.read_text(encoding="utf-8")))
     project = tmp_path / "fabric-project"
-    ScalableFabricProjectGenerator().generate(proposal.base_proposal.spec, project)
+    adapter = adapter_for_lock_values(proposal.base_proposal.spec.platform)
+
+    # Exercise the same provider-owned scaffold path used by production execution.
+    fabric_immutable_rebind_contract.install()
+    receipt = fabric_provider.bootstrap_fabric_project(
+        project_root=project,
+        spec=proposal.base_proposal.spec,
+        adapter=adapter,
+        cache_root=tmp_path / "fabric-provider-cache",
+    )
+    assert receipt["verified_generated_toolchain"]["minecraft_version"] == adapter.minecraft_version
+    assert receipt["verified_generated_toolchain"]["gradle"] == adapter.gradle
+    assert receipt.get("approval_rebind") == "EXACT"
 
     lock = project / ".minecraft_ai" / "platform-lock.json"
     assert lock.is_file(), "generated Fabric project must carry the target platform lock"
