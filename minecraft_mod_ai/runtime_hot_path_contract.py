@@ -268,6 +268,11 @@ def _install_parallel_external_provider(external_mcp_router_module: Any) -> None
         try:
             asyncio.get_running_loop()
         except RuntimeError:
+            running_loop = False
+        else:
+            running_loop = True
+
+        if not running_loop:
             return anyio.run(run)
 
         value: dict[str, Any] = {}
