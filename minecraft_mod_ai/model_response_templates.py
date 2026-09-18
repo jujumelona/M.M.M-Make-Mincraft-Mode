@@ -5,7 +5,7 @@ import json
 from copy import deepcopy
 from functools import lru_cache
 
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, ValidationError
 
 from .task_template_catalog import RUNTIME_TEMPLATE_ROOT
 
@@ -40,4 +40,40 @@ def response_template_prompt(name):
     )
 
 
-__all__ = ["response_schema", "response_template_prompt"]
+def validate_response_value(name, value):
+    """Validate one concrete response value against the named fixed contract."""
+
+    validator = Draft202012Validator(response_schema(name))
+    try:
+        validator.validate(value)
+    except ValidationError as exc:
+        raise ValueError(f"RESPONSE_TEMPLATE: {name} output violates fixed schema: {exc.message}") from exc
+    return value
+
+
+def serialize_response(name, value):
+    """Serialize a host-owned fixed response only after schema validation."""
+
+    validate_response_value(name, value)
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def parse_response_text(name, text):
+    """Parse exactly one JSON value and validate it against the named fixed contract."""
+
+    if not isinstance(text, str):
+        raise ValueError(f"RESPONSE_TEMPLATE: {name} output must be text")
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"RESPONSE_TEMPLATE: {name} output is not exactly one JSON value") from exc
+    return validate_response_value(name, value)
+
+
+__all__ = [
+    "parse_response_text",
+    "response_schema",
+    "response_template_prompt",
+    "serialize_response",
+    "validate_response_value",
+]
