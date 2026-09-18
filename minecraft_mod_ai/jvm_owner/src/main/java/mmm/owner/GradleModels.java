@@ -49,7 +49,16 @@ public final class GradleModels {
                     + groovyQuote(modelJar.toString()) + "') } }\n";
             Files.writeString(init, prefix + INIT_SCRIPT, StandardCharsets.UTF_8);
             GradleConnector connector = GradleConnector.newConnector().forProjectDirectory(root.toFile());
-            // Tooling API defaults to the project's wrapper distribution.
+            Object gradleHome = params.get("gradle_home");
+            if (gradleHome instanceof String && !((String) gradleHome).isBlank()) {
+                connector.useInstallation(Path.of((String) gradleHome).toRealPath().toFile());
+            }
+            Object gradleUserHome = params.get("gradle_user_home");
+            if (gradleUserHome instanceof String && !((String) gradleUserHome).isBlank()) {
+                Path userHome = Path.of((String) gradleUserHome).toAbsolutePath().normalize();
+                Files.createDirectories(userHome);
+                connector.useGradleUserHomeDir(userHome.toFile());
+            }
             try (ProjectConnection connection = connector.connect()) {
                 BuildActionExecuter<List<String>> execution = connection.action(new ResolveAction());
                 execution.withArguments("--init-script", init.toString(), "--console=plain");
