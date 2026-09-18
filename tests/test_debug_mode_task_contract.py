@@ -6,6 +6,7 @@ from pathlib import Path
 from minecraft_mod_ai.colab_run_modes import write_debug_example_plan
 from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator
 from minecraft_mod_ai.complete_spec import ProductionModule
+from minecraft_mod_ai.small_model_atomic_coder_execution import atomicize_coder_messages
 from minecraft_mod_ai.small_model_task_capsule_contract import compile_task_capsule
 
 
@@ -45,6 +46,50 @@ def test_debug_fixture_uses_real_custom_task_contract(tmp_path: Path) -> None:
     assert capsule.primary_symbol == "DebugToken"
     assert capsule.required_gates == ("target_compile",)
     assert capsule.reuse_action == "fresh"
+
+
+def test_debug_fixture_constraint_steps_compile_to_one_coder_state_transition(
+    tmp_path: Path,
+) -> None:
+    plan_path = write_debug_example_plan(
+        tmp_path / "proposal.json",
+        minecraft_version="1.21.8",
+        loader="fabric",
+    )
+    payload = json.loads(plan_path.read_text(encoding="utf-8"))
+    raw = payload["modules"][0]
+    task = dict(raw["config"]["evidence_task"])
+    task["coder_execution_contract"] = raw["config"]["coder_execution_contract"]
+    messages = (
+        {"role": "system", "content": "coder"},
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "phase": "implement_module",
+                    "task": "Implement the approved debug fixture.",
+                    "module": {
+                        "module_id": raw["module_id"],
+                        "kind": raw["kind"],
+                        "evidence_task": task,
+                    },
+                }
+            ),
+        },
+    )
+
+    batches = atomicize_coder_messages(messages)
+
+    assert len(task["coder_execution_contract"]["implementation_steps"]) == 3
+    assert len(batches) == 1
+    lowered = json.loads(batches[0][-1]["content"])
+    assert lowered["atomic_execution"]["step_count"] == 1
+    obligation = lowered["module"]["evidence_task"]["coder_execution_contract"]["step"][
+        "obligation"
+    ]
+    assert "host-grounded item registration API" in obligation
+    assert "owned DebugToken.java target" in obligation
+    assert "Do not implement ModInitializer" in obligation
 
 
 def test_debug_target_compile_is_source_owned_and_satisfied_by_real_build_receipt(
