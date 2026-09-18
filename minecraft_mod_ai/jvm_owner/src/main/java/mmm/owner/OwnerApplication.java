@@ -33,6 +33,29 @@ public final class OwnerApplication implements IApplication {
         System.err.flush();
     }
 
+    private static String describeFailure(Throwable failure) {
+        StringBuilder description = new StringBuilder();
+        Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        Throwable current = failure;
+        while (current != null && seen.add(current)) {
+            if (description.length() > 0) description.append(" <- ");
+            description.append(current.getClass().getName());
+            String message = current.getMessage();
+            if (message != null && !message.isBlank()) {
+                description.append(": ").append(message);
+            }
+            if (current instanceof CoreException core
+                    && core.getStatus() != null
+                    && core.getStatus().getException() != null
+                    && core.getStatus().getException() != current) {
+                current = core.getStatus().getException();
+            } else {
+                current = current.getCause();
+            }
+        }
+        return description.toString();
+    }
+
     private static void startBundle(String symbolicName) throws Exception {
         Bundle bundle = Platform.getBundle(symbolicName);
         if (bundle == null) {
@@ -118,7 +141,7 @@ public final class OwnerApplication implements IApplication {
                     reply.put("result", result);
                 } catch (Exception failure) {
                     failure.printStackTrace(System.err);
-                    reply.put("error", Map.of("message", failure.toString()));
+                    reply.put("error", Map.of("message", describeFailure(failure)));
                 }
                 reply.put("id", id);
                 protocol.println(gson.toJson(reply)); protocol.flush();
