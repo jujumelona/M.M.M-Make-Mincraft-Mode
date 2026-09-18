@@ -57,7 +57,7 @@ def _receipt(query: str, *, correction_queries: tuple[str, ...]=()) -> Retrieval
     hit = RetrievalHit(evidence_id='sha256:' + '1' * 64, document_id='fabric-api-1201', title='Fabric API 1.20.1', url='https://maven.fabricmc.net/', excerpt=f'Evidence for {query}', content_sha256='sha256:' + '2' * 64, revision='fabric-api-0.92.11+1.20.1', minecraft_versions=('1.20.1',), score=1.0, channels=('test',))
     return RetrievalReceipt(schema_version='minecraft-mod-ai/retrieval-receipt-v1', query=query, canonical_query=query, query_family='project', minecraft_version='1.20.1', loader='fabric', mappings='1.20.1+build.1', query_hash='sha256:' + '3' * 64, corpus_snapshot_hash='sha256:' + '4' * 64, quality='strong', coverage=1.0, correction_required=bool(correction_queries), correction_queries=correction_queries, hits=(hit,))
 
-def test_targetless_official_research_skips_worker_without_retrieval() -> None:
+def test_targetless_official_research_uses_generic_official_retrieval() -> None:
     brief = normalize_research_brief('Research all routed facts.', {}, _candidate([_domain('official_one', providers=['official_docs'])]))
     calls: list[str] = []
 
@@ -66,11 +66,11 @@ def test_targetless_official_research_skips_worker_without_retrieval() -> None:
         return _receipt(query)
 
     evidence = retrieve_domain_evidence(brief, retrieve=fake_retrieve)
-    assert calls == []
+    assert calls == ['official_one implementation evidence']
     assert evidence['target'] is None
-    assert evidence['deferred_official_domains'] == ['official_one']
+    assert evidence['deferred_official_domains'] == []
     assert evidence['unresolved_official_domains'] == []
-    assert evidence['domains'][0]['strategy'] == 'deferred_until_platform_selected'
+    assert evidence['domains'][0]['strategy'] == 'adaptive_generic_per_query'
 
 
 def test_targetless_mixed_research_keeps_generic_route() -> None:
@@ -82,13 +82,16 @@ def test_targetless_mixed_research_keeps_generic_route() -> None:
             {**_domain('generic_one', providers=['github']), 'evidence_kinds': ['source_code']},
         ]),
     )
+    calls: list[str] = []
 
-    def must_not_retrieve(*_args: object, **_kwargs: object) -> RetrievalReceipt:
-        raise AssertionError('Official retrieval must not run without a target')
+    def fake_retrieve(query: str, **_kwargs: object) -> RetrievalReceipt:
+        calls.append(query)
+        return _receipt(query)
 
-    evidence = retrieve_domain_evidence(brief, retrieve=must_not_retrieve)
-    assert evidence['deferred_official_domains'] == ['official_one']
-    assert evidence['domains'][0]['strategy'] == 'deferred_until_platform_selected'
+    evidence = retrieve_domain_evidence(brief, retrieve=fake_retrieve)
+    assert calls == ['official_one implementation evidence']
+    assert evidence['deferred_official_domains'] == []
+    assert evidence['domains'][0]['strategy'] == 'adaptive_generic_per_query'
     assert evidence['domains'][1]['strategy'] == 'routed_to_other_providers'
 
 
