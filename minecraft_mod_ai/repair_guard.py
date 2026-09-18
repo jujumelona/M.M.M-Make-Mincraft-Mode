@@ -8,6 +8,7 @@ from typing import Any
 
 from .repair_engine import RepairEngine as _BaseRepairEngine
 from .repairability import source_repair_block_reason
+from .runner import BuildRunnerError
 
 _PRELOADED_EVIDENCE: ContextVar[tuple[Path, bool, dict[str, Any]] | None] = ContextVar(
     "mmm_repair_guard_preloaded_evidence", default=None
@@ -106,11 +107,34 @@ class RepairEngine(_BaseRepairEngine):
         *,
         run_gametest: bool,
     ) -> dict[str, Any]:
+        """Use the real target compiler as the only repair oracle.
+
+        Repair must not inherit auxiliary JDT wrappers from the base RepairEngine.
+        The first failed Gradle receipt is preloaded by run_build_with_repair; every
+        subsequent repair iteration rebuilds the exact target and feeds that compiler
+        result back to the coder. JDT remains a post-build validation service only.
+        """
+
         preloaded = _PRELOADED_EVIDENCE.get()
         if preloaded is not None and preloaded[0] == root and preloaded[1] == run_gametest:
             _PRELOADED_EVIDENCE.set(None)
             return preloaded[2]
-        return super()._evidence(root, run_gametest=run_gametest)
+
+        try:
+            build = self.runner_factory(self.gradle_cache).build(
+                root,
+                run_gametest=run_gametest,
+            ).to_dict()
+        except (BuildRunnerError, OSError, TimeoutError) as exc:
+            build = {
+                "status": "UNAVAILABLE",
+                "failure_class": "infrastructure",
+                "repairable": False,
+                "error_code": "TARGET_COMPILE_UNAVAILABLE",
+                "error": f"{type(exc).__name__}: {exc}",
+                "commands": [],
+            }
+        return _initial_compile_evidence(build)
 
     def _request_patch(
         self,
