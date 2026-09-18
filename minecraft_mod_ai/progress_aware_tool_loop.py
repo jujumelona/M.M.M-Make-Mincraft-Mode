@@ -143,6 +143,12 @@ _CODE_MARKERS = frozenset({
     "package ", "import ", "void ", "return ", "final ", "static ", "new ",
     "extends ", "implements ", "override", "{", "}", ";", "(", ")",
 })
+_FRESH_JAVA_EXTERNAL_CAPABILITIES = (
+    "source_search",
+    "official_mod_docs",
+    "mod_examples",
+    "mapping_resolution",
+)
 
 
 def _tool_name(schema: Mapping[str, Any]) -> str:
@@ -207,14 +213,19 @@ def normalize_retrieval_query(value: Any) -> str:
 
 def retrieval_source_key(tool_name: str, arguments: Mapping[str, Any]) -> str:
     name = str(tool_name or "").strip()
-    if name == "external_mcp_call":
+    if name in {"external_mcp_schema", "external_mcp_call"}:
         capability = str(arguments.get("capability", "")).strip()
         return f"{name}:{capability}" if capability else name
     return name
 
 
 def retrieval_query_signature(tool_name: str, arguments: Mapping[str, Any]) -> str:
-    parts = [str(tool_name or "").strip()]
+    name = str(tool_name or "").strip()
+    parts = [name]
+    if name in {"external_mcp_schema", "external_mcp_call"}:
+        capability = str(arguments.get("capability", "")).strip().casefold()
+        if capability:
+            parts.append(f"capability={capability}")
     query = normalize_retrieval_query(arguments.get("query"))
     for key in ("index_path", "path", "file", "target_path", "symbol", "symbol_name"):
         value = str(arguments.get(key) or "").strip().casefold()
@@ -1653,6 +1664,49 @@ def _unattempted_tools(
     return [name for name in preferred if name in by_name and name not in attempted]
 
 
+def _next_fresh_java_external_step(
+    by_name: Mapping[str, Mapping[str, Any]],
+    attempted: set[str],
+) -> tuple[str, str] | None:
+    if (
+        "external_mcp_capabilities" in by_name
+        and "external_mcp_capabilities" not in attempted
+    ):
+        return "external_mcp_capabilities", ""
+    for capability in _FRESH_JAVA_EXTERNAL_CAPABILITIES:
+        schema_key = f"external_mcp_schema:{capability}"
+        call_key = f"external_mcp_call:{capability}"
+        if "external_mcp_schema" in by_name and schema_key not in attempted:
+            return "external_mcp_schema", capability
+        if "external_mcp_call" in by_name and call_key not in attempted:
+            return "external_mcp_call", capability
+    return None
+
+
+def _fresh_java_external_schema(
+    schema: Mapping[str, Any],
+    attempted: set[str],
+    by_name: Mapping[str, Mapping[str, Any]],
+) -> Mapping[str, Any]:
+    name = _tool_name(schema)
+    if name not in {"external_mcp_schema", "external_mcp_call"}:
+        return schema
+    step = _next_fresh_java_external_step(by_name, attempted)
+    if step is None or step[0] != name or not step[1]:
+        return schema
+    cloned = deepcopy(schema)
+    function = cloned.get("function") if isinstance(cloned, dict) else None
+    parameters = function.get("parameters") if isinstance(function, dict) else None
+    properties = parameters.get("properties") if isinstance(parameters, dict) else None
+    capability = properties.get("capability") if isinstance(properties, dict) else None
+    if isinstance(capability, dict):
+        capability["enum"] = [step[1]]
+        capability["description"] = (
+            "Host-selected fresh-Java evidence capability. Use exactly this value."
+        )
+    return cloned
+
+
 def _fresh_observe_names(
     by_name: Mapping[str, Mapping[str, Any]],
     attempted: set[str],
@@ -1664,21 +1718,23 @@ def _fresh_observe_names(
         preferred = ("search_project_rag", "search_code_rag", "java_workspace_symbols")
         return _unattempted_tools(by_name, attempted, preferred)[:1]
 
-    # The target path is already host-localized. These turns exist to ground the
-    # implementation API, not to rediscover the new filename. Start with project/API
-    # code, then keep the frontier open through the reviewed external MCP discovery
-    # sequence before falling back to JDT/project-symbol routes.
-    preferred = (
-        "search_code_rag",
-        "external_mcp_capabilities",
-        "external_mcp_schema",
-        "external_mcp_call",
-        "java_workspace_symbols",
-        "search_project_rag",
-        "inspect_modrinth_project",
-    )
-    names = _unattempted_tools(by_name, attempted, preferred)
-    return names[:1]
+    # The target path is already host-localized. Ground Java/API semantics using the
+    # cheapest version-pinned project evidence first. External MCP then walks a
+    # capability-specific frontier instead of spending its only call on whichever
+    # capability the model happens to choose. Modrinth project lookup is deliberately
+    # excluded: a task id is not a Modrinth project id and that lookup cannot prove the
+    # Java API needed to implement a fresh source file.
+    for local_name in ("search_code_rag", "search_project_rag"):
+        if local_name in by_name and local_name not in attempted:
+            return [local_name]
+
+    external = _next_fresh_java_external_step(by_name, attempted)
+    if external is not None:
+        return [external[0]]
+
+    if "java_workspace_symbols" in by_name and "java_workspace_symbols" not in attempted:
+        return ["java_workspace_symbols"]
+    return []
 
 
 def _localized_observe_names(
@@ -1751,10 +1807,21 @@ def _filter_tools_for_phase(
                 by_name, attempted, mutation_context,
                 semantic_retrieval_choice=semantic_retrieval_choice,
             )
-    return tuple(
-        _source_edit_schema_for_context(by_name[name], mutation_context)
-        for name in names if name in by_name
-    )
+    selected: list[Mapping[str, Any]] = []
+    for name in names:
+        if name not in by_name:
+            continue
+        schema = _source_edit_schema_for_context(by_name[name], mutation_context)
+        if (
+            phase == LoopPhase.OBSERVE
+            and semantic_retrieval_choice
+            and mutation_context is not None
+            and mutation_context.is_new_file
+            and mutation_context.is_mutation_ready
+        ):
+            schema = _fresh_java_external_schema(schema, attempted, by_name)
+        selected.append(schema)
+    return tuple(selected)
 
 
 def _replace_live_messages(
