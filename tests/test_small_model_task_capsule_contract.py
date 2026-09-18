@@ -341,7 +341,6 @@ def test_fresh_java_evidence_frontier_walks_external_capabilities() -> None:
     attempted: set[str] = set()
     expected: list[tuple[str, str]] = [
         ("search_code_rag", ""),
-        ("search_project_rag", ""),
         ("external_mcp_capabilities", ""),
     ]
     for capability in tool_loop._FRESH_JAVA_EXTERNAL_CAPABILITIES:
@@ -387,6 +386,26 @@ def test_fresh_java_evidence_frontier_walks_external_capabilities() -> None:
         semantic_retrieval_choice=True,
     ) == []
 
+
+
+
+def test_metadata_only_project_rag_does_not_authorize_fresh_java() -> None:
+    metadata_only = {
+        "schema_version": "mmm/rag-result-v1",
+        "query": "register item",
+        "minecraft_version": "26.2",
+        "sources": [
+            {
+                "source_id": "fabric-project-creation",
+                "title": "Fabric Documentation - Creating a Project",
+                "url": "https://docs.fabricmc.net/develop/getting-started/creating-a-project",
+                "authority": "Fabric official documentation",
+                "version_scope": "Version-selected Fabric documentation",
+            }
+        ],
+    }
+
+    assert tool_loop._authoritative_java_evidence(metadata_only) is False
 
 def test_external_mcp_retrieval_signatures_are_capability_specific() -> None:
     assert tool_loop.retrieval_query_signature(
