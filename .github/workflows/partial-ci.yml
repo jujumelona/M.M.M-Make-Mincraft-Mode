@@ -1,0 +1,179 @@
+name: Partial CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: partial-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  impact:
+    name: Select impacted checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      python_files: ${{ steps.select.outputs.python_files }}
+      test_files: ${{ steps.select.outputs.test_files }}
+      run_python: ${{ steps.select.outputs.run_python }}
+      run_tests: ${{ steps.select.outputs.run_tests }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+      - id: select
+        shell: bash
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          root = Path(".")
+          try:
+              changed = subprocess.check_output(
+                  ["git", "diff", "--name-only", "--diff-filter=ACMRT", "HEAD^", "HEAD"],
+                  text=True,
+              ).splitlines()
+          except subprocess.CalledProcessError:
+              changed = subprocess.check_output(
+                  ["git", "ls-files"], text=True
+              ).splitlines()
+
+          changed = sorted({Path(path).as_posix() for path in changed if path.strip()})
+          python_files = [
+              path for path in changed
+              if path.endswith(".py") and (root / path).is_file()
+          ]
+
+          selected_tests: set[str] = {
+              path for path in changed
+              if path.startswith("tests/test_") and path.endswith(".py") and (root / path).is_file()
+          }
+
+          source_modules: set[str] = set()
+          source_stems: set[str] = set()
+          for path in python_files:
+              p = Path(path)
+              if p.parts and p.parts[0] == "minecraft_mod_ai":
+                  module = ".".join(p.with_suffix("").parts)
+                  source_modules.add(module)
+                  source_stems.add(p.stem)
+              elif p.parts and p.parts[0] == "tools":
+                  source_modules.add(".".join(p.with_suffix("").parts))
+                  source_stems.add(p.stem)
+
+          for test_path in root.glob("tests/test_*.py"):
+              text = test_path.read_text(encoding="utf-8", errors="ignore")
+              if any(module in text for module in source_modules):
+                  selected_tests.add(test_path.as_posix())
+                  continue
+              if any(
+                  f"import {stem}" in text or
+                  f"from minecraft_mod_ai import {stem}" in text or
+                  f"from tools import {stem}" in text
+                  for stem in source_stems
+              ):
+                  selected_tests.add(test_path.as_posix())
+
+          # Explicit ownership regression: this test exercises task-capsule authority
+          # and progress-aware tool-loop routing together.
+          if "minecraft_mod_ai/progress_aware_tool_loop.py" in changed:
+              candidate = Path("tests/test_small_model_task_capsule_contract.py")
+              if candidate.is_file():
+                  selected_tests.add(candidate.as_posix())
+
+          output = Path(os.environ["GITHUB_OUTPUT"])
+          with output.open("a", encoding="utf-8") as handle:
+              handle.write("python_files=" + json.dumps(python_files, separators=(",", ":")) + "\n")
+              handle.write("test_files=" + json.dumps(sorted(selected_tests), separators=(",", ":")) + "\n")
+              handle.write("run_python=" + ("true" if python_files else "false") + "\n")
+              handle.write("run_tests=" + ("true" if selected_tests else "false") + "\n")
+
+          print("changed:", *changed, sep="\n  ")
+          print("python:", *python_files, sep="\n  ")
+          print("tests:", *sorted(selected_tests), sep="\n  ")
+          PY
+
+  python:
+    name: Changed Python compile + ruff
+    needs: impact
+    if: ${{ needs.impact.outputs.run_python == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.11', cache: pip}
+      - run: python -m pip install --prefer-binary ruff
+      - shell: bash
+        env:
+          PYTHON_FILES_JSON: ${{ needs.impact.outputs.python_files }}
+        run: |
+          python - <<'PY' > /tmp/python-files.txt
+          import json, os
+          for path in json.loads(os.environ["PYTHON_FILES_JSON"]):
+              print(path)
+          PY
+          mapfile -t PYTHON_FILES < /tmp/python-files.txt
+          python -m py_compile "${PYTHON_FILES[@]}"
+          python -m ruff check "${PYTHON_FILES[@]}" --select F,E7,E9
+
+  tests:
+    name: Impacted tests
+    needs: impact
+    if: ${{ needs.impact.outputs.run_tests == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.11', cache: pip}
+      - uses: actions/setup-java@v5
+        with: {distribution: temurin, java-version: '17'}
+      - run: python -m pip install --prefer-binary -e '.[dev,ui]'
+      - shell: bash
+        env:
+          TEST_FILES_JSON: ${{ needs.impact.outputs.test_files }}
+        run: |
+          python - <<'PY' > /tmp/tests.txt
+          import json, os
+          for path in json.loads(os.environ["TEST_FILES_JSON"]):
+              print(path)
+          PY
+          mapfile -t TEST_FILES < /tmp/tests.txt
+          printf 'Impacted tests:\n'
+          printf '  %s\n' "${TEST_FILES[@]}"
+          python tools/pytest_diagnostics.py             --log audit/partial-tests.log             --junit audit/partial-tests.xml             --durations 25             --maxfail 20             "${TEST_FILES[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: partial-tests-${{ github.sha }}
+          path: |
+            audit/partial-tests.log
+            audit/partial-tests.xml
+          if-no-files-found: warn
+
+  gate:
+    name: Partial CI Gate
+    if: ${{ always() }}
+    needs: [impact, python, tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          IMPACT: ${{ needs.impact.result }}
+          PYTHON: ${{ needs.python.result }}
+          TESTS: ${{ needs.tests.result }}
+        run: |
+          test "$IMPACT" = success
+          test "$PYTHON" = success -o "$PYTHON" = skipped
+          test "$TESTS" = success -o "$TESTS" = skipped
