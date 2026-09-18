@@ -346,6 +346,16 @@ class CompletePipelineResult:
         return asdict(self)
 
 
+def _unchanged_postbuild_validation(
+    source_report: dict[str, Any],
+    jdt_receipt: dict[str, Any] | None,
+    validate_jdt: Callable[[], dict[str, Any]] | None,
+) -> tuple[dict[str, Any], dict[str, Any] | None, bool]:
+    if jdt_receipt is None and validate_jdt is not None:
+        return source_report, validate_jdt(), True
+    return source_report, jdt_receipt, False
+
+
 def _refresh_validation_after_build(
     *,
     prebuild_manifest: str,
@@ -355,9 +365,11 @@ def _refresh_validation_after_build(
     validate_source: Callable[[], dict[str, Any]],
     validate_jdt: Callable[[], dict[str, Any]] | None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None, bool]:
-    """Bind final-tree validation to the same bounded executor as initial validation."""
+    """Run JDT after compile; refresh source validation only when the tree changed."""
     if final_manifest == prebuild_manifest:
-        return source_report, jdt_receipt, False
+        return _unchanged_postbuild_validation(
+            source_report, jdt_receipt, validate_jdt
+        )
 
     from .deadline_executor import iter_completed_with_deadlines
 
@@ -457,7 +469,7 @@ class CompleteProductionOrchestrator:
             return run_named_checkpoint(ledger, 'validate-jdt', stage='validate:jdt', input_value=validation_checkpoint_input('validate-jdt', {'graph_hash': work_plan.graph_hash, 'project_manifest': validation_manifest}), action=run_jdt, encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: cached_validation_is_reusable('validate-jdt', cached))
 
         jdt_receipt = None
-        if options.run_jdt and (not options.source_only):
+        if options.run_jdt and options.source_only:
             from .deadline_executor import iter_completed_with_deadlines
 
             validation_jobs = (("source", validate_source), ("jdt", validate_jdt))
