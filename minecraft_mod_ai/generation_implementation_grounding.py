@@ -56,18 +56,48 @@ def _complete_template_symbol_authority(
     context: Any,
     symbols: dict[str, Any],
     templates: list[dict[str, Any]],
+    *,
+    artifact_kind: str,
 ) -> None:
-    """Add immutable HOST owners for external types actually named by templates."""
+    """Add HOST owners for template types without crossing artifact namespaces."""
 
     mentioned = _template_type_names(templates)
     catalog = getattr(context, "api_symbols", None)
     if not mentioned or not isinstance(catalog, Mapping):
         return
+
+    resolved = {
+        owner.rsplit(".", 1)[-1]
+        for symbol in symbols.values()
+        if (owner := _import_owner(symbol))
+    }
+    candidates: dict[str, list[tuple[str, Any]]] = {}
     for name, raw_symbol in catalog.items():
         owner = _import_owner(raw_symbol)
         simple = owner.rsplit(".", 1)[-1] if owner else ""
-        if simple and simple in mentioned and str(name) not in symbols:
-            symbols[str(name)] = _json_native(raw_symbol)
+        if simple and simple in mentioned and simple not in resolved:
+            candidates.setdefault(simple, []).append((str(name), raw_symbol))
+
+    domain = str(artifact_kind or "").strip().casefold()
+    for simple in sorted(candidates):
+        options = candidates[simple]
+        selected: tuple[str, Any] | None = None
+        if len(options) == 1:
+            selected = options[0]
+        elif domain:
+            scoped = [
+                item
+                for item in options
+                if domain in item[0].casefold().replace("-", "_").split("_")
+            ]
+            if len(scoped) == 1:
+                selected = scoped[0]
+        if selected is None:
+            # Ambiguous cross-domain owner names are not safe model grounding.
+            continue
+        name, raw_symbol = selected
+        symbols.setdefault(name, _json_native(raw_symbol))
+        resolved.add(simple)
 
 
 def _module_config(module: Any) -> Mapping[str, Any]:
@@ -181,7 +211,12 @@ def build_generation_implementation_grounding(
                 }
             )
 
-        _complete_template_symbol_authority(context, symbols, templates)
+        _complete_template_symbol_authority(
+            context,
+            symbols,
+            templates,
+            artifact_kind=kind,
+        )
         required_imports = list(
             dict.fromkeys(
                 owner
