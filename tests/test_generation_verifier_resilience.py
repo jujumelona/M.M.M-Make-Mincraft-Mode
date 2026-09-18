@@ -64,7 +64,7 @@ def test_generation_verifier_preserves_completed_owner_diagnostics(tmp_path):
     assert calls == [False, False]
 
 
-def test_generation_verifier_rejects_unbound_owner_result(tmp_path):
+def test_generation_verifier_reports_unbound_owner_as_unavailable(tmp_path):
     project, _source = _project(tmp_path)
     closed = []
 
@@ -76,13 +76,21 @@ def test_generation_verifier_rejects_unbound_owner_result(tmp_path):
             closed.append(True)
 
     runtime = SimpleNamespace(workspace_root=str(project))
-    with pytest.raises(agent_tool_runtime.AgentToolRuntimeError, match="unbound"):
-        run_generation_verifier(runtime, {}, runtime_module=agent_tool_runtime,
-                                java_service_factory=IncompleteOwner)
+    result = run_generation_verifier(
+        runtime,
+        {},
+        runtime_module=agent_tool_runtime,
+        java_service_factory=IncompleteOwner,
+    )
+    assert result["status"] == "UNAVAILABLE"
+    assert result["available"] is False
+    assert result["verification_backend"] == "jdt_core"
+    assert result["diagnostics"][0]["code"] == "JDT_DIAGNOSTICS_UNAVAILABLE"
+    assert "unbound" in result["diagnostics"][0]["message"]
     assert closed == [True]
 
 
-def test_jdt_failure_fails_closed_when_no_verification_backend_is_healthy(tmp_path):
+def test_jdt_failure_returns_structured_unavailable_without_gradle_fallback(tmp_path):
     project, _source = _project(tmp_path)
     closed = []
 
@@ -94,17 +102,18 @@ def test_jdt_failure_fails_closed_when_no_verification_backend_is_healthy(tmp_pa
             closed.append(True)
 
     runtime = SimpleNamespace(workspace_root=str(project))
-    with pytest.raises(
-        agent_tool_runtime.AgentToolRuntimeError,
-        match="Generation verification has no healthy backend",
-    ):
-        run_generation_verifier(
-            runtime,
-            {},
-            runtime_module=agent_tool_runtime,
-            java_service_factory=FailingJava,
-        )
+    result = run_generation_verifier(
+        runtime,
+        {},
+        runtime_module=agent_tool_runtime,
+        java_service_factory=FailingJava,
+    )
 
+    assert result["status"] == "UNAVAILABLE"
+    assert result["available"] is False
+    assert result["verification_backend"] == "jdt_core"
+    assert result["diagnostics"][0]["code"] == "JDT_DIAGNOSTICS_UNAVAILABLE"
+    assert "workspace import failed" in result["diagnostics"][0]["message"]
     assert closed == [True]
     assert not hasattr(runtime, "_mmm_generation_java_service")
     assert not hasattr(runtime, "_mmm_generation_jdt_disabled_reason")

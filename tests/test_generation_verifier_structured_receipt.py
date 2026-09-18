@@ -2,9 +2,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from minecraft_mod_ai.generation_verifier_fallback_installation import (
-    _gradle_fallback_receipt,
-)
 from minecraft_mod_ai.generation_verifier_resilience import run_generation_verifier
 from minecraft_mod_ai.validation_diagnostic_contract import diagnostic_errors
 
@@ -56,27 +53,6 @@ class _LargeDiagnosticService:
         return None
 
 
-class _LargeFailedGradleReport:
-    passed = False
-    status = "FAIL"
-    error = "Gradle compilation failed: " + ("x" * (20 * 1024))
-    gradle_version = "8.6"
-
-    @staticmethod
-    def to_dict():
-        return {"commands": []}
-
-
-class _LargeFailedGradleRunner:
-    def __init__(self, _cache_root):
-        pass
-
-    @staticmethod
-    def build(_root, *, run_gametest):
-        assert run_gametest is False
-        return _LargeFailedGradleReport()
-
-
 def test_large_generation_diagnostics_remain_structured_and_actionable(tmp_path):
     runtime = SimpleNamespace(workspace_root=tmp_path)
 
@@ -102,7 +78,7 @@ def test_large_generation_diagnostics_remain_structured_and_actionable(tmp_path)
     assert errors[0]["message"] == "The import net.minecraft.item cannot be resolved"
 
 
-def test_large_gradle_fallback_diagnostics_remain_structured_and_actionable(tmp_path):
+
     runtime = SimpleNamespace(workspace_root=tmp_path)
 
     result = _gradle_fallback_receipt(
@@ -122,3 +98,30 @@ def test_large_gradle_fallback_diagnostics_remain_structured_and_actionable(tmp_
     assert len(errors) == 1
     assert errors[0]["code"] == "GRADLE_BUILD_FAILED"
     assert errors[0].get("code") != "JDT_DIAGNOSTICS_UNAVAILABLE"
+
+
+class _UnavailableService:
+    def diagnostics(self, root, *, timeout_seconds, full_scan):
+        del root, timeout_seconds, full_scan
+        raise TimeoutError("JDT owner deadline exceeded")
+
+    def close(self):
+        return None
+
+
+def test_unavailable_jdt_receipt_remains_structured_and_untruncated(tmp_path):
+    runtime = SimpleNamespace(workspace_root=tmp_path)
+    result = run_generation_verifier(
+        runtime,
+        {"timeout_seconds": 90},
+        runtime_module=_RuntimeModule,
+        java_service_factory=_UnavailableService,
+    )
+
+    assert result["status"] == "UNAVAILABLE"
+    assert result["available"] is False
+    assert result["verification_backend"] == "jdt_core"
+    assert result["_mmm_observation"]["truncated"] is False
+    errors = diagnostic_errors(result)
+    assert len(errors) == 1
+    assert errors[0]["code"] == "JDT_DIAGNOSTICS_UNAVAILABLE"

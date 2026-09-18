@@ -117,8 +117,6 @@ _MUTATION_ACT_TOOLS = frozenset({
 _VERIFY_TOOLS = frozenset({
     "java_diagnostics",
     "jdt_diagnostics",
-    "run_gradle_build",
-    "gradle_build",
     "run_gametest",
 })
 _VERIFIER_UNAVAILABLE_STATUSES = frozenset({
@@ -1967,7 +1965,7 @@ def _verifier_tool(
     schemas: Sequence[Mapping[str, Any]], unavailable: set[str]
 ) -> str | None:
     names = {_tool_name(schema) for schema in schemas}
-    for name in ("java_diagnostics", "jdt_diagnostics", "run_gradle_build", "gradle_build", "run_gametest"):
+    for name in ("java_diagnostics", "jdt_diagnostics", "run_gametest"):
         if name in names and name not in unavailable:
             return name
     return None
