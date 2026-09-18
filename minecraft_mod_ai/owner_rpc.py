@@ -43,6 +43,7 @@ class OwnerRPC:
         self._responses: queue.Queue[Any] = queue.Queue()
         self._stderr: deque[str] = deque(maxlen=40)
         self._stdout_noise: deque[str] = deque(maxlen=40)
+        self._timeout_diagnostics = ""
         self._lock = threading.RLock()
         self._closed = False
         self._sequence = 0
@@ -100,7 +101,41 @@ class OwnerRPC:
         noise = list(self._stdout_noise)
         suffix = f'; non-protocol stdout tail={noise!r}' if noise else ''
         suffix += _stderr_timeout_suffix(self._stderr)
+        if self._timeout_diagnostics:
+            suffix += f'; JVM timeout diagnostics={self._timeout_diagnostics!r}'
         return OwnerRPCError(f'Owner {method} timed out after {timeout}s{suffix}')
+
+    def _capture_timeout_diagnostics(self) -> None:
+        """Capture a bounded JVM thread dump before retiring a timed-out owner."""
+
+        if self.process.poll() is not None:
+            return
+        command = self.process.args
+        if isinstance(command, str) or not command:
+            return
+        java = Path(str(command[0]))
+        jcmd = java.parent / ("jcmd.exe" if java.name.lower().endswith(".exe") else "jcmd")
+        if not jcmd.is_file():
+            return
+        try:
+            result = subprocess.run(
+                (str(jcmd), str(self.process.pid), "Thread.print", "-l"),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=8,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return
+        lines = result.stdout.splitlines()
+        if not lines:
+            return
+        # The main/application thread is near the start of HotSpot's thread dump.
+        self._timeout_diagnostics = "\n".join(lines[:80])[-16000:]
 
     def _raise_transport_failure(
         self,
@@ -108,9 +143,11 @@ class OwnerRPC:
         timeout: float,
         exc: BaseException,
     ) -> None:
-        self.close()
         if isinstance(exc, queue.Empty):
+            self._capture_timeout_diagnostics()
+            self.close()
             raise self._timeout_error(method, timeout) from exc
+        self.close()
         if isinstance(exc, OwnerRPCError):
             raise exc
         raise OwnerRPCError(f'Owner transport failed: {exc}') from exc
