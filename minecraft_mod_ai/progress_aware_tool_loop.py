@@ -131,6 +131,7 @@ _SOURCE_CREATE_OPERATIONS = frozenset({
     "create", "create_file", "create_java_type", "create_class", "create_type",
     "write", "write_file",
 })
+_SOURCE_ATOMIC_REWRITE_OPERATIONS = frozenset({"create", "create_file", "write", "write_file"})
 _MODEL_REJECTION_TOOL_NAME = "__mmm_rejected_tool_call__"
 _HOST_AUTHORITY_ROLES = frozenset({"system", "developer", "tool"})
 _EXISTING_TARGET_EVIDENCE_SOURCES = frozenset({
@@ -891,6 +892,15 @@ def _mutation_target_error(
         return None
     if _creation_authorized(supplied, pinned, context):
         return None
+    if (
+        supplied == pinned
+        and not context.is_new_file
+        and operation in _SOURCE_ATOMIC_REWRITE_OPERATIONS
+    ):
+        # The scalar source-edit core lowers same-path create_file/create on an
+        # existing exact target into an expected-SHA replace. It is a rewrite,
+        # not authority to create another path.
+        return None
     return (
         "MUTATION_TARGET_CREATION_CONFLICT: create operation is not authorized "
         f"for existing target {supplied!r}"
@@ -968,8 +978,10 @@ def _atomic_output_recovery_instruction(request: GenerationRequest) -> str:
             "file, the first action must be create_java_type with only package_name and an empty type "
             "declaration; never create a complete Java file with create_file. After each tool observation, "
             "add at most one import with add_java_import or one field/constructor/method/nested declaration "
-            "with insert_java_member. For an existing file, use one bounded replace_exact/insert action. "
-            "The host will preserve the same mutation target and workspace state between actions."
+            "with insert_java_member. For an existing file, use one bounded replace_exact/insert action "
+            "or, when a coherent whole-file repair is necessary, create_file on the exact same path; "
+            "the host lowers that call to a SHA-bound replace. The host will preserve the same mutation "
+            "target and workspace state between actions."
         )
     return (
         "The preceding assistant action exceeded the bounded output allowance and is discarded. "
@@ -1500,12 +1512,12 @@ class HostRunState:
         return (
             "MMM_CORE_VERIFIER_REPAIR_V5\n"
             "The verifier failure is the active repair obligation. Do not restart generation, "
-            "do not search unrelated ecosystem candidates, and do not recreate an existing path. "
+            "do not search unrelated ecosystem candidates, and never write a different path. "
             "The payload includes the exact host-tracked current source and its SHA-256. "
-            "Any earlier host_reserved/fresh metadata is pre-materialization history only and "
-            "does not authorize a second create after target_is_new_file becomes false. "
-            "A same-path create_file is forbidden once target_is_new_file is false. "
-            "Edit that existing source with a non-create operation when target_is_new_file is false. "
+            "Any earlier host_reserved/fresh metadata is pre-materialization history only. "
+            "When target_is_new_file is false, create_file/create on the exact target path is "
+            "an atomic whole-file repair: the host converts it to an expected-SHA replace. "
+            "You may use that for a coherent rewrite or use a smaller non-create exact edit. "
             "Use the diagnostics below against the host-pinned target and make one materially "
             "different source edit. The next successful mutation goes directly back to VERIFY.\n"
             + _repair_guidance_source_section(payload)
@@ -1631,7 +1643,10 @@ def _source_edit_schema_for_context(
             elif not context.is_new_file:
                 operation["enum"] = [
                     value for value in enum
-                    if str(value).strip().casefold() not in _SOURCE_CREATE_OPERATIONS
+                    if (
+                        str(value).strip().casefold() not in _SOURCE_CREATE_OPERATIONS
+                        or str(value).strip().casefold() in _SOURCE_ATOMIC_REWRITE_OPERATIONS
+                    )
                 ]
     description = str(function.get("description") or "").strip()
     if context.is_new_file and context.target_path.casefold().endswith(".java"):
@@ -1641,8 +1656,10 @@ def _source_edit_schema_for_context(
         )
     elif not context.is_new_file:
         suffix = (
-            "Existing host-pinned target: create/write operations are not permitted; "
-            "edit the current file."
+            "Existing host-pinned target: create_file/create on this exact same path means "
+            "an atomic whole-file rewrite and is host-lowered to a SHA-bound replace; "
+            "create_java_type or any different path remains forbidden. Exact bounded edits "
+            "remain available when a smaller repair is sufficient."
         )
     else:
         suffix = ""
@@ -2829,8 +2846,9 @@ def _generate_with_tools_impl(
                                     "MMM_TARGET_MATERIALIZED_V1\n"
                                     f"The host has materialized {materialized_path!r}. It is now an existing "
                                     "workspace file. Any earlier host_reserved/fresh creation status describes "
-                                    "only the pre-create lifecycle and no longer authorizes create/write operations "
-                                    "for this path. Future repairs must edit the current file in place."
+                                    "only the pre-create lifecycle. Future repairs stay on this exact path; "
+                                    "same-path create_file/create is lowered to a SHA-bound whole-file replace, "
+                                    "while creation of any other path remains forbidden."
                                 ),
                             })
                     if compile_backed_java:
