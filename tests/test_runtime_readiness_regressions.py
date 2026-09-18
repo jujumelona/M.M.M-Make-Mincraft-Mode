@@ -1,6 +1,5 @@
 import httpx
 
-from minecraft_mod_ai import java_diagnostics_fallback_contract as fallback
 from minecraft_mod_ai import llama_exact_context as exact
 
 
@@ -48,31 +47,3 @@ def test_exact_context_probe_does_not_retry_non_transient_http(monkeypatch):
     else:
         raise AssertionError("non-transient HTTP errors must fail fast")
     assert calls["count"] == 1
-
-
-def test_retired_jdt_gradle_fallback_preserves_fail_closed_result(tmp_path):
-    class Service:
-        workspace_root = tmp_path
-
-        def java_diagnostics(
-            self,
-            project_root,
-            relative_files=None,
-            timeout_seconds=60,
-        ):
-            del project_root, relative_files, timeout_seconds
-            return {
-                "status": "UNAVAILABLE",
-                "error": "jdt down",
-                "diagnostics": {},
-            }
-
-    original = Service.java_diagnostics
-    fallback.install(Service)
-
-    assert Service.java_diagnostics is original
-    assert Service().java_diagnostics(str(tmp_path)) == {
-        "status": "UNAVAILABLE",
-        "error": "jdt down",
-        "diagnostics": {},
-    }
