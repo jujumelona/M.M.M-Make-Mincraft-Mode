@@ -9,15 +9,16 @@ from minecraft_mod_ai.model_adapters import GenerationRequest, GenerationRespons
 from minecraft_mod_ai.model_router import _usable_rag_result
 
 
-def _fresh_context() -> loop.TargetMutationContext:
+def _fresh_context(*, host_authorized: bool = True) -> loop.TargetMutationContext:
+    target = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
     return loop.TargetMutationContext(
-        target_path="src/main/java/dev/mmm/debugfixture/DebugToken.java",
+        target_path=target,
         target_symbol="DebugToken",
         is_new_file=True,
-        writable_paths=("src/main/java/dev/mmm/debugfixture/DebugToken.java",),
-        creatable_paths=("src/main/java/dev/mmm/debugfixture/DebugToken.java",),
-        target_pinned=True,
-        evidence_source="host_task_authority",
+        writable_paths=(target,) if host_authorized else (),
+        creatable_paths=(target,) if host_authorized else (),
+        target_pinned=host_authorized,
+        evidence_source="host_task_authority" if host_authorized else "untrusted_observation",
     )
 
 
@@ -48,7 +49,7 @@ def test_metadata_only_project_rag_from_trace_is_not_usable() -> None:
 
 
 def test_generic_evidence_cannot_authorize_fresh_java_act() -> None:
-    state = loop.HostRunState(mutation_context=_fresh_context())
+    state = loop.HostRunState(mutation_context=_fresh_context(host_authorized=False))
     generic = {
         "schema_version": "other/evidence-v1",
         "content": "general project convention without exact API symbols",
@@ -72,7 +73,7 @@ def test_target_neutral_project_rag_never_authorizes_fresh_java() -> None:
 
 
 def test_code_rag_with_concrete_minecraft_api_authorizes_fresh_java() -> None:
-    state = loop.HostRunState(mutation_context=_fresh_context())
+    state = loop.HostRunState(mutation_context=_fresh_context(host_authorized=False))
     payload = {
         "schema_version": "mmm/code-rag-result-v1",
         "hits": [
@@ -123,8 +124,10 @@ def test_fresh_java_observe_skips_target_neutral_project_rag() -> None:
 
 
 def test_completion_boundary_gets_one_in_state_recovery(monkeypatch) -> None:
-    class LlamaCompletionBoundaryError(RuntimeError):
-        pass
+    from minecraft_mod_ai.llama_finish_reason_contract import (
+        OUTPUT_EXHAUSTED,
+        LlamaCompletionBoundaryError,
+    )
 
     class Adapter:
         def __init__(self) -> None:
@@ -133,7 +136,12 @@ def test_completion_boundary_gets_one_in_state_recovery(monkeypatch) -> None:
         def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
             self.requests.append(request)
             if len(self.requests) == 1:
-                raise LlamaCompletionBoundaryError("completion token limit")
+                raise LlamaCompletionBoundaryError(
+                    "completion token limit",
+                    kind=OUTPUT_EXHAUSTED,
+                    completion_tokens=512,
+                    max_tokens=512,
+                )
             return GenerationResponse(content="recovered")
 
     monkeypatch.setattr(
@@ -167,12 +175,19 @@ def test_completion_boundary_gets_one_in_state_recovery(monkeypatch) -> None:
 
 
 def test_completion_boundary_recovery_does_not_loop(monkeypatch) -> None:
-    class LlamaCompletionBoundaryError(RuntimeError):
-        pass
+    from minecraft_mod_ai.llama_finish_reason_contract import (
+        OUTPUT_EXHAUSTED,
+        LlamaCompletionBoundaryError,
+    )
 
     class Adapter:
         def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
-            raise LlamaCompletionBoundaryError("completion token limit")
+            raise LlamaCompletionBoundaryError(
+                "completion token limit",
+                kind=OUTPUT_EXHAUSTED,
+                completion_tokens=512,
+                max_tokens=512,
+            )
 
     monkeypatch.setattr(
         loop,
