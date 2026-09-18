@@ -133,7 +133,11 @@ _SOURCE_CREATE_OPERATIONS = frozenset({
 })
 _MODEL_REJECTION_TOOL_NAME = "__mmm_rejected_tool_call__"
 _HOST_AUTHORITY_ROLES = frozenset({"system", "developer", "tool"})
-_EXISTING_TARGET_EVIDENCE_SOURCES = frozenset({"host_exact_source", "mutation_receipt"})
+_EXISTING_TARGET_EVIDENCE_SOURCES = frozenset({
+    "host_exact_source",
+    "mutation_receipt",
+    "search_code_rag",
+})
 _CODE_MARKERS = frozenset({
     "class ", "interface ", "enum ", "record ", "public ", "private ", "protected ",
     "package ", "import ", "void ", "return ", "final ", "static ", "new ",
