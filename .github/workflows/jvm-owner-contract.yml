@@ -1,0 +1,71 @@
+name: JVM Owner Contract
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'minecraft_mod_ai/jvm_owner/**'
+      - 'minecraft_mod_ai/jvm_owner_bootstrap.py'
+      - 'minecraft_mod_ai/java_core.py'
+      - 'minecraft_mod_ai/runner.py'
+      - 'tests/test_java_core_toolchain.py'
+      - 'tests/test_jvm_owner_integration.py'
+      - '.github/workflows/jvm-owner-contract.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'minecraft_mod_ai/jvm_owner/**'
+      - 'minecraft_mod_ai/jvm_owner_bootstrap.py'
+      - 'minecraft_mod_ai/java_core.py'
+      - 'minecraft_mod_ai/runner.py'
+      - 'tests/test_java_core_toolchain.py'
+      - 'tests/test_jvm_owner_integration.py'
+      - '.github/workflows/jvm-owner-contract.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jvm-owner-contract-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  owner-build:
+    name: Build pinned JDT owner runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install package and test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Build owner through production bootstrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import tempfile
+          from pathlib import Path
+
+          from minecraft_mod_ai.jvm_owner_bootstrap import owner_command
+
+          with tempfile.TemporaryDirectory(prefix="mmm-owner-ci-") as raw:
+              workspace = Path(raw)
+              command = owner_command(workspace)
+              assert command
+              assert "-application" in command
+              assert "mmm.owner.application" in command
+              config = workspace / "configuration" / "config.ini"
+              assert config.is_file(), config
+              print("owner bootstrap compiled and materialized:", command[0])
+          PY
+      - name: Run owner/toolchain contract tests
+        run: |
+          python -m pytest -q             tests/test_java_core_toolchain.py             tests/test_owner_rpc.py             tests/test_generation_verifier_resilience.py
