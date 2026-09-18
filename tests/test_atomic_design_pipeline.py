@@ -20,12 +20,12 @@ class GraphRouter:
             else [
                 {
                     "entity_id": "raw_material",
-                    "kind": "resource",
+                    "kind": "item",
                     "role": "Collect raw material",
                 },
                 {
                     "entity_id": "processed_material",
-                    "kind": "processed_material",
+                    "kind": "item",
                     "role": "Use processed material",
                 },
             ]
@@ -47,7 +47,7 @@ class GraphRouter:
             ]
             return {"count": len(selected)}
         if tool_name == "submit_design_decision_count":
-            return {"count": 0, "blocked_reason": ""}
+            return {"count": 0}
         single_record = tool_name.startswith("submit_one_")
         normalized_tool = (
             tool_name.replace("submit_one_", "submit_", 1)
@@ -317,7 +317,7 @@ def test_research_facts_are_bound_to_their_actual_source():
             if tool_name == "submit_design_research_fact_count":
                 context = json.loads(messages[-1]["content"])
                 assert context["source_ref"] == "source_b"
-                return {"count": 1, "blocked_reason": ""}
+                return {"count": 1}
             if tool_name in {
                 "submit_design_research_fact",
                 "submit_one_design_research_fact",
