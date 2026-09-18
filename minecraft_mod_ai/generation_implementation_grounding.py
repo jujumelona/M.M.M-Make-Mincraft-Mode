@@ -39,6 +39,34 @@ def _json_native(value: Any) -> Any:
     return value
 
 
+_ITEM_REGISTRY_GROUNDING_SYMBOLS = (
+    "register_item",
+    "builtin_item_registry",
+    "resource_key_create",
+    "registries_item",
+    "identifier_factory",
+    "item_stacks_to",
+)
+
+
+def _import_owner(symbol: Any) -> str:
+    if not isinstance(symbol, Mapping):
+        return ""
+    owner = str(symbol.get("owner") or "").strip()
+    if not owner:
+        return ""
+    return owner.split("$", 1)[0]
+
+
+def _complete_item_registry_symbols(context: Any, symbols: dict[str, Any]) -> None:
+    """Project every exact HOST owner needed by the item-registry templates."""
+
+    for name in _ITEM_REGISTRY_GROUNDING_SYMBOLS:
+        if name in symbols:
+            continue
+        symbols[name] = _json_native(context.require_fact("api_symbols", name))
+
+
 def _module_config(module: Any) -> Mapping[str, Any]:
     value = getattr(module, "config", None)
     return value if isinstance(value, Mapping) else {}
@@ -150,6 +178,16 @@ def build_generation_implementation_grounding(
                 }
             )
 
+        if step.template_id == "minecraft/item/registry":
+            _complete_item_registry_symbols(context, symbols)
+        required_imports = list(
+            dict.fromkeys(
+                owner
+                for symbol in symbols.values()
+                if (owner := _import_owner(symbol))
+            )
+        )
+
         facts.append(
             {
                 "responsibility": step.template_id,
@@ -158,6 +196,11 @@ def build_generation_implementation_grounding(
                 "implementation_id": implementation.get("implementation_id"),
                 "executor_type": implementation.get("executor_type"),
                 "api_symbols": symbols,
+                "required_imports": required_imports,
+                "import_policy": (
+                    "Use these exact HOST owners for unqualified template types; do not "
+                    "substitute Yarn, intermediary, neighbouring-version, or remembered names."
+                ),
                 "templates": templates,
                 "validators": list(step.validators),
                 "postconditions": list(step.postconditions),
