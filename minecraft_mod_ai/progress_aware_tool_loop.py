@@ -886,8 +886,6 @@ def _verification_outcome(tool_name: str, payload: Mapping[str, Any]) -> str:
     status = str(result.get("status") or result.get("state") or result.get("outcome") or "").strip().upper()
     if status in _VERIFIER_UNAVAILABLE_STATUSES:
         return "UNAVAILABLE"
-    if status in _VERIFIER_FAIL_STATUSES:
-        return "FAIL"
     if result.get("available") is False:
         return "UNAVAILABLE"
     if tool_name in {"java_diagnostics", "jdt_diagnostics"}:
@@ -899,7 +897,11 @@ def _verification_outcome(tool_name: str, payload: Mapping[str, Any]) -> str:
         }
         if any(str(item.get("code") or "").strip().upper() in unavailable_codes for item in errors):
             return "UNAVAILABLE"
-        return "FAIL" if errors else "PASS"
+        if errors:
+            return "FAIL"
+        return "FAIL" if status in _VERIFIER_FAIL_STATUSES else "PASS"
+    if status in _VERIFIER_FAIL_STATUSES:
+        return "FAIL"
     if status in _VERIFIER_PASS_STATUSES:
         return "PASS"
     for key in ("success", "ok"):
