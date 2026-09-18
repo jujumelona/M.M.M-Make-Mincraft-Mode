@@ -6,7 +6,7 @@ from .custom_module_architecture_support import (
     output_exhaustion_continuation_messages as _architecture_continuation_messages,
     task_local_module_contract as _architecture_task_contract,
 )
-from .model_response_templates import response_template_prompt
+from .model_response_templates import parse_response_text, response_template_prompt
 
 
 import hashlib
@@ -1392,38 +1392,13 @@ def _extract_json(text: str) -> dict[str, Any]:
 
 
 def _parse_coder_summary(text: str) -> str:
-    """Parse exactly one fixed coder-summary object from possibly wrapped model text."""
+    """Parse the fixed coder-summary contract through the shared schema authority."""
 
-    decoder = json.JSONDecoder()
-    parseable_objects: list[dict[str, Any]] = []
-    candidates: list[dict[str, Any]] = []
-    for index, char in enumerate(text):
-        if char != "{":
-            continue
-        try:
-            value, _ = decoder.raw_decode(text[index:])
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(value, dict):
-            continue
-        parseable_objects.append(value)
-        if set(value) == {"summary"}:
-            candidates.append(value)
-
-    if not candidates:
-        if parseable_objects:
-            raise CustomModuleGenerationError(
-                "Coder summary must contain exactly the fixed JSON field 'summary'."
-            )
-        raise CustomModuleGenerationError(
-            "Coder summary output did not contain a parseable fixed JSON object."
-        )
-    if len(candidates) != 1:
-        raise CustomModuleGenerationError(
-            "Coder summary output contained multiple fixed JSON summary objects."
-        )
-
-    summary = candidates[0]["summary"]
+    try:
+        payload = parse_response_text("coder_summary", text)
+    except ValueError as exc:
+        raise CustomModuleGenerationError(str(exc)) from exc
+    summary = payload["summary"]
     if not isinstance(summary, str):
         raise CustomModuleGenerationError(
             "Coder summary must be a string in the fixed JSON template."
