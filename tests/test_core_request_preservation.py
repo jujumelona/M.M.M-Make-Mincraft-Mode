@@ -24,7 +24,7 @@ def _schema(name: str) -> dict[str, object]:
     }
 
 
-def test_llama_reasoning_continuation_preserves_full_request_contract() -> None:
+def test_llama_tool_normalization_preserves_full_request_contract() -> None:
     visible = _schema("visible")
     authorized = _schema("authorized")
     request = GenerationRequest(
@@ -40,21 +40,20 @@ def test_llama_reasoning_continuation_preserves_full_request_contract() -> None:
         prompt="sentinel-prompt",
         metadata={"sentinel": "metadata"},
     )
-    core = inspect.unwrap(llama_cpp_adapter._reasoning_continuation_request)
 
-    continued = core(request, "reasoning")
+    normalized = llama_cpp_adapter._normalized_tool_request(request)
 
-    assert continued.media_paths == ()
-    assert continued.messages[:1] == request.messages
-    assert continued.response_format == request.response_format
-    assert continued.response_schema == request.response_schema
-    assert continued.tools == request.tools
-    assert continued.tool_validation_schemas == request.tool_validation_schemas
-    assert continued.tool_choice == request.tool_choice
-    assert continued.parallel_tool_calls == request.parallel_tool_calls
-    assert continued.task == request.task
-    assert continued.prompt == request.prompt
-    assert dict(continued.metadata) == dict(request.metadata)
+    assert normalized.messages == request.messages
+    assert normalized.media_paths == request.media_paths
+    assert normalized.response_format == request.response_format
+    assert normalized.response_schema == request.response_schema
+    assert normalized.tools == request.tools
+    assert normalized.tool_validation_schemas == request.tool_validation_schemas
+    assert normalized.tool_choice == request.tool_choice
+    assert normalized.parallel_tool_calls == request.parallel_tool_calls
+    assert normalized.task == request.task
+    assert normalized.prompt == request.prompt
+    assert dict(normalized.metadata) == dict(request.metadata)
 
 
 def test_model_router_core_derives_tool_turns_with_dataclass_replace() -> None:
