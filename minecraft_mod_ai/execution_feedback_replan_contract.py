@@ -28,6 +28,9 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from .compiler_diagnostics import (
+    compiler_log_diagnostics as _compiler_log_diagnostics,
+)
 from .root_cause_trace import emit_root_cause, trace_scope
 
 _SCHEMA = "mmm/execution-feedback-replan-v1"
@@ -283,75 +286,6 @@ def _diagnostics_from_value(value: Any, *, limit: int = 256) -> list[dict[str, A
         elif isinstance(node, str):
             for match in _PATH_TOKEN.finditer(node[:16000]):
                 append({"path": match.group("path"), "message": node[:2000]}, inherited_path)
-
-    walk(value)
-    return diagnostics
-
-
-def _bounded_build_log_text(raw_path: Any) -> str:
-    path = Path(str(raw_path or "")).expanduser()
-    if not path.is_file() or path.is_symlink():
-        return ""
-    try:
-        size = path.stat().st_size
-        with path.open("rb") as stream:
-            if size <= _BUILD_LOG_WINDOW_BYTES * 2:
-                data = stream.read()
-            else:
-                head = stream.read(_BUILD_LOG_WINDOW_BYTES)
-                stream.seek(max(0, size - _BUILD_LOG_WINDOW_BYTES))
-                data = head + b"\n" + stream.read(_BUILD_LOG_WINDOW_BYTES)
-    except (OSError, ValueError):
-        return ""
-    return data.decode("utf-8", "replace")
-
-
-def _compiler_log_diagnostics(value: Any, *, limit: int = 256) -> list[dict[str, Any]]:
-    """Extract path-bearing javac failures from host-owned Gradle command logs."""
-
-    diagnostics: list[dict[str, Any]] = []
-    seen: set[str] = set()
-
-    def inspect_command(command: Mapping[str, Any]) -> None:
-        if len(diagnostics) >= limit:
-            return
-        exit_code = command.get("exit_code")
-        if command.get("timed_out") is not True and (
-            not isinstance(exit_code, int) or isinstance(exit_code, bool) or exit_code == 0
-        ):
-            return
-        text = _bounded_build_log_text(command.get("log_path"))
-        for match in _JAVAC_DIAGNOSTIC.finditer(text):
-            if len(diagnostics) >= limit:
-                break
-            body = {
-                "path": _norm_path(match.group("path")),
-                "message": match.group("message").strip()[:2000],
-                "code": f"javac:{match.group('kind')}:{match.group('line')}",
-            }
-            fingerprint = _sha(body)
-            if fingerprint in seen:
-                continue
-            seen.add(fingerprint)
-            diagnostics.append({**body, "diagnostic_sha256": fingerprint})
-
-    def walk(node: Any, depth: int = 0) -> None:
-        if depth > 10 or len(diagnostics) >= limit:
-            return
-        if isinstance(node, Mapping):
-            commands = node.get("commands")
-            if isinstance(commands, Sequence) and not isinstance(
-                commands, (str, bytes, bytearray)
-            ):
-                for command in commands:
-                    if isinstance(command, Mapping):
-                        inspect_command(command)
-            for child in node.values():
-                if isinstance(child, (Mapping, list, tuple)):
-                    walk(child, depth + 1)
-        elif isinstance(node, (list, tuple)):
-            for child in node:
-                walk(child, depth + 1)
 
     walk(value)
     return diagnostics
