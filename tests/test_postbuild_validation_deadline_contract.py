@@ -70,3 +70,27 @@ def test_postbuild_validation_skips_executor_when_tree_is_unchanged(monkeypatch)
     assert refreshed is False
     assert source is source_report
     assert jdt is jdt_receipt
+
+
+def test_unchanged_tree_runs_deferred_postbuild_jdt_once():
+    from minecraft_mod_ai import complete_orchestrator as orchestrator
+
+    calls: list[str] = []
+    source_report = {"status": "PASS", "kind": "existing"}
+
+    source, jdt, refreshed = orchestrator._refresh_validation_after_build(
+        prebuild_manifest="same",
+        final_manifest="same",
+        source_report=source_report,
+        jdt_receipt=None,
+        validate_source=lambda: (_ for _ in ()).throw(
+            AssertionError("source validation must not rerun for unchanged tree")
+        ),
+        validate_jdt=lambda: calls.append("jdt")
+        or {"status": "PASS", "kind": "postbuild-jdt"},
+    )
+
+    assert source is source_report
+    assert jdt == {"status": "PASS", "kind": "postbuild-jdt"}
+    assert refreshed is True
+    assert calls == ["jdt"]
