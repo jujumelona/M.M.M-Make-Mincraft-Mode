@@ -150,6 +150,24 @@ def _tool_name(schema: Mapping[str, Any]) -> str:
     return str(fn.get("name", "")).strip() if isinstance(fn, Mapping) else ""
 
 
+def _normalize_gate_name(value: Any) -> str:
+    return " ".join(
+        "".join(character.casefold() if character.isalnum() else " " for character in str(value)).split()
+    )
+
+
+def _generation_verification_can_defer_to_required_compile_gate() -> bool:
+    """Defer only when the active task is guaranteed a downstream compile gate."""
+
+    try:
+        from .small_model_task_capsule_contract import current_task_required_gates
+    except ImportError:
+        return False
+    return "target compile" in {
+        _normalize_gate_name(gate) for gate in current_task_required_gates()
+    }
+
+
 def _canonical_mutation_path(value: Any) -> str:
     clean = str(value or "").strip().replace("\\", "/")
     return re.sub(r"^(?:\./)+", "", clean)
@@ -2181,6 +2199,47 @@ def _generate_with_tools_impl(
         baseline_ready = _target_evidence_ready(
             state, require_rag=require_rag, fresh_java_target=fresh_java_target
         )
+        if (
+            implementation_requires_mutation
+            and state.workspace_changed
+            and state.validation_status == "DEFERRED"
+            and baseline_ready
+        ):
+            state.termination_reason = "VERIFICATION_DEFERRED_TO_TARGET_COMPILE"
+            emit_root_cause(
+                "generation_verifier_deferred_to_required_gate",
+                stage=stage,
+                operation="generate_with_tools",
+                gate="generation_verifier",
+                result="SKIP",
+                reason="generation-time Java verifier unavailable; target_compile remains mandatory",
+                details={
+                    "target_path": (
+                        state.mutation_context.target_path
+                        if state.mutation_context is not None
+                        else None
+                    ),
+                    "required_gate": "target_compile",
+                },
+            )
+            return _finalize_without_tools(
+                router,
+                config,
+                adapter,
+                request,
+                messages,
+                instruction=(
+                    "The source mutation is applied, but the generation-time Java verifier was unavailable. "
+                    "The active task has a mandatory downstream target_compile gate, so verification is "
+                    "deferred to that host-owned compile gate. Do not claim that verification passed. "
+                    "Do not call more tools. Return only the implementation_requires_mutation summary in "
+                    "the fixed response format."
+                ),
+                empty_error=(
+                    "Agent returned an empty final response after verification was deferred to target_compile."
+                ),
+            )
+
         if implementation_requires_mutation and state.workspace_changed and state.validation_status == "PASS" and baseline_ready:
             state.termination_reason = "VERIFICATION_PASSED"
             return _finalize_without_tools(
@@ -2663,9 +2722,16 @@ def _generate_with_tools_impl(
                         f"{status}: {payload.get('error', '')}"
                     )
                 if status == "UNAVAILABLE":
+                    state.record_failure(call.name, payload.get("error", "verifier unavailable"))
+                    if (
+                        call.name in {"java_diagnostics", "jdt_diagnostics"}
+                        and _generation_verification_can_defer_to_required_compile_gate()
+                    ):
+                        state.validation_status = "DEFERRED"
+                        state.phase = LoopPhase.VERIFY
+                        continue
                     unavailable_verifiers.add(call.name)
                     state.validation_status = "UNAVAILABLE"
-                    state.record_failure(call.name, payload.get("error", "verifier unavailable"))
                     state.phase = LoopPhase.VERIFY
                     continue
                 if state.record_verification(call.name, payload, status):
