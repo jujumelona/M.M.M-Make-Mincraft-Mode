@@ -27,13 +27,46 @@ class JavaCoreService:
     def diagnostics(self, project_root: str | Path, *, relative_files=None,
                     timeout_seconds: int = 600, full_scan: bool = False) -> dict[str, Any]:
         root = Path(project_root).resolve()
+        requested_files = self._normalize_relative_files(root, relative_files)
         # The owner snapshot must never overlap a multi-file transaction halfway through commit.
         with self._lock, project_write_lock(root):
             try:
-                return self._diagnostics(root, timeout_seconds, full_scan)
+                return self._diagnostics(
+                    root,
+                    timeout_seconds,
+                    full_scan,
+                    requested_files=requested_files,
+                )
             except (OSError, ValueError, TypeError, OwnerRPCError):
                 self.close()
                 raise
+
+    @staticmethod
+    def _normalize_relative_files(
+        root: Path,
+        relative_files: Any,
+    ) -> tuple[str, ...] | None:
+        if relative_files is None:
+            return None
+        if not isinstance(relative_files, (list, tuple)) or not relative_files:
+            raise ValueError("relative_files must be a non-empty sequence when supplied")
+        normalized: list[str] = []
+        for raw in relative_files:
+            relative = str(raw or "").replace("\\", "/").strip()
+            while relative.startswith("./"):
+                relative = relative[2:]
+            candidate = Path(relative)
+            if not relative or candidate.is_absolute() or ".." in candidate.parts:
+                raise ValueError(f"invalid relative diagnostic path: {relative!r}")
+            resolved = (root / candidate).resolve(strict=False)
+            try:
+                resolved.relative_to(root)
+            except ValueError as exc:
+                raise ValueError(
+                    f"diagnostic path escapes project root: {relative!r}"
+                ) from exc
+            normalized.append(resolved.relative_to(root).as_posix())
+        return tuple(dict.fromkeys(normalized))
 
     def _prepare_project(self, root: Path) -> None:
         from .jvm_owner_bootstrap import owner_command
@@ -144,7 +177,14 @@ class JavaCoreService:
             'generation': response['generation'],
         }
 
-    def _diagnostics(self, root: Path, timeout: int, full_scan: bool) -> dict[str, Any]:
+    def _diagnostics(
+        self,
+        root: Path,
+        timeout: int,
+        full_scan: bool,
+        *,
+        requested_files: tuple[str, ...] | None = None,
+    ) -> dict[str, Any]:
         self._prepare_project(root)
         assert self._inputs is not None
         owner = mutation_owner(root)
@@ -164,13 +204,27 @@ class JavaCoreService:
         self._model_revision = self._inputs.revision()
         self._revision = revision
         diagnostics = self._normalize_diagnostics(response['diagnostics'], root)
-        return self._result_payload(
+        if requested_files is not None:
+            requested_uris = {
+                (root / relative).resolve(strict=False).as_uri()
+                for relative in requested_files
+            }
+            diagnostics = {
+                uri: rows
+                for uri, rows in diagnostics.items()
+                if uri in requested_uris
+            }
+        result = self._result_payload(
             root,
             revision,
             response,
             diagnostics,
             full_scope=refresh or full_scan,
         )
+        if requested_files is not None:
+            result["verification_scope"] = "targeted"
+            result["relative_files"] = list(requested_files)
+        return result
 
     def close(self) -> None:
         with self._lock:
