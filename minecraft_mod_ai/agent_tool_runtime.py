@@ -93,7 +93,7 @@ _BLOCKED_MODEL_TOOLS = frozenset(
         "run_model_smoke",
     }
 )
-_HOST_ONLY_MODEL_TOOLS = frozenset({"apply_source_patch"})
+_HOST_ONLY_MODEL_TOOLS = frozenset({"apply_source_patch", "target_compile"})
 _SOURCE_EDIT_TOOL = "apply_source_edit"
 _SOURCE_EDIT_DESCRIPTION = (
     "Apply one executable semantic source/resource edit. For an existing file use an "
@@ -409,6 +409,27 @@ class AgentToolRuntime:
             },
         )
         try:
+            if (
+                selected == "generation"
+                and tool_name == "target_compile"
+                and not model_scoped
+            ):
+                from .generation_target_compile import run_generation_target_compile
+
+                target_path = str(payload.get("target_path") or "").strip()
+                result = run_generation_target_compile(
+                    self.workspace_root,
+                    target_path=target_path,
+                )
+                emit_root_cause(
+                    "agent_tool_call_result",
+                    stage=selected,
+                    operation=tool_name,
+                    gate="runtime_dispatch",
+                    result="PASS" if result.get("status") == "PASS" else "FAIL",
+                    details={"arguments": payload, "result": result},
+                )
+                return result
             if (
                 selected == "generation"
                 and tool_name == "java_diagnostics"
