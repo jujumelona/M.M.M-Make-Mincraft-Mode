@@ -35,7 +35,7 @@ _PATH_TOKEN = re.compile(
     r"(?P<path>(?:[A-Za-z]:)?[^\s:'\"<>|]*?(?:src[/\\][^\s:'\"<>|]+|[A-Za-z0-9_.-]+\.(?:java|json|kt|kts|gradle|mcmeta|png|ogg)))"
 )
 _JAVAC_DIAGNOSTIC = re.compile(
-    r"^(?P<path>(?:[A-Za-z]:)?[^:\r\n]+\.java):(?P<line>\d+):\s*"
+    r"^[ \t]*(?P<path>(?:[A-Za-z]:)?[^:\r\n]+\.java):(?P<line>\d+):\s*"
     r"(?P<kind>error|warning):\s*(?P<message>[^\r\n]*)$",
     re.MULTILINE,
 )
@@ -74,6 +74,21 @@ def _path_equivalent(left: str, right: str) -> bool:
     # and Gradle.  Suffix matching is allowed only across a path separator; basename-
     # only matching would incorrectly merge same-named files from different modules.
     return a.endswith("/" + b) or b.endswith("/" + a)
+
+
+def _diagnostic_file_path(value: Any) -> str:
+    """Reject verifier source labels masquerading as filesystem paths."""
+
+    path = _norm_path(value)
+    if not path:
+        return ""
+    folded = path.casefold()
+    if "/" in path or re.search(
+        r"\.(?:java|kt|kts|json|gradle|mcmeta|png|ogg)$",
+        folded,
+    ):
+        return path
+    return ""
 
 
 def _collect_paths(value: Any, *, limit: int = 4096) -> list[str]:
@@ -213,7 +228,7 @@ def _diagnostics_from_value(value: Any, *, limit: int = 256) -> list[dict[str, A
     def append(item: Mapping[str, Any], inherited_path: str = "") -> None:
         if len(diagnostics) >= limit or not _diagnostic_severity_is_error(item):
             return
-        path = _norm_path(
+        path = _diagnostic_file_path(
             item.get("path")
             or item.get("uri")
             or item.get("file")
@@ -240,7 +255,7 @@ def _diagnostics_from_value(value: Any, *, limit: int = 256) -> list[dict[str, A
         if depth > 14 or len(diagnostics) >= limit:
             return
         if isinstance(node, Mapping):
-            local_path = _norm_path(
+            local_path = _diagnostic_file_path(
                 node.get("path") or node.get("uri") or node.get("file") or inherited_path
             )
             diagnostic_like = any(
