@@ -139,7 +139,7 @@ def test_diagnostics_pages_every_java_file_without_a_total_count_cap(
     assert len(_FakeJsonRpcProcess.instances) == 1
     rpc = _FakeJsonRpcProcess.instances[0]
     assert len(rpc.opened_uris) == 300
-    assert rpc.request_methods[:3] == ["initialize", "textDocument/hover", "textDocument/hover"]
+    assert rpc.request_methods == ["initialize"]
     assert all(0 < value <= 3 for value in rpc.request_timeouts)
     assert rpc.closed is False
     service.close()
@@ -260,7 +260,7 @@ def test_workspace_symbol_calls_reuse_one_initialized_jdt_process(
     assert second["symbols"] == {"query": "Beta"}
     assert len(_FakeJsonRpcProcess.instances) == 1
     rpc = _FakeJsonRpcProcess.instances[0]
-    assert rpc.request_methods == ["initialize", "textDocument/hover", "textDocument/hover", "workspace/symbol", "workspace/symbol"]
+    assert rpc.request_methods == ["initialize", "workspace/symbol", "workspace/symbol"]
     assert rpc.closed is False
     service.close()
     assert rpc.closed is True
