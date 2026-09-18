@@ -2163,6 +2163,7 @@ def _consume_rejected_evidence_fixed_point(
     phase_names: Collection[str],
     *,
     forced_evidence_tool: str | None = None,
+    forced_evidence_arguments: Mapping[str, Any] | None = None,
 ) -> tuple[str, ...]:
     """Consume the reviewed evidence route that cannot produce an admissible call.
 
@@ -2193,8 +2194,12 @@ def _consume_rejected_evidence_fixed_point(
     consumed = tuple(sorted(routes))
     if not consumed:
         return ()
+    forced_arguments = dict(forced_evidence_arguments or {})
     for route in consumed:
-        state.record_source_attempt(route, {})
+        state.record_source_attempt(
+            route,
+            forced_arguments if route == forced else {},
+        )
     state.clear_no_progress_result()
     return consumed
 
@@ -2403,9 +2408,15 @@ def _generate_with_tools_impl(
         if implementation_requires_mutation and state.phase == LoopPhase.ACT and not phase_tools:
             raise ModelConfigurationError("MUTATION_TOOL_UNAVAILABLE: no reviewed source mutation tool is exposed.")
         if implementation_requires_mutation and state.phase in {LoopPhase.OBSERVE, LoopPhase.RECOVER} and not phase_tools:
-            if is_mutation_ready(messages, state) and baseline_ready:
+            mutation_is_ready = is_mutation_ready(messages, state)
+            if mutation_is_ready and baseline_ready:
                 state.phase = LoopPhase.ACT
                 continue
+            if mutation_is_ready and require_rag and not baseline_ready:
+                raise ModelConfigurationError(
+                    "IMPLEMENTATION_EVIDENCE_STALLED: the mutation target is host-localized, "
+                    "but no untried authoritative Java/API evidence route remains."
+                )
             raise ModelConfigurationError(
                 "MUTATION_LOCALIZATION_STALLED: no untried relevant source-evidence route remains."
             )
@@ -2415,6 +2426,7 @@ def _generate_with_tools_impl(
         parallel = request.parallel_tool_calls
 
         forced_evidence_tool: str | None = None
+        forced_evidence_arguments: dict[str, Any] = {}
         if (
             required_evidence_choice
             and require_rag
@@ -2433,6 +2445,22 @@ def _generate_with_tools_impl(
                 # reviewed retrieval tools remain available.
                 tool_choice = "required"
                 parallel = False
+            if forced_evidence_tool in {"external_mcp_schema", "external_mcp_call"}:
+                for schema in phase_tools:
+                    if _tool_name(schema) != forced_evidence_tool:
+                        continue
+                    function = schema.get("function")
+                    parameters = function.get("parameters") if isinstance(function, Mapping) else None
+                    properties = parameters.get("properties") if isinstance(parameters, Mapping) else None
+                    capability = properties.get("capability") if isinstance(properties, Mapping) else None
+                    enum = capability.get("enum") if isinstance(capability, Mapping) else None
+                    if (
+                        isinstance(enum, Sequence)
+                        and not isinstance(enum, (str, bytes, bytearray))
+                        and len(enum) == 1
+                    ):
+                        forced_evidence_arguments = {"capability": str(enum[0])}
+                    break
         elif state.phase == LoopPhase.ACT:
             mutation_names = [name for name in phase_names if name in _MUTATION_ACT_TOOLS]
             if len(mutation_names) == 1:
@@ -2539,6 +2567,12 @@ def _generate_with_tools_impl(
                     f"this turn: {forced_evidence_tool!r}. Call exactly that function; do "
                     "not replay a tool from an earlier turn."
                 )
+                capability = str(forced_evidence_arguments.get("capability") or "").strip()
+                if capability:
+                    feedback += (
+                        f" Its capability is host-selected as {capability!r}; use exactly "
+                        "that capability and do not substitute another one."
+                    )
             messages.append({"role": "assistant", "content": turn.content or None})
             messages.append({"role": "system", "content": feedback})
             emit_root_cause(
@@ -2562,6 +2596,7 @@ def _generate_with_tools_impl(
                     rejection_payloads,
                     phase_names,
                     forced_evidence_tool=forced_evidence_tool,
+                    forced_evidence_arguments=forced_evidence_arguments,
                 )
                 if rejected_routes:
                     # A repeated schema/protocol rejection means this evidence route
