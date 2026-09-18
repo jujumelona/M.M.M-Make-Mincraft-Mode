@@ -1,27 +1,23 @@
 """Real Equinox integration; opt in with MMM_JVM_OWNER_LIVE=1 after installDist."""
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
+from minecraft_mod_ai.jvm_owner_bootstrap import owner_command
 from minecraft_mod_ai.owner_rpc import OwnerRPC
 
 
-def _configuration(runtime, workspace):
-    target = workspace / 'configuration'
-    target.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(runtime / 'configuration/config.ini', target / 'config.ini')
-    return target
+def _owner_command(tmp_path: Path, name: str) -> list[str]:
+    """Launch the exact production owner bootstrap used by JavaCoreService."""
+
+    return owner_command(tmp_path / f"owner-{name}")
 
 
 @pytest.mark.skipif(os.environ.get("MMM_JVM_OWNER_LIVE") != "1", reason="real JVM integration opt-in")
 def test_incremental_dependent_diagnostics(tmp_path):
-    runtime = Path(__file__).parents[1] / "minecraft_mod_ai/jvm_owner/build/install/owner"
-    framework = next((runtime / "plugins").glob("org.eclipse.osgi-*.jar"))
-    process = OwnerRPC(["java", "-cp", str(framework), "org.eclipse.core.runtime.adaptor.EclipseStarter", "-configuration", str(_configuration(runtime, tmp_path)),
-                       "-data", str(tmp_path / "workspace"), "-application", "mmm.owner.application", "-nosplash"])
+    process = OwnerRPC(_owner_command(tmp_path, "incremental"))
     def rpc(method, params):
         return process.request(method, params, timeout=45)
     source = tmp_path / "project/src"
@@ -60,8 +56,7 @@ def test_incremental_dependent_diagnostics(tmp_path):
 def test_tooling_model_and_core_project_dependencies(tmp_path):
     from minecraft_mod_ai.project_model import ResolvedBuildModel
 
-    runtime = Path(__file__).parents[1] / 'minecraft_mod_ai/jvm_owner/build/install/owner'
-    framework = next((runtime / 'plugins').glob('org.eclipse.osgi-*.jar'))
+
     project = tmp_path / 'project'
     project.mkdir()
     (project / 'settings.gradle').write_text("rootProject.name='owner-test'\ninclude 'producer', 'consumer'\n")
@@ -72,9 +67,7 @@ def test_tooling_model_and_core_project_dependencies(tmp_path):
         path.parent.mkdir(parents=True)
     producer.write_text('public class A { public static int method() { return 1; } }')
     consumer.write_text('public class B { int n = A.method(); }')
-    with OwnerRPC(['java', '-cp', str(framework), 'org.eclipse.core.runtime.adaptor.EclipseStarter',
-                   '-configuration', str(_configuration(runtime, tmp_path)), '-data', str(tmp_path / 'workspace'),
-                   '-application', 'mmm.owner.application', '-nosplash']) as rpc:
+    with OwnerRPC(_owner_command(tmp_path, "tooling-model")) as rpc:
         raw = rpc.request('resolve', {'project_root': str(project)}, timeout=120)
         model = ResolvedBuildModel.from_dict(raw)
         assert {source.project_path for source in model.source_sets} == {':producer', ':consumer'}
@@ -86,22 +79,17 @@ def test_tooling_model_and_core_project_dependencies(tmp_path):
 
 
 @pytest.mark.skipif(os.environ.get('MMM_JVM_OWNER_LIVE') != '1', reason='real JVM integration opt-in')
-def test_generation_service_preserves_errors_after_unchanged_check(tmp_path, monkeypatch):
+def test_generation_service_preserves_errors_after_unchanged_check(tmp_path):
     from types import SimpleNamespace
 
-    from minecraft_mod_ai import agent_tool_runtime, jvm_owner_bootstrap
+    from minecraft_mod_ai import agent_tool_runtime
     from minecraft_mod_ai.generation_verifier_resilience import run_generation_verifier
     from minecraft_mod_ai.source_patch import TransactionalSourcePatcher
 
-    runtime_dir = Path(__file__).parents[1] / 'minecraft_mod_ai/jvm_owner/build/install/owner'
-    framework = next((runtime_dir / 'plugins').glob('org.eclipse.osgi-*.jar'))
+    from minecraft_mod_ai.platform_catalog import adapter_for_target
+    from minecraft_mod_ai.platform_generation_contract import _write_platform_lock
 
-    def command(workspace):
-        return ['java', '-cp', str(framework), 'org.eclipse.core.runtime.adaptor.EclipseStarter',
-                '-configuration', str(_configuration(runtime_dir, workspace)), '-data', str(workspace / 'data'),
-                '-application', 'mmm.owner.application', '-nosplash']
-
-    monkeypatch.setattr(jvm_owner_bootstrap, 'owner_command', command)
+    _write_platform_lock(tmp_path, adapter_for_target("1.20.1", "fabric"))
     (tmp_path / 'build.gradle').write_text("plugins { id 'java' }\n")
     (tmp_path / 'settings.gradle').write_text("rootProject.name='generation-owner'\n")
     patcher = TransactionalSourcePatcher(tmp_path)
@@ -155,15 +143,11 @@ public class Generator extends AbstractProcessor {
     source = tmp_path / 'src'
     source.mkdir()
     (source / 'Main.java').write_text('public class Main { Generated value; }')
-    runtime = Path(__file__).parents[1] / 'minecraft_mod_ai/jvm_owner/build/install/owner'
-    framework = next((runtime / 'plugins').glob('org.eclipse.osgi-*.jar'))
     model = {'source_sets': [{'id': ':main', 'name': 'main', 'project_path': ':',
               'source_roots': [str(source)], 'classpath': [], 'output_dirs': [],
               'java_home': os.environ.get('JAVA_HOME', 'C:/Program Files/Java/jdk-17'),
               'source_compatibility': '17', 'target_compatibility': '17', 'release': 17,
               'compiler_args': [], 'annotation_processor_path': [str(jar)]}]}
-    with OwnerRPC(['java', '-cp', str(framework), 'org.eclipse.core.runtime.adaptor.EclipseStarter',
-                   '-configuration', str(_configuration(runtime, tmp_path)), '-data', str(tmp_path / 'workspace'),
-                   '-application', 'mmm.owner.application', '-nosplash']) as rpc:
+    with OwnerRPC(_owner_command(tmp_path, "annotation-processor")) as rpc:
         result = rpc.request('open', {'model': model}, timeout=45)
         assert not [d for d in result['diagnostics'] if d['severity'] == 'error'], result
