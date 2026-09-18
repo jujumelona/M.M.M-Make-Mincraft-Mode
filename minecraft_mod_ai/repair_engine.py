@@ -45,8 +45,12 @@ _ALLOWED_SUFFIXES = {
     ".yaml",
     ".yml",
 }
-_REPAIR_LOG_SNIPPET_CHARS = 3000
-_REPAIR_LOG_READ_BYTES = 16384
+_REPAIR_LOG_SNIPPET_CHARS = 6000
+_REPAIR_LOG_READ_BYTES = 32768
+_JAVAC_LINE = re.compile(
+    r"^[ \t]*(?:[A-Za-z]:)?[^\r\n]+\.java:\d+:\s*(?:error|warning):",
+    re.IGNORECASE,
+)
 _REPAIR_BUILD_LOG_LIMIT = 4
 _REPAIR_QUERY_PART_LIMIT = 12
 
@@ -74,6 +78,8 @@ def active_repair_project_index(root: Path, policy: ScalePolicy) -> ProjectIndex
 
 
 def _read_bounded_build_log(log_path: Any) -> str:
+    """Keep compiler diagnostics even when Gradle appends a long stack trace."""
+
     raw_path = str(log_path or "").strip()
     if not raw_path:
         return ""
@@ -81,16 +87,31 @@ def _read_bounded_build_log(log_path: Any) -> str:
     try:
         if not path.is_file() or path.is_symlink():
             return ""
+        size = path.stat().st_size
         with path.open("rb") as handle:
-            handle.seek(0, 2)
-            size = handle.tell()
-            handle.seek(max(0, size - _REPAIR_LOG_READ_BYTES))
-            payload = handle.read(_REPAIR_LOG_READ_BYTES)
+            head = handle.read(_REPAIR_LOG_READ_BYTES)
+            if size > _REPAIR_LOG_READ_BYTES:
+                handle.seek(max(0, size - _REPAIR_LOG_READ_BYTES))
+                tail = handle.read(_REPAIR_LOG_READ_BYTES)
+            else:
+                tail = b""
     except (OSError, ValueError):
         return ""
-    text = payload.decode("utf-8", errors="replace")
-    normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
-    return normalized[-_REPAIR_LOG_SNIPPET_CHARS:]
+
+    normalized = (head + (b"\n" if tail else b"") + tail).decode(
+        "utf-8", errors="replace"
+    ).replace("\r\n", "\n").replace("\r", "\n")
+    lines = normalized.splitlines()
+    compiler: list[str] = []
+    for index, line in enumerate(lines):
+        if _JAVAC_LINE.search(line):
+            compiler.extend(lines[index : index + 5])
+    compiler_text = "\n".join(dict.fromkeys(compiler))
+    tail_text = "\n".join(lines)[-_REPAIR_LOG_SNIPPET_CHARS // 2 :]
+    combined = "\n".join(
+        part for part in (compiler_text, tail_text) if part.strip()
+    ).strip()
+    return combined[-_REPAIR_LOG_SNIPPET_CHARS:]
 
 
 def _failed_build_log_diagnostics(evidence: dict[str, Any]) -> list[dict[str, Any]]:
