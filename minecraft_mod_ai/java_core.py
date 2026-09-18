@@ -131,7 +131,17 @@ class JavaCoreService:
             raise OwnerRPCError('Malformed JDT Core diagnostic')
         severity = {'error': 1, 'warning': 2, 'info': 3}[row['severity']]
         line = max(0, int(row.get('line', 1)) - 1)
-        uri = str(row.get('uri') or row.get('path') or root.as_uri())
+        raw_uri = str(row.get('uri') or '').strip()
+        raw_path = str(row.get('path') or '').strip()
+        if raw_uri:
+            uri = raw_uri
+        elif raw_path:
+            path = Path(raw_path)
+            if not path.is_absolute():
+                path = root / path
+            uri = path.resolve(strict=False).as_uri()
+        else:
+            uri = root.as_uri()
         normalized = {
             **row,
             'severity': severity,
