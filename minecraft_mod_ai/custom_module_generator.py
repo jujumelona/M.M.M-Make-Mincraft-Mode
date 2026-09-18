@@ -1377,20 +1377,6 @@ def _collect_staged_operations(
     return operations, touched, discarded
 
 
-def _extract_json(text: str) -> dict[str, Any]:
-    decoder = json.JSONDecoder()
-    for index, char in enumerate(text):
-        if char != "{":
-            continue
-        try:
-            value, _ = decoder.raw_decode(text[index:])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict):
-            return value
-    raise CustomModuleGenerationError("Model output did not contain one parseable JSON object.")
-
-
 def _parse_coder_summary(text: str) -> str:
     """Parse the fixed coder-summary contract through the shared schema authority."""
 
