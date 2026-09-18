@@ -295,12 +295,16 @@ def _run_real_fabric_evidence(
         timeout=900,
         candidate=candidate,
     )
-    verify_execution_evidence(store, evidence_id, expected=expected)
+    evidence_record = verify_execution_evidence(
+        store,
+        evidence_id,
+        expected=expected,
+    )
     (root / "result.json").write_text(
         json.dumps({"evidence_id": evidence_id, "expected": expected}, indent=2),
         encoding="utf-8",
     )
-    return evidence_id
+    return evidence_id, evidence_record
 
 
 def _write_debug_e2e_receipt(
@@ -310,17 +314,20 @@ def _write_debug_e2e_receipt(
     result: dict[str, object],
     target: Path,
     evidence_id: str,
+    evidence_record: dict[str, object],
 ) -> None:
-    class_file = project / "build/classes/java/main/dev/mmm/debugfixture/DebugToken.class"
-    if not class_file.is_file():
+    class_file = "build/classes/java/main/dev/mmm/debugfixture/DebugToken.class"
+    artifacts = evidence_record.get("artifacts")
+    if not isinstance(artifacts, dict) or class_file not in artifacts:
         raise AssertionError(
-            "Gradle build passed but DebugToken.class was not produced from the fresh target"
+            "Isolated Gradle evidence passed but DebugToken.class was not captured"
         )
     payload = {
         "schema_version": "mmm/debug-token-compile-e2e-v1",
         "status": "PASS",
         "target": target.relative_to(project).as_posix(),
-        "class_file": class_file.relative_to(project).as_posix(),
+        "class_file": class_file,
+        "class_sha256": artifacts[class_file],
         "generation_status": result.get("status"),
         "operation_count": result.get("operation_count"),
         "touched_paths": result.get("touched_paths"),
@@ -350,7 +357,12 @@ def main() -> None:
     spec, generated = _materialize_project(project, bootstrap_integrity())
     module, debug_result, debug_target = _run_debug_token_generation(root, project)
     _ensure_gradle_wrapper(project)
-    evidence_id = _run_real_fabric_evidence(root, project, spec, generated)
+    evidence_id, evidence_record = _run_real_fabric_evidence(
+        root,
+        project,
+        spec,
+        generated,
+    )
     _write_debug_e2e_receipt(
         root,
         project,
@@ -358,6 +370,7 @@ def main() -> None:
         debug_result,
         debug_target,
         evidence_id,
+        evidence_record,
     )
     print("Evidence:", evidence_id, flush=True)
     print("DebugToken fresh create -> real Gradle compile: PASS", flush=True)
