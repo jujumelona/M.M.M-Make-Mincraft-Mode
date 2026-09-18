@@ -205,8 +205,9 @@ def _debug_task_contract(platform: Any) -> dict[str, Any]:
         "task_sha256": "",
         "sequence": 0,
         "semantic_outcome": (
-            "Implement one deterministic debug_token Fabric item fixture in the exact "
-            "host-owned source target so the normal coder and verification pipeline runs."
+            "Generate one deterministic compile-backed debug_token item-registration source "
+            "fixture in the exact host-owned Java target. This Debug fixture validates coder "
+            "grounding and target compilation; it does not authorize a second Fabric entrypoint."
         ),
         "execution_role": "production",
         "requirement_refs": ["debug_fixture_requirement"],
@@ -217,14 +218,17 @@ def _debug_task_contract(platform: Any) -> dict[str, Any]:
         "provides": ["requirement_done:debug_fixture_requirement"],
         "depends_on": [],
         "implementation_obligations": [
-            "Implement the debug_token item fixture using the immutable Fabric target APIs; keep all production source changes inside the owned DebugToken.java target.",
+            "Use only the host-grounded item registration API admitted for the immutable target.",
+            "Keep all production source changes inside the owned DebugToken.java target.",
+            "Do not implement ModInitializer, create another entrypoint, add item groups/tabs, or invent lifecycle hooks; this is a compile-backed API fixture.",
         ],
         "engineering_worksheet": {
             "schema_version": "mmm/debug-engineering-worksheet-v1",
             "objective": "Exercise the real task-local custom coding path without running the planner.",
             "implementation": [
                 "Create the exact owned DebugToken Java source.",
-                "Use the selected Fabric/Minecraft target coordinates without changing the target.",
+                "Use the host-projected target item API/template facts instead of remembered mappings or package names.",
+                "Implement only the minimal debug_token item-registration source needed to exercise target compilation.",
                 "Keep the fixture deterministic and self-contained for repeatable pipeline debugging.",
             ],
             "boundaries": [
@@ -248,7 +252,8 @@ def _debug_task_contract(platform: Any) -> dict[str, Any]:
         ],
         "required_gates": ["target_compile"],
         "acceptance": [
-            "The exact owned DebugToken.java source implements the debug_token fixture.",
+            "The exact owned DebugToken.java source contains the host-grounded debug_token item-registration fixture.",
+            "The source does not introduce a second Fabric entrypoint or unrelated lifecycle/API surface.",
             "The selected target compile gate passes for the generated project.",
         ],
         "public_acceptance": [],
@@ -286,7 +291,7 @@ def write_debug_example_plan(
         "run the normal implementation/verification pipeline."
     )
     acceptance = (
-        "The generated project contains the debug_token item.",
+        "The generated project contains a target-API compile-verified debug_token item-registration fixture.",
         "The generated Fabric project passes the normal build and validation pipeline.",
     )
     base = Proposal(
@@ -338,6 +343,8 @@ def write_debug_example_plan(
                 kind="custom_java",
                 config={
                     "summary": "Deterministic debug_token implementation fixture.",
+                    "semantic_kind": "item",
+                    "registry_path": "debug_token",
                     "evidence_task": evidence_task,
                     "coder_execution_contract": coder_contract,
                 },
