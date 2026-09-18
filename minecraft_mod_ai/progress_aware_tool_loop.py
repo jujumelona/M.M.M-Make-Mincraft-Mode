@@ -2147,7 +2147,6 @@ def _generate_with_tools_impl(
     initial_execution_authority = _host_target_execution_authority(state)
     require_rag = bool(
         role in {"coder", "coder_safe"}
-        and all_names & _RAG_EVIDENCE_TOOLS
         and not host_grounded
         and (
             router._agent_require_fresh_evidence
