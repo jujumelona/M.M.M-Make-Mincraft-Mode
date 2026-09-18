@@ -12,7 +12,7 @@ import json
 import re
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
