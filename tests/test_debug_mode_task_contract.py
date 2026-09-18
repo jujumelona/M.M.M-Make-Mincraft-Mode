@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from minecraft_mod_ai.colab_run_modes import write_debug_example_plan
+from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator
 from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.small_model_task_capsule_contract import compile_task_capsule
 
@@ -44,3 +45,43 @@ def test_debug_fixture_uses_real_custom_task_contract(tmp_path: Path) -> None:
     assert capsule.primary_symbol == "DebugToken"
     assert capsule.required_gates == ("target_compile",)
     assert capsule.reuse_action == "fresh"
+
+
+def test_debug_target_compile_is_source_owned_and_satisfied_by_real_build_receipt(
+    tmp_path: Path,
+) -> None:
+    plan_path = write_debug_example_plan(
+        tmp_path / "proposal.json",
+        minecraft_version="1.21.8",
+        loader="fabric",
+    )
+    payload = json.loads(plan_path.read_text(encoding="utf-8"))
+
+    from minecraft_mod_ai.complete_spec import CompleteProposal
+
+    proposal = CompleteProposal.from_dict(payload)
+    proposal.validate()
+    failures = CompleteProductionOrchestrator._required_gate_failures(
+        proposal,
+        generated_receipts=(),
+        project_root=tmp_path,
+        source_validation={"status": "PASS"},
+        jdt_receipt=None,
+        build_report={
+            "status": "PASS",
+            "commands": [
+                {
+                    "name": "build",
+                    "exit_code": 0,
+                    "timed_out": False,
+                }
+            ],
+        },
+        jar_validation=None,
+        blockbench_receipts=(),
+        runtime_receipt=None,
+        playtest_receipt=None,
+        visual_receipt=None,
+    )
+
+    assert failures == []
