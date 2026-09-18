@@ -318,6 +318,44 @@ def test_fresh_host_reserved_java_target_separates_write_and_api_evidence_author
     ) is True
 
 
+def test_fresh_java_edit_schema_requires_one_complete_create_before_compile() -> None:
+    context = tool_loop.TargetMutationContext(
+        target_path=JAVA_PATH,
+        target_symbol=SYMBOL,
+        is_new_file=True,
+        evidence_source="host_owned_fresh_target",
+        writable_paths=(JAVA_PATH,),
+        creatable_paths=(JAVA_PATH,),
+        target_pinned=True,
+    )
+    narrowed = tool_loop._source_edit_schema_for_context(_tool_schema(), context)
+    operations = narrowed["function"]["parameters"]["properties"]["operation"]["enum"]
+
+    assert operations == ["create_file", "create"]
+
+
+def test_materialized_java_edit_schema_forbids_second_create() -> None:
+    context = tool_loop.TargetMutationContext(
+        target_path=JAVA_PATH,
+        target_symbol=SYMBOL,
+        source_body="package generated.generated_mod; public final class X {}\n",
+        is_new_file=False,
+        evidence_source="mutation_receipt",
+        writable_paths=(JAVA_PATH,),
+        creatable_paths=(),
+        target_pinned=True,
+    )
+    narrowed = tool_loop._source_edit_schema_for_context(_tool_schema(), context)
+    operations = {
+        value.casefold()
+        for value in narrowed["function"]["parameters"]["properties"]["operation"]["enum"]
+    }
+
+    assert "create_file" not in operations
+    assert "create" not in operations
+    assert "replace_exact" in operations
+
+
 def test_fresh_java_optional_observe_frontier_stays_local() -> None:
     schemas = {
         name: {
