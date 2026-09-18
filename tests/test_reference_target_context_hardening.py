@@ -36,29 +36,27 @@ def _fresh_request(*, task_reuse_refs=(), binding_source_refs=()) -> dict:
     }
 
 
-def test_fresh_task_with_reuse_refs_fails_closed_to_localization() -> None:
+def test_fresh_task_reuse_refs_do_not_erase_reserved_creation_target() -> None:
     payload = _fresh_request(task_reuse_refs=("component:existing_trade_engine",))
 
-    assert tool_loop._fresh_target_has_reuse_evidence(payload) is True
     context = tool_loop._extract_mutation_context_from_payload(payload)
 
     assert context is not None
-    assert context.target_path is None
-    assert context.is_new_file is False
-    assert context.localization_stage == tool_loop.LocalizationStage.NEED_FILE
-    assert context.evidence_source == "reuse_evidence_requires_localization"
+    assert context.target_path == TARGET_PATH
+    assert context.target_symbol == TARGET_SYMBOL
+    assert context.is_new_file is True
+    assert context.localization_stage == tool_loop.LocalizationStage.READY
 
 
-def test_fresh_binding_with_source_refs_fails_closed_to_localization() -> None:
+def test_fresh_binding_source_refs_do_not_replace_reserved_creation_target() -> None:
     payload = _fresh_request(
         binding_source_refs=("src/main/java/mod/TradeEngine.java",)
     )
 
-    assert tool_loop._fresh_target_has_reuse_evidence(payload) is True
     context = tool_loop._extract_mutation_context_from_payload(payload)
 
     assert context is not None
-    assert context.target_path is None
-    assert context.is_new_file is False
-    assert context.localization_stage == tool_loop.LocalizationStage.NEED_FILE
-    assert context.evidence_source == "reuse_evidence_requires_localization"
+    assert context.target_path == TARGET_PATH
+    assert context.target_symbol == TARGET_SYMBOL
+    assert context.is_new_file is True
+    assert context.localization_stage == tool_loop.LocalizationStage.READY
