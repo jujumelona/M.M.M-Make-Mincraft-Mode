@@ -290,3 +290,50 @@ def test_guarded_repair_engine_delegates_for_source_diagnostic(monkeypatch) -> N
     )
 
     assert result == expected
+
+
+def test_guarded_repair_evidence_uses_target_compile_not_base_jdt(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls = {"build": 0}
+
+    class Runner:
+        def __init__(self, cache):
+            assert cache == tmp_path / ".cache"
+
+        def build(self, root, *, run_gametest):
+            calls["build"] += 1
+            assert root == tmp_path
+            assert run_gametest is False
+            return _Report(
+                {
+                    "status": "FAIL",
+                    "error": "Gradle build failed.",
+                    "commands": [
+                        {
+                            "name": "incremental_build",
+                            "exit_code": 1,
+                            "timed_out": False,
+                        }
+                    ],
+                }
+            )
+
+    def forbidden_base_evidence(*_args, **_kwargs):
+        raise AssertionError("repair guard must not re-enter JDT/base evidence")
+
+    monkeypatch.setattr(
+        repair_guard._BaseRepairEngine,
+        "_evidence",
+        forbidden_base_evidence,
+    )
+    engine = object.__new__(repair_guard.RepairEngine)
+    engine.runner_factory = Runner
+    engine.gradle_cache = tmp_path / ".cache"
+
+    evidence = engine._evidence(tmp_path, run_gametest=False)
+
+    assert calls["build"] == 1
+    assert evidence["passed"] is False
+    assert evidence["build"]["status"] == "FAIL"
+    assert evidence["diagnostics"]["status"] == "DEFERRED_TO_POST_BUILD"
