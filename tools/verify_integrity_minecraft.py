@@ -6,6 +6,7 @@ single probe, not all canonical leaves or the complete supported version matrix.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import sys
@@ -218,15 +219,20 @@ def _assert_debug_generation_receipt(
         )
 
 
+def _download_gradle_wrapper_component(project: Path, name: str) -> None:
+    path = project / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        return
+    url = "https://raw.githubusercontent.com/gradle/gradle/v8.6.0/" + name
+    with urlopen(url, timeout=60) as response:
+        path.write_bytes(response.read())
+
+
 def _ensure_gradle_wrapper(project: Path) -> None:
-    for name in ("gradlew", "gradlew.bat", "gradle/wrapper/gradle-wrapper.jar"):
-        path = project / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            continue
-        url = "https://raw.githubusercontent.com/gradle/gradle/v8.6.0/" + name
-        with urlopen(url, timeout=60) as response:
-            path.write_bytes(response.read())
+    names = ("gradlew", "gradlew.bat", "gradle/wrapper/gradle-wrapper.jar")
+    with ThreadPoolExecutor(max_workers=len(names)) as executor:
+        tuple(executor.map(lambda name: _download_gradle_wrapper_component(project, name), names))
     with urlopen(
         "https://services.gradle.org/distributions/gradle-8.6-bin.zip.sha256",
         timeout=60,
