@@ -51,3 +51,58 @@ def test_platform_lock_wins_over_stale_environment(tmp_path, monkeypatch):
     monkeypatch.setenv('MMM_JAVA_VERSION', '25')
     monkeypatch.setattr(java_lsp, '_candidate_java_homes', lambda _major: [home])
     assert Path(JavaCoreService._resolve_parameters(tmp_path)['java_home']) == home
+
+
+
+def test_platform_lock_resolves_gradle_coordinates_without_materialization(tmp_path, monkeypatch):
+    from minecraft_mod_ai.platform_generation_contract import _write_platform_lock
+    from minecraft_mod_ai.runner import GradleRunner
+
+    target = platform_catalog.adapter_for_target('1.20.1', 'fabric')
+    _write_platform_lock(tmp_path, target)
+    home = _jdk(tmp_path, int(target.java_version))
+    monkeypatch.setattr(java_lsp, '_candidate_java_homes', lambda _major: [home])
+    monkeypatch.setattr(
+        GradleRunner,
+        'ensure_gradle',
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError('pure target resolution must not materialize Gradle')
+        ),
+    )
+
+    params = JavaCoreService._resolve_parameters(tmp_path)
+
+    assert params['gradle_version'] == target.gradle
+    assert params['gradle_sha256'] == target.gradle_sha256
+    assert Path(params['java_home']) == home
+
+
+def test_owner_resolution_materializes_exact_pinned_gradle(tmp_path, monkeypatch):
+    from minecraft_mod_ai.platform_generation_contract import _write_platform_lock
+    from minecraft_mod_ai.runner import GradleRunner
+
+    target = platform_catalog.adapter_for_target('1.20.1', 'fabric')
+    _write_platform_lock(tmp_path, target)
+    home = _jdk(tmp_path, int(target.java_version))
+    monkeypatch.setattr(java_lsp, '_candidate_java_homes', lambda _major: [home])
+
+    gradle_home = tmp_path / 'verified-gradle'
+    executable = gradle_home / 'bin' / 'gradle'
+    executable.parent.mkdir(parents=True)
+    executable.write_text('', encoding='utf-8')
+    calls = []
+
+    def ensure(self, version, sha256):
+        calls.append((version, sha256))
+        return executable
+
+    monkeypatch.setattr(GradleRunner, 'ensure_gradle', ensure)
+
+    params = JavaCoreService()._owner_resolve_parameters(tmp_path)
+
+    assert calls == [(target.gradle, target.gradle_sha256)]
+    assert params['gradle_home'] == str(gradle_home.resolve())
+    assert params['gradle_user_home']
+    assert 'gradle_version' not in params
+    assert 'gradle_sha256' not in params
+    assert Path(params['java_home']) == home
