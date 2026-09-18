@@ -173,7 +173,7 @@ class ExpansionGraphRouter:
 
 def test_entity_exists_lowering_and_asset_mold():
     router = ExpansionGraphRouter(
-        nodes=[{"entity_id": "space_boss", "kind": "boss", "role": "Boss mob"}],
+        nodes=[{"entity_id": "space_boss", "kind": "entity", "role": "Boss mob"}],
         capabilities={"space_boss": "ENTITY_EXISTS"},
         properties={
             "space_boss": [
@@ -205,7 +205,7 @@ def test_entity_exists_lowering_and_asset_mold():
 
 def test_gui_panel_lowering_and_asset_mold():
     router = ExpansionGraphRouter(
-        nodes=[{"entity_id": "fusion_gui", "kind": "screen", "role": "Machine interface"}],
+        nodes=[{"entity_id": "fusion_gui", "kind": "gui", "role": "Machine interface"}],
         capabilities={"fusion_gui": "GUI_EXISTS"},
         properties={
             "fusion_gui": [
@@ -230,8 +230,8 @@ def test_gui_panel_lowering_and_asset_mold():
 def test_machine_and_network_capabilities():
     router = ExpansionGraphRouter(
         nodes=[
-            {"entity_id": "fusion_core", "kind": "machine", "role": "Energy generator"},
-            {"entity_id": "power_sync", "kind": "packet", "role": "Sync power packet"},
+            {"entity_id": "fusion_core", "kind": "block_entity", "role": "Energy generator"},
+            {"entity_id": "power_sync", "kind": "network_packet", "role": "Sync power packet"},
         ],
         capabilities={
             "fusion_core": "BLOCK_ENTITY_EXISTS",
@@ -260,8 +260,8 @@ def test_expanded_relations_graph():
         nodes=[
             {"entity_id": "controller_item", "kind": "item", "role": "Handheld controller"},
             {"entity_id": "control_gui", "kind": "gui", "role": "Control panel"},
-            {"entity_id": "machine_block", "kind": "machine", "role": "Fabricator machine"},
-            {"entity_id": "sync_packet", "kind": "packet", "role": "Sync packet"},
+            {"entity_id": "machine_block", "kind": "block_entity", "role": "Fabricator machine"},
+            {"entity_id": "sync_packet", "kind": "network_packet", "role": "Sync packet"},
             {"entity_id": "spawn_drone", "kind": "entity", "role": "Drone companion"},
             {"entity_id": "space_dim", "kind": "dimension", "role": "Orbit dimension"},
         ],
