@@ -34,7 +34,7 @@ def owner_command(workspace: Path) -> list[str]:
                 output = target / path.relative_to(source)
                 output.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(path, output)
-            gradle = GradleRunner(cache / 'gradle')._ensure_gradle(GRADLE_VERSION, GRADLE_SHA256)
+            gradle = GradleRunner(cache / 'gradle').ensure_gradle(GRADLE_VERSION, GRADLE_SHA256)
             with tempfile.TemporaryFile(mode='w+b') as log:
                 result = subprocess.run([str(gradle), '--no-daemon', '--console=plain', 'installDist'],
                                         cwd=target, stdout=log, stderr=subprocess.STDOUT,
