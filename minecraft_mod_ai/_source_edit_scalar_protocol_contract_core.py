@@ -4,8 +4,10 @@ from __future__ import annotations
 
 One model action describes one executable source edit. A fresh, exact host-owned Java
 target is created once as a complete file so the target compiler can validate one coherent
-implementation. After materialization, create/write operations are forbidden and repairs
-use SHA-bound exact edits. The host materializes every action into transactional patches.
+implementation. After materialization, a create_file/create request for that same exact
+existing path is an atomic whole-file rewrite and is lowered to an expected-SHA replace;
+structural create operations and different-path creation remain forbidden by host authority.
+The host materializes every action into transactional patches.
 """
 
 import hashlib
