@@ -1238,19 +1238,20 @@ def _target_evidence_ready(
 ) -> bool:
     """Decide whether implementation may proceed.
 
-    Fresh Java never depends on optional retrieval services when the host owns the exact
-    target and the task carries mandatory target_compile. In that case the real target
-    compiler is the authoritative API gate and retrieval remains advisory only.
+    target_compile is the canonical verifier, not permission to guess an exact
+    Minecraft/Fabric API. When the active coding policy requires fresh evidence, the
+    small coder must ground the implementation before mutating even though compile is
+    guaranteed downstream.
     """
 
-    if not require_rag or compile_backed_java:
+    del compile_backed_java
+    if not require_rag:
         return True
     return (
         state.has_authoritative_java_evidence
         if fresh_java_target
         else state.has_fresh_evidence
     )
-
 
 def _completion_boundary_error(exc: BaseException) -> bool:
     seen: set[int] = set()
@@ -2232,12 +2233,12 @@ def _generate_with_tools_impl(
         implementation_requires_mutation=implementation_requires_mutation,
         initial_execution_authority=initial_execution_authority,
     )
-    required_evidence_choice = bool(require_rag and not compile_backed_java)
+    required_evidence_choice = bool(require_rag)
 
-    if compile_backed_java:
-        state.phase = LoopPhase.ACT
-    elif require_rag:
+    if require_rag:
         state.phase = LoopPhase.OBSERVE
+    elif compile_backed_java:
+        state.phase = LoopPhase.ACT
     elif implementation_requires_mutation and mutation_ready and not mutation_history_applied(messages):
         state.phase = LoopPhase.ACT
     else:
