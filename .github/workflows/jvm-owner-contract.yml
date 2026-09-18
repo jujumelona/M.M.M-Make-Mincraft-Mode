@@ -61,7 +61,9 @@ jobs:
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '17'
+          # The owner resolves live Fabric/Loom project models. Loom 1.17+ requires
+          # the Gradle JVM itself to be Java 21+, independently of project toolchains.
+          java-version: '21'
       - name: Install package and test dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Build owner through production bootstrap
