@@ -49,10 +49,12 @@ def _install_runtime_contracts() -> None:
 
 def _install_core_contracts() -> None:
     from . import runner, spec, work_graph
+    from .hardware_concurrency import publish_effective_concurrency
     from .runner_lock_contract import install as install_runner_lock
     from .toolchain_contract import install as install_toolchain
     from .work_graph_mutation_contract import install as install_work_graph_mutation
 
+    publish_effective_concurrency()
     install_toolchain(spec, runner)
     install_runner_lock(runner)
     install_work_graph_mutation(work_graph)
