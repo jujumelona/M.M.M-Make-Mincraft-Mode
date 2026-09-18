@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 from types import SimpleNamespace
 
@@ -30,10 +31,17 @@ def test_resume_rejects_stale_base_workspace(
 
     assert resume_integrity.prepared_project_matches_spec(root, spec)
     assert orchestrator.CompleteProductionOrchestrator._project_matches_spec(root, spec)
-    assert getattr(
-        orchestrator.CompleteProductionOrchestrator._project_matches_spec,
-        "_mmm_prepared_project_resume_integrity",
-        False,
+    assert (
+        inspect.getmodule(
+            orchestrator.CompleteProductionOrchestrator._project_matches_spec
+        )
+        is orchestrator
+    )
+    assert (
+        inspect.getmodule(
+            orchestrator.CompleteProductionOrchestrator._valid_project_root
+        )
+        is orchestrator
     )
 
     metadata = root / ".minecraft_ai"
