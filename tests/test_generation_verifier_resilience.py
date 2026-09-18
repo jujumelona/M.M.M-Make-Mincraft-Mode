@@ -46,7 +46,7 @@ def test_generation_verifier_preserves_completed_owner_diagnostics(tmp_path):
     calls = []
 
     class JavaOwner:
-        def diagnostics(self, root, *, timeout_seconds, full_scan=False):
+        def diagnostics(self, root, *, relative_files=None, timeout_seconds, full_scan=False):
             calls.append(full_scan)
             return {"complete": True, "session_id": "owner", "model_id": "model",
                     "error_count": 1, "warning_count": 0,
@@ -66,7 +66,7 @@ def test_generation_verifier_reports_unbound_owner_as_unavailable(tmp_path):
     closed = []
 
     class IncompleteOwner:
-        def diagnostics(self, root, *, timeout_seconds, full_scan=False):
+        def diagnostics(self, root, *, relative_files=None, timeout_seconds, full_scan=False):
             return {"error_count": 0, "diagnostics": {}}
 
         def close(self):
