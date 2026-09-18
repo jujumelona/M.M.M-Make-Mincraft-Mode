@@ -1609,7 +1609,7 @@ def _source_edit_schema_for_context(
     schema: Mapping[str, Any],
     context: TargetMutationContext | None,
 ) -> Mapping[str, Any]:
-    if _tool_name(schema) != "apply_source_edit" or context is None or context.is_new_file:
+    if _tool_name(schema) != "apply_source_edit" or context is None:
         return schema
     cloned = deepcopy(schema)
     if not isinstance(cloned, dict):
@@ -1623,12 +1623,29 @@ def _source_edit_schema_for_context(
     if isinstance(operation, dict):
         enum = operation.get("enum")
         if isinstance(enum, list):
-            operation["enum"] = [
-                value for value in enum
-                if str(value).strip().casefold() not in _SOURCE_CREATE_OPERATIONS
-            ]
+            if context.is_new_file and context.target_path.casefold().endswith(".java"):
+                operation["enum"] = [
+                    value for value in enum
+                    if str(value).strip().casefold() in {"create_file", "create"}
+                ]
+            elif not context.is_new_file:
+                operation["enum"] = [
+                    value for value in enum
+                    if str(value).strip().casefold() not in _SOURCE_CREATE_OPERATIONS
+                ]
     description = str(function.get("description") or "").strip()
-    suffix = "Existing host-pinned target: create/write operations are not permitted; edit the current file."
+    if context.is_new_file and context.target_path.casefold().endswith(".java"):
+        suffix = (
+            "Fresh host-pinned Java target: create exactly one complete source file with "
+            "create_file; the host compiles it immediately before any repair edit."
+        )
+    elif not context.is_new_file:
+        suffix = (
+            "Existing host-pinned target: create/write operations are not permitted; "
+            "edit the current file."
+        )
+    else:
+        suffix = ""
     function["description"] = f"{description} {suffix}".strip()
     return cloned
 
