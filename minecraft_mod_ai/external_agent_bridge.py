@@ -39,18 +39,28 @@ class ExternalAgentBridge:
     def tool_schemas(stage: str) -> tuple[dict[str, Any], ...]:
         if stage not in AGENT_STAGES:
             return ()
+        host_binds_target = stage == "generation"
         target_properties = {
             "minecraft_version": {
-                "type": "string",
-                "description": "Target Minecraft version. Defaults to the active MMM target.",
+                **({} if host_binds_target else {"type": "string"}),
+                "description": (
+                    "Target Minecraft version. In generation this value is host-owned and "
+                    "any model-supplied value is ignored; otherwise it defaults to the active MMM target."
+                ),
             },
             "loader": {
-                "type": "string",
-                "description": "Target mod loader. Defaults to fabric.",
+                **({} if host_binds_target else {"type": "string"}),
+                "description": (
+                    "Target mod loader. In generation this value is host-owned and any "
+                    "model-supplied value is ignored; otherwise it defaults to fabric."
+                ),
             },
             "mappings": {
-                "type": "string",
-                "description": "Target mapping namespace/version. Defaults to the active MMM target.",
+                **({} if host_binds_target else {"type": "string"}),
+                "description": (
+                    "Target mapping namespace/version. In generation this value is host-owned "
+                    "and any model-supplied value is ignored; otherwise it defaults to the active MMM target."
+                ),
             },
             "max_access": {
                 "type": "string",
