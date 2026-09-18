@@ -52,21 +52,11 @@ def test_need_symbol_never_uses_diagnostics_or_reexposes_exhausted_source() -> N
     assert exhausted == ()
 
 
-def test_localization_attempt_memory_is_stage_scoped() -> None:
+def test_localization_attempt_memory_consumes_route_across_stage_labels() -> None:
     state = loop.HostRunState()
     args = {"query": "Foo service"}
-    state.record_attempted_source(
-        "search_code_rag",
-        args,
-        localization_stage=loop.LocalizationStage.NEED_FILE,
-    )
+    state.record_source_attempt("search_code_rag", args)
 
-    assert state.attempted_sources_for_localization_stage(
-        loop.LocalizationStage.NEED_FILE
-    ) == frozenset({"search_code_rag"})
-    assert state.attempted_sources_for_localization_stage(
-        loop.LocalizationStage.NEED_BODY
-    ) == frozenset()
     assert state.next_untried_internal_tool(
         {"search_code_rag"},
         preferred=("search_code_rag",),
@@ -76,8 +66,7 @@ def test_localization_attempt_memory_is_stage_scoped() -> None:
         {"search_code_rag"},
         preferred=("search_code_rag",),
         localization_stage=loop.LocalizationStage.NEED_BODY,
-    ) == "search_code_rag"
-
+    ) is None
 
 def test_verify_keeps_java_diagnostics_available() -> None:
     tools = (_schema("java_diagnostics"), _schema("search_code_rag"))
