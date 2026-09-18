@@ -145,12 +145,4 @@ def prepared_project_cache_valid(project_root: Path) -> bool:
     return prepared_project_matches_spec(root, proposal.spec)
 
 
-def install(orchestrator_module: Any) -> None:
-    cls = orchestrator_module.CompleteProductionOrchestrator
-    cls._project_matches_spec = staticmethod(prepared_project_matches_spec)
-    cls._valid_project_root = staticmethod(prepared_project_cache_valid)
-    cls._project_matches_spec._mmm_prepared_project_resume_integrity = True  # type: ignore[attr-defined]
-    cls._valid_project_root._mmm_prepared_project_resume_integrity = True  # type: ignore[attr-defined]
-
-
-__all__ = ["install", "prepared_project_cache_valid", "prepared_project_matches_spec"]
+__all__ = ["prepared_project_cache_valid", "prepared_project_matches_spec"]
