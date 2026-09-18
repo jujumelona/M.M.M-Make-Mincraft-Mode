@@ -218,6 +218,7 @@ def test_lsp_source_label_is_not_treated_as_file_path():
         {
             "diagnostics": [
                 {
+                    "path": "Java",
                     "source": "Java",
                     "severity": 1,
                     "code": "67108964",
@@ -228,14 +229,14 @@ def test_lsp_source_label_is_not_treated_as_file_path():
     )
 
     assert diagnostics
-    assert all(item["path"] != "Java" for item in diagnostics)
+    assert all(item["path"] == "" for item in diagnostics)
 
 
 def test_compiler_log_path_binds_failed_build_to_generation_owner(tmp_path):
     log = tmp_path / "gradle-build.log"
     absolute = tmp_path / "project/src/main/java/demo/Alpha.java"
     log.write_text(
-        f"{absolute}:4: error: package net.minecraft.item does not exist\n"
+        f"  {absolute}:4: error: package net.minecraft.item does not exist\n"
         "1 error\n",
         encoding="utf-8",
     )
