@@ -246,3 +246,22 @@ def test_agent_runtime_owns_generation_verifier_dispatch_directly(monkeypatch, t
     assert result["status"] == "PASS"
     assert calls and calls[0][0] is runtime
     assert calls[0][2] is agent_tool_runtime
+
+
+def test_generation_verifier_defers_only_to_required_target_compile(monkeypatch):
+    from minecraft_mod_ai import progress_aware_tool_loop as loop
+    from minecraft_mod_ai import small_model_task_capsule_contract as capsules
+
+    monkeypatch.setattr(
+        capsules,
+        "current_task_required_gates",
+        lambda: ("target_compile",),
+    )
+    assert loop._generation_verification_can_defer_to_required_compile_gate() is True
+
+    monkeypatch.setattr(
+        capsules,
+        "current_task_required_gates",
+        lambda: ("source_static_validation",),
+    )
+    assert loop._generation_verification_can_defer_to_required_compile_gate() is False
