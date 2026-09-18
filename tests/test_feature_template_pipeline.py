@@ -64,9 +64,7 @@ class MockFeatureRouter:
         import json
 
         raw_context = str(messages[1]["content"])
-        prefix = "READ_ONLY_INPUT_CONTEXT:\n"
-        assert raw_context.startswith(prefix)
-        context = json.loads(raw_context[len(prefix):])
+        context = json.loads(raw_context)
         self.calls.append((tool_name, context))
 
         if tool_name.startswith("submit_feature_") and tool_name.endswith("_count"):
