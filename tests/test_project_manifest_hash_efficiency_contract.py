@@ -181,29 +181,36 @@ def test_execution_manifest_reuse_stays_before_build_repair_mutation() -> None:
         for node in cls.body
         if isinstance(node, ast.FunctionDef) and node.name == "execute"
     )
-    build_repair = next(
-        node
-        for node in execute.body
-        if isinstance(node, ast.FunctionDef) and node.name == "build_with_repair"
-    )
-    build_bundle = next(
-        node
-        for node in execute.body
-        if isinstance(node, ast.Assign)
-        and any(isinstance(target, ast.Name) and target.id == "build_bundle" for target in node.targets)
-    )
 
-    def manifest_calls(node: ast.AST) -> list[ast.Call]:
-        return [
-            item
-            for item in ast.walk(node)
-            if isinstance(item, ast.Call)
-            and isinstance(item.func, ast.Attribute)
-            and item.func.attr == "_project_manifest_hash"
-        ]
+    manifest_assignments: dict[str, int] = {}
+    build_call_line = None
+    for node in ast.walk(execute):
+        if isinstance(node, ast.Assign):
+            names = [
+                target.id
+                for target in node.targets
+                if isinstance(target, ast.Name)
+            ]
+            if any(
+                isinstance(item, ast.Call)
+                and isinstance(item.func, ast.Attribute)
+                and item.func.attr == "_project_manifest_hash"
+                for item in ast.walk(node.value)
+            ):
+                for name in names:
+                    if name in {"generated_manifest_hash", "validation_manifest"}:
+                        manifest_assignments[name] = node.lineno
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "run_build_repair_checkpoint"
+        ):
+            build_call_line = node.lineno
 
-    calls = manifest_calls(execute)
-    assert len(calls) >= 2
-    assert manifest_calls(build_repair) == []
-    assert all(call.lineno <= build_bundle.end_lineno for call in calls)
-    assert not any(call.lineno > build_bundle.end_lineno for call in calls)
+    assert set(manifest_assignments) == {
+        "generated_manifest_hash",
+        "validation_manifest",
+    }
+    assert build_call_line is not None
+    assert all(line < build_call_line for line in manifest_assignments.values())
+
