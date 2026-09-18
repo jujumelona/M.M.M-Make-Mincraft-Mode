@@ -2053,42 +2053,27 @@ def _fixed_point_error(state: HostRunState) -> ModelConfigurationError:
     )
 
 
-def _finalize_without_tools(
-    router: Any,
-    config: Any,
-    adapter: Any,
-    request: GenerationRequest,
-    messages: list[dict[str, Any]],
-    *,
-    instruction: str,
-    empty_error: str,
-) -> str:
-    final_messages = [*messages, {"role": "system", "content": instruction}]
-    final_request = replace(
-        request,
-        messages=tuple(final_messages),
-        media_paths=(),
-        tools=(),
-        tool_choice=None,
-        parallel_tool_calls=False,
-    )
-    mutable = [dict(message) for message in final_messages]
-    turn = _generate_turn_with_context_recovery(
-        router,
-        config=config,
-        adapter=adapter,
-        request=final_request,
-        messages=mutable,
-        media_paths=(),
-        tool_choice=None,
-        parallel_tool_calls=False,
-    )
-    if turn.tool_calls:
-        raise ModelConfigurationError("Agent emitted tool calls after the host disabled tools.")
-    content = turn.content.strip()
-    if not content:
-        raise ModelConfigurationError(empty_error)
-    return content
+def _host_coder_summary(*, verification: str) -> str:
+    """Return the fixed coder-summary contract from host-owned terminal state.
+
+    Once mutation/verification state is terminal, asking the model for one more
+    formatting-only turn reintroduces tool/prose drift after the host has already
+    made the authoritative decision. The host therefore serializes the fixed
+    response contract directly.
+    """
+
+    if verification == "PASS":
+        summary = "Applied the approved source mutation and passed generation-time host verification."
+    elif verification == "DEFERRED_TO_TARGET_COMPILE":
+        summary = (
+            "Applied the approved source mutation; generation-time Java verification was "
+            "unavailable and verification is deferred to the mandatory target_compile gate."
+        )
+    else:
+        raise ModelConfigurationError(
+            f"HOST_SUMMARY_STATE_INVALID: unsupported terminal verification state {verification!r}"
+        )
+    return json.dumps({"summary": summary}, ensure_ascii=False, separators=(",", ":"))
 
 
 
@@ -2222,38 +2207,11 @@ def _generate_with_tools_impl(
                     "required_gate": "target_compile",
                 },
             )
-            return _finalize_without_tools(
-                router,
-                config,
-                adapter,
-                request,
-                messages,
-                instruction=(
-                    "The source mutation is applied, but the generation-time Java verifier was unavailable. "
-                    "The active task has a mandatory downstream target_compile gate, so verification is "
-                    "deferred to that host-owned compile gate. Do not claim that verification passed. "
-                    "Do not call more tools. Return only the implementation_requires_mutation summary in "
-                    "the fixed response format."
-                ),
-                empty_error=(
-                    "Agent returned an empty final response after verification was deferred to target_compile."
-                ),
-            )
+            return _host_coder_summary(verification="DEFERRED_TO_TARGET_COMPILE")
 
         if implementation_requires_mutation and state.workspace_changed and state.validation_status == "PASS" and baseline_ready:
             state.termination_reason = "VERIFICATION_PASSED"
-            return _finalize_without_tools(
-                router,
-                config,
-                adapter,
-                request,
-                messages,
-                instruction=(
-                    "Host verification passed after the applied source mutation. "
-                    "Do not call more tools. Return only the verified implementation_requires_mutation summary."
-                ),
-                empty_error="Agent returned an empty final response after verification passed.",
-            )
+            return _host_coder_summary(verification="PASS")
 
         if state.semantic_fixed_point:
             actionable_mutation = bool(
