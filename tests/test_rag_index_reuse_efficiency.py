@@ -1,39 +1,29 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
-from minecraft_mod_ai import central_research, retrieval
-from minecraft_mod_ai import platform_live_rag_contract as live_rag
+from minecraft_mod_ai import retrieval
 
 
 def test_builtin_rag_index_is_constructed_once_per_thread(monkeypatch) -> None:
     created: list[int] = []
+    original = retrieval.OfficialCorpusIndex
 
-    class FakeIndex:
-        def __init__(self, *, documents):
-            created.append(id(documents))
-            self.documents = documents
+    class CountingIndex(original):
+        def __init__(self, *args, **kwargs):
+            created.append(1)
+            super().__init__(*args, **kwargs)
 
-    fake_retrieval = SimpleNamespace(
-        OfficialCorpusIndex=FakeIndex,
-        BUILTIN_CORPUS=(object(),),
-    )
-    monkeypatch.setattr(live_rag._RAG_THREAD_STATE, "indexes", {}, raising=False)
+    monkeypatch.setattr(retrieval, "OfficialCorpusIndex", CountingIndex)
+    monkeypatch.delattr(retrieval._CORPUS_THREAD_STATE, "official_index", raising=False)
 
-    first = live_rag._thread_index(fake_retrieval)
-    second = live_rag._thread_index(fake_retrieval)
-    assert first is second
+    first = retrieval.retrieve_official_evidence("Fabric build project")
+    second = retrieval.retrieve_official_evidence("Fabric metadata project")
+
+    assert first.schema_version == "minecraft-mod-ai/retrieval-receipt-v1"
+    assert second.schema_version == "minecraft-mod-ai/retrieval-receipt-v1"
     assert len(created) == 1
 
 
-def test_runtime_rag_entrypoints_use_shared_index_contract() -> None:
-    assert getattr(
-        retrieval.retrieve_official_evidence,
-        "_mmm_thread_local_index_reuse",
-        False,
-    )
-    assert getattr(
-        central_research.retrieve_official_evidence,
-        "_mmm_thread_local_index_reuse",
-        False,
-    )
+def test_runtime_rag_entrypoint_owns_shared_index_contract_directly() -> None:
+    assert hasattr(retrieval, "_CORPUS_THREAD_STATE")
+    assert retrieval.retrieve_official_evidence.__module__ == "minecraft_mod_ai.retrieval"
+    assert retrieval._retrieve_official_evidence_impl.__module__ == "minecraft_mod_ai.retrieval"
