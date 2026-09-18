@@ -205,17 +205,17 @@ def test_fresh_java_requires_reviewed_evidence_before_source_mutation() -> None:
             self.calls += 1
             names = {item["function"]["name"] for item in request.tools}
             if self.calls == 1:
-                assert names == {"search_project_rag"}
+                assert names == {"search_code_rag"}
                 assert request.tool_choice == {
                     "type": "function",
-                    "function": {"name": "search_project_rag"},
+                    "function": {"name": "search_code_rag"},
                 }
                 arguments = {"query": "Fabric item registration example"}
                 return GenerationResponse(
                     tool_calls=(
                         ToolCall(
                             id="evidence-1",
-                            name="search_project_rag",
+                            name="search_code_rag",
                             arguments=arguments,
                             raw_arguments=json.dumps(arguments, separators=(",", ":")),
                         ),
@@ -250,8 +250,9 @@ def test_fresh_java_requires_reviewed_evidence_before_source_mutation() -> None:
         def call(self, stage, name, _arguments):
             assert stage == "generation"
             self.calls.append(name)
-            if name == "search_project_rag":
+            if name == "search_code_rag":
                 return {
+                    "schema_version": "mmm/code-rag-result-v1",
                     "receipt": {
                         "result_count": 1,
                         "coverage_score": 1.0,
@@ -304,6 +305,19 @@ def test_fresh_java_requires_reviewed_evidence_before_source_mutation() -> None:
                         "primary_path": target,
                         "writable_paths": [target],
                         "reuse_action": "fresh",
+                        "module": {
+                            "config": {
+                                "evidence_task": {
+                                    "owned_anchors": [
+                                        {
+                                            "kind": "symbol",
+                                            "locator": target + "#DebugToken",
+                                            "status": "host_reserved",
+                                        }
+                                    ]
+                                }
+                            }
+                        },
                     }
                 ),
             },
@@ -321,8 +335,20 @@ def test_fresh_java_requires_reviewed_evidence_before_source_mutation() -> None:
             {
                 "type": "function",
                 "function": {
+                    "name": "search_code_rag",
+                    "description": "search reviewed project/API code evidence",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "search_project_rag",
-                    "description": "search project evidence",
+                    "description": "search version-pinned primary evidence",
                     "parameters": {
                         "type": "object",
                         "properties": {"query": {"type": "string"}},
@@ -369,7 +395,7 @@ def test_fresh_java_requires_reviewed_evidence_before_source_mutation() -> None:
     assert json.loads(result)["summary"]
     assert adapter.calls == 2
     assert runtime.calls == [
-        "search_project_rag",
+        "search_code_rag",
         "apply_source_edit",
         "java_diagnostics",
     ]
