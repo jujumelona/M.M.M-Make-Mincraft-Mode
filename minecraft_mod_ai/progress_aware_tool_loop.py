@@ -1199,6 +1199,36 @@ def _host_target_execution_authority(state: Any) -> bool:
     return target in state.created_paths
 
 
+def _requires_rag_evidence(
+    *,
+    role: str,
+    host_grounded: bool,
+    router_requires_fresh_evidence: bool,
+    implementation_requires_mutation: bool,
+    initial_execution_authority: bool,
+) -> bool:
+    """Decide whether the coder must retrieve evidence before acting.
+
+    A fresh host-reserved file is already localized and executable when the host
+    owns the exact creatable target. Freshness alone must not force retrieval:
+    otherwise deterministic local-only files can exhaust every evidence route
+    without ever reaching ACT. Explicit router evidence policy and missing host
+    execution authority still require retrieval.
+    """
+
+    return bool(
+        role in {"coder", "coder_safe"}
+        and not host_grounded
+        and (
+            router_requires_fresh_evidence
+            or (
+                implementation_requires_mutation
+                and not initial_execution_authority
+            )
+        )
+    )
+
+
 def _target_evidence_ready(
     state: "HostRunState",
     *,
@@ -2143,17 +2173,12 @@ def _generate_with_tools_impl(
         and _canonical_mutation_path(state.mutation_context.target_path).casefold().endswith(".java")
     )
     initial_execution_authority = _host_target_execution_authority(state)
-    require_rag = bool(
-        role in {"coder", "coder_safe"}
-        and not host_grounded
-        and (
-            router._agent_require_fresh_evidence
-            or fresh_java_target
-            or (
-                implementation_requires_mutation
-                and not initial_execution_authority
-            )
-        )
+    require_rag = _requires_rag_evidence(
+        role=role,
+        host_grounded=host_grounded,
+        router_requires_fresh_evidence=bool(router._agent_require_fresh_evidence),
+        implementation_requires_mutation=implementation_requires_mutation,
+        initial_execution_authority=initial_execution_authority,
     )
     required_evidence_choice = require_rag
 
