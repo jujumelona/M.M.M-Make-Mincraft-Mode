@@ -605,7 +605,11 @@ class CompleteProductionOrchestrator:
             'compile_java': 'PASS',
             'tests': 'PASS',
             'gradle_build': 'PASS',
-            'gametest': 'PASS' if options.run_gametest else 'NOT_REQUIRED',
+            'gametest': _gametest_attestation_status(
+                build,
+                spec,
+                requested=options.run_gametest,
+            ),
             'production_jar': 'PASS',
             'jar_integrity': artifact_receipt['integrity'],
             'mod_metadata': 'PASS',
@@ -1710,6 +1714,21 @@ class CompleteProductionOrchestrator:
     @staticmethod
     def _runtime_profile(run_root: Path, memory_mb: int) -> Path:
         return runtime_profile(run_root, memory_mb)
+
+def _gametest_attestation_status(
+    build_report: dict[str, Any] | None,
+    spec: Any,
+    *,
+    requested: bool,
+) -> str:
+    if not requested:
+        return 'NOT_REQUIRED'
+    return (
+        'PASS'
+        if CompleteProductionOrchestrator._gametest_receipt_passed(build_report, spec)
+        else 'NO_EVIDENCE'
+    )
+
 
 def _normalize_required_gate(value: str) -> str:
     return ' '.join(''.join(character.casefold() if character.isalnum() else ' ' for character in value).split())
