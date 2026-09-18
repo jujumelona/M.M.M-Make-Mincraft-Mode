@@ -80,12 +80,15 @@ class GradleRunner:
         self.command_timeout_seconds = command_timeout_seconds
 
     def build(self, project_root: Path, *, run_gametest: bool = True) -> BuildReport:
+        """Build without serializing independent projects on the distribution lock.
+
+        The cross-process cache lock protects only Gradle distribution materialization
+        inside _ensure_gradle(). Gradle itself owns its user-home/project cache locking.
+        Holding MMM's distribution lock across wrapper/build/GameTest can deadlock or
+        unnecessarily serialize unrelated validation work.
+        """
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        with _exclusive_cache_lock(
-            self.cache_dir,
-            timeout_seconds=max(300, self.command_timeout_seconds * 3),
-        ):
-            return self._build_locked(project_root, run_gametest=run_gametest)
+        return self._build_locked(project_root.resolve(), run_gametest=run_gametest)
 
     def _build_locked(
         self,
@@ -281,6 +284,15 @@ class GradleRunner:
         )
 
     def _ensure_gradle(self, gradle_version: str, gradle_sha256: str) -> Path:
+        """Materialize one verified Gradle distribution under a narrow cache lock."""
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        with _exclusive_cache_lock(
+            self.cache_dir,
+            timeout_seconds=max(60, self.download_timeout_seconds + 60),
+        ):
+            return self._ensure_gradle_locked(gradle_version, gradle_sha256)
+
+    def _ensure_gradle_locked(self, gradle_version: str, gradle_sha256: str) -> Path:
         from .root_cause_trace import emit_root_cause
 
         emit_root_cause(
@@ -671,6 +683,8 @@ def _exclusive_cache_lock(
         os.close(fd)
 
 
+GradleRunner.build._mmm_project_parallel_validation = True  # type: ignore[attr-defined]
+GradleRunner._ensure_gradle._mmm_target_parallel_distribution = True  # type: ignore[attr-defined]
 _exclusive_cache_lock._mmm_os_advisory_cache_lock = True  # type: ignore[attr-defined]
 
 
