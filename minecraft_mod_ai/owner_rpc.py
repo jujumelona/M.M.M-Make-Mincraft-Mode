@@ -134,8 +134,30 @@ class OwnerRPC:
         lines = result.stdout.splitlines()
         if not lines:
             return
-        # The main/application thread is near the start of HotSpot's thread dump.
-        self._timeout_diagnostics = "\n".join(lines[:80])[-16000:]
+
+        focused: list[str] = []
+        main_index = next(
+            (index for index, line in enumerate(lines) if line.startswith('"main"')),
+            None,
+        )
+        if main_index is not None:
+            end = len(lines)
+            for index in range(main_index + 1, len(lines)):
+                if lines[index].startswith('"') and " #" in lines[index]:
+                    end = index
+                    break
+            focused.extend(lines[main_index:end])
+
+        # Preserve any owner/Eclipse frames outside the main-thread block as well.
+        for index, line in enumerate(lines):
+            if "mmm.owner." in line or "org.eclipse." in line:
+                start = max(0, index - 3)
+                end = min(len(lines), index + 8)
+                focused.extend(lines[start:end])
+
+        if not focused:
+            focused = lines[:80]
+        self._timeout_diagnostics = "\n".join(dict.fromkeys(focused))[-24000:]
 
     def _raise_transport_failure(
         self,
