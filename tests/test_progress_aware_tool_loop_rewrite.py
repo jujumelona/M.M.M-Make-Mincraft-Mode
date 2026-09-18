@@ -33,7 +33,10 @@ def test_fresh_host_reserved_target_is_ready_without_searching_its_own_filename(
         attempted_sources=(),
         semantic_retrieval_choice=True,
     )
-    assert [item["function"]["name"] for item in selected] == ["search_project_rag"]
+    assert [item["function"]["name"] for item in selected] == [
+        "search_code_rag",
+        "search_project_rag",
+    ]
 
 
 def test_materialized_atomic_target_reconciles_stale_fresh_authority(tmp_path) -> None:
@@ -254,11 +257,8 @@ def test_fresh_java_requires_reviewed_evidence_before_source_mutation() -> None:
             self.calls += 1
             names = {item["function"]["name"] for item in request.tools}
             if self.calls == 1:
-                assert names == {"search_code_rag"}
-                assert request.tool_choice == {
-                    "type": "function",
-                    "function": {"name": "search_code_rag"},
-                }
+                assert names == {"search_code_rag", "search_project_rag"}
+                assert request.tool_choice == "required"
                 arguments = {"query": "Fabric item registration example"}
                 return GenerationResponse(
                     tool_calls=(
@@ -427,7 +427,7 @@ def test_fresh_java_requires_reviewed_evidence_before_source_mutation() -> None:
     runtime = Runtime()
 
     result = loop.generate_with_tools(
-        SimpleNamespace(_agent_require_fresh_evidence=False),
+        SimpleNamespace(_agent_require_fresh_evidence=True),
         config=SimpleNamespace(
             adapter="test",
             max_context=32768,
@@ -506,9 +506,9 @@ def test_fresh_java_without_reviewed_evidence_tool_fails_before_model_mutation()
         ),
     )
 
-    with pytest.raises(ModelConfigurationError, match="MUTATION_LOCALIZATION_STALLED"):
+    with pytest.raises(ModelConfigurationError, match="IMPLEMENTATION_EVIDENCE_STALLED"):
         loop.generate_with_tools(
-            SimpleNamespace(_agent_require_fresh_evidence=False),
+            SimpleNamespace(_agent_require_fresh_evidence=True),
             config=SimpleNamespace(
                 adapter="test",
                 max_context=32768,
