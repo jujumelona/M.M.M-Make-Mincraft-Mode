@@ -6,6 +6,10 @@ from pathlib import Path
 
 import pytest
 
+from minecraft_mod_ai.generation_verifier_resilience import (
+    host_jdt_idle_timeout_seconds,
+    host_jdt_startup_timeout_seconds,
+)
 from minecraft_mod_ai.jvm_owner_bootstrap import owner_command
 from minecraft_mod_ai.owner_rpc import OwnerRPC
 
@@ -19,8 +23,19 @@ def _owner_command(tmp_path: Path, name: str) -> list[str]:
 @pytest.mark.skipif(os.environ.get("MMM_JVM_OWNER_LIVE") != "1", reason="real JVM integration opt-in")
 def test_incremental_dependent_diagnostics(tmp_path):
     process = OwnerRPC(_owner_command(tmp_path, "incremental"))
+    opened = False
+
     def rpc(method, params):
-        return process.request(method, params, timeout=45)
+        nonlocal opened
+        timeout = (
+            host_jdt_startup_timeout_seconds()
+            if method == "open" and not opened
+            else host_jdt_idle_timeout_seconds()
+        )
+        result = process.request(method, params, timeout=timeout)
+        if method == "open":
+            opened = True
+        return result
     source = tmp_path / "project/src"
     source.mkdir(parents=True)
     a = source / "A.java"
@@ -74,14 +89,26 @@ def test_tooling_model_and_core_project_dependencies(tmp_path):
     consumer.write_text('public class B { int n = A.method(); }')
     params = JavaCoreService()._owner_resolve_parameters(project)
     with OwnerRPC(_owner_command(tmp_path, "tooling-model")) as rpc:
-        raw = rpc.request('resolve', params, timeout=180)
+        raw = rpc.request(
+            'resolve',
+            params,
+            timeout=host_jdt_startup_timeout_seconds(),
+        )
         model = ResolvedBuildModel.from_dict(raw)
         assert model.gradle_version == target.gradle
         assert {source.project_path for source in model.source_sets} == {':producer', ':consumer'}
-        opened = rpc.request('open', {'model': model.to_dict()}, timeout=45)
+        opened = rpc.request(
+            'open',
+            {'model': model.to_dict()},
+            timeout=host_jdt_startup_timeout_seconds(),
+        )
         assert not [d for d in opened['diagnostics'] if d['severity'] == 'error'], opened
         producer.write_text('public class A {}')
-        broken = rpc.request('build', {'changes': [], 'full': False}, timeout=45)
+        broken = rpc.request(
+            'build',
+            {'changes': [], 'full': False},
+            timeout=host_jdt_idle_timeout_seconds(),
+        )
         assert any(d['path'].endswith('B.java') and d['severity'] == 'error' for d in broken['diagnostics']), broken
 
 
@@ -156,7 +183,11 @@ public class Generator extends AbstractProcessor {
               'source_compatibility': '17', 'target_compatibility': '17', 'release': 17,
               'compiler_args': [], 'annotation_processor_path': [str(jar)]}]}
     with OwnerRPC(_owner_command(tmp_path, "annotation-processor")) as rpc:
-        result = rpc.request('open', {'model': model}, timeout=45)
+        result = rpc.request(
+            'open',
+            {'model': model},
+            timeout=host_jdt_startup_timeout_seconds(),
+        )
         assert not [d for d in result['diagnostics'] if d['severity'] == 'error'], result
 
 
