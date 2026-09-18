@@ -253,6 +253,43 @@ def test_fabric_manifest_observation_cannot_become_task_mutation_target() -> Non
     assert state.mutation_context.target_pinned is True
 
 
+def test_fresh_host_reserved_java_target_does_not_force_rag_by_freshness_alone() -> None:
+    capsule = compile_task_capsule(_module(reuse_action="fresh"))
+    assert capsule is not None
+    messages = [
+        {"role": "system", "content": "Implement the approved task."},
+        {
+            "role": "developer",
+            "content": json.dumps(capsule.to_host_authority_payload()),
+        },
+    ]
+    state = tool_loop.HostRunState()
+    assert tool_loop.is_mutation_ready(messages, state) is True
+    assert tool_loop._host_target_execution_authority(state) is True
+
+    assert tool_loop._requires_rag_evidence(
+        role="coder",
+        host_grounded=False,
+        router_requires_fresh_evidence=False,
+        implementation_requires_mutation=True,
+        initial_execution_authority=True,
+    ) is False
+    assert tool_loop._requires_rag_evidence(
+        role="coder",
+        host_grounded=False,
+        router_requires_fresh_evidence=True,
+        implementation_requires_mutation=True,
+        initial_execution_authority=True,
+    ) is True
+    assert tool_loop._requires_rag_evidence(
+        role="coder",
+        host_grounded=False,
+        router_requires_fresh_evidence=False,
+        implementation_requires_mutation=True,
+        initial_execution_authority=False,
+    ) is True
+
+
 def test_compact_coder_contract_drops_planner_provenance_blob() -> None:
     module = _module()
     original_task = module.config["evidence_task"]
