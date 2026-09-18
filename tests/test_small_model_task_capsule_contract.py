@@ -384,6 +384,27 @@ def test_fresh_java_evidence_frontier_walks_external_capabilities() -> None:
 
 
 
+def test_nested_current_project_java_hit_authorizes_fresh_java() -> None:
+    value = {
+        "structured_content": {
+            "schema_version": "mmm/code-rag-result-v1",
+            "hits": [
+                {
+                    "path": "src/main/java/dev/mmm/debugfixture/MmmDebugFixtureMod.java",
+                    "text": (
+                        "package dev.mmm.debugfixture;\n"
+                        "import net.fabricmc.api.ModInitializer;\n"
+                        "public final class MmmDebugFixtureMod implements ModInitializer {}\n"
+                    ),
+                }
+            ],
+            "receipt": {"status": "FOUND", "result_count": 1},
+        }
+    }
+
+    assert tool_loop._authoritative_java_evidence(value) is True
+
+
 def test_metadata_only_project_rag_does_not_authorize_fresh_java() -> None:
     metadata_only = {
         "schema_version": "mmm/rag-result-v1",
