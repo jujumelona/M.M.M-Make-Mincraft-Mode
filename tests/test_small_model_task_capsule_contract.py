@@ -334,7 +334,7 @@ def test_fresh_java_edit_schema_requires_one_complete_create_before_compile() ->
     assert operations == ["create_file", "create"]
 
 
-def test_materialized_java_edit_schema_forbids_second_create() -> None:
+def test_materialized_java_edit_schema_allows_atomic_same_path_rewrite() -> None:
     context = tool_loop.TargetMutationContext(
         target_path=JAVA_PATH,
         target_symbol=SYMBOL,
@@ -351,9 +351,9 @@ def test_materialized_java_edit_schema_forbids_second_create() -> None:
         for value in narrowed["function"]["parameters"]["properties"]["operation"]["enum"]
     }
 
-    assert "create_file" not in operations
-    assert "create" not in operations
-    assert "replace_exact" in operations
+    assert {"create_file", "create", "replace_exact"} <= operations
+    assert "create_java_type" not in operations
+    assert "SHA-bound replace" in narrowed["function"]["description"]
 
 
 def test_fresh_java_optional_observe_frontier_stays_local() -> None:
