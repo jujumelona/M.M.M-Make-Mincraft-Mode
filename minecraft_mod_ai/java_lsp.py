@@ -930,10 +930,9 @@ def _await_java_core_ready(
             if remaining > 0:
                 time.sleep(min(0.25, remaining))
     finally:
-        try:
-            probe_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        # A readiness probe must never become project source. Fail closed if the
+        # temporary file cannot be removed instead of silently contaminating output.
+        probe_path.unlink(missing_ok=True)
 
     raise JDTWorkspaceBootstrapError(
         "JDT workspace bootstrap failure: initialize/status notifications were insufficient; "
