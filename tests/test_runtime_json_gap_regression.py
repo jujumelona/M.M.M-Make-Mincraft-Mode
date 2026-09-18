@@ -155,8 +155,11 @@ def test_qwen_canonical_permission_name_maps_back_to_exposed_source_edit():
         request,
     )
 
-    assert [call.name for call in turn.tool_calls] == ["__mmm_rejected_tool_call__"]
-    assert turn.tool_calls[0].arguments["failure_code"] == "TOOL_SCHEMA_INVALID"
+    assert [call.name for call in turn.tool_calls] == ["apply_source_edit"]
+    assert turn.tool_calls[0].arguments == {
+        "operation": "delete_file",
+        "path": "src/main/java/example/Old.java",
+    }
 
 
 def test_qwen_canonical_tool_name_does_not_revive_removed_whole_file_operation():

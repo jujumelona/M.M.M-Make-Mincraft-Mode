@@ -201,23 +201,31 @@ def test_pipeline_restores_prompt_checkpoint_before_downstream_planning(monkeypa
     assert restored['checkpoint_kind'] == 'prompt_tasks'
     assert 'plan_ready' not in restored
 
-    class ReachedRequirementCompilation(Exception):
+    class ReachedRequirementResolution(Exception):
         pass
 
-    def compile_requirements(_router, _prompt, state):
+    def resolve_requirements(
+        _router,
+        _prompt,
+        state,
+        *,
+        trace_metadata,
+        checkpoint,
+    ):
+        del trace_metadata, checkpoint
         validate_planning_state(state, prompt=prompt)
         assert state['goal']['statement'] == prompt
         assert state['known'][0]['statement'] == prompt
         assert 'checkpoint_kind' not in state
-        raise ReachedRequirementCompilation
+        raise ReachedRequirementResolution
 
     router.interrupt_at = None
     monkeypatch.setattr(
         pipeline,
-        'compile_researched_requirements_convergent',
-        compile_requirements,
+        '_resolve_requirements_or_wait',
+        resolve_requirements,
     )
-    with pytest.raises(ReachedRequirementCompilation):
+    with pytest.raises(ReachedRequirementResolution):
         pipeline.prepare_planning_state(
             router,
             prompt,

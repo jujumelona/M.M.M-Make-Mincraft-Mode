@@ -65,7 +65,7 @@ REGRESSION_EXECUTION_ROUTES: dict[str, RegressionExecutionRoute] = {
     "REG-028": RegressionExecutionRoute("tests/test_platform_lock_naming_regime.py"),
     "REG-029": RegressionExecutionRoute("tests/test_target_semantics_boundary.py"),
     "REG-030": RegressionExecutionRoute(
-        "tests/test_reference_target_context_hardening.py::test_fresh_task_with_reuse_refs_fails_closed_to_localization"
+        "tests/test_reference_target_context_hardening.py::test_fresh_task_reuse_refs_do_not_erase_reserved_creation_target"
     ),
     "REG-031": RegressionExecutionRoute("tests/test_verifier_receipt_truth_contract.py"),
     "REG-032": RegressionExecutionRoute("tests/test_project_inventory_contract.py"),
