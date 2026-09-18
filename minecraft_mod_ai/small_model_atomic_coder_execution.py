@@ -132,6 +132,60 @@ def _atomic_step(step: Mapping[str, Any], *, index: int, count: int) -> dict[str
     }
 
 
+def _step_execution_signature(step: Mapping[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Identify steps that operate on the same host-owned state transition."""
+
+    return (
+        tuple(_step_target_refs(step)),
+        tuple(str(item).strip() for item in _sequence_copy(step.get("consumes")) if str(item).strip()),
+        tuple(str(item).strip() for item in _sequence_copy(step.get("must_provide")) if str(item).strip()),
+    )
+
+
+def _merge_coowned_steps(group: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    if len(group) == 1:
+        return copy.deepcopy(dict(group[0]))
+
+    first = copy.deepcopy(dict(group[0]))
+    obligations = [str(step.get("obligation") or "").strip() for step in group]
+    done_when = [str(step.get("done_when") or "").strip() for step in group]
+    checklist: list[Any] = []
+    seen_checklist: set[str] = set()
+    for step in group:
+        for item in _sequence_copy(step.get("execution_checklist")):
+            marker = json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
+            if marker in seen_checklist:
+                continue
+            seen_checklist.add(marker)
+            checklist.append(copy.deepcopy(item))
+
+    first["obligation"] = (
+        "Satisfy all co-owned obligations in this one host-owned state transition:\n- "
+        + "\n- ".join(obligations)
+    )
+    first["execution_checklist"] = checklist
+    first["done_when"] = (
+        "Every co-owned obligation in this grouped state transition is satisfied: "
+        + " | ".join(done_when)
+    )
+    return first
+
+
+def _coalesce_execution_steps(
+    steps: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, Any], ...]:
+    """Avoid reopening one target for constraint-only siblings with identical dataflow."""
+
+    groups: list[list[Mapping[str, Any]]] = []
+    for step in steps:
+        signature = _step_execution_signature(step)
+        if groups and _step_execution_signature(groups[-1][0]) == signature:
+            groups[-1].append(step)
+        else:
+            groups.append([step])
+    return tuple(_merge_coowned_steps(group) for group in groups)
+
+
 def _atomic_contract(
     contract: Mapping[str, Any],
     evidence_task: Mapping[str, Any],
@@ -256,7 +310,8 @@ def atomicize_coder_messages(
             "implement_module request carries a non-canonical coder execution schema: "
             f"{contract.get('schema_version')!r}"
         )
-    steps = _steps(contract)
+    raw_steps = _steps(contract)
+    steps = _coalesce_execution_steps(raw_steps)
 
     batches: list[tuple[dict[str, Any], ...]] = []
     for step_index, step in enumerate(steps):
@@ -287,12 +342,12 @@ def atomicize_coder_messages(
         }
 
         current["task"] = (
-            "Implement only the atomic obligation declared in "
+            "Implement only the atomic host-owned state transition declared in "
             "module.evidence_task.coder_execution_contract.step."
         )
         rules = [str(item) for item in current.get("rules", ()) if str(item).strip()]
         current["rules"] = [
-            "Work on this atomic obligation only; sibling obligations are host-scheduled later.",
+            "Work on this atomic state transition only; independent sibling state transitions are host-scheduled later.",
             "Read and obey the atomic contract's engineering worksheet, exact targets, execution checklist, protected boundaries, and verification plan before editing.",
             "Read only the exact source chunk needed for this obligation; use bounded retrieval tools for additional source.",
             *rules,
@@ -311,7 +366,7 @@ def atomicize_coder_messages(
             "schema_version": _ATOMIC_SCHEMA,
             "step_index": step_index + 1,
             "step_count": len(steps),
-            "policy": "one_model_call_one_implementation_obligation",
+            "policy": "one_model_call_one_host_owned_state_transition",
         }
         batch = [dict(message) for message in messages]
         batch[user_index] = {
