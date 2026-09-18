@@ -24,7 +24,6 @@ from .project_index import ProjectIndex
 from .runner import GradleRunner
 from .scale_policy import ScalePolicy
 from .source_patch import (
-    SourcePatchError,
     TransactionalSourcePatcher,
     sha256_bytes,
 )
