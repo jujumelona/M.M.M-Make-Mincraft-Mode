@@ -175,10 +175,9 @@ def test_planning_research_domains_run_in_parallel_but_merge_deterministically(
     assert [row["status"] for row in result["research_queue"]] == ["complete", "complete"]
 
 
-def test_llama_prefill_cache_is_shared_across_request_local_adapters() -> None:
-    cache = LlamaCppAdapter._prefill_template_prefix_cache
-    assert isinstance(cache, dict)
+def test_request_local_llama_adapters_do_not_share_mutable_prefill_state() -> None:
+    assert not hasattr(LlamaCppAdapter, "_prefill_template_prefix_cache")
     first = object.__new__(LlamaCppAdapter)
     second = object.__new__(LlamaCppAdapter)
-    assert getattr(first, "_prefill_template_prefix_cache") is cache
-    assert getattr(second, "_prefill_template_prefix_cache") is cache
+    assert not hasattr(first, "_prefill_template_prefix_cache")
+    assert not hasattr(second, "_prefill_template_prefix_cache")
