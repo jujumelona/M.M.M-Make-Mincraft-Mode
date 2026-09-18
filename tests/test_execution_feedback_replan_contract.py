@@ -213,6 +213,70 @@ def test_diagnostics_extract_path_from_gradle_message():
     )
 
 
+def test_lsp_source_label_is_not_treated_as_file_path():
+    diagnostics = feedback._diagnostics_from_value(
+        {
+            "diagnostics": [
+                {
+                    "source": "Java",
+                    "severity": 1,
+                    "code": "67108964",
+                    "message": "The import net.minecraft.item cannot be resolved",
+                }
+            ]
+        }
+    )
+
+    assert diagnostics
+    assert all(item["path"] != "Java" for item in diagnostics)
+
+
+def test_compiler_log_path_binds_failed_build_to_generation_owner(tmp_path):
+    log = tmp_path / "gradle-build.log"
+    absolute = tmp_path / "project/src/main/java/demo/Alpha.java"
+    log.write_text(
+        f"{absolute}:4: error: package net.minecraft.item does not exist\n"
+        "1 error\n",
+        encoding="utf-8",
+    )
+    compiler = feedback._compiler_log_diagnostics(
+        {
+            "build": {
+                "status": "FAIL",
+                "commands": [
+                    {
+                        "name": "build",
+                        "exit_code": 1,
+                        "timed_out": False,
+                        "log_path": str(log),
+                    }
+                ],
+            }
+        }
+    )
+    assert len(compiler) == 1
+    assert compiler[0]["path"].endswith("src/main/java/demo/Alpha.java")
+
+    ledger = _FakeLedger(
+        [
+            _generation_task(
+                "generate-custom-00000000",
+                "alpha",
+                "src/main/java/demo/Alpha.java",
+                "REQ-ALPHA",
+            )
+        ]
+    )
+    seeds, owners, requirements, matches = feedback._derive_impacted_seeds(
+        ledger,
+        {"checkpoint_id": "gradle-build", "diagnostics": compiler},
+    )
+    assert seeds == {"generate-custom-00000000"}
+    assert owners == {"alpha"}
+    assert requirements == {"REQ-ALPHA"}
+    assert matches[0]["match"]["observed_path"] is True
+
+
 class _FeedbackLoopError(RuntimeError):
     pass
 
