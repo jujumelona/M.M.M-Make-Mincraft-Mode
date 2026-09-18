@@ -469,8 +469,13 @@ def install(*, custom_module_generator_module: Any, model_router_module: Any) ->
             serialize_response,
         )
 
-        structured_summary = kwargs.get("response_schema") == response_schema("coder_summary")
+        coder_summary_schema = response_schema("coder_summary")
+        structured_summary = kwargs.get("response_schema") == coder_summary_schema
+        summary_max_length = int(
+            coder_summary_schema["properties"]["summary"]["maxLength"]
+        )
         summaries: list[str] = []
+        raw_summaries: list[str] = []
         contract_results: list[bool] = []
         for index, batch in enumerate(batches, start=1):
             result = original_generate_text(self, role, batch, *args, **kwargs)
@@ -486,9 +491,18 @@ def install(*, custom_module_generator_module: Any, model_router_module: Any) ->
                 contract_results.append(True)
             if len(summary) > _MAX_SUMMARY_CHARS_PER_STEP:
                 summary = summary[:_MAX_SUMMARY_CHARS_PER_STEP] + "…"
+            raw_summaries.append(summary)
             summaries.append(f"atomic step {index}/{len(batches)}: {summary}")
         combined = "\n".join(summaries)
         if contract_results and all(contract_results):
+            if len(combined) > summary_max_length and len(set(raw_summaries)) == 1:
+                combined = (
+                    f"atomic steps 1-{len(batches)}/{len(batches)}: "
+                    f"{raw_summaries[0]}"
+                )
+            if len(combined) > summary_max_length:
+                ellipsis = "…" if summary_max_length > 0 else ""
+                combined = combined[: max(0, summary_max_length - len(ellipsis))] + ellipsis
             return serialize_response("coder_summary", {"summary": combined})
         if any(contract_results):
             raise AtomicCoderContractError(
