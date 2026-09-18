@@ -253,7 +253,7 @@ def test_fabric_manifest_observation_cannot_become_task_mutation_target() -> Non
     assert state.mutation_context.target_pinned is True
 
 
-def test_fresh_host_reserved_java_target_does_not_force_rag_by_freshness_alone() -> None:
+def test_fresh_host_reserved_java_target_authority_overrides_router_fresh_evidence() -> None:
     capsule = compile_task_capsule(_module(reuse_action="fresh"))
     assert capsule is not None
     messages = [
@@ -285,12 +285,19 @@ def test_fresh_host_reserved_java_target_does_not_force_rag_by_freshness_alone()
         router_requires_fresh_evidence=True,
         implementation_requires_mutation=True,
         initial_execution_authority=True,
-    ) is True
+    ) is False
     assert tool_loop._requires_rag_evidence(
         role="coder",
         host_grounded=False,
         router_requires_fresh_evidence=False,
         implementation_requires_mutation=True,
+        initial_execution_authority=False,
+    ) is True
+    assert tool_loop._requires_rag_evidence(
+        role="coder",
+        host_grounded=False,
+        router_requires_fresh_evidence=True,
+        implementation_requires_mutation=False,
         initial_execution_authority=False,
     ) is True
 
