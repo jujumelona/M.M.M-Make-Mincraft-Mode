@@ -279,6 +279,7 @@ def _iter_completed_with_deadlines_impl(
     sort_key: Callable[[_Item], object] | None,
     on_result: Callable[[_Item, _Result], None] | None,
     on_error: Callable[[_Item, BaseException], None] | None,
+    work_unit_timeout_seconds: float | None,
 ) -> Iterator[tuple[_Item, _Result]]:
     total_units = len(items) if isinstance(items, Sized) else None
     if total_units is not None and total_units <= 0:
@@ -286,16 +287,22 @@ def _iter_completed_with_deadlines_impl(
 
     workers = _resolve_worker_count(total_units, max_workers)
     started_at = time.monotonic()
-    unit_timeout = planning_work_unit_timeout_seconds()
-    stage_deadline = (
-        planning_stage_deadline(
-            work_units=total_units,
-            workers=workers,
-            started_at=started_at,
-        )
-        if total_units is not None
-        else None
+    unit_timeout = (
+        planning_work_unit_timeout_seconds()
+        if work_unit_timeout_seconds is None
+        else max(0.001, float(work_unit_timeout_seconds))
     )
+    stage_deadline = None
+    if total_units is not None:
+        if work_unit_timeout_seconds is None:
+            stage_deadline = planning_stage_deadline(
+                work_units=total_units,
+                workers=workers,
+                started_at=started_at,
+            )
+        else:
+            waves = max(1, (total_units + workers - 1) // workers)
+            stage_deadline = started_at + unit_timeout * waves
     state = _SubmissionState(iter(items))
     active: dict[Future[_Result], _ActiveTask[_Item]] = {}
     pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix=stage)
@@ -322,6 +329,7 @@ def _iter_completed_with_deadlines_impl(
             sort_key=sort_key,
             on_result=on_result,
             on_error=on_error,
+            work_unit_timeout_seconds=work_unit_timeout_seconds,
         )
         yield from _drain_active_tasks(context)
     finally:
@@ -337,6 +345,7 @@ def iter_completed_with_deadlines(
     sort_key: Callable[[_Item], object] | None = None,
     on_result: Callable[[_Item, _Result], None] | None = None,
     on_error: Callable[[_Item, BaseException], None] | None = None,
+    work_unit_timeout_seconds: float | None = None,
 ) -> Iterator[tuple[_Item, _Result]]:
     """Yield completed work through a bounded deadline-aware submission window.
 
@@ -355,6 +364,7 @@ def iter_completed_with_deadlines(
         sort_key=sort_key,
         on_result=on_result,
         on_error=on_error,
+        work_unit_timeout_seconds=work_unit_timeout_seconds,
     )
 
 
@@ -367,6 +377,7 @@ def collect_completed_with_deadlines(
     sort_key: Callable[[_Item], object] | None = None,
     on_result: Callable[[_Item, _Result], None] | None = None,
     on_error: Callable[[_Item, BaseException], None] | None = None,
+    work_unit_timeout_seconds: float | None = None,
 ) -> list[tuple[_Item, _Result]]:
     """Compatibility collector for callers that explicitly need all results in memory."""
 
