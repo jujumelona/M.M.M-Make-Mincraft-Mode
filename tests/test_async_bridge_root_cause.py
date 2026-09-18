@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from minecraft_mod_ai.agent_tool_runtime import AgentToolRuntime
+from minecraft_mod_ai.external_agent_bridge import ExternalAgentBridge
 from minecraft_mod_ai.external_mcp_router import ExternalMCPRouter
 
 
@@ -32,6 +33,16 @@ def test_external_router_loop_probe_does_not_mask_real_failure(
 
     with pytest.raises(ValueError, match="real external provider failure") as captured:
         router._call_provider("provider", {}, tool="lookup", arguments={})
+
+    context = captured.value.__context__
+    assert context is None or "no running event loop" not in str(context)
+
+
+def test_external_agent_bridge_loop_probe_does_not_mask_real_failure() -> None:
+    bridge = ExternalAgentBridge(timeout_seconds=1.0)
+
+    with pytest.raises(ValueError, match="real provider failure") as captured:
+        bridge._run_async(_raise_real_failure)
 
     context = captured.value.__context__
     assert context is None or "no running event loop" not in str(context)
