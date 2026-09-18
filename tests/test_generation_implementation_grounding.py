@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 
 from minecraft_mod_ai import generation_implementation_grounding as grounding
 from minecraft_mod_ai.grounding_policy import host_baseline_evidence_ready
@@ -31,15 +31,18 @@ class _Context:
 
     def require_fact(self, category, name):
         assert category == "api_symbols"
-        return {
-            "owner": "net.minecraft.core.Registry",
-            "name": "register",
-            "descriptor": "(...)Item",
-            "kind": "method",
-            "static": True,
-            "side": "common",
-            "namespace": "minecraft",
-        }
+        return MappingProxyType(
+            {
+                "owner": "net.minecraft.core.Registry",
+                "name": "register",
+                "descriptor": "(...)Item",
+                "kind": "method",
+                "static": True,
+                "side": "common",
+                "namespace": "minecraft",
+                "metadata": MappingProxyType({"source": "host_catalog"}),
+            }
+        )
 
     def admit_template(self, template):
         assert template["id"] in {
@@ -148,6 +151,9 @@ def test_generation_grounding_projects_only_explicit_host_responsibility(monkeyp
         "identifier_factory",
     }
     assert result["policy"]["model_must_not_substitute_api_names"] is True
+    assert isinstance(fact["api_symbols"]["register_item"], dict)
+    assert fact["api_symbols"]["register_item"]["metadata"] == {"source": "host_catalog"}
+    json.dumps(result, ensure_ascii=False)
 
 
 def test_generation_grounding_requires_explicit_structural_responsibility() -> None:
