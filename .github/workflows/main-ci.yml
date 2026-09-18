@@ -389,6 +389,7 @@ jobs:
   audit:
     name: Aggregate granular audit gate
     if: ${{ always() }}
+    timeout-minutes: 5
     needs: [debug-audit, architecture-quality, compile, ruff, dead-code, import-smoke, runtime-concurrency, runtime-efficiency, runtime-mutations, mineflayer-syntax, colab-validation, skill-packaging, removed-surface, audit-families, dependency-check, package-build, wheel-clean-import, root-cause-wrapper-contract, minecraft-integrity, test-plan]
     runs-on: ubuntu-latest
     steps:
@@ -403,6 +404,7 @@ jobs:
   ci-gate:
     name: CI Gate
     if: ${{ always() }}
+    timeout-minutes: 5
     needs: [audit, tests, python313, model-realistic-replay]
     runs-on: ubuntu-latest
     steps:
