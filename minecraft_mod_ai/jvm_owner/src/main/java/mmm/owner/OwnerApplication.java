@@ -33,13 +33,17 @@ public final class OwnerApplication implements IApplication {
     @Override public Object start(IApplicationContext context) throws Exception {
         PrintStream protocol = System.out;
         System.setOut(System.err);
+        stage("application.start");
         workspace = ResourcesPlugin.getWorkspace();
+        stage("application.workspace.ready");
         IWorkspaceDescription desc = workspace.getDescription();
         desc.setAutoBuilding(false);
         workspace.setDescription(desc);
+        stage("application.input_loop.ready");
         try (BufferedReader input = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
             String line;
             while (!closing && (line = input.readLine()) != null) {
+                stage("application.request.received");
                 Object id = null;
                 Map<String, Object> reply = new LinkedHashMap<>();
                 try {
