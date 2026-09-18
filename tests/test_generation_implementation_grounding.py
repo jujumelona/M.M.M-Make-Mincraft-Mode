@@ -85,6 +85,20 @@ class _Context:
             }
         )
 
+    @property
+    def api_symbols(self):
+        names = (
+            "register_item",
+            "builtin_item_registry",
+            "resource_key_create",
+            "registries_item",
+            "identifier_factory",
+            "item_stacks_to",
+        )
+        return MappingProxyType(
+            {name: self.require_fact("api_symbols", name) for name in names}
+        )
+
     def admit_template(self, template):
         assert template["id"] in {
             "fabric/item/register_keyed",
