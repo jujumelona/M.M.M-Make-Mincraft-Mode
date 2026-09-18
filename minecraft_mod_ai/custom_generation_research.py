@@ -11,7 +11,7 @@ from typing import Any
 
 from .platform_catalog import adapter_for_target, adapter_from_project
 from .project_index import ProjectIndex
-from .research_code_context import ResearchCodeContext
+from .versioned_research_context import VersionedResearchCodeContext as ResearchCodeContext
 from .target_contract import TargetContractError, validate_target_coordinates
 
 
