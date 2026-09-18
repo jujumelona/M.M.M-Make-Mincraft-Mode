@@ -302,19 +302,29 @@ def test_fresh_host_reserved_java_target_separates_write_and_api_evidence_author
     ) is True
 
 
-def test_fresh_java_evidence_frontier_reaches_external_mcp_before_stalling() -> None:
+def test_fresh_java_evidence_frontier_walks_external_capabilities() -> None:
     schemas = {
         name: {
             "type": "function",
-            "function": {"name": name, "parameters": {"type": "object", "properties": {}}},
+            "function": {
+                "name": name,
+                "parameters": {
+                    "type": "object",
+                    "properties": (
+                        {"capability": {"type": "string"}}
+                        if name in {"external_mcp_schema", "external_mcp_call"}
+                        else {}
+                    ),
+                },
+            },
         }
         for name in (
             "search_code_rag",
+            "search_project_rag",
             "external_mcp_capabilities",
             "external_mcp_schema",
             "external_mcp_call",
             "java_workspace_symbols",
-            "search_project_rag",
             "inspect_modrinth_project",
         )
     }
@@ -329,16 +339,21 @@ def test_fresh_java_evidence_frontier_reaches_external_mcp_before_stalling() -> 
     )
 
     attempted: set[str] = set()
-    expected = (
-        "search_code_rag",
-        "external_mcp_capabilities",
-        "external_mcp_schema",
-        "external_mcp_call",
-        "java_workspace_symbols",
-        "search_project_rag",
-        "inspect_modrinth_project",
-    )
-    for name in expected:
+    expected: list[tuple[str, str]] = [
+        ("search_code_rag", ""),
+        ("search_project_rag", ""),
+        ("external_mcp_capabilities", ""),
+    ]
+    for capability in tool_loop._FRESH_JAVA_EXTERNAL_CAPABILITIES:
+        expected.extend(
+            [
+                ("external_mcp_schema", capability),
+                ("external_mcp_call", capability),
+            ]
+        )
+    expected.append(("java_workspace_symbols", ""))
+
+    for name, capability in expected:
         selected = tool_loop._fresh_observe_names(
             schemas,
             attempted,
@@ -346,14 +361,45 @@ def test_fresh_java_evidence_frontier_reaches_external_mcp_before_stalling() -> 
             semantic_retrieval_choice=True,
         )
         assert selected == [name]
-        attempted.add(name)
+        if capability:
+            narrowed = tool_loop._fresh_java_external_schema(
+                schemas[name],
+                attempted,
+                schemas,
+            )
+            assert (
+                narrowed["function"]["parameters"]["properties"]["capability"]["enum"]
+                == [capability]
+            )
+            attempted.add(f"{name}:{capability}")
+            attempted.add(name)
+        else:
+            attempted.add(name)
 
+    assert "inspect_modrinth_project" not in {
+        name
+        for name, _capability in expected
+    }
     assert tool_loop._fresh_observe_names(
         schemas,
         attempted,
         context,
         semantic_retrieval_choice=True,
     ) == []
+
+
+def test_external_mcp_retrieval_signatures_are_capability_specific() -> None:
+    assert tool_loop.retrieval_query_signature(
+        "external_mcp_call", {"capability": "source_search"}
+    ) != tool_loop.retrieval_query_signature(
+        "external_mcp_call", {"capability": "official_mod_docs"}
+    )
+    assert tool_loop.retrieval_source_key(
+        "external_mcp_schema", {"capability": "source_search"}
+    ) == "external_mcp_schema:source_search"
+    assert tool_loop.retrieval_source_key(
+        "external_mcp_call", {"capability": "source_search"}
+    ) == "external_mcp_call:source_search"
 
 
 def test_compact_coder_contract_drops_planner_provenance_blob() -> None:
