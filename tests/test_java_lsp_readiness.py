@@ -28,25 +28,23 @@ def test_project_jdk_resolver_matches_mmm_java_version(monkeypatch, tmp_path: Pa
     assert runtime == {"name": "JavaSE-21", "path": str(jdk21.resolve()), "default": True}
 
 
-def test_missing_matching_project_jdk_fails_before_jdt_process_start(monkeypatch, tmp_path: Path) -> None:
+def test_missing_matching_project_jdk_provisions_exact_version_before_jdt_start(monkeypatch, tmp_path: Path) -> None:
     jdk21 = _fake_jdk(tmp_path, "jdk-21", "21.0.4")
+    jdk17 = _fake_jdk(tmp_path, "jdk-17", "17.0.12")
     monkeypatch.setenv("MMM_JAVA_VERSION", "17")
     monkeypatch.setattr(java_lsp, "_candidate_java_homes", lambda _major: [jdk21])
-    started = False
 
-    class ForbiddenRpc:
-        def __init__(self, *args, **kwargs):
-            nonlocal started
-            started = True
-            raise AssertionError("JDT LS must not start without the requested project JDK")
+    calls: list[tuple[int, str]] = []
 
-    monkeypatch.setattr(java_lsp, "_JsonRpcProcess", ForbiddenRpc)
-    service = java_lsp.JavaLanguageService(command="jdtls")
+    def provision(required: int, detail: str) -> Path:
+        calls.append((required, detail))
+        return jdk17.resolve()
 
-    with pytest.raises(java_lsp.JDTWorkspaceBootstrapError, match="no project JDK matching"):
-        service._ensure_rpc_locked(tmp_path.resolve(), timeout_seconds=5)
-    assert started is False
-    assert service.ready is False
+    monkeypatch.setattr(java_lsp, "_provision_project_java_home", provision)
+
+    assert java_lsp._resolve_project_java_home() == jdk17.resolve()
+    assert calls and calls[0][0] == 17
+    assert "21" in calls[0][1]
 
 
 def test_launcher_java_and_project_java_are_separate(monkeypatch, tmp_path: Path) -> None:
@@ -111,7 +109,7 @@ def test_traced_service_cannot_override_canonical_readiness() -> None:
     assert TracedJavaLanguageService._ensure_rpc_locked is java_lsp.JavaLanguageService._ensure_rpc_locked
 
 
-def test_semantic_probe_requires_object_and_string_resolution(monkeypatch, tmp_path: Path) -> None:
+def test_semantic_probe_uses_compiler_diagnostics_without_hover(monkeypatch, tmp_path: Path) -> None:
     source_root = tmp_path / "src" / "main" / "java"
     source_root.mkdir(parents=True)
 
@@ -121,16 +119,14 @@ def test_semantic_probe_requires_object_and_string_resolution(monkeypatch, tmp_p
             self.process = SimpleNamespace(poll=lambda: None)
             self.stderr = []
             self.requests = []
+            self.notifications = []
 
         def notify(self, method, params):
-            return None
+            self.notifications.append(method)
 
         def request(self, method, params, timeout):
             self.requests.append((method, params))
-            if method != "textDocument/hover":
-                raise AssertionError(method)
-            line = params["position"]["line"]
-            return {"contents": "java.lang.Object" if line == 1 else "java.lang.String"}
+            raise AssertionError("semantic readiness must not use request/hover")
 
     monkeypatch.setattr(java_lsp, "_collect_diagnostics", lambda *args, **kwargs: {
         (source_root / "__MmmJdtReadinessProbe.java").resolve(strict=False).as_uri(): []
@@ -142,8 +138,8 @@ def test_semantic_probe_requires_object_and_string_resolution(monkeypatch, tmp_p
         timeout_seconds=2,
         quiet_seconds=0,
     )
-    assert [method for method, _params in rpc.requests] == ["textDocument/hover", "textDocument/hover"]
-
+    assert rpc.requests == []
+    assert rpc.notifications == ["textDocument/didOpen", "textDocument/didClose"]
 
 def test_core_type_diagnostic_is_workspace_bootstrap_failure() -> None:
     diagnostics = {
