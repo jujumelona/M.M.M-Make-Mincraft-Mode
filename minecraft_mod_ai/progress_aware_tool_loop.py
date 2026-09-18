@@ -1207,20 +1207,19 @@ def _requires_rag_evidence(
     implementation_requires_mutation: bool,
     initial_execution_authority: bool,
 ) -> bool:
-    """Decide whether the coder must retrieve evidence before acting.
+    """Separate write-location authority from implementation-evidence authority.
 
-    Exact host execution authority is the final localization decision for an approved
-    mutation target. A router-wide fresh-evidence preference may still require retrieval
-    when the host has not authorized an executable target, but it must not demote an
-    already mutation-ready PlanIR target back into OBSERVE. Otherwise deterministic
-    host-specified files can exhaust irrelevant evidence routes and never reach ACT.
+    An exact host-reserved target proves where the coder may write. It does not prove
+    which Minecraft/Fabric API is valid for the approved version. Explicit fresh-evidence
+    policy therefore remains authoritative even for an executable target, while host
+    target authority still suppresses retrieval that would exist only to localize the file.
     """
 
     if role not in {"coder", "coder_safe"} or host_grounded:
         return False
-    if implementation_requires_mutation and initial_execution_authority:
-        return False
-    return bool(router_requires_fresh_evidence or implementation_requires_mutation)
+    if router_requires_fresh_evidence:
+        return True
+    return bool(implementation_requires_mutation and not initial_execution_authority)
 
 
 def _target_evidence_ready(
@@ -1660,18 +1659,22 @@ def _fresh_observe_names(
     if not semantic_retrieval_choice:
         preferred = ("search_project_rag", "search_code_rag", "java_workspace_symbols")
         return _unattempted_tools(by_name, attempted, preferred)[:1]
-    direct_host_reservation = (
-        not mutation_context.target_symbol
-        and mutation_context.evidence_source == "host_task_authority"
+
+    # The target path is already host-localized. These turns exist to ground the
+    # implementation API, not to rediscover the new filename. Start with project/API
+    # code, then keep the frontier open through the reviewed external MCP discovery
+    # sequence before falling back to JDT/project-symbol routes.
+    preferred = (
+        "search_code_rag",
+        "external_mcp_capabilities",
+        "external_mcp_schema",
+        "external_mcp_call",
+        "java_workspace_symbols",
+        "search_project_rag",
+        "inspect_modrinth_project",
     )
-    if not direct_host_reservation:
-        if "search_code_rag" in by_name and "search_code_rag" not in attempted:
-            return ["search_code_rag"]
-        semantic_fallback = ("java_workspace_symbols", "search_project_rag")
-        return _unattempted_tools(by_name, attempted, semantic_fallback)
-    if "search_project_rag" in by_name and "search_project_rag" not in attempted:
-        return ["search_project_rag"]
-    return _unattempted_tools(by_name, attempted, ("search_code_rag", "java_workspace_symbols"))
+    names = _unattempted_tools(by_name, attempted, preferred)
+    return names[:1]
 
 
 def _localized_observe_names(
