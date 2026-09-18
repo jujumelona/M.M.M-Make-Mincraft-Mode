@@ -137,12 +137,14 @@ def test_capsule_compiles_exact_planir_main_and_test_authority() -> None:
     assert creatable == (JAVA_PATH, TEST_PATH)
 
 
-def test_custom_java_requires_target_compile_gate() -> None:
+def test_custom_java_host_injects_target_compile_gate() -> None:
     module = _module()
     module.required_gates = ("source_static_validation",)
 
-    with pytest.raises(TaskCapsuleContractError, match="COMPILE_GATE_MISSING"):
-        compile_task_capsule(module)
+    capsule = compile_task_capsule(module)
+
+    assert capsule is not None
+    assert capsule.required_gates == ("source_static_validation", "target_compile")
 
 
 def test_planir_authority_fails_before_coder_when_binding_is_missing() -> None:
