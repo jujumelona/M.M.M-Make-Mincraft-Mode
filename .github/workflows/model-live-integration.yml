@@ -47,6 +47,7 @@ jobs:
   gate:
     name: Model live integration gate
     if: ${{ always() }}
+    timeout-minutes: 5
     needs: [qwen-live]
     runs-on: ubuntu-latest
     steps:
