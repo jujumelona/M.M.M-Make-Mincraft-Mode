@@ -45,10 +45,18 @@ def owner_command(workspace: Path) -> list[str]:
     frameworks = list((distribution / 'plugins').glob('org.eclipse.osgi-*.jar'))
     if len(frameworks) != 1:
         raise OwnerRPCError('Owner runtime must contain exactly one Equinox framework')
-    java_home = os.environ.get('JAVA_HOME')
-    java = str(Path(java_home) / 'bin' / ('java.exe' if os.name == 'nt' else 'java')) if java_home else shutil.which('java')
-    if not java:
-        raise OwnerRPCError('Java 17 or newer is required to launch JDT Core')
+    # The owner hosts both JDT Core and Gradle Tooling API model resolution.
+    # Modern Fabric Loom plugins require a Java 21+ runtime even when the project
+    # itself targets an older Java release (for example Minecraft 1.20.1 / Java 17).
+    # Keep that runtime separate from each source set's Gradle JavaCompile toolchain.
+    from .java_lsp import _resolve_project_java_home
+
+    owner_java_home = _resolve_project_java_home(21)
+    java = str(
+        owner_java_home / 'bin' / ('java.exe' if os.name == 'nt' else 'java')
+    )
+    if not Path(java).is_file():
+        raise OwnerRPCError('Java 21 or newer is required to launch the JVM owner')
     configuration = workspace / 'configuration'
     configuration.mkdir(parents=True, exist_ok=True)
     shutil.copy2(distribution / 'configuration' / 'config.ini', configuration / 'config.ini')
