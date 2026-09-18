@@ -664,13 +664,25 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
     if authority is not None:
         initial = payload.get("initial_exact_source_context")
         if isinstance(initial, Mapping):
-            exact = _extract_mutation_context_from_payload(initial)
-            if (
-                exact is not None
-                and _canonical_mutation_path(exact.target_path)
-                == _canonical_mutation_path(authority.target_path)
-                and exact.source_body
-            ):
+            exact_candidates: list[TargetMutationContext] = []
+            direct_exact = _extract_mutation_context_from_payload(initial)
+            if direct_exact is not None:
+                exact_candidates.append(direct_exact)
+            for record in _sequence(initial.get("records")):
+                exact = _extract_mutation_context_from_payload(record)
+                if exact is not None:
+                    exact_candidates.append(exact)
+            expected_path = _canonical_mutation_path(authority.target_path)
+            exact = next(
+                (
+                    candidate
+                    for candidate in exact_candidates
+                    if _canonical_mutation_path(candidate.target_path) == expected_path
+                    and candidate.source_body
+                ),
+                None,
+            )
+            if exact is not None:
                 return replace(
                     authority,
                     source_body=exact.source_body,
@@ -678,6 +690,10 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
                     end_line=exact.end_line,
                     is_new_file=False,
                     evidence_source="host_exact_source",
+                    creatable_paths=_without_target_path(
+                        authority.creatable_paths,
+                        expected_path,
+                    ),
                 )
         return authority
 
