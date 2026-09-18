@@ -90,7 +90,19 @@ jobs:
             tests/test_java_core_toolchain.py \
             tests/test_owner_rpc.py \
             tests/test_generation_verifier_resilience.py
-      - name: Run live production-owner integration
-        env:
+      - name: Live owner incremental diagnostics
+        env: &live_owner_env
           MMM_JVM_OWNER_LIVE: '1'
-        run: python -m pytest -vv tests/test_jvm_owner_integration.py
+        run: python -m pytest -vv tests/test_jvm_owner_integration.py::test_incremental_dependent_diagnostics
+      - name: Live owner Gradle project model
+        env: *live_owner_env
+        run: python -m pytest -vv tests/test_jvm_owner_integration.py::test_tooling_model_and_core_project_dependencies
+      - name: Live generation verifier persistence
+        env: *live_owner_env
+        run: python -m pytest -vv tests/test_jvm_owner_integration.py::test_generation_service_preserves_errors_after_unchanged_check
+      - name: Live annotation processor model
+        env: *live_owner_env
+        run: python -m pytest -vv tests/test_jvm_owner_integration.py::test_core_runs_resolved_annotation_processor
+      - name: Live Debug Fabric project model
+        env: *live_owner_env
+        run: python -m pytest -vv tests/test_jvm_owner_integration.py::test_debug_fixture_fabric_project_resolves_through_production_java_core
