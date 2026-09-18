@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from types import SimpleNamespace
 
 from minecraft_mod_ai import agent_tool_runtime, java_lsp
@@ -481,4 +483,4 @@ def test_passed_verification_terminates_without_formatting_model_turn(monkeypatc
     )
 
     assert "passed generation-time host verification" in payload["summary"]
-    assert calls == 2
+    assert calls == 1
