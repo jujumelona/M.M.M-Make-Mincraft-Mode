@@ -287,3 +287,78 @@ def test_atomic_summary_aggregation_preserves_response_template():
     summary = json.loads(result)["summary"]
     assert summary.count("Completed an isolated obligation.") == 3
     assert "atomic step 3/3" in summary
+
+
+def test_atomic_summary_aggregation_preserves_host_summary_in_production_text_mode():
+    from types import SimpleNamespace
+
+    from minecraft_mod_ai.custom_module_generator import _parse_coder_summary
+    from minecraft_mod_ai.small_model_atomic_coder_execution import install
+
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            assert kwargs["response_format"] == "text"
+            assert kwargs.get("response_schema") is None
+            assert kwargs["tool_stage"] == "generation"
+            assert kwargs["enable_tools"] is True
+            return json.dumps({
+                "summary": "Applied the approved source mutation and passed generation-time host verification."
+            })
+
+    custom = SimpleNamespace(
+        _coder_project_context_budget=lambda *a, **k: 4096,
+        _collect_initial_observations=lambda *a, **k: {},
+        _materialize_owned_reuse_context=lambda *a, **k: {},
+    )
+    install(
+        custom_module_generator_module=custom,
+        model_router_module=SimpleNamespace(ModelRouter=Router),
+    )
+    result = Router().generate_text(
+        "coder",
+        _messages(step_count=3),
+        response_format="text",
+        tool_stage="generation",
+        enable_tools=True,
+    )
+    summary = _parse_coder_summary(result)
+    assert summary.count(
+        "Applied the approved source mutation and passed generation-time host verification."
+    ) == 3
+    assert "atomic step 3/3" in summary
+
+
+def test_atomic_summary_aggregation_rejects_mixed_summary_transport():
+    from types import SimpleNamespace
+
+    from minecraft_mod_ai.small_model_atomic_coder_execution import (
+        AtomicCoderContractError,
+        install,
+    )
+
+    class Router:
+        calls = 0
+
+        def generate_text(self, role, messages, **kwargs):
+            self.calls += 1
+            if self.calls == 2:
+                return "free text"
+            return json.dumps({"summary": "host summary"})
+
+    custom = SimpleNamespace(
+        _coder_project_context_budget=lambda *a, **k: 4096,
+        _collect_initial_observations=lambda *a, **k: {},
+        _materialize_owned_reuse_context=lambda *a, **k: {},
+    )
+    install(
+        custom_module_generator_module=custom,
+        model_router_module=SimpleNamespace(ModelRouter=Router),
+    )
+    with pytest.raises(AtomicCoderContractError, match="CODER_SUMMARY_TRANSPORT_MIXED"):
+        Router().generate_text(
+            "coder",
+            _messages(step_count=3),
+            response_format="text",
+            tool_stage="generation",
+            enable_tools=True,
+        )
