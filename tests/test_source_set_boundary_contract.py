@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from minecraft_mod_ai.java_lsp import JDTLanguageServerError, JavaLanguageService
@@ -10,7 +8,6 @@ from minecraft_mod_ai.source_set_boundary_contract import (
     assert_server_safe_source_sets,
     source_set_boundary_errors,
 )
-from minecraft_mod_ai.source_set_boundary_installation import install
 
 
 def _write(root, relative: str, text: str) -> None:
@@ -125,19 +122,10 @@ def test_canonical_java_diagnostics_fails_before_jdt_start(tmp_path, monkeypatch
     assert calls == []
 
 
-def test_installation_only_accepts_static_source_set_owner():
-    class MissingGuard:
-        def diagnostics(self):
-            return None
 
-    with pytest.raises(RuntimeError, match="missing the canonical source-set boundary"):
-        install(SimpleNamespace(JavaLanguageService=MissingGuard))
-
-
-def test_package_runtime_exposes_source_set_guard_on_java_diagnostics():
+def test_java_diagnostics_owns_source_set_guard_directly():
     from minecraft_mod_ai import java_lsp
 
-    install(java_lsp)
     assert getattr(
         java_lsp.JavaLanguageService.diagnostics,
         "__mmm_source_set_boundary__",
