@@ -196,22 +196,29 @@ def test_jdt_mapping_errors_are_flattened_without_blocking_warnings() -> None:
     assert [item["message"] for item in errors] == ["compile error"]
 
 
-def test_progressive_repair_skips_gradle_when_jdt_is_not_clean(tmp_path: Path) -> None:
+def test_progressive_repair_uses_target_compile_without_jdt_gate(tmp_path: Path) -> None:
     root = _project(tmp_path / "project")
+    calls = {"build": 0}
 
     class Diagnostics:
-        def diagnostics(self, *_args, **_kwargs):
-            return {
-                "diagnostics": {
-                    "file:///Main.java": [
-                        {"severity": 1, "message": "cannot resolve symbol"}
-                    ]
-                }
-            }
+        def __init__(self):
+            raise AssertionError("JDT must not gate compile-backed source repair")
 
     class Runner:
         def __init__(self, _cache):
-            raise AssertionError("Gradle must not start while JDT errors remain")
+            pass
+
+        def build(self, _root, *, run_gametest):
+            calls["build"] += 1
+            assert run_gametest is True
+            return BuildReport(
+                status="FAIL",
+                gradle_version="test",
+                commands=(),
+                jar_path=None,
+                gametest_report=None,
+                error="Gradle build failed.",
+            )
 
     repair = RepairEngine(
         router=SimpleNamespace(),
@@ -220,8 +227,10 @@ def test_progressive_repair_skips_gradle_when_jdt_is_not_clean(tmp_path: Path) -
         runner_factory=Runner,
     )
     evidence = repair._evidence(root, run_gametest=True)
+    assert calls["build"] == 1
     assert evidence["passed"] is False
-    assert evidence["build"]["status"] == "SKIPPED"
+    assert evidence["build"]["status"] == "FAIL"
+    assert evidence["diagnostics"]["status"] == "DEFERRED_TO_POST_BUILD"
 
 
 def test_progressive_repair_does_not_hide_programming_errors(tmp_path: Path) -> None:
