@@ -46,6 +46,22 @@ def _passed_result(evidence: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _initial_compile_evidence(build: dict[str, Any]) -> dict[str, Any]:
+    """Convert the already executed target compile into first repair evidence."""
+
+    return {
+        "passed": build.get("status") == "PASS",
+        "diagnostics": {
+            "schema_version": "mmm/java-diagnostics-v3",
+            "status": "DEFERRED_TO_POST_BUILD",
+            "available": False,
+            "complete": False,
+            "diagnostics": {},
+        },
+        "build": dict(build),
+    }
+
+
 class RepairEngine(_BaseRepairEngine):
     """Repair engine variant that never asks the coder to patch non-source failures."""
 
@@ -55,9 +71,14 @@ class RepairEngine(_BaseRepairEngine):
         *,
         run_gametest: bool = True,
         max_attempts: int | None = None,
+        initial_build: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         root = Path(project_root).expanduser().resolve()
-        evidence = super()._evidence(root, run_gametest=run_gametest)
+        evidence = (
+            _initial_compile_evidence(initial_build)
+            if isinstance(initial_build, dict)
+            else super()._evidence(root, run_gametest=run_gametest)
+        )
         if evidence.get("passed") is True:
             return _passed_result(evidence)
 
