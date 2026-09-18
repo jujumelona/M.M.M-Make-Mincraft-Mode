@@ -266,6 +266,11 @@ def test_fresh_host_reserved_java_target_does_not_force_rag_by_freshness_alone()
     state = tool_loop.HostRunState()
     assert tool_loop.is_mutation_ready(messages, state) is True
     assert tool_loop._host_target_execution_authority(state) is True
+    assert tool_loop._target_evidence_ready(
+        state,
+        require_rag=False,
+        fresh_java_target=True,
+    ) is True
 
     assert tool_loop._requires_rag_evidence(
         role="coder",
