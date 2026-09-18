@@ -34,6 +34,12 @@ _SCHEMA = "mmm/execution-feedback-replan-v1"
 _PATH_TOKEN = re.compile(
     r"(?P<path>(?:[A-Za-z]:)?[^\s:'\"<>|]*?(?:src[/\\][^\s:'\"<>|]+|[A-Za-z0-9_.-]+\.(?:java|json|kt|kts|gradle|mcmeta|png|ogg)))"
 )
+_JAVAC_DIAGNOSTIC = re.compile(
+    r"^(?P<path>(?:[A-Za-z]:)?[^:\r\n]+\.java):(?P<line>\d+):\s*"
+    r"(?P<kind>error|warning):\s*(?P<message>[^\r\n]*)$",
+    re.MULTILINE,
+)
+_BUILD_LOG_WINDOW_BYTES = 256 * 1024
 _INSTALLED = False
 
 
@@ -211,7 +217,6 @@ def _diagnostics_from_value(value: Any, *, limit: int = 256) -> list[dict[str, A
             item.get("path")
             or item.get("uri")
             or item.get("file")
-            or item.get("source")
             or inherited_path
         )
         message = " ".join(
@@ -268,6 +273,90 @@ def _diagnostics_from_value(value: Any, *, limit: int = 256) -> list[dict[str, A
     return diagnostics
 
 
+def _bounded_build_log_text(raw_path: Any) -> str:
+    path = Path(str(raw_path or "")).expanduser()
+    if not path.is_file() or path.is_symlink():
+        return ""
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as stream:
+            if size <= _BUILD_LOG_WINDOW_BYTES * 2:
+                data = stream.read()
+            else:
+                head = stream.read(_BUILD_LOG_WINDOW_BYTES)
+                stream.seek(max(0, size - _BUILD_LOG_WINDOW_BYTES))
+                data = head + b"\n" + stream.read(_BUILD_LOG_WINDOW_BYTES)
+    except (OSError, ValueError):
+        return ""
+    return data.decode("utf-8", "replace")
+
+
+def _compiler_log_diagnostics(value: Any, *, limit: int = 256) -> list[dict[str, Any]]:
+    """Extract path-bearing javac failures from host-owned Gradle command logs."""
+
+    diagnostics: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def inspect_command(command: Mapping[str, Any]) -> None:
+        if len(diagnostics) >= limit:
+            return
+        exit_code = command.get("exit_code")
+        if command.get("timed_out") is not True and (
+            not isinstance(exit_code, int) or isinstance(exit_code, bool) or exit_code == 0
+        ):
+            return
+        text = _bounded_build_log_text(command.get("log_path"))
+        for match in _JAVAC_DIAGNOSTIC.finditer(text):
+            if len(diagnostics) >= limit:
+                break
+            body = {
+                "path": _norm_path(match.group("path")),
+                "message": match.group("message").strip()[:2000],
+                "code": f"javac:{match.group('kind')}:{match.group('line')}",
+            }
+            fingerprint = _sha(body)
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            diagnostics.append({**body, "diagnostic_sha256": fingerprint})
+
+    def walk(node: Any, depth: int = 0) -> None:
+        if depth > 10 or len(diagnostics) >= limit:
+            return
+        if isinstance(node, Mapping):
+            commands = node.get("commands")
+            if isinstance(commands, Sequence) and not isinstance(
+                commands, (str, bytes, bytearray)
+            ):
+                for command in commands:
+                    if isinstance(command, Mapping):
+                        inspect_command(command)
+            for child in node.values():
+                if isinstance(child, (Mapping, list, tuple)):
+                    walk(child, depth + 1)
+        elif isinstance(node, (list, tuple)):
+            for child in node:
+                walk(child, depth + 1)
+
+    walk(value)
+    return diagnostics
+
+
+def _merge_diagnostics(*groups: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for group in groups:
+        for raw in group:
+            item = dict(raw)
+            fingerprint = str(item.get("diagnostic_sha256") or _sha(item))
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            item["diagnostic_sha256"] = fingerprint
+            merged.append(item)
+    return merged
+
+
 def _validation_failed(checkpoint_id: str, receipt: Mapping[str, Any]) -> bool:
     status = str(receipt.get("status") or "").strip().casefold()
     if status in {"fail", "failed", "error", "invalid", "rejected"}:
@@ -306,7 +395,10 @@ def _latest_failed_feedback(ledger: Any) -> dict[str, Any] | None:
             str(checkpoint_id), receipt
         ):
             continue
-        diagnostics = _diagnostics_from_value(receipt)
+        diagnostics = _merge_diagnostics(
+            _diagnostics_from_value(receipt),
+            _compiler_log_diagnostics(receipt),
+        )
         return {
             "schema_version": "mmm/execution-validation-feedback-v1",
             "checkpoint_id": str(checkpoint_id),
