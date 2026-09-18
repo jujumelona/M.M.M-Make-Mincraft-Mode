@@ -2090,24 +2090,42 @@ def _consume_rejected_evidence_fixed_point(
     state: HostRunState,
     rejection_payloads: Sequence[Mapping[str, Any]],
     phase_names: Collection[str],
+    *,
+    forced_evidence_tool: str | None = None,
 ) -> tuple[str, ...]:
-    """Consume only the evidence route that cannot produce a valid tool call."""
+    """Consume the reviewed evidence route that cannot produce an admissible call.
+
+    Adapter rejection payloads name the model-emitted tool. When the host has forced
+    exactly one reviewed evidence route, a non-visible model tool is evidence that the
+    forced route failed to yield an admissible call, not that the invented tool became
+    part of the reviewed frontier. After the same rejection state repeats, consume the
+    forced route so the frontier can advance without granting authority to the invented
+    tool name.
+    """
 
     if state.phase not in {LoopPhase.OBSERVE, LoopPhase.RECOVER}:
         return ()
-    allowed = set(phase_names)
-    routes = tuple(sorted({
+    allowed = {
+        str(name).strip()
+        for name in phase_names
+        if str(name).strip()
+    }
+    routes = {
         name
         for payload in rejection_payloads
         if (name := str(payload.get("original_tool") or "").strip())
         and name in allowed
-    }))
-    if not routes:
+    }
+    forced = str(forced_evidence_tool or "").strip()
+    if not routes and forced and forced in allowed and len(allowed) == 1:
+        routes.add(forced)
+    consumed = tuple(sorted(routes))
+    if not consumed:
         return ()
-    for route in routes:
+    for route in consumed:
         state.record_source_attempt(route, {})
     state.clear_no_progress_result()
-    return routes
+    return consumed
 
 
 def _host_coder_summary(*, verification: str) -> str:
@@ -2427,7 +2445,11 @@ def _generate_with_tools_impl(
             feedback, rejection_payloads = rejection
             for payload in rejection_payloads:
                 state.record_failure(
-                    str(payload.get("rejected_name") or "model_tool_call"),
+                    str(
+                        payload.get("original_tool")
+                        or payload.get("rejected_name")
+                        or "model_tool_call"
+                    ),
                     str(
                         payload.get("error")
                         or payload.get("failure_code")
@@ -2440,6 +2462,12 @@ def _generate_with_tools_impl(
                 "verifier": state.latest_verifier_fingerprint,
                 "model_tool_rejections": rejection_payloads,
             })
+            if forced_evidence_tool is not None:
+                feedback += (
+                    " The host has selected exactly one admissible evidence function for "
+                    f"this turn: {forced_evidence_tool!r}. Call exactly that function; do "
+                    "not replay a tool from an earlier turn."
+                )
             messages.append({"role": "assistant", "content": turn.content or None})
             messages.append({"role": "system", "content": feedback})
             emit_root_cause(
@@ -2462,6 +2490,7 @@ def _generate_with_tools_impl(
                     state,
                     rejection_payloads,
                     phase_names,
+                    forced_evidence_tool=forced_evidence_tool,
                 )
                 if rejected_routes:
                     # A repeated schema/protocol rejection means this evidence route
