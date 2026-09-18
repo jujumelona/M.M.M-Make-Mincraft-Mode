@@ -138,7 +138,7 @@ def _fresh_owned_anchor_message_without_host_grounding() -> dict[str, object]:
     }
 
 
-def test_host_grounded_ready_fresh_target_enters_act_before_any_rag(monkeypatch) -> None:
+def test_trusted_developer_ready_fresh_target_enters_act_before_any_rag(monkeypatch) -> None:
     adapter = _CapturingAdapter()
     monkeypatch.setattr(loop, "implementation_requested", lambda _messages: True)
     monkeypatch.setattr(loop, "mutation_history_applied", lambda _messages: False)
@@ -149,7 +149,7 @@ def test_host_grounded_ready_fresh_target_enters_act_before_any_rag(monkeypatch)
     )
 
     request = GenerationRequest(
-        messages=(_host_grounded_fresh_java_message(),),
+        messages=({**_fresh_owned_anchor_message_without_host_grounding(), "role": "developer"},),
         tools=(
             _tool("search_project_rag"),
             _tool("search_code_rag"),
