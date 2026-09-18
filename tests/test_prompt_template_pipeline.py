@@ -189,7 +189,7 @@ def test_capture_is_exact_and_never_invokes_a_model():
         'original_prompt': prompt}
 
 
-def test_pipeline_restores_prompt_checkpoint_before_research(monkeypatch):
+def test_pipeline_restores_prompt_checkpoint_before_downstream_planning(monkeypatch):
     from minecraft_mod_ai import planning_state_pipeline as pipeline
     prompt = 'Add a compass.'
     router = PromptRouter(prompt, {'submit_prompt_parse': [{'statement': prompt}]})
@@ -201,20 +201,29 @@ def test_pipeline_restores_prompt_checkpoint_before_research(monkeypatch):
     assert restored['checkpoint_kind'] == 'prompt_tasks'
     assert 'plan_ready' not in restored
 
-    class ReachedResearch(Exception):
+    class ReachedRequirementCompilation(Exception):
         pass
 
-    def research(_router, _prompt, state, **kwargs):
+    def compile_requirements(_router, _prompt, state):
         validate_planning_state(state, prompt=prompt)
         assert state['goal']['statement'] == prompt
         assert state['known'][0]['statement'] == prompt
         assert 'checkpoint_kind' not in state
-        raise ReachedResearch
+        raise ReachedRequirementCompilation
 
     router.interrupt_at = None
-    monkeypatch.setattr(pipeline, 'collect_planning_state_research_convergent', research)
-    with pytest.raises(ReachedResearch):
-        pipeline.prepare_planning_state(router, prompt, existing_state=restored, checkpoint=snapshots.append)
+    monkeypatch.setattr(
+        pipeline,
+        'compile_researched_requirements_convergent',
+        compile_requirements,
+    )
+    with pytest.raises(ReachedRequirementCompilation):
+        pipeline.prepare_planning_state(
+            router,
+            prompt,
+            existing_state=restored,
+            checkpoint=snapshots.append,
+        )
     assert [c[0] for c in router.calls].count('submit_prompt_intent') == 1
     assert [c[0] for c in router.calls].count('submit_prompt_parse_count') == 1
     assert [c[0] for c in router.calls].count('submit_one_prompt_parse') == 1
