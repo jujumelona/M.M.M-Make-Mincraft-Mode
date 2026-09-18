@@ -144,8 +144,8 @@ _CODE_MARKERS = frozenset({
     "extends ", "implements ", "override", "{", "}", ";", "(", ")",
 })
 _FRESH_JAVA_EXTERNAL_CAPABILITIES = (
-    "source_search",
     "official_mod_docs",
+    "source_search",
     "mod_examples",
     "mapping_resolution",
 )
@@ -1673,12 +1673,11 @@ def _next_fresh_java_external_step(
         and "external_mcp_capabilities" not in attempted
     ):
         return "external_mcp_capabilities", ""
+    if "external_mcp_call" not in by_name:
+        return None
     for capability in _FRESH_JAVA_EXTERNAL_CAPABILITIES:
-        schema_key = f"external_mcp_schema:{capability}"
         call_key = f"external_mcp_call:{capability}"
-        if "external_mcp_schema" in by_name and schema_key not in attempted:
-            return "external_mcp_schema", capability
-        if "external_mcp_call" in by_name and call_key not in attempted:
+        if call_key not in attempted:
             return "external_mcp_call", capability
     return None
 
@@ -1689,7 +1688,7 @@ def _fresh_java_external_schema(
     by_name: Mapping[str, Mapping[str, Any]],
 ) -> Mapping[str, Any]:
     name = _tool_name(schema)
-    if name not in {"external_mcp_schema", "external_mcp_call"}:
+    if name != "external_mcp_call":
         return schema
     step = _next_fresh_java_external_step(by_name, attempted)
     if step is None or step[0] != name or not step[1]:
@@ -1704,6 +1703,69 @@ def _fresh_java_external_schema(
         capability["description"] = (
             "Host-selected fresh-Java evidence capability. Use exactly this value."
         )
+    return cloned
+
+
+def _single_external_capability(schema: Mapping[str, Any]) -> str:
+    function = schema.get("function")
+    parameters = function.get("parameters") if isinstance(function, Mapping) else None
+    properties = parameters.get("properties") if isinstance(parameters, Mapping) else None
+    capability = properties.get("capability") if isinstance(properties, Mapping) else None
+    enum = capability.get("enum") if isinstance(capability, Mapping) else None
+    if (
+        isinstance(enum, Sequence)
+        and not isinstance(enum, (str, bytes, bytearray))
+        and len(enum) == 1
+    ):
+        return str(enum[0]).strip()
+    return ""
+
+
+def _external_call_schema_with_live_arguments(
+    schema: Mapping[str, Any],
+    live_schema: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """Bind model-visible call arguments to the live provider schema.
+
+    Provider target coordinates are host-owned. Remove those provider argument names
+    from the model-visible nested schema while preserving every other live constraint.
+    """
+
+    cloned = deepcopy(schema)
+    function = cloned.get("function") if isinstance(cloned, dict) else None
+    parameters = function.get("parameters") if isinstance(function, dict) else None
+    properties = parameters.get("properties") if isinstance(parameters, dict) else None
+    arguments = properties.get("arguments") if isinstance(properties, dict) else None
+    provider_schema = live_schema.get("input_schema")
+    if not isinstance(arguments, dict) or not isinstance(provider_schema, Mapping):
+        return cloned
+
+    bound = deepcopy(dict(provider_schema))
+    reserved = {
+        str(value).strip()
+        for value in dict(live_schema.get("target_args_injected_by_router", {}) or {}).values()
+        if str(value).strip()
+    }
+    provider_properties = bound.get("properties")
+    if isinstance(provider_properties, dict):
+        for name in reserved:
+            provider_properties.pop(name, None)
+    required = bound.get("required")
+    if isinstance(required, list):
+        bound["required"] = [
+            name for name in required if str(name).strip() not in reserved
+        ]
+    bound["description"] = (
+        "Arguments for the host-bound live provider schema. Minecraft target/version/"
+        "mapping coordinates are injected by the host and must not be supplied here."
+    )
+    properties["arguments"] = bound
+    description = str(function.get("description") or "").strip()
+    provider_description = str(live_schema.get("description") or "").strip()
+    if provider_description:
+        function["description"] = (
+            f"{description} Live provider contract: {provider_description}"
+        ).strip()
     return cloned
 
 
