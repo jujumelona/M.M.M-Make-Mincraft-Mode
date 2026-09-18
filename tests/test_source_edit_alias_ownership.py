@@ -3,7 +3,7 @@ from __future__ import annotations
 import inspect
 
 from minecraft_mod_ai import research_code_context
-from minecraft_mod_ai.model_adapters import qwen_tool_parser
+from minecraft_mod_ai.model_adapters import llama_cpp_adapter
 from minecraft_mod_ai.source_edit_scalar_protocol_contract import (
     SOURCE_EDIT_PARAMETER_ALIASES,
     SOURCE_EDIT_SCHEMA,
@@ -21,12 +21,12 @@ def test_dependency_query_has_one_runtime_owner() -> None:
 
 def test_transport_aliases_do_not_duplicate_scalar_protocol_aliases() -> None:
     properties = set(SOURCE_EDIT_SCHEMA["properties"])
-    transport = set(qwen_tool_parser._APPLY_SOURCE_EDIT_TRANSPORT_ALIASES)
+    transport = set(llama_cpp_adapter._SOURCE_EDIT_TRANSPORT_ALIASES)
     scalar_aliases = set(SOURCE_EDIT_PARAMETER_ALIASES)
     assert transport.isdisjoint(properties)
     assert scalar_aliases <= properties
     assert scalar_aliases.isdisjoint(transport)
     assert all(
-        qwen_tool_parser._APPLY_SOURCE_EDIT_ALIASES[alias] == canonical
+        llama_cpp_adapter._SOURCE_EDIT_ADMISSION_ALIASES[alias] == canonical
         for alias, canonical in SOURCE_EDIT_PARAMETER_ALIASES.items()
     )
