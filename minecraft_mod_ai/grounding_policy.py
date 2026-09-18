@@ -118,15 +118,20 @@ def _receipt_hashes_ready(receipt: Any) -> bool:
     )
 
 
-def _research_receipt_ready(bindings: Mapping[str, Any]) -> bool:
-    research = bindings.get("approved_research_rag")
-    if not isinstance(research, Mapping):
-        return False
-    receipt = research.get("receipt")
-    if not isinstance(receipt, Mapping):
-        return False
-    count = receipt.get("selected_fact_count")
-    return type(count) is int and count > 0
+def _fresh_implementation_evidence_ready(bindings: Mapping[str, Any]) -> bool:
+    """Accept either reviewed research facts or immutable host implementation facts."""
+
+    for key in ("implementation_contract", "approved_research_rag"):
+        evidence = bindings.get(key)
+        if not isinstance(evidence, Mapping):
+            continue
+        receipt = evidence.get("receipt")
+        if not isinstance(receipt, Mapping):
+            continue
+        count = receipt.get("selected_fact_count")
+        if type(count) is int and count > 0:
+            return True
+    return False
 
 
 def _grounding_policy_ready(policy: Any) -> bool:
@@ -149,7 +154,7 @@ def _grounding_ready(
     project = bindings.get("project_exact_rag")
     if not isinstance(project, Mapping) or not _receipt_hashes_ready(project.get("receipt")):
         return False
-    return not require_research or _research_receipt_ready(bindings)
+    return not require_research or _fresh_implementation_evidence_ready(bindings)
 
 
 __all__ = ["host_baseline_causal_facts", "host_baseline_evidence_ready"]
