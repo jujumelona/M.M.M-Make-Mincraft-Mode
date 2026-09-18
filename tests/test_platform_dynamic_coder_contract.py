@@ -10,6 +10,7 @@ from minecraft_mod_ai.custom_module_generator import (
     CustomModuleGenerationError,
     CustomModuleGenerator,
 )
+from minecraft_mod_ai.model_router import ModelRouter
 from minecraft_mod_ai.platform_catalog import PlatformAdapter, adapter_for_target
 from minecraft_mod_ai.platform_custom_coder_contract import _bind_target
 from minecraft_mod_ai.platform_evidence_pipeline import PlatformOptimization, TargetEvidence
@@ -76,6 +77,10 @@ def _optimization(adapter: PlatformAdapter) -> PlatformOptimization:
         },
     )
     return optimization
+
+
+def test_custom_coder_target_binding_does_not_wrap_global_model_router() -> None:
+    assert not getattr(ModelRouter.generate_text, "_mmm_dynamic_coder_target", False)
 
 
 def test_custom_coder_structured_request_uses_exact_live_target() -> None:
