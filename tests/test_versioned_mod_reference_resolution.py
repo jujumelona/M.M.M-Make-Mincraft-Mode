@@ -14,7 +14,6 @@ from minecraft_mod_ai.versioned_mod_reference_retriever import (
     ReferenceExcerpt,
     VersionedModReferenceRetriever,
 )
-from minecraft_mod_ai.versioned_reference_context_installation import install
 from minecraft_mod_ai.versioned_research_context import VersionedResearchCodeContext
 
 
@@ -234,6 +233,5 @@ java_version=17
     assert proof.admitted is False
 
 
-def test_hot_path_installer_points_coder_engine_at_versioned_context() -> None:
-    install()
+def test_coder_engine_owns_versioned_context_directly() -> None:
     assert custom_generation_research.ResearchCodeContext is VersionedResearchCodeContext
