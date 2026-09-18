@@ -6,7 +6,6 @@ from .execution_feedback_semantic_convergence_installation import (
 from .hardware_concurrency_installation import install as install_hardware_concurrency
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
-from .source_observation_budget_installation import install as install_source_observation_budget
 from .task_template_catalog import RUNTIME_TEMPLATE_ROOT
 from .template_contract_validation import runtime_consumer_roots, validate_catalog
 
@@ -81,7 +80,6 @@ from .technology_radar import (
     technology_research_routes,
 )
 
-install_source_observation_budget()
 
 MinecraftModPipeline = ScalableMinecraftModPipeline
 
