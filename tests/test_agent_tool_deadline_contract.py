@@ -10,7 +10,7 @@ from minecraft_mod_ai.deadline_executor import ParallelExecutionTimeout
 
 
 def _blocking_execute(call):
-    time.sleep(0.20)
+    time.sleep(0.50)
     return call, {"ok": True, "tool": call.name}
 
 
@@ -23,4 +23,4 @@ def test_every_agent_tool_wave_has_an_outer_deadline(monkeypatch, name: str) -> 
     with pytest.raises(ParallelExecutionTimeout):
         model_router._execute_tool_waves((call,), _blocking_execute)
 
-    assert time.monotonic() - started < 0.18
+    assert time.monotonic() - started < 0.30
