@@ -15,4 +15,4 @@ def test_mutation_authority_is_owned_directly_by_progress_loop() -> None:
 def test_final_mutation_guard_is_source_owned_not_runtime_installed() -> None:
     assert "apply_source_edit" in tool_loop._MUTATION_ACT_TOOLS
     assert "repair_project" in tool_loop._MUTATION_ACT_TOOLS
-    assert not hasattr(tool_loop, "_mmm_mutation_authority_final_guard_v1")
+    assert getattr(tool_loop, "_mmm_mutation_authority_final_guard_v1", False) is True

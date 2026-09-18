@@ -76,7 +76,7 @@ class MockFeatureRouter:
                 count = len(self.splits.get(fid, ()))
             else:
                 count = 1
-            return {"count": count, "blocked_reason": ""}
+            return {"count": count}
 
         if not tool_name.startswith("submit_one_feature_"):
             raise AssertionError(tool_name)

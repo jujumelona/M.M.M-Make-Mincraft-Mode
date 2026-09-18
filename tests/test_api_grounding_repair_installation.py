@@ -5,7 +5,11 @@ from types import SimpleNamespace
 import pytest
 
 import minecraft_mod_ai.progress_aware_tool_loop as loop
-from minecraft_mod_ai.model_adapters import GenerationRequest, GenerationResponse
+from minecraft_mod_ai.model_adapters import (
+    GenerationRequest,
+    GenerationResponse,
+    ModelConfigurationError,
+)
 from minecraft_mod_ai.model_router import _usable_rag_result
 
 
@@ -203,7 +207,7 @@ def test_completion_boundary_recovery_does_not_loop(monkeypatch) -> None:
         tool_choice={"type": "function", "function": {"name": "apply_source_edit"}},
         parallel_tool_calls=False,
     )
-    with pytest.raises(LlamaCompletionBoundaryError):
+    with pytest.raises(ModelConfigurationError, match="ATOMIC_ACTION_OUTPUT_STALLED"):
         loop._generate_turn_with_context_recovery(
             SimpleNamespace(),
             config=SimpleNamespace(),

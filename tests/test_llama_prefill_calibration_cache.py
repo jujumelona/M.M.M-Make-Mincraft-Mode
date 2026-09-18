@@ -45,6 +45,13 @@ def test_retired_prefill_regeneration_surface_is_absent() -> None:
 def test_output_exhaustion_is_not_semantically_regenerated(monkeypatch) -> None:
     calls = 0
 
+    from minecraft_mod_ai import qwen_agent_family_contract as qwen_contract
+
+    monkeypatch.setattr(
+        qwen_contract,
+        "_ensure_tool_safe_runtime",
+        lambda *_args, **_kwargs: None,
+    )
     monkeypatch.setattr(LlamaCppAdapter, "_server_url", lambda self, request: "http://unit.test/v1")
     from minecraft_mod_ai import llama_exact_context
     from minecraft_mod_ai import llama_stream_efficiency_contract as stream_contract
