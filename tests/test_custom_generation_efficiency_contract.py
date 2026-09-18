@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
+from minecraft_mod_ai import custom_module_generator as generator
 from minecraft_mod_ai.custom_generation_search_contract import (
     _ResearchEvidenceRouter,
     _width,
@@ -72,3 +74,52 @@ def test_research_router_preserves_fresh_evidence_binding(monkeypatch, tmp_path)
     assert result == "ok"
     assert base.calls[-1][1] == messages
     assert base.calls[-1][2]["enable_tools"] is True
+
+
+def test_post_generation_stage_snapshot_is_reused_for_checkpoint_and_diff(
+    monkeypatch, tmp_path: Path
+) -> None:
+    checkpoint_root = tmp_path / "checkpoint"
+    base_root = checkpoint_root / "base"
+    staged_root = checkpoint_root / "project"
+    base_source = base_root / "src/main/java/example/Feature.java"
+    staged_source = staged_root / "src/main/java/example/Feature.java"
+    base_source.parent.mkdir(parents=True)
+    staged_source.parent.mkdir(parents=True)
+    base_source.write_text("final class Feature {}\n", encoding="utf-8")
+    staged_source.write_text("final class Feature { int value; }\n", encoding="utf-8")
+
+    real_digest = generator.content_digest
+    calls = {"base": 0, "stage": 0}
+
+    def counted_digest(path):
+        resolved = Path(path).resolve()
+        if resolved.is_relative_to(staged_root.resolve()):
+            calls["stage"] += 1
+        elif resolved.is_relative_to(base_root.resolve()):
+            calls["base"] += 1
+        return real_digest(path)
+
+    monkeypatch.setattr(generator, "content_digest", counted_digest)
+
+    stage_tree_sha256, after = generator._stage_tree_snapshot(staged_root)
+    assert calls == {"base": 0, "stage": 1}
+
+    generator._persist_generation_checkpoint(
+        checkpoint_root,
+        staged_root,
+        identity_sha256="sha256:" + "a" * 64,
+        stage_tree_sha256=stage_tree_sha256,
+    )
+    assert calls == {"base": 1, "stage": 1}
+
+    operations, touched, discarded = generator._collect_staged_operations(
+        base_root,
+        staged_root,
+        {"src/main/java/example/Feature.java": "sha256:" + "b" * 64},
+        after=after,
+    )
+    assert calls == {"base": 1, "stage": 1}
+    assert touched == ["src/main/java/example/Feature.java"]
+    assert discarded == []
+    assert operations[0]["operation"] == "replace"
