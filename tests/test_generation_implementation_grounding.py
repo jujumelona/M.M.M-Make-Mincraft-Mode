@@ -200,6 +200,19 @@ def test_generation_grounding_projects_only_explicit_host_responsibility(monkeyp
         "fabric/item/key_identifier",
     ]
     assert "BuiltInRegistries.ITEM" in fact["templates"][0]["render_body"]
+    assert set(fact["templates"][0]["symbol_usage"]) == {
+        "register_item",
+        "builtin_item_registry",
+    }
+    assert set(fact["templates"][1]["symbol_usage"]) == {
+        "resource_key_create",
+        "registries_item",
+        "identifier_factory",
+    }
+    assert "builtin_item_registry" not in fact["templates"][1]["symbol_usage"]
+    assert "registries_item" not in fact["templates"][0]["symbol_usage"]
+    assert "receiver/member/argument" in fact["templates"][0]["topology_policy"]
+    assert "never interchange" in fact["call_topology_policy"]
     assert set(fact["api_symbols"]) == {
         "register_item",
         "builtin_item_registry",
@@ -218,6 +231,7 @@ def test_generation_grounding_projects_only_explicit_host_responsibility(monkeyp
     }
     assert "do not substitute Yarn" in fact["import_policy"]
     assert result["policy"]["model_must_not_substitute_api_names"] is True
+    assert result["policy"]["model_must_preserve_template_call_topology"] is True
     assert isinstance(fact["api_symbols"]["register_item"], dict)
     assert fact["api_symbols"]["register_item"]["metadata"] == {"source": "host_catalog"}
     json.dumps(result, ensure_ascii=False)
@@ -246,6 +260,11 @@ def test_real_26_2_item_registry_grounding_has_complete_native_import_authority(
         not owner.startswith(("net.minecraft.item.", "net.minecraft.registry.", "net.minecraft.util."))
         for owner in fact["required_imports"]
     )
+    templates = {item["template_id"]: item for item in fact["templates"]}
+    assert "builtin_item_registry" in templates["fabric/item/register_keyed"]["symbol_usage"]
+    assert "registries_item" not in templates["fabric/item/register_keyed"]["symbol_usage"]
+    assert "registries_item" in templates["fabric/item/key_identifier"]["symbol_usage"]
+    assert "builtin_item_registry" not in templates["fabric/item/key_identifier"]["symbol_usage"]
     json.dumps(result, ensure_ascii=False)
 
 def test_generation_grounding_requires_explicit_structural_responsibility() -> None:
