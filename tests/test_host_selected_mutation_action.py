@@ -19,7 +19,7 @@ def test_host_tool_phase_classification_is_canonical() -> None:
     assert "apply_java_operations" in _MUTATION_ACT_TOOLS
 
     assert "java_diagnostics" in _VERIFY_TOOLS
-    assert "run_gradle_build" in _VERIFY_TOOLS
+    assert "run_gradle_build" not in _VERIFY_TOOLS
     assert "run_gametest" in _VERIFY_TOOLS
 
 
