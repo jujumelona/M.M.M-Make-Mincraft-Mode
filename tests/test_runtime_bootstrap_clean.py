@@ -76,6 +76,13 @@ def test_package_init_has_one_bootstrap_and_no_contract_patch_chain() -> None:
     assert not {local_name: module for local_name, module in modules.items() if local_name in module_calls}
     assert 'integrated_contract_bootstrap' not in source
     assert 'platform_mcp_compatibility_contract' not in source
+    for legacy in (
+        'java_toolchain_separation_installation',
+        'source_set_boundary_installation',
+        'versioned_reference_context_installation',
+        'prepared_project_resume_integrity',
+    ):
+        assert legacy not in source
 
 
 def test_managed_llama_reuse_is_owned_by_model_runtime_stage() -> None:
