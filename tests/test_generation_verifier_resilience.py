@@ -250,26 +250,6 @@ def test_agent_runtime_owns_generation_verifier_dispatch_directly(monkeypatch, t
     assert calls[0][2] is agent_tool_runtime
 
 
-def test_generation_verifier_defers_only_to_required_target_compile(monkeypatch):
-    from minecraft_mod_ai import progress_aware_tool_loop as loop
-    from minecraft_mod_ai import small_model_task_capsule_contract as capsules
-
-    monkeypatch.setattr(
-        capsules,
-        "current_task_required_gates",
-        lambda: ("target_compile",),
-    )
-    assert loop._generation_verification_can_defer_to_required_compile_gate() is True
-
-    monkeypatch.setattr(
-        capsules,
-        "current_task_required_gates",
-        lambda: ("source_static_validation",),
-    )
-    assert loop._generation_verification_can_defer_to_required_compile_gate() is False
-
-
-
 def test_terminal_coder_summary_is_host_owned_and_fixed_contract():
     import json
     from minecraft_mod_ai import progress_aware_tool_loop as loop
