@@ -85,6 +85,7 @@ tasks.register('installDist') {
         new File(config, 'config.ini').text = 'osgi.framework=' + framework.toURI() + '\n' +
             'osgi.bundles=' + bundles.collect { 'reference:' + it.toURI() + eagerStart(it) }.join(',') + '\n' +
             'org.osgi.framework.system.packages.extra=' + javaCompilerPackages + '\n' +
+            'org.osgi.framework.bootdelegation=javax.*\n' +
             'osgi.bundles.defaultStartLevel=4\nosgi.configuration.cascaded=false\neclipse.application=mmm.owner.application\n'
     }
 }
