@@ -283,14 +283,20 @@ class GradleRunner:
             and gradle_sha256.lower() in text.lower()
         )
 
-    def _ensure_gradle(self, gradle_version: str, gradle_sha256: str) -> Path:
-        """Materialize one verified Gradle distribution under a narrow cache lock."""
+    def ensure_gradle(self, gradle_version: str, gradle_sha256: str) -> Path:
+        """Return the executable from one SHA-verified pinned Gradle distribution."""
+
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         with _exclusive_cache_lock(
             self.cache_dir,
             timeout_seconds=max(60, self.download_timeout_seconds + 60),
         ):
             return self._ensure_gradle_locked(gradle_version, gradle_sha256)
+
+    def _ensure_gradle(self, gradle_version: str, gradle_sha256: str) -> Path:
+        """Compatibility wrapper for callers not yet migrated to the public authority."""
+
+        return self.ensure_gradle(gradle_version, gradle_sha256)
 
     def _ensure_gradle_locked(self, gradle_version: str, gradle_sha256: str) -> Path:
         from .root_cause_trace import emit_root_cause
