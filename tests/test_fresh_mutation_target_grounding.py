@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 from minecraft_mod_ai import progress_aware_tool_loop as tool_loop
 
@@ -169,3 +170,88 @@ def test_task_local_output_continuation_recovers_fresh_target() -> None:
 def test_adapt_task_still_requires_existing_source_localization() -> None:
     context = tool_loop._extract_mutation_context_from_payload(_request(action="adapt"))
     assert context is None or context.is_new_file is False
+
+
+def test_existing_pinned_target_refreshes_from_workspace(tmp_path) -> None:
+    target = tmp_path / TARGET_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        "package generated.alienmod.mmmplan; public final class "
+        + TARGET_SYMBOL
+        + " {}\n",
+        encoding="utf-8",
+    )
+    state = tool_loop.HostRunState()
+    state.mutation_context = tool_loop.TargetMutationContext(
+        target_path=TARGET_PATH,
+        target_symbol=TARGET_SYMBOL,
+        source_body="stale source",
+        is_new_file=False,
+        evidence_source="workspace_existing_target",
+        writable_paths=(TARGET_PATH,),
+        target_pinned=True,
+    )
+
+    refreshed = tool_loop._reconcile_materialized_target_from_workspace(
+        state, SimpleNamespace(workspace_root=str(tmp_path))
+    )
+
+    assert refreshed is not None
+    assert refreshed.is_new_file is False
+    assert refreshed.source_body == target.read_text(encoding="utf-8")
+    assert state.mutation_context == refreshed
+
+
+def test_exact_edit_precondition_failure_has_mutation_specific_code() -> None:
+    code = tool_loop._runtime_failure_code(
+        "apply_source_edit",
+        "AgentToolRuntimeError: Exact source-edit precondition failed for "
+        + TARGET_PATH
+        + ": expected 1 matches, found 0",
+    )
+    assert code == "MUTATION_STALE_PRECONDITION"
+
+
+def test_fixed_point_call_identity_ignores_volatile_source_payload() -> None:
+    first = SimpleNamespace(
+        name="apply_source_edit",
+        arguments={
+            "operation": "replace_exact",
+            "path": TARGET_PATH,
+            "old": "old source one",
+            "new": "new source one",
+        },
+    )
+    second = SimpleNamespace(
+        name="apply_source_edit",
+        arguments={
+            "operation": "replace_exact",
+            "path": TARGET_PATH,
+            "old": "different stale source",
+            "new": "different replacement",
+        },
+    )
+
+    assert tool_loop._fixed_point_tool_calls((first,)) == tool_loop._fixed_point_tool_calls(
+        (second,)
+    )
+
+
+def test_no_progress_streak_counts_consecutive_failures() -> None:
+    state = tool_loop.HostRunState()
+    value = {
+        "phase": "ACT",
+        "calls": [{"name": "apply_source_edit", "path": TARGET_PATH}],
+        "results": [
+            {
+                "name": "apply_source_edit",
+                "ok": False,
+                "failure_code": "MUTATION_STALE_PRECONDITION",
+            }
+        ],
+    }
+
+    assert state.record_no_progress_result(value) is False
+    assert state.no_progress_streak == 1
+    assert state.record_no_progress_result(value) is True
+    assert state.no_progress_streak == 2
