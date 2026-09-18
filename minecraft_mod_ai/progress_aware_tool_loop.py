@@ -1015,7 +1015,11 @@ def _model_tool_rejection_feedback(
     details: list[str] = []
     for payload in rejections:
         code = str(payload.get("failure_code") or "MODEL_TOOL_CALL_REJECTED").strip()
-        name = str(payload.get("rejected_name") or "").strip()
+        name = str(
+            payload.get("original_tool")
+            or payload.get("rejected_name")
+            or ""
+        ).strip()
         error = str(payload.get("error") or "").strip()
         line = code + (f" for {name!r}" if name else "")
         if error:
