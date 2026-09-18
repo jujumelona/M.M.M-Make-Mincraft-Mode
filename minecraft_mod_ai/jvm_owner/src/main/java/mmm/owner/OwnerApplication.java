@@ -25,6 +25,8 @@ public final class OwnerApplication implements IApplication {
     private long generation;
     private boolean opened;
     private boolean closing;
+    private static final String JDT_PROCESS_ANNOTATIONS_OPTION =
+        "org.eclipse.jdt.core.compiler.processAnnotations";
 
     private static void stage(String value) {
         System.err.println("MMM_OWNER_STAGE " + value);
@@ -189,7 +191,7 @@ public final class OwnerApplication implements IApplication {
         if (args.contains("-parameters")) options.put(JavaCore.COMPILER_CODEGEN_METHOD_PARAMETERS_ATTR, JavaCore.GENERATE);
         boolean processingEnabled = !processors.isEmpty() && !args.contains("-proc:none");
         options.put(
-            JavaCore.COMPILER_PROCESS_ANNOTATIONS,
+            JDT_PROCESS_ANNOTATIONS_OPTION,
             processingEnabled ? JavaCore.ENABLED : JavaCore.DISABLED
         );
         javaProject.setOptions(options);
@@ -214,7 +216,7 @@ public final class OwnerApplication implements IApplication {
                 throw new IllegalStateException("APT did not enable for " + required(set, "id"));
             }
             if (!JavaCore.ENABLED.equals(
-                    javaProject.getOption(JavaCore.COMPILER_PROCESS_ANNOTATIONS, true))) {
+                    javaProject.getOption(JDT_PROCESS_ANNOTATIONS_OPTION, true))) {
                 throw new IllegalStateException(
                     "JDT compiler annotation processing did not enable for " + required(set, "id"));
             }
