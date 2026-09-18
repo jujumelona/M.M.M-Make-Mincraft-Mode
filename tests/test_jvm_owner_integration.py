@@ -1,4 +1,4 @@
-"""Real Equinox integration; opt in with MMM_JVM_OWNER_LIVE=1 after installDist."""
+"""Real production-owner integration; opt in with MMM_JVM_OWNER_LIVE=1."""
 import os
 import subprocess
 from pathlib import Path
@@ -54,11 +54,15 @@ def test_incremental_dependent_diagnostics(tmp_path):
 
 @pytest.mark.skipif(os.environ.get('MMM_JVM_OWNER_LIVE') != '1', reason='real JVM integration opt-in')
 def test_tooling_model_and_core_project_dependencies(tmp_path):
+    from minecraft_mod_ai.java_core import JavaCoreService
+    from minecraft_mod_ai.platform_catalog import adapter_for_target
+    from minecraft_mod_ai.platform_generation_contract import _write_platform_lock
     from minecraft_mod_ai.project_model import ResolvedBuildModel
-
 
     project = tmp_path / 'project'
     project.mkdir()
+    target = adapter_for_target("1.20.1", "fabric")
+    _write_platform_lock(project, target)
     (project / 'settings.gradle').write_text("rootProject.name='owner-test'\ninclude 'producer', 'consumer'\n")
     (project / 'build.gradle').write_text("subprojects { apply plugin: 'java' }\nproject(':consumer') { dependencies { implementation project(':producer') } }\n")
     producer = project / 'producer/src/main/java/A.java'
@@ -67,9 +71,11 @@ def test_tooling_model_and_core_project_dependencies(tmp_path):
         path.parent.mkdir(parents=True)
     producer.write_text('public class A { public static int method() { return 1; } }')
     consumer.write_text('public class B { int n = A.method(); }')
+    params = JavaCoreService()._owner_resolve_parameters(project)
     with OwnerRPC(_owner_command(tmp_path, "tooling-model")) as rpc:
-        raw = rpc.request('resolve', {'project_root': str(project)}, timeout=120)
+        raw = rpc.request('resolve', params, timeout=180)
         model = ResolvedBuildModel.from_dict(raw)
+        assert model.gradle_version == target.gradle
         assert {source.project_path for source in model.source_sets} == {':producer', ':consumer'}
         opened = rpc.request('open', {'model': model.to_dict()}, timeout=45)
         assert not [d for d in opened['diagnostics'] if d['severity'] == 'error'], opened
