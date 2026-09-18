@@ -329,7 +329,6 @@ def _iter_completed_with_deadlines_impl(
             sort_key=sort_key,
             on_result=on_result,
             on_error=on_error,
-            work_unit_timeout_seconds=work_unit_timeout_seconds,
         )
         yield from _drain_active_tasks(context)
     finally:
@@ -390,6 +389,7 @@ def collect_completed_with_deadlines(
             sort_key=sort_key,
             on_result=on_result,
             on_error=on_error,
+            work_unit_timeout_seconds=work_unit_timeout_seconds,
         )
     )
 
