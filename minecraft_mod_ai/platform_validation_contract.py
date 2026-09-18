@@ -8,6 +8,22 @@ from .imported_platform_repair import read_valid_marker
 from .platform_catalog import adapter_for_lock_values, adapter_from_project
 
 
+def _uses_provider_owned_scaffold(adapter: Any) -> bool:
+    """Use the same target-classification policy as project preparation.
+
+    Validation must follow the scaffold authority actually selected for the target.
+    In particular, a host-authoritative Fabric target with no reviewed deterministic
+    project templates uses the official provider scaffold even when its source API
+    family is not labelled fabric_live_ai. Sending that project through the historical
+    deterministic validator would require files and class names the provider scaffold
+    never promised to emit.
+    """
+
+    from .platform_live_execution_contract import _uses_official_scaffold
+
+    return _uses_official_scaffold(adapter)
+
+
 def install(module: Any) -> None:
     validator = module.ProjectValidator
     if getattr(validator.validate, "_mmm_dynamic_platform_validation", False):
@@ -51,7 +67,7 @@ def install(module: Any) -> None:
                     "PLATFORM_LOCK_INVALID",
                     f"Project target is missing, mixed or unsupported: {exc}",
                 )
-            if expected.source_api_family == "fabric_live_ai":
+            if _uses_provider_owned_scaffold(expected):
                 report = _validate_live_project(
                     self,
                     module,
@@ -101,7 +117,7 @@ def install(module: Any) -> None:
                 ),
             )
 
-        if expected.source_api_family == "fabric_live_ai":
+        if _uses_provider_owned_scaffold(expected):
             return _validate_live_project(self, module, root, spec, expected)
         return _validate_reviewed_project(
             self,
