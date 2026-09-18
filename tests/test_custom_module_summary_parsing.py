@@ -23,3 +23,17 @@ def test_parse_coder_summary_requires_exact_fixed_field():
 def test_parse_coder_summary_requires_string_value():
     with pytest.raises(CustomModuleGenerationError, match="must be a string"):
         _parse_coder_summary('{"summary":123}')
+
+
+def test_parse_coder_summary_ignores_unrelated_reasoning_json():
+    value = _parse_coder_summary(
+        '<think>{"phase":"analysis"}</think>\n{"summary":"final"}'
+    )
+    assert value == "final"
+
+
+def test_parse_coder_summary_rejects_multiple_summary_objects():
+    with pytest.raises(CustomModuleGenerationError, match="multiple"):
+        _parse_coder_summary(
+            '{"summary":"first"}\n{"summary":"second"}'
+        )
