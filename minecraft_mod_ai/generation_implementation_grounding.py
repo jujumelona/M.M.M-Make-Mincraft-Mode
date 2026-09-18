@@ -29,6 +29,16 @@ def _sha(value: Any) -> str:
     return "sha256:" + hashlib.sha256(rendered.encode("utf-8")).hexdigest()
 
 
+def _json_native(value: Any) -> Any:
+    """Materialize immutable HOST facts into JSON-native model-bound payload data."""
+
+    if isinstance(value, Mapping):
+        return {str(key): _json_native(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_native(item) for item in value]
+    return value
+
+
 def _module_config(module: Any) -> Mapping[str, Any]:
     value = getattr(module, "config", None)
     return value if isinstance(value, Mapping) else {}
@@ -121,8 +131,8 @@ def build_generation_implementation_grounding(
             for name in rule.get("required_symbols", ()):
                 symbol_name = str(name).strip()
                 if symbol_name:
-                    symbols[symbol_name] = context.require_fact(
-                        "api_symbols", symbol_name
+                    symbols[symbol_name] = _json_native(
+                        context.require_fact("api_symbols", symbol_name)
                     )
             render = template.get("render")
             body = render.get("body") if isinstance(render, Mapping) else None
