@@ -1841,6 +1841,7 @@ def _generate_turn_with_context_recovery(
     media_paths: tuple[Any, ...],
     tool_choice: Any,
     parallel_tool_calls: bool,
+    verifier_relative_files: tuple[str, ...] = (),
 ) -> Any:
     """Fit one live turn and recover typed completion boundaries in-place."""
 
@@ -1858,7 +1859,10 @@ def _generate_turn_with_context_recovery(
                 "coder inference"
             ),
         )
-        return synthesized_verifier_turn(messages)
+        return synthesized_verifier_turn(
+            messages,
+            relative_files=verifier_relative_files or None,
+        )
 
     turn_request = replace(
         request,
@@ -2128,14 +2132,21 @@ def _generate_with_tools_impl(
         and state.mutation_context.is_new_file
         and _canonical_mutation_path(state.mutation_context.target_path).casefold().endswith(".java")
     )
+    initial_execution_authority = _host_target_execution_authority(state)
     require_rag = bool(
         role in {"coder", "coder_safe"}
         and all_names & _RAG_EVIDENCE_TOOLS
         and not host_grounded
-        and (router._agent_require_fresh_evidence or fresh_java_target)
+        and (
+            router._agent_require_fresh_evidence
+            or fresh_java_target
+            or (
+                implementation_requires_mutation
+                and not initial_execution_authority
+            )
+        )
     )
 
-    initial_execution_authority = _host_target_execution_authority(state)
     if require_rag and not initial_execution_authority:
         state.phase = LoopPhase.OBSERVE
     elif implementation_requires_mutation and mutation_ready and not mutation_history_applied(messages):
@@ -2318,6 +2329,15 @@ def _generate_with_tools_impl(
             tool_choice=tool_choice,
             parallel_tool_calls=parallel,
         )
+        verifier_relative_files = (
+            (state.mutation_context.target_path,)
+            if (
+                forced_verifier == "java_diagnostics"
+                and state.mutation_context is not None
+                and state.mutation_context.target_path.casefold().endswith(".java")
+            )
+            else ()
+        )
         turn = _generate_turn_with_context_recovery(
             router,
             config=config,
@@ -2327,6 +2347,7 @@ def _generate_with_tools_impl(
             media_paths=request.media_paths if state.step_index == 1 else (),
             tool_choice=tool_choice,
             parallel_tool_calls=parallel,
+            verifier_relative_files=verifier_relative_files,
         )
 
         rejection = _model_tool_rejection_feedback(turn.tool_calls)
@@ -2646,17 +2667,8 @@ def _generate_with_tools_impl(
                 recorded = state.record_evidence(payload.get("result"), usable=usable)
                 after = _mutation_context_dict(state.mutation_context)
                 localization_progress = before != after
-                baseline_progress = bool(
-                    state.phase == LoopPhase.OBSERVE
-                    and require_rag
-                    and recorded
-                    and usable
-                    and (
-                        not fresh_java_target
-                        or state.has_authoritative_java_evidence
-                    )
-                )
-                if localization_progress or baseline_progress:
+                evidence_progress = bool(recorded and usable)
+                if localization_progress or evidence_progress:
                     progress = True
                     if (
                         implementation_requires_mutation

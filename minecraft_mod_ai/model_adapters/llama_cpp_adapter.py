@@ -595,7 +595,7 @@ def _normalize_admission_arguments(
                 f"tool {call.name!r} emitted conflicting sources for canonical parameter "
                 f"{key!r}: {previous!r} and {emitted_key!r}"
             )
-            return call, ("TOOL_ARGUMENT_CONFLICT", error)
+            return call, ("TOOL_ARGUMENT_ALIAS_COLLISION", error)
         normalized[key] = _normalize_admission_value(raw_value, properties.get(key, {}))
         sources[key] = emitted_key
     _inject_required_minecraft_version(

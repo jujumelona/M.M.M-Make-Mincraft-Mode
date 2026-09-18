@@ -683,7 +683,6 @@ def _exclusive_cache_lock(
         os.close(fd)
 
 
-GradleRunner.build._mmm_project_parallel_validation = True  # type: ignore[attr-defined]
 GradleRunner._ensure_gradle._mmm_target_parallel_distribution = True  # type: ignore[attr-defined]
 _exclusive_cache_lock._mmm_os_advisory_cache_lock = True  # type: ignore[attr-defined]
 

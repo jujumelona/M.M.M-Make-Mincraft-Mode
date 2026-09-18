@@ -55,12 +55,20 @@ def _requested_timeout_seconds(payload: Mapping[str, Any]) -> float:
     return timeout
 
 
-def synthesized_verifier_turn(messages: list[dict[str, Any]]) -> Any:
-    """Create the mechanical verifier call without spending a coder inference turn."""
+def synthesized_verifier_turn(
+    messages: list[dict[str, Any]],
+    *,
+    relative_files: tuple[str, ...] | None = None,
+) -> Any:
+    """Create the mechanical verifier call bound to the host-owned target."""
 
     from .model_adapters import GenerationResponse, ToolCall
 
-    arguments = {"timeout_seconds": host_jdt_idle_timeout_seconds()}
+    arguments: dict[str, Any] = {
+        "timeout_seconds": host_jdt_idle_timeout_seconds(),
+    }
+    if relative_files:
+        arguments["relative_files"] = list(dict.fromkeys(relative_files))
     raw_arguments = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
     identity_material = f"{len(messages)}:{raw_arguments}".encode()
     call_id = "host_verify_" + hashlib.sha256(identity_material).hexdigest()[:16]
