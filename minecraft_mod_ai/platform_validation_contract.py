@@ -52,6 +52,8 @@ def install(module: Any) -> None:
                 f"Approved platform lock is invalid: {exc}",
             )
 
+        provider_owned_scaffold = _uses_provider_owned_scaffold(expected)
+
         try:
             actual = adapter_from_project(root)
         except Exception as exc:
@@ -67,7 +69,7 @@ def install(module: Any) -> None:
                     "PLATFORM_LOCK_INVALID",
                     f"Project target is missing, mixed or unsupported: {exc}",
                 )
-            if _uses_provider_owned_scaffold(expected):
+            if provider_owned_scaffold:
                 report = _validate_live_project(
                     self,
                     module,
@@ -117,7 +119,7 @@ def install(module: Any) -> None:
                 ),
             )
 
-        if _uses_provider_owned_scaffold(expected):
+        if provider_owned_scaffold:
             return _validate_live_project(self, module, root, spec, expected)
         return _validate_reviewed_project(
             self,
