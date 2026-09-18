@@ -114,6 +114,7 @@ def test_base_server_payload_and_transport_payload_agree_on_tool_choice() -> Non
     transport = _tool_server_payload(_adapter(), request)
 
     assert base["tool_choice"] == transport["tool_choice"] == "required"
-    assert base["tools"] == transport["tools"] == [tool]
+    assert transport["tools"] == [tool]
+    assert [row["function"]["name"] for row in base["tools"]] == ["search_code_rag"]
     assert base["parallel_tool_calls"] is False
     assert transport["parallel_tool_calls"] is False
