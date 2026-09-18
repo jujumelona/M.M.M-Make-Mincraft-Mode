@@ -6,6 +6,7 @@ import pytest
 
 from minecraft_mod_ai import planning_state_pipeline
 from minecraft_mod_ai.fixed_template_generation import generate_fixed_template_value
+from minecraft_mod_ai.model_adapters import GenerationResponse, ToolCall
 from minecraft_mod_ai.model_router import ModelRouter
 from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
 from minecraft_mod_ai.planning_pipeline import (
@@ -34,14 +35,32 @@ def _router(monkeypatch):
     router = ModelRouter(profile="fast_test")
     requests = []
 
-    def generate(request):
-        requests.append(request)
-        return json.dumps(
-            {"statement": "Players assemble modular spacecraft and recruit crews."}
-        )
+    class Adapter:
+        def generate(self, request):
+            requests.append(request)
+            return json.dumps(
+                {"statement": "Players assemble modular spacecraft and recruit crews."}
+            )
+
+        def generate_turn(self, request):
+            requests.append(request)
+            tool = request.tools[0]["function"]
+            arguments = {
+                "statement": "Players assemble modular spacecraft and recruit crews."
+            }
+            return GenerationResponse(
+                tool_calls=(
+                    ToolCall(
+                        id="planner-decision",
+                        name=tool["name"],
+                        arguments=arguments,
+                        raw_arguments=json.dumps(arguments),
+                    ),
+                )
+            )
 
     config = SimpleNamespace(adapter="llama_cpp")
-    adapter = SimpleNamespace(generate=generate)
+    adapter = Adapter()
     monkeypatch.setattr(router.registry, "role", lambda profile, role: config)
     monkeypatch.setattr(router, "_generation_adapter", lambda role: (config, adapter))
     monkeypatch.setattr(router, "_generation_scope", lambda config: nullcontext())
@@ -49,7 +68,7 @@ def _router(monkeypatch):
 
 
 @pytest.mark.parametrize("surface", ["fixed_template", "decision", "text"])
-def test_all_planning_surfaces_accept_content_without_a_function_call(
+def test_planning_surfaces_use_the_declared_structured_transport(
     monkeypatch, surface
 ):
     router, requests = _router(monkeypatch)
@@ -75,12 +94,23 @@ def test_all_planning_surfaces_accept_content_without_a_function_call(
                 enable_tools=False,
             )
         )
+
     assert result["statement"].startswith("Players assemble")
     assert len(requests) == 1
-    assert requests[0].tools == ()
-    assert requests[0].response_schema == SCHEMA
-    assert "interchange shape" in str(requests[0].messages)
-    assert "Call the required function" not in str(requests[0].messages)
+    request = requests[0]
+    if surface == "text":
+        assert request.tools == ()
+        assert request.response_schema == SCHEMA
+        assert "interchange shape" in str(request.messages)
+        assert "Call the required function" not in str(request.messages)
+    else:
+        assert len(request.tools) == 1
+        assert request.response_schema is None
+        assert request.tool_choice == {
+            "type": "function",
+            "function": {"name": request.tools[0]["function"]["name"]},
+        }
+        assert "Call the required function" in str(request.messages)
 
 
 def test_interrupted_writer_reports_original_cause_and_keeps_draft(monkeypatch):
