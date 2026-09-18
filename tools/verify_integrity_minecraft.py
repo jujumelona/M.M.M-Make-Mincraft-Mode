@@ -307,6 +307,18 @@ def _run_real_fabric_evidence(
     return evidence_id, evidence_record
 
 
+def _required_debug_class_digest(
+    evidence_record: dict[str, object],
+    class_file: str,
+) -> object:
+    artifacts = evidence_record.get("artifacts")
+    if not isinstance(artifacts, dict) or class_file not in artifacts:
+        raise AssertionError(
+            "Isolated Gradle evidence passed but DebugToken.class was not captured"
+        )
+    return artifacts[class_file]
+
+
 def _write_debug_e2e_receipt(
     root: Path,
     project: Path,
@@ -317,17 +329,13 @@ def _write_debug_e2e_receipt(
     evidence_record: dict[str, object],
 ) -> None:
     class_file = "build/classes/java/main/dev/mmm/debugfixture/DebugToken.class"
-    artifacts = evidence_record.get("artifacts")
-    if not isinstance(artifacts, dict) or class_file not in artifacts:
-        raise AssertionError(
-            "Isolated Gradle evidence passed but DebugToken.class was not captured"
-        )
+    class_digest = _required_debug_class_digest(evidence_record, class_file)
     payload = {
         "schema_version": "mmm/debug-token-compile-e2e-v1",
         "status": "PASS",
         "target": target.relative_to(project).as_posix(),
         "class_file": class_file,
-        "class_sha256": artifacts[class_file],
+        "class_sha256": class_digest,
         "generation_status": result.get("status"),
         "operation_count": result.get("operation_count"),
         "touched_paths": result.get("touched_paths"),
