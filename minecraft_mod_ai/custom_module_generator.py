@@ -1524,13 +1524,77 @@ def _collect_initial_observations(
     return {"schema_version": "mmm/source-observation-ledger-v1", "receipt": receipt, "records": records}
 
 
+_MIN_OBSERVATION_FRAGMENT_BYTES = 128
+_OBSERVATION_PAGE_RESERVE_BYTES = 128
+
+
+def _utf8_fragments(text: str, max_bytes: int) -> tuple[tuple[int, bytes], ...]:
+    """Split UTF-8 text at code-point boundaries while retaining byte offsets."""
+
+    limit = max(_MIN_OBSERVATION_FRAGMENT_BYTES, int(max_bytes))
+    fragments: list[tuple[int, bytes]] = []
+    chars: list[str] = []
+    size = 0
+    start = 0
+    for char in text:
+        encoded = char.encode("utf-8")
+        if chars and size + len(encoded) > limit:
+            payload = "".join(chars).encode("utf-8")
+            fragments.append((start, payload))
+            start += len(payload)
+            chars = []
+            size = 0
+        chars.append(char)
+        size += len(encoded)
+    if chars:
+        fragments.append((start, "".join(chars).encode("utf-8")))
+    return tuple(fragments)
+
+
+def _split_observation_records(
+    records: list[dict[str, Any]],
+    byte_budget: int,
+) -> list[dict[str, Any]]:
+    """Make every exact-source record small enough to coexist with page metadata."""
+
+    fragment_budget = max(
+        _MIN_OBSERVATION_FRAGMENT_BYTES,
+        min(1024, byte_budget // 5),
+    )
+    result: list[dict[str, Any]] = []
+    for record in records:
+        if _json_size(record) <= fragment_budget + 512:
+            result.append(record)
+            continue
+        text = str(record.get("text", ""))
+        base_start = int(record.get("content_start_bytes", 0) or 0)
+        for relative_start, payload in _utf8_fragments(text, fragment_budget):
+            result.append(
+                _exact_observation(
+                    path=str(record.get("path", "")),
+                    sha256=str(record.get("sha256", "")),
+                    start=base_start + relative_start,
+                    content=payload,
+                    source_page=int(record.get("source_page_index", 0) or 0),
+                )
+            )
+    return result
+
+
 def _observation_context_pages(
     ledger: dict[str, Any],
     *,
     query: str,
     byte_budget: int,
 ) -> tuple[dict[str, Any], ...]:
-    records = list(ledger["records"])
+    """Build provenance-preserving source pages that are strictly byte bounded."""
+
+    if type(byte_budget) is not int or byte_budget < 1024:
+        raise CustomModuleGenerationError(
+            "Source-observation byte budget must be an integer >= 1024."
+        )
+
+    records = _split_observation_records(list(ledger["records"]), byte_budget)
     query_tokens = _query_tokens(query)
     ranked = sorted(
         records,
@@ -1541,55 +1605,93 @@ def _observation_context_pages(
             record["observation_id"],
         ),
     )
+
+    safe_budget = max(1024, byte_budget - _OBSERVATION_PAGE_RESERVE_BYTES)
     anchors: list[dict[str, Any]] = []
-    anchor_bytes = max(512, byte_budget // 2)
+    anchor_target = max(1024, safe_budget * 3 // 5)
     for record in ranked:
-        candidate = [*anchors, record]
-        if _json_size(candidate) <= anchor_bytes:
+        candidate = _observation_page_payload(
+            receipt=ledger["receipt"],
+            page_index=0,
+            page_count=999999,
+            anchors=[*anchors, record],
+            records=[],
+            complete=False,
+        )
+        if _json_size(candidate) <= anchor_target:
             anchors.append(record)
+
     if ranked and not anchors:
+        candidate = _observation_page_payload(
+            receipt=ledger["receipt"],
+            page_index=0,
+            page_count=999999,
+            anchors=[ranked[0]],
+            records=[],
+            complete=False,
+        )
+        if _json_size(candidate) > safe_budget:
+            raise CustomModuleGenerationError(
+                "Exact-source provenance metadata cannot fit the configured coder context budget."
+            )
         anchors.append(ranked[0])
+
     anchor_ids = {record["observation_id"] for record in anchors}
-    remaining = [record for record in ranked if record["observation_id"] not in anchor_ids]
+    remaining = [
+        record for record in ranked if record["observation_id"] not in anchor_ids
+    ]
     pages: list[dict[str, Any]] = []
     cursor = 0
-    safe_budget = max(1024, byte_budget - 128)
+
     while cursor < len(remaining) or not pages:
         page_records: list[dict[str, Any]] = []
         while cursor < len(remaining):
+            candidate_records = [*page_records, remaining[cursor]]
             candidate = _observation_page_payload(
+                receipt=ledger["receipt"],
+                page_index=len(pages),
+                page_count=999999,
+                anchors=anchors,
+                records=candidate_records,
+                complete=False,
+            )
+            if _json_size(candidate) > safe_budget:
+                break
+            page_records.append(remaining[cursor])
+            cursor += 1
+
+        if cursor < len(remaining) and not page_records:
+            if anchors:
+                demoted = anchors.pop()
+                anchor_ids.discard(demoted["observation_id"])
+                remaining.insert(cursor, demoted)
+                continue
+            raise CustomModuleGenerationError(
+                "Exact-source observation cannot fit the configured coder context budget."
+            )
+
+        pages.append(
+            _observation_page_payload(
                 receipt=ledger["receipt"],
                 page_index=len(pages),
                 page_count=0,
                 anchors=anchors,
-                records=[*page_records, remaining[cursor]],
+                records=page_records,
                 complete=False,
             )
-            if _json_size(candidate) > safe_budget:
-                if not page_records:
-                    break
-                break
-            page_records.append(remaining[cursor])
-            cursor += 1
-        page = _observation_page_payload(
-            receipt=ledger["receipt"],
-            page_index=len(pages),
-            page_count=0,
-            anchors=anchors,
-            records=page_records,
-            complete=False,
         )
-        pages.append(page)
         if cursor >= len(remaining):
             break
-        if not page_records:
-            cursor += 1
+
     page_count = len(pages)
     for index, page in enumerate(pages):
         page["page_count"] = page_count
         page["complete"] = index == page_count - 1
+        if _json_size(page) > byte_budget:
+            raise CustomModuleGenerationError(
+                "Host source-observation context page exceeded its byte budget after finalization."
+            )
     return tuple(pages)
-
 
 def _observation_page_payload(
     *,
