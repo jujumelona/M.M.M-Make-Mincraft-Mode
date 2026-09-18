@@ -599,20 +599,20 @@ def _compile_detailed_plans_resumable_impl(
                 },
             )
             _checkpoint_state(checkpoint, pending_state)
-            raise RuntimeError(
-                "DETAILED_PLAN_RUNTIME_STALLED: detailed planning failed without "
-                "new durable obligation progress"
-            ) from exc
+            # A recoverable generation interruption is a resumable planning state, not
+            # a planning failure. The caller persists plan_ready=False and may resume
+            # from this exact checkpoint on the next planning pass.
+            return pending_state
 
         if result.get("plan_ready") is not True:
             latest_state, advanced = _handle_nonready_detailed_result(
                 result, progress_before, checkpoint
             )
             if not advanced:
-                raise RuntimeError(
-                    "DETAILED_PLAN_NOT_READY: detailed planning returned non-ready "
-                    "without new durable obligation progress"
-                )
+                # Truthful non-ready output is a stable resumable checkpoint. Do not
+                # manufacture a failure merely because this invocation made no new
+                # durable progress.
+                return latest_state
             continue
         break
 
