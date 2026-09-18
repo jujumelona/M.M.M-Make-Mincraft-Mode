@@ -74,8 +74,17 @@ tasks.register('installDist') {
             return ''
         }
         def config = new File(target, 'configuration'); config.mkdirs()
+        def javaCompilerPackages = [
+            'javax.annotation.processing',
+            'javax.lang.model',
+            'javax.lang.model.element',
+            'javax.lang.model.type',
+            'javax.lang.model.util',
+            'javax.tools'
+        ].join(',')
         new File(config, 'config.ini').text = 'osgi.framework=' + framework.toURI() + '\n' +
             'osgi.bundles=' + bundles.collect { 'reference:' + it.toURI() + eagerStart(it) }.join(',') + '\n' +
+            'org.osgi.framework.system.packages.extra=' + javaCompilerPackages + '\n' +
             'osgi.bundles.defaultStartLevel=4\nosgi.configuration.cascaded=false\neclipse.application=mmm.owner.application\n'
     }
 }
