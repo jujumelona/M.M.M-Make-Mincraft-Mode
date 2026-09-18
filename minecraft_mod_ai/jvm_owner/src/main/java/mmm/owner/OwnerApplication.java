@@ -45,6 +45,48 @@ public final class OwnerApplication implements IApplication {
         }
     }
 
+    private static void ensureAnnotationProcessingRuntime() throws Exception {
+        startBundle("org.eclipse.jdt.core.compiler.batch");
+        startBundle("org.eclipse.jdt.apt.core");
+        startBundle("org.eclipse.jdt.apt.pluggable.core");
+
+        IExtensionPoint managerPoint = Platform.getExtensionRegistry().getExtensionPoint(
+            JavaCore.PLUGIN_ID, "annotationProcessorManager");
+        if (managerPoint == null) {
+            throw new IllegalStateException("JDT annotation processor manager extension point is unavailable");
+        }
+        IConfigurationElement managerElement = null;
+        for (IExtension extension : managerPoint.getExtensions()) {
+            for (IConfigurationElement element : extension.getConfigurationElements()) {
+                if ("annotationProcessorManager".equals(element.getName())) {
+                    if (managerElement != null) {
+                        throw new IllegalStateException(
+                            "Multiple JDT annotation processor managers are registered");
+                    }
+                    managerElement = element;
+                }
+            }
+        }
+        if (managerElement == null) {
+            throw new IllegalStateException("JDT annotation processor manager is not registered");
+        }
+        Object manager = managerElement.createExecutableExtension("class");
+        if (manager == null) {
+            throw new IllegalStateException("JDT annotation processor manager could not be instantiated");
+        }
+        stage("apt.runtime.ready:" + manager.getClass().getName());
+    }
+
+    private static boolean sourceEntryPresent(IJavaProject javaProject, IPath sourcePath)
+            throws JavaModelException {
+        for (IClasspathEntry entry : javaProject.getRawClasspath()) {
+            if (entry.getEntryKind() == IClasspathEntry.CPE_SOURCE && sourcePath.equals(entry.getPath())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @Override public Object start(IApplicationContext context) throws Exception {
         PrintStream protocol = System.out;
         System.setOut(System.err);
@@ -92,6 +134,14 @@ public final class OwnerApplication implements IApplication {
         if (model == null) throw new IllegalArgumentException("model is required");
         List<Map<String,Object>> sets = (List<Map<String,Object>>)model.get("source_sets");
         if (sets == null || sets.isEmpty()) throw new IllegalArgumentException("No resolved Java source sets");
+        boolean annotationProcessingRequired = sets.stream().anyMatch(set ->
+            !strings(set, "annotation_processor_path").isEmpty()
+                && !strings(set, "compiler_args").contains("-proc:none"));
+        if (annotationProcessingRequired) {
+            stage("open.apt_runtime.begin");
+            ensureAnnotationProcessingRuntime();
+            stage("open.apt_runtime.end");
+        }
         // Reopening is a complete model replacement, never reuse previous marker/classpath state.
         opened = false;
         for (IProject project : workspace.getRoot().getProjects()) project.delete(true, true, null);
@@ -197,8 +247,6 @@ public final class OwnerApplication implements IApplication {
         javaProject.setOptions(options);
         stage("configure.options.end:" + required(set, "id"));
         if (processingEnabled) {
-            startBundle("org.eclipse.jdt.apt.core");
-            startBundle("org.eclipse.jdt.apt.pluggable.core");
             IFactoryPath factoryPath = AptConfig.getDefaultFactoryPath(javaProject);
             List<String> reversed = new ArrayList<>(processors);
             Collections.reverse(reversed);
@@ -224,11 +272,27 @@ public final class OwnerApplication implements IApplication {
                 throw new IllegalStateException(
                     "Resolved annotation processor path was not persisted for " + required(set, "id"));
             }
-            IExtensionPoint managerPoint = Platform.getExtensionRegistry().getExtensionPoint(
-                JavaCore.PLUGIN_ID, "annotationProcessorManager");
-            if (managerPoint == null || managerPoint.getExtensions().length == 0) {
+            IPath generatedSourcePath = project.getFolder(AptConfig.getGenSrcDir(javaProject)).getFullPath();
+            if (!sourceEntryPresent(javaProject, generatedSourcePath)) {
                 throw new IllegalStateException(
-                    "JDT annotation processor manager extension is unavailable");
+                    "APT generated source folder is not on the Java source path for " + required(set, "id"));
+            }
+            IFactoryPath persistedFactoryPath = AptConfig.getFactoryPath(javaProject);
+            for (String processor : processors) {
+                File jar = new File(processor).getCanonicalFile();
+                boolean present = persistedFactoryPath.getAllContainers().keySet().stream().anyMatch(
+                    container -> {
+                        try {
+                            return container.getType() == org.eclipse.jdt.apt.core.util.IFactoryPath.FactoryContainerType.EXTJAR
+                                && jar.getCanonicalPath().equals(container.getId());
+                        } catch (IOException failure) {
+                            return false;
+                        }
+                    });
+                if (!present) {
+                    throw new IllegalStateException(
+                        "Resolved annotation processor JAR is absent from the persisted factory path: " + jar);
+                }
             }
             stage("configure.apt.ready:" + required(set, "id"));
         }
