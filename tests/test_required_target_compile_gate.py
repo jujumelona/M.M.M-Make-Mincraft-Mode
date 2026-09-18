@@ -61,3 +61,51 @@ def test_target_compile_rejects_timed_out_or_failed_gradle_command():
         assert failures == [
             "required-gate:debug_token:target_compile:missing-gradle"
         ]
+
+
+def _jdt_failures(jdt_receipt, *, build_report=None):
+    module = SimpleNamespace(
+        module_id="debug_token",
+        required_gates=("jdt",),
+        kind="custom_java",
+        config={},
+    )
+    proposal = SimpleNamespace(
+        modules=(module,),
+        base_proposal=SimpleNamespace(spec=SimpleNamespace()),
+    )
+    return CompleteProductionOrchestrator._required_gate_failures(
+        proposal,
+        generated_receipts=(),
+        project_root=None,
+        source_validation={"status": "PASS"},
+        jdt_receipt=jdt_receipt,
+        build_report=build_report,
+        jar_validation=None,
+        blockbench_receipts=(),
+        runtime_receipt=None,
+        playtest_receipt=None,
+        visual_receipt=None,
+    )
+
+
+def test_required_jdt_does_not_fallback_to_successful_gradle_build():
+    failures = _jdt_failures(
+        {"status": "UNAVAILABLE", "error_count": 0, "files_opened": 0},
+        build_report={
+            "status": "PASS",
+            "commands": [{"name": "build", "exit_code": 0, "timed_out": False}],
+        },
+    )
+
+    assert failures == ["required-gate:debug_token:jdt:missing-jdt"]
+
+
+def test_required_jdt_accepts_only_real_clean_jdt_receipt():
+    assert _jdt_failures(
+        {"status": "PASS", "error_count": 0, "files_opened": 1},
+        build_report={
+            "status": "PASS",
+            "commands": [{"name": "build", "exit_code": 0, "timed_out": False}],
+        },
+    ) == []
