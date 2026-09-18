@@ -98,8 +98,16 @@ def test_explicit_nonrepairable_failure_does_not_enter_source_repair(
 
 
 def test_source_failure_still_enters_repair(monkeypatch, tmp_path: Path) -> None:
-    calls = {"repair": 0}
-    router = object()
+    calls = {"repair": 0, "bind": 0}
+
+    class Router:
+        def bind_agent_workspace(self, root, *, require_fresh_evidence):
+            calls["bind"] += 1
+            assert Path(root).resolve() == tmp_path.resolve()
+            assert require_fresh_evidence is True
+            return self
+
+    router = Router()
 
     class Runner:
         def __init__(self, _cache):
@@ -154,6 +162,7 @@ def test_source_failure_still_enters_repair(monkeypatch, tmp_path: Path) -> None
     )
 
     assert calls["repair"] == 1
+    assert calls["bind"] == 1
     assert active_router is router
     assert bundle["build"]["status"] == "PASS"
     assert bundle["repair"]["status"] == "PASS"
