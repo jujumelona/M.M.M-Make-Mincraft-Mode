@@ -19,6 +19,7 @@ jobs:
   mirror:
     name: Gradle ${{ matrix.gradle_version }}
     runs-on: ubuntu-22.04
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
