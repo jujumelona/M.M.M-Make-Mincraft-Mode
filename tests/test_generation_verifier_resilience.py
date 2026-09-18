@@ -159,23 +159,22 @@ def test_jdt_failure_returns_structured_unavailable_without_gradle_fallback(tmp_
     assert not hasattr(runtime, "_mmm_generation_jdt_disabled_reason")
 
 
-def test_jdt_readiness_uses_diagnostics_and_never_hover(monkeypatch, tmp_path):
+def test_jdt_readiness_uses_document_symbols_not_hover(tmp_path):
     project, _source = _project(tmp_path)
     notifications = []
+    requests = []
 
     class FakeRpc:
         def notify(self, method, params):
             notifications.append(method)
 
         def request(self, method, params, timeout):
-            raise AssertionError(f"readiness must not call {method}")
+            requests.append(method)
+            assert method == "textDocument/documentSymbol"
+            uri = params["textDocument"]["uri"]
+            name = Path(uri.removeprefix("file://")).stem
+            return [{"name": name, "kind": 5}]
 
-    def diagnostics(
-        _rpc, *, expected_uris, timeout_seconds, quiet_seconds, deadline=None
-    ):
-        return {next(iter(expected_uris)): []}
-
-    monkeypatch.setattr(java_lsp, "_collect_diagnostics", diagnostics)
     java_lsp._await_java_core_ready(
         FakeRpc(),
         project,
@@ -184,6 +183,7 @@ def test_jdt_readiness_uses_diagnostics_and_never_hover(monkeypatch, tmp_path):
     )
 
     assert notifications == ["textDocument/didOpen", "textDocument/didClose"]
+    assert requests == ["textDocument/documentSymbol"]
 
 def test_progress_loop_elides_forced_verifier_model_turn_without_runtime_rebind():
     from minecraft_mod_ai import progress_aware_tool_loop as loop
@@ -300,44 +300,30 @@ def _run_terminal_verification_flow(monkeypatch, *, verifier_result, defer):
 
     target = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
 
-    class EvidenceThenMutationAdapter:
+    class MutationAdapter:
         def __init__(self):
             self.calls = 0
 
         def generate_turn(self, request):
             self.calls += 1
             names = {item["function"]["name"] for item in request.tools}
-            if self.calls == 1:
-                assert names == {"search_project_rag"}
-                arguments = {"query": "reviewed Java implementation evidence"}
-                return GenerationResponse(
-                    tool_calls=(
-                        ToolCall(
-                            id="evidence-1",
-                            name="search_project_rag",
-                            arguments=arguments,
-                            raw_arguments=json.dumps(arguments, separators=(",", ":")),
-                        ),
-                    )
+            assert self.calls == 1
+            assert names == {"apply_source_edit"}
+            arguments = {
+                "operation": "create_file",
+                "path": target,
+                "content": "package dev.mmm.debugfixture; public final class DebugToken {}\n",
+            }
+            return GenerationResponse(
+                tool_calls=(
+                    ToolCall(
+                        id="edit-1",
+                        name="apply_source_edit",
+                        arguments=arguments,
+                        raw_arguments=json.dumps(arguments, separators=(",", ":")),
+                    ),
                 )
-            if self.calls == 2:
-                assert names == {"apply_source_edit"}
-                arguments = {
-                    "operation": "create_file",
-                    "path": target,
-                    "content": "package dev.mmm.debugfixture; public final class DebugToken {}\n",
-                }
-                return GenerationResponse(
-                    tool_calls=(
-                        ToolCall(
-                            id="edit-1",
-                            name="apply_source_edit",
-                            arguments=arguments,
-                            raw_arguments=json.dumps(arguments, separators=(",", ":")),
-                        ),
-                    )
-                )
-            raise AssertionError("terminal host state must not invoke the coder again")
+            )
 
     class Runtime:
         def call(self, stage, name, _arguments):
@@ -436,7 +422,7 @@ def _run_terminal_verification_flow(monkeypatch, *, verifier_result, defer):
             lambda: True,
         )
 
-    adapter = EvidenceThenMutationAdapter()
+    adapter = MutationAdapter()
     result = loop.generate_with_tools(
         SimpleNamespace(_agent_require_fresh_evidence=False),
         config=SimpleNamespace(
@@ -475,7 +461,7 @@ def test_deferred_verification_terminates_without_second_model_turn(monkeypatch)
 
     assert set(payload) == {"summary"}
     assert "target_compile" in payload["summary"]
-    assert calls == 2
+    assert calls == 1
 
 
 def test_passed_verification_terminates_without_formatting_model_turn(monkeypatch):
