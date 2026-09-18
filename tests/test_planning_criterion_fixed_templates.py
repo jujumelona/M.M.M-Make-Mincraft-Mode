@@ -50,8 +50,14 @@ def test_missing_concern_is_not_automatically_marked_inapplicable():
     row = authored('behavior_contract')
     concern = next(iter(DETAIL_RECORDS['behavior_contract']))
     row['specification'][concern] = []
-    with pytest.raises(ValueError, match='fixed specification template'):
-        fragments.validate_criterion_fragment({'section_updates': [row]}, selected_sections=CORE_WORKSHEET_SECTIONS, allowed_refs=set())
+    validated = fragments.validate_criterion_fragment(
+        {'section_updates': [row]},
+        selected_sections=CORE_WORKSHEET_SECTIONS,
+        allowed_refs=set(),
+    )
+    specification = validated['section_updates'][0]['specification']
+    assert specification[concern] == []
+    assert specification['inapplicable_concerns'] == []
 
 
 def test_legacy_checkpoint_invalidates_derived_work_only():
