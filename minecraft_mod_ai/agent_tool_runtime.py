@@ -509,6 +509,15 @@ class AgentToolRuntime:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
+            running_loop = False
+        else:
+            running_loop = True
+
+        # Do not execute the real MCP call from inside the get_running_loop()
+        # exception handler. Otherwise any provider/JDT exception inherits
+        # "no running event loop" as __context__, and root-cause tracing reports
+        # that harmless branch probe instead of the actual tool failure.
+        if not running_loop:
             return anyio.run(runner)
 
         value: dict[str, Any] = {}
