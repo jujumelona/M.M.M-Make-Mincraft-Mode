@@ -9,6 +9,9 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from .runner import GradleRunner
+from .validator import validate_jar
+
 SCHEMA = "mmm/clean-room-build-v1"
 
 
@@ -75,6 +78,14 @@ def jar_content_sha256(path: Path) -> str:
     return "sha256:" + digest.hexdigest()
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
+
 def _receipt_path(run_root: Path, fingerprint: str) -> Path:
     return (
         run_root
@@ -91,7 +102,6 @@ def clean_room_build(
     run_root: Path,
     project_root: Path,
     build_report: Mapping[str, Any],
-    orchestrator_module: Any,
     validation_module: Any,
 ) -> dict[str, Any]:
     """Build an exact source snapshot with no live build/.gradle outputs.
@@ -141,7 +151,7 @@ def clean_room_build(
         / fingerprint[:20]
     )
     _copy_source(project_root, clean_root, validation_module)
-    report = orchestrator_module.GradleRunner(
+    report = GradleRunner(
         run_root / ".cache" / "gradle"
     ).build(
         clean_root,
@@ -159,7 +169,7 @@ def clean_room_build(
         if isinstance(raw, str):
             jar = Path(raw).expanduser().resolve()
             if jar.is_file() and not jar.is_symlink():
-                jar_validation = orchestrator_module.validate_jar(
+                jar_validation = validate_jar(
                     jar,
                     approved.base_proposal.spec,
                 ).to_dict()
@@ -183,11 +193,7 @@ def clean_room_build(
                     ):
                         status = "PASS"
                         jar_path = str(jar)
-                        jar_sha256 = (
-                            orchestrator_module.CompleteProductionOrchestrator._file_hash(
-                                jar
-                            )
-                        )
+                        jar_sha256 = _file_sha256(jar)
 
     receipt = {
         "schema_version": SCHEMA,
@@ -243,7 +249,6 @@ def install(
                     run_root=run_root,
                     project_root=project_root,
                     build_report=build_report,
-                    orchestrator_module=orchestrator_module,
                     validation_module=validation_module,
                 )
                 augmented = dict(build_report)

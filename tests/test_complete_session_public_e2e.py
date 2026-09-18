@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
+import minecraft_mod_ai.clean_room_verification_contract as clean_room_module
 import minecraft_mod_ai.complete_build_repair as build_repair_module
 import minecraft_mod_ai.complete_orchestrator as orchestrator_module
 import minecraft_mod_ai.generator as generator_module
@@ -215,6 +216,7 @@ def test_complete_session_build_uses_real_orchestrator_and_repair_path(
     )
     monkeypatch.setattr(build_repair_module, "GradleRunner", _FakeGradleRunner)
     monkeypatch.setattr(build_repair_module, "RepairEngine", _FakeRepairEngine)
+    monkeypatch.setattr(clean_room_module, "GradleRunner", _FakeGradleRunner)
 
     def fake_verify_final_mod_artifact(project_root: Path, **expected: str) -> _DictReport:
         jar = Path(project_root) / "build" / "libs" / "public-e2e-1.0.0.jar"
@@ -237,10 +239,18 @@ def test_complete_session_build_uses_real_orchestrator_and_repair_path(
         "verify_final_mod_artifact",
         fake_verify_final_mod_artifact,
     )
+    def fake_validate_jar(_jar: Path, _spec: object) -> _DictReport:
+        return _DictReport({"status": "PASS", "checks_run": 1})
+
     monkeypatch.setattr(
         orchestrator_module,
         "validate_jar",
-        lambda _jar, _spec: _DictReport({"status": "PASS", "checks_run": 1}),
+        fake_validate_jar,
+    )
+    monkeypatch.setattr(
+        clean_room_module,
+        "validate_jar",
+        fake_validate_jar,
     )
 
     def fake_package_release(
@@ -292,7 +302,7 @@ def test_complete_session_build_uses_real_orchestrator_and_repair_path(
     assert result.build_report is not None
     assert result.build_report["status"] == "PASS"
     assert result.jar_path is not None and Path(result.jar_path).is_file()
-    assert _FakeGradleRunner.calls == 2
+    assert _FakeGradleRunner.calls == 3
     assert _FakeRepairEngine.calls == 1
     assert any(
         receipt.get("schema_version") == "mmm/repair-receipt-v2"
