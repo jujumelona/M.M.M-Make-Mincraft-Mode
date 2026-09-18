@@ -292,8 +292,7 @@ def test_terminal_coder_summary_rejects_unknown_host_state():
         loop._host_coder_summary(verification="UNKNOWN")
 
 
-
-def test_deferred_verification_terminates_without_second_model_turn(monkeypatch):
+def _run_terminal_verification_flow(monkeypatch, *, verifier_result, defer):
     import json
 
     from minecraft_mod_ai import progress_aware_tool_loop as loop
@@ -305,7 +304,7 @@ def test_deferred_verification_terminates_without_second_model_turn(monkeypatch)
         def __init__(self):
             self.calls = 0
 
-        def generate_turn(self, request):
+        def generate_turn(self, _request):
             self.calls += 1
             if self.calls != 1:
                 raise AssertionError("terminal host state must not invoke the coder again")
@@ -326,7 +325,7 @@ def test_deferred_verification_terminates_without_second_model_turn(monkeypatch)
             )
 
     class Runtime:
-        def call(self, stage, name, arguments):
+        def call(self, stage, name, _arguments):
             assert stage == "generation"
             if name == "apply_source_edit":
                 return {
@@ -342,19 +341,7 @@ def test_deferred_verification_terminates_without_second_model_turn(monkeypatch)
                     ],
                 }
             if name == "java_diagnostics":
-                return {
-                    "schema_version": "mmm/java-diagnostics-v3",
-                    "status": "UNAVAILABLE",
-                    "available": False,
-                    "complete": False,
-                    "diagnostics": [
-                        {
-                            "severity": "error",
-                            "code": "JDT_DIAGNOSTICS_UNAVAILABLE",
-                            "message": "owner unavailable",
-                        }
-                    ],
-                }
+                return verifier_result
             raise AssertionError(name)
 
     request = GenerationRequest(
@@ -398,13 +385,14 @@ def test_deferred_verification_terminates_without_second_model_turn(monkeypatch)
             },
         ),
     )
-    adapter = OneMutationAdapter()
-    monkeypatch.setattr(
-        loop,
-        "_generation_verification_can_defer_to_required_compile_gate",
-        lambda: True,
-    )
+    if defer:
+        monkeypatch.setattr(
+            loop,
+            "_generation_verification_can_defer_to_required_compile_gate",
+            lambda: True,
+        )
 
+    adapter = OneMutationAdapter()
     result = loop.generate_with_tools(
         SimpleNamespace(_agent_require_fresh_evidence=False),
         config=SimpleNamespace(
@@ -419,133 +407,48 @@ def test_deferred_verification_terminates_without_second_model_turn(monkeypatch)
         stage="generation",
         role="coder",
     )
+    return json.loads(result), adapter.calls
 
-    payload = json.loads(result)
+
+def test_deferred_verification_terminates_without_second_model_turn(monkeypatch):
+    payload, calls = _run_terminal_verification_flow(
+        monkeypatch,
+        defer=True,
+        verifier_result={
+            "schema_version": "mmm/java-diagnostics-v3",
+            "status": "UNAVAILABLE",
+            "available": False,
+            "complete": False,
+            "diagnostics": [
+                {
+                    "severity": "error",
+                    "code": "JDT_DIAGNOSTICS_UNAVAILABLE",
+                    "message": "owner unavailable",
+                }
+            ],
+        },
+    )
+
     assert set(payload) == {"summary"}
     assert "target_compile" in payload["summary"]
-    assert adapter.calls == 1
-
+    assert calls == 1
 
 
 def test_passed_verification_terminates_without_formatting_model_turn(monkeypatch):
-    import json
-
-    from minecraft_mod_ai import progress_aware_tool_loop as loop
-    from minecraft_mod_ai.model_adapters import GenerationRequest, GenerationResponse, ToolCall
-
-    target = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
-
-    class OneMutationAdapter:
-        def __init__(self):
-            self.calls = 0
-
-        def generate_turn(self, request):
-            self.calls += 1
-            if self.calls != 1:
-                raise AssertionError("verified host state must not invoke the coder again")
-            arguments = {
-                "operation": "create_file",
-                "path": target,
-                "content": "package dev.mmm.debugfixture; public final class DebugToken {}\n",
-            }
-            return GenerationResponse(
-                tool_calls=(
-                    ToolCall(
-                        id="edit-pass",
-                        name="apply_source_edit",
-                        arguments=arguments,
-                        raw_arguments=json.dumps(arguments, separators=(",", ":")),
-                    ),
-                )
-            )
-
-    class Runtime:
-        def call(self, stage, name, arguments):
-            assert stage == "generation"
-            if name == "apply_source_edit":
-                return {
-                    "schema_version": "mmm/source-patch-receipt-v1",
-                    "status": "APPLIED",
-                    "operations": [
-                        {
-                            "operation": "create",
-                            "path": target,
-                            "before_sha256": None,
-                            "after_sha256": "sha256:" + "2" * 64,
-                        }
-                    ],
-                }
-            if name == "java_diagnostics":
-                return {
-                    "schema_version": "mmm/java-diagnostics-v3",
-                    "status": "PASS",
-                    "available": True,
-                    "complete": True,
-                    "files_opened": 1,
-                    "error_count": 0,
-                    "warning_count": 0,
-                    "diagnostics": {},
-                }
-            raise AssertionError(name)
-
-    request = GenerationRequest(
-        messages=(
-            {
-                "role": "developer",
-                "content": json.dumps(
-                    {
-                        "primary_path": target,
-                        "writable_paths": [target],
-                        "reuse_action": "fresh",
-                    }
-                ),
-            },
-            {
-                "role": "user",
-                "content": json.dumps(
-                    {
-                        "phase": "implement_module",
-                        "task": "Implement the approved debug token.",
-                    }
-                ),
-            },
-        ),
-        tools=(
-            {
-                "type": "function",
-                "function": {
-                    "name": "apply_source_edit",
-                    "description": "edit source",
-                    "parameters": {"type": "object", "properties": {}},
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "java_diagnostics",
-                    "description": "verify Java",
-                    "parameters": {"type": "object", "properties": {}},
-                },
-            },
-        ),
-    )
-    adapter = OneMutationAdapter()
-
-    result = loop.generate_with_tools(
-        SimpleNamespace(_agent_require_fresh_evidence=False),
-        config=SimpleNamespace(
-            adapter="test",
-            max_context=32768,
-            max_input_tokens=0,
-            max_new_tokens=512,
-        ),
-        adapter=adapter,
-        request=request,
-        runtime=Runtime(),
-        stage="generation",
-        role="coder",
+    payload, calls = _run_terminal_verification_flow(
+        monkeypatch,
+        defer=False,
+        verifier_result={
+            "schema_version": "mmm/java-diagnostics-v3",
+            "status": "PASS",
+            "available": True,
+            "complete": True,
+            "files_opened": 1,
+            "error_count": 0,
+            "warning_count": 0,
+            "diagnostics": {},
+        },
     )
 
-    payload = json.loads(result)
     assert "passed generation-time host verification" in payload["summary"]
-    assert adapter.calls == 1
+    assert calls == 1
