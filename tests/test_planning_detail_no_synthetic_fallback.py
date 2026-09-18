@@ -57,7 +57,7 @@ def test_detailed_planning_resumes_only_after_durable_progress(monkeypatch: pyte
     assert any("binding-1" in row.get("template_progress", {}) for row in checkpoints)
 
 
-def test_detailed_planning_never_retries_without_new_obligation_progress(
+def test_detailed_planning_stall_is_persisted_once_as_resumable_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _silence_trace(monkeypatch)
@@ -70,10 +70,21 @@ def test_detailed_planning_never_retries_without_new_obligation_progress(
 
     monkeypatch.setattr(pipeline, "compile_progress_monotone_detailed_plans", compile_stub)
 
-    with pytest.raises(RuntimeError, match="DETAILED_PLAN_RUNTIME_STALLED"):
-        pipeline._compile_detailed_plans_resumable(object(), "prompt", _state(), {}, None)
+    result = pipeline._compile_detailed_plans_resumable(
+        object(),
+        "prompt",
+        _state(),
+        {},
+        None,
+    )
 
     assert calls == 1
+    assert result["plan_ready"] is False
+    assert result["generation_interruption"] == {
+        "type": "ValueError",
+        "reason": "same invalid generation",
+    }
+    assert result["decisions"] == []
 
 
 def test_completed_requirement_is_monotone_even_when_criterion_checkpoint_is_cleared() -> None:
@@ -108,7 +119,9 @@ def test_template_content_rewrite_without_new_binding_is_not_progress() -> None:
     )
 
 
-def test_non_ready_result_cannot_be_promoted_by_host(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_non_ready_result_remains_truthful_resumable_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _silence_trace(monkeypatch)
     monkeypatch.setattr(
         pipeline,
@@ -116,8 +129,17 @@ def test_non_ready_result_cannot_be_promoted_by_host(monkeypatch: pytest.MonkeyP
         lambda *args, **kwargs: _state(),
     )
 
-    with pytest.raises(RuntimeError, match="DETAILED_PLAN_NOT_READY"):
-        pipeline._compile_detailed_plans_resumable(object(), "prompt", _state(), {}, None)
+    result = pipeline._compile_detailed_plans_resumable(
+        object(),
+        "prompt",
+        _state(),
+        {},
+        None,
+    )
+
+    assert result["plan_ready"] is False
+    assert "generation_interruption" not in result
+    assert result["decisions"] == []
 
 
 def test_synthetic_detailed_plan_fallback_surface_is_absent() -> None:

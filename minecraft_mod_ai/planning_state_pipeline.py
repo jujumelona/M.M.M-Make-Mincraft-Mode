@@ -3,10 +3,10 @@ from __future__ import annotations
 """Single prompt-first planning state machine with durable transition snapshots.
 
 Planning state advances monotonically through durable checkpoints. Model, template,
-transport, and partial-output interruptions may resume only after a new validated
-obligation marker is persisted. A detailed-planning attempt that makes no durable
-progress, or returns non-ready without progress, fails closed instead of being promoted
-or silently returned as a resumable success.
+transport, and partial-output interruptions resume after validated obligation progress.
+When a detailed-planning pass cannot advance, the exact non-ready state is persisted as
+resumable progress metadata instead of manufacturing either completion or a terminal
+planning failure.
 """
 
 from collections.abc import Callable, Mapping
