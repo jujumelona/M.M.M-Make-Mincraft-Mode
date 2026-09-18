@@ -107,7 +107,32 @@ from .work_graph import (
     run_named_checkpoint,
 )
 
-_REQUIRED_GATE_TO_EVIDENCE = {'registry': 'source', 'resource': 'source', 'recipe': 'source', 'jdt': 'jdt', 'jdt diagnostics': 'jdt', 'gradle': 'gradle', 'gradle clean build': 'gradle', 'gametest': 'gametest', 'gametest spawn and attributes': 'gametest', 'jar validation': 'jar', 'blockbench uv and bone hierarchy review': 'blockbench', 'blockbench uv render review': 'blockbench', 'minecraft server client runtime': 'runtime_client', 'mineflayer playtest': 'playtest', 'runtime interaction tests': 'playtest', 'runtime animation review': 'runtime_visual', 'visual review': 'visual', 'client gui and validated network action test': 'playtest_visual', 'research ledger integrity': 'research_ledger'}
+_REQUIRED_GATE_TO_EVIDENCE = {
+    'registry': 'source',
+    'resource': 'source',
+    'recipe': 'source',
+    'source static validation': 'source',
+    'generated resource validation': 'source',
+    'jdt': 'jdt',
+    'jdt diagnostics': 'jdt',
+    'gradle': 'gradle',
+    'gradle clean build': 'gradle',
+    'target compile': 'gradle',
+    'gametest': 'gametest',
+    'gametest spawn and attributes': 'gametest',
+    'worldgen runtime validation': 'gametest',
+    'jar': 'jar',
+    'jar validation': 'jar',
+    'runtime': 'runtime_client',
+    'minecraft server client runtime': 'runtime_client',
+    'network protocol validation': 'playtest',
+    'mineflayer playtest': 'playtest',
+    'runtime interaction tests': 'playtest',
+    'runtime animation review': 'runtime_visual',
+    'visual review': 'visual',
+    'client gui and validated network action test': 'playtest_visual',
+    'research ledger integrity': 'research_ledger',
+}
 
 
 def _fork_custom_work_router(router: Any) -> Any:
@@ -1539,7 +1564,14 @@ class CompleteProductionOrchestrator:
                 return False
             return path.is_file() and (not path.is_symlink()) and (CompleteProductionOrchestrator._file_hash(path) == expected)
         passed_research = {str(receipt.get('module_id')): (str(receipt.get('shard_sha256', '')), str(receipt.get('corpus_sha256', ''))) for receipt in research_ledger_receipts if receipt.get('status') in {'WRITTEN', 'VERIFIED_EXISTING'} and research_file_matches(receipt)}
-        gradle_passed = isinstance(build_report, dict) and build_report.get('status') == 'PASS' and CompleteProductionOrchestrator._command_receipt_passed(build_report, 'clean_build')
+        gradle_passed = (
+            isinstance(build_report, dict)
+            and build_report.get('status') == 'PASS'
+            and (
+                CompleteProductionOrchestrator._command_receipt_passed(build_report, 'build')
+                or CompleteProductionOrchestrator._command_receipt_passed(build_report, 'clean_build')
+            )
+        )
         jdt_passed = isinstance(jdt_receipt, dict) and (
             (jdt_receipt.get('status') != 'UNAVAILABLE' and int(jdt_receipt.get('error_count', -1)) == 0 and int(jdt_receipt.get('files_opened', 0)) > 0)
             or (jdt_receipt.get('status') == 'UNAVAILABLE' and gradle_passed)
