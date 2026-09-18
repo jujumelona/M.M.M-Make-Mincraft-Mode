@@ -66,7 +66,6 @@ def install(custom_module_generator_module: Any) -> None:
     activate_dependency_decode_monitor()
     _install_custom_generator_scope(custom_module_generator_module)
     _install_gradle_metadata_scope(custom_module_generator_module)
-    _install_router_target_binding()
 
 
 def _required_target(
@@ -211,33 +210,6 @@ def _install_gradle_metadata_scope(module_api: Any) -> None:
 
     validate_operations._mmm_live_gradle_metadata_scope = True
     cls._validate_operations = validate_operations
-
-
-def _install_router_target_binding() -> None:
-    """Bind structured coder requests to the active target; never rewrite prose defaults."""
-
-    from . import model_router as router_module
-
-    cls = router_module.ModelRouter
-    original = cls.generate_text
-    if getattr(original, "_mmm_dynamic_coder_target", False):
-        return
-
-    @wraps(original)
-    def generate_text(
-        self: Any,
-        role: str,
-        messages: Sequence[Mapping[str, Any]],
-        **kwargs: Any,
-    ) -> str:
-        adapter = _ACTIVE_CODER_TARGET.get()
-        rewritten = messages
-        if adapter is not None and role == "coder":
-            rewritten = tuple(_bind_target(message, adapter) for message in messages)
-        return original(self, role, rewritten, **kwargs)
-
-    generate_text._mmm_dynamic_coder_target = True
-    cls.generate_text = generate_text
 
 
 def _bind_target(message: Mapping[str, Any], adapter: Any) -> dict[str, Any]:
