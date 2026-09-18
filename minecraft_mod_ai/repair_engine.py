@@ -46,7 +46,6 @@ _ALLOWED_SUFFIXES = {
     ".yaml",
     ".yml",
 }
-_HARD_REPAIR_ATTEMPTS = 2
 _REPAIR_LOG_SNIPPET_CHARS = 3000
 _REPAIR_LOG_READ_BYTES = 16384
 _REPAIR_BUILD_LOG_LIMIT = 4
@@ -167,8 +166,9 @@ class RepairEngine:
         ):
             raise RepairEngineError("max_attempts must be null or a positive integer.")
 
-        requested_limit = max_attempts if max_attempts is not None else _HARD_REPAIR_ATTEMPTS
-        attempt_limit = min(requested_limit, _HARD_REPAIR_ATTEMPTS)
+        # With no explicit caller limit, convergence is semantic rather than
+        # attempt-count based: a repeated verifier signature terminates the loop.
+        attempt_limit = max_attempts
 
         # Build the complete project index exactly once for this repair invocation.
         # ContextVar keeps concurrent/nested repairs isolated without storing mutable
@@ -204,16 +204,12 @@ class RepairEngine:
                     }
                 signatures.add(signature)
 
-                if repair_attempts >= attempt_limit:
+                if attempt_limit is not None and repair_attempts >= attempt_limit:
                     return {
                         "schema_version": "mmm/repair-result-v2",
                         "status": "FAIL",
                         "attempts": attempt,
-                        "stop_reason": (
-                            "explicit_max_attempts"
-                            if max_attempts is not None and max_attempts < _HARD_REPAIR_ATTEMPTS
-                            else "hard_max_attempts"
-                        ),
+                        "stop_reason": "explicit_max_attempts",
                         "evidence": evidence,
                         "patch_receipts": receipts,
                     }
