@@ -642,6 +642,28 @@ class CustomModuleGenerator:
             loader=loader,
             mappings=mappings,
         )
+        from .generation_implementation_grounding import (
+            build_generation_implementation_grounding,
+        )
+
+        implementation_grounding = build_generation_implementation_grounding(
+            module,
+            minecraft_version=minecraft_version,
+        )
+        if implementation_grounding is not None:
+            evidence_bindings = dict(host_grounding.get("evidence_bindings") or {})
+            evidence_bindings["implementation_contract"] = {
+                "receipt": {
+                    "selected_fact_count": implementation_grounding["selected_fact_count"],
+                    "grounding_sha256": implementation_grounding["grounding_sha256"],
+                    "context_id": implementation_grounding["context_id"],
+                },
+                "grounding": implementation_grounding,
+            }
+            host_grounding = {
+                **host_grounding,
+                "evidence_bindings": evidence_bindings,
+            }
 
         approved_reuse_context = _materialize_owned_reuse_context(
             staged_root,
@@ -690,8 +712,11 @@ class CustomModuleGenerator:
             },
             "rules": [
                 "Implement the feature directly; do not return a file-plan protocol.",
-                "Use workspace/RAG/MCP tools to retrieve exact source as needed instead of asking for the whole repository.",
-                "Apply real edits with the source-edit tool; fill the final summary in the supplied fixed template.",
+                "Use host_grounding.evidence_bindings.implementation_contract first when present; its API symbols and admitted templates are target authority, not examples to rewrite from memory.",
+                "Keep the first implementation minimal: do not invent extra entrypoints, registries, helper classes, creative tabs/groups, logging, or lifecycle hooks unless the approved task explicitly requires them.",
+                "Use workspace/RAG/MCP retrieval only when the host implementation grounding and exact project context do not contain a fact required by the approved task.",
+                "Apply real edits with the source-edit tool; target compile feedback is handled inside this same generation run before any fallback repair stage.",
+                "Fill the final summary in the supplied fixed template.",
                 response_template_prompt("coder_summary"),
                 "Edits are limited to src/main/java, src/main/resources, src/test/java and src/gametest.",
                 "Build infrastructure, Gradle configuration and host-owned ledgers are read-only.",
@@ -712,9 +737,10 @@ class CustomModuleGenerator:
                 "role": "system",
                 "content": (
                     "You are the implementation coder for one approved Minecraft/Fabric module. "
-                    "The host keeps the complete project indexed. Retrieve only source needed for "
-                    "the current action, edit the staged workspace with tools, and do not invent "
-                    "a second patch/file-plan protocol."
+                    "Prefer exact host-owned implementation facts and the current project over memory. "
+                    "Write the smallest source change that satisfies the approved task, then let the "
+                    "host target compiler verify it in this same generation run. Do not invent extra "
+                    "entrypoints, files, lifecycle hooks, or a second patch/file-plan protocol."
                 ),
             },
             {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
