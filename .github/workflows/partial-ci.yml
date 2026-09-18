@@ -10,7 +10,9 @@ permissions:
 
 concurrency:
   group: partial-ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Every push is scoped to its own HEAD^..HEAD diff. Cancelling an older run can
+  # therefore erase coverage for files changed only by the older commit.
+  cancel-in-progress: false
 
 jobs:
   impact:
