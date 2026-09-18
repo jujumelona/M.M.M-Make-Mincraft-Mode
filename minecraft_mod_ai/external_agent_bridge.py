@@ -300,6 +300,11 @@ class ExternalAgentBridge:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
+            running_loop = False
+        else:
+            running_loop = True
+
+        if not running_loop:
             return anyio.run(runner)
 
         result: dict[str, Any] = {}
