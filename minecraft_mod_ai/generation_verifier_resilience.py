@@ -13,13 +13,11 @@ import hashlib
 import json
 import os
 from collections.abc import Mapping
-from functools import wraps
 from pathlib import Path
 from typing import Any
 
 from .root_cause_trace import emit_root_cause
 
-_MARKER = "_mmm_host_owned_generation_verifier"
 _VERIFIER_NAME = "java_diagnostics"
 _JDT_SERVICE_ATTR = "_mmm_generation_java_service"
 
@@ -55,15 +53,6 @@ def _requested_timeout_seconds(payload: Mapping[str, Any]) -> float:
     if timeout <= 0 or timeout != timeout or timeout == float("inf"):
         raise ValueError("JDT diagnostics timeout must be a positive finite number.")
     return timeout
-
-
-def _forced_tool_name(tool_choice: Any) -> str:
-    if not isinstance(tool_choice, Mapping):
-        return ""
-    function = tool_choice.get("function")
-    if not isinstance(function, Mapping):
-        return ""
-    return str(function.get("name") or "").strip()
 
 
 def synthesized_verifier_turn(messages: list[dict[str, Any]]) -> Any:
@@ -235,105 +224,8 @@ def run_generation_verifier(
     return _structured_verifier_result(result, runtime_module=runtime_module)
 
 
-def install(
-    *,
-    agent_tool_runtime_module: Any,
-    progress_loop_module: Any,
-    java_lsp_trace_module: Any,
-) -> None:
-    """Install the host-owned generation verifier after runtime composition.
-
-    ``java_lsp_trace_module`` remains in the signature for composition compatibility,
-    but generation verification no longer mutates its diagnostics collector.
-    """
-
-    del java_lsp_trace_module
-    runtime_cls = agent_tool_runtime_module.AgentToolRuntime
-    current_call = runtime_cls._call
-    if not getattr(current_call, _MARKER, False):
-
-        @wraps(current_call)
-        def call_with_host_generation_verifier(
-            self: Any,
-            stage: str,
-            name: str,
-            arguments: Mapping[str, Any] | None,
-            *,
-            external_server_ids: frozenset[str] | None,
-        ) -> dict[str, Any]:
-            selected = self._stage(stage)
-            if (
-                selected == "generation"
-                and str(name).strip() == _VERIFIER_NAME
-                and external_server_ids is None
-            ):
-                return run_generation_verifier(
-                    self,
-                    arguments,
-                    runtime_module=agent_tool_runtime_module,
-                )
-            return current_call(
-                self,
-                stage,
-                name,
-                arguments,
-                external_server_ids=external_server_ids,
-            )
-
-        setattr(call_with_host_generation_verifier, _MARKER, True)
-        call_with_host_generation_verifier.__wrapped__ = current_call
-        runtime_cls._call = call_with_host_generation_verifier
-
-    current_turn = progress_loop_module._generate_turn_with_context_recovery
-    if not getattr(current_turn, _MARKER, False):
-
-        @wraps(current_turn)
-        def generate_turn_with_host_verifier(
-            router: Any,
-            *,
-            config: Any,
-            adapter: Any,
-            request: Any,
-            messages: list[dict[str, Any]],
-            media_paths: tuple[Any, ...],
-            tool_choice: Any,
-            parallel_tool_calls: bool,
-        ) -> Any:
-            if _forced_tool_name(tool_choice) == _VERIFIER_NAME:
-                turn = synthesized_verifier_turn(messages)
-                emit_root_cause(
-                    "generation_verifier_model_turn_elided",
-                    stage="generation",
-                    operation=_VERIFIER_NAME,
-                    gate="host_verifier_authority",
-                    result="PASS",
-                    reason=(
-                        "forced verifier selection is mechanical and does not require "
-                        "coder inference"
-                    ),
-                )
-                return turn
-            return current_turn(
-                router,
-                config=config,
-                adapter=adapter,
-                request=request,
-                messages=messages,
-                media_paths=media_paths,
-                tool_choice=tool_choice,
-                parallel_tool_calls=parallel_tool_calls,
-            )
-
-        setattr(generate_turn_with_host_verifier, _MARKER, True)
-        generate_turn_with_host_verifier.__wrapped__ = current_turn
-        progress_loop_module._generate_turn_with_context_recovery = (
-            generate_turn_with_host_verifier
-        )
-
-
 __all__ = [
     "host_jdt_idle_timeout_seconds",
-    "install",
     "run_generation_verifier",
     "synthesized_verifier_turn",
 ]

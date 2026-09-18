@@ -6,7 +6,6 @@ import pytest
 
 from minecraft_mod_ai import agent_tool_runtime, java_lsp
 from minecraft_mod_ai.generation_verifier_resilience import (
-    install,
     run_generation_verifier,
     synthesized_verifier_turn,
 )
@@ -145,41 +144,62 @@ def test_jdt_readiness_uses_diagnostics_and_never_hover(monkeypatch, tmp_path):
 
     assert notifications == ["textDocument/didOpen", "textDocument/didClose"]
 
+def test_progress_loop_elides_forced_verifier_model_turn_without_runtime_rebind():
+    from minecraft_mod_ai import progress_aware_tool_loop as loop
+    from minecraft_mod_ai.model_adapters import GenerationRequest
 
-def test_install_elides_forced_verifier_model_turn():
-    class DummyRuntime:
-        def _call(self, stage, name, arguments, *, external_server_ids):
-            return {"delegated": True}
+    class FailingAdapter:
+        def generate_turn(self, _request):
+            raise AssertionError("forced verifier must not invoke the coder model")
 
-        @staticmethod
-        def _stage(stage):
-            return stage
-
-    def original_turn(*args, **kwargs):
-        raise AssertionError("forced verifier must not invoke the coder model")
-
-    fake_runtime_module = SimpleNamespace(
-        AgentToolRuntime=DummyRuntime,
-        _discover_model_project_root=agent_tool_runtime._discover_model_project_root,
-        _bounded_result=agent_tool_runtime._bounded_result,
-        AgentToolRuntimeError=agent_tool_runtime.AgentToolRuntimeError,
+    request = GenerationRequest(
+        messages=({"role": "user", "content": "task"},),
+        tools=(),
+        tool_choice={"type": "function", "function": {"name": "java_diagnostics"}},
+        parallel_tool_calls=False,
     )
-    fake_progress_module = SimpleNamespace(_generate_turn_with_context_recovery=original_turn)
-    fake_java_module = SimpleNamespace(_collect_diagnostics_traced=lambda *args, **kwargs: {})
-
-    install(
-        agent_tool_runtime_module=fake_runtime_module,
-        progress_loop_module=fake_progress_module,
-        java_lsp_trace_module=fake_java_module,
-    )
-    response = fake_progress_module._generate_turn_with_context_recovery(
+    messages = [{"role": "user", "content": "task"}]
+    response = loop._generate_turn_with_context_recovery(
         object(),
-        config=object(),
-        adapter=object(),
-        request=object(),
-        messages=[{"role": "user", "content": "task"}],
+        config=SimpleNamespace(),
+        adapter=FailingAdapter(),
+        request=request,
+        messages=messages,
         media_paths=(),
         tool_choice={"type": "function", "function": {"name": "java_diagnostics"}},
         parallel_tool_calls=False,
     )
     assert response.tool_calls[0].name == "java_diagnostics"
+
+
+def test_agent_runtime_owns_generation_verifier_dispatch_directly(monkeypatch, tmp_path):
+    from minecraft_mod_ai import generation_verifier_resilience
+
+    runtime = agent_tool_runtime.AgentToolRuntime(
+        profile="test",
+        workspace_root=tmp_path,
+    )
+    calls = []
+
+    def fake_run(runtime_obj, arguments, *, runtime_module, java_service_factory=None):
+        del java_service_factory
+        calls.append((runtime_obj, dict(arguments), runtime_module))
+        return {
+            "schema_version": "mmm/java-diagnostics-v3",
+            "status": "PASS",
+            "complete": True,
+            "error_count": 0,
+            "warning_count": 0,
+            "diagnostics": {},
+        }
+
+    monkeypatch.setattr(
+        generation_verifier_resilience,
+        "run_generation_verifier",
+        fake_run,
+    )
+    result = runtime.call("generation", "java_diagnostics", {})
+
+    assert result["status"] == "PASS"
+    assert calls and calls[0][0] is runtime
+    assert calls[0][2] is agent_tool_runtime

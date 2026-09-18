@@ -231,10 +231,9 @@ def install() -> None:
     if _INSTALLED:
         return
 
-    from . import agent_tool_runtime, complete_orchestrator, java_lsp_trace
+    from . import complete_orchestrator
     from . import fabric_official_template_provider as fabric_provider
-    from . import geckolib_generator, progress_aware_tool_loop, resource_asset_production
-    from .generation_verifier_resilience import install as install_generation_verifier_resilience
+    from . import geckolib_generator, resource_asset_production
 
     _install_resource_asset_preflight(
         resource_asset_production,
@@ -242,11 +241,6 @@ def install() -> None:
     )
     _install_geckolib_project_preflight(geckolib_generator)
     _install_orchestrator_generation_preflight(complete_orchestrator)
-    install_generation_verifier_resilience(
-        agent_tool_runtime_module=agent_tool_runtime,
-        progress_loop_module=progress_aware_tool_loop,
-        java_lsp_trace_module=java_lsp_trace,
-    )
 
     original_platform_lock_writer = fabric_provider._write_platform_lock
     if not getattr(original_platform_lock_writer, "_mmm_approval_bound_bootstrap_lock", False):

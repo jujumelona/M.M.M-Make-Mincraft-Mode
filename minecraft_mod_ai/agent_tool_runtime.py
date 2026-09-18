@@ -368,6 +368,27 @@ class AgentToolRuntime:
             },
         )
         try:
+            if (
+                selected == "generation"
+                and tool_name == "java_diagnostics"
+                and not model_scoped
+            ):
+                from .generation_verifier_resilience import run_generation_verifier
+
+                result = run_generation_verifier(
+                    self,
+                    payload,
+                    runtime_module=sys.modules[__name__],
+                )
+                emit_root_cause(
+                    "agent_tool_call_result",
+                    stage=selected,
+                    operation=tool_name,
+                    gate="runtime_dispatch",
+                    result="PASS",
+                    details={"arguments": payload, "result": result},
+                )
+                return result
             if selected == "generation" and tool_name == _SOURCE_EDIT_TOOL:
                 try:
                     patch = materialize_model_source_edit(

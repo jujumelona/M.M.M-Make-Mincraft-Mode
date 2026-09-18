@@ -1800,6 +1800,15 @@ def _generate_turn_in_scope(
     with scope:
         return adapter.generate_turn(turn_request)
 
+def _forced_tool_choice_name(tool_choice: Any) -> str:
+    if not isinstance(tool_choice, Mapping):
+        return ""
+    function = tool_choice.get("function")
+    if not isinstance(function, Mapping):
+        return ""
+    return str(function.get("name") or "").strip()
+
+
 def _generate_turn_with_context_recovery(
     router: Any,
     *,
@@ -1812,6 +1821,22 @@ def _generate_turn_with_context_recovery(
     parallel_tool_calls: bool,
 ) -> Any:
     """Fit one live turn and recover typed completion boundaries in-place."""
+
+    if _forced_tool_choice_name(tool_choice) == "java_diagnostics":
+        from .generation_verifier_resilience import synthesized_verifier_turn
+
+        emit_root_cause(
+            "generation_verifier_model_turn_elided",
+            stage="generation",
+            operation="java_diagnostics",
+            gate="host_verifier_authority",
+            result="PASS",
+            reason=(
+                "forced verifier selection is mechanical and does not require "
+                "coder inference"
+            ),
+        )
+        return synthesized_verifier_turn(messages)
 
     turn_request = replace(
         request,
