@@ -39,7 +39,7 @@ concurrency:
 
 jobs:
   colab-real-model-e2e:
-    name: Normal planner and source-generation E2E
+    name: Normal planner and DebugToken compile E2E
     runs-on: [self-hosted, linux, x64, t4]
     timeout-minutes: 45
     env:
@@ -88,7 +88,6 @@ jobs:
           )
           output_root = Path("audit/real-model-colab-e2e").resolve()
           output_root.mkdir(parents=True, exist_ok=True)
-          plan_path = output_root / "proposal.json"
           profile = os.environ["MMM_MODEL_PROFILE"]
 
           session = CompleteModAISession(
@@ -97,6 +96,9 @@ jobs:
               fast_mode=False,
               kv_cache_quant="q4_0",
           )
+
+          # First prove the normal planner/source-generation path.
+          plan_path = output_root / "proposal.json"
           dialog = run_plan_dialog(
               session=session,
               run_mode=FULL_MODE,
@@ -117,7 +119,7 @@ jobs:
           if not plan_path.is_file():
               raise AssertionError("normal Colab path did not persist proposal.json")
 
-          options = CompleteExecutionOptions(
+          source_options = CompleteExecutionOptions(
               source_only=True,
               run_jdt=False,
               run_gametest=False,
@@ -130,18 +132,20 @@ jobs:
               cleanup_runtime=True,
               eula_accepted=False,
           )
-          result = session.build(
+          source_result = session.build(
               dialog.reply,
               run_name="real-model-colab-e2e",
-              options=options,
+              options=source_options,
           )
-          if result.status != "SOURCE_READY":
-              raise AssertionError(f"unexpected source-only status: {result.status!r}")
-          release_zip = Path(str(result.release_zip)).expanduser().resolve()
+          if source_result.status != "SOURCE_READY":
+              raise AssertionError(
+                  f"unexpected source-only status: {source_result.status!r}"
+              )
+          release_zip = Path(str(source_result.release_zip)).expanduser().resolve()
           if not release_zip.is_file():
               raise AssertionError(f"source-only release is missing: {release_zip}")
 
-          evidence = {
+          normal_evidence = {
               "schema_version": "mmm/real-model-colab-e2e-v1",
               "status": "PASS",
               "profile": profile,
@@ -149,52 +153,51 @@ jobs:
               "prompt": prompt,
               "proposal_hash": proposal.calculate_hash(),
               "module_count": len(proposal.modules),
-              "pipeline_status": result.status,
+              "pipeline_status": source_result.status,
               "release_zip": str(release_zip),
-              "work_graph_hash": result.work_graph_hash,
+              "work_graph_hash": source_result.work_graph_hash,
           }
           (output_root / "REAL_MODEL_COLAB_E2E.json").write_text(
-              json.dumps(evidence, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+              json.dumps(normal_evidence, ensure_ascii=False, indent=2, sort_keys=True)
+              + "\n",
               encoding="utf-8",
           )
-          print(json.dumps(evidence, ensure_ascii=False, indent=2, sort_keys=True))
+          print(json.dumps(normal_evidence, ensure_ascii=False, indent=2, sort_keys=True))
 
-          # R
-          output_root.mkdir(parents=True, exist_ok=True)
-          plan_path = output_root / "proposal.json"
-          profile = os.environ["MMM_MODEL_PROFILE"]
-
-          session = CompleteModAISession(
-              output_root=output_root,
-              model_profile=profile,
-              fast_mode=False,
-              kv_cache_quant="q4_0",
-          )
-          dialog = run_plan_dialog(
+          # Reuse the same live model/session for deterministic fresh-target generation
+          # and a real Gradle compile receipt.
+          target_rel = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+          debug_root = output_root / "debug-fixture"
+          debug_root.mkdir(parents=True, exist_ok=True)
+          debug_plan_path = debug_root / "proposal.json"
+          debug_dialog = run_plan_dialog(
               session=session,
               run_mode=FULL_MODE,
               prompt="",
-              plan_path=plan_path,
+              plan_path=debug_plan_path,
               debug_mode=True,
               minecraft_version="1.21.8",
               loader="fabric",
               print_fn=lambda *args, **kwargs: print(*args, **kwargs),
           )
-          proposal = dialog.reply.complete_proposal
-          proposal.validate()
-          if len(proposal.modules) != 1:
-              raise AssertionError(f"debug fixture module count changed: {len(proposal.modules)}")
-          module = proposal.modules[0]
-          if module.module_id != "debug_token" or module.kind != "custom_java":
+          debug_proposal = debug_dialog.reply.complete_proposal
+          debug_proposal.validate()
+          if len(debug_proposal.modules) != 1:
               raise AssertionError(
-                  f"debug fixture task drifted: {module.module_id!r} / {module.kind!r}"
+                  f"debug fixture module count changed: {len(debug_proposal.modules)}"
               )
-          if tuple(module.required_gates) != ("target_compile",):
+          debug_module = debug_proposal.modules[0]
+          if debug_module.module_id != "debug_token" or debug_module.kind != "custom_java":
               raise AssertionError(
-                  f"debug fixture required gates drifted: {module.required_gates!r}"
+                  "debug fixture task drifted: "
+                  f"{debug_module.module_id!r} / {debug_module.kind!r}"
+              )
+          if tuple(debug_module.required_gates) != ("target_compile",):
+              raise AssertionError(
+                  f"debug fixture required gates drifted: {debug_module.required_gates!r}"
               )
 
-          options = CompleteExecutionOptions(
+          build_options = CompleteExecutionOptions(
               source_only=False,
               run_jdt=False,
               run_gametest=False,
@@ -207,41 +210,49 @@ jobs:
               cleanup_runtime=True,
               eula_accepted=False,
           )
-          result = session.build(
-              dialog.reply,
+          debug_result = session.build(
+              debug_dialog.reply,
               run_name="real-model-debug-token-compile",
-              options=options,
+              options=build_options,
           )
 
-          target = Path(result.project_root).resolve() / target_rel
+          target = Path(debug_result.project_root).resolve() / target_rel
           if not target.is_file():
               raise AssertionError(f"fresh DebugToken target was not created: {target}")
 
-          build = result.build_report or {}
+          build = debug_result.build_report or {}
           if build.get("status") != "PASS":
               raise AssertionError(f"DebugToken Gradle build did not pass: {build!r}")
-          commands = [
-              command for command in build.get("commands", [])
+          successful_build_commands = [
+              command
+              for command in build.get("commands", [])
               if isinstance(command, dict)
               and command.get("name") in {"build", "clean_build"}
               and command.get("exit_code") == 0
               and command.get("timed_out") is not True
           ]
-          if not commands:
-              raise AssertionError("DebugToken target_compile has no successful Gradle receipt")
+          if not successful_build_commands:
+              raise AssertionError(
+                  "DebugToken target_compile has no successful Gradle receipt"
+              )
 
           required_gate_failures = [
-              value for value in result.unresolved_gates
-              if str(value).startswith("required-gate:debug_token:target_compile:")
+              value
+              for value in debug_result.unresolved_gates
+              if str(value).startswith(
+                  "required-gate:debug_token:target_compile:"
+              )
           ]
           if required_gate_failures:
               raise AssertionError(
-                  f"DebugToken target_compile remained unresolved: {required_gate_failures!r}"
+                  "DebugToken target_compile remained unresolved: "
+                  f"{required_gate_failures!r}"
               )
 
           module_receipt = next(
               (
-                  receipt for receipt in result.module_receipts
+                  receipt
+                  for receipt in debug_result.module_receipts
                   if isinstance(receipt, dict)
                   and receipt.get("module_id") == "debug_token"
               ),
@@ -252,28 +263,32 @@ jobs:
           touched = {str(path) for path in module_receipt.get("touched_paths", [])}
           if target_rel not in touched:
               raise AssertionError(
-                  f"DebugToken receipt does not own the fresh target: {sorted(touched)!r}"
+                  "DebugToken receipt does not own the fresh target: "
+                  f"{sorted(touched)!r}"
               )
 
-          evidence = {
+          debug_evidence = {
               "schema_version": "mmm/debug-token-real-build-e2e-v1",
               "status": "PASS",
               "profile": profile,
               "debug_mode": True,
-              "module_id": module.module_id,
+              "module_id": debug_module.module_id,
               "target_path": target_rel,
-              "pipeline_status": result.status,
+              "pipeline_status": debug_result.status,
               "build_status": build.get("status"),
-              "successful_build_commands": [command.get("name") for command in commands],
-              "unresolved_gates": list(result.unresolved_gates),
-              "release_ready": result.release_ready,
-              "work_graph_hash": result.work_graph_hash,
+              "successful_build_commands": [
+                  command.get("name") for command in successful_build_commands
+              ],
+              "unresolved_gates": list(debug_result.unresolved_gates),
+              "release_ready": debug_result.release_ready,
+              "work_graph_hash": debug_result.work_graph_hash,
           }
-          (output_root / "DEBUG_TOKEN_REAL_BUILD_E2E.json").write_text(
-              json.dumps(evidence, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+          (debug_root / "DEBUG_TOKEN_REAL_BUILD_E2E.json").write_text(
+              json.dumps(debug_evidence, ensure_ascii=False, indent=2, sort_keys=True)
+              + "\n",
               encoding="utf-8",
           )
-          print(json.dumps(evidence, ensure_ascii=False, indent=2, sort_keys=True))
+          print(json.dumps(debug_evidence, ensure_ascii=False, indent=2, sort_keys=True))
           PY
 
       - name: Upload E2E evidence
@@ -286,5 +301,5 @@ jobs:
           path: |
             audit/real-model-colab-e2e/REAL_MODEL_COLAB_E2E.json
             audit/real-model-colab-e2e/proposal.json
-            audit/real-model-colab-e2e/runs/**/*.zip
             audit/real-model-colab-e2e/debug-fixture/**
+            audit/real-model-colab-e2e/runs/**/*.zip
