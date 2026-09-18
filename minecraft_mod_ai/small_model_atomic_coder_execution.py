@@ -448,20 +448,20 @@ def install(*, custom_module_generator_module: Any, model_router_module: Any) ->
 
     @wraps(original_generate_text)
     def generate_text(
-        self: Any,
+        router: Any,
         role: str,
         messages: Any,
         *args: Any,
         **kwargs: Any,
     ) -> Any:
         if str(role).strip().casefold() not in {"coder", "coder_safe"}:
-            return original_generate_text(self, role, messages, *args, **kwargs)
+            return original_generate_text(router, role, messages, *args, **kwargs)
         if not _is_sequence(messages):
-            return original_generate_text(self, role, messages, *args, **kwargs)
+            return original_generate_text(router, role, messages, *args, **kwargs)
 
         batches = atomicize_coder_messages(messages)
         if len(batches) == 1:
-            return original_generate_text(self, role, batches[0], *args, **kwargs)
+            return original_generate_text(router, role, batches[0], *args, **kwargs)
 
         from .model_response_templates import (
             parse_response_text,
@@ -478,7 +478,7 @@ def install(*, custom_module_generator_module: Any, model_router_module: Any) ->
         raw_summaries: list[str] = []
         contract_results: list[bool] = []
         for index, batch in enumerate(batches, start=1):
-            result = original_generate_text(self, role, batch, *args, **kwargs)
+            result = original_generate_text(router, role, batch, *args, **kwargs)
             try:
                 parsed = parse_response_text("coder_summary", result)
             except ValueError:
