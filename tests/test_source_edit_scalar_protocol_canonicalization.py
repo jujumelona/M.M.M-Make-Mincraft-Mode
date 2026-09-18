@@ -95,6 +95,35 @@ def test_create_file_accepts_genuinely_new_java_source(tmp_path: Path) -> None:
     }
 
 
+def test_create_file_on_existing_exact_target_lowers_to_sha_bound_replace(tmp_path: Path) -> None:
+    target = tmp_path / "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+    target.parent.mkdir(parents=True)
+    target.write_text(
+        "package dev.mmm.debugfixture; public final class DebugToken {}\n",
+        encoding="utf-8",
+    )
+    replacement = (
+        "package dev.mmm.debugfixture;\n\n"
+        "public final class DebugToken { private DebugToken() {} }\n"
+    )
+
+    result = materialize_model_source_edit(
+        _Runtime,
+        tmp_path,
+        {
+            "operation": "create_file",
+            "path": "src/main/java/dev/mmm/debugfixture/DebugToken.java",
+            "content": replacement,
+        },
+    )
+
+    operation = result["operations"][0]
+    assert operation["operation"] == "replace"
+    assert operation["path"] == "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+    assert operation["expected_sha256"].startswith("sha256:")
+    assert operation["content"] == replacement
+
+
 def test_create_file_rejects_conflicting_content_aliases(tmp_path: Path) -> None:
     with pytest.raises(_Runtime.AgentToolRuntimeError, match="Conflicting.*content"):
         materialize_model_source_edit(
