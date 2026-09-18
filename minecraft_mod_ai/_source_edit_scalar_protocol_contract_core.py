@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """Canonical model-facing source edit protocol.
 
-One model action describes one executable semantic edit. Java source is never created
-as one giant model-authored file payload: the model creates a type shell, adds imports,
-and inserts one member per action. The host materializes those semantic actions into
-SHA-bound transactional patches. Non-Java resources may still be created directly.
+One model action describes one executable source edit. A fresh, exact host-owned Java
+target is created once as a complete file so the target compiler can validate one coherent
+implementation. After materialization, create/write operations are forbidden and repairs
+use SHA-bound exact edits. The host materializes every action into transactional patches.
 """
 
 import hashlib
@@ -91,10 +91,11 @@ SOURCE_EDIT_SCHEMA: dict[str, Any] = {
             "type": "string",
             "enum": list(_MODEL_OPERATION_ENUM),
             "description": (
-                "Perform exactly one semantic source action. For Java: create_java_type "
-                "creates only the empty type shell, add_java_import adds one import, and "
-                "insert_java_member adds one field/constructor/method/nested declaration. "
-                "Never emit an entire Java file as create_file content."
+                "Perform exactly one source action. For a fresh host-owned Java target, "
+                "create_file writes the complete first implementation so it can be compiled "
+                "as one coherent unit. Existing Java targets must use non-create exact edits. "
+                "create_java_type/add_java_import/insert_java_member remain available for "
+                "non-atomic structural workflows."
             ),
         },
         "path": {
