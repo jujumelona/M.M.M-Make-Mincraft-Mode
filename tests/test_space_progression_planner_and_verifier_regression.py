@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 from minecraft_mod_ai import evidence_first_planning as planning
 from minecraft_mod_ai import structural_minecraft_runtime_contract as structural
-from minecraft_mod_ai import java_lsp_trace
+from minecraft_mod_ai import java_core
 from minecraft_mod_ai.agent_tool_runtime import AgentToolRuntime
 from minecraft_mod_ai.generation_verifier_resilience import host_jdt_idle_timeout_seconds
 from minecraft_mod_ai.model_adapters import (
@@ -19,6 +19,7 @@ from minecraft_mod_ai.production_contract import _infer_dimensions
 from minecraft_mod_ai.progress_aware_tool_loop import generate_with_tools
 from minecraft_mod_ai.small_model_task_capsule_contract import (
     _TaskBoundAdapter,
+    _authority_message,
     compile_task_capsule,
 )
 from tests.planning_authority_fixtures import request_catalog
@@ -485,6 +486,7 @@ def test_host_owned_diagnostics_is_task_bound_and_verification_completes(capsys)
     )
     request = GenerationRequest(
         messages=(
+            _authority_message(capsule),
             {
                 "role": "user",
                 "content": json.dumps(
@@ -546,7 +548,9 @@ def test_agent_runtime_binds_diagnostics_to_the_actual_project_root(
             *,
             relative_files=None,
             timeout_seconds=60,
+            full_scan=False,
         ):
+            assert full_scan is False
             observed.append(
                 (
                     Path(project_root).resolve(),
@@ -554,12 +558,21 @@ def test_agent_runtime_binds_diagnostics_to_the_actual_project_root(
                     timeout_seconds,
                 )
             )
-            return {"status": "PASS", "diagnostics": {}}
+            return {
+                "schema_version": "mmm/java-diagnostics-v3",
+                "status": "PASS",
+                "complete": True,
+                "session_id": "test-session",
+                "model_id": "test-model",
+                "error_count": 0,
+                "warning_count": 0,
+                "diagnostics": {},
+            }
 
         def close(self):
             return None
 
-    monkeypatch.setattr(java_lsp_trace, "TracedJavaLanguageService", FakeJavaService)
+    monkeypatch.setattr(java_core, "JavaCoreService", FakeJavaService)
     runtime.call(
         "generation",
         "java_diagnostics",
