@@ -1,4 +1,5 @@
 """Real production-owner integration; opt in with MMM_JVM_OWNER_LIVE=1."""
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -157,3 +158,43 @@ public class Generator extends AbstractProcessor {
     with OwnerRPC(_owner_command(tmp_path, "annotation-processor")) as rpc:
         result = rpc.request('open', {'model': model}, timeout=45)
         assert not [d for d in result['diagnostics'] if d['severity'] == 'error'], result
+
+
+
+@pytest.mark.skipif(os.environ.get("MMM_JVM_OWNER_LIVE") != "1", reason="real JVM integration opt-in")
+def test_debug_fixture_fabric_project_resolves_through_production_java_core(tmp_path):
+    """Exercise the same Fabric/Loom project-model path used by Debug Mode."""
+
+    from minecraft_mod_ai.colab_run_modes import write_debug_example_plan
+    from minecraft_mod_ai.complete_spec import CompleteProposal
+    from minecraft_mod_ai.java_core import JavaCoreService
+    from minecraft_mod_ai.scalable_generator import ScalableFabricProjectGenerator
+
+    plan = write_debug_example_plan(
+        tmp_path / "debug-proposal.json",
+        minecraft_version="1.20.1",
+        loader="fabric",
+    )
+    proposal = CompleteProposal.from_dict(json.loads(plan.read_text(encoding="utf-8")))
+    project = tmp_path / "fabric-project"
+    ScalableFabricProjectGenerator().generate(proposal.base_proposal.spec, project)
+
+    lock = project / ".minecraft_ai" / "platform-lock.json"
+    assert lock.is_file(), "generated Fabric project must carry the target platform lock"
+
+    service = JavaCoreService()
+    try:
+        receipt = service.diagnostics(
+            project,
+            timeout_seconds=300,
+            full_scan=True,
+        )
+    finally:
+        service.close()
+
+    assert receipt["complete"] is True
+    assert receipt["verification_backend"] == "jdt_core"
+    assert receipt["verification_scope"] == "full"
+    assert receipt["error_count"] == 0, receipt["diagnostics"]
+    assert receipt["session_id"]
+    assert receipt["model_id"]
