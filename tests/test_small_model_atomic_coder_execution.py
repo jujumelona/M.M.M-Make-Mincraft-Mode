@@ -121,8 +121,18 @@ def _request(batch):
     return json.loads(batch[-1]["content"])
 
 
-def test_multi_obligation_task_becomes_one_model_batch_per_obligation() -> None:
-    batches = atomicize_coder_messages(_messages(step_count=3))
+def _distinct_messages(*, step_count: int = 3):
+    messages = list(_messages(step_count=step_count))
+    request = json.loads(messages[-1]["content"])
+    steps = request["module"]["evidence_task"]["coder_execution_contract"]["implementation_steps"]
+    for index, step in enumerate(steps, start=1):
+        step["must_provide"] = [f"feature_ready_{index}"]
+    messages[-1] = {"role": "user", "content": json.dumps(request)}
+    return tuple(messages)
+
+
+def test_distinct_state_transitions_become_one_model_batch_each() -> None:
+    batches = atomicize_coder_messages(_distinct_messages(step_count=3))
 
     assert len(batches) == 3
     obligations = [
@@ -136,13 +146,30 @@ def test_multi_obligation_task_becomes_one_model_batch_per_obligation() -> None:
     ]
     assert all(
         _request(batch)["atomic_execution"]["policy"]
-        == "one_model_call_one_implementation_obligation"
+        == "one_model_call_one_host_owned_state_transition"
         for batch in batches
     )
 
 
-def test_atomic_batch_removes_siblings_but_preserves_required_canonical_context() -> None:
+def test_coowned_constraint_steps_are_coalesced_into_one_state_transition() -> None:
     batches = atomicize_coder_messages(_messages(step_count=3))
+
+    assert len(batches) == 1
+    request = _request(batches[0])
+    step = request["module"]["evidence_task"]["coder_execution_contract"]["step"]
+    assert "Implement isolated behavior 1." in step["obligation"]
+    assert "Implement isolated behavior 2." in step["obligation"]
+    assert "Implement isolated behavior 3." in step["obligation"]
+    assert step["must_provide"] == ["feature_ready"]
+    assert request["atomic_execution"]["step_count"] == 1
+    assert (
+        request["atomic_execution"]["policy"]
+        == "one_model_call_one_host_owned_state_transition"
+    )
+
+
+def test_atomic_batch_removes_siblings_but_preserves_required_canonical_context() -> None:
+    batches = atomicize_coder_messages(_distinct_messages(step_count=3))
 
     first_text = batches[0][-1]["content"]
     assert "Implement isolated behavior 1." in first_text
@@ -161,7 +188,7 @@ def test_atomic_batch_removes_siblings_but_preserves_required_canonical_context(
     assert contract["step"]["execution_checklist"] == [f"check-{index}" for index in range(8)]
     assert contract["step"]["target_refs"] == ["src/main/java/demo/Feature.java#Feature"]
     assert contract["step"]["consumes"] == ["core_ready"]
-    assert contract["step"]["must_provide"] == ["feature_ready"]
+    assert contract["step"]["must_provide"] == ["feature_ready_1"]
     assert contract["targets"] == [
         {
             "path": "src/main/java/demo/Feature.java",
@@ -181,7 +208,7 @@ def test_atomic_batch_removes_siblings_but_preserves_required_canonical_context(
 
 
 def test_later_atomic_steps_do_not_receive_stale_pre_step_source_page() -> None:
-    batches = atomicize_coder_messages(_messages(step_count=3))
+    batches = atomicize_coder_messages(_distinct_messages(step_count=3))
 
     first = _request(batches[0])
     second = _request(batches[1])
@@ -286,7 +313,7 @@ def test_atomic_summary_aggregation_preserves_response_template():
     assert Router.generate_text is original_router_generate_text
     result = custom._generate_coder_text(Router(),
         "coder",
-        _messages(step_count=3),
+        _distinct_messages(step_count=3),
         response_format="json",
         response_schema=response_schema("coder_summary"),
     )
@@ -326,7 +353,7 @@ def test_atomic_summary_aggregation_preserves_host_summary_in_production_text_mo
     )
     result = custom._generate_coder_text(Router(),
         "coder",
-        _messages(step_count=3),
+        _distinct_messages(step_count=3),
         response_format="text",
         tool_stage="generation",
         enable_tools=True,
@@ -412,7 +439,7 @@ def test_atomic_summary_aggregation_rejects_mixed_summary_transport():
     with pytest.raises(AtomicCoderContractError, match="CODER_SUMMARY_TRANSPORT_MIXED"):
         custom._generate_coder_text(Router(),
             "coder",
-            _messages(step_count=3),
+            _distinct_messages(step_count=3),
             response_format="text",
             tool_stage="generation",
             enable_tools=True,
