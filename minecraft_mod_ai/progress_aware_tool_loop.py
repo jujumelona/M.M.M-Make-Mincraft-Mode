@@ -2086,6 +2086,30 @@ def _fixed_point_error(state: HostRunState) -> ModelConfigurationError:
     )
 
 
+def _consume_rejected_evidence_fixed_point(
+    state: HostRunState,
+    rejection_payloads: Sequence[Mapping[str, Any]],
+    phase_names: Collection[str],
+) -> tuple[str, ...]:
+    """Consume only the evidence route that cannot produce a valid tool call."""
+
+    if state.phase not in {LoopPhase.OBSERVE, LoopPhase.RECOVER}:
+        return ()
+    allowed = set(phase_names)
+    routes = tuple(sorted({
+        name
+        for payload in rejection_payloads
+        if (name := str(payload.get("original_tool") or "").strip())
+        and name in allowed
+    }))
+    if not routes:
+        return ()
+    for route in routes:
+        state.record_source_attempt(route, {})
+    state.clear_no_progress_result()
+    return routes
+
+
 def _host_coder_summary(*, verification: str) -> str:
     """Return the fixed coder-summary contract from host-owned terminal state.
 
@@ -2433,20 +2457,17 @@ def _generate_with_tools_impl(
             )
             if require_rag and not baseline_ready:
                 required_evidence_choice = True
-            if repeated and state.phase in {LoopPhase.OBSERVE, LoopPhase.RECOVER}:
-                rejected_routes = {
-                    str(payload.get("original_tool") or "").strip()
-                    for payload in rejection_payloads
-                    if str(payload.get("original_tool") or "").strip() in phase_names
-                }
+            if repeated:
+                rejected_routes = _consume_rejected_evidence_fixed_point(
+                    state,
+                    rejection_payloads,
+                    phase_names,
+                )
                 if rejected_routes:
                     # A repeated schema/protocol rejection means this evidence route
                     # has reached a semantic fixed point. Consume only that route and
                     # continue through the remaining evidence frontier instead of
                     # aborting the whole generation task.
-                    for rejected_route in sorted(rejected_routes):
-                        state.record_source_attempt(rejected_route, {})
-                    state.clear_no_progress_result()
                     emit_root_cause(
                         "rejected_evidence_route_exhausted",
                         stage=stage,
@@ -2457,7 +2478,7 @@ def _generate_with_tools_impl(
                         details={
                             "step_index": state.step_index,
                             "phase": state.phase.value,
-                            "routes": sorted(rejected_routes),
+                            "routes": list(rejected_routes),
                         },
                     )
                     continue
