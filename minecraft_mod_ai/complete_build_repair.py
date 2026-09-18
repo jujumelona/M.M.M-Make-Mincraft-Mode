@@ -66,6 +66,10 @@ def _run_source_repair(
     policy: ScalePolicy,
 ) -> tuple[dict[str, Any], ModelRouter]:
     active_router = router or router_factory()
+    active_router.bind_agent_workspace(
+        project_root,
+        require_fresh_evidence=True,
+    )
     repair = RepairEngine(
         router=active_router, gradle_cache=cache, policy=policy
     ).repair(
