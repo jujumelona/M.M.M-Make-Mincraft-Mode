@@ -137,6 +137,14 @@ def test_capsule_compiles_exact_planir_main_and_test_authority() -> None:
     assert creatable == (JAVA_PATH, TEST_PATH)
 
 
+def test_custom_java_requires_target_compile_gate() -> None:
+    module = _module()
+    module.required_gates = ("source_static_validation",)
+
+    with pytest.raises(TaskCapsuleContractError, match="COMPILE_GATE_MISSING"):
+        compile_task_capsule(module)
+
+
 def test_planir_authority_fails_before_coder_when_binding_is_missing() -> None:
     with pytest.raises(TaskCapsuleContractError, match="BINDING_MISSING"):
         compile_task_capsule(_module(binding=False))
@@ -271,6 +279,12 @@ def test_fresh_host_reserved_java_target_separates_write_and_api_evidence_author
         require_rag=False,
         fresh_java_target=True,
     ) is True
+    assert tool_loop._target_evidence_ready(
+        state,
+        require_rag=True,
+        fresh_java_target=True,
+        compile_backed_java=True,
+    ) is True
 
     assert tool_loop._requires_rag_evidence(
         role="coder",
@@ -302,29 +316,16 @@ def test_fresh_host_reserved_java_target_separates_write_and_api_evidence_author
     ) is True
 
 
-def test_fresh_java_evidence_frontier_walks_external_capabilities() -> None:
+def test_fresh_java_optional_observe_frontier_stays_local() -> None:
     schemas = {
         name: {
             "type": "function",
-            "function": {
-                "name": name,
-                "parameters": {
-                    "type": "object",
-                    "properties": (
-                        {"capability": {"type": "string"}}
-                        if name in {"external_mcp_schema", "external_mcp_call"}
-                        else {}
-                    ),
-                },
-            },
+            "function": {"name": name, "parameters": {"type": "object", "properties": {}}},
         }
         for name in (
             "search_code_rag",
-            "search_project_rag",
-            "external_mcp_capabilities",
-            "external_mcp_schema",
-            "external_mcp_call",
             "java_workspace_symbols",
+            "external_mcp_call",
             "inspect_modrinth_project",
         )
     }
@@ -338,50 +339,12 @@ def test_fresh_java_evidence_frontier_walks_external_capabilities() -> None:
         target_pinned=True,
     )
 
-    attempted: set[str] = set()
-    expected: list[tuple[str, str]] = [
-        ("search_code_rag", ""),
-        ("external_mcp_capabilities", ""),
-    ]
-    for capability in tool_loop._FRESH_JAVA_EXTERNAL_CAPABILITIES:
-        expected.append(("external_mcp_call", capability))
-    expected.append(("java_workspace_symbols", ""))
-
-    for name, capability in expected:
-        selected = tool_loop._fresh_observe_names(
-            schemas,
-            attempted,
-            context,
-            semantic_retrieval_choice=True,
-        )
-        assert selected == [name]
-        if capability:
-            narrowed = tool_loop._fresh_java_external_schema(
-                schemas[name],
-                attempted,
-                schemas,
-            )
-            assert (
-                narrowed["function"]["parameters"]["properties"]["capability"]["enum"]
-                == [capability]
-            )
-            attempted.add(f"{name}:{capability}")
-            attempted.add(name)
-        else:
-            attempted.add(name)
-
-    assert "inspect_modrinth_project" not in {
-        name
-        for name, _capability in expected
-    }
     assert tool_loop._fresh_observe_names(
         schemas,
-        attempted,
+        set(),
         context,
         semantic_retrieval_choice=True,
-    ) == []
-
-
+    ) == ["search_code_rag", "java_workspace_symbols"]
 
 
 def test_nested_current_project_java_hit_authorizes_fresh_java() -> None:
@@ -422,65 +385,6 @@ def test_metadata_only_project_rag_does_not_authorize_fresh_java() -> None:
     }
 
     assert tool_loop._authoritative_java_evidence(metadata_only) is False
-
-def test_live_external_schema_is_embedded_into_model_call_contract() -> None:
-    schema = {
-        "type": "function",
-        "function": {
-            "name": "external_mcp_call",
-            "description": "Invoke reviewed provider.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "capability": {
-                        "type": "string",
-                        "enum": ["source_search"],
-                    },
-                    "arguments": {
-                        "type": "object",
-                        "additionalProperties": True,
-                    },
-                },
-                "required": ["capability", "arguments"],
-            },
-        },
-    }
-    live = {
-        "status": "PASS",
-        "description": "Search decompiled Minecraft source.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "version": {"type": "string"},
-                "mapping": {"type": "string"},
-                "query": {"type": "string"},
-                "searchType": {
-                    "type": "string",
-                    "enum": ["class", "method", "field", "content"],
-                },
-                "limit": {"type": "integer"},
-            },
-            "required": ["version", "mapping", "query", "searchType"],
-        },
-        "target_args_injected_by_router": {
-            "minecraft_version": "version",
-            "mapping": "mapping",
-        },
-    }
-
-    bound = tool_loop._external_call_schema_with_live_arguments(schema, live)
-    arguments = bound["function"]["parameters"]["properties"]["arguments"]
-
-    assert "version" not in arguments["properties"]
-    assert "mapping" not in arguments["properties"]
-    assert arguments["required"] == ["query", "searchType"]
-    assert arguments["properties"]["searchType"]["enum"] == [
-        "class",
-        "method",
-        "field",
-        "content",
-    ]
-
 
 def test_external_mcp_retrieval_signatures_are_capability_specific() -> None:
     assert tool_loop.retrieval_query_signature(
