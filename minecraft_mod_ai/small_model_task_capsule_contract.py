@@ -188,6 +188,13 @@ class TaskCapsule:
         }
 
 
+def current_task_required_gates() -> tuple[str, ...]:
+    """Return required downstream gates for the active task capsule, if any."""
+
+    capsule = _CURRENT_CAPSULE.get()
+    return capsule.required_gates if capsule is not None else ()
+
+
 def _canonical_path(locator: Any) -> tuple[str, str]:
     raw = str(locator or "").replace("\\", "/").strip()
     if not raw:
@@ -932,6 +939,7 @@ __all__ = [
     "bind_verifier_arguments",
     "compact_task_local_module_contract",
     "compile_task_capsule",
+    "current_task_required_gates",
     "install",
     "narrow_source_edit_schema",
     "narrow_task_tool_schema",
