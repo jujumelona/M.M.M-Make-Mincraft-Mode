@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -668,6 +669,26 @@ def _parallel_read_workers() -> int:
     return max(1, value)
 
 
+def _agent_tool_timeout_seconds() -> float:
+    """Bound every model-requested tool/verification call.
+
+    This is an execution-safety deadline, not a retry-count policy. Individual
+    transports may enforce a tighter timeout; this outer boundary prevents any
+    reviewed tool path from pinning the agent loop indefinitely.
+    """
+
+    raw = os.environ.get("MMM_AGENT_TOOL_TIMEOUT_SECONDS", "").strip()
+    if not raw:
+        return 120.0
+    try:
+        value = float(raw)
+    except ValueError:
+        return 120.0
+    if not math.isfinite(value) or value <= 0.0:
+        return 120.0
+    return max(1.0, min(value, 600.0))
+
+
 def _parallel_read_call(call: Any) -> bool:
     """Return whether a reviewed call is side-effect-free and safe in a read wave."""
 
@@ -683,47 +704,68 @@ def _execute_tool_waves(
     calls: Sequence[Any],
     execute: Callable[[Any], tuple[Any, Mapping[str, Any]]],
 ) -> tuple[tuple[Any, Mapping[str, Any]], ...]:
-    """Execute maximal read waves concurrently while preserving serial barriers."""
+    """Execute every reviewed tool through an explicit wall-clock deadline.
+
+    Read-only calls may run concurrently. Mutation/barrier calls remain serial, but
+    they still pass through the same deadline executor so a stuck provider, verifier,
+    or transaction cannot block the agent loop forever.
+    """
 
     completed: list[tuple[Any, Mapping[str, Any]]] = []
     pending_reads: list[Any] = []
+    timeout_seconds = _agent_tool_timeout_seconds()
+
+    def execute_indexed(
+        item: tuple[int, Any],
+    ) -> tuple[int, tuple[Any, Mapping[str, Any]]]:
+        index, call = item
+        return index, execute(call)
+
+    def execute_batch(
+        batch: Sequence[Any],
+        *,
+        workers: int,
+        stage: str,
+    ) -> tuple[tuple[Any, Mapping[str, Any]], ...]:
+        indexed_batch = tuple(enumerate(batch))
+        ordered: list[tuple[Any, Mapping[str, Any]] | None] = [None] * len(batch)
+        for _item, indexed_result in iter_completed_with_deadlines(
+            indexed_batch,
+            execute_indexed,
+            max_workers=max(1, workers),
+            stage=stage,
+            sort_key=lambda item: item[0],
+            work_unit_timeout_seconds=timeout_seconds,
+        ):
+            index, result = indexed_result
+            ordered[index] = result
+        if any(item is None for item in ordered):
+            raise ModelConfigurationError(
+                f"{stage} lost a completed tool result."
+            )
+        return tuple(item for item in ordered if item is not None)
 
     def flush_reads() -> None:
         if not pending_reads:
             return
         batch = tuple(pending_reads)
         pending_reads.clear()
-        workers = min(len(batch), _parallel_read_workers())
-        if workers <= 1:
-            completed.extend(execute(call) for call in batch)
-            return
-
-        indexed_batch = tuple(enumerate(batch))
-
-        def execute_indexed(item: tuple[int, Any]) -> tuple[int, tuple[Any, Mapping[str, Any]]]:
-            index, call = item
-            return index, execute(call)
-
-        ordered: list[tuple[Any, Mapping[str, Any]] | None] = [None] * len(batch)
-        for _item, indexed_result in iter_completed_with_deadlines(
-            indexed_batch,
-            execute_indexed,
-            max_workers=workers,
-            stage="agent_read_wave",
-            sort_key=lambda item: item[0],
-        ):
-            index, result = indexed_result
-            ordered[index] = result
-        if any(item is None for item in ordered):
-            raise ModelConfigurationError("Parallel read wave lost a completed tool result.")
-        completed.extend(item for item in ordered if item is not None)
+        completed.extend(
+            execute_batch(
+                batch,
+                workers=min(len(batch), _parallel_read_workers()),
+                stage="agent_read_wave",
+            )
+        )
 
     for call in calls:
         if _parallel_read_call(call):
             pending_reads.append(call)
             continue
         flush_reads()
-        completed.append(execute(call))
+        completed.extend(
+            execute_batch((call,), workers=1, stage="agent_tool_call")
+        )
     flush_reads()
     return tuple(completed)
 
