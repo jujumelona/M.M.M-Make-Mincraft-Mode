@@ -1138,12 +1138,37 @@ def _authoritative_java_evidence(value: Any) -> bool:
     return _has_mapping_records(value)
 
 
+def _host_target_execution_authority(state: Any) -> bool:
+    """Return whether the host has exact authority to mutate the pinned target.
+
+    Fresh host-reserved targets are executable when the exact pinned path is also in
+    the host-owned creatable set. Once that path is materialized by an applied create
+    mutation, the same authority remains valid for verification/repair of that file.
+    """
+    context = state.mutation_context
+    if context is None or not context.target_pinned or not context.is_mutation_ready:
+        return False
+    target = _canonical_mutation_path(context.target_path)
+    if not target:
+        return False
+    if context.is_new_file:
+        creatable = {
+            _canonical_mutation_path(path)
+            for path in context.creatable_paths
+            if _canonical_mutation_path(path)
+        }
+        return target in creatable
+    return target in state.created_paths
+
+
 def _target_evidence_ready(
     state: "HostRunState",
     *,
     require_rag: bool,
     fresh_java_target: bool,
 ) -> bool:
+    if _host_target_execution_authority(state):
+        return True
     if not require_rag:
         return True
     if fresh_java_target:
@@ -1337,8 +1362,17 @@ class HostRunState:
             if sig in self.attempted_queries:
                 return False
             self.attempted_queries.add(sig)
+            self.attempted_sources.add(str(tool_name or "").strip())
             self.attempted_sources.add(retrieval_source_key(tool_name, arguments))
             return True
+
+    def record_source_attempt(
+        self, tool_name: str, arguments: Mapping[str, Any]
+    ) -> None:
+        """Consume one route even when its result is not classified as RAG evidence."""
+        with self._lock:
+            self.attempted_sources.add(str(tool_name or "").strip())
+            self.attempted_sources.add(retrieval_source_key(tool_name, arguments))
 
     def is_query_attempted(self, tool_name: str, arguments: Mapping[str, Any]) -> bool:
         sig = retrieval_query_signature(tool_name, arguments)
@@ -1565,7 +1599,7 @@ def _fresh_observe_names(
     if not direct_host_reservation:
         if "search_code_rag" in by_name and "search_code_rag" not in attempted:
             return ["search_code_rag"]
-        semantic_fallback = ("java_workspace_symbols", "external_mcp_call")
+        semantic_fallback = ("java_workspace_symbols", "search_project_rag")
         return _unattempted_tools(by_name, attempted, semantic_fallback)
     if "search_project_rag" in by_name and "search_project_rag" not in attempted:
         return ["search_project_rag"]
@@ -2056,7 +2090,8 @@ def _generate_with_tools_impl(
         and (router._agent_require_fresh_evidence or fresh_java_target)
     )
 
-    if require_rag:
+    initial_execution_authority = _host_target_execution_authority(state)
+    if require_rag and not initial_execution_authority:
         state.phase = LoopPhase.OBSERVE
     elif implementation_requires_mutation and mutation_ready and not mutation_history_applied(messages):
         state.phase = LoopPhase.ACT
@@ -2075,6 +2110,7 @@ def _generate_with_tools_impl(
             "host_grounded": host_grounded,
             "fresh_java_target": fresh_java_target,
             "require_rag": require_rag,
+            "host_target_execution_authority": initial_execution_authority,
             "implementation_requires_mutation": implementation_requires_mutation,
             "mutation_ready": mutation_ready,
             "initial_phase": state.phase.value,
@@ -2085,9 +2121,6 @@ def _generate_with_tools_impl(
         last_prompt_phase = _sync_phase_tool_transcript(
             messages, state=state, last_prompt_phase=last_prompt_phase, stage=stage
         )
-
-        if state.semantic_fixed_point:
-            raise _fixed_point_error(state)
 
         baseline_ready = _target_evidence_ready(
             state, require_rag=require_rag, fresh_java_target=fresh_java_target
@@ -2106,6 +2139,22 @@ def _generate_with_tools_impl(
                 ),
                 empty_error="Agent returned an empty final response after verification passed.",
             )
+
+        if state.semantic_fixed_point:
+            actionable_mutation = bool(
+                implementation_requires_mutation
+                and baseline_ready
+                and is_mutation_ready(messages, state)
+                and (
+                    not state.workspace_changed
+                    or state.validation_status == "FAIL"
+                )
+            )
+            if actionable_mutation:
+                state.clear_no_progress_result()
+                state.phase = LoopPhase.ACT
+            else:
+                raise _fixed_point_error(state)
 
         state.step_index += 1
         phase_before = state.phase
@@ -2418,6 +2467,7 @@ def _generate_with_tools_impl(
 
             try:
                 if call.name.startswith("external_mcp_"):
+                    state.record_source_attempt(call.name, call.arguments)
                     scoped = getattr(runtime, "call_scoped", None)
                     if not callable(scoped):
                         raise ModelConfigurationError(

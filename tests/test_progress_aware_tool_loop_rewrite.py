@@ -111,3 +111,32 @@ def test_native_core_blocks_legacy_runtime_monkey_patch_installers() -> None:
     assert loop.TargetMutationContext is original_context
     assert loop.is_mutation_ready is original_ready
     assert loop._generate_turn_with_context_recovery is original_turn
+
+
+def test_failed_external_mcp_route_is_consumed_for_recovery_frontier() -> None:
+    state = loop.HostRunState(
+        phase=loop.LoopPhase.RECOVER,
+        mutation_context=loop.TargetMutationContext(
+            target_path="src/main/java/dev/mmm/Foo.java",
+            target_symbol="Foo",
+            writable_paths=("src/main/java/dev/mmm/Foo.java",),
+            target_pinned=True,
+        ),
+    )
+    state.record_source_attempt("external_mcp_call", {"capability": "read_file"})
+
+    selected = loop._filter_tools_for_phase(
+        (
+            _schema("search_code_rag"),
+            _schema("search_project_rag"),
+            _schema("java_workspace_symbols"),
+            _schema("external_mcp_call"),
+            _schema("inspect_modrinth_project"),
+        ),
+        loop.LoopPhase.RECOVER,
+        "coder",
+        mutation_context=state.mutation_context,
+        attempted_sources=state.attempted_sources,
+    )
+    names = {item["function"]["name"] for item in selected}
+    assert "external_mcp_call" not in names
