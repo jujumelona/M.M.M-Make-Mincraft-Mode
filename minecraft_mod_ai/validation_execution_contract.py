@@ -395,25 +395,13 @@ def _install_progressive_repair(repair_module: Any) -> None:
         *,
         run_gametest: bool,
     ) -> dict[str, Any]:
-        relative_files = getattr(self, "_mmm_last_java_paths", ()) or None
-        diagnostics = _run_jdt_diagnostics(
-            self.diagnostics_factory,
-            root,
-            relative_files=relative_files,
-            timeout_seconds=90,
-        )
+        """Use the target compiler as the repair oracle.
 
-        errors = _diagnostic_errors(diagnostics)
-        if errors:
-            return {
-                "passed": False,
-                "diagnostics": diagnostics,
-                "build": {
-                    "status": "SKIPPED",
-                    "error": "Gradle/GameTest deferred until JDT diagnostics are clean.",
-                    "commands": [],
-                },
-            }
+        JDT is intentionally absent from the source-repair critical path. A compile or
+        GameTest failure already supplies executable target evidence and must never be
+        reclassified as SKIPPED merely because auxiliary JDT diagnostics are dirty or
+        unavailable. Post-build JDT remains a separate validation gate.
+        """
 
         try:
             build = self.runner_factory(self.gradle_cache).build(
@@ -427,8 +415,14 @@ def _install_progressive_repair(repair_module: Any) -> None:
                 "commands": [],
             }
         return {
-            "passed": build.get("status") == "PASS" and not errors,
-            "diagnostics": diagnostics,
+            "passed": build.get("status") == "PASS",
+            "diagnostics": {
+                "schema_version": "mmm/java-diagnostics-v3",
+                "status": "DEFERRED_TO_POST_BUILD",
+                "available": False,
+                "complete": False,
+                "diagnostics": {},
+            },
             "build": build,
         }
 
