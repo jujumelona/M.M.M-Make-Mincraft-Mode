@@ -14,6 +14,9 @@ import org.eclipse.equinox.app.IApplicationContext;
 import org.eclipse.jdt.core.*;
 import org.eclipse.jdt.apt.core.util.AptConfig;
 import org.eclipse.jdt.apt.core.util.IFactoryPath;
+import org.osgi.framework.Bundle;
+import org.osgi.framework.BundleContext;
+import org.osgi.framework.FrameworkUtil;
 
 /** Single-writer, persistent Eclipse resource workspace. stdout is exclusively JSON lines. */
 public final class OwnerApplication implements IApplication {
@@ -28,6 +31,24 @@ public final class OwnerApplication implements IApplication {
     private static void stage(String value) {
         System.err.println("MMM_OWNER_STAGE " + value);
         System.err.flush();
+    }
+
+    private static void startBundle(String symbolicName) throws Exception {
+        Bundle owner = FrameworkUtil.getBundle(OwnerApplication.class);
+        if (owner == null || owner.getBundleContext() == null) {
+            throw new IllegalStateException("Owner OSGi bundle context is unavailable");
+        }
+        BundleContext context = owner.getBundleContext();
+        for (Bundle bundle : context.getBundles()) {
+            if (!symbolicName.equals(bundle.getSymbolicName())) continue;
+            if (bundle.getState() != Bundle.ACTIVE) {
+                stage("bundle.start.begin:" + symbolicName);
+                bundle.start(Bundle.START_TRANSIENT);
+                stage("bundle.start.end:" + symbolicName);
+            }
+            return;
+        }
+        throw new IllegalStateException("Required OSGi bundle is not installed: " + symbolicName);
     }
 
     @Override public Object start(IApplicationContext context) throws Exception {
@@ -177,6 +198,8 @@ public final class OwnerApplication implements IApplication {
         javaProject.setOptions(options);
         stage("configure.options.end:" + required(set, "id"));
         if (!processors.isEmpty() && !args.contains("-proc:none")) {
+            startBundle("org.eclipse.jdt.apt.core");
+            startBundle("org.eclipse.jdt.apt.pluggable.core");
             IFactoryPath factoryPath = AptConfig.getDefaultFactoryPath(javaProject);
             List<String> reversed = new ArrayList<>(processors);
             Collections.reverse(reversed);
