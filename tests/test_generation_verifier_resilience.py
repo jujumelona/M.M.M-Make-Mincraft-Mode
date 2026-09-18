@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
-
 from minecraft_mod_ai import agent_tool_runtime, java_lsp
 from minecraft_mod_ai.generation_verifier_resilience import (
     run_generation_verifier,
