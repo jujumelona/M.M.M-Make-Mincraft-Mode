@@ -881,58 +881,59 @@ def _await_java_core_ready(
 ) -> None:
     """Wait for compiler diagnostics to prove core Java types resolve.
 
-    Hover is intentionally not used as a readiness signal. It is an optional language
-    feature request and can block independently of compiler diagnostics while JDT is
-    importing a Gradle workspace.
+    The readiness document is materialized under a real Java source root. JDT LS does
+    not guarantee diagnostics for an arbitrary non-existent file URI, so a virtual-only
+    probe can report observed=0 forever even when the workspace is healthy. Readiness is
+    limited to the contract it is meant to prove: java.lang.Object/String resolution.
+    Ordinary source diagnostics are evaluated later by the normal diagnostics/compile
+    gates and must not make bootstrap itself fail.
     """
 
     source_root = _java_source_root(root)
-    probe_path = source_root / f"{_SEMANTIC_PROBE_NAME}.java"
+    probe_name = f"{_SEMANTIC_PROBE_NAME}_{os.getpid()}_{threading.get_ident()}"
+    probe_path = source_root / f"{probe_name}.java"
+    probe_source = _SEMANTIC_PROBE_SOURCE.replace(_SEMANTIC_PROBE_NAME, probe_name)
     uri = probe_path.resolve(strict=False).as_uri()
     deadline = deadline if deadline is not None else time.monotonic() + float(timeout_seconds)
     version = 1
     last_reason = "semantic diagnostics have not completed"
 
-    while time.monotonic() < deadline:
-        rpc.notify("textDocument/didOpen", {"textDocument": {
-            "uri": uri,
-            "languageId": "java",
-            "version": version,
-            "text": _SEMANTIC_PROBE_SOURCE,
-        }})
-        try:
-            remaining = _remaining_jdt_deadline(deadline, operation="semantic readiness")
-            diagnostics = _collect_diagnostics(
-                rpc,
-                expected_uris={uri},
-                timeout_seconds=remaining,
-                quiet_seconds=quiet_seconds,
-                deadline=deadline,
-            )
-            core_messages = _java_core_bootstrap_messages(diagnostics)
-            errors = [
-                item
-                for values in diagnostics.values()
-                for item in values
-                if int(item.get("severity", 1)) == 1
-            ]
-            if not core_messages and not errors:
-                return
-            if core_messages:
-                last_reason = "; ".join(core_messages[-3:])
-            else:
-                last_reason = "; ".join(
-                    str(item.get("message", "")) for item in errors[-3:]
+    try:
+        probe_path.write_text(probe_source, encoding="utf-8")
+        while time.monotonic() < deadline:
+            rpc.notify("textDocument/didOpen", {"textDocument": {
+                "uri": uri,
+                "languageId": "java",
+                "version": version,
+                "text": probe_source,
+            }})
+            try:
+                remaining = _remaining_jdt_deadline(deadline, operation="semantic readiness")
+                diagnostics = _collect_diagnostics(
+                    rpc,
+                    expected_uris={uri},
+                    timeout_seconds=remaining,
+                    quiet_seconds=quiet_seconds,
+                    deadline=deadline,
                 )
-        except (JDTLanguageServerError, TimeoutError) as exc:
-            last_reason = f"{type(exc).__name__}: {exc}"
-        finally:
-            rpc.notify("textDocument/didClose", {"textDocument": {"uri": uri}})
+                core_messages = _java_core_bootstrap_messages(diagnostics)
+                if not core_messages:
+                    return
+                last_reason = "; ".join(core_messages[-3:])
+            except (JDTLanguageServerError, TimeoutError) as exc:
+                last_reason = f"{type(exc).__name__}: {exc}"
+            finally:
+                rpc.notify("textDocument/didClose", {"textDocument": {"uri": uri}})
 
-        version += 1
-        remaining = deadline - time.monotonic()
-        if remaining > 0:
-            time.sleep(min(0.25, remaining))
+            version += 1
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(0.25, remaining))
+    finally:
+        try:
+            probe_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     raise JDTWorkspaceBootstrapError(
         "JDT workspace bootstrap failure: initialize/status notifications were insufficient; "
