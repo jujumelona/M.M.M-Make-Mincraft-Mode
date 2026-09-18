@@ -506,18 +506,23 @@ def test_host_owned_diagnostics_is_task_bound_and_verification_completes(capsys)
         parallel_tool_calls=False,
     )
     runtime = Runtime()
+    inner_adapter = Adapter()
 
     result = generate_with_tools(
         router,
         config=config,
-        adapter=_TaskBoundAdapter(Adapter(), capsule),
+        adapter=_TaskBoundAdapter(inner_adapter, capsule),
         request=request,
         runtime=runtime,
         stage="generation",
         role="coder",
     )
 
-    assert result == "implemented and verified"
+    payload = json.loads(result)
+    assert payload == {
+        "summary": "Applied the approved source mutation and passed generation-time host verification."
+    }
+    assert inner_adapter.turn == 1
     assert [name for _stage, name, _args in runtime.calls] == [
         "apply_source_edit",
         "java_diagnostics",
