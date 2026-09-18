@@ -322,16 +322,6 @@ class ModelRouter:
         name = str(tool_name or "").strip()
         if not name:
             raise ModelConfigurationError("Tool-decision name must not be empty.")
-        if role == "planner":
-            import json
-
-            return json.loads(self.generate_text(
-                role,
-                messages,
-                response_format="json",
-                response_schema=parameters,
-                enable_tools=False,
-            ))
         schema = {
             "type": "function",
             "function": {
