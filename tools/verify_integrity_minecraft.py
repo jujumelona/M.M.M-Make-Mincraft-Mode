@@ -178,6 +178,7 @@ def _run_debug_token_generation(root: Path, project: Path):
     from minecraft_mod_ai.colab_run_modes import write_debug_example_plan
     from minecraft_mod_ai.complete_spec import CompleteProposal
     from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
+    from minecraft_mod_ai.platform_catalog import adapter_for_target
 
     debug_plan = write_debug_example_plan(
         root / "debug-proposal.json",
@@ -189,12 +190,13 @@ def _run_debug_token_generation(root: Path, project: Path):
     )
     proposal.validate()
     module = proposal.modules[0]
+    adapter = adapter_for_target("1.20.1", "fabric")
     result = CustomModuleGenerator(_DebugTokenRouter(_DEBUG_SOURCE)).generate(
         project,
         module=module,
-        minecraft_version="1.20.1",
-        loader="fabric",
-        mappings="1.20.1+build.10",
+        minecraft_version=adapter.minecraft_version,
+        loader=adapter.loader,
+        mappings=adapter.yarn_mappings,
     )
     target = project / _DEBUG_TARGET
     _assert_debug_generation_receipt(project, target, result)
