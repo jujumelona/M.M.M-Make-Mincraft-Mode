@@ -25,6 +25,11 @@ public final class OwnerApplication implements IApplication {
     private boolean opened;
     private boolean closing;
 
+    private static void stage(String value) {
+        System.err.println("MMM_OWNER_STAGE " + value);
+        System.err.flush();
+    }
+
     @Override public Object start(IApplicationContext context) throws Exception {
         PrintStream protocol = System.out;
         System.setOut(System.err);
@@ -63,6 +68,7 @@ public final class OwnerApplication implements IApplication {
 
     @SuppressWarnings("unchecked")
     private Object open(Map<String, Object> params) throws Exception {
+        stage("open.begin");
         Map<String, Object> model = (Map<String,Object>)params.get("model");
         if (model == null) throw new IllegalArgumentException("model is required");
         List<Map<String,Object>> sets = (List<Map<String,Object>>)model.get("source_sets");
@@ -70,11 +76,13 @@ public final class OwnerApplication implements IApplication {
         // Reopening is a complete model replacement, never reuse previous marker/classpath state.
         opened = false;
         for (IProject project : workspace.getRoot().getProjects()) project.delete(true, true, null);
+        stage("open.previous_projects_deleted");
         projectIds.clear();
         Map<String,IJavaProject> projects = new LinkedHashMap<>();
         Map<String,String> outputs = new HashMap<>();
         for (Map<String,Object> set : sets) {
             String id = required(set, "id");
+            stage("open.project.create.begin:" + id);
             String name = "source_" + UUID.nameUUIDFromBytes(id.getBytes(StandardCharsets.UTF_8)).toString().replace("-", "");
             IProject project = workspace.getRoot().getProject(name);
             project.create(null); project.open(null);
@@ -86,10 +94,19 @@ public final class OwnerApplication implements IApplication {
             projects.put(id, javaProject); projectIds.put(name, id);
             for (String output : strings(set, "output_dirs")) outputs.put(canonical(output), id);
             for (String output : strings(set, "output_artifacts")) outputs.put(canonical(output), id);
+            stage("open.project.create.end:" + id);
         }
-        for (Map<String,Object> set : sets) configure(set, projects, outputs);
+        for (Map<String,Object> set : sets) {
+            String id = required(set, "id");
+            stage("open.configure.begin:" + id);
+            configure(set, projects, outputs);
+            stage("open.configure.end:" + id);
+        }
         opened = true;
-        return build(true);
+        stage("open.full_build.begin");
+        Object result = build(true);
+        stage("open.full_build.end");
+        return result;
     }
 
     private void configure(Map<String,Object> set, Map<String,IJavaProject> projects, Map<String,String> outputs) throws Exception {
@@ -140,7 +157,9 @@ public final class OwnerApplication implements IApplication {
         description.setReferencedProjects(references.stream().map(id -> projects.get(id).getProject()).toArray(IProject[]::new));
         project.setDescription(description, null);
         IFolder bin = project.getFolder("bin"); bin.create(true, true, null);
+        stage("configure.classpath.begin:" + required(set, "id"));
         javaProject.setRawClasspath(entries.toArray(IClasspathEntry[]::new), bin.getFullPath(), null);
+        stage("configure.classpath.end:" + required(set, "id"));
         Map<String,String> options = new HashMap<>();
         String release = set.get("release") instanceof Number n ? Integer.toString(n.intValue()) : null;
         String source = release != null ? release : required(set, "source_compatibility");
@@ -152,6 +171,7 @@ public final class OwnerApplication implements IApplication {
         if (release != null) options.put(JavaCore.COMPILER_RELEASE, JavaCore.ENABLED);
         if (args.contains("-parameters")) options.put(JavaCore.COMPILER_CODEGEN_METHOD_PARAMETERS_ATTR, JavaCore.GENERATE);
         javaProject.setOptions(options);
+        stage("configure.options.end:" + required(set, "id"));
         if (!processors.isEmpty() && !args.contains("-proc:none")) {
             IFactoryPath factoryPath = AptConfig.getDefaultFactoryPath(javaProject);
             List<String> reversed = new ArrayList<>(processors);
@@ -170,11 +190,19 @@ public final class OwnerApplication implements IApplication {
 
     private Object build(boolean full) throws Exception {
         requireOpen();
+        String mode = full ? "full" : "incremental";
         // Eclipse compares resources and creates deltas; catches external writers as well as declared changes.
+        stage("build." + mode + ".refresh.begin");
         workspace.getRoot().refreshLocal(IResource.DEPTH_INFINITE, null);
+        stage("build." + mode + ".refresh.end");
+        stage("build." + mode + ".workspace.begin");
         workspace.build(full ? IncrementalProjectBuilder.FULL_BUILD : IncrementalProjectBuilder.INCREMENTAL_BUILD, null);
+        stage("build." + mode + ".workspace.end");
         generation++;
-        return snapshot();
+        stage("build." + mode + ".snapshot.begin");
+        Object result = snapshot();
+        stage("build." + mode + ".snapshot.end");
+        return result;
     }
 
     private Map<String,Object> snapshot() throws CoreException {
