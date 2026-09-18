@@ -1667,7 +1667,15 @@ def _fresh_observe_names(
     semantic_retrieval_choice: bool,
 ) -> list[str]:
     del mutation_context
-    preferred = ("search_code_rag", "java_workspace_symbols")
+    preferred = (
+        "search_code_rag",
+        "java_workspace_symbols",
+        "search_project_rag",
+        "external_mcp_capabilities",
+        "external_mcp_schema",
+        "external_mcp_call",
+        "inspect_modrinth_project",
+    )
     names = _unattempted_tools(by_name, attempted, preferred)
     return names if semantic_retrieval_choice else names[:1]
 
@@ -1723,11 +1731,24 @@ def _filter_tools_for_phase(
             and isinstance(mutation_context.source_body, str)
         )
         recovery_frontier = (
-            ("search_code_rag", "java_workspace_symbols", "search_project_rag")
+            (
+                "search_code_rag",
+                "java_workspace_symbols",
+                "search_project_rag",
+                "external_mcp_capabilities",
+                "external_mcp_schema",
+                "external_mcp_call",
+            )
             if pinned_source
             else (
-                "search_code_rag", "java_workspace_symbols", "search_project_rag",
-                "inspect_modrinth_project", "external_mcp_call", "read_reuse_source",
+                "search_code_rag",
+                "java_workspace_symbols",
+                "search_project_rag",
+                "external_mcp_capabilities",
+                "external_mcp_schema",
+                "external_mcp_call",
+                "inspect_modrinth_project",
+                "read_reuse_source",
             )
         )
         names = [name for name in recovery_frontier if name in by_name and name not in attempted]
