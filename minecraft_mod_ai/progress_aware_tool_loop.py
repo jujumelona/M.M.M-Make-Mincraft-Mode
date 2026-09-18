@@ -2457,6 +2457,75 @@ def _generate_with_tools_impl(
             semantic_retrieval_choice=bool(require_rag and not baseline_ready),
         )
 
+        if (
+            fresh_java_target
+            and require_rag
+            and not baseline_ready
+            and state.phase == LoopPhase.OBSERVE
+            and len(phase_tools) == 1
+            and _tool_name(phase_tools[0]) == "external_mcp_call"
+        ):
+            capability = _single_external_capability(phase_tools[0])
+            if capability:
+                host_schema = getattr(runtime, "host_external_schema", None)
+                if not callable(host_schema):
+                    state.record_source_attempt(
+                        "external_mcp_call", {"capability": capability}
+                    )
+                    emit_root_cause(
+                        "host_external_mcp_schema_unavailable",
+                        stage=stage,
+                        operation="external_mcp_call",
+                        gate="host_schema_binding",
+                        result="SKIP",
+                        reason="runtime does not expose host-owned external schema binding",
+                        details={"capability": capability},
+                    )
+                    continue
+                try:
+                    live_schema = host_schema(
+                        stage,
+                        capability,
+                        external_server_ids=reviewed_external_servers,
+                    )
+                except Exception as exc:
+                    state.record_source_attempt(
+                        "external_mcp_call", {"capability": capability}
+                    )
+                    state.record_failure("external_mcp_schema", exc)
+                    emit_root_cause(
+                        "host_external_mcp_schema_unavailable",
+                        stage=stage,
+                        operation="external_mcp_call",
+                        gate="host_schema_binding",
+                        result="SKIP",
+                        reason=f"{type(exc).__name__}: {exc}",
+                        details={"capability": capability},
+                    )
+                    continue
+                if str(live_schema.get("status", "")).strip() != "PASS":
+                    state.record_source_attempt(
+                        "external_mcp_call", {"capability": capability}
+                    )
+                    emit_root_cause(
+                        "host_external_mcp_schema_unavailable",
+                        stage=stage,
+                        operation="external_mcp_call",
+                        gate="host_schema_binding",
+                        result="SKIP",
+                        reason="no live provider schema is available for this capability",
+                        details={
+                            "capability": capability,
+                            "attempts": live_schema.get("attempts", []),
+                        },
+                    )
+                    continue
+                phase_tools = (
+                    _external_call_schema_with_live_arguments(
+                        phase_tools[0], live_schema
+                    ),
+                )
+
         forced_verifier: str | None = None
         if state.phase == LoopPhase.VERIFY:
             forced_verifier = _verifier_tool(phase_tools, unavailable_verifiers)
@@ -2506,7 +2575,7 @@ def _generate_with_tools_impl(
                 # reviewed retrieval tools remain available.
                 tool_choice = "required"
                 parallel = False
-            if forced_evidence_tool in {"external_mcp_schema", "external_mcp_call"}:
+            if forced_evidence_tool == "external_mcp_call":
                 for schema in phase_tools:
                     if _tool_name(schema) != forced_evidence_tool:
                         continue
