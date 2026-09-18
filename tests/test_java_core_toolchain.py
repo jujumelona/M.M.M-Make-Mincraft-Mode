@@ -1,4 +1,4 @@
-"""The owner must bind Gradle to the selected project JDK, not its launcher."""
+"""The owner runtime and project compile toolchain are intentionally distinct."""
 from pathlib import Path
 
 from minecraft_mod_ai import java_lsp, platform_catalog
@@ -42,15 +42,20 @@ def test_unconfigured_generic_gradle_project_keeps_own_toolchain(tmp_path, monke
     assert JavaCoreService._resolve_parameters(tmp_path) == {'project_root': str(tmp_path)}
 
 
-def test_platform_lock_wins_over_stale_environment(tmp_path, monkeypatch):
+def test_platform_lock_does_not_force_gradle_runtime_to_project_target_jdk(tmp_path, monkeypatch):
     from minecraft_mod_ai.platform_generation_contract import _write_platform_lock
 
     target = platform_catalog.adapter_for_target('1.20.1', 'fabric')
     _write_platform_lock(tmp_path, target)
-    home = _jdk(tmp_path, 17)
+    stale = _jdk(tmp_path, 17)
     monkeypatch.setenv('MMM_JAVA_VERSION', '25')
-    monkeypatch.setattr(java_lsp, '_candidate_java_homes', lambda _major: [home])
-    assert Path(JavaCoreService._resolve_parameters(tmp_path)['java_home']) == home
+    monkeypatch.setattr(java_lsp, '_candidate_java_homes', lambda _major: [stale])
+
+    params = JavaCoreService._resolve_parameters(tmp_path)
+
+    assert 'java_home' not in params
+    assert params['gradle_version'] == target.gradle
+    assert params['gradle_sha256'] == target.gradle_sha256
 
 
 
@@ -60,8 +65,6 @@ def test_platform_lock_resolves_gradle_coordinates_without_materialization(tmp_p
 
     target = platform_catalog.adapter_for_target('1.20.1', 'fabric')
     _write_platform_lock(tmp_path, target)
-    home = _jdk(tmp_path, int(target.java_version))
-    monkeypatch.setattr(java_lsp, '_candidate_java_homes', lambda _major: [home])
     monkeypatch.setattr(
         GradleRunner,
         'ensure_gradle',
@@ -74,7 +77,7 @@ def test_platform_lock_resolves_gradle_coordinates_without_materialization(tmp_p
 
     assert params['gradle_version'] == target.gradle
     assert params['gradle_sha256'] == target.gradle_sha256
-    assert Path(params['java_home']) == home
+    assert 'java_home' not in params
 
 
 def test_owner_resolution_materializes_exact_pinned_gradle(tmp_path, monkeypatch):
@@ -83,9 +86,6 @@ def test_owner_resolution_materializes_exact_pinned_gradle(tmp_path, monkeypatch
 
     target = platform_catalog.adapter_for_target('1.20.1', 'fabric')
     _write_platform_lock(tmp_path, target)
-    home = _jdk(tmp_path, int(target.java_version))
-    monkeypatch.setattr(java_lsp, '_candidate_java_homes', lambda _major: [home])
-
     gradle_home = tmp_path / 'verified-gradle'
     executable = gradle_home / 'bin' / 'gradle'
     executable.parent.mkdir(parents=True)
@@ -105,4 +105,4 @@ def test_owner_resolution_materializes_exact_pinned_gradle(tmp_path, monkeypatch
     assert params['gradle_user_home']
     assert 'gradle_version' not in params
     assert 'gradle_sha256' not in params
-    assert Path(params['java_home']) == home
+    assert 'java_home' not in params
