@@ -1205,12 +1205,20 @@ def _target_evidence_ready(
     require_rag: bool,
     fresh_java_target: bool,
 ) -> bool:
-    if _host_target_execution_authority(state):
-        return True
+    """Keep mutation authority separate from factual implementation evidence.
+
+    A host-reserved path proves where the coder may write; it does not prove that the
+    coder knows the target Minecraft/Fabric API. Fresh Java targets therefore require
+    reviewed Java/API evidence whenever RAG is required, even when the destination is
+    already host-authorized.
+    """
+
     if not require_rag:
         return True
     if fresh_java_target:
         return state.has_authoritative_java_evidence
+    if _host_target_execution_authority(state):
+        return True
     return state.has_fresh_evidence
 
 
@@ -2152,7 +2160,7 @@ def _generate_with_tools_impl(
         )
     )
 
-    if require_rag and not initial_execution_authority:
+    if require_rag and (fresh_java_target or not initial_execution_authority):
         state.phase = LoopPhase.OBSERVE
     elif implementation_requires_mutation and mutation_ready and not mutation_history_applied(messages):
         state.phase = LoopPhase.ACT
