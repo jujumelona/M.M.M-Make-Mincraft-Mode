@@ -776,10 +776,12 @@ class CustomModuleGenerator:
                     tool_stage="generation",
                     enable_tools=True,
                 )
+            stage_tree_sha256, post_generation_snapshot = _stage_tree_snapshot(staged_root)
             _persist_generation_checkpoint(
                 checkpoint_root,
                 staged_root,
                 identity_sha256=checkpoint_identity,
+                stage_tree_sha256=stage_tree_sha256,
             )
         except BaseException as exc:
             try:
@@ -818,6 +820,7 @@ class CustomModuleGenerator:
             root,
             staged_root,
             before,
+            after=post_generation_snapshot,
         )
         if not operations:
             discarded = ", ".join(discarded_paths[:8]) if discarded_paths else "none"
@@ -1062,8 +1065,11 @@ def _checkpoint_router_scope(router: Any) -> dict[str, Any]:
     return {"mode": "single", "strategy_epoch": _CHECKPOINT_STRATEGY_EPOCH}
 
 
-def _checkpoint_tree_state_sha256(root: Path) -> str:
+def _stage_tree_snapshot(root: Path) -> tuple[str, dict[str, str]]:
+    """Hash checkpoint structure and file contents in one filesystem traversal."""
+
     rows: list[tuple[str, str, str]] = []
+    files: dict[str, str] = {}
     for path in sorted(root.rglob("*")):
         relative = path.relative_to(root)
         if any(part in _STAGE_IGNORED_DIRS for part in relative.parts):
@@ -1072,10 +1078,16 @@ def _checkpoint_tree_state_sha256(root: Path) -> str:
         if path.is_symlink():
             rows.append((normalized, "symlink", str(path.readlink())))
         elif path.is_file():
-            rows.append((normalized, "file", "sha256:" + content_digest(path).hex()))
+            digest = "sha256:" + content_digest(path).hex()
+            rows.append((normalized, "file", digest))
+            files[normalized] = digest
         elif path.is_dir():
             rows.append((normalized, "directory", ""))
-    return _sha256_json(rows)
+    return _sha256_json(rows), files
+
+
+def _checkpoint_tree_state_sha256(root: Path) -> str:
+    return _stage_tree_snapshot(root)[0]
 
 
 def _generation_checkpoint_identity(
@@ -1161,6 +1173,7 @@ def _persist_generation_checkpoint(
     staged_root: Path,
     *,
     identity_sha256: str,
+    stage_tree_sha256: str | None = None,
 ) -> None:
     checkpoint_stat = checkpoint_root.lstat()
     staged_stat = staged_root.lstat()
@@ -1172,7 +1185,11 @@ def _persist_generation_checkpoint(
         "schema_version": _CHECKPOINT_SCHEMA,
         "identity_sha256": identity_sha256,
         "base_tree_sha256": _checkpoint_tree_state_sha256(base_root),
-        "stage_tree_sha256": _checkpoint_tree_state_sha256(staged_root),
+        "stage_tree_sha256": (
+            stage_tree_sha256
+            if stage_tree_sha256 is not None
+            else _checkpoint_tree_state_sha256(staged_root)
+        ),
     }
     manifest = _checkpoint_manifest(checkpoint_root)
     if manifest.is_symlink():
@@ -1319,15 +1336,7 @@ def _prepare_generation_checkpoint(
 
 
 def _project_snapshot(root: Path) -> dict[str, str]:
-    snapshot: dict[str, str] = {}
-    for path in sorted(root.rglob("*")):
-        relative = path.relative_to(root)
-        if any(part in _STAGE_IGNORED_DIRS for part in relative.parts):
-            continue
-        if path.is_symlink() or not path.is_file():
-            continue
-        snapshot[relative.as_posix()] = "sha256:" + content_digest(path).hex()
-    return snapshot
+    return _stage_tree_snapshot(root)[1]
 
 
 def _mutable_stage_state_sha256(staged_root: Path) -> str:
@@ -1376,8 +1385,11 @@ def _collect_staged_operations(
     original_root: Path,
     staged_root: Path,
     before: dict[str, str],
+    *,
+    after: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
-    after = _project_snapshot(staged_root)
+    if after is None:
+        after = _project_snapshot(staged_root)
     operations: list[dict[str, Any]] = []
     touched: list[str] = []
     discarded: list[str] = []
