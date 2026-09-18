@@ -2203,17 +2203,23 @@ def _generate_with_tools_impl(
     )
     host_grounded = host_baseline_evidence_ready(request.messages)
     mutation_ready = is_mutation_ready(messages, state)
-    fresh_java_target = bool(
+    java_target = bool(
         implementation_requires_mutation
         and state.mutation_context
-        and state.mutation_context.is_new_file
         and _canonical_mutation_path(state.mutation_context.target_path).casefold().endswith(".java")
+    )
+    fresh_java_target = bool(
+        java_target
+        and state.mutation_context
+        and state.mutation_context.is_new_file
     )
     initial_execution_authority = _host_target_execution_authority(state)
     from .small_model_task_capsule_contract import current_task_required_gates
     compile_backed_java = bool(
-        fresh_java_target
-        and initial_execution_authority
+        java_target
+        and state.mutation_context
+        and state.mutation_context.target_pinned
+        and state.mutation_context.is_mutation_ready
         and "target_compile" in current_task_required_gates()
     )
     router_requires_fresh_evidence = bool(router._agent_require_fresh_evidence)
@@ -2270,17 +2276,22 @@ def _generate_with_tools_impl(
         if (
             implementation_requires_mutation
             and state.workspace_changed
-            and state.validation_status == "DEFERRED"
+            and state.validation_status in {"COMPILE_REQUIRED", "DEFERRED"}
             and baseline_ready
         ):
             state.termination_reason = "VERIFICATION_DEFERRED_TO_TARGET_COMPILE"
+            intentional_compile_handoff = state.validation_status == "COMPILE_REQUIRED"
             emit_root_cause(
                 "generation_verifier_deferred_to_required_gate",
                 stage=stage,
                 operation="generate_with_tools",
                 gate="generation_verifier",
                 result="SKIP",
-                reason="generation-time Java verifier unavailable; target_compile remains mandatory",
+                reason=(
+                    "compile-backed Java uses mandatory target_compile as the canonical verifier"
+                    if intentional_compile_handoff
+                    else "generation-time Java verifier unavailable; target_compile remains mandatory"
+                ),
                 details={
                     "target_path": (
                         state.mutation_context.target_path
@@ -2288,6 +2299,7 @@ def _generate_with_tools_impl(
                         else None
                     ),
                     "required_gate": "target_compile",
+                    "intentional_compile_handoff": intentional_compile_handoff,
                 },
             )
             return _host_coder_summary(verification="DEFERRED_TO_TARGET_COMPILE")
@@ -2779,9 +2791,15 @@ def _generate_with_tools_impl(
                                     "for this path. Future repairs must edit the current file in place."
                                 ),
                             })
-                    state.phase = LoopPhase.VERIFY if all_names & _VERIFY_TOOLS else LoopPhase.OBSERVE
-                    if not all_names & _VERIFY_TOOLS:
-                        state.validation_status = "PASS"
+                    if compile_backed_java:
+                        state.validation_status = "COMPILE_REQUIRED"
+                        state.phase = LoopPhase.VERIFY
+                    else:
+                        state.phase = (
+                            LoopPhase.VERIFY if all_names & _VERIFY_TOOLS else LoopPhase.OBSERVE
+                        )
+                        if not all_names & _VERIFY_TOOLS:
+                            state.validation_status = "PASS"
                 else:
                     code = str(payload.get("failure_code") or "")
                     error = str(payload.get("error") or "MUTATION_UNCHANGED: no source-byte change")
