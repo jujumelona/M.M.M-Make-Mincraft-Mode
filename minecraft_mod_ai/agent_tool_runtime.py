@@ -320,6 +320,55 @@ class AgentToolRuntime:
             ),
         )
 
+    def host_external_schema(
+        self,
+        stage: str,
+        capability: str,
+        *,
+        external_server_ids: Collection[str],
+    ) -> dict[str, Any]:
+        """Resolve one live external schema as host-owned execution metadata.
+
+        This bypasses observation bounding because the returned JSON Schema is used to
+        construct the next model tool contract, not shown to the model as free-form
+        evidence. The normal ExternalAgentBridge binding contract still owns provider
+        selection, route fingerprinting, and TOCTOU revalidation.
+        """
+
+        selected = self._stage(stage)
+        name = str(capability or "").strip()
+        if not name:
+            raise AgentToolRuntimeError("external capability must not be empty")
+        payload: dict[str, Any] = {"capability": name, "max_access": "read"}
+        if selected == "generation":
+            payload.update(_generation_external_target(self.workspace_root))
+        allowed = frozenset(
+            value
+            for raw in external_server_ids
+            if (value := str(raw).strip())
+        )
+        result = self._external_bridge.call(
+            selected,
+            "external_mcp_schema",
+            payload,
+            allowed_server_ids=allowed,
+        )
+        emit_root_cause(
+            "host_external_mcp_schema_result",
+            stage=selected,
+            operation="external_mcp_schema",
+            gate="host_schema_binding",
+            result="PASS" if str(result.get("status", "")) == "PASS" else "SKIP",
+            details={
+                "capability": name,
+                "status": result.get("status"),
+                "server": result.get("server"),
+                "tool": result.get("tool"),
+                "attempts": result.get("attempts", []),
+            },
+        )
+        return result
+
     def _call(
         self,
         stage: str,
