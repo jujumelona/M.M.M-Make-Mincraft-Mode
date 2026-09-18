@@ -24,12 +24,19 @@ def test_explicit_project_java_overrides_launcher(tmp_path, monkeypatch):
     assert Path(params['java_home']) == project
 
 
-def test_unavailable_project_jdk_cannot_fall_back_to_launcher(tmp_path, monkeypatch):
+def test_unavailable_project_jdk_is_provisioned_instead_of_falling_back_to_launcher(tmp_path, monkeypatch):
     host = _jdk(tmp_path, 17)
+    project = _jdk(tmp_path, 25)
     monkeypatch.setenv('MMM_JAVA_VERSION', '25')
     monkeypatch.setattr(java_lsp, '_candidate_java_homes', lambda _major: [host])
-    with pytest.raises(java_lsp.JDTWorkspaceBootstrapError, match='25'):
-        JavaCoreService._resolve_parameters(tmp_path)
+    monkeypatch.setattr(
+        java_lsp,
+        '_provision_project_java_home',
+        lambda required, detail: project.resolve(),
+    )
+    params = JavaCoreService._resolve_parameters(tmp_path)
+    assert Path(params['java_home']) == project.resolve()
+    assert Path(params['java_home']) != host.resolve()
 
 
 def test_unconfigured_generic_gradle_project_keeps_own_toolchain(tmp_path, monkeypatch):
