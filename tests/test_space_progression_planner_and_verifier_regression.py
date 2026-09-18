@@ -9,7 +9,7 @@ from minecraft_mod_ai import evidence_first_planning as planning
 from minecraft_mod_ai import structural_minecraft_runtime_contract as structural
 from minecraft_mod_ai import java_core
 from minecraft_mod_ai.agent_tool_runtime import AgentToolRuntime
-from minecraft_mod_ai.generation_verifier_resilience import host_jdt_idle_timeout_seconds
+from minecraft_mod_ai.generation_verifier_resilience import (\n    host_jdt_idle_timeout_seconds,\n    host_jdt_startup_timeout_seconds,\n)
 from minecraft_mod_ai.model_adapters import (
     GenerationRequest,
     GenerationResponse,
@@ -587,6 +587,6 @@ def test_agent_runtime_binds_diagnostics_to_the_actual_project_root(
         (
             project.resolve(),
             [target],
-            host_jdt_idle_timeout_seconds(),
+            host_jdt_startup_timeout_seconds(),
         )
     ]

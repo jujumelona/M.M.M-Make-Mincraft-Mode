@@ -11,7 +11,14 @@ def test_gradle_build_does_not_hold_mmm_distribution_lock(
     monkeypatch,
 ) -> None:
     runner = GradleRunner(tmp_path / "cache")
-    sentinel = object()
+    sentinel = runner_module.BuildReport(
+        status="FAIL",
+        gradle_version="test",
+        commands=(),
+        jar_path=None,
+        gametest_report=None,
+        error="sentinel",
+    )
     calls: list[tuple[Path, bool]] = []
 
     def fake_build_locked(project_root: Path, *, run_gametest: bool):

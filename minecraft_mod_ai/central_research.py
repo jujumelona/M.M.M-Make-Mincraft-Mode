@@ -234,17 +234,6 @@ def _build_research_graph(
                 }
             )
             continue
-        if adapter is None:
-            deferred.append(domain.domain_id)
-            results.append(
-                {
-                    "domain_id": domain.domain_id,
-                    "strategy": "deferred_until_platform_selected",
-                    "queries": [],
-                }
-            )
-            continue
-
         query_results: list[dict[str, Any]] = []
         has_hits = False
         target_kwargs = (
@@ -285,7 +274,11 @@ def _build_research_graph(
         results.append(
             {
                 "domain_id": domain.domain_id,
-                "strategy": "adaptive_per_query",
+                "strategy": (
+                    "adaptive_per_query"
+                    if adapter is not None
+                    else "adaptive_generic_per_query"
+                ),
                 "queries": query_results,
             }
         )
