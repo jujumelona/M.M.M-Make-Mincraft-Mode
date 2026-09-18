@@ -95,19 +95,21 @@ class JavaCoreService:
         from .platform_catalog import _project_platform_lock, adapter_from_project
 
         params = {'project_root': str(root)}
-        # This method is coordinate resolution only: no downloads, builds, or cache
-        # mutation. Materialization belongs to the execution boundary below.
+        # Gradle/Loom model resolution must run on the JVM that owns the Tooling API,
+        # not on the project's source/compile target JDK. The daemon-side model reads
+        # JavaCompile.javaCompiler and returns the exact target toolchain separately.
+        # For platform-locked projects, therefore, never force execution.setJavaHome()
+        # to adapter.java_version; doing so can run a modern Loom plugin on an older
+        # source-target JDK (for example Loom 1.17.x on Java 17).
         platform_lock = _project_platform_lock(root)
         if platform_lock is not None:
             adapter = adapter_from_project(root)
-            major = adapter.java_version
             params['gradle_version'] = adapter.gradle
             params['gradle_sha256'] = adapter.gradle_sha256
-        elif os.environ.get('MMM_JAVA_VERSION', '').strip():
-            major = _requested_project_java_major()
-        else:
             return params
-        params['java_home'] = str(_resolve_project_java_home(int(major)))
+        if os.environ.get('MMM_JAVA_VERSION', '').strip():
+            major = _requested_project_java_major()
+            params['java_home'] = str(_resolve_project_java_home(int(major)))
         return params
 
     def _owner_resolve_parameters(self, root: Path) -> dict[str, str]:
