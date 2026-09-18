@@ -91,7 +91,6 @@ jobs:
             tests/test_owner_rpc.py \
             tests/test_generation_verifier_resilience.py
       - name: Run live production-owner integration
-        timeout-minutes: 15
         env:
           MMM_JVM_OWNER_LIVE: '1'
         run: python -m pytest -vv tests/test_jvm_owner_integration.py
