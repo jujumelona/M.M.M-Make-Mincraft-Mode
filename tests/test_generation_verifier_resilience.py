@@ -307,24 +307,27 @@ def _run_compile_backed_generation_flow(
                 )
                 assert "target_compile" in rendered
                 assert "package net.minecraft.item does not exist" in rendered
-            source = (
+            broken_source = (
                 "package dev.mmm.debugfixture; "
                 "import net.minecraft.item.Item; "
                 "public final class DebugToken {}\n"
-                if self.calls == 1
-                else "package dev.mmm.debugfixture; public final class DebugToken {}\n"
+            )
+            fixed_source = (
+                "package dev.mmm.debugfixture; public final class DebugToken {}\n"
             )
             arguments = (
                 {
                     "operation": "create_file",
                     "path": target,
-                    "content": source,
+                    "content": broken_source,
                 }
                 if self.calls == 1
                 else {
-                    "operation": "replace",
+                    "operation": "replace_exact",
                     "path": target,
-                    "new": source,
+                    "old": broken_source,
+                    "new": fixed_source,
+                    "count": 1,
                 }
             )
             return GenerationResponse(
