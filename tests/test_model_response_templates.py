@@ -6,7 +6,12 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator
 
-from minecraft_mod_ai.model_response_templates import response_schema, response_template_prompt
+from minecraft_mod_ai.model_response_templates import (
+    parse_response_text,
+    response_schema,
+    response_template_prompt,
+    serialize_response,
+)
 from minecraft_mod_ai.source_patch import TransactionalSourcePatcher, sha256_bytes
 
 
@@ -47,3 +52,24 @@ def test_every_explicit_json_generation_call_supplies_a_schema():
                 if "response_schema" not in kwargs:
                     missing.append(f"{path.name}:{node.lineno}")
     assert missing == []
+
+
+
+def test_fixed_response_round_trip_is_exact_and_schema_validated():
+    text = serialize_response("coder_summary", {"summary": "done"})
+    assert text == '{"summary":"done"}'
+    assert parse_response_text("coder_summary", text) == {"summary": "done"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        '</think>\n{"summary":"done"}',
+        '{"summary":"done"} trailing',
+        '{"summary":"done","extra":true}',
+        '{"summary":123}',
+    ),
+)
+def test_fixed_response_parser_rejects_wrappers_and_schema_drift(text):
+    with pytest.raises(ValueError, match="RESPONSE_TEMPLATE"):
+        parse_response_text("coder_summary", text)
