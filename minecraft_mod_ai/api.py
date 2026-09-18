@@ -585,10 +585,17 @@ class CompleteModAISession:
             updated_brief = merge_design_brief(self.brief, message)
         except ValueError as exc:
             raise SpecValidationError("대화 내용을 입력해 주세요.") from exc
+        existing_input_sha256 = ""
+        if self.existing_input is not None:
+            existing_input_sha256 = _verified_existing_input_sha256(
+                self.router,
+                self.existing_input,
+                await_inventory=True,
+            )
         proposal = self.planner.plan(
             updated_brief,
             media_paths=media_paths,
-            existing_input_sha256="",
+            existing_input_sha256=existing_input_sha256,
         )
         self.brief = updated_brief
         self.complete_proposal = proposal
