@@ -64,9 +64,6 @@ def finalize_runtime() -> None:
             small_model_max_agent_contract,
             work_graph,
         )
-        from .adaptive_retrieval_contract import (
-            _install_repository_grounding as install_repository_grounding,
-        )
         from .agent_observation_determinism import install as install_observation_determinism
         from .agent_routing_intent_contract import install as install_routing_intent
         from .authored_scope_research_contract import install as install_authored_scope_research
@@ -140,8 +137,6 @@ def finalize_runtime() -> None:
         install_routing_intent(small_model_module=small_model_max_agent_contract)
         install_generation_safety()
         install_retrieval_residency(model_router_module=model_router)
-
-        install_repository_grounding()
 
         install_model_tool_alias_permissions(agent_capability_context, model_tool_aliases)
         install_llama_mtp_cache_policy(llama_server_autotune, llama_server_runtime_tuning)
