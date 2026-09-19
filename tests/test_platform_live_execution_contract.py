@@ -1,3 +1,4 @@
+import json
 import inspect
 from pathlib import Path
 from types import SimpleNamespace
@@ -253,3 +254,26 @@ def test_live_migration_uses_explicit_existing_project_import_primitive_once(
     assert "wrapped_prepare" not in inspect.signature(
         contract._prepare_live_migration
     ).parameters
+
+
+def test_debug_fixture_roundtrip_lock_still_routes_to_official_scaffold(
+    tmp_path: Path,
+) -> None:
+    from minecraft_mod_ai.colab_run_modes import write_debug_example_plan
+    from minecraft_mod_ai.complete_spec import CompleteProposal
+
+    plan = write_debug_example_plan(
+        tmp_path / "proposal.json",
+        minecraft_version="1.21.8",
+        loader="fabric",
+    )
+    proposal = CompleteProposal.from_dict(
+        json.loads(plan.read_text(encoding="utf-8"))
+    )
+    adapter = platform_catalog.adapter_for_lock_values(
+        proposal.base_proposal.spec.platform
+    )
+
+    assert adapter.loader == "fabric"
+    assert tuple(adapter.deterministic_module_kinds) == ()
+    assert contract._uses_official_scaffold(adapter) is True
