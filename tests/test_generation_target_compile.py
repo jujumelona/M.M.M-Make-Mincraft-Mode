@@ -18,8 +18,7 @@ class _Runner:
     def __init__(self, report):
         self.report = report
 
-    def build(self, project_root, *, run_gametest):
-        assert run_gametest is False
+    def compile_java(self, project_root):
         return _Build(self.report)
 
 
@@ -118,7 +117,7 @@ def test_generation_target_compile_reports_infrastructure_unavailable(
     monkeypatch,
 ) -> None:
     class _BrokenRunner:
-        def build(self, project_root, *, run_gametest):
+        def compile_java(self, project_root):
             raise OSError("compiler unavailable")
 
     monkeypatch.setattr(
