@@ -398,25 +398,6 @@ def _manifest_hash(root: Path) -> str:
 
 
 def _write_platform_lock(root: Path, adapter: Any, receipt: dict[str, Any]) -> None:
-    target = root / ".minecraft_ai" / "platform-lock.json"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "schema_version": "mmm/generated-platform-lock-v2",
-        "adapter_id": adapter.adapter_id,
-        "edition": adapter.edition,
-        "loader": adapter.loader,
-        "minecraft_version": adapter.minecraft_version,
-        "java_version": adapter.java_version,
-        "yarn_mappings": "mojang",
-        "fabric_loader": adapter.fabric_loader,
-        "fabric_api": adapter.fabric_api,
-        "fabric_loom": adapter.fabric_loom,
-        "gradle": adapter.gradle,
-        "gradle_sha256": adapter.gradle_sha256,
-        "source_api_family": "fabric_live_ai",
-        "bootstrap": receipt,
-    }
-    target.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    from .platform_generation_contract import write_platform_lock
+
+    write_platform_lock(root, adapter, bootstrap=receipt)
