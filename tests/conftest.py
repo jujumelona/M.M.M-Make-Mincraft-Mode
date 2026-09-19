@@ -181,8 +181,14 @@ def _isolate_test_runtime_state(
             provider_id=production_provider.provider_id,
             discover_versions=lambda limit=32: (_TEST_MINECRAFT_VERSION,)[: max(1, int(limit))],
             resolve=resolve_test_or_production,
+            # The synthetic test target extends the production provider; it must not
+            # silently downgrade provider provenance for real production versions.
+            host_authoritative=production_provider.host_authoritative,
         ),
     )
+    isolated_provider = platform_catalog.provider_for_loader(_TEST_LOADER)
+    assert isolated_provider.provider_id == production_provider.provider_id
+    assert isolated_provider.host_authoritative is production_provider.host_authoritative
     # The optimizer has its own official-version helper. In offline test mode it must
     # see the same provider-owned target instead of leaking the moving live release
     # catalogue into otherwise deterministic unit tests.
