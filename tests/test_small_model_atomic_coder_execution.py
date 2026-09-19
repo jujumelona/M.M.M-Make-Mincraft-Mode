@@ -131,6 +131,44 @@ def _distinct_messages(*, step_count: int = 3):
     return tuple(messages)
 
 
+def test_production_atomic_seams_are_source_owned_and_install_is_noop() -> None:
+    from minecraft_mod_ai import custom_module_generator, model_router
+    from minecraft_mod_ai.small_model_atomic_coder_execution import (
+        assert_installed,
+        install,
+    )
+
+    before = (
+        custom_module_generator._generate_coder_text,
+        custom_module_generator._collect_initial_observations,
+        custom_module_generator._materialize_owned_reuse_context,
+    )
+    assert all(
+        getattr(item, "_mmm_small_model_atomic_coder", False)
+        for item in before
+    )
+    assert getattr(
+        custom_module_generator._collect_initial_observations,
+        "__mmm_repository_grounding_live_context__",
+        False,
+    )
+
+    install(
+        custom_module_generator_module=custom_module_generator,
+        model_router_module=model_router,
+    )
+    after = (
+        custom_module_generator._generate_coder_text,
+        custom_module_generator._collect_initial_observations,
+        custom_module_generator._materialize_owned_reuse_context,
+    )
+    assert after == before
+    assert_installed(
+        custom_module_generator_module=custom_module_generator,
+        model_router_module=model_router,
+    )
+
+
 def test_distinct_state_transitions_become_one_model_batch_each() -> None:
     batches = atomicize_coder_messages(_distinct_messages(step_count=3))
 
