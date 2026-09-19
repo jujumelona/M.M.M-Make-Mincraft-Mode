@@ -255,3 +255,66 @@ def test_no_progress_streak_counts_consecutive_failures() -> None:
     assert state.no_progress_streak == 1
     assert state.record_no_progress_result(value) is True
     assert state.no_progress_streak == 2
+
+
+def test_repeated_unapplied_mutation_fixed_point_survives_no_progress_reset() -> None:
+    state = tool_loop.HostRunState()
+    arguments = {
+        "operation": "replace_exact",
+        "path": TARGET_PATH,
+        "old": "stale",
+        "new": "replacement",
+    }
+    payload = {
+        "ok": False,
+        "failure_code": "MUTATION_STALE_PRECONDITION",
+        "error": "Exact source-edit precondition failed",
+    }
+
+    assert state.record_mutation("apply_source_edit", arguments, payload) is False
+    assert state.unapplied_mutation_fixed_point is False
+
+    assert state.record_mutation("apply_source_edit", arguments, payload) is False
+    assert state.unapplied_mutation_fixed_point is True
+    assert state.semantic_fixed_point is True
+
+    state.clear_no_progress_result()
+
+    assert state.unapplied_mutation_fixed_point is True
+    assert state.semantic_fixed_point is True
+
+
+def test_successful_mutation_clears_stale_mutation_fixed_point() -> None:
+    state = tool_loop.HostRunState()
+    arguments = {
+        "operation": "replace_exact",
+        "path": TARGET_PATH,
+        "old": "stale",
+        "new": "replacement",
+    }
+    failed = {
+        "ok": False,
+        "failure_code": "MUTATION_STALE_PRECONDITION",
+        "error": "Exact source-edit precondition failed",
+    }
+
+    state.record_mutation("apply_source_edit", arguments, failed)
+    state.record_mutation("apply_source_edit", arguments, failed)
+    assert state.unapplied_mutation_fixed_point is True
+
+    applied = {
+        "ok": True,
+        "result": {
+            "status": "applied",
+            "workspace_impact": "changed",
+        },
+    }
+    state.record_mutation(
+        "apply_source_edit",
+        {**arguments, "old": "current", "new": "fixed"},
+        applied,
+    )
+
+    assert state.unapplied_mutation_fixed_point is False
+    assert state.semantic_fixed_point is False
+    assert state.unchanged_mutation_fingerprints == set()
