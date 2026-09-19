@@ -206,12 +206,8 @@ def test_debug_fixture_runs_real_build_and_packaging_without_live_model(
     assert target.is_file()
     assert result.build_report is not None
     assert result.build_report["status"] == "PASS"
-    assert any(
-        command.get("name") in {"build", "clean_build"}
-        and command.get("exit_code") == 0
-        and command.get("timed_out") is not True
-        for command in result.build_report.get("commands", ())
-        if isinstance(command, dict)
+    assert CompleteProductionOrchestrator._full_gradle_build_receipt_passed(
+        result.build_report
     )
     assert result.jar_validation is not None
     assert result.jar_validation["status"] == "PASS"
