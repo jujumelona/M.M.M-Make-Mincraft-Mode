@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .platform_catalog import adapter_for_lock_values
+from .spec import platform_receipt_sha256
 
 
 def install(generator_module: Any) -> None:
@@ -37,29 +38,58 @@ def install(generator_module: Any) -> None:
     generator.generate = generate
 
 
-def _write_platform_lock(project_root: Path, adapter: Any) -> None:
+def write_platform_lock(
+    project_root: Path,
+    adapter: Any,
+    *,
+    bootstrap: dict[str, Any] | None = None,
+) -> None:
+    """Persist the one complete approval/execution platform lock schema."""
+
     target = project_root / ".minecraft_ai" / "platform-lock.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "schema_version": "mmm/generated-platform-lock-v1",
+        "schema_version": "mmm/generated-platform-lock-v4",
         "adapter_id": adapter.adapter_id,
         "edition": adapter.edition,
         "loader": adapter.loader,
         "minecraft_version": adapter.minecraft_version,
         "java_version": adapter.java_version,
         "yarn_mappings": adapter.yarn_mappings,
+        "mappings_kind": adapter.mappings_kind,
+        "mappings_version": adapter.mappings_version,
         "fabric_loader": adapter.fabric_loader,
         "fabric_api": adapter.fabric_api,
         "fabric_loom": adapter.fabric_loom,
         "gradle": adapter.gradle,
+        "gradle_sha256": adapter.gradle_sha256,
+        "gradle_distribution_url": (
+            f"https://services.gradle.org/distributions/gradle-{adapter.gradle}-bin.zip"
+        ),
+        "data_pack_version": adapter.data_pack_version,
+        "resource_pack_version": adapter.resource_pack_version,
         "resource_pack_format": adapter.resource_pack_format,
+        "release_metadata_url": adapter.release_metadata_url,
         "source_api_family": adapter.source_api_family,
+        "deterministic_module_kinds": sorted(adapter.deterministic_module_kinds),
     }
+    payload["receipt_sha256"] = platform_receipt_sha256(payload)
+    if bootstrap is not None:
+        payload["bootstrap"] = dict(bootstrap)
     target.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 
+
+def _write_platform_lock(
+    project_root: Path,
+    adapter: Any,
+    receipt: dict[str, Any] | None = None,
+) -> None:
+    """Compatibility entrypoint backed by the canonical complete writer."""
+
+    write_platform_lock(project_root, adapter, bootstrap=receipt)
 
 def _rewrite_gradle_properties(project_root: Path, adapter: Any) -> None:
     path = project_root / "gradle.properties"
