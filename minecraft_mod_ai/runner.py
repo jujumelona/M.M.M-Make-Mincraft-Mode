@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -243,16 +244,44 @@ class GradleRunner:
         if build_result.exit_code != 0:
             return self._failed_build(prepared, commands, "Gradle build failed.")
         if run_gametest:
+            gametest_task = self._configured_gametest_task(prepared.project_root)
+            if gametest_task is None:
+                return BuildReport(
+                    status="BLOCKED",
+                    gradle_version=prepared.gradle_version,
+                    commands=tuple(commands),
+                    jar_path=self._find_release_jar(prepared.project_root),
+                    gametest_report=None,
+                    error=(
+                        "GameTest was requested but the project declares no supported "
+                        "GameTest Gradle run configuration."
+                    ),
+                )
             gametest_result = self._run(
                 name="gametest",
                 executable=prepared.gradle,
-                arguments=("--no-daemon", "runGameTestServer", "--stacktrace"),
+                arguments=("--no-daemon", gametest_task, "--stacktrace"),
                 cwd=prepared.project_root,
                 env=prepared.environment,
                 log_path=prepared.logs / "gradle-gametest.log",
             )
             commands.append(gametest_result)
             if gametest_result.exit_code != 0:
+                if self._gradle_task_missing(
+                    Path(gametest_result.log_path),
+                    gametest_task,
+                ):
+                    return BuildReport(
+                        status="BLOCKED",
+                        gradle_version=prepared.gradle_version,
+                        commands=tuple(commands),
+                        jar_path=self._find_release_jar(prepared.project_root),
+                        gametest_report=self._gametest_report(prepared.project_root),
+                        error=(
+                            f"Configured GameTest Gradle task {gametest_task!r} is "
+                            "unavailable; source repair cannot create host verifier tasks."
+                        ),
+                    )
                 return self._failed_build(
                     prepared,
                     commands,
@@ -295,6 +324,46 @@ class GradleRunner:
                 self._gametest_report(prepared.project_root) if include_artifacts else None
             ),
             error=error,
+        )
+
+    @staticmethod
+    def _configured_gametest_task(project_root: Path) -> str | None:
+        """Resolve the GameTest task from the project's declared Loom/Fabric DSL."""
+
+        scripts = (
+            project_root / "build.gradle",
+            project_root / "build.gradle.kts",
+        )
+        text_parts: list[str] = []
+        for script in scripts:
+            if not script.is_file() or script.is_symlink():
+                continue
+            try:
+                text_parts.append(script.read_text(encoding="utf-8", errors="strict"))
+            except (OSError, UnicodeError):
+                return None
+        text = "\n".join(text_parts)
+        if not text:
+            return None
+        if re.search(r"\bgameTestServer\b", text):
+            return "runGameTestServer"
+        if "configureTests" in text or re.search(r"\bgameTest\b", text):
+            return "runGameTest"
+        return None
+
+    @staticmethod
+    def _gradle_task_missing(log_path: Path, task_name: str) -> bool:
+        if not log_path.is_file() or log_path.is_symlink():
+            return False
+        try:
+            text = log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return False
+        quoted = f"Task '{task_name}' not found"
+        return quoted in text or (
+            "TaskSelectionException" in text
+            and task_name in text
+            and "not found" in text
         )
 
     @staticmethod
