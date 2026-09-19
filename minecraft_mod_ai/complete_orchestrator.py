@@ -466,6 +466,37 @@ def _persisted_runtime_evidence(
     }
 
 
+def _refresh_runtime_receipt_status(
+    receipt: dict[str, Any],
+    live_status: dict[str, Any],
+    *,
+    require_client: bool,
+) -> dict[str, Any]:
+    server = dict(receipt.get("server") or {})
+    server["server_running"] = live_status.get("server_running") is True
+    if "server_log_lines" in live_status:
+        server["server_log_lines"] = live_status.get("server_log_lines")
+
+    client_value = receipt.get("client")
+    client = dict(client_value) if isinstance(client_value, dict) else None
+    if client is not None:
+        client["client_running"] = live_status.get("client_running") is True
+        if "client_log_lines" in live_status:
+            client["client_log_lines"] = live_status.get("client_log_lines")
+
+    terminal_ok = server.get("server_running") is True and (
+        not require_client
+        or (client is not None and client.get("client_running") is True)
+    )
+    return {
+        **receipt,
+        "status": "PASS" if terminal_ok else "FAIL",
+        "server": server,
+        "client": client,
+        "final_status": dict(live_status),
+    }
+
+
 def _runtime_verification_passed(
     *,
     required: bool,
@@ -920,6 +951,12 @@ class CompleteProductionOrchestrator:
             else:
                 if approved.external_runtime_required:
                     unresolved.append('visual-review:not-requested')
+            if runtime_manager is not None and runtime_receipt is not None:
+                runtime_receipt = _refresh_runtime_receipt_status(
+                    runtime_receipt,
+                    runtime_manager.status(),
+                    require_client=options.run_client,
+                )
         finally:
             if runtime_manager is not None and options.cleanup_runtime:
                 cleanup = runtime_manager.cleanup()
