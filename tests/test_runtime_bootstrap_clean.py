@@ -162,6 +162,15 @@ def test_contract_composition_is_limited_to_explicit_owners() -> None:
     assert offenders == [], 'nested contract composition:\n' + '\n'.join(offenders)
 
 
+def test_repair_grounding_is_not_late_runtime_patched() -> None:
+    adaptive = _text("adaptive_retrieval_contract.py")
+    finalization = _FINALIZATION.read_text(encoding="utf-8")
+
+    assert "_install_repository_grounding" not in adaptive
+    assert "_install_repository_grounding" not in finalization
+    assert "install_repository_grounding" not in finalization
+
+
 def test_model_output_atomicity_has_one_install_owner() -> None:
     bootstrap = _BOOTSTRAP.read_text(encoding="utf-8")
     finalization = _FINALIZATION.read_text(encoding="utf-8")
