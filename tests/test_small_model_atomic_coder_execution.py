@@ -434,7 +434,7 @@ def test_atomic_summary_aggregation_truncates_distinct_contract_summaries_to_sch
     )
     result = custom._generate_coder_text(Router(),
         "coder",
-        _messages(step_count=3),
+        _distinct_messages(step_count=3),
         response_format="text",
         tool_stage="generation",
         enable_tools=True,
