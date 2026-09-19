@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 from minecraft_mod_ai.runner_parallel_validation_contract import (
     _executed_gametest_task,
+    _structured_gametest_report,
     _task_from_listing,
     install,
 )
@@ -102,6 +103,20 @@ class _FakeGradleRunner:
                     '<testsuite tests="1" failures="0" errors="0" skipped="0">'
                     '<testcase name="MmmDebugFixtureModGameTests.generatedRegistriesAreLive"/>'
                     "</testsuite>",
+                    encoding="utf-8",
+                )
+            elif (
+                name == "incremental_build"
+                and (cwd / "simulate-integrated-gametest-log-only").is_file()
+            ):
+                log_path.write_text(
+                    "> Task :configureLaunch\n"
+                    "> Task :runGameTest\n"
+                    "2 tests are now running at position 0, 0, 0!\n"
+                    "========= 2 GAME TESTS COMPLETE IN 7.570 s ======================\n"
+                    "All 2 required tests passed :)\n"
+                    "> Task :build\n"
+                    "BUILD SUCCESSFUL\n",
                     encoding="utf-8",
                 )
             with self.counter_lock:
@@ -219,6 +234,59 @@ def _project(root: Path, name: str, version: str, sha256: str) -> Path:
         encoding="utf-8",
     )
     return project
+
+
+
+def _install_host_gametest_fixture(project: Path) -> None:
+    source = (
+        project
+        / "src/main/java/dev/mmm/debugfixture/MmmDebugFixtureModGameTests.java"
+    )
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        "package dev.mmm.debugfixture;\n"
+        "public final class MmmDebugFixtureModGameTests {\n"
+        "    @GameTest\n"
+        "    public void generatedRegistriesAreLive() {}\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    metadata = project / "src/main/resources/fabric.mod.json"
+    metadata.parent.mkdir(parents=True, exist_ok=True)
+    metadata.write_text(
+        json.dumps(
+            {
+                "entrypoints": {
+                    "fabric-gametest": [
+                        "dev.mmm.debugfixture.MmmDebugFixtureModGameTests"
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    lock = project / ".minecraft_ai/platform-lock.json"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(
+        json.dumps(
+            {
+                "bootstrap": {
+                    "gametest_contract": {
+                        "task": "runGameTest",
+                        "report": "build/gametest-report.xml",
+                        "entrypoint": (
+                            "dev.mmm.debugfixture.MmmDebugFixtureModGameTests"
+                        ),
+                        "source": (
+                            "src/main/java/dev/mmm/debugfixture/"
+                            "MmmDebugFixtureModGameTests.java"
+                        ),
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def _reset() -> None:
@@ -365,3 +433,49 @@ def test_fallback_discovers_real_gradle_task_instead_of_hardcoding_server(
     assert report.gametest_task == "runGameTest"
     assert "gametest_capabilities" in _FakeGradleRunner.run_calls
     assert "gametest" in _FakeGradleRunner.run_calls
+
+
+def test_log_only_integrated_gametest_reconstructs_host_bound_xml(
+    tmp_path: Path,
+) -> None:
+    _reset()
+    runner_module = _runner_module()
+    install(runner_module=runner_module, validation_module=_validation_module())
+    runner = _FakeGradleRunner(tmp_path / "cache")
+    project = _project(tmp_path, "log-only", "8.10.2", "f" * 64)
+    _install_host_gametest_fixture(project)
+    (project / "simulate-integrated-gametest-log-only").write_text(
+        "1",
+        encoding="utf-8",
+    )
+
+    report = runner.build(project, run_gametest=True)
+
+    assert report.passed
+    assert report.gametest_mode == "integrated_build"
+    assert report.gametest_task == "runGameTest"
+    assert report.gametest_report is not None
+    assert Path(report.gametest_report).name == "mmm-gametest-attestation.xml"
+    assert "gametest" not in _FakeGradleRunner.run_calls
+    assert "gametest_capabilities" not in _FakeGradleRunner.run_calls
+
+
+def test_log_summary_cannot_create_evidence_without_host_contract(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path, "unbound", "8.10.2", "1" * 64)
+    log = project / ".minecraft_ai/logs/gradle-build.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(
+        "> Task :runGameTest\n"
+        "========= 2 GAME TESTS COMPLETE IN 1.0 s ======================\n"
+        "All 2 required tests passed :)\n"
+        "BUILD SUCCESSFUL\n",
+        encoding="utf-8",
+    )
+
+    assert _structured_gametest_report(
+        project,
+        log,
+        project / "build/gametest-report.xml",
+    ) is None
