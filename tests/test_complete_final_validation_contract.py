@@ -615,3 +615,15 @@ def test_primary_release_zip_path_accepts_attested_additional_artifacts() -> Non
     assert "Path('additional') / name" in package_source
     assert "'resource_pack_sha256'" in execute_source
     assert "'generated-resource-pack.zip': resource_pack_bundle" in execute_source
+
+
+def test_blockbench_checkpoint_dependency_tracks_geometry_digest(tmp_path) -> None:
+    geo = tmp_path / "entity.geo.json"
+    geo.write_text('{"minecraft:geometry":[]}', encoding="utf-8")
+    receipt = {"files": [str(geo)]}
+
+    first = CompleteProductionOrchestrator._blockbench_geometry_sha256(receipt)
+    geo.write_text('{"minecraft:geometry":[{"description":{}}]}', encoding="utf-8")
+    second = CompleteProductionOrchestrator._blockbench_geometry_sha256(receipt)
+
+    assert first != second
