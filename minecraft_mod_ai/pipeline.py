@@ -700,20 +700,24 @@ class MinecraftModPipeline:
     ) -> None:
         path = project_root / ".minecraft_ai" / "audit.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
+        status = str(details.get("status", "succeeded")).strip().casefold()
+        if status not in {"succeeded", "failed", "blocked", "skipped"}:
+            status = "failed" if status in {"fail", "error"} else "succeeded"
+        commands = details.get("commands")
+        evidence = (
+            tuple(str(item) for item in commands if str(item))
+            if isinstance(commands, list)
+            else ()
+        )
+        if not evidence:
+            evidence = (f"{worker}:{status}",)
         receipt = make_worker_receipt(
+            node_id=worker,
             worker=worker,
-            worker_kind="local_tool",
-            task_id=worker,
-            status=str(details.get("status", "succeeded")),
-            scope=worker,
-            inputs=(proposal.calculate_hash(),),
-            outputs=tuple(
-                str(item) for item in details.get("commands", ())
-            )
-            if isinstance(details.get("commands"), list)
-            else (),
-            tools=(worker,),
-            validations=(str(details.get("status", "succeeded")),),
+            proposal=proposal,
+            result=dict(details),
+            evidence=evidence,
+            status=status,
             error=str(details.get("error") or "") or None,
         )
         with path.open("a", encoding="utf-8") as handle:

@@ -93,7 +93,6 @@ def finalize_runtime() -> None:
         from .runtime_hot_path_contract import install as install_runtime_hot_paths
         from .runtime_live_path_preflight import run_runtime_live_path_preflight
         from .runtime_preflight import run_runtime_preflight
-        from .runtime_regression_reconciliation import install as install_runtime_regression_reconciliation
         from .runtime_wrapper_integrity import verify_installed_wrappers
         from .small_model_atomic_coder_execution import assert_installed as assert_small_model_atomic_coder
         from .small_model_task_capsule_contract import assert_installed as assert_small_model_task_capsule
@@ -152,7 +151,6 @@ def finalize_runtime() -> None:
         )
         install_immutable_platform_execution()
         install_fabric_immutable_rebind()
-        install_runtime_regression_reconciliation()
         install_generation_boundary_reconciliation()
 
         assert_small_model_task_capsule()

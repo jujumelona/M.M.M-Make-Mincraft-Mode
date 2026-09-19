@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import inspect
-
 from minecraft_mod_ai import evidence_obligation_contract as obligations
 from minecraft_mod_ai import reuse_planner
 
@@ -56,8 +54,12 @@ def test_frozen_target_expands_complete_obligation_dag():
     assert brief["deferred_obligation_kinds"] == []
 
 
-def test_reuse_planner_does_not_gate_grounded_donors_on_public_discovery():
-    source = inspect.getsource(reuse_planner.optimize_platform_and_reuse)
-    assert "grounded_donors_available" in source
-    assert "__mmm_grounded_donors__" in source
-    assert "client if evidence_discovery_enabled else None" in source
+def test_reuse_planner_owns_catalog_provenance_without_runtime_rebinding():
+    graph = reuse_planner.decompose_capability_graph(
+        "test",
+        design={"_evidence_request_catalog": _catalog(1)},
+    )
+
+    assert graph.sources == (("capability_0", "evidence_request_catalog.req_0"),)
+    assert not hasattr(reuse_planner, "_discover_donor_candidates")
+    assert not hasattr(reuse_planner, "_discover_best_donor")

@@ -117,6 +117,7 @@ def test_removed_runtime_patch_modules_do_not_return() -> None:
         "execution_feedback_owner_precision_contract.py",
         "generation_verifier_runtime_contract.py",
         "model_tool_alias_permission_policy.py",
+        "runtime_regression_reconciliation.py",
     ):
         assert not (PACKAGE / name).exists()
 
@@ -175,6 +176,8 @@ def test_execution_feedback_is_not_late_runtime_patched() -> None:
     assert "_install_run_context" not in feedback
     assert "sys.modules" not in feedback
     assert "execution_feedback_replan_contract.install" not in finalization
+    assert "runtime_regression_reconciliation" not in finalization
+    assert "install_runtime_regression_reconciliation" not in finalization
 
 
 def test_repair_grounding_is_not_late_runtime_patched() -> None:

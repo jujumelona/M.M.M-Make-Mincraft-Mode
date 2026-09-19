@@ -214,6 +214,21 @@ class TargetImplementationPlan:
             "total_expected_cost": round(self.total_expected_cost, 4),
             "unresolved_capabilities": self.unresolved_capabilities,
             "reusable_registry_candidates": self.reusable_registry_candidates,
+            "reuse_ledger": [
+                {
+                    "capability": item.capability,
+                    "mode": item.mode,
+                    "proof_level": item.proof_level,
+                    "fresh_generation_scope": (
+                        "full"
+                        if item.mode == "fresh"
+                        else "forbidden"
+                        if item.verified_reuse
+                        else "residual_only"
+                    ),
+                }
+                for item in self.capabilities
+            ],
             "capability_graph": (
                 dict(self.capability_graph)
                 if isinstance(self.capability_graph, Mapping)
@@ -382,7 +397,7 @@ def decompose_capability_graph(
             for capability in capabilities:
                 if capability not in nodes:
                     nodes.append(capability)
-                    sources.append((capability, f"request_catalog.{requirement_id}"))
+                    sources.append((capability, f"evidence_request_catalog.{requirement_id}"))
                     terms.append(
                         (
                             capability,
