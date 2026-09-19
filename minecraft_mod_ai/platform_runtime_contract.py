@@ -128,6 +128,16 @@ def _install_runtime_manager(module: Any) -> None:
             )
         if not re.fullmatch(r"[a-z][a-z0-9_-]{1,63}", instance_name):
             raise module.RuntimePolicyError("Invalid runtime instance name.")
+        mod_jar = kwargs.get("mod_jar")
+        server_launcher = kwargs.get("server_launcher")
+        if len(args) >= 2 and mod_jar is None:
+            mod_jar = args[1]
+        if len(args) >= 3 and server_launcher is None:
+            server_launcher = args[2]
+        # Artifact existence belongs to instance preparation, where those inputs
+        # are actually present.  start_server() only starts the prepared instance.
+        self._existing_file(mod_jar)
+        self._existing_file(server_launcher)
         result = original_prepare(self, *args, **kwargs)
         result = dict(result)
         result["platform_adapter"] = self._mmm_platform_adapter.adapter_id
@@ -141,9 +151,6 @@ def _install_runtime_manager(module: Any) -> None:
 
     @wraps(original_start_server)
     def start_server(self: Any, *args: Any, **kwargs: Any):
-        # Missing artifacts are request errors; do not mask them with host-JDK drift.
-        self._existing_file(kwargs.get("mod_jar"))
-        self._existing_file(kwargs.get("server_launcher"))
         _validate_java_command(
             self.profile.server_java_command,
             expected_major=int(self._mmm_platform_adapter.java_version),
