@@ -1,8 +1,5 @@
 """M.M.M Make Mincraft Mode: scalable multimodal Minecraft mod production tools."""
 
-from .execution_feedback_semantic_convergence_installation import (
-    install as install_execution_feedback_semantic_convergence,
-)
 from .runtime_bootstrap import initialize_runtime
 from .runtime_finalization import finalize_runtime
 from .task_template_catalog import RUNTIME_TEMPLATE_ROOT
@@ -19,9 +16,6 @@ def _validate_runtime_template_authority() -> None:
 
 initialize_runtime()
 _validate_runtime_template_authority()
-from . import execution_feedback_replan_contract as _execution_feedback_replan_contract
-
-install_execution_feedback_semantic_convergence(_execution_feedback_replan_contract)
 finalize_runtime()
 
 from .api import (
