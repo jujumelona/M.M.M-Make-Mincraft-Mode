@@ -9,6 +9,7 @@ on:
       - 'minecraft_mod_ai/custom_generation_research.py'
       - 'minecraft_mod_ai/complete_orchestrator.py'
       - 'minecraft_mod_ai/small_model_atomic_coder_execution.py'
+      - 'minecraft_mod_ai/small_model_write_scope_enforcement.py'
       - 'minecraft_mod_ai/platform_custom_coder_contract.py'
       - 'minecraft_mod_ai/agent_tool_runtime.py'
       - 'minecraft_mod_ai/generation_verifier_resilience.py'
@@ -27,6 +28,7 @@ on:
       - 'tests/test_production_tool_call_isolation_contract.py'
       - 'tests/test_production_path_contract.py'
       - 'tests/test_small_model_atomic_coder_execution.py'
+      - 'tests/test_small_model_write_scope_enforcement.py'
       - 'tests/test_custom_generation_efficiency_contract.py'
       - 'tests/test_platform_dynamic_coder_contract.py'
       - 'tests/test_debug_mode_fixture_roundtrip.py'
@@ -44,6 +46,7 @@ on:
       - 'minecraft_mod_ai/custom_generation_research.py'
       - 'minecraft_mod_ai/complete_orchestrator.py'
       - 'minecraft_mod_ai/small_model_atomic_coder_execution.py'
+      - 'minecraft_mod_ai/small_model_write_scope_enforcement.py'
       - 'minecraft_mod_ai/platform_custom_coder_contract.py'
       - 'minecraft_mod_ai/agent_tool_runtime.py'
       - 'minecraft_mod_ai/generation_verifier_resilience.py'
@@ -62,6 +65,7 @@ on:
       - 'tests/test_production_tool_call_isolation_contract.py'
       - 'tests/test_production_path_contract.py'
       - 'tests/test_small_model_atomic_coder_execution.py'
+      - 'tests/test_small_model_write_scope_enforcement.py'
       - 'tests/test_custom_generation_efficiency_contract.py'
       - 'tests/test_platform_dynamic_coder_contract.py'
       - 'tests/test_debug_mode_fixture_roundtrip.py'
@@ -103,6 +107,7 @@ jobs:
             minecraft_mod_ai/custom_generation_research.py \
             minecraft_mod_ai/complete_orchestrator.py \
             minecraft_mod_ai/small_model_atomic_coder_execution.py \
+            minecraft_mod_ai/small_model_write_scope_enforcement.py \
             minecraft_mod_ai/platform_custom_coder_contract.py \
             minecraft_mod_ai/agent_tool_runtime.py \
             minecraft_mod_ai/generation_verifier_resilience.py \
@@ -120,6 +125,7 @@ jobs:
             tests/test_production_tool_call_isolation_contract.py \
             tests/test_production_path_contract.py \
             tests/test_small_model_atomic_coder_execution.py \
+            tests/test_small_model_write_scope_enforcement.py \
             tests/test_custom_generation_efficiency_contract.py \
             tests/test_platform_dynamic_coder_contract.py \
             tests/test_debug_mode_fixture_roundtrip.py \
