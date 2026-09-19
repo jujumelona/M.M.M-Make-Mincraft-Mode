@@ -106,7 +106,6 @@ def finalize_runtime() -> None:
         from .runtime_wrapper_integrity import verify_installed_wrappers
         from .small_model_atomic_coder_execution import assert_installed as assert_small_model_atomic_coder
         from .small_model_task_capsule_contract import assert_installed as assert_small_model_task_capsule
-        from .small_model_task_capsule_contract import install as install_small_model_task_capsule
         from .small_model_write_scope_enforcement import assert_installed as assert_small_model_write_scope
         from .source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
         from .task_artifact_contract import install_task_artifact_contract
@@ -175,7 +174,6 @@ def finalize_runtime() -> None:
             verifier_module=generation_verifier_resilience,
         )
 
-        install_small_model_task_capsule()
         assert_small_model_task_capsule()
         assert_small_model_write_scope(custom_module_generator_module=custom_module_generator, host_grounding_module=host_grounding)
         assert_small_model_atomic_coder(
