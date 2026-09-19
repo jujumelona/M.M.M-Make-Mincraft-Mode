@@ -8,6 +8,11 @@ on:
       - 'minecraft_mod_ai/custom_module_generator.py'
       - 'minecraft_mod_ai/custom_generation_research.py'
       - 'minecraft_mod_ai/complete_orchestrator.py'
+      - 'minecraft_mod_ai/complete_orchestrator_services.py'
+      - 'minecraft_mod_ai/resource_asset_production.py'
+      - 'minecraft_mod_ai/final_artifact.py'
+      - 'minecraft_mod_ai/publisher.py'
+      - 'minecraft_mod_ai/mcp_tools.py'
       - 'minecraft_mod_ai/small_model_atomic_coder_execution.py'
       - 'minecraft_mod_ai/small_model_write_scope_enforcement.py'
       - 'minecraft_mod_ai/platform_custom_coder_contract.py'
@@ -49,6 +54,11 @@ on:
       - 'minecraft_mod_ai/custom_module_generator.py'
       - 'minecraft_mod_ai/custom_generation_research.py'
       - 'minecraft_mod_ai/complete_orchestrator.py'
+      - 'minecraft_mod_ai/complete_orchestrator_services.py'
+      - 'minecraft_mod_ai/resource_asset_production.py'
+      - 'minecraft_mod_ai/final_artifact.py'
+      - 'minecraft_mod_ai/publisher.py'
+      - 'minecraft_mod_ai/mcp_tools.py'
       - 'minecraft_mod_ai/small_model_atomic_coder_execution.py'
       - 'minecraft_mod_ai/small_model_write_scope_enforcement.py'
       - 'minecraft_mod_ai/platform_custom_coder_contract.py'
@@ -114,6 +124,11 @@ jobs:
             minecraft_mod_ai/custom_module_generator.py \
             minecraft_mod_ai/custom_generation_research.py \
             minecraft_mod_ai/complete_orchestrator.py \
+            minecraft_mod_ai/complete_orchestrator_services.py \
+            minecraft_mod_ai/resource_asset_production.py \
+            minecraft_mod_ai/final_artifact.py \
+            minecraft_mod_ai/publisher.py \
+            minecraft_mod_ai/mcp_tools.py \
             minecraft_mod_ai/small_model_atomic_coder_execution.py \
             minecraft_mod_ai/small_model_write_scope_enforcement.py \
             minecraft_mod_ai/platform_custom_coder_contract.py \
