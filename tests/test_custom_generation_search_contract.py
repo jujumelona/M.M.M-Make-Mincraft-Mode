@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 import pytest
 
 from minecraft_mod_ai import custom_generation_search_contract as custom_search
-from minecraft_mod_ai import java_lsp
 from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
 
 
@@ -104,44 +103,38 @@ def test_custom_generation_public_target_overrides_are_not_exposed() -> None:
     assert "mappings" not in signature.parameters
 
 
-def test_candidate_verifier_rejects_errors_and_transport_failures() -> None:
+def test_candidate_verifier_selects_host_generation_pass_only() -> None:
     assert custom_search._candidate_verifier_selectable(
+        {
+            "generation_status": "PASS",
+            "verification_authority": "generation_tool_loop",
+        }
+    )
+    assert not custom_search._candidate_verifier_selectable(
+        {
+            "generation_status": "FAIL",
+            "verification_authority": "generation_tool_loop",
+        }
+    )
+    assert not custom_search._candidate_verifier_selectable(
         {
             "jdt_status": "AVAILABLE",
             "jdt_error_count": 0,
         }
     )
-    assert not custom_search._candidate_verifier_selectable(
-        {
-            "jdt_status": "AVAILABLE",
-            "jdt_error_count": 1,
-        }
-    )
-    assert not custom_search._candidate_verifier_selectable(
-        {
-            "jdt_status": "VERIFIER_ERROR",
-            "jdt_error_count": None,
-            "verifier_error": "ImportError: broken verifier",
-        }
-    )
-    assert custom_search._candidate_verifier_selectable(
-        {
-            "jdt_status": "NOT_RUN",
-            "jdt_error_count": None,
-        }
-    )
 
 
-def test_candidate_selection_preserves_rejected_verification_evidence() -> None:
+def test_candidate_selection_preserves_nonselectable_verification_evidence() -> None:
     evaluations = [
         (
-            1001.0,
+            1.0,
             0,
             None,
             {},
             {
-                "jdt_status": "AVAILABLE",
-                "jdt_error_count": 0,
+                "generation_status": "PASS",
+                "verification_authority": "generation_tool_loop",
+                "jdt_status": "NOT_RUN",
             },
         ),
         (
@@ -150,9 +143,9 @@ def test_candidate_selection_preserves_rejected_verification_evidence() -> None:
             None,
             {},
             {
-                "jdt_status": "VERIFIER_ERROR",
-                "jdt_error_count": None,
-                "verifier_error": "ImportError: broken verifier",
+                "generation_status": "FAIL",
+                "verification_authority": "generation_tool_loop",
+                "jdt_status": "NOT_RUN",
             },
         ),
     ]
@@ -166,7 +159,7 @@ def test_candidate_selection_preserves_rejected_verification_evidence() -> None:
     assert selectable == [evaluations[0]]
 
 
-def test_candidate_search_fails_closed_when_every_verifier_is_unusable() -> None:
+def test_candidate_search_fails_closed_without_host_generation_pass() -> None:
     evaluations = [
         (
             -2.85,
@@ -174,9 +167,8 @@ def test_candidate_search_fails_closed_when_every_verifier_is_unusable() -> None
             None,
             {},
             {
-                "jdt_status": "VERIFIER_ERROR",
-                "jdt_error_count": None,
-                "verifier_error": "ImportError: broken verifier",
+                "generation_status": "FAIL",
+                "verification_authority": "generation_tool_loop",
             },
         ),
         (
@@ -185,8 +177,8 @@ def test_candidate_search_fails_closed_when_every_verifier_is_unusable() -> None
             None,
             {},
             {
-                "jdt_status": "AVAILABLE",
-                "jdt_error_count": 1,
+                "generation_status": "MISSING",
+                "verification_authority": "unknown",
             },
         ),
     ]
@@ -198,46 +190,30 @@ def test_candidate_search_fails_closed_when_every_verifier_is_unusable() -> None
         )
 
 
-def test_candidate_verifier_closes_jdt_session(tmp_path, monkeypatch) -> None:
-    class _FakeService:
-        def __init__(self) -> None:
-            self.closed = False
-
-        def diagnostics(self, project_root, *, relative_files, timeout_seconds):
-            assert project_root == tmp_path
-            assert relative_files == ("src/main/java/demo/Test.java",)
-            assert timeout_seconds == 60
-            return {
-                "status": "PASS",
-                "diagnostics": {},
-            }
-
-        def close(self) -> None:
-            self.closed = True
-
-    service = _FakeService()
-    monkeypatch.setenv("MMM_CUSTOM_CANDIDATE_JDT", "auto")
-    monkeypatch.setattr(java_lsp, "JavaLanguageService", lambda: service)
-
+def test_candidate_verifier_reuses_generation_gate_without_starting_jdt(tmp_path) -> None:
     _score, verifier = custom_search._verify_candidate(
         tmp_path,
         {
             "touched_paths": ["src/main/java/demo/Test.java"],
             "operation_count": 1,
             "runtime_tests": [],
+            "required_gates": ["target_compile"],
         },
     )
 
-    assert service.closed is True
-    assert verifier["jdt_status"] == "AVAILABLE"
-    assert verifier["jdt_error_count"] == 0
+    assert verifier["generation_status"] == "PASS"
+    assert verifier["verification_authority"] == "generation_tool_loop"
+    assert verifier["target_compile_required"] is True
+    assert verifier["java_path_count"] == 1
+    assert verifier["jdt_status"] == "NOT_RUN"
+    assert verifier["jdt_error_count"] is None
 
 
-def test_candidate_verifier_uses_canonical_diagnostic_contract() -> None:
+def test_candidate_verifier_has_no_candidate_local_jdt_dependency() -> None:
     source = inspect.getsource(custom_search._verify_candidate)
-    assert "validation_diagnostic_contract import diagnostic_errors" in source
-    assert "repair_diagnostics_contract import diagnostic_errors" not in source
-
+    assert "JavaLanguageService" not in source
+    assert "diagnostic_errors" not in source
+    assert "timeout_seconds=60" not in source
 
 def test_target_values_fail_closed_without_complete_host_target() -> None:
     with pytest.raises(ValueError, match="mappings"):
