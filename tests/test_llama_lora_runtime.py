@@ -72,6 +72,22 @@ def test_lora_launch_args_preload_gguf_and_zero_by_default(monkeypatch, tmp_path
     ]
 
 
+def test_huggingface_snapshot_symlink_keeps_gguf_name(monkeypatch, tmp_path) -> None:
+    blob = tmp_path / "blobs" / "64e8d88ba7057e8c0c65a07649975232"
+    blob.parent.mkdir()
+    blob.write_bytes(b"gguf")
+    snapshot = tmp_path / "snapshots" / "main" / "coding-agentic.gguf"
+    snapshot.parent.mkdir(parents=True)
+    snapshot.symlink_to(blob)
+
+    monkeypatch.setattr(lora, "_download_hf_adapter", lambda _spec: str(snapshot))
+
+    artifacts = lora.resolve_lora_artifacts(_config())
+    assert artifacts == ((lora.configured_lora_specs(_config())[0], str(snapshot.absolute())),)
+    assert artifacts[0][1].endswith("coding-agentic.gguf")
+    assert Path(artifacts[0][1]).is_file()
+
+
 def test_initialize_managed_server_explicitly_zeros_loaded_adapters(monkeypatch) -> None:
     posts = []
 
