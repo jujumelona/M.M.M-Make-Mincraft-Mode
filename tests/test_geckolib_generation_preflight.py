@@ -9,9 +9,6 @@ import pytest
 from minecraft_mod_ai import geckolib_generation_contract as contract
 from minecraft_mod_ai import geckolib_generator
 from minecraft_mod_ai import platform_specialized_generator_contract as specialized_contract
-from minecraft_mod_ai.generation_boundary_reconciliation import (
-    _install_geckolib_project_preflight,
-)
 
 
 def _project_info(
@@ -144,8 +141,6 @@ def test_generator_preflight_fails_before_first_write(
         raise AssertionError("GeckoLib generation must not write after a failed preflight")
 
     monkeypatch.setattr(geckolib_generator, "write_text_files", write_text_files)
-    _install_geckolib_project_preflight(geckolib_generator)
-
     with pytest.raises(
         geckolib_generator.GeckoLibGenerationError,
         match="generation preflight failed",
