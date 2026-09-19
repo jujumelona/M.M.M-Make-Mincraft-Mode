@@ -3,6 +3,7 @@ from __future__ import annotations
 from .fixed_template_generation import generate_fixed_template_text
 from .model_response_templates import response_schema
 
+import hashlib
 import json
 import os
 import zipfile
@@ -123,11 +124,13 @@ def blockbench_review(
         raise CompleteProductionError(
             "Blockbench did not produce a regular preview image."
         )
+    preview_sha256 = "sha256:" + hashlib.sha256(preview.read_bytes()).hexdigest()
     return {
         "entity": gecko_receipt["entity_id"],
         "uv": uv,
         "render": render,
         "preview": str(preview),
+        "preview_sha256": preview_sha256,
     }
 
 
