@@ -61,7 +61,7 @@ permissions:
 
 concurrency:
   group: deterministic-debug-full-e2e-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deterministic-debug-full-e2e:
