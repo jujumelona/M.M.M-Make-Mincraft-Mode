@@ -285,9 +285,10 @@ def test_custom_routed_modules_bypass_builtin_preflight() -> None:
     validate_production_generation_modules(modules)
 
 
-def test_runtime_owns_normalized_pre_dispatch_gate() -> None:
-    assert getattr(
-        CompleteProductionOrchestrator._execute_generation_work,
-        "_mmm_project_generation_preflight",
-        False,
-    )
+def test_orchestrator_owns_normalized_pre_dispatch_gate_in_source() -> None:
+    import inspect
+
+    source = inspect.getsource(CompleteProductionOrchestrator._execute_generation_work)
+    assert "validate_production_generation_project(" in source
+    assert "Production generation preflight failed before dispatch" in source
+    assert "__wrapped__" not in vars(CompleteProductionOrchestrator._execute_generation_work)
