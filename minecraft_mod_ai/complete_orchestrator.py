@@ -543,6 +543,21 @@ class CompleteProductionOrchestrator:
             if quality_report is not None:
                 unresolved.extend(f'quality:{dimension_id}' for dimension_id in quality_unresolved(quality_report))
                 self._record_quality_nodes(ledger, quality_report, allow_success=False)
+            unresolved.extend(
+                self._required_gate_failures(
+                    approved,
+                    generated_receipts=module_receipts,
+                    project_root=project_root,
+                    source_validation=source_report,
+                    jdt_receipt=jdt_receipt,
+                    build_report=None,
+                    jar_validation=None,
+                    blockbench_receipts=blockbench_receipts,
+                    runtime_receipt=None,
+                    playtest_receipt=None,
+                    visual_receipt=None,
+                )
+            )
             self._persist_work_evidence(project_root, ledger, work_plan)
             return CompletePipelineResult(schema_version='mmm/complete-pipeline-result-v3', status='SOURCE_READY', project_root=str(project_root), release_zip=release, jar_path=None, complete_proposal_hash=approved.calculate_hash(), source_validation=source_report, build_report=None, jar_validation=None, module_receipts=tuple(module_receipts), asset_receipt=asset_receipt, blockbench_receipts=tuple(blockbench_receipts), runtime_receipt=None, playtest_receipt=None, visual_receipt=None, distribution_receipt=None, unresolved_gates=tuple(sorted(set(unresolved))), release_ready=False, work_graph_hash=work_plan.graph_hash, work_ledger_path=str(ledger.path), run_resumed=run_resumed, quality_report=quality_report)
         build_bundle, router = run_build_repair_checkpoint(
@@ -786,6 +801,21 @@ class CompleteProductionOrchestrator:
         if quality_report is not None:
             unresolved.extend(f'quality:{dimension_id}' for dimension_id in quality_unresolved(quality_report))
             self._record_quality_nodes(ledger, quality_report, allow_success=True)
+        unresolved.extend(
+            self._required_gate_failures(
+                approved,
+                generated_receipts=module_receipts,
+                project_root=project_root,
+                source_validation=source_report,
+                jdt_receipt=jdt_receipt,
+                build_report=build,
+                jar_validation=jar_validation,
+                blockbench_receipts=blockbench_receipts,
+                runtime_receipt=runtime_receipt,
+                playtest_receipt=playtest_receipt,
+                visual_receipt=visual_receipt,
+            )
+        )
         self._persist_work_evidence(project_root, ledger, work_plan)
         contract = approved.game_design.get('_production_contract')
         coverage_receipt = build_requirement_coverage_receipt(
