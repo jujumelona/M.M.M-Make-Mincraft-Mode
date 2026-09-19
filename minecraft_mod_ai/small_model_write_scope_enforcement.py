@@ -179,15 +179,6 @@ def exact_task_operation_validator(
     return decorate
 
 
-def install(*, custom_module_generator_module: Any, host_grounding_module: Any) -> None:
-    """Compatibility assertion; runtime mutation is source-owned and no longer installed late."""
-
-    assert_installed(
-        custom_module_generator_module=custom_module_generator_module,
-        host_grounding_module=host_grounding_module,
-    )
-
-
 def assert_installed(*, custom_module_generator_module: Any, host_grounding_module: Any) -> None:
     generator_type = custom_module_generator_module.CustomModuleGenerator
     if not getattr(generator_type.generate, "_mmm_exact_task_write_scope", False):
@@ -203,6 +194,5 @@ __all__ = [
     "exact_task_operation_validator",
     "exact_task_writable_paths",
     "generation_authority_scoped",
-    "install",
     "validate_exact_task_operations",
 ]
