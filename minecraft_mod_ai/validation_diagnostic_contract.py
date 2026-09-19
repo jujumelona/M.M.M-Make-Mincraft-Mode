@@ -10,7 +10,14 @@ from typing import Any
 from .java_lsp import JDTLanguageServerError
 from .root_cause_trace import emit_root_cause, exception_chain
 
-_DIAGNOSTIC_SUCCESS_STATUSES = {"PASS", "OK", "AVAILABLE"}
+_DIAGNOSTIC_SUCCESS_STATUSES = {
+    "PASS",
+    "OK",
+    "AVAILABLE",
+    # This is a valid lifecycle state emitted before the target Gradle build.
+    # It must not be converted into JDT_DIAGNOSTICS_UNAVAILABLE.
+    "DEFERRED_TO_POST_BUILD",
+}
 _JDT_AVAILABILITY_ERRORS = (OSError, TimeoutError, JDTLanguageServerError)
 _DIAGNOSTIC_ENVELOPE_KEYS = (
     "structured_content",
