@@ -1535,7 +1535,7 @@ class CompleteProductionOrchestrator:
                                     action=lambda: self._blockbench_review(receipt, run_root),
                                     encode=lambda value: value,
                                     decode=lambda cached: cached,
-                                    validate_cached=lambda cached: Path(str(cached.get('preview', ''))).is_file(),
+                                    validate_cached=self._cached_blockbench_review,
                                 )
                             review_future = review_pool.submit(
                                 run_with_model_execution_deadline,
@@ -1964,6 +1964,27 @@ class CompleteProductionOrchestrator:
         }
 
     @staticmethod
+    def _cached_blockbench_review(receipt: Any) -> bool:
+        if not isinstance(receipt, dict):
+            return False
+        uv = receipt.get('uv')
+        raw = receipt.get('preview')
+        expected = receipt.get('preview_sha256')
+        if (
+            not isinstance(uv, dict)
+            or uv.get('status') not in {'PASS', 'OK'}
+            or not isinstance(raw, str)
+            or not isinstance(expected, str)
+        ):
+            return False
+        path = Path(raw).expanduser().resolve()
+        return (
+            path.is_file()
+            and not path.is_symlink()
+            and CompleteProductionOrchestrator._file_hash(path) == expected
+        )
+
+    @staticmethod
     def _cached_download_bundle_exists(receipt: Any) -> bool:
         if not isinstance(receipt, dict) or receipt.get('status') != 'PASS':
             return False
@@ -2112,7 +2133,11 @@ class CompleteProductionOrchestrator:
             expected = {owner} if owner in entity_ids else entity_ids
             if not expected:
                 return False
-            passed = {str(receipt.get('entity')) for receipt in blockbench if isinstance(receipt.get('uv'), dict) and receipt['uv'].get('status') in {'PASS', 'OK'} and isinstance(receipt.get('preview'), str) and Path(receipt['preview']).is_file() and (not Path(receipt['preview']).is_symlink())}
+            passed = {
+                str(receipt.get('entity'))
+                for receipt in blockbench
+                if CompleteProductionOrchestrator._cached_blockbench_review(receipt)
+            }
             return expected <= passed
         failures: list[str] = []
         for owner, gate in sorted(requirements):
