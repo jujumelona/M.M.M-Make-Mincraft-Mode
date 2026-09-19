@@ -464,18 +464,18 @@ def install(custom_module_generator_module: Any) -> None:
                     )
                 ]
 
-            evaluations = _require_selectable_evaluations(
+            selectable = _require_selectable_evaluations(
                 evaluations,
                 verifier_index=4,
             )
-            evaluations.sort(
+            selectable.sort(
                 key=lambda item: (
                     -float(item[0]),
                     _json_size(item[3]),
                     int(item[1]),
                 )
             )
-            score, winner_index, winner_root, result, verifier = evaluations[0]
+            score, winner_index, winner_root, result, verifier = selectable[0]
             capture = _candidate_patch_capture(
                 base_root=base_root,
                 candidate_root=winner_root,
