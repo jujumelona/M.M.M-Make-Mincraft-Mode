@@ -91,6 +91,42 @@ def test_equivalent_relative_path_and_gate_spelling_are_canonicalized() -> None:
     assert result["verifier_tier"] == 2
 
 
+def test_java_target_compile_gate_cannot_be_downgraded_by_receipt_flag() -> None:
+    result = classify_generation_verification(
+        source_status="SOURCE_GENERATED",
+        receipt=_receipt(
+            compile_backed_java=False,
+            verifier_tool="target_compile",
+        ),
+        touched_paths=(JAVA_PATH,),
+        required_gates=("target_compile",),
+    )
+
+    assert result["java_target"] is True
+    assert result["compile_required"] is True
+    assert result["compile_backed_java"] is False
+    assert result["receipt_semantics_valid"] is False
+    assert result["verifier_tier"] == 0
+
+
+def test_target_compile_gate_never_accepts_non_java_receipt_as_compile_pass() -> None:
+    result = classify_generation_verification(
+        source_status="SOURCE_GENERATED",
+        receipt=_receipt(
+            target_path=RESOURCE_PATH,
+            verifier_tool="target_compile",
+            compile_backed_java=True,
+        ),
+        touched_paths=(RESOURCE_PATH,),
+        required_gates=("target_compile",),
+    )
+
+    assert result["java_target"] is False
+    assert result["compile_required"] is True
+    assert result["receipt_semantics_valid"] is False
+    assert result["verifier_tier"] == 0
+
+
 def test_verifier_receipt_cannot_be_replayed_for_a_different_file() -> None:
     result = _classify(_receipt(target_path="src/main/java/demo/Other.java"))
 
