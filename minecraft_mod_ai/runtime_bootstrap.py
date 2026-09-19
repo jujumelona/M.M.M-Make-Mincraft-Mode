@@ -300,7 +300,6 @@ def _install_late_safety_contracts() -> None:
     from .parallel_result_determinism_contract import install as install_parallel_result_determinism
     from .production_tool_parallel_contract import install as install_production_tool_parallel_safety
     from .runner_parallel_validation_contract import install as install_runner_parallel_validation
-    from .scheduler_claim_fencing_contract import install as install_scheduler_claim_fencing
     from .scheduler_parallel_safety_contract import install as install_scheduler_parallel_safety
 
     install_scheduler_parallel_safety(
@@ -308,10 +307,6 @@ def _install_late_safety_contracts() -> None:
         orchestrator_module=complete_orchestrator,
     )
     install_llama_parallel_runtime(model_router, scheduler_parallel_safety_contract)
-    install_scheduler_claim_fencing(
-        work_graph_module=work_graph,
-        orchestrator_module=complete_orchestrator,
-    )
     install_production_tool_parallel_safety(production_tools)
     install_runner_parallel_validation(
         runner_module=runner,
