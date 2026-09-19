@@ -5,25 +5,40 @@ on:
     branches: [main]
     paths:
       - "minecraft_mod_ai/custom_generation_search_contract.py"
+      - "minecraft_mod_ai/generation_verification_contract.py"
       - "minecraft_mod_ai/progress_aware_tool_loop.py"
       - "minecraft_mod_ai/custom_module_generator.py"
-      - "minecraft_mod_ai/complete_orchestrator.py"
-      - "minecraft_mod_ai/small_model_task_capsule_contract.py"
-      - "minecraft_mod_ai/agent_tool_runtime.py"
-      - "minecraft_mod_ai/generation_target_compile.py"
-      - "minecraft_mod_ai/generation_compile_state.py"
       - "minecraft_mod_ai/coder_max_efficiency_contract.py"
+      - "minecraft_mod_ai/generation_compile_state.py"
+      - "minecraft_mod_ai/generation_target_compile.py"
+      - "minecraft_mod_ai/agent_tool_runtime.py"
+      - "minecraft_mod_ai/small_model_task_capsule_contract.py"
+      - "minecraft_mod_ai/complete_orchestrator.py"
       - "tests/test_custom_generation_search_contract.py"
-      - "tests/test_small_model_task_capsule_contract.py"
+      - "tests/test_generation_verification_contract.py"
+      - "tests/test_generation_compile_state.py"
+      - "tests/test_generation_target_compile.py"
       - "tests/test_required_target_compile_gate.py"
+      - "tests/test_small_model_task_capsule_contract.py"
       - ".github/workflows/candidate-verifier-targeted.yml"
   pull_request:
     paths:
       - "minecraft_mod_ai/custom_generation_search_contract.py"
+      - "minecraft_mod_ai/generation_verification_contract.py"
       - "minecraft_mod_ai/progress_aware_tool_loop.py"
       - "minecraft_mod_ai/custom_module_generator.py"
       - "minecraft_mod_ai/coder_max_efficiency_contract.py"
+      - "minecraft_mod_ai/generation_compile_state.py"
+      - "minecraft_mod_ai/generation_target_compile.py"
+      - "minecraft_mod_ai/agent_tool_runtime.py"
+      - "minecraft_mod_ai/small_model_task_capsule_contract.py"
+      - "minecraft_mod_ai/complete_orchestrator.py"
       - "tests/test_custom_generation_search_contract.py"
+      - "tests/test_generation_verification_contract.py"
+      - "tests/test_generation_compile_state.py"
+      - "tests/test_generation_target_compile.py"
+      - "tests/test_required_target_compile_gate.py"
+      - "tests/test_small_model_task_capsule_contract.py"
       - ".github/workflows/candidate-verifier-targeted.yml"
   workflow_dispatch:
 
@@ -51,6 +66,9 @@ jobs:
         run: >-
           python -m pytest
           tests/test_custom_generation_search_contract.py
+          tests/test_generation_verification_contract.py
+          tests/test_generation_compile_state.py
+          tests/test_generation_target_compile.py
           tests/test_required_target_compile_gate.py
           tests/test_small_model_task_capsule_contract.py
           -q
