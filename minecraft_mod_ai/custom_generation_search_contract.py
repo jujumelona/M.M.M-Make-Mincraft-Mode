@@ -330,13 +330,16 @@ def _verify_candidate(candidate_root: Path, result: Mapping[str, Any]) -> tuple[
         for value in result.get("required_gates", ())
         if str(value).strip()
     )
+    source_status = str(result.get("status") or "").strip().upper()
+    generation_status = "PASS" if source_status == "SOURCE_GENERATED" else "FAIL"
     verifier: dict[str, Any] = {
         "operation_count": operation_count,
         "touched_path_count": len(touched),
         "runtime_test_count": len(runtime_tests),
         "research_evidence_score": research_score,
-        "generation_status": "PASS",
+        "generation_status": generation_status,
         "verification_authority": "generation_tool_loop",
+        "source_status": source_status or "MISSING",
         "required_gates": list(required_gates),
         "target_compile_required": "target_compile" in required_gates,
         "java_path_count": len(java_paths),
