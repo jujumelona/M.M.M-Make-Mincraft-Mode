@@ -109,3 +109,33 @@ def test_required_jdt_accepts_only_real_clean_jdt_receipt():
             "commands": [{"name": "build", "exit_code": 0, "timed_out": False}],
         },
     ) == []
+
+
+def test_generated_receipt_cannot_add_unapproved_release_gate():
+    proposal = _proposal()
+    failures = CompleteProductionOrchestrator._required_gate_failures(
+        proposal,
+        generated_receipts=(
+            {
+                "module_id": "debug_token",
+                "required_gates": [
+                    "Blockbench UV and bone hierarchy review",
+                    "restart persistence test",
+                ],
+            },
+        ),
+        project_root=None,
+        source_validation={"status": "PASS"},
+        jdt_receipt={"status": "UNAVAILABLE", "error_count": 0, "files_opened": 0},
+        build_report={
+            "status": "PASS",
+            "commands": [{"name": "build", "exit_code": 0, "timed_out": False}],
+        },
+        jar_validation=None,
+        blockbench_receipts=(),
+        runtime_receipt=None,
+        playtest_receipt=None,
+        visual_receipt=None,
+    )
+
+    assert failures == []
