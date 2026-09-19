@@ -338,6 +338,7 @@ def verify_debug_fixture_source(
 
     relative_path = str(contract.get("path") or "").strip()
     identifier = str(contract.get("identifier") or "").strip()
+    binding_field = str(contract.get("binding_field") or "").strip()
     required_keys_raw = contract.get("required_host_symbol_keys")
     forbidden_raw = contract.get("forbidden_lifecycle_symbols")
     required_keys = (
@@ -356,6 +357,8 @@ def verify_debug_fixture_source(
         findings.append("debug source contract path is unsafe or empty")
     if not identifier:
         findings.append("debug source contract identifier is empty")
+    if not binding_field:
+        findings.append("debug source contract binding_field is empty")
     if not required_keys:
         findings.append("debug source contract has no required host symbols")
 
@@ -396,6 +399,7 @@ def verify_debug_fixture_source(
 
     symbol_results: dict[str, bool] = {}
     identifier_present = False
+    binding_assignment_proven = False
     lifecycle_clear = False
     if source:
         commentless, code = _debug_java_code_surface(source)
@@ -414,6 +418,25 @@ def verify_debug_fixture_source(
             elif not used:
                 findings.append(f"debug source does not use required host symbol {key!r}")
 
+        register_symbol = api_symbols.get("register_item")
+        if isinstance(register_symbol, Mapping) and binding_field:
+            register_owner = str(register_symbol.get("owner") or "").strip()
+            register_name = str(register_symbol.get("name") or "").strip()
+            register_simple = register_owner.rsplit(".", 1)[-1].split("$", 1)[0]
+            compact = re.sub(r"\s+", "", code)
+            assignment_pattern = (
+                re.escape(binding_field)
+                + r"=[^;]*"
+                + re.escape(f"{register_simple}.{register_name}(")
+            )
+            binding_assignment_proven = (
+                re.search(assignment_pattern, compact) is not None
+            )
+        if not binding_assignment_proven:
+            findings.append(
+                "debug binding field is not directly assigned from the host item registry call"
+            )
+
         code_identifiers = set(re.findall(r"[A-Za-z_$][A-Za-z0-9_$]*", code))
         lifecycle_hits = [
             token for token in forbidden if token and token in code_identifiers
@@ -430,6 +453,7 @@ def verify_debug_fixture_source(
         and source
         and source_sha256
         and identifier_present
+        and binding_assignment_proven
         and required_keys
         and all(symbol_results.get(key) is True for key in required_keys)
         and lifecycle_clear
@@ -441,6 +465,8 @@ def verify_debug_fixture_source(
         "source_path": relative_path,
         "source_sha256": source_sha256,
         "identifier": identifier,
+        "binding_field": binding_field,
+        "binding_assignment_proven": binding_assignment_proven,
         "required_host_symbol_keys": list(required_keys),
         "symbol_results": symbol_results,
         "forbidden_lifecycle_symbols": list(forbidden),
