@@ -165,6 +165,18 @@ def test_contract_composition_is_limited_to_explicit_owners() -> None:
     assert offenders == [], 'nested contract composition:\n' + '\n'.join(offenders)
 
 
+def test_execution_feedback_is_not_late_runtime_patched() -> None:
+    feedback = _text("execution_feedback_replan_contract.py")
+    finalization = _FINALIZATION.read_text(encoding="utf-8")
+
+    assert "def install(" not in feedback
+    assert "_install_ledger_feedback" not in feedback
+    assert "_install_observation_owner" not in feedback
+    assert "_install_run_context" not in feedback
+    assert "sys.modules" not in feedback
+    assert "execution_feedback_replan_contract.install" not in finalization
+
+
 def test_repair_grounding_is_not_late_runtime_patched() -> None:
     adaptive = _text("adaptive_retrieval_contract.py")
     finalization = _FINALIZATION.read_text(encoding="utf-8")
