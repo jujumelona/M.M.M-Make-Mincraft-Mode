@@ -2,7 +2,9 @@ from __future__ import annotations
 
 """Pure validation contract for generation-time verifier receipts."""
 
+import re
 from collections.abc import Mapping, Sequence
+from pathlib import PurePosixPath
 from typing import Any
 
 GENERATION_VERIFICATION_SCHEMA = "mmm/generation-verification-v1"
@@ -10,7 +12,25 @@ GENERATION_VERIFICATION_AUTHORITY = "generation_tool_loop"
 
 
 def _normalized_path(value: Any) -> str:
-    return str(value or "").replace("\\", "/").strip()
+    text = str(value or "").replace("\\", "/").strip()
+    while text.startswith("./"):
+        text = text[2:]
+    while "//" in text:
+        text = text.replace("//", "/")
+    if not text:
+        return ""
+    path = PurePosixPath(text)
+    if path.is_absolute() or ".." in path.parts:
+        return text
+    return path.as_posix()
+
+
+def _normalized_gate(value: Any) -> str:
+    return re.sub(
+        r"[^a-z0-9]+",
+        "_",
+        str(value or "").strip().casefold(),
+    ).strip("_")
 
 
 def classify_generation_verification(
@@ -32,6 +52,11 @@ def classify_generation_verification(
         gate
         for raw in required_gates
         if (gate := str(raw or "").strip())
+    )
+    normalized_gate_keys = frozenset(
+        key
+        for gate in normalized_gates
+        if (key := _normalized_gate(gate))
     )
     source = str(source_status or "").strip().upper()
     candidate_receipt = receipt if isinstance(receipt, Mapping) else {}
@@ -61,7 +86,7 @@ def classify_generation_verification(
         receipt_target_path and receipt_target_path in touched_set
     )
     compile_backed_java = candidate_receipt.get("compile_backed_java") is True
-    target_compile_required = "target_compile" in normalized_gates
+    target_compile_required = "target_compile" in normalized_gate_keys
     downstream_required_gate = str(
         candidate_receipt.get("downstream_required_gate") or ""
     ).strip()
