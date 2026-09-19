@@ -132,6 +132,40 @@ def test_candidate_verifier_rejects_errors_and_transport_failures() -> None:
     )
 
 
+def test_candidate_selection_preserves_rejected_verification_evidence() -> None:
+    evaluations = [
+        (
+            1001.0,
+            0,
+            None,
+            {},
+            {
+                "jdt_status": "AVAILABLE",
+                "jdt_error_count": 0,
+            },
+        ),
+        (
+            -2.85,
+            1,
+            None,
+            {},
+            {
+                "jdt_status": "VERIFIER_ERROR",
+                "jdt_error_count": None,
+                "verifier_error": "ImportError: broken verifier",
+            },
+        ),
+    ]
+
+    selectable = custom_search._require_selectable_evaluations(
+        evaluations,
+        verifier_index=4,
+    )
+
+    assert len(evaluations) == 2
+    assert selectable == [evaluations[0]]
+
+
 def test_candidate_search_fails_closed_when_every_verifier_is_unusable() -> None:
     evaluations = [
         (
