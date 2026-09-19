@@ -170,7 +170,7 @@ def resolve_lora_artifacts(config: Any) -> tuple[tuple[LoraAdapterSpec, str], ..
     for spec in configured_lora_specs(config):
         raw_path = spec.local_path or _download_hf_adapter(spec)
         path = Path(raw_path).expanduser().resolve()
-        if not path.is_file() or path.is_symlink() or path.suffix.casefold() != ".gguf":
+        if not path.is_file() or path.suffix.casefold() != ".gguf":
             raise RuntimeError(
                 f"LoRA adapter {spec.name!r} did not resolve to a regular GGUF file: {path}"
             )
