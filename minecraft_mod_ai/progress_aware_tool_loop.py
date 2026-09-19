@@ -1264,24 +1264,87 @@ def _runtime_failure_code(tool_name: str, error: str) -> str:
 
 def _atomic_output_recovery_instruction(request: GenerationRequest) -> str:
     names = frozenset(_tool_name(schema) for schema in request.tools if _tool_name(schema))
+    if "apply_source_edit" in names:
+        return (
+            "The preceding assistant action exceeded the bounded output allowance and is discarded. "
+            "Do not continue or reconstruct that oversized payload. Call apply_source_edit exactly once "
+            "with no prose. For a fresh host-pinned Java target, use operation=create_file and provide one "
+            "complete minimal compilable source file at the already-authorized path. For an existing target, "
+            "use one bounded replace/insert operation, or create_file only as an atomic whole-file rewrite "
+            "of that exact same path. Do not invent Java mutation tools that are not visible in this turn."
+        )
     if names & _MUTATION_ACT_TOOLS:
         return (
             "The preceding assistant action exceeded the bounded output allowance and is discarded. "
-            "Do not continue, reproduce, or complete that oversized payload. Call exactly one visible "
-            "source-mutation tool now with exactly one small semantic edit and no prose. For a new Java "
-            "file, the first action must be create_java_type with only package_name and an empty type "
-            "declaration; never create a complete Java file with create_file. After each tool observation, "
-            "add at most one import with add_java_import or one field/constructor/method/nested declaration "
-            "with insert_java_member. For an existing file, use one bounded replace_exact/insert action "
-            "or, when a coherent whole-file repair is necessary, create_file on the exact same path; "
-            "the host lowers that call to a SHA-bound replace. The host will preserve the same mutation "
-            "target and workspace state between actions."
+            "Do not continue or reconstruct that oversized payload. Call exactly one visible mutation "
+            "tool now, perform only the current host-pinned semantic action, and emit no prose."
         )
     return (
         "The preceding assistant action exceeded the bounded output allowance and is discarded. "
         "Do not continue that oversized payload. Produce exactly one concise visible tool call or one "
         "concise final answer using the already-grounded state; do not emit a long reconstruction."
     )
+
+
+_ACT_REDUNDANT_SYSTEM_PREFIXES = (
+    "Host research context follows.",
+    "MMM reviewed Skill/tool/Minecraft-MCP routing context:",
+)
+
+
+def _forced_act_messages(
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    state: Any,
+    require_rag: bool,
+    phase_names: Collection[str],
+) -> list[dict[str, Any]]:
+    """Project a forced mutation turn onto only execution-relevant context."""
+
+    names = frozenset(str(name).strip() for name in phase_names if str(name).strip())
+    forced_mutation = (
+        getattr(state, "phase", None) == LoopPhase.ACT
+        and not require_rag
+        and len(names) == 1
+        and bool(names & _MUTATION_ACT_TOOLS)
+    )
+    if not forced_mutation:
+        return [dict(message) for message in messages]
+
+    projected: list[dict[str, Any]] = []
+    for raw in messages:
+        message = dict(raw)
+        content = message.get("content")
+        if (
+            str(message.get("role") or "").strip().casefold() == "system"
+            and isinstance(content, str)
+            and content.startswith(_ACT_REDUNDANT_SYSTEM_PREFIXES)
+        ):
+            continue
+        projected.append(message)
+
+    context = getattr(state, "mutation_context", None)
+    target = _canonical_mutation_path(getattr(context, "target_path", ""))
+    fresh_java = bool(
+        context is not None
+        and getattr(context, "is_new_file", False)
+        and target.casefold().endswith(".java")
+    )
+    if fresh_java:
+        directive = (
+            "HOST FORCED ACT: target localization, write authority, and evidence policy are already "
+            f"resolved for {target!r}. Call the single visible mutation tool exactly once with no prose. "
+            "Use create_file and emit one complete minimal compilable Java source for this task. "
+            "Do not perform retrieval, planning, narration, or multi-step file construction."
+        )
+    else:
+        directive = (
+            "HOST FORCED ACT: target localization, write authority, and evidence policy are already "
+            "resolved. Call the single visible mutation tool exactly once with no prose and perform "
+            "only the current host-pinned edit."
+        )
+    projected.append({"role": "system", "content": directive})
+    return projected
 
 
 def _model_tool_rejection_feedback(
@@ -2869,12 +2932,34 @@ def _generate_with_tools_impl(
             )
             else ()
         )
+        turn_messages = _forced_act_messages(
+            messages,
+            state=state,
+            require_rag=require_rag,
+            phase_names=phase_names,
+        )
+        if len(turn_messages) != len(messages):
+            emit_root_cause(
+                "forced_act_context_projected",
+                stage=stage,
+                operation="generate_with_tools",
+                gate="coder_input",
+                result="PASS",
+                reason="removed research/routing context after the canonical loop selected one forced ACT tool",
+                details={
+                    "step_index": state.step_index,
+                    "selected_tools": sorted(phase_names),
+                    "messages_before": len(messages),
+                    "messages_after": len(turn_messages),
+                    "target": ctx_before,
+                },
+            )
         turn = _generate_turn_with_context_recovery(
             router,
             config=config,
             adapter=adapter,
             request=turn_request,
-            messages=messages,
+            messages=turn_messages,
             media_paths=request.media_paths if state.step_index == 1 else (),
             tool_choice=tool_choice,
             parallel_tool_calls=parallel,
