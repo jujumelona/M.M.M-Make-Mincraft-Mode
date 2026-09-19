@@ -136,3 +136,41 @@ def test_optional_runtime_checks_do_not_create_unresolved_release_gates() -> Non
         "if approved.external_runtime_required:\n"
         "                    unresolved.append('visual-review:not-requested')"
     ) in source
+
+
+def test_cached_build_requires_real_build_command_and_requested_gametest(tmp_path) -> None:
+    jar = tmp_path / "demo.jar"
+    jar.write_bytes(b"jar")
+    report = tmp_path / "gametest-report.xml"
+    report.write_text(
+        '<testsuites><testsuite tests="1" failures="0" errors="0" skipped="0">'
+        '<testcase name="DemoModGameTests.generatedRegistriesAreLive"/>'
+        '</testsuite></testsuites>',
+        encoding="utf-8",
+    )
+    build = {
+        "status": "PASS",
+        "jar_path": str(jar),
+        "commands": [
+            {"name": "build", "exit_code": 0, "timed_out": False},
+            {"name": "gametest", "exit_code": 0, "timed_out": False},
+        ],
+        "gametest_report": str(report),
+    }
+
+    assert CompleteProductionOrchestrator._cached_build_exists(build)
+    assert CompleteProductionOrchestrator._cached_build_exists(
+        build,
+        require_gametest=True,
+        spec=SimpleNamespace(mod_id="demo"),
+    )
+
+    no_build_receipt = {**build, "commands": build["commands"][1:]}
+    assert not CompleteProductionOrchestrator._cached_build_exists(no_build_receipt)
+
+    missing_gametest = {**build, "gametest_report": None}
+    assert not CompleteProductionOrchestrator._cached_build_exists(
+        missing_gametest,
+        require_gametest=True,
+        spec=SimpleNamespace(mod_id="demo"),
+    )
