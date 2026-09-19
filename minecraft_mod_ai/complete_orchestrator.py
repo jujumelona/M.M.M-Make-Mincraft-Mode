@@ -1742,7 +1742,32 @@ class CompleteProductionOrchestrator:
         from concurrent.futures import FIRST_COMPLETED, Future, wait
 
         from . import scheduler_parallel_safety_contract as scheduler_safety
+        from .production_generation_preflight import (
+            ProductionGenerationPreflightError,
+            validate_production_generation_project,
+        )
+
+        if bool(getattr(options, "resume", False)):
+            for node in work_plan.nodes:
+                node_id = str(node.node_id)
+                if not str(node.stage).startswith("generate:"):
+                    continue
+                if str(ledger.task(node_id)["state"]) == "failed":
+                    ledger.retry(node_id)
+
         spec = approved.base_proposal.spec
+        try:
+            validate_production_generation_project(
+                project_root,
+                ordered,
+                mod_id=spec.mod_id,
+                package_name=spec.package_name,
+                policy=self.policy,
+            )
+        except ProductionGenerationPreflightError as exc:
+            raise CompleteProductionError(
+                f"Production generation preflight failed before dispatch: {exc}"
+            ) from exc
         if spec.platform.minecraft_version:
             os.environ["MMM_MINECRAFT_VERSION"] = str(spec.platform.minecraft_version).strip()
         if spec.platform.loader:
