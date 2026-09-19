@@ -140,6 +140,73 @@ def test_jar_validation_pass_requires_independent_jar_receipt_identity():
     assert receipt["_mmm_completion_evidence"]["artifact_sha256"] == "sha256:abc"
 
 
+def test_incremental_build_receipt_is_truthful_when_argv_runs_gradle_build():
+    receipt = _decorate_receipt(
+        _row("build", "build-project"),
+        {
+            "status": "PASS",
+            "build": {
+                "status": "PASS",
+                "commands": [
+                    {
+                        "name": "incremental_build",
+                        "command": [
+                            "/root/.cache/mmm/gradle/bin/gradle",
+                            "--daemon",
+                            "--parallel",
+                            "--max-workers=4",
+                            "build",
+                            "--build-cache",
+                            "--stacktrace",
+                        ],
+                        "exit_code": 0,
+                        "timed_out": False,
+                    }
+                ],
+                "artifact_receipt": {"sha256": "sha256:jar"},
+            },
+            "final_build_receipt": {
+                "status": "PASS",
+                "production_jar": "PASS",
+                "artifact_sha256": "sha256:jar",
+                "toolchain_attested": True,
+            },
+        },
+    )
+
+    evidence = receipt["_mmm_completion_evidence"]
+    assert evidence["verifier"] == "gradle_and_final_artifact"
+    assert evidence["artifact_sha256"] == "sha256:jar"
+
+
+def test_incremental_non_build_task_cannot_satisfy_truth_contract():
+    with pytest.raises(VerifierReceiptTruthError, match="VERIFIER_RECEIPT_MISSING"):
+        _decorate_receipt(
+            _row("build", "build-project"),
+            {
+                "status": "PASS",
+                "build": {
+                    "status": "PASS",
+                    "commands": [
+                        {
+                            "name": "incremental_build",
+                            "command": ["gradle", "compileJava", "--stacktrace"],
+                            "exit_code": 0,
+                            "timed_out": False,
+                        }
+                    ],
+                    "artifact_receipt": {"sha256": "sha256:jar"},
+                },
+                "final_build_receipt": {
+                    "status": "PASS",
+                    "production_jar": "PASS",
+                    "artifact_sha256": "sha256:jar",
+                    "toolchain_attested": True,
+                },
+            },
+        )
+
+
 def test_build_pass_cannot_be_invented_without_command_and_artifact_receipts():
     with pytest.raises(VerifierReceiptTruthError, match="VERIFIER_RECEIPT_MISSING"):
         _decorate_receipt(
