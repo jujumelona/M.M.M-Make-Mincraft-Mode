@@ -14,6 +14,7 @@ from minecraft_mod_ai.complete_orchestrator import (
     _blocking_jdt_errors,
     _final_validation_failure,
     _gametest_attestation_status,
+    _generation_receipt_sort_key,
     _persisted_runtime_evidence,
     _refresh_runtime_receipt_status,
     _runtime_verification_passed,
@@ -627,3 +628,17 @@ def test_blockbench_checkpoint_dependency_tracks_geometry_digest(tmp_path) -> No
     second = CompleteProductionOrchestrator._blockbench_geometry_sha256(receipt)
 
     assert first != second
+
+
+def test_parallel_generation_receipts_sort_deterministically() -> None:
+    receipts = [
+        {"schema_version": "z", "module_id": "b", "value": 1},
+        {"schema_version": "a", "module_id": "a", "value": 2},
+        {"schema_version": "b", "module_id": "a", "value": 3},
+    ]
+
+    forward = sorted(receipts, key=_generation_receipt_sort_key)
+    reverse = sorted(reversed(receipts), key=_generation_receipt_sort_key)
+
+    assert forward == reverse
+    assert [item["module_id"] for item in forward] == ["a", "a", "b"]
