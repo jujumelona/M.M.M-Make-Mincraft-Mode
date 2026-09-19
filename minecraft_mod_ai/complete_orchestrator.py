@@ -1173,14 +1173,7 @@ class CompleteProductionOrchestrator:
             raise CompleteProductionError(
                 'Gradle build report does not identify the sole verified production JAR.'
             )
-        successful_commands = {
-            str(item.get('name'))
-            for item in build.get('commands', ())
-            if isinstance(item, dict)
-            and item.get('exit_code') == 0
-            and item.get('timed_out', False) is False
-        }
-        if not successful_commands.intersection({'build', 'clean_build'}):
+        if not self._full_gradle_build_receipt_passed(build):
             raise CompleteProductionError(
                 'Final project has no passing full Gradle build command receipt.'
             )
@@ -2947,10 +2940,7 @@ class CompleteProductionOrchestrator:
     ) -> bool:
         if not isinstance(build, dict) or build.get('status') != 'PASS':
             return False
-        if not (
-            CompleteProductionOrchestrator._command_receipt_passed(build, 'build')
-            or CompleteProductionOrchestrator._command_receipt_passed(build, 'clean_build')
-        ):
+        if not CompleteProductionOrchestrator._full_gradle_build_receipt_passed(build):
             return False
         raw = build.get('jar_path')
         if not isinstance(raw, str):
@@ -3044,13 +3034,8 @@ class CompleteProductionOrchestrator:
                 return False
             return path.is_file() and (not path.is_symlink()) and (CompleteProductionOrchestrator._file_hash(path) == expected)
         passed_research = {str(receipt.get('module_id')): (str(receipt.get('shard_sha256', '')), str(receipt.get('corpus_sha256', ''))) for receipt in research_ledger_receipts if receipt.get('status') in {'WRITTEN', 'VERIFIED_EXISTING'} and research_file_matches(receipt)}
-        gradle_passed = (
-            isinstance(build_report, dict)
-            and build_report.get('status') == 'PASS'
-            and (
-                CompleteProductionOrchestrator._command_receipt_passed(build_report, 'build')
-                or CompleteProductionOrchestrator._command_receipt_passed(build_report, 'clean_build')
-            )
+        gradle_passed = CompleteProductionOrchestrator._full_gradle_build_receipt_passed(
+            build_report
         )
         jdt_passed = (
             isinstance(jdt_receipt, dict)
@@ -3093,14 +3078,40 @@ class CompleteProductionOrchestrator:
         return any(isinstance(command, dict) and command.get('name') == name and (command.get('exit_code') == 0) and (command.get('timed_out') is not True) for command in build_report.get('commands', []))
 
     @staticmethod
+    def _full_gradle_build_receipt_passed(
+        build_report: dict[str, Any] | None,
+    ) -> bool:
+        if not isinstance(build_report, dict) or build_report.get('status') != 'PASS':
+            return False
+        for command in build_report.get('commands', ()):
+            if (
+                not isinstance(command, dict)
+                or command.get('exit_code') != 0
+                or command.get('timed_out') is True
+            ):
+                continue
+            name = str(command.get('name') or '')
+            if name in {'build', 'clean_build'}:
+                return True
+            if name != 'incremental_build':
+                continue
+            argv = command.get('command')
+            if not isinstance(argv, (list, tuple)):
+                continue
+            if any(str(argument) == 'build' for argument in argv):
+                return True
+        return False
+
+    @staticmethod
     def _gametest_receipt_passed(build_report: dict[str, Any] | None, spec: Any) -> bool:
         if not isinstance(build_report, dict) or not isinstance(build_report.get('gametest_report'), str):
             return False
         mode = str(build_report.get('gametest_mode') or '').strip()
         if mode == 'integrated_build':
             execution_passed = (
-                CompleteProductionOrchestrator._command_receipt_passed(build_report, 'build')
-                or CompleteProductionOrchestrator._command_receipt_passed(build_report, 'clean_build')
+                CompleteProductionOrchestrator._full_gradle_build_receipt_passed(
+                    build_report
+                )
             )
         else:
             # Backward compatible with older receipts that had no gametest_mode.
