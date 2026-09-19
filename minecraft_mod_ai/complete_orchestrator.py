@@ -1873,7 +1873,11 @@ class CompleteProductionOrchestrator:
                     return fallback_custom_generator
             return CustomModuleGenerator(worker_router, policy=self.policy, fast_mode=getattr(self, '_fast_mode', False), project_index=shared_project_index, checkpoint_root=run_root / '.minecraft_ai' / '.mmm-custom-checkpoints')
 
-        def module_node_action(node: WorkNode, members: list[ProductionModule]) -> dict[str, Any]:
+        def module_node_action(
+            node: WorkNode,
+            members: list[ProductionModule],
+            uncommitted_custom_results: list[dict[str, Any]],
+        ) -> dict[str, Any]:
             stage = str(node.payload.get('generation_stage', ''))
             receipts: list[dict[str, Any]] = []
             node_custom_generator: CustomModuleGenerator | None = None
@@ -1891,6 +1895,7 @@ class CompleteProductionOrchestrator:
                     mappings=spec.platform.yarn_mappings,
                 )
                 _register_checkpoint_owner(result, node_custom_generator)
+                uncommitted_custom_results.append(result)
                 return result
 
             if stage == 'content':
@@ -2062,17 +2067,24 @@ class CompleteProductionOrchestrator:
                 if not member_ids or any(item not in module_lookup for item in member_ids):
                     raise CompleteProductionError(f'Work node {node.node_id} has invalid module members.')
                 members = [module_lookup[item] for item in member_ids]
+                uncommitted_custom_results: list[dict[str, Any]] = []
                 receipt = self._run_work_node(
                     ledger,
                     node,
-                    action=lambda node=node, members=members: module_node_action(node, members),
+                    action=lambda node=node, members=members: module_node_action(
+                        node,
+                        members,
+                        uncommitted_custom_results,
+                    ),
                     validate_cached=lambda value: self._receipt_outputs_exist(
                         value,
                         project_root=project_root,
                     ),
                     shared_index=shared_project_index,
                     on_commit=_finalize_committed_generation_receipts,
-                    on_abort=_release_uncommitted_generation_receipts,
+                    on_abort=lambda _receipt: _release_uncommitted_generation_receipts(
+                        {'receipts': uncommitted_custom_results}
+                    ),
                 )
                 children = [item for item in receipt.get('receipts', []) if isinstance(item, dict)]
                 module_receipts.extend(children)
@@ -2384,9 +2396,9 @@ class CompleteProductionOrchestrator:
                         )
             return receipt
         except BaseException as exc:
-            if receipt is not None and not committed and on_abort is not None:
+            if not committed and on_abort is not None:
                 try:
-                    on_abort(receipt)
+                    on_abort(receipt or {})
                 except BaseException as abort_exc:
                     emit_root_cause(
                         'orchestrator_node_abort_cleanup_failure',
