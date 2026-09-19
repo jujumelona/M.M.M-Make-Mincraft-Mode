@@ -49,6 +49,7 @@ from .final_artifact import (
     FinalArtifactError,
     build_debug_fixture_coverage_receipt,
     build_requirement_coverage_receipt,
+    verify_debug_fixture_source,
     load_or_empty_reuse_manifest,
     verify_final_mod_artifact,
     verify_runtime_artifact_binding,
@@ -1025,6 +1026,7 @@ class CompleteProductionOrchestrator:
         playtest_receipt: dict[str, Any] | None = None
         visual_receipt: dict[str, Any] | None = None
         distribution_receipt: dict[str, Any] | None = None
+        debug_source_acceptance: dict[str, Any] | None = None
         unresolved: list[str] = []
         module_receipts.extend(collision_receipts)
         project_root = run_named_checkpoint(ledger, 'prepare-project', stage='prepare', input_value={'graph_hash': work_plan.graph_hash, 'existing_input_sha256': approved.existing_input_sha256}, action=lambda: self._prepare_project(approved, run_root=run_root, existing_input=existing_input), encode=lambda value: {'project_root': str(value)}, decode=lambda receipt: Path(str(receipt['project_root'])).resolve(), validate_cached=self._valid_project_root)
@@ -1077,6 +1079,52 @@ class CompleteProductionOrchestrator:
 
         if source_report.get('status') != 'PASS':
             raise CompleteProductionError('Generated complete project failed deterministic validation.')
+        if (
+            approved.schema_version == 'mmm/complete-proposal-v1'
+            and approved.game_design.get('mode') == 'debug_fixture'
+        ):
+            fixture = approved.game_design.get('fixture')
+            fixture_module_id = (
+                str(fixture.get('module_id') or '').strip()
+                if isinstance(fixture, dict)
+                else ''
+            )
+            fixture_module = next(
+                (
+                    module
+                    for module in approved.modules
+                    if module.module_id == fixture_module_id
+                ),
+                None,
+            )
+            source_contract = (
+                fixture_module.config.get('observable_source_contract')
+                if fixture_module is not None and isinstance(fixture_module.config, dict)
+                else None
+            )
+            debug_source_acceptance = verify_debug_fixture_source(
+                project_root,
+                source_contract=(
+                    source_contract if isinstance(source_contract, dict) else None
+                ),
+                host_facts_json=approved.base_proposal.spec.platform.host_facts_json,
+            )
+            module_receipts.append(
+                {
+                    'schema_version': 'mmm/debug-source-gate-v1',
+                    **debug_source_acceptance,
+                }
+            )
+            if debug_source_acceptance.get('status') != 'PASS':
+                findings = debug_source_acceptance.get('findings')
+                rendered = (
+                    '; '.join(str(value) for value in findings)
+                    if isinstance(findings, list) and findings
+                    else 'observable source contract was not proven'
+                )
+                raise CompleteProductionError(
+                    'Debug fixture observable source acceptance failed: ' + rendered
+                )
         self._succeed_work_node(ledger, 'validate-source', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'PASS', 'checks_run': source_report.get('checks_run', 0), 'project_manifest': generated_manifest_hash})
         self._persist_work_evidence(project_root, ledger, work_plan)
         if jdt_receipt is not None:
@@ -1516,6 +1564,7 @@ class CompleteProductionOrchestrator:
                 build_report=build,
                 jar_validation=jar_validation,
                 gametest_passed=self._gametest_receipt_passed(build, spec),
+                observable_acceptance=debug_source_acceptance,
                 unresolved_gates=normalized_unresolved,
             )
         else:
