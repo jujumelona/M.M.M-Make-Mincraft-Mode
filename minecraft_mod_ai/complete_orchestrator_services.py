@@ -134,21 +134,35 @@ def blockbench_review(
     }
 
 
-def run_playtest(actions: Iterable[dict[str, Any]]) -> dict[str, Any]:
+def run_playtest(
+    actions: Iterable[dict[str, Any]],
+    acceptance_tests: Iterable[str] = (),
+) -> dict[str, Any]:
     requested = tuple(actions)
+    expected_tests = tuple(str(value) for value in acceptance_tests)
     if not requested:
         raise CompleteProductionError(
             "Complete runtime verification requires explicit playtest actions; an empty bot session cannot prove functionality."
         )
     allowed = MineflayerBridge.ACTIONS - {"connect", "disconnect"}
     observational = {"status", "inventory"}
-    normalized: list[tuple[str, dict[str, Any]]] = []
+    normalized: list[tuple[str, dict[str, Any], str | None]] = []
     has_interaction = False
     has_assertion = False
+    covered_tests: set[str] = set()
+    expected_set = set(expected_tests)
+    if len(expected_set) != len(expected_tests):
+        raise CompleteProductionError(
+            "Approved acceptance tests must be unique for runtime playtesting."
+        )
     for action in requested:
-        if not isinstance(action, dict) or set(action) - {"action", "params"}:
+        if not isinstance(action, dict) or set(action) - {
+            "action",
+            "params",
+            "acceptance_test",
+        }:
             raise CompleteProductionError(
-                "Every playtest action must contain only action and optional params."
+                "Every playtest action may contain only action, params, and acceptance_test."
             )
         if "action" not in action:
             raise CompleteProductionError(
@@ -164,11 +178,24 @@ def run_playtest(actions: Iterable[dict[str, Any]]) -> dict[str, Any]:
             raise CompleteProductionError(
                 "Playtest params must be an object."
             )
+        acceptance_test = action.get("acceptance_test")
+        if acceptance_test is not None:
+            acceptance_test = str(acceptance_test)
         if name not in observational and name != "wait_for":
             has_interaction = True
         if name == "wait_for":
             has_assertion = True
-        normalized.append((name, params))
+            if expected_tests:
+                if not acceptance_test or acceptance_test not in expected_set:
+                    raise CompleteProductionError(
+                        "Each wait_for must bind to one approved acceptance_test."
+                    )
+                covered_tests.add(acceptance_test)
+        elif acceptance_test is not None:
+            raise CompleteProductionError(
+                "acceptance_test is only valid on wait_for assertions."
+            )
+        normalized.append((name, params, acceptance_test))
     if not has_interaction:
         raise CompleteProductionError(
             "Complete playtesting must perform at least one gameplay interaction, not only status or inventory reads."
@@ -176,6 +203,12 @@ def run_playtest(actions: Iterable[dict[str, Any]]) -> dict[str, Any]:
     if not has_assertion:
         raise CompleteProductionError(
             "Complete playtesting must include wait_for so the requested outcome is machine-checked."
+        )
+    if expected_tests and covered_tests != expected_set:
+        missing = [test for test in expected_tests if test not in covered_tests]
+        raise CompleteProductionError(
+            "Mineflayer playtest does not cover every approved acceptance test: "
+            + ", ".join(missing)
         )
 
     bridge = MineflayerBridge()
@@ -189,19 +222,29 @@ def run_playtest(actions: Iterable[dict[str, Any]]) -> dict[str, Any]:
                 username="MMMTestBot",
             )
         )
-        for name, params in normalized:
+        acceptance_results: list[dict[str, Any]] = []
+        for name, params, acceptance_test in normalized:
             result = bridge.call(name, **params)
             if name == "wait_for" and result.get("matched") is not True:
                 raise CompleteProductionError(
                     "Mineflayer wait_for returned without a matched condition."
                 )
-            results.append(
-                {
-                    "action": name,
-                    "params": params,
-                    "result": result,
-                }
-            )
+            result_row = {
+                "action": name,
+                "params": params,
+                "result": result,
+            }
+            if acceptance_test is not None:
+                result_row["acceptance_test"] = acceptance_test
+            results.append(result_row)
+            if name == "wait_for" and acceptance_test is not None:
+                acceptance_results.append(
+                    {
+                        "test": acceptance_test,
+                        "status": "PASS",
+                        "evidence": result,
+                    }
+                )
         results.append(
             {
                 "action": "inventory",
@@ -213,12 +256,17 @@ def run_playtest(actions: Iterable[dict[str, Any]]) -> dict[str, Any]:
             "status": "PASS",
             "interaction_count": sum(
                 1
-                for name, _ in normalized
+                for name, _, _ in normalized
                 if name not in observational and name != "wait_for"
             ),
             "assertion_count": sum(
-                1 for name, _ in normalized if name == "wait_for"
+                1 for name, _, _ in normalized if name == "wait_for"
             ),
+            "acceptance_tests": list(expected_tests),
+            "covered_acceptance_tests": [
+                test for test in expected_tests if test in covered_tests
+            ],
+            "acceptance_test_results": acceptance_results,
             "results": results,
         }
     finally:
