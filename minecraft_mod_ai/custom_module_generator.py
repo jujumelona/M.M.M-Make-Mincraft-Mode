@@ -783,8 +783,15 @@ class CustomModuleGenerator:
             {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
         ]
 
+        from .progress_aware_tool_loop import (
+            clear_generation_verification_receipt,
+            current_generation_verification_receipt,
+        )
+
         summary = ""
+        generation_verification: dict[str, Any] | None = None
         continuation_count = 0
+        clear_generation_verification_receipt()
         try:
             with _active_checkpoint_persistence(
                 checkpoint_root,
@@ -799,6 +806,7 @@ class CustomModuleGenerator:
                     tool_stage="generation",
                     enable_tools=True,
                 )
+                generation_verification = current_generation_verification_receipt()
             stage_tree_sha256, post_generation_snapshot = _stage_tree_snapshot(staged_root)
             _persist_generation_checkpoint(
                 checkpoint_root,
@@ -838,6 +846,18 @@ class CustomModuleGenerator:
             ) from exc
 
         summary_text = _parse_coder_summary(summary)
+        if (
+            not isinstance(generation_verification, dict)
+            or generation_verification.get("schema_version")
+            != "mmm/generation-verification-v1"
+            or generation_verification.get("authority") != "generation_tool_loop"
+            or generation_verification.get("status")
+            not in {"PASS", "DEFERRED_TO_TARGET_COMPILE"}
+        ):
+            raise CustomModuleGenerationError(
+                "GENERATION_VERIFICATION_RECEIPT_MISSING: coder/tool loop completed "
+                "without a trustworthy terminal verification receipt."
+            )
 
         operations, touched_paths, discarded_paths = _collect_staged_operations(
             root,
@@ -890,6 +910,7 @@ class CustomModuleGenerator:
             "touched_paths": touched_paths,
             "discarded_out_of_scope_paths": discarded_paths,
             "agent_summary": summary_text.strip()[:4096],
+            "generation_verification": generation_verification,
             "output_exhaustion_continuations": continuation_count,
             "generation_checkpoint_resumed": checkpoint_resumed,
             "generation_checkpoint": {
