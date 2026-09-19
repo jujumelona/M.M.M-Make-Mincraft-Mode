@@ -1,0 +1,91 @@
+name: Deterministic Debug Full E2E
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'minecraft_mod_ai/custom_module_generator.py'
+      - 'minecraft_mod_ai/custom_generation_research.py'
+      - 'minecraft_mod_ai/generation_implementation_grounding.py'
+      - 'minecraft_mod_ai/colab_run_modes.py'
+      - 'minecraft_mod_ai/complete_orchestrator.py'
+      - 'minecraft_mod_ai/complete_build_repair.py'
+      - 'minecraft_mod_ai/repair_guard.py'
+      - 'minecraft_mod_ai/runner.py'
+      - 'minecraft_mod_ai/final_artifact.py'
+      - 'minecraft_mod_ai/mcp_tools.py'
+      - 'minecraft_mod_ai/publisher.py'
+      - 'minecraft_mod_ai/scalable_generator.py'
+      - 'minecraft_mod_ai/scalable_validator.py'
+      - 'minecraft_mod_ai/validator.py'
+      - 'minecraft_mod_ai/platform_catalog.py'
+      - 'minecraft_mod_ai/platform_resolver.py'
+      - 'minecraft_mod_ai/host_version_catalog.py'
+      - 'minecraft_mod_ai/project_index.py'
+      - 'minecraft_mod_ai/project_index_execution_reuse_contract.py'
+      - 'minecraft_mod_ai/work_graph.py'
+      - 'minecraft_mod_ai/templates/fabric/item/**'
+      - 'tests/test_deterministic_debug_full_pipeline_e2e.py'
+      - 'pyproject.toml'
+      - '.github/workflows/deterministic-debug-full-e2e.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'minecraft_mod_ai/custom_module_generator.py'
+      - 'minecraft_mod_ai/custom_generation_research.py'
+      - 'minecraft_mod_ai/generation_implementation_grounding.py'
+      - 'minecraft_mod_ai/colab_run_modes.py'
+      - 'minecraft_mod_ai/complete_orchestrator.py'
+      - 'minecraft_mod_ai/complete_build_repair.py'
+      - 'minecraft_mod_ai/repair_guard.py'
+      - 'minecraft_mod_ai/runner.py'
+      - 'minecraft_mod_ai/final_artifact.py'
+      - 'minecraft_mod_ai/mcp_tools.py'
+      - 'minecraft_mod_ai/publisher.py'
+      - 'minecraft_mod_ai/scalable_generator.py'
+      - 'minecraft_mod_ai/scalable_validator.py'
+      - 'minecraft_mod_ai/validator.py'
+      - 'minecraft_mod_ai/platform_catalog.py'
+      - 'minecraft_mod_ai/platform_resolver.py'
+      - 'minecraft_mod_ai/host_version_catalog.py'
+      - 'minecraft_mod_ai/project_index.py'
+      - 'minecraft_mod_ai/project_index_execution_reuse_contract.py'
+      - 'minecraft_mod_ai/work_graph.py'
+      - 'minecraft_mod_ai/templates/fabric/item/**'
+      - 'tests/test_deterministic_debug_full_pipeline_e2e.py'
+      - 'pyproject.toml'
+      - '.github/workflows/deterministic-debug-full-e2e.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deterministic-debug-full-e2e-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deterministic-debug-full-e2e:
+    name: Debug fixture real Gradle pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install runtime and test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+
+      - name: Run deterministic full-pipeline E2E
+        timeout-minutes: 14
+        run: python -m pytest -q tests/test_deterministic_debug_full_pipeline_e2e.py
