@@ -285,3 +285,34 @@ def test_execute_checkpoints_distribution_packaging_for_resume() -> None:
     assert "release_package_input" in source
     assert "runtime_receipt_sha256" in source
     assert "coverage_sha256" in source
+
+
+def test_cached_download_bundle_validates_every_member_digest(tmp_path) -> None:
+    root = tmp_path / "download"
+    root.mkdir()
+    jar = root / "demo.jar"
+    jar.write_bytes(b"jar")
+    receipt = {
+        "status": "PASS",
+        "path": str(root),
+        "members": [
+            {
+                "path": "demo.jar",
+                "sha256": CompleteProductionOrchestrator._file_hash(jar),
+            }
+        ],
+    }
+
+    assert CompleteProductionOrchestrator._cached_download_bundle_exists(receipt)
+
+    jar.write_bytes(b"tampered")
+    assert not CompleteProductionOrchestrator._cached_download_bundle_exists(receipt)
+
+
+def test_execute_checkpoints_publish_and_download_side_effects() -> None:
+    source = inspect.getsource(CompleteProductionOrchestrator.execute)
+
+    assert "'publish-' + provider" in source
+    assert "'package-downloadable'" in source
+    assert "final-mod-download-" in source
+    assert "validate_cached=self._cached_download_bundle_exists" in source
