@@ -1383,6 +1383,12 @@ class CompleteProductionOrchestrator:
                 blockbench_receipts,
             )
         )
+        unresolved.extend(
+            self._mandatory_gametest_failures(
+                build,
+                spec,
+            )
+        )
         self._persist_work_evidence(project_root, ledger, work_plan)
         contract = approved.game_design.get('_production_contract')
         coverage_receipt = build_requirement_coverage_receipt(
@@ -2613,6 +2619,20 @@ class CompleteProductionOrchestrator:
             if not CompleteProductionOrchestrator._gametest_receipt_passed(build, spec):
                 return False
         return True
+
+    @staticmethod
+    def _mandatory_gametest_failures(
+        build_report: dict[str, Any] | None,
+        spec: Any,
+    ) -> list[str]:
+        return (
+            []
+            if CompleteProductionOrchestrator._gametest_receipt_passed(
+                build_report,
+                spec,
+            )
+            else ['gametest:missing-host-required-evidence']
+        )
 
     @staticmethod
     def _mandatory_blockbench_failures(
