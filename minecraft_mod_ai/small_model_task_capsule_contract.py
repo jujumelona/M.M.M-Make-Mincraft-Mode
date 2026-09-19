@@ -770,19 +770,10 @@ def _insert_authority_message(
     return tuple(result)
 
 
-def install() -> None:
-    """Install last so task authority remains outside generic generation wrappers."""
+def task_capsule_generation_scope(func: Any) -> Any:
+    """Bind one compiled task capsule around the source-owned generation method."""
 
-    from . import custom_module_generator, progress_aware_tool_loop
-
-    if getattr(progress_aware_tool_loop, _MARKER, False):
-        return
-    Generator = custom_module_generator.CustomModuleGenerator
-    original_generate = Generator.generate
-    original_loop = progress_aware_tool_loop.generate_with_tools
-    original_contract = custom_module_generator._task_local_module_contract
-
-    @wraps(original_generate)
+    @wraps(func)
     def generate(self: Any, *args: Any, **kwargs: Any):
         module = kwargs.get("module")
         capsule: TaskCapsule | None = None
@@ -818,7 +809,7 @@ def install() -> None:
             },
         )
         try:
-            return original_generate(self, *args, **kwargs)
+            return func(self, *args, **kwargs)
         except BaseException as exc:
             emit_root_cause(
                 "task_capsule_generation_failure",
@@ -834,7 +825,14 @@ def install() -> None:
         finally:
             _CURRENT_CAPSULE.reset(token)
 
-    @wraps(original_loop)
+    generate._mmm_small_model_task_capsule = True  # type: ignore[attr-defined]
+    return generate
+
+
+def task_capsule_tool_loop(func: Any) -> Any:
+    """Narrow coder tools/messages at the source-owned tool-loop definition."""
+
+    @wraps(func)
     def generate_with_tools(
         router: Any,
         *,
@@ -847,7 +845,7 @@ def install() -> None:
     ) -> str:
         capsule = _CURRENT_CAPSULE.get()
         if capsule is None or stage != "generation" or role not in {"coder", "coder_safe"}:
-            return original_loop(
+            return func(
                 router,
                 config=config,
                 adapter=adapter,
@@ -892,7 +890,7 @@ def install() -> None:
                     "narrowed_tools": request.tools,
                 },
             )
-            return original_loop(
+            return func(
                 router,
                 config=config,
                 adapter=_TaskBoundAdapter(adapter, capsule),
@@ -902,33 +900,33 @@ def install() -> None:
                 role=role,
             )
 
-    @wraps(original_contract)
+    generate_with_tools._mmm_small_model_task_capsule = True  # type: ignore[attr-defined]
+    return generate_with_tools
+
+
+def task_local_module_contract_owner(func: Any) -> Any:
+    """Compact task-local coder input at its canonical contract definition."""
+
+    @wraps(func)
     def task_local_module_contract(module: Any) -> dict[str, Any]:
         if _evidence_task(module) is None:
-            return original_contract(module)
+            return func(module)
         return compact_task_local_module_contract(module)
 
-    generate._mmm_small_model_task_capsule = True  # type: ignore[attr-defined]
-    generate_with_tools._mmm_small_model_task_capsule = True  # type: ignore[attr-defined]
     task_local_module_contract._mmm_small_model_task_capsule = True  # type: ignore[attr-defined]
-    Generator.generate = generate
-    progress_aware_tool_loop.generate_with_tools = generate_with_tools
-    custom_module_generator._task_local_module_contract = task_local_module_contract
-    setattr(progress_aware_tool_loop, _MARKER, True)
-    setattr(custom_module_generator, _MARKER, True)
+    return task_local_module_contract
 
 
 def assert_installed() -> None:
     from . import custom_module_generator, progress_aware_tool_loop
 
     checks = (
-        getattr(progress_aware_tool_loop, _MARKER, False),
         getattr(progress_aware_tool_loop.generate_with_tools, "_mmm_small_model_task_capsule", False),
         getattr(custom_module_generator.CustomModuleGenerator.generate, "_mmm_small_model_task_capsule", False),
         getattr(custom_module_generator._task_local_module_contract, "_mmm_small_model_task_capsule", False),
     )
     if not all(checks):
-        raise RuntimeError("Small-model task capsule contract is not final/active.")
+        raise RuntimeError("Small-model task capsule source ownership is incomplete.")
 
 
 __all__ = [
@@ -941,7 +939,9 @@ __all__ = [
     "compact_task_local_module_contract",
     "compile_task_capsule",
     "current_task_required_gates",
-    "install",
     "narrow_source_edit_schema",
     "narrow_task_tool_schema",
+    "task_capsule_generation_scope",
+    "task_capsule_tool_loop",
+    "task_local_module_contract_owner",
 ]
