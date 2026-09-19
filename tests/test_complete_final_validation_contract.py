@@ -456,3 +456,32 @@ def test_generation_executor_quiesces_mutating_workers_before_return() -> None:
     assert "time.monotonic() + lease_seconds" in source
     assert "shutdown(wait=False" not in source
     assert source.count("shutdown(wait=True, cancel_futures=True)") == 5
+
+
+def test_asset_shard_cache_validates_asset_and_document_digests(tmp_path) -> None:
+    texture = tmp_path / "texture.png"
+    document = tmp_path / "model.json"
+    texture.write_bytes(b"png")
+    document.write_text("{}", encoding="utf-8")
+    receipt = {
+        "status": "TEXTURE_PRODUCTION_PASS",
+        "assets": [
+            {
+                "target": str(texture),
+                "sha256": CompleteProductionOrchestrator._file_hash(texture),
+            }
+        ],
+        "documents": [
+            {
+                "resolved_path": str(document),
+                "sha256": CompleteProductionOrchestrator._file_hash(document),
+            }
+        ],
+        "resource_graph_validation": {"status": "PASS"},
+        "resource_contract_validation": {"status": "PASS"},
+    }
+
+    assert CompleteProductionOrchestrator._cached_asset_shard(receipt)
+
+    document.write_text('{"changed": true}', encoding="utf-8")
+    assert not CompleteProductionOrchestrator._cached_asset_shard(receipt)
