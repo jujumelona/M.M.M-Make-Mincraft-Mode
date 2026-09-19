@@ -52,7 +52,6 @@ def finalize_runtime() -> None:
             llama_tuning_pipeline,
             mcp_transport_pool,
             model_router,
-            model_tool_aliases,
             parallel_runtime_contract,
             planner_template_schema,
             production_contract,
@@ -86,7 +85,6 @@ def finalize_runtime() -> None:
         from .mcp_transport_pool import install_agent_mcp_transport_pool
         from .model_output_atomicity_contract import assert_installed as assert_model_output_atomicity
         from .model_prefetch_resilience import install as install_prefetch_resilience
-        from .model_tool_alias_permission_policy import install as install_model_tool_alias_permissions
         from .planner_design_readiness_contract import install as install_planner_design_readiness
         from .procedural_skill_identity_contract import install as install_procedural_skill_identity
         from .production_boundary_contract import install_production_boundary_contract
@@ -131,7 +129,6 @@ def finalize_runtime() -> None:
         install_generation_safety()
         install_retrieval_residency(model_router_module=model_router)
 
-        install_model_tool_alias_permissions(agent_capability_context, model_tool_aliases)
         install_llama_mtp_cache_policy(llama_server_autotune, llama_server_runtime_tuning)
         install_llama_native_context_authority(llama_server_autotune, llama_tuning_pipeline)
         install_tool_validation_surface()
