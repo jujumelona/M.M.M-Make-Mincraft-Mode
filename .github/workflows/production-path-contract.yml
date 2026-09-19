@@ -32,6 +32,7 @@ on:
       - 'minecraft_mod_ai/planning_pipeline.py'
       - 'minecraft_mod_ai/runtime_finalization.py'
       - 'minecraft_mod_ai/runtime_preflight.py'
+      - 'minecraft_mod_ai/runtime_manager.py'
       - 'minecraft_mod_ai/tool_validation_surface_contract.py'
       - 'tests/test_llama_cpp_native_tool_call_contract.py'
       - 'tests/test_production_tool_call_isolation_contract.py'
@@ -43,6 +44,7 @@ on:
       - 'tests/test_platform_dynamic_coder_contract.py'
       - 'tests/test_platform_live_execution_contract.py'
       - 'tests/test_platform_runtime_wrapper_contract.py'
+      - 'tests/test_runtime_visual_provenance.py'
       - 'tests/test_fabric_official_template_provider_contract.py'
       - 'tests/test_debug_mode_fixture_roundtrip.py'
       - 'tests/test_debug_mode_task_contract.py'
@@ -83,6 +85,7 @@ on:
       - 'minecraft_mod_ai/planning_pipeline.py'
       - 'minecraft_mod_ai/runtime_finalization.py'
       - 'minecraft_mod_ai/runtime_preflight.py'
+      - 'minecraft_mod_ai/runtime_manager.py'
       - 'minecraft_mod_ai/tool_validation_surface_contract.py'
       - 'tests/test_llama_cpp_native_tool_call_contract.py'
       - 'tests/test_production_tool_call_isolation_contract.py'
@@ -94,6 +97,7 @@ on:
       - 'tests/test_platform_dynamic_coder_contract.py'
       - 'tests/test_platform_live_execution_contract.py'
       - 'tests/test_platform_runtime_wrapper_contract.py'
+      - 'tests/test_runtime_visual_provenance.py'
       - 'tests/test_fabric_official_template_provider_contract.py'
       - 'tests/test_debug_mode_fixture_roundtrip.py'
       - 'tests/test_debug_mode_task_contract.py'
@@ -154,6 +158,7 @@ jobs:
             minecraft_mod_ai/routed_planner.py \
             minecraft_mod_ai/runtime_finalization.py \
             minecraft_mod_ai/runtime_preflight.py \
+            minecraft_mod_ai/runtime_manager.py \
             minecraft_mod_ai/tool_validation_surface_contract.py
       - name: Run production-path fault-injection contracts
         run: |
@@ -167,6 +172,7 @@ jobs:
             tests/test_platform_dynamic_coder_contract.py \
             tests/test_platform_live_execution_contract.py \
             tests/test_platform_runtime_wrapper_contract.py \
+            tests/test_runtime_visual_provenance.py \
             tests/test_fabric_official_template_provider_contract.py \
             tests/test_debug_mode_fixture_roundtrip.py \
             tests/test_debug_mode_task_contract.py \
