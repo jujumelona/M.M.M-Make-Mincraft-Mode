@@ -443,6 +443,19 @@ def test_generation_terminal_receipt_is_context_local_and_structured() -> None:
     assert tool_loop.current_generation_verification_receipt()["status"] == "PASS"
 
 
+def test_runtime_candidate_verifier_is_the_canonical_source_implementation() -> None:
+    verifier = custom_search._verify_candidate
+    source = inspect.getsource(verifier)
+
+    assert verifier.__module__ == "minecraft_mod_ai.custom_generation_search_contract", (
+        verifier.__module__,
+        verifier,
+    )
+    assert "classification = classify_generation_verification" in source, source
+    assert "score += 1_000_000" not in source, source
+    assert "JavaLanguageService" not in source, source
+
+
 def test_candidate_verifier_has_no_candidate_local_jdt_dependency() -> None:
     source = inspect.getsource(custom_search._verify_candidate)
     assert "JavaLanguageService" not in source
