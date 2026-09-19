@@ -307,7 +307,15 @@ class MMMToolService:
         report = validate_jar(jar, parsed.spec)
         return {**report.to_dict(), 'jar_path': str(jar), 'jar_sha256': _sha256(jar)}
 
-    def package_release(self, project_root: str, proposal: dict[str, Any], approval_hash: str, output_zip: str='releases/mmm-release.zip', jar_path: str | None=None) -> dict[str, Any]:
+    def package_release(
+        self,
+        project_root: str,
+        proposal: dict[str, Any],
+        approval_hash: str,
+        output_zip: str='releases/mmm-release.zip',
+        jar_path: str | None=None,
+        additional_artifacts: dict[str, dict[str, Any]] | None=None,
+    ) -> dict[str, Any]:
         approved = self._approved(proposal, approval_hash)
         root = self._existing_dir(project_root)
         self.broker.authorize(approved_request(ToolAction.PACKAGE, project_root=root, workspace_root=self.workspace_root, proposal=approved), approved)
@@ -322,6 +330,25 @@ class MMMToolService:
             if not validated.passed:
                 raise RuntimeError('JAR validation failed; release package was not created.')
             jar_report = validated.to_dict()
+        verified_additional: dict[str, dict[str, str]] = {}
+        for name, descriptor in sorted((additional_artifacts or {}).items()):
+            if not isinstance(name, str) or not name or Path(name).name != name:
+                raise SpecValidationError('Additional release artifact name is unsafe.')
+            if not isinstance(descriptor, dict):
+                raise SpecValidationError(
+                    f'Additional release artifact descriptor is invalid: {name}'
+                )
+            source = self._existing_file(str(descriptor.get('path') or ''))
+            expected = str(descriptor.get('sha256') or '')
+            if not expected.startswith('sha256:') or _sha256(source) != expected:
+                raise SpecValidationError(
+                    f'Additional release artifact digest mismatch: {name}'
+                )
+            verified_additional[name] = {
+                'path': str(source),
+                'sha256': expected,
+            }
+
         target = self._new_file(output_zip)
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
@@ -336,8 +363,34 @@ class MMMToolService:
                 zipped.write(path, Path('source') / relative)
             if jar is not None:
                 zipped.write(jar, Path('binary') / jar.name)
-            zipped.writestr('release-manifest.json', canonical_json({'schema_version': 'mmm/release-manifest-v2', 'proposal_hash': approved.calculate_hash(), 'source_validation': source_report.to_dict(), 'jar_validation': jar_report, 'resource_policy': self.policy.__dict__}))
-        return {'status': 'PACKAGED', 'release_zip': str(target), 'sha256': _sha256(target), 'includes_verified_jar': jar is not None}
+            for name, descriptor in sorted(verified_additional.items()):
+                zipped.write(Path(descriptor['path']), Path('additional') / name)
+            zipped.writestr(
+                'release-manifest.json',
+                canonical_json(
+                    {
+                        'schema_version': 'mmm/release-manifest-v2',
+                        'proposal_hash': approved.calculate_hash(),
+                        'source_validation': source_report.to_dict(),
+                        'jar_validation': jar_report,
+                        'additional_artifacts': {
+                            name: descriptor['sha256']
+                            for name, descriptor in sorted(verified_additional.items())
+                        },
+                        'resource_policy': self.policy.__dict__,
+                    }
+                ),
+            )
+        return {
+            'status': 'PACKAGED',
+            'release_zip': str(target),
+            'sha256': _sha256(target),
+            'includes_verified_jar': jar is not None,
+            'additional_artifacts': {
+                name: descriptor['sha256']
+                for name, descriptor in sorted(verified_additional.items())
+            },
+        }
 
     def _run_gradle(self, project_root: str, proposal: dict[str, Any], approval_hash: str, *, run_gametest: bool) -> dict[str, Any]:
         approved = self._approved(proposal, approval_hash)
