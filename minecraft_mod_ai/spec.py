@@ -133,6 +133,69 @@ def platform_receipt_sha256(value: Any) -> str:
     return canonical_json_sha256(platform_receipt_payload(value))
 
 
+_MOJANG_NAMESPACE_MARKERS = (
+    "net.minecraft.core.",
+    "net.minecraft.resources.",
+    "net.minecraft.world.item.",
+    "net.minecraft.world.entity.",
+    "net.minecraft.world.level.",
+)
+_YARN_NAMESPACE_MARKERS = (
+    "net.minecraft.registry.",
+    "net.minecraft.item.",
+    "net.minecraft.entity.",
+    "net.minecraft.block.",
+    "net.minecraft.util.Identifier",
+)
+
+
+def _validate_host_facts_namespace(
+    host_facts_json: str,
+    *,
+    mappings_kind: str,
+    native_names: bool,
+) -> None:
+    raw = str(host_facts_json or "").strip()
+    if not raw:
+        return
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SpecValidationError(
+            "Platform host_facts_json must be valid JSON."
+        ) from exc
+    if not isinstance(payload, dict):
+        raise SpecValidationError(
+            "Platform host_facts_json must be a JSON object."
+        )
+    symbols = payload.get("api_symbols")
+    if symbols in (None, {}, []):
+        return
+    rendered = json.dumps(
+        symbols,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    has_mojang = any(marker in rendered for marker in _MOJANG_NAMESPACE_MARKERS)
+    has_yarn = any(marker in rendered for marker in _YARN_NAMESPACE_MARKERS)
+
+    if has_mojang and has_yarn:
+        raise SpecValidationError(
+            "Platform host facts mix Mojang and Yarn API namespaces in one target receipt."
+        )
+    if native_names:
+        return
+    if mappings_kind == "mojang" and has_yarn:
+        raise SpecValidationError(
+            "Platform host facts use Yarn API namespaces for a Mojang-mapped target."
+        )
+    if mappings_kind == "yarn" and has_mojang:
+        raise SpecValidationError(
+            "Platform host facts use Mojang API namespaces for a Yarn-mapped target."
+        )
+
+
 @dataclass(frozen=True)
 class PlatformLock:
     """Immutable coordinates copied from one already-validated provider receipt."""
@@ -288,6 +351,11 @@ class PlatformLock:
                 raise SpecValidationError(
                     "Platform lock mappings_version must equal the executable mappings coordinate."
                 )
+        _validate_host_facts_namespace(
+            self.host_facts_json,
+            mappings_kind=self.mappings_kind,
+            native_names=native_names,
+        )
         if any(not str(item).strip() for item in self.deterministic_module_kinds):
             raise SpecValidationError(
                 "Platform lock deterministic_module_kinds contains an empty capability."
