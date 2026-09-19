@@ -450,7 +450,7 @@ def runtime_profile(run_root: Path, memory_mb: int) -> Path:
     payload = {
         "schema_version": "mmm/runtime-profiles-v1",
         "profiles": {
-            "minecraft_target_disposable": {
+            "fabric_target_disposable": {
                 "minecraft_version": version,
                 "loader": loader,
                 "java_project_version": java_version,
