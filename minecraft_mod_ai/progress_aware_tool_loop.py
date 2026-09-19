@@ -14,6 +14,7 @@ import threading
 import time
 from collections.abc import Collection, Mapping, Sequence
 from contextlib import nullcontext
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -150,6 +151,52 @@ _REPAIR_FORBIDDEN_OPERATIONS = frozenset({
 })
 _MODEL_REJECTION_TOOL_NAME = "__mmm_rejected_tool_call__"
 _HOST_AUTHORITY_ROLES = frozenset({"system", "developer", "tool"})
+_GENERATION_VERIFICATION_RECEIPT: ContextVar[dict[str, Any] | None] = ContextVar(
+    "mmm_generation_verification_receipt",
+    default=None,
+)
+
+
+def clear_generation_verification_receipt() -> None:
+    _GENERATION_VERIFICATION_RECEIPT.set(None)
+
+
+def current_generation_verification_receipt() -> dict[str, Any] | None:
+    value = _GENERATION_VERIFICATION_RECEIPT.get()
+    return deepcopy(value) if isinstance(value, dict) else None
+
+
+def _record_terminal_generation_verification(
+    state: "HostRunState",
+    *,
+    terminal_status: str,
+    compile_backed_java: bool,
+) -> None:
+    context = state.mutation_context
+    verifier_tool = str(state.latest_verifier_tool or "").strip()
+    _GENERATION_VERIFICATION_RECEIPT.set(
+        {
+            "schema_version": "mmm/generation-verification-v1",
+            "status": terminal_status,
+            "authority": "generation_tool_loop",
+            "validation_status": str(state.validation_status or "").strip().upper(),
+            "termination_reason": str(state.termination_reason or "").strip(),
+            "verifier_tool": verifier_tool or None,
+            "target_path": (
+                str(context.target_path)
+                if context is not None and str(context.target_path or "").strip()
+                else None
+            ),
+            "compile_backed_java": bool(compile_backed_java),
+            "downstream_required_gate": (
+                "target_compile"
+                if terminal_status == "DEFERRED_TO_TARGET_COMPILE"
+                else None
+            ),
+        }
+    )
+
+
 _EXISTING_TARGET_EVIDENCE_SOURCES = frozenset({
     "host_exact_source",
     "mutation_receipt",
@@ -2617,6 +2664,7 @@ def _generate_with_tools_impl(
     all_names = frozenset(_tool_schema_names(all_tools))
     reviewed_external_servers = reviewed_mcp_servers_for_model_role(stage, role)
     state = HostRunState()
+    clear_generation_verification_receipt()
     unavailable_verifiers: set[str] = set()
     implementation_requires_mutation = bool(
         role in {"coder", "coder_safe"}
@@ -2718,6 +2766,11 @@ def _generate_with_tools_impl(
             and baseline_ready
         ):
             state.termination_reason = "VERIFICATION_DEFERRED_TO_TARGET_COMPILE"
+            _record_terminal_generation_verification(
+                state,
+                terminal_status="DEFERRED_TO_TARGET_COMPILE",
+                compile_backed_java=compile_backed_java,
+            )
             emit_root_cause(
                 "generation_verifier_deferred_to_required_gate",
                 stage=stage,
@@ -2738,6 +2791,11 @@ def _generate_with_tools_impl(
 
         if implementation_requires_mutation and state.workspace_changed and state.validation_status == "PASS" and baseline_ready:
             state.termination_reason = "VERIFICATION_PASSED"
+            _record_terminal_generation_verification(
+                state,
+                terminal_status="PASS",
+                compile_backed_java=compile_backed_java,
+            )
             return _host_coder_summary(verification="PASS")
 
         if state.semantic_fixed_point:
@@ -3518,6 +3576,8 @@ __all__ = [
     "RetrievalObservation",
     "RetrievalProgress",
     "TargetMutationContext",
+    "clear_generation_verification_receipt",
+    "current_generation_verification_receipt",
     "evidence_fingerprint",
     "format_trajectory_summary",
     "generate_with_tools",
