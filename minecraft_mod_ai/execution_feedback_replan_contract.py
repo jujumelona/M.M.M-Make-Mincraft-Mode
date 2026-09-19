@@ -346,6 +346,22 @@ def _semantic_observation(
     return core
 
 
+def semantic_execution_observation(
+    module: Any,
+    receipt: dict[str, Any],
+    *,
+    dependent_ids: Iterable[str],
+) -> dict[str, Any] | None:
+    """Canonical source-owned semantic observation for generation receipts."""
+
+    if not isinstance(receipt, Mapping):
+        return None
+    return _semantic_observation(module, receipt, dependent_ids=dependent_ids)
+
+
+semantic_execution_observation._mmm_multi_owner_observation = True  # type: ignore[attr-defined]
+
+
 def _diagnostic_severity_is_error(item: Mapping[str, Any]) -> bool:
     raw = item.get("severity")
     if raw is None:
