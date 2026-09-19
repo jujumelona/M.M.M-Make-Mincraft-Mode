@@ -174,3 +174,23 @@ def test_work_node_releases_uncommitted_checkpoint_when_ledger_commit_fails() ->
 
     assert ledger.state == "failed"
     assert events == ["abort"]
+
+
+def test_cached_receipt_accepts_later_repair_when_checkpoint_is_already_gone(tmp_path) -> None:
+    project = tmp_path / "project"
+    target = project / "src/main/java/demo/Feature.java"
+    target.parent.mkdir(parents=True)
+    target.write_text("original generated source\n", encoding="utf-8")
+    identity = "sha256:" + "d" * 64
+    result = _checkpoint_result(project, identity)
+
+    # Simulate a later build-repair mutation after the original checkpoint was
+    # successfully cleaned in the previous process.
+    target.write_text("repaired source\n", encoding="utf-8")
+
+    assert finalize_persisted_generation_checkpoint(
+        result,
+        project_root=project,
+        checkpoint_root=tmp_path / ".mmm-custom-checkpoints",
+    )
+    assert result["generation_checkpoint"]["status"] == "CLEANED_AFTER_LIVE_COMMIT"
