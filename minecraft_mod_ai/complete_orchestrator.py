@@ -1572,7 +1572,8 @@ class CompleteProductionOrchestrator:
 
         def dispatch_node(node: WorkNode) -> Future[Any]:
             resource_class = node.resource_class or str(node.payload.get('resource_class', 'cpu_io'))
-            args = (process_node, node)
+            deadline = time.monotonic() + lease_seconds
+            args = (run_with_model_execution_deadline, deadline, process_node, node)
             if resource_class == 'llm':
                 return llm_pool.submit(*args)
             if resource_class == 'image_gpu':
@@ -1657,11 +1658,13 @@ class CompleteProductionOrchestrator:
                 future.cancel()
             for _, future, _ in review_futures:
                 future.cancel()
-            cpu_pool.shutdown(wait=False, cancel_futures=True)
-            llm_pool.shutdown(wait=False, cancel_futures=True)
-            image_pool.shutdown(wait=False, cancel_futures=True)
-            commit_pool.shutdown(wait=False, cancel_futures=True)
-            review_pool.shutdown(wait=False, cancel_futures=True)
+            # Generation workers mutate the shared staged workspace.  Never return
+            # while a running worker from this attempt can still write into it.
+            cpu_pool.shutdown(wait=True, cancel_futures=True)
+            llm_pool.shutdown(wait=True, cancel_futures=True)
+            image_pool.shutdown(wait=True, cancel_futures=True)
+            commit_pool.shutdown(wait=True, cancel_futures=True)
+            review_pool.shutdown(wait=True, cancel_futures=True)
         asset_receipt = {'schema_version': 'mmm/complete-assets-sharded-v1', 'status': 'GENERATED', 'shard_count': len(asset_shards), 'asset_count': sum(len(item.get('assets', [])) for item in asset_shards), 'shards': asset_shards} if asset_shards else None
         return {'module_receipts': module_receipts, 'blockbench_receipts': blockbench_receipts, 'asset_receipt': asset_receipt, 'unresolved': unresolved, 'router': router}
 
