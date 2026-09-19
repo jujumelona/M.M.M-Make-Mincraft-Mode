@@ -215,20 +215,7 @@ def test_live_migration_uses_explicit_existing_project_import_primitive_once(
         existing_input_sha256="sha256:" + ("b" * 64),
         calculate_hash=lambda: "sha256:" + ("c" * 64),
     )
-    adapter = SimpleNamespace(
-        adapter_id="official-fabric-1.21.8",
-        edition="java",
-        loader="fabric",
-        minecraft_version="1.21.8",
-        java_version="21",
-        yarn_mappings="mojang",
-        fabric_loader="0.19.5",
-        fabric_api="0.136.1+1.21.8",
-        fabric_loom="1.17.20",
-        gradle="9.5.1",
-        gradle_sha256="d" * 64,
-        source_api_family="mojang",
-    )
+    adapter = platform_catalog.adapter_for_target("1.21.8", "fabric")
     existing_input = tmp_path / "input.zip"
 
     result = contract._prepare_live_migration(
