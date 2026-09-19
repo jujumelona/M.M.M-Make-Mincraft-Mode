@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import traceback
+import zipfile
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
@@ -1185,12 +1186,21 @@ class CompleteProductionOrchestrator:
                 ),
             )
         if release_ready:
+            resource_pack_bundle = (
+                asset_receipt.get('resource_pack_bundle')
+                if isinstance(asset_receipt, dict)
+                and isinstance(asset_receipt.get('resource_pack_bundle'), dict)
+                else None
+            )
             downloadable_input = {
                 'artifact_sha256': str(artifact_receipt.get('sha256') or ''),
                 'coverage_sha256': str(coverage_receipt.get('coverage_sha256') or ''),
                 'reuse_manifest_sha256': _stable_payload_sha256(reuse_manifest),
                 'build_receipt_sha256': _stable_payload_sha256(build_receipt),
                 'runtime_receipt_sha256': _stable_payload_sha256(persisted_runtime_receipt),
+                'resource_pack_sha256': str(
+                    resource_pack_bundle.get('sha256') if resource_pack_bundle else ''
+                ),
             }
             downloadable_sha256 = _stable_payload_sha256(downloadable_input)
             downloadable_target = (
@@ -1215,6 +1225,13 @@ class CompleteProductionOrchestrator:
                         reuse_manifest=reuse_manifest,
                         build_receipt=build_receipt,
                         runtime_receipt=persisted_runtime_receipt,
+                        additional_artifacts=(
+                            {
+                                'generated-resource-pack.zip': resource_pack_bundle
+                            }
+                            if resource_pack_bundle is not None
+                            else None
+                        ),
                     ),
                 ),
                 encode=lambda value: value,
@@ -1683,8 +1700,91 @@ class CompleteProductionOrchestrator:
             image_pool.shutdown(wait=True, cancel_futures=True)
             commit_pool.shutdown(wait=True, cancel_futures=True)
             review_pool.shutdown(wait=True, cancel_futures=True)
-        asset_receipt = {'schema_version': 'mmm/complete-assets-sharded-v1', 'status': 'GENERATED', 'shard_count': len(asset_shards), 'asset_count': sum(len(item.get('assets', [])) for item in asset_shards), 'shards': asset_shards} if asset_shards else None
+        resource_pack_bundle = self._finalize_resource_pack_bundle(
+            asset_shards,
+            run_root=run_root,
+        )
+        asset_receipt = (
+            {
+                'schema_version': 'mmm/complete-assets-sharded-v1',
+                'status': 'GENERATED',
+                'shard_count': len(asset_shards),
+                'asset_count': sum(len(item.get('assets', [])) for item in asset_shards),
+                'shards': asset_shards,
+                'resource_pack_bundle': resource_pack_bundle,
+            }
+            if asset_shards
+            else None
+        )
         return {'module_receipts': module_receipts, 'blockbench_receipts': blockbench_receipts, 'asset_receipt': asset_receipt, 'unresolved': unresolved, 'router': router}
+
+    @staticmethod
+    def _finalize_resource_pack_bundle(
+        asset_shards: Iterable[dict[str, Any]],
+        *,
+        run_root: Path,
+    ) -> dict[str, Any] | None:
+        roots: set[Path] = set()
+        for shard in asset_shards:
+            validation = shard.get('container_validation')
+            if not isinstance(validation, dict):
+                continue
+            pack = validation.get('standalone_resource_pack')
+            if not isinstance(pack, dict) or pack.get('status') != 'PASS':
+                continue
+            raw = pack.get('root')
+            if isinstance(raw, str) and raw:
+                roots.add(Path(raw).expanduser().resolve())
+        if not roots:
+            return None
+        if len(roots) != 1:
+            raise CompleteProductionError(
+                'Asset shards disagree on the standalone resource-pack root.'
+            )
+        root = next(iter(roots))
+        allowed_root = run_root.expanduser().resolve()
+        try:
+            root.relative_to(allowed_root)
+        except ValueError as exc:
+            raise CompleteProductionError(
+                'Standalone resource-pack root escaped the run workspace.'
+            ) from exc
+        if not root.is_dir() or root.is_symlink():
+            raise CompleteProductionError(
+                'Standalone resource-pack root is missing or unsafe.'
+            )
+
+        target = allowed_root / 'resource-packs' / 'generated-resource-pack-final.zip'
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            if target.is_symlink() or not target.is_file():
+                raise CompleteProductionError(
+                    'Standalone resource-pack bundle target is unsafe.'
+                )
+            target.unlink()
+
+        files = [
+            path
+            for path in sorted(root.rglob('*'))
+            if path.is_file() and not path.is_symlink()
+        ]
+        if not files:
+            raise CompleteProductionError(
+                'Standalone resource-pack root contains no files.'
+            )
+        with zipfile.ZipFile(target, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+            for path in files:
+                relative = path.relative_to(root).as_posix()
+                info = zipfile.ZipInfo(relative, date_time=(1980, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.external_attr = (0o644 & 0xFFFF) << 16
+                archive.writestr(info, path.read_bytes())
+        return {
+            'status': 'PASS',
+            'path': str(target),
+            'sha256': CompleteProductionOrchestrator._file_hash(target),
+            'file_count': len(files),
+        }
 
     @staticmethod
     def _run_work_node(ledger: DurableWorkLedger, node: WorkNode, *, action: Callable[[], dict[str, Any]], validate_cached: Callable[[dict[str, Any]], bool], shared_index: ProjectIndex | None=None) -> dict[str, Any]:
