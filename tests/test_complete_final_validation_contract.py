@@ -8,6 +8,7 @@ from minecraft_mod_ai.complete_orchestrator import (
     _blocking_jdt_errors,
     _final_validation_failure,
     _gametest_attestation_status,
+    _runtime_verification_passed,
 )
 
 
@@ -173,4 +174,52 @@ def test_cached_build_requires_real_build_command_and_requested_gametest(tmp_pat
         missing_gametest,
         require_gametest=True,
         spec=SimpleNamespace(mod_id="demo"),
+    )
+
+
+def test_required_runtime_needs_live_client_playtest_and_visual_evidence() -> None:
+    runtime = {
+        "status": "PASS",
+        "server": {"server_running": True},
+        "client": {"client_running": True},
+    }
+    playtest = {
+        "status": "PASS",
+        "interaction_count": 1,
+        "assertion_count": 1,
+    }
+    visual = {"status": "PASS"}
+
+    assert _runtime_verification_passed(
+        required=True,
+        runtime_receipt=runtime,
+        playtest_receipt=playtest,
+        visual_receipt=visual,
+    )
+    assert not _runtime_verification_passed(
+        required=True,
+        runtime_receipt={**runtime, "client": None},
+        playtest_receipt=playtest,
+        visual_receipt=visual,
+    )
+    assert not _runtime_verification_passed(
+        required=True,
+        runtime_receipt=runtime,
+        playtest_receipt={**playtest, "assertion_count": 0},
+        visual_receipt=visual,
+    )
+    assert not _runtime_verification_passed(
+        required=True,
+        runtime_receipt=runtime,
+        playtest_receipt=playtest,
+        visual_receipt={"status": "FAIL"},
+    )
+
+
+def test_optional_runtime_is_not_required_for_release_readiness() -> None:
+    assert _runtime_verification_passed(
+        required=False,
+        runtime_receipt=None,
+        playtest_receipt=None,
+        visual_receipt=None,
     )
