@@ -1072,6 +1072,12 @@ class CompleteProductionOrchestrator:
             )
         from .mcp_tools import MMMToolService
         tool_service = MMMToolService(workspace_root=run_root, profile=self.profile)
+        resource_pack_bundle = (
+            asset_receipt.get('resource_pack_bundle')
+            if isinstance(asset_receipt, dict)
+            and isinstance(asset_receipt.get('resource_pack_bundle'), dict)
+            else None
+        )
         release_package_input = {
             'graph_hash': work_plan.graph_hash,
             'proposal_hash': base.calculate_hash(),
@@ -1081,6 +1087,9 @@ class CompleteProductionOrchestrator:
             'build_receipt_sha256': _stable_payload_sha256(build_receipt),
             'reuse_manifest_sha256': _stable_payload_sha256(reuse_manifest),
             'quality_report_sha256': _stable_payload_sha256(quality_report),
+            'resource_pack_sha256': str(
+                resource_pack_bundle.get('sha256') if resource_pack_bundle else ''
+            ),
         }
         release_package_sha256 = _stable_payload_sha256(release_package_input)
         release_output = (
@@ -1101,6 +1110,13 @@ class CompleteProductionOrchestrator:
                     base.calculate_hash(),
                     output_zip=release_output,
                     jar_path=str(jar_path),
+                    additional_artifacts=(
+                        {
+                            'generated-resource-pack.zip': resource_pack_bundle
+                        }
+                        if resource_pack_bundle is not None
+                        else None
+                    ),
                 ),
             ),
             encode=lambda value: value,
@@ -1186,12 +1202,6 @@ class CompleteProductionOrchestrator:
                 ),
             )
         if release_ready:
-            resource_pack_bundle = (
-                asset_receipt.get('resource_pack_bundle')
-                if isinstance(asset_receipt, dict)
-                and isinstance(asset_receipt.get('resource_pack_bundle'), dict)
-                else None
-            )
             downloadable_input = {
                 'artifact_sha256': str(artifact_receipt.get('sha256') or ''),
                 'coverage_sha256': str(coverage_receipt.get('coverage_sha256') or ''),
