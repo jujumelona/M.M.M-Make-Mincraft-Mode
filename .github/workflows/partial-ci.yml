@@ -63,8 +63,28 @@ jobs:
 
           source_modules: set[str] = set()
           source_stems: set[str] = set()
+          narrow_complete_orchestrator_receipt_change = False
           for path in python_files:
               p = Path(path)
+              if p.as_posix() == "minecraft_mod_ai/complete_orchestrator.py":
+                  diff_text = subprocess.check_output(
+                      ["git", "diff", "--unified=0", "HEAD^", "HEAD", "--", path],
+                      text=True,
+                  )
+                  receipt_markers = (
+                      "_full_gradle_build_receipt_passed",
+                      "Final project has no passing full Gradle build command receipt",
+                      "_gametest_receipt_passed",
+                  )
+                  if any(marker in diff_text for marker in receipt_markers):
+                      narrow_complete_orchestrator_receipt_change = True
+                      for candidate in (
+                          "tests/test_complete_final_validation_contract.py",
+                          "tests/test_gametest_capability_and_jdt_deferred.py",
+                      ):
+                          if (root / candidate).is_file():
+                              selected_tests.add(candidate)
+                      continue
               if p.parts and p.parts[0] == "minecraft_mod_ai":
                   module = ".".join(p.with_suffix("").parts)
                   source_modules.add(module)
