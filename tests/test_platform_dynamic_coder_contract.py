@@ -5,6 +5,7 @@ import json
 import pytest
 
 from minecraft_mod_ai import platform_resolver as resolver
+from minecraft_mod_ai import platform_selection_pipeline as selection_pipeline
 from minecraft_mod_ai import repair_engine
 from minecraft_mod_ai.custom_module_generator import (
     CustomModuleGenerationError,
@@ -147,8 +148,8 @@ def test_repair_scope_supports_kotlin_gradle_metadata() -> None:
 def test_revise_explicit_version_is_hint_and_migration_uses_optimizer(monkeypatch) -> None:
     winner = _future_adapter()
     monkeypatch.setattr(
-        resolver,
-        "_optimize",
+        selection_pipeline,
+        "optimize_platform_fail_closed",
         lambda *_args, **_kwargs: _optimization(winner),
     )
 
