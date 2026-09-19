@@ -1844,7 +1844,12 @@ class CompleteProductionOrchestrator:
             return False
         raw = receipt.get('path')
         members = receipt.get('members')
-        if not isinstance(raw, str) or not isinstance(members, list):
+        manifest_sha256 = receipt.get('manifest_sha256')
+        if (
+            not isinstance(raw, str)
+            or not isinstance(members, list)
+            or not isinstance(manifest_sha256, str)
+        ):
             return False
         root = Path(raw).expanduser().resolve()
         if not root.is_dir() or root.is_symlink():
@@ -1861,7 +1866,19 @@ class CompleteProductionOrchestrator:
                 return False
             if CompleteProductionOrchestrator._file_hash(target) != expected:
                 return False
-        return True
+        manifest_path = root / 'bundle-receipt.json'
+        if not manifest_path.is_file() or manifest_path.is_symlink():
+            return False
+        try:
+            persisted = json.loads(manifest_path.read_text(encoding='utf-8'))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        return (
+            isinstance(persisted, dict)
+            and persisted.get('manifest_sha256') == manifest_sha256
+            and persisted.get('artifact_sha256') == receipt.get('artifact_sha256')
+            and persisted.get('members') == members
+        )
 
     @staticmethod
     def _cached_package_exists(receipt: Any, *, path_key: str) -> bool:
