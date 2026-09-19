@@ -560,18 +560,28 @@ class AgentToolRuntime:
         return value["result"]
 
     def close(self) -> None:
-        # runtime_finalization patches _session() to MCPTransportPool. Close only that
-        # persistent owner when materialized; do not create a pool merely to close it.
+        """Close every persistent runtime resource owned by this tool runtime."""
+
         with self._lock:
+            java_service = getattr(self, "_mmm_generation_java_service", None)
+            if java_service is not None:
+                try:
+                    delattr(self, "_mmm_generation_java_service")
+                except AttributeError:
+                    pass
             pool = getattr(self, "_mcp_transport_pool", None)
-            if pool is None:
-                return
             self._mcp_transport_pool = None
             finalizer = getattr(self, "_mcp_transport_pool_finalizer", None)
             self._mcp_transport_pool_finalizer = None
+
+        if java_service is not None:
+            close_java = getattr(java_service, "close", None)
+            if callable(close_java):
+                close_java()
         if finalizer is not None and getattr(finalizer, "alive", False):
             finalizer.detach()
-        pool.close()
+        if pool is not None:
+            pool.close()
 
     async def _list_tools_async(self, stage: str) -> list[dict[str, Any]]:
         async with self._session(stage) as session:
