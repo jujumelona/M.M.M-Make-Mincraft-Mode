@@ -13,6 +13,8 @@ from minecraft_mod_ai.complete_orchestrator import (
     _persisted_runtime_evidence,
     _refresh_runtime_receipt_status,
     _runtime_verification_passed,
+    _replace_stale_directory_target,
+    _replace_stale_file_target,
     _stable_payload_sha256,
     _validate_external_execution_preflight,
 )
@@ -422,3 +424,26 @@ def test_runtime_receipt_is_refreshed_with_terminal_liveness() -> None:
         require_client=False,
     )
     assert server_only["status"] == "PASS"
+
+
+def test_checkpoint_miss_replaces_stale_package_targets(tmp_path) -> None:
+    stale_file = tmp_path / "package.zip"
+    stale_file.write_bytes(b"partial")
+    assert _replace_stale_file_target(
+        stale_file,
+        lambda: (stale_file.write_bytes(b"rebuilt"), "file-ok")[1],
+    ) == "file-ok"
+    assert stale_file.read_bytes() == b"rebuilt"
+
+    stale_dir = tmp_path / "download"
+    stale_dir.mkdir()
+    (stale_dir / "partial").write_text("partial", encoding="utf-8")
+
+    def rebuild_dir():
+        stale_dir.mkdir()
+        (stale_dir / "complete").write_text("ok", encoding="utf-8")
+        return "dir-ok"
+
+    assert _replace_stale_directory_target(stale_dir, rebuild_dir) == "dir-ok"
+    assert not (stale_dir / "partial").exists()
+    assert (stale_dir / "complete").read_text(encoding="utf-8") == "ok"
