@@ -419,6 +419,23 @@ def _blocking_jdt_errors(
     ]
 
 
+def _validate_required_gate_contract(proposal: Any) -> None:
+    unsupported: list[str] = []
+    for module in getattr(proposal, "modules", ()):
+        module_id = str(getattr(module, "module_id", "") or "")
+        for gate in getattr(module, "required_gates", ()):
+            rendered = str(gate).strip()
+            if not rendered:
+                continue
+            if _normalize_required_gate(rendered) not in _REQUIRED_GATE_TO_EVIDENCE:
+                unsupported.append(f"{module_id}:{rendered}")
+    if unsupported:
+        raise CompleteProductionError(
+            "Approved proposal contains unsupported required gates: "
+            + ", ".join(sorted(unsupported))
+        )
+
+
 def _validate_external_execution_preflight(
     proposal: Any,
     options: Any,
@@ -630,6 +647,7 @@ class CompleteProductionOrchestrator:
         if approved.status is not CompleteProposalStatus.APPROVED:
             raise SpecValidationError('Complete proposal approval did not complete.')
         _validate_external_execution_preflight(approved, options)
+        _validate_required_gate_contract(approved)
         input_is_bound = bool(approved.existing_input_sha256)
         input_is_supplied = existing_input is not None
         if input_is_bound != input_is_supplied:
