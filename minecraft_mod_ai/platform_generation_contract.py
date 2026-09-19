@@ -38,6 +38,40 @@ def install(generator_module: Any) -> None:
     generator.generate = generate
 
 
+def _matching_existing_bootstrap(
+    target: Path,
+    adapter: Any,
+) -> dict[str, Any] | None:
+    """Preserve bootstrap evidence only when the existing lock is the same target."""
+
+    if not target.is_file() or target.is_symlink():
+        return None
+    try:
+        existing = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(existing, dict):
+        return None
+    expected = {
+        "adapter_id": adapter.adapter_id,
+        "loader": adapter.loader,
+        "minecraft_version": adapter.minecraft_version,
+        "java_version": adapter.java_version,
+        "fabric_loader": adapter.fabric_loader,
+        "fabric_api": adapter.fabric_api,
+        "fabric_loom": adapter.fabric_loom,
+        "gradle": adapter.gradle,
+        "gradle_sha256": adapter.gradle_sha256,
+    }
+    if any(
+        str(existing.get(key) or "") != str(value)
+        for key, value in expected.items()
+    ):
+        return None
+    bootstrap = existing.get("bootstrap")
+    return dict(bootstrap) if isinstance(bootstrap, dict) else None
+
+
 def write_platform_lock(
     project_root: Path,
     adapter: Any,
@@ -48,6 +82,11 @@ def write_platform_lock(
 
     target = project_root / ".minecraft_ai" / "platform-lock.json"
     target.parent.mkdir(parents=True, exist_ok=True)
+    resolved_bootstrap = (
+        dict(bootstrap)
+        if bootstrap is not None
+        else _matching_existing_bootstrap(target, adapter)
+    )
     payload = {
         "schema_version": "mmm/generated-platform-lock-v4",
         "adapter_id": adapter.adapter_id,
@@ -74,8 +113,8 @@ def write_platform_lock(
         "deterministic_module_kinds": sorted(adapter.deterministic_module_kinds),
     }
     payload["receipt_sha256"] = platform_receipt_sha256(payload)
-    if bootstrap is not None:
-        payload["bootstrap"] = dict(bootstrap)
+    if resolved_bootstrap is not None:
+        payload["bootstrap"] = resolved_bootstrap
     target.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

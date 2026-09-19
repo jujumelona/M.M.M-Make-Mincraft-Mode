@@ -5,6 +5,7 @@ import json
 from minecraft_mod_ai import fabric_immutable_rebind_contract as fabric_rebind
 from minecraft_mod_ai import fabric_official_template_provider as fabric_provider
 from minecraft_mod_ai import platform_catalog
+from minecraft_mod_ai import platform_generation_contract
 from minecraft_mod_ai.platform_catalog import PlatformAdapter
 
 
@@ -95,3 +96,30 @@ def test_final_rebind_writer_cannot_downgrade_complete_lock(tmp_path) -> None:
 
     rebound = platform_catalog.adapter_from_project(tmp_path)
     assert rebound == adapter
+
+
+def test_canonical_rewrite_preserves_same_target_bootstrap_receipt(tmp_path) -> None:
+    adapter = _adapter()
+    adapter.validate()
+    receipt = {
+        "schema_version": "mmm/fabric-official-template-v3",
+        "provider": "fabricmc.net/cli",
+        "gametest_contract": {
+            "task": "runGameTest",
+            "report": "build/gametest-report.xml",
+            "entrypoint": "example.ExampleModGameTests",
+            "source": "src/main/java/example/ExampleModGameTests.java",
+        },
+    }
+
+    platform_generation_contract.write_platform_lock(
+        tmp_path,
+        adapter,
+        bootstrap=receipt,
+    )
+    platform_generation_contract.write_platform_lock(tmp_path, adapter)
+
+    payload = json.loads(
+        (tmp_path / ".minecraft_ai/platform-lock.json").read_text(encoding="utf-8")
+    )
+    assert payload["bootstrap"] == receipt

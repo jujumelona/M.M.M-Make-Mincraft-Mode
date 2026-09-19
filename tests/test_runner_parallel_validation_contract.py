@@ -237,18 +237,51 @@ def _project(root: Path, name: str, version: str, sha256: str) -> Path:
 
 
 
-def _install_host_gametest_fixture(project: Path) -> None:
+def _install_host_gametest_fixture(
+    project: Path,
+    *,
+    include_bootstrap: bool = True,
+) -> None:
     source = (
         project
         / "src/main/java/dev/mmm/debugfixture/MmmDebugFixtureModGameTests.java"
     )
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text(
-        "package dev.mmm.debugfixture;\n"
+        "package dev.mmm.debugfixture;\n\n"
+        "import net.fabricmc.fabric.api.gametest.v1.GameTest;\n"
+        "import net.fabricmc.loader.api.FabricLoader;\n"
+        "import net.minecraft.gametest.framework.GameTestHelper;\n\n"
         "public final class MmmDebugFixtureModGameTests {\n"
         "    @GameTest\n"
-        "    public void generatedRegistriesAreLive() {}\n"
+        "    public void generatedRegistriesAreLive(GameTestHelper context) {\n"
+        "        if (!FabricLoader.getInstance().isModLoaded(\"mmm_debug_fixture\")) {\n"
+        "            throw new AssertionError(\"generated mod was not loaded by Fabric\");\n"
+        "        }\n"
+        "        context.succeed();\n"
+        "    }\n"
         "}\n",
+        encoding="utf-8",
+    )
+    (project / "build.gradle").write_text(
+        """plugins {}
+
+fabricApi {
+    configureTests {
+        createSourceSet = false
+        enableGameTests = true
+        enableClientGameTests = false
+    }
+}
+
+loom {
+    runs {
+        gameTest {
+            property "fabric-api.gametest.report-file", file('build/gametest-report.xml').absolutePath
+        }
+    }
+}
+""",
         encoding="utf-8",
     )
     metadata = project / "src/main/resources/fabric.mod.json"
@@ -256,37 +289,44 @@ def _install_host_gametest_fixture(project: Path) -> None:
     metadata.write_text(
         json.dumps(
             {
+                "id": "mmm_debug_fixture",
                 "entrypoints": {
                     "fabric-gametest": [
                         "dev.mmm.debugfixture.MmmDebugFixtureModGameTests"
                     ]
-                }
+                },
             }
         ),
         encoding="utf-8",
     )
+    lock_payload = {
+        "adapter_id": "test",
+        "loader": "fabric",
+        "minecraft_version": "26.2",
+        "java_version": "25",
+        "fabric_loader": "0.19.5",
+        "fabric_api": "0.140.0+26.2",
+        "fabric_loom": "1.17-SNAPSHOT",
+        "gradle": "8.10.2",
+        "gradle_sha256": "f" * 64,
+    }
+    if include_bootstrap:
+        lock_payload["bootstrap"] = {
+            "gametest_contract": {
+                "task": "runGameTest",
+                "report": "build/gametest-report.xml",
+                "entrypoint": (
+                    "dev.mmm.debugfixture.MmmDebugFixtureModGameTests"
+                ),
+                "source": (
+                    "src/main/java/dev/mmm/debugfixture/"
+                    "MmmDebugFixtureModGameTests.java"
+                ),
+            }
+        }
     lock = project / ".minecraft_ai/platform-lock.json"
     lock.parent.mkdir(parents=True, exist_ok=True)
-    lock.write_text(
-        json.dumps(
-            {
-                "bootstrap": {
-                    "gametest_contract": {
-                        "task": "runGameTest",
-                        "report": "build/gametest-report.xml",
-                        "entrypoint": (
-                            "dev.mmm.debugfixture.MmmDebugFixtureModGameTests"
-                        ),
-                        "source": (
-                            "src/main/java/dev/mmm/debugfixture/"
-                            "MmmDebugFixtureModGameTests.java"
-                        ),
-                    }
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
+    lock.write_text(json.dumps(lock_payload), encoding="utf-8")
 
 
 def _reset() -> None:
@@ -464,6 +504,67 @@ def test_log_summary_cannot_create_evidence_without_host_contract(
     tmp_path: Path,
 ) -> None:
     project = _project(tmp_path, "unbound", "8.10.2", "1" * 64)
+    log = project / ".minecraft_ai/logs/gradle-build.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(
+        "> Task :runGameTest\n"
+        "========= 2 GAME TESTS COMPLETE IN 1.0 s ======================\n"
+        "All 2 required tests passed :)\n"
+        "BUILD SUCCESSFUL\n",
+        encoding="utf-8",
+    )
+
+    assert _structured_gametest_report(
+        project,
+        log,
+        project / "build/gametest-report.xml",
+    ) is None
+
+
+def test_log_only_gametest_reconstructs_contract_when_bootstrap_receipt_is_missing(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path, "receipt-missing", "8.10.2", "f" * 64)
+    _install_host_gametest_fixture(project, include_bootstrap=False)
+    log = project / ".minecraft_ai/logs/gradle-build.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(
+        "> Task :runGameTest\n"
+        "[12:45:11] [Server thread/INFO] (Minecraft) "
+        "========= 2 GAME TESTS COMPLETE IN 4.935 s ======================\n"
+        "[12:45:11] [Server thread/INFO] (Minecraft) "
+        "All 2 required tests passed :)\n"
+        "> Task :build\n"
+        "BUILD SUCCESSFUL\n",
+        encoding="utf-8",
+    )
+
+    report = _structured_gametest_report(
+        project,
+        log,
+        project / "build/gametest-report.xml",
+    )
+
+    assert report is not None
+    assert report.name == "mmm-gametest-attestation.xml"
+
+
+def test_log_only_gametest_rejects_tampered_host_source_without_bootstrap(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path, "tampered-host-source", "8.10.2", "f" * 64)
+    _install_host_gametest_fixture(project, include_bootstrap=False)
+    source = (
+        project
+        / "src/main/java/dev/mmm/debugfixture/MmmDebugFixtureModGameTests.java"
+    )
+    source.write_text(
+        source.read_text(encoding="utf-8").replace(
+            "context.succeed();",
+            "throw new AssertionError(\"tampered\");",
+        ),
+        encoding="utf-8",
+    )
     log = project / ".minecraft_ai/logs/gradle-build.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text(
