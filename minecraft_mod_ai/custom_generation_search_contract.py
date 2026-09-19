@@ -255,10 +255,24 @@ def _capture_candidate(
         shutil.rmtree(base_root, ignore_errors=True)
 
 
-def _candidate_verifier_selectable(verifier: Mapping[str, Any]) -> bool:
-    """Return whether the host-owned generation verifier completed successfully."""
+def _generation_verifier_tier(verifier: Mapping[str, Any]) -> int:
+    status = str(verifier.get("generation_status") or "").strip().upper()
+    if status == "PASS":
+        return 2
+    if (
+        status == "DEFERRED_TO_TARGET_COMPILE"
+        and verifier.get("target_compile_required") is True
+        and str(verifier.get("downstream_required_gate") or "").strip()
+        == "target_compile"
+    ):
+        return 1
+    return 0
 
-    return str(verifier.get("generation_status") or "").strip().upper() == "PASS"
+
+def _candidate_verifier_selectable(verifier: Mapping[str, Any]) -> bool:
+    """Return whether host verification is strong enough to admit a candidate."""
+
+    return _generation_verifier_tier(verifier) > 0
 
 
 def _require_selectable_evaluations(
@@ -285,23 +299,21 @@ def _require_selectable_evaluations(
         )
         status = str(verifier.get("generation_status") or "MISSING")
         authority = str(verifier.get("verification_authority") or "unknown")
-        failures.append(f"status={status}, authority={authority}")
+        terminal = str(verifier.get("terminal_verification_status") or "MISSING")
+        failures.append(
+            f"status={status}, terminal={terminal}, authority={authority}"
+        )
     raise RuntimeError(
         "Custom generation search has no candidate with trustworthy verification: "
         + " | ".join(failures)
     )
 
 
-def _verify_candidate(candidate_root: Path, result: Mapping[str, Any]) -> tuple[float, dict[str, Any]]:
-    """Score a candidate already admitted by the host-owned generation verifier.
-
-    Custom generation reaches this function only after the coder/tool loop has
-    completed. Java candidates are compile-backed in that loop before completion,
-    and the normal live-workspace verification pipeline still owns JDT diagnostics.
-    Starting a second JDT LS for every disposable candidate duplicated validation,
-    forced a cold Gradle import per candidate, and could turn a successful
-    target_compile into a false candidate failure when JDT bootstrap was slow.
-    """
+def _verify_candidate(
+    candidate_root: Path,
+    result: Mapping[str, Any],
+) -> tuple[float, dict[str, Any]]:
+    """Score one candidate from its exact host-owned terminal verification receipt."""
 
     del candidate_root
     touched = [
@@ -309,7 +321,9 @@ def _verify_candidate(candidate_root: Path, result: Mapping[str, Any]) -> tuple[
         for value in result.get("touched_paths", [])
         if isinstance(value, str)
     ]
-    java_paths = tuple(sorted(path for path in touched if path.lower().endswith(".java")))
+    java_paths = tuple(
+        sorted(path for path in touched if path.lower().endswith(".java"))
+    )
     operation_count = int(result.get("operation_count", 0) or 0)
     runtime_tests = result.get("runtime_tests", [])
     runtime_tests = runtime_tests if isinstance(runtime_tests, list) else []
@@ -331,26 +345,75 @@ def _verify_candidate(candidate_root: Path, result: Mapping[str, Any]) -> tuple[
         if str(value).strip()
     )
     source_status = str(result.get("status") or "").strip().upper()
-    generation_status = "PASS" if source_status == "SOURCE_GENERATED" else "FAIL"
+    generation_receipt = result.get("generation_verification")
+    receipt = (
+        generation_receipt
+        if isinstance(generation_receipt, Mapping)
+        else {}
+    )
+    receipt_valid = bool(
+        receipt.get("schema_version") == "mmm/generation-verification-v1"
+        and receipt.get("authority") == "generation_tool_loop"
+    )
+    terminal_status = (
+        str(receipt.get("status") or "").strip().upper()
+        if receipt_valid
+        else "MISSING"
+    )
+    target_compile_required = "target_compile" in required_gates
+    downstream_required_gate = str(
+        receipt.get("downstream_required_gate") or ""
+    ).strip()
+
+    if source_status != "SOURCE_GENERATED" or not receipt_valid:
+        generation_status = "FAIL"
+    elif terminal_status == "PASS":
+        generation_status = "PASS"
+    elif (
+        terminal_status == "DEFERRED_TO_TARGET_COMPILE"
+        and target_compile_required
+        and downstream_required_gate == "target_compile"
+    ):
+        generation_status = "DEFERRED_TO_TARGET_COMPILE"
+    else:
+        generation_status = "FAIL"
+
     verifier: dict[str, Any] = {
         "operation_count": operation_count,
         "touched_path_count": len(touched),
         "runtime_test_count": len(runtime_tests),
         "research_evidence_score": research_score,
         "generation_status": generation_status,
-        "verification_authority": "generation_tool_loop",
+        "verification_authority": (
+            str(receipt.get("authority") or "unknown")
+            if receipt_valid
+            else "unknown"
+        ),
+        "terminal_verification_status": terminal_status,
+        "validation_status": str(
+            receipt.get("validation_status") or ""
+        ).strip().upper(),
+        "termination_reason": str(
+            receipt.get("termination_reason") or ""
+        ).strip(),
+        "verification_tool": receipt.get("verifier_tool"),
         "source_status": source_status or "MISSING",
         "required_gates": list(required_gates),
-        "target_compile_required": "target_compile" in required_gates,
+        "target_compile_required": target_compile_required,
+        "downstream_required_gate": downstream_required_gate or None,
         "java_path_count": len(java_paths),
         "jdt_status": "NOT_RUN",
         "jdt_error_count": None,
         "jdt_reason": (
-            "candidate-local JDT is intentionally not run; generation-time host "
-            "verification already admitted the candidate and live-workspace JDT "
-            "remains in the normal verification pipeline"
+            "candidate-local JDT is intentionally not run; exact generation-time "
+            "host verification state is carried in generation_verification and "
+            "live-workspace JDT remains in the normal verification pipeline"
         ),
+        "selection_policy": "verifier_tier_then_locality",
     }
+    verifier_tier = _generation_verifier_tier(verifier)
+    verifier["verifier_tier"] = verifier_tier
+    score += 1_000_000.0 * verifier_tier
     return (score, verifier)
 
 def install(custom_module_generator_module: Any) -> None:
@@ -570,6 +633,7 @@ __all__ = [
     "_active_native_slots",
     "_candidate_patch_capture",
     "_candidate_verifier_selectable",
+    "_generation_verifier_tier",
     "_require_selectable_evaluations",
     "_capture_candidate",
     "_fork_router_for_candidate",
