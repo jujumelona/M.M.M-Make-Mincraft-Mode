@@ -131,7 +131,15 @@ def _deterministic_coder(
     )
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(source, encoding="utf-8")
-    return "Created the host-grounded DebugToken fixture in the owned target."
+    return json.dumps(
+        {
+            "summary": (
+                "Created the host-grounded DebugToken fixture in the owned target."
+            )
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 def test_debug_fixture_runs_real_build_and_packaging_without_live_model(
