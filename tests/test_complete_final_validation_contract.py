@@ -11,6 +11,7 @@ from minecraft_mod_ai.complete_orchestrator import (
     _final_validation_failure,
     _gametest_attestation_status,
     _persisted_runtime_evidence,
+    _refresh_runtime_receipt_status,
     _runtime_verification_passed,
     _stable_payload_sha256,
     _validate_external_execution_preflight,
@@ -392,3 +393,32 @@ def test_source_only_package_cache_rejects_tampered_zip(tmp_path) -> None:
         receipt,
         path_key="release_zip",
     )
+
+
+def test_runtime_receipt_is_refreshed_with_terminal_liveness() -> None:
+    initial = {
+        "status": "PASS",
+        "server": {"schema_version": "mmm/runtime-status-v1", "server_running": True},
+        "client": {"schema_version": "mmm/runtime-status-v1", "client_running": True},
+    }
+
+    dead_client = _refresh_runtime_receipt_status(
+        initial,
+        {
+            "server_running": True,
+            "client_running": False,
+            "server_log_lines": 12,
+            "client_log_lines": 3,
+        },
+        require_client=True,
+    )
+    assert dead_client["status"] == "FAIL"
+    assert dead_client["server"]["server_running"] is True
+    assert dead_client["client"]["client_running"] is False
+
+    server_only = _refresh_runtime_receipt_status(
+        {**initial, "client": None},
+        {"server_running": True, "client_running": False, "server_log_lines": 12},
+        require_client=False,
+    )
+    assert server_only["status"] == "PASS"
