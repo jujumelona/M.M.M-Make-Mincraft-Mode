@@ -389,6 +389,66 @@ def _blocking_jdt_errors(
     ]
 
 
+def _validate_external_execution_preflight(
+    proposal: Any,
+    options: Any,
+) -> None:
+    if bool(getattr(options, "source_only", False)):
+        return
+
+    required = bool(getattr(proposal, "external_runtime_required", False))
+    if required:
+        disabled = [
+            name
+            for name, enabled in (
+                ("runtime", getattr(options, "run_runtime", False)),
+                ("client", getattr(options, "run_client", False)),
+                ("mineflayer", getattr(options, "run_mineflayer", False)),
+                ("visual-review", getattr(options, "run_visual_review", False)),
+            )
+            if not enabled
+        ]
+        if disabled:
+            raise CompleteProductionError(
+                "Approved proposal requires external runtime verification, but these "
+                "checks are disabled: " + ", ".join(disabled)
+            )
+
+    if bool(getattr(options, "run_runtime", False)):
+        if not bool(getattr(options, "eula_accepted", False)):
+            raise CompleteProductionError(
+                "Runtime verification was requested without explicit Minecraft EULA acceptance."
+            )
+        raw_launcher = getattr(options, "server_launcher", None)
+        if not isinstance(raw_launcher, str) or not raw_launcher.strip():
+            raise CompleteProductionError(
+                "Runtime verification requires server_launcher before generation starts."
+            )
+        launcher = Path(raw_launcher).expanduser().resolve()
+        if not launcher.is_file() or launcher.is_symlink():
+            raise CompleteProductionError(
+                "server_launcher must be an existing regular file before generation starts."
+            )
+
+    if bool(getattr(options, "run_mineflayer", False)):
+        if not bool(getattr(options, "run_runtime", False)):
+            raise CompleteProductionError(
+                "Mineflayer verification requires runtime verification."
+            )
+        actions = getattr(options, "playtest_actions", ())
+        if not isinstance(actions, (list, tuple)) or not actions:
+            raise CompleteProductionError(
+                "Mineflayer verification requires explicit playtest_actions before generation starts."
+            )
+
+    if bool(getattr(options, "run_visual_review", False)):
+        screenshots = getattr(options, "screenshot_paths", ())
+        if not isinstance(screenshots, (list, tuple)) or not screenshots:
+            raise CompleteProductionError(
+                "Visual verification requires screenshot_paths before generation starts."
+            )
+
+
 def _persisted_runtime_evidence(
     runtime_receipt: dict[str, Any] | None,
     *,
@@ -508,6 +568,7 @@ class CompleteProductionOrchestrator:
         approved = parsed.approve(approval_hash)
         if approved.status is not CompleteProposalStatus.APPROVED:
             raise SpecValidationError('Complete proposal approval did not complete.')
+        _validate_external_execution_preflight(approved, options)
         input_is_bound = bool(approved.existing_input_sha256)
         input_is_supplied = existing_input is not None
         if input_is_bound != input_is_supplied:
