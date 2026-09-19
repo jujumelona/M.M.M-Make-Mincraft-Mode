@@ -40,7 +40,10 @@ from .execution_feedback_replan_contract import (
     feedback_run_context,
     semantic_execution_observation as _semantic_execution_observation,
 )
-from .custom_module_generator import CustomModuleGenerator
+from .custom_module_generator import (
+    CustomModuleGenerator,
+    finalize_persisted_generation_checkpoint,
+)
 from .extended_content_generator import generate_extended_content
 from .final_artifact import (
     FinalArtifactError,
@@ -1787,6 +1790,74 @@ class CompleteProductionOrchestrator:
             return router
         shared_project_index = execution_project_index(ProjectIndex, project_root, policy=self.policy)
         fallback_custom_generator: CustomModuleGenerator | None = None
+        generation_checkpoint_owners: dict[str, CustomModuleGenerator] = {}
+        generation_checkpoint_owners_lock = threading.RLock()
+
+        def _custom_generation_receipts(value: Any) -> tuple[dict[str, Any], ...]:
+            found: list[dict[str, Any]] = []
+
+            def visit(item: Any) -> None:
+                if isinstance(item, dict):
+                    if (
+                        item.get('schema_version') == 'mmm/custom-module-result-v3'
+                        and isinstance(item.get('generation_checkpoint'), dict)
+                    ):
+                        found.append(item)
+                    for nested in item.values():
+                        if nested is not item:
+                            visit(nested)
+                elif isinstance(item, (list, tuple)):
+                    for nested in item:
+                        visit(nested)
+
+            visit(value)
+            return tuple(found)
+
+        def _register_checkpoint_owner(
+            result: dict[str, Any],
+            generator: CustomModuleGenerator,
+        ) -> None:
+            checkpoint = result.get('generation_checkpoint')
+            token = checkpoint.get('cleanup_token') if isinstance(checkpoint, dict) else None
+            if isinstance(token, str) and token:
+                with generation_checkpoint_owners_lock:
+                    generation_checkpoint_owners[token] = generator
+
+        def _finalize_committed_generation_receipts(receipt: dict[str, Any]) -> None:
+            for result in _custom_generation_receipts(receipt):
+                checkpoint = result.get('generation_checkpoint')
+                token = checkpoint.get('cleanup_token') if isinstance(checkpoint, dict) else None
+                owner = None
+                if isinstance(token, str):
+                    with generation_checkpoint_owners_lock:
+                        owner = generation_checkpoint_owners.pop(token, None)
+                finalized = (
+                    owner.finalize_committed_generation_checkpoint(
+                        result,
+                        project_root=project_root,
+                    )
+                    if owner is not None
+                    else finalize_persisted_generation_checkpoint(
+                        result,
+                        project_root=project_root,
+                        checkpoint_root=run_root / '.minecraft_ai' / '.mmm-custom-checkpoints',
+                    )
+                )
+                if not finalized:
+                    raise CompleteProductionError(
+                        'Committed custom-generation checkpoint could not be finalized safely.'
+                    )
+
+        def _release_uncommitted_generation_receipts(receipt: dict[str, Any]) -> None:
+            for result in _custom_generation_receipts(receipt):
+                checkpoint = result.get('generation_checkpoint')
+                token = checkpoint.get('cleanup_token') if isinstance(checkpoint, dict) else None
+                owner = None
+                if isinstance(token, str):
+                    with generation_checkpoint_owners_lock:
+                        owner = generation_checkpoint_owners.pop(token, None)
+                if owner is not None:
+                    owner.release_generation_checkpoint(result)
 
         def new_custom_generator() -> CustomModuleGenerator:
             nonlocal fallback_custom_generator
@@ -1811,7 +1882,16 @@ class CompleteProductionOrchestrator:
                 nonlocal node_custom_generator
                 if node_custom_generator is None:
                     node_custom_generator = new_custom_generator()
-                return node_custom_generator.generate(project_root, module=module, research_modules=research_modules, minecraft_version=spec.platform.minecraft_version, loader=spec.platform.loader, mappings=spec.platform.yarn_mappings)
+                result = node_custom_generator.generate(
+                    project_root,
+                    module=module,
+                    research_modules=research_modules,
+                    minecraft_version=spec.platform.minecraft_version,
+                    loader=spec.platform.loader,
+                    mappings=spec.platform.yarn_mappings,
+                )
+                _register_checkpoint_owner(result, node_custom_generator)
+                return result
 
             if stage == 'content':
                 research_shards = [module for module in members if is_research_shard(module)]
@@ -1982,7 +2062,18 @@ class CompleteProductionOrchestrator:
                 if not member_ids or any(item not in module_lookup for item in member_ids):
                     raise CompleteProductionError(f'Work node {node.node_id} has invalid module members.')
                 members = [module_lookup[item] for item in member_ids]
-                receipt = self._run_work_node(ledger, node, action=lambda node=node, members=members: module_node_action(node, members), validate_cached=lambda value: self._receipt_outputs_exist(value, project_root=project_root), shared_index=shared_project_index)
+                receipt = self._run_work_node(
+                    ledger,
+                    node,
+                    action=lambda node=node, members=members: module_node_action(node, members),
+                    validate_cached=lambda value: self._receipt_outputs_exist(
+                        value,
+                        project_root=project_root,
+                    ),
+                    shared_index=shared_project_index,
+                    on_commit=_finalize_committed_generation_receipts,
+                    on_abort=_release_uncommitted_generation_receipts,
+                )
                 children = [item for item in receipt.get('receipts', []) if isinstance(item, dict)]
                 module_receipts.extend(children)
                 if node.payload.get('generation_stage') == 'entity':
@@ -2226,7 +2317,16 @@ class CompleteProductionOrchestrator:
         }
 
     @staticmethod
-    def _run_work_node(ledger: DurableWorkLedger, node: WorkNode, *, action: Callable[[], dict[str, Any]], validate_cached: Callable[[dict[str, Any]], bool], shared_index: ProjectIndex | None=None) -> dict[str, Any]:
+    def _run_work_node(
+        ledger: DurableWorkLedger,
+        node: WorkNode,
+        *,
+        action: Callable[[], dict[str, Any]],
+        validate_cached: Callable[[dict[str, Any]], bool],
+        shared_index: ProjectIndex | None = None,
+        on_commit: Callable[[dict[str, Any]], None] | None = None,
+        on_abort: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         cached = ledger.cached_receipt(node.node_id, input_hash=node.input_hash)
         emit_root_cause(
             'orchestrator_node_decision',
@@ -2238,6 +2338,8 @@ class CompleteProductionOrchestrator:
         )
         if cached is not None and validate_cached(cached):
             emit_root_cause('orchestrator_node_cache_hit', stage=node.stage, operation=node.node_id, gate='cached_receipt_validation', result='PASS', details={'receipt': cached})
+            if on_commit is not None:
+                on_commit(cached)
             return cached
         if cached is not None:
             emit_root_cause('orchestrator_node_cache_invalidated', stage=node.stage, operation=node.node_id, gate='cached_receipt_validation', result='FAIL', reason='cached outputs failed existence/integrity validation', details={'receipt': cached})
@@ -2250,6 +2352,8 @@ class CompleteProductionOrchestrator:
         ledger.raise_if_cancelled()
         if current['state'] != 'running':
             ledger.begin(node.node_id, worker_id='complete-orchestrator')
+        receipt: dict[str, Any] | None = None
+        committed = False
         try:
             emit_root_cause('orchestrator_node_action_start', stage=node.stage, operation=node.node_id, gate='work_node_action', result='START', details={'ledger_state': current, 'payload': node.payload})
             receipt = action()
@@ -2257,6 +2361,9 @@ class CompleteProductionOrchestrator:
                 raise CompleteProductionError(f'Work node {node.node_id} returned a non-object receipt.')
             ledger.raise_if_cancelled()
             ledger.succeed(node.node_id, receipt)
+            committed = True
+            if on_commit is not None:
+                on_commit(receipt)
             emit_root_cause('orchestrator_node_action_result', stage=node.stage, operation=node.node_id, gate='work_node_action', result='PASS', details={'receipt': receipt})
             if shared_index is not None:
                 touched = receipt.get('touched_paths') or receipt.get('written_files') or []
@@ -2277,6 +2384,19 @@ class CompleteProductionOrchestrator:
                         )
             return receipt
         except BaseException as exc:
+            if receipt is not None and not committed and on_abort is not None:
+                try:
+                    on_abort(receipt)
+                except BaseException as abort_exc:
+                    emit_root_cause(
+                        'orchestrator_node_abort_cleanup_failure',
+                        stage=node.stage,
+                        operation=node.node_id,
+                        gate='generation_checkpoint_release',
+                        result='FAIL',
+                        reason=f'{type(abort_exc).__name__}: {abort_exc}',
+                        exc=abort_exc,
+                    )
             try:
                 if ledger.task(node.node_id)['state'] == 'running':
                     ledger.fail(node.node_id, f'{type(exc).__name__}: {exc}')
