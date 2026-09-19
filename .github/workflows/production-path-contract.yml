@@ -45,6 +45,7 @@ on:
       - 'tests/test_platform_live_execution_contract.py'
       - 'tests/test_platform_runtime_wrapper_contract.py'
       - 'tests/test_runtime_visual_provenance.py'
+      - 'tests/test_playtest_acceptance_binding.py'
       - 'tests/test_fabric_official_template_provider_contract.py'
       - 'tests/test_debug_mode_fixture_roundtrip.py'
       - 'tests/test_debug_mode_task_contract.py'
@@ -98,6 +99,7 @@ on:
       - 'tests/test_platform_live_execution_contract.py'
       - 'tests/test_platform_runtime_wrapper_contract.py'
       - 'tests/test_runtime_visual_provenance.py'
+      - 'tests/test_playtest_acceptance_binding.py'
       - 'tests/test_fabric_official_template_provider_contract.py'
       - 'tests/test_debug_mode_fixture_roundtrip.py'
       - 'tests/test_debug_mode_task_contract.py'
@@ -173,6 +175,7 @@ jobs:
             tests/test_platform_live_execution_contract.py \
             tests/test_platform_runtime_wrapper_contract.py \
             tests/test_runtime_visual_provenance.py \
+            tests/test_playtest_acceptance_binding.py \
             tests/test_fabric_official_template_provider_contract.py \
             tests/test_debug_mode_fixture_roundtrip.py \
             tests/test_debug_mode_task_contract.py \
