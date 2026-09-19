@@ -200,3 +200,12 @@ def test_model_output_atomicity_has_one_install_owner() -> None:
     assert "install as install_model_output_atomicity" not in finalization
     assert "install_model_output_atomicity(" not in finalization
     assert "assert_model_output_atomicity" in finalization
+
+
+def test_claim_fencing_is_not_late_runtime_patched() -> None:
+    claim_fencing = _text("scheduler_claim_fencing_contract.py")
+    bootstrap = _BOOTSTRAP.read_text(encoding="utf-8")
+
+    assert "def install(" not in claim_fencing
+    assert "install_scheduler_claim_fencing" not in bootstrap
+    assert "scheduler_claim_fencing_contract import install" not in bootstrap
