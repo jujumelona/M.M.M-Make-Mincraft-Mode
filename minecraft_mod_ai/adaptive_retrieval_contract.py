@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-import json
-from functools import wraps
-from pathlib import Path
 from typing import Any
-
-_GROUNDING_MARKER = "__mmm_repository_grounding_live_context__"
 
 
 def install(model_router_module: Any) -> None:
@@ -24,7 +19,6 @@ def install(model_router_module: Any) -> None:
     from .inference_time_scaling import harden_runtime
     from .runtime_composer_hardening import harden_runtime_composer_identity
 
-    _install_repository_grounding()
     harden_runtime()
     harden_code_search_routes()
     harden_runtime_composer_identity()
@@ -45,85 +39,3 @@ def _expose_composed_repair_contracts() -> None:
     from .repair_engine import RepairEngine
 
     _inherit_boolean_contract_markers(RepairEngine._signature)
-
-
-def _runtime_grounding_budget(router: Any, requested: int, *, role: str) -> int:
-    """Reserve most of the live model window for task/tool traffic, not source dumps."""
-
-    requested = max(1024, int(requested))
-    registry = getattr(router, "registry", None)
-    resolve = getattr(registry, "role", None)
-    profile = str(getattr(router, "profile", "") or "").strip()
-    if not callable(resolve) or not profile:
-        return min(requested, 32 * 1024)
-    try:
-        config = resolve(profile, role)
-        from .model_context_budget import request_message_budget
-
-        live_request_bytes = request_message_budget(config, ())
-    except Exception:
-        return min(requested, 32 * 1024)
-    return min(requested, max(4 * 1024, live_request_bytes // 2))
-
-
-def _install_repository_grounding() -> None:
-    """Install adaptive repository grounding only where it still owns runtime behavior."""
-
-    from . import repair_engine
-    from .repository_grounding import build_repair_repository_context
-
-    # Custom generation owns its bounded initial source page directly in
-    # custom_module_generator. The historical wrapper here was installed first and
-    # then replaced by the atomic-coder finalizer, so it never owned the final runtime.
-    current_context = repair_engine.RepairEngine._context
-    if getattr(current_context, _GROUNDING_MARKER, False):
-        return
-
-    @wraps(current_context)
-    def _context(self: Any, root: Path, evidence: dict[str, Any]) -> dict[str, Any]:
-        diagnostic_paths: list[str] = []
-        query_parts: list[str] = []
-        for item in evidence.get("diagnostics", {}).get("diagnostics", []):
-            if not isinstance(item, dict):
-                continue
-            path = item.get("path") or item.get("uri")
-            if isinstance(path, str) and path.strip():
-                diagnostic_paths.append(path)
-            message = item.get("message")
-            if isinstance(message, str) and message.strip():
-                query_parts.append(message)
-        build = evidence.get("build", {})
-        if isinstance(build.get("error"), str) and build["error"].strip():
-            query_parts.append(build["error"])
-        build_logs = repair_engine._failed_build_log_diagnostics(evidence)
-        for command in build_logs:
-            output = command.get("output")
-            if isinstance(output, str) and output:
-                query_parts.append(output)
-
-        query = "\n".join(query_parts).strip()
-        if not query:
-            query = json.dumps(
-                {
-                    "diagnostics_status": evidence.get("diagnostics", {}).get("status"),
-                    "build_status": build.get("status"),
-                },
-                sort_keys=True,
-            )
-        index = repair_engine.active_repair_project_index(root, self.policy)
-        context = build_repair_repository_context(
-            self.router,
-            index,
-            query=query,
-            diagnostic_paths=diagnostic_paths,
-            byte_budget=_runtime_grounding_budget(
-                self.router,
-                self.policy.model_context_bytes,
-                role="coder_safe",
-            ),
-        )
-        context["build_logs"] = build_logs
-        return context
-
-    setattr(_context, _GROUNDING_MARKER, True)
-    repair_engine.RepairEngine._context = _context
