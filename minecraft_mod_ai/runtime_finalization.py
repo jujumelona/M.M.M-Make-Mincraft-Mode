@@ -61,8 +61,6 @@ def finalize_runtime() -> None:
             quality_evidence,
             reference_source_research,
             research_rag_performance,
-            retrieval_cpu_budget_contract,
-            small_model_hybrid_search_contract,
             small_model_max_agent_contract,
             work_graph,
         )
@@ -143,8 +141,6 @@ def finalize_runtime() -> None:
         install_generation_safety()
         install_retrieval_residency(model_router_module=model_router)
 
-        retrieval_cpu_budget_contract._install_live_hybrid_budget(small_model_hybrid_search_contract)
-        retrieval_cpu_budget_contract._install_production_tool_budget(production_tools)
         install_repository_grounding()
 
         install_model_tool_alias_permissions(agent_capability_context, model_tool_aliases)
