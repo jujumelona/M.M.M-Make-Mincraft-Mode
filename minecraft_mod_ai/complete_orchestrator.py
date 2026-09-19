@@ -378,6 +378,21 @@ def _blocking_jdt_errors(
     ]
 
 
+def _persisted_runtime_evidence(
+    runtime_receipt: dict[str, Any] | None,
+    *,
+    required: bool,
+    artifact_sha256: str,
+) -> dict[str, Any]:
+    if isinstance(runtime_receipt, dict):
+        return dict(runtime_receipt)
+    return {
+        "schema_version": "mmm/final-runtime-receipt-v1",
+        "status": "REQUIRED_NOT_RUN" if required else "NOT_REQUIRED",
+        "artifact_sha256": artifact_sha256,
+    }
+
+
 def _runtime_verification_passed(
     *,
     required: bool,
@@ -818,11 +833,11 @@ class CompleteProductionOrchestrator:
             if runtime_manager is not None and options.cleanup_runtime:
                 cleanup = runtime_manager.cleanup()
                 runtime_receipt = {**(runtime_receipt or {}), 'cleanup': cleanup}
-        persisted_runtime_receipt = runtime_receipt or {
-            'schema_version': 'mmm/final-runtime-receipt-v1',
-            'status': 'NOT_REQUIRED',
-            'artifact_sha256': artifact_receipt['sha256'],
-        }
+        persisted_runtime_receipt = _persisted_runtime_evidence(
+            runtime_receipt,
+            required=approved.external_runtime_required,
+            artifact_sha256=str(artifact_receipt['sha256']),
+        )
         (metadata_root / 'runtime-receipt.json').write_text(
             json.dumps(persisted_runtime_receipt, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
             encoding='utf-8',
