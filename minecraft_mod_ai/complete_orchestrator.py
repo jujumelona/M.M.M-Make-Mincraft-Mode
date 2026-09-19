@@ -3209,6 +3209,14 @@ class CompleteProductionOrchestrator:
         expected_class = f'{main_class}GameTests'.lower()
         expected_method = 'generatedRegistriesAreLive'.lower()
         expected_combined = f'{expected_class}.{expected_method}'
+        expected_method_compact = ''.join(
+            character for character in expected_method if character.isalnum()
+        )
+        mod_id_compact = ''.join(
+            character
+            for character in str(spec.mod_id).casefold()
+            if character.isalnum()
+        )
 
         for testcase in testcases:
             name = str(testcase.attrib.get('name') or '').strip().lower()
@@ -3217,8 +3225,23 @@ class CompleteProductionOrchestrator:
                 return True
             if (
                 name == expected_method
-                and classname
-                and classname.rsplit('.', 1)[-1] == expected_class
+                and (
+                    not classname
+                    or classname.rsplit('.', 1)[-1] == expected_class
+                )
+            ):
+                return True
+
+            # Fabric's GameTest JUnit writer may serialize the registered test id
+            # (for example mod_id:method_name) instead of the Java class/method pair.
+            # Bind that form to both our host-owned method id and this exact mod id.
+            name_compact = ''.join(
+                character for character in name if character.isalnum()
+            )
+            if (
+                name_compact.endswith(expected_method_compact)
+                and mod_id_compact
+                and name_compact.startswith(mod_id_compact)
             ):
                 return True
         return False
