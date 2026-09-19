@@ -36,7 +36,7 @@ permissions:
 
 concurrency:
   group: real-model-colab-e2e-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   colab-real-model-e2e:
