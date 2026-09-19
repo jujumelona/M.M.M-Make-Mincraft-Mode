@@ -317,7 +317,16 @@ def _verify_candidate(candidate_root: Path, result: Mapping[str, Any]) -> tuple[
     try:
         from .java_lsp import JavaLanguageService
         from .validation_diagnostic_contract import diagnostic_errors
-        diagnostics = JavaLanguageService().diagnostics(candidate_root, relative_files=java_paths, timeout_seconds=60)
+
+        service = JavaLanguageService()
+        try:
+            diagnostics = service.diagnostics(
+                candidate_root,
+                relative_files=java_paths,
+                timeout_seconds=60,
+            )
+        finally:
+            service.close()
         errors = diagnostic_errors(diagnostics)
         verifier['jdt_status'] = 'AVAILABLE'
         verifier['jdt_error_count'] = len(errors)
