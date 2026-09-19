@@ -761,13 +761,15 @@ class CompleteProductionOrchestrator:
                     runtime_receipt, str(artifact_receipt['sha256'])
                 )
             else:
-                unresolved.append('runtime:not-requested')
+                if approved.external_runtime_required:
+                    unresolved.append('runtime:not-requested')
             if options.run_mineflayer:
                 if not options.run_runtime:
                     raise CompleteProductionError('Mineflayer requires the disposable runtime.')
                 playtest_receipt = self._run_playtest(options.playtest_actions)
             else:
-                unresolved.append('mineflayer:not-requested')
+                if approved.external_runtime_required:
+                    unresolved.append('mineflayer:not-requested')
             if options.run_visual_review:
                 if not options.screenshot_paths:
                     raise CompleteProductionError('Visual review requires explicit runtime screenshot paths.')
@@ -776,7 +778,8 @@ class CompleteProductionOrchestrator:
                 if visual_receipt.get('status') != 'PASS':
                     raise CompleteProductionError('VisualCritic rejected the runtime screenshots.')
             else:
-                unresolved.append('visual-review:not-requested')
+                if approved.external_runtime_required:
+                    unresolved.append('visual-review:not-requested')
         finally:
             if runtime_manager is not None and options.cleanup_runtime:
                 cleanup = runtime_manager.cleanup()
