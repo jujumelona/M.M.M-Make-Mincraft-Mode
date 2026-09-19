@@ -194,3 +194,24 @@ def test_cached_receipt_accepts_later_repair_when_checkpoint_is_already_gone(tmp
         checkpoint_root=tmp_path / ".mmm-custom-checkpoints",
     )
     assert result["generation_checkpoint"]["status"] == "CLEANED_AFTER_LIVE_COMMIT"
+
+
+def test_work_node_runs_abort_callback_when_action_raises_before_receipt() -> None:
+    ledger = _Ledger()
+    events: list[object] = []
+
+    def fail_before_receipt():
+        raise RuntimeError("generation action failed")
+
+    with pytest.raises(RuntimeError, match="generation action failed"):
+        CompleteProductionOrchestrator._run_work_node(
+            ledger,
+            _node(),
+            action=fail_before_receipt,
+            validate_cached=lambda _value: True,
+            on_commit=lambda _receipt: events.append("commit"),
+            on_abort=lambda receipt: events.append(("abort", receipt)),
+        )
+
+    assert ledger.state == "failed"
+    assert events == [("abort", {})]
