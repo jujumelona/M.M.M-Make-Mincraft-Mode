@@ -380,6 +380,24 @@ def _stable_payload_sha256(value: Any) -> str:
     return "sha256:" + hashlib.sha256(rendered.encode("utf-8")).hexdigest()
 
 
+def _generation_receipt_sort_key(value: Any) -> tuple[str, str, str]:
+    if not isinstance(value, dict):
+        return ("", "", _stable_payload_sha256(value))
+    owner = next(
+        (
+            str(value.get(key) or "")
+            for key in ("module_id", "entity_id", "pack_id", "sound_id")
+            if value.get(key)
+        ),
+        "",
+    )
+    return (
+        owner,
+        str(value.get("schema_version") or ""),
+        _stable_payload_sha256(value),
+    )
+
+
 def _replace_stale_file_target(
     target: Path,
     action: Callable[[], Any],
@@ -1714,6 +1732,9 @@ class CompleteProductionOrchestrator:
             image_pool.shutdown(wait=True, cancel_futures=True)
             commit_pool.shutdown(wait=True, cancel_futures=True)
             review_pool.shutdown(wait=True, cancel_futures=True)
+        module_receipts.sort(key=_generation_receipt_sort_key)
+        asset_shards.sort(key=_generation_receipt_sort_key)
+        unresolved.sort()
         resource_pack_bundle = self._finalize_resource_pack_bundle(
             asset_shards,
             run_root=run_root,
