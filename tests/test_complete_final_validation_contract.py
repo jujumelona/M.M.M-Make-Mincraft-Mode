@@ -119,3 +119,20 @@ def test_execute_wires_required_gate_failures_into_both_release_paths() -> None:
     assert "build_report=None" in source
     assert "build_report=build" in source
     assert source.count("unresolved.extend(") >= 2
+
+
+def test_optional_runtime_checks_do_not_create_unresolved_release_gates() -> None:
+    source = inspect.getsource(CompleteProductionOrchestrator.execute)
+
+    assert (
+        "if approved.external_runtime_required:\n"
+        "                    unresolved.append('runtime:not-requested')"
+    ) in source
+    assert (
+        "if approved.external_runtime_required:\n"
+        "                    unresolved.append('mineflayer:not-requested')"
+    ) in source
+    assert (
+        "if approved.external_runtime_required:\n"
+        "                    unresolved.append('visual-review:not-requested')"
+    ) in source
