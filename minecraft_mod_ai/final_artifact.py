@@ -374,6 +374,7 @@ def write_downloadable_bundle(
     reuse_manifest: Mapping[str, Any],
     build_receipt: Mapping[str, Any],
     runtime_receipt: Mapping[str, Any],
+    additional_artifacts: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if artifact_receipt.get("status") != "PASS":
         raise FinalArtifactError("Only a passing final artifact receipt may be bundled.")
@@ -416,6 +417,37 @@ def write_downloadable_bundle(
         shutil.copy2(artifact, installed)
         if sha256_file(installed) != expected_sha256:
             raise FinalArtifactError("Bundled JAR changed while it was copied.")
+
+        bundled_additional: dict[str, str] = {}
+        for name, descriptor in sorted((additional_artifacts or {}).items()):
+            if not isinstance(name, str) or not name or Path(name).name != name:
+                raise FinalArtifactError("Additional artifact bundle name is unsafe.")
+            if not isinstance(descriptor, Mapping):
+                raise FinalArtifactError(
+                    f"Additional artifact descriptor is invalid: {name}"
+                )
+            source = _safe_existing_file(str(descriptor.get("path") or ""))
+            if source is None:
+                raise FinalArtifactError(
+                    f"Additional artifact path is missing or unsafe: {name}"
+                )
+            expected = normalize_sha256(descriptor.get("sha256"))
+            if sha256_file(source) != expected:
+                raise FinalArtifactError(
+                    f"Additional artifact changed after verification: {name}"
+                )
+            destination = target / name
+            if destination.exists():
+                raise FinalArtifactError(
+                    f"Additional artifact collides with bundle member: {name}"
+                )
+            shutil.copy2(source, destination)
+            if sha256_file(destination) != expected:
+                raise FinalArtifactError(
+                    f"Additional artifact changed while copied: {name}"
+                )
+            bundled_additional[name] = expected
+
         receipts = {
             "artifact-receipt.json": dict(artifact_receipt),
             "requirement-coverage.json": dict(requirement_coverage),
@@ -442,6 +474,7 @@ def write_downloadable_bundle(
             "status": "PASS",
             "artifact": artifact.name,
             "artifact_sha256": expected_sha256,
+            "additional_artifacts": bundled_additional,
             "members": members,
         }
         bundle_receipt["manifest_sha256"] = _canonical_sha256(bundle_receipt)
