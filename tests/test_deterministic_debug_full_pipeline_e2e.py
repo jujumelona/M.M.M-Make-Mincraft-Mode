@@ -11,6 +11,20 @@ from minecraft_mod_ai.complete_orchestrator import (
     CompleteProductionOrchestrator,
 )
 from minecraft_mod_ai.complete_spec import CompleteProposal
+from minecraft_mod_ai import platform_live_execution_contract as live_platform
+from minecraft_mod_ai.platform_catalog import adapter_for_lock_values, provider_for_loader
+
+
+def _assert_official_scaffold_route(proposal: CompleteProposal) -> None:
+    adapter = adapter_for_lock_values(proposal.base_proposal.spec.platform)
+    provider = provider_for_loader(adapter.loader)
+    assert adapter.loader == "fabric"
+    assert tuple(adapter.deterministic_module_kinds) == ()
+    assert provider.host_authoritative is True, (
+        provider.provider_id,
+        provider.host_authoritative,
+    )
+    assert live_platform._uses_official_scaffold(adapter) is True
 
 
 class _DeterministicRouter:
@@ -123,10 +137,32 @@ def test_debug_fixture_runs_real_build_and_packaging_without_live_model(
     proposal = CompleteProposal.from_dict(
         json.loads(plan_path.read_text(encoding="utf-8"))
     )
+    _assert_official_scaffold_route(proposal)
     orchestrator = CompleteProductionOrchestrator(
         workspace_root=tmp_path / "workspace",
         profile="deterministic-e2e",
         router_factory=_DeterministicRouter,
+    )
+    _assert_official_scaffold_route(proposal)
+    _original_official_scaffold_route = live_platform._uses_official_scaffold
+
+    def _checked_official_scaffold_route(adapter):
+        provider = provider_for_loader(adapter.loader)
+        result = _original_official_scaffold_route(adapter)
+        assert result is True, {
+            "loader": adapter.loader,
+            "adapter_id": adapter.adapter_id,
+            "source_api_family": adapter.source_api_family,
+            "deterministic_module_kinds": list(adapter.deterministic_module_kinds),
+            "provider_id": provider.provider_id,
+            "provider_host_authoritative": provider.host_authoritative,
+        }
+        return result
+
+    monkeypatch.setattr(
+        live_platform,
+        "_uses_official_scaffold",
+        _checked_official_scaffold_route,
     )
     result = orchestrator.execute(
         proposal,
