@@ -187,6 +187,55 @@ def test_integrated_gametest_accepts_incremental_build_receipt(tmp_path) -> None
     ) == "PASS"
 
 
+def test_incremental_integrated_build_receipt_matches_runtime_log_shape(
+    tmp_path,
+) -> None:
+    jar = tmp_path / "demo.jar"
+    jar.write_bytes(b"jar")
+    report = tmp_path / "gametest-report.xml"
+    report.write_text(
+        '<testsuite tests="1" failures="0" errors="0" skipped="0">'
+        '<testcase name="DemoModGameTests.generatedRegistriesAreLive"/>'
+        "</testsuite>",
+        encoding="utf-8",
+    )
+    build = {
+        "status": "PASS",
+        "jar_path": str(jar),
+        "gametest_mode": "integrated_build",
+        "gametest_task": "runGameTest",
+        "gametest_report": str(report),
+        "commands": [
+            {
+                "name": "incremental_build",
+                "command": [
+                    "/root/.cache/mmm/gradle/bin/gradle",
+                    "--daemon",
+                    "--parallel",
+                    "--max-workers=4",
+                    "build",
+                    "--build-cache",
+                    "--stacktrace",
+                ],
+                "exit_code": 0,
+                "timed_out": False,
+            }
+        ],
+    }
+
+    assert CompleteProductionOrchestrator._full_gradle_build_receipt_passed(build)
+    assert CompleteProductionOrchestrator._cached_build_exists(
+        build,
+        require_gametest=True,
+        spec=SimpleNamespace(mod_id="demo"),
+    )
+    assert _gametest_attestation_status(
+        build,
+        SimpleNamespace(mod_id="demo"),
+        requested=True,
+    ) == "PASS"
+
+
 def test_requested_gametest_without_report_is_not_attested() -> None:
     build = {
         "status": "PASS",
