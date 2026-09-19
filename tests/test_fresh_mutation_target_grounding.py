@@ -305,8 +305,16 @@ def test_successful_mutation_clears_stale_mutation_fixed_point() -> None:
     applied = {
         "ok": True,
         "result": {
-            "status": "applied",
-            "workspace_impact": "changed",
+            "schema_version": "mmm/source-patch-receipt-v1",
+            "status": "APPLIED",
+            "operations": [
+                {
+                    "path": TARGET_PATH,
+                    "operation": "replace",
+                    "before_sha256": "sha256:" + "1" * 64,
+                    "after_sha256": "sha256:" + "2" * 64,
+                }
+            ],
         },
     }
     state.record_mutation(
