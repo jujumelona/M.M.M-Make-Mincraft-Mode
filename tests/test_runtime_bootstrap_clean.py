@@ -113,6 +113,7 @@ def test_removed_runtime_patch_modules_do_not_return() -> None:
         "planir_mutation_authority_contract.py",
         "repair_mutation_recovery_contract.py",
         "execution_feedback_semantic_convergence_installation.py",
+        "coder_mutation_authority_contract.py",
     ):
         assert not (PACKAGE / name).exists()
 
