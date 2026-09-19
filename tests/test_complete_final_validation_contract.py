@@ -192,8 +192,10 @@ def test_cached_build_requires_real_build_command_and_requested_gametest(tmp_pat
     )
 
 
-def test_required_runtime_needs_live_client_playtest_and_visual_evidence() -> None:
+def test_required_runtime_needs_live_client_playtest_and_visual_evidence(tmp_path) -> None:
     artifact_sha = "sha256:" + "a" * 64
+    evidence = tmp_path / "runtime-proof.png"
+    evidence.write_bytes(b"runtime-proof")
     runtime = {
         "status": "PASS",
         "artifact_sha256": artifact_sha,
@@ -210,7 +212,8 @@ def test_required_runtime_needs_live_client_playtest_and_visual_evidence() -> No
         "artifact_sha256": artifact_sha,
         "runtime_screenshots": [
             {
-                "sha256": "sha256:" + "b" * 64,
+                "sha256": CompleteProductionOrchestrator._file_hash(evidence),
+                "evidence_path": str(evidence),
                 "server_running": True,
                 "client_running": True,
             }
@@ -690,8 +693,10 @@ def test_parallel_generation_receipts_sort_deterministically() -> None:
     assert [item["module_id"] for item in forward] == ["a", "a", "b"]
 
 
-def test_runtime_visual_evidence_rejects_unbound_or_stale_receipts() -> None:
+def test_runtime_visual_evidence_rejects_unbound_or_stale_receipts(tmp_path) -> None:
     artifact_sha = "sha256:" + "c" * 64
+    evidence = tmp_path / "visual-evidence.png"
+    evidence.write_bytes(b"visual-evidence")
     runtime = {
         "status": "PASS",
         "artifact_sha256": artifact_sha,
@@ -699,16 +704,16 @@ def test_runtime_visual_evidence_rejects_unbound_or_stale_receipts() -> None:
         "client": {"client_running": True},
     }
     playtest = {"status": "PASS", "interaction_count": 1, "assertion_count": 1}
+    screenshot = {
+        "sha256": CompleteProductionOrchestrator._file_hash(evidence),
+        "evidence_path": str(evidence),
+        "server_running": True,
+        "client_running": True,
+    }
     base_visual = {
         "status": "PASS",
         "artifact_sha256": artifact_sha,
-        "runtime_screenshots": [
-            {
-                "sha256": "sha256:" + "d" * 64,
-                "server_running": True,
-                "client_running": True,
-            }
-        ],
+        "runtime_screenshots": [screenshot],
     }
 
     assert not _runtime_verification_passed(
@@ -729,14 +734,16 @@ def test_runtime_visual_evidence_rejects_unbound_or_stale_receipts() -> None:
         playtest_receipt=playtest,
         visual_receipt={
             **base_visual,
-            "runtime_screenshots": [
-                {
-                    "sha256": "sha256:" + "d" * 64,
-                    "server_running": True,
-                    "client_running": False,
-                }
-            ],
+            "runtime_screenshots": [{**screenshot, "client_running": False}],
         },
+    )
+
+    evidence.write_bytes(b"tampered-after-review")
+    assert not _runtime_verification_passed(
+        required=True,
+        runtime_receipt=runtime,
+        playtest_receipt=playtest,
+        visual_receipt=base_visual,
     )
 
 
