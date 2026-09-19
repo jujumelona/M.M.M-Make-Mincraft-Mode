@@ -375,3 +375,20 @@ def test_source_only_skips_external_runtime_preflight() -> None:
         SimpleNamespace(external_runtime_required=True),
         SimpleNamespace(source_only=True),
     )
+
+
+def test_source_only_package_cache_rejects_tampered_zip(tmp_path) -> None:
+    archive = tmp_path / "complete-source.zip"
+    archive.write_bytes(b"source-zip")
+    receipt = CompleteProductionOrchestrator._source_package_receipt(str(archive))
+
+    assert CompleteProductionOrchestrator._cached_package_exists(
+        receipt,
+        path_key="release_zip",
+    )
+
+    archive.write_bytes(b"tampered")
+    assert not CompleteProductionOrchestrator._cached_package_exists(
+        receipt,
+        path_key="release_zip",
+    )
