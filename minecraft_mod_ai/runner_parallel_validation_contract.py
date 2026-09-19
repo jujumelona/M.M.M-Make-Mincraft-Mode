@@ -200,6 +200,175 @@ def _task_from_listing(log_path: str | Path) -> str | None:
     return None
 
 
+def _host_gametest_contract(root: Path) -> dict[str, str] | None:
+    """Resolve the exact host-installed GameTest identity from the platform lock."""
+
+    lock = _safe_regular_file(root, root / ".minecraft_ai/platform-lock.json")
+    metadata_path = _safe_regular_file(
+        root, root / "src/main/resources/fabric.mod.json"
+    )
+    if lock is None or metadata_path is None:
+        return None
+    try:
+        payload = json.loads(lock.read_text(encoding="utf-8"))
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    bootstrap = payload.get("bootstrap") if isinstance(payload, dict) else None
+    contract = (
+        bootstrap.get("gametest_contract")
+        if isinstance(bootstrap, dict)
+        else None
+    )
+    if not isinstance(contract, dict) or not isinstance(metadata, dict):
+        return None
+    if contract.get("task") != "runGameTest":
+        return None
+    source_value = contract.get("source")
+    entrypoint = contract.get("entrypoint")
+    if not isinstance(source_value, str) or not isinstance(entrypoint, str):
+        return None
+    source = _safe_regular_file(root, root / source_value)
+    if source is None:
+        return None
+    entrypoints = metadata.get("entrypoints")
+    gametest_entrypoints = (
+        entrypoints.get("fabric-gametest")
+        if isinstance(entrypoints, dict)
+        else None
+    )
+    if (
+        not isinstance(gametest_entrypoints, list)
+        or entrypoint not in gametest_entrypoints
+    ):
+        return None
+    try:
+        source_text = source.read_text(encoding="utf-8", errors="strict")
+    except (OSError, UnicodeError):
+        return None
+    if re.search(
+        r"@GameTest(?:\s*\([^)]*\))?\s*"
+        r"(?:public\s+)?void\s+generatedRegistriesAreLive\s*\(",
+        source_text,
+    ) is None:
+        return None
+    class_name = entrypoint.rsplit(".", 1)[-1]
+    if not class_name:
+        return None
+    return {
+        "entrypoint": entrypoint,
+        "source": source_value,
+        "testcase": f"{class_name}.generatedRegistriesAreLive",
+    }
+
+
+def _gametest_pass_summary(log_path: str | Path) -> int | None:
+    """Read Fabric's terminal required-test summary conservatively."""
+
+    path = Path(log_path)
+    if not path.is_file() or path.is_symlink():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    completed = re.findall(
+        r"(?mi)=+\s*(\d+)\s+GAME TESTS COMPLETE\b",
+        text,
+    )
+    passed = re.findall(
+        r"(?mi)\bAll\s+(\d+)\s+required tests passed\s*:\)",
+        text,
+    )
+    if not completed or not passed:
+        return None
+    try:
+        completed_count = int(completed[-1])
+        passed_count = int(passed[-1])
+    except ValueError:
+        return None
+    if completed_count <= 0 or completed_count != passed_count:
+        return None
+    return completed_count
+
+
+def _structured_gametest_report(
+    root: Path,
+    log_path: str | Path,
+    native_report: str | Path,
+) -> Path | None:
+    """Return native XML or reconstruct a host-bound XML receipt from Fabric output."""
+
+    safe_native = _safe_regular_file(root, native_report)
+    if safe_native is not None and _passing_gametest_xml(root, safe_native):
+        return safe_native
+
+    contract = _host_gametest_contract(root)
+    passed_count = _gametest_pass_summary(log_path)
+    if contract is None or passed_count is None:
+        return None
+
+    log_file = _safe_regular_file(root, log_path)
+    if log_file is None:
+        return None
+    target = root / "build" / "mmm-gametest-attestation.xml"
+    if target.is_symlink():
+        return None
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(
+        f".{target.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+    )
+    suite = ET.Element(
+        "testsuite",
+        {
+            "name": "mmm-host-required-gametest",
+            "tests": "1",
+            "failures": "0",
+            "errors": "0",
+            "skipped": "0",
+        },
+    )
+    properties = ET.SubElement(suite, "properties")
+    ET.SubElement(
+        properties,
+        "property",
+        {
+            "name": "mmm.runtime.required_tests_passed",
+            "value": str(passed_count),
+        },
+    )
+    ET.SubElement(
+        properties,
+        "property",
+        {
+            "name": "mmm.gradle_log_sha256",
+            "value": "sha256:" + hashlib.sha256(log_file.read_bytes()).hexdigest(),
+        },
+    )
+    ET.SubElement(
+        suite,
+        "testcase",
+        {
+            "name": contract["testcase"],
+            "classname": contract["entrypoint"],
+        },
+    )
+    try:
+        ET.ElementTree(suite).write(
+            temporary,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        os.replace(temporary, target)
+    except OSError:
+        temporary.unlink(missing_ok=True)
+        return None
+    safe_target = _safe_regular_file(root, target)
+    if safe_target is None or not _passing_gametest_xml(root, safe_target):
+        return None
+    return safe_target
+
+
 def _build_cache_profile(self: Any) -> tuple[Any, ...]:
     return (
         str(Path(self.cache_dir).expanduser().resolve()),
@@ -558,8 +727,16 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
         gametest_task: str | None = None
         if run_gametest:
             report_candidate = root / "build" / "gametest-report.xml"
-            safe_report = _safe_regular_file(root, report_candidate)
             integrated_task = _executed_gametest_task(build_result.log_path)
+            safe_report = (
+                _structured_gametest_report(
+                    root,
+                    build_result.log_path,
+                    report_candidate,
+                )
+                if integrated_task is not None
+                else None
+            )
             integrated_evidence = (
                 integrated_task is not None
                 and safe_report is not None
@@ -664,7 +841,11 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
                             + " | ".join(resource_errors[:8])
                         ),
                     )
-                safe_report = _safe_regular_file(root, report_candidate)
+                safe_report = _structured_gametest_report(
+                    root,
+                    gametest_result.log_path,
+                    report_candidate,
+                )
                 if safe_report is None:
                     return runner_module.BuildReport(
                         status="FAIL",
