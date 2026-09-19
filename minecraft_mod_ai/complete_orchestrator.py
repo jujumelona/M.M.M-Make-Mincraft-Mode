@@ -366,6 +366,17 @@ _JDT_INFRASTRUCTURE_CODES = frozenset({
 })
 
 
+def _stable_payload_sha256(value: Any) -> str:
+    rendered = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return "sha256:" + hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+
 def _blocking_jdt_errors(
     receipt: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
@@ -897,10 +908,72 @@ class CompleteProductionOrchestrator:
             )
         from .mcp_tools import MMMToolService
         tool_service = MMMToolService(workspace_root=run_root, profile=self.profile)
-        release_result = run_named_checkpoint(ledger, 'package-release', stage='package', input_value={'graph_hash': work_plan.graph_hash, 'proposal_hash': base.calculate_hash(), 'jar_sha256': self._file_hash(jar_path)}, action=lambda: tool_service.package_release(str(project_root), base.to_dict(), base.calculate_hash(), output_zip='releases/complete-release.zip', jar_path=str(jar_path)), encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: Path(str(cached.get('release_zip', ''))).is_file())
+        release_package_input = {
+            'graph_hash': work_plan.graph_hash,
+            'proposal_hash': base.calculate_hash(),
+            'jar_sha256': self._file_hash(jar_path),
+            'coverage_sha256': str(coverage_receipt.get('coverage_sha256') or ''),
+            'runtime_receipt_sha256': _stable_payload_sha256(persisted_runtime_receipt),
+            'build_receipt_sha256': _stable_payload_sha256(build_receipt),
+            'reuse_manifest_sha256': _stable_payload_sha256(reuse_manifest),
+            'quality_report_sha256': _stable_payload_sha256(quality_report),
+        }
+        release_package_sha256 = _stable_payload_sha256(release_package_input)
+        release_output = (
+            'releases/complete-release-'
+            + release_package_sha256.split(':', 1)[1][:16]
+            + '.zip'
+        )
+        release_result = run_named_checkpoint(
+            ledger,
+            'package-release',
+            stage='package',
+            input_value=release_package_input,
+            action=lambda: tool_service.package_release(
+                str(project_root),
+                base.to_dict(),
+                base.calculate_hash(),
+                output_zip=release_output,
+                jar_path=str(jar_path),
+            ),
+            encode=lambda value: value,
+            decode=lambda cached: cached,
+            validate_cached=lambda cached: self._cached_package_exists(
+                cached, path_key='release_zip'
+            ),
+        )
         release_zip = str(release_result['release_zip'])
         metadata = build_distribution_metadata(jar_path=jar_path, mod_id=spec.mod_id, version=spec.version, name=spec.mod_name, changelog=options.changelog, platform_lock=spec.platform)
-        bundle = package_distribution_bundle(metadata, output_zip=run_root / 'releases/distribution-bundle.zip', source_zip=release_zip)
+        distribution_input = {
+            'metadata_sha256': _stable_payload_sha256(metadata),
+            'source_zip_sha256': str(release_result.get('sha256') or ''),
+        }
+        distribution_sha256 = _stable_payload_sha256(distribution_input)
+        distribution_output = (
+            run_root
+            / 'releases'
+            / (
+                'distribution-bundle-'
+                + distribution_sha256.split(':', 1)[1][:16]
+                + '.zip'
+            )
+        )
+        bundle = run_named_checkpoint(
+            ledger,
+            'package-distribution',
+            stage='package:distribution',
+            input_value=distribution_input,
+            action=lambda: package_distribution_bundle(
+                metadata,
+                output_zip=distribution_output,
+                source_zip=release_zip,
+            ),
+            encode=lambda value: value,
+            decode=lambda cached: cached,
+            validate_cached=lambda cached: self._cached_package_exists(
+                cached, path_key='path'
+            ),
+        )
         distribution_receipt = {'metadata': metadata, 'bundle': bundle}
         release_ready = (
             not unresolved
@@ -1649,6 +1722,19 @@ class CompleteProductionOrchestrator:
             for chunk in iter(lambda: stream.read(1024 * 1024), b''):
                 digest.update(chunk)
         return 'sha256:' + digest.hexdigest()
+
+    @staticmethod
+    def _cached_package_exists(receipt: Any, *, path_key: str) -> bool:
+        if not isinstance(receipt, dict) or receipt.get('status') != 'PACKAGED':
+            return False
+        raw = receipt.get(path_key)
+        expected = receipt.get('sha256')
+        if not isinstance(raw, str) or not isinstance(expected, str):
+            return False
+        path = Path(raw).expanduser().resolve()
+        if not path.is_file() or path.is_symlink():
+            return False
+        return CompleteProductionOrchestrator._file_hash(path) == expected
 
     @staticmethod
     def _cached_build_exists(
