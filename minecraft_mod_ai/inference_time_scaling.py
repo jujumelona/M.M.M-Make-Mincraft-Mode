@@ -193,23 +193,14 @@ def _install_search_width(generation_search: Any, repair_search: Any) -> None:
 
 
 def _install_verifier_first_ranking(generation_search: Any, repair_search: Any) -> None:
-    current_generation_verify = generation_search._verify_candidate
-    if not getattr(current_generation_verify, _VERIFIER_MARKER, False):
+    """Keep legacy verifier-first scaling confined to repair search.
 
-        @wraps(current_generation_verify)
-        def verify_candidate(candidate_root: Any, result: Mapping[str, Any]):
-            score, verifier = current_generation_verify(candidate_root, result)
-            tier = _verifier_tier(verifier)
-            bounded = max(-100_000.0, min(100_000.0, float(score)))
-            verifier = {
-                **dict(verifier),
-                "selection_policy": "verifier_first_then_locality",
-                "verifier_tier": tier,
-            }
-            return tier * 1_000_000.0 + bounded, verifier
-
-        setattr(verify_candidate, _VERIFIER_MARKER, True)
-        generation_search._verify_candidate = verify_candidate
+    Custom generation owns candidate admission and ordering in
+    generation_verification_contract. Wrapping generation_search._verify_candidate
+    here used an obsolete JDT-centric tier, overwrote exact generation receipts, and
+    made runtime behavior differ from the reviewed source implementation.
+    """
+    del generation_search
 
     current_repair_verify = repair_search._verify_repair_candidate
     if getattr(current_repair_verify, _VERIFIER_MARKER, False):
