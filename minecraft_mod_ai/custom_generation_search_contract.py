@@ -255,6 +255,53 @@ def _capture_candidate(
         shutil.rmtree(base_root, ignore_errors=True)
 
 
+def _candidate_verifier_selectable(verifier: Mapping[str, Any]) -> bool:
+    """Return whether candidate verification is trustworthy enough to commit."""
+
+    status = str(verifier.get('jdt_status') or '').strip().upper()
+    if status == 'NOT_RUN':
+        return True
+    if status != 'AVAILABLE':
+        return False
+    error_count = verifier.get('jdt_error_count')
+    return type(error_count) is int and error_count == 0
+
+
+def _require_selectable_evaluations(
+    evaluations: list[tuple[Any, ...]],
+    *,
+    verifier_index: int,
+) -> list[tuple[Any, ...]]:
+    selectable = [
+        item
+        for item in evaluations
+        if len(item) > verifier_index
+        and isinstance(item[verifier_index], Mapping)
+        and _candidate_verifier_selectable(item[verifier_index])
+    ]
+    if selectable:
+        return selectable
+
+    failures: list[str] = []
+    for item in evaluations:
+        verifier = (
+            item[verifier_index]
+            if len(item) > verifier_index and isinstance(item[verifier_index], Mapping)
+            else {}
+        )
+        status = str(verifier.get('jdt_status') or 'MISSING')
+        error_count = verifier.get('jdt_error_count')
+        verifier_error = str(verifier.get('verifier_error') or '').strip()
+        detail = f"status={status}, errors={error_count}"
+        if verifier_error:
+            detail += f", verifier_error={verifier_error}"
+        failures.append(detail)
+    raise RuntimeError(
+        'Custom generation search has no candidate with trustworthy verification: '
+        + ' | '.join(failures)
+    )
+
+
 def _verify_candidate(candidate_root: Path, result: Mapping[str, Any]) -> tuple[float, dict[str, Any]]:
     touched = [str(value).replace('\\', '/') for value in result.get('touched_paths', []) if isinstance(value, str)]
     java_paths = tuple(sorted(path for path in touched if path.lower().endswith('.java')))
@@ -269,7 +316,7 @@ def _verify_candidate(candidate_root: Path, result: Mapping[str, Any]) -> tuple[
         return (score, verifier)
     try:
         from .java_lsp import JavaLanguageService
-        from .repair_diagnostics_contract import diagnostic_errors
+        from .validation_diagnostic_contract import diagnostic_errors
         diagnostics = JavaLanguageService().diagnostics(candidate_root, relative_files=java_paths, timeout_seconds=60)
         errors = diagnostic_errors(diagnostics)
         verifier['jdt_status'] = 'AVAILABLE'
@@ -408,6 +455,10 @@ def install(custom_module_generator_module: Any) -> None:
                     )
                 ]
 
+            evaluations = _require_selectable_evaluations(
+                evaluations,
+                verifier_index=4,
+            )
             evaluations.sort(
                 key=lambda item: (
                     -float(item[0]),
@@ -494,6 +545,8 @@ __all__ = [
     "_StrategyRouter",
     "_active_native_slots",
     "_candidate_patch_capture",
+    "_candidate_verifier_selectable",
+    "_require_selectable_evaluations",
     "_capture_candidate",
     "_fork_router_for_candidate",
     "_submit_with_copied_context",
