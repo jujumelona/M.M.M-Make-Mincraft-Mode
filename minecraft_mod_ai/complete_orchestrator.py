@@ -654,7 +654,24 @@ class CompleteProductionOrchestrator:
                     'JDT reported source errors that cannot be left unresolved.'
                 )
         if options.source_only:
-            release = run_named_checkpoint(ledger, 'package-source', stage='package:source', input_value={'graph_hash': work_plan.graph_hash, 'project_manifest': self._project_manifest_hash(project_root)}, action=lambda: self._package_source_only(run_root, project_root, approved), encode=lambda value: {'release_zip': value}, decode=lambda cached: str(cached['release_zip']), validate_cached=lambda value: Path(value).is_file())
+            source_package = run_named_checkpoint(
+                ledger,
+                'package-source',
+                stage='package:source',
+                input_value={
+                    'graph_hash': work_plan.graph_hash,
+                    'project_manifest': self._project_manifest_hash(project_root),
+                },
+                action=lambda: self._source_package_receipt(
+                    self._package_source_only(run_root, project_root, approved)
+                ),
+                encode=lambda value: value,
+                decode=lambda cached: cached,
+                validate_cached=lambda cached: self._cached_package_exists(
+                    cached, path_key='release_zip'
+                ),
+            )
+            release = str(source_package['release_zip'])
             unresolved.extend(_external_gates(approved, options))
             quality_report = self._evaluate_quality(approved=approved, run_root=run_root, project_root=project_root, source_validation=source_report, build_report=None, jar_validation=None, module_receipts=module_receipts, asset_receipt=asset_receipt, blockbench_receipts=blockbench_receipts, runtime_receipt=None, playtest_receipt=None, visual_receipt=None)
             if quality_report is not None:
@@ -1837,6 +1854,19 @@ class CompleteProductionOrchestrator:
             for chunk in iter(lambda: stream.read(1024 * 1024), b''):
                 digest.update(chunk)
         return 'sha256:' + digest.hexdigest()
+
+    @staticmethod
+    def _source_package_receipt(path: str) -> dict[str, Any]:
+        target = Path(path).expanduser().resolve()
+        if not target.is_file() or target.is_symlink():
+            raise CompleteProductionError(
+                'Source package did not produce a regular ZIP file.'
+            )
+        return {
+            'status': 'PACKAGED',
+            'release_zip': str(target),
+            'sha256': CompleteProductionOrchestrator._file_hash(target),
+        }
 
     @staticmethod
     def _cached_download_bundle_exists(receipt: Any) -> bool:
