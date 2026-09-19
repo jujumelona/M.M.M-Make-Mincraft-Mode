@@ -1,22 +1,9 @@
 """M.M.M Make Mincraft Mode: scalable multimodal Minecraft mod production tools."""
 
 from .runtime_bootstrap import initialize_runtime
-from .runtime_finalization import finalize_runtime
-from .task_template_catalog import RUNTIME_TEMPLATE_ROOT
-from .template_contract_validation import runtime_consumer_roots, validate_catalog
-
-
-def _validate_runtime_template_authority() -> None:
-    """Fail before model decode when any runtime template is orphaned or structurally invalid."""
-    validate_catalog(
-        RUNTIME_TEMPLATE_ROOT,
-        consumer_roots=runtime_consumer_roots(),
-    )
 
 
 initialize_runtime()
-_validate_runtime_template_authority()
-finalize_runtime()
 
 from .api import (
     ChatReply,
