@@ -78,6 +78,19 @@ def test_deferred_compile_is_admissible_only_with_exact_downstream_gate() -> Non
     assert result["downstream_required_gate"] == "target_compile"
 
 
+def test_equivalent_relative_path_and_gate_spelling_are_canonicalized() -> None:
+    result = classify_generation_verification(
+        source_status="SOURCE_GENERATED",
+        receipt=_receipt(target_path="./src/main/java/demo/Test.java"),
+        touched_paths=(JAVA_PATH,),
+        required_gates=("target compile",),
+    )
+
+    assert result["receipt_target_matches"] is True
+    assert result["target_compile_required"] is True
+    assert result["verifier_tier"] == 2
+
+
 def test_verifier_receipt_cannot_be_replayed_for_a_different_file() -> None:
     result = _classify(_receipt(target_path="src/main/java/demo/Other.java"))
 
