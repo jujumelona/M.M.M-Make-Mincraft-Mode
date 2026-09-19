@@ -1576,7 +1576,11 @@ class CompleteProductionOrchestrator:
                                     ledger,
                                     f'blockbench-review-{module_id}',
                                     stage='validate:blockbench',
-                                    input_value={'graph_hash': work_plan.graph_hash, 'entity_receipt': receipt},
+                                    input_value={
+                                        'graph_hash': work_plan.graph_hash,
+                                        'entity_receipt': receipt,
+                                        'geometry_sha256': self._blockbench_geometry_sha256(receipt),
+                                    },
                                     action=lambda: self._blockbench_review(receipt, run_root),
                                     encode=lambda value: value,
                                     decode=lambda cached: cached,
@@ -2148,6 +2152,29 @@ class CompleteProductionOrchestrator:
             and isinstance(contract, dict)
             and contract.get('status') == 'PASS'
         )
+
+    @staticmethod
+    def _blockbench_geometry_sha256(receipt: Any) -> str:
+        if not isinstance(receipt, dict):
+            raise CompleteProductionError('Entity receipt is invalid for Blockbench review.')
+        raw = next(
+            (
+                str(path)
+                for path in receipt.get('files', ())
+                if isinstance(path, str) and path.endswith('.geo.json')
+            ),
+            '',
+        )
+        if not raw:
+            raise CompleteProductionError(
+                'Entity receipt contains no geometry for Blockbench review.'
+            )
+        path = Path(raw).expanduser().resolve()
+        if not path.is_file() or path.is_symlink():
+            raise CompleteProductionError(
+                'Entity geometry is missing or unsafe before Blockbench review.'
+            )
+        return CompleteProductionOrchestrator._file_hash(path)
 
     @staticmethod
     def _cached_blockbench_review(receipt: Any) -> bool:
