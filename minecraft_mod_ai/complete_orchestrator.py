@@ -379,6 +379,34 @@ def _stable_payload_sha256(value: Any) -> str:
     return "sha256:" + hashlib.sha256(rendered.encode("utf-8")).hexdigest()
 
 
+def _replace_stale_file_target(
+    target: Path,
+    action: Callable[[], Any],
+) -> Any:
+    path = target.expanduser().resolve()
+    if path.exists():
+        if path.is_symlink() or not path.is_file():
+            raise CompleteProductionError(
+                f"Stale package target is not a regular file: {path}"
+            )
+        path.unlink()
+    return action()
+
+
+def _replace_stale_directory_target(
+    target: Path,
+    action: Callable[[], Any],
+) -> Any:
+    path = target.expanduser().resolve()
+    if path.exists():
+        if path.is_symlink() or not path.is_dir():
+            raise CompleteProductionError(
+                f"Stale package target is not a regular directory: {path}"
+            )
+        shutil.rmtree(path)
+    return action()
+
+
 def _blocking_jdt_errors(
     receipt: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
@@ -1046,12 +1074,15 @@ class CompleteProductionOrchestrator:
             'package-release',
             stage='package',
             input_value=release_package_input,
-            action=lambda: tool_service.package_release(
-                str(project_root),
-                base.to_dict(),
-                base.calculate_hash(),
-                output_zip=release_output,
-                jar_path=str(jar_path),
+            action=lambda: _replace_stale_file_target(
+                run_root / release_output,
+                lambda: tool_service.package_release(
+                    str(project_root),
+                    base.to_dict(),
+                    base.calculate_hash(),
+                    output_zip=release_output,
+                    jar_path=str(jar_path),
+                ),
             ),
             encode=lambda value: value,
             decode=lambda cached: cached,
@@ -1080,10 +1111,13 @@ class CompleteProductionOrchestrator:
             'package-distribution',
             stage='package:distribution',
             input_value=distribution_input,
-            action=lambda: package_distribution_bundle(
-                metadata,
-                output_zip=distribution_output,
-                source_zip=release_zip,
+            action=lambda: _replace_stale_file_target(
+                distribution_output,
+                lambda: package_distribution_bundle(
+                    metadata,
+                    output_zip=distribution_output,
+                    source_zip=release_zip,
+                ),
             ),
             encode=lambda value: value,
             decode=lambda cached: cached,
@@ -1154,13 +1188,16 @@ class CompleteProductionOrchestrator:
                 'package-downloadable',
                 stage='package:downloadable',
                 input_value=downloadable_input,
-                action=lambda: write_downloadable_bundle(
+                action=lambda: _replace_stale_directory_target(
                     downloadable_target,
-                    artifact_receipt=artifact_receipt,
-                    requirement_coverage=coverage_receipt,
-                    reuse_manifest=reuse_manifest,
-                    build_receipt=build_receipt,
-                    runtime_receipt=persisted_runtime_receipt,
+                    lambda: write_downloadable_bundle(
+                        downloadable_target,
+                        artifact_receipt=artifact_receipt,
+                        requirement_coverage=coverage_receipt,
+                        reuse_manifest=reuse_manifest,
+                        build_receipt=build_receipt,
+                        runtime_receipt=persisted_runtime_receipt,
+                    ),
                 ),
                 encode=lambda value: value,
                 decode=lambda cached: cached,
