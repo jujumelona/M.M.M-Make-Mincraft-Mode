@@ -607,6 +607,26 @@ def _validate_external_execution_preflight(
                 "checks are disabled: " + ", ".join(disabled)
             )
 
+    if bool(getattr(options, "run_client", False)) and not bool(
+        getattr(options, "run_runtime", False)
+    ):
+        raise CompleteProductionError(
+            "Client verification requires runtime verification."
+        )
+
+    has_entity_review = any(
+        getattr(module, "kind", "") in {"entity", "boss", "npc"}
+        for module in getattr(proposal, "modules", ())
+    )
+    if (
+        has_entity_review
+        and not bool(getattr(options, "source_only", False))
+        and not bool(getattr(options, "run_blockbench", False))
+    ):
+        raise CompleteProductionError(
+            "Entity production requires Blockbench UV/render verification."
+        )
+
     if bool(getattr(options, "run_runtime", False)):
         if not bool(getattr(options, "eula_accepted", False)):
             raise CompleteProductionError(
@@ -1355,6 +1375,12 @@ class CompleteProductionOrchestrator:
                 runtime_receipt=runtime_receipt,
                 playtest_receipt=playtest_receipt,
                 visual_receipt=visual_receipt,
+            )
+        )
+        unresolved.extend(
+            self._mandatory_blockbench_failures(
+                approved,
+                blockbench_receipts,
             )
         )
         self._persist_work_evidence(project_root, ledger, work_plan)
@@ -2587,6 +2613,28 @@ class CompleteProductionOrchestrator:
             if not CompleteProductionOrchestrator._gametest_receipt_passed(build, spec):
                 return False
         return True
+
+    @staticmethod
+    def _mandatory_blockbench_failures(
+        proposal: CompleteProposal,
+        blockbench_receipts: Iterable[dict[str, Any]],
+    ) -> list[str]:
+        expected = {
+            module.module_id
+            for module in proposal.modules
+            if module.kind in {'entity', 'boss', 'npc'}
+        }
+        if not expected:
+            return []
+        passed = {
+            str(receipt.get('entity'))
+            for receipt in blockbench_receipts
+            if CompleteProductionOrchestrator._cached_blockbench_review(receipt)
+        }
+        return [
+            f'blockbench:{module_id}:missing-host-required-review'
+            for module_id in sorted(expected - passed)
+        ]
 
     @staticmethod
     def _required_gate_failures(proposal: CompleteProposal, *, generated_receipts: Iterable[Any], project_root: Path | None=None, source_validation: dict[str, Any] | None, jdt_receipt: dict[str, Any] | None, build_report: dict[str, Any] | None, jar_validation: dict[str, Any] | None, blockbench_receipts: Iterable[dict[str, Any]], runtime_receipt: dict[str, Any] | None, playtest_receipt: dict[str, Any] | None, visual_receipt: dict[str, Any] | None) -> list[str]:
