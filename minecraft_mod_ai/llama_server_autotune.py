@@ -234,6 +234,8 @@ def _resolve_model_path(config: Any) -> str:
 
 
 def _fingerprint(config: Any, binary: str, model_path: str) -> str:
+    from .llama_lora_runtime import lora_config_signature
+
     path = Path(model_path)
     stat = path.stat()
     payload = {
@@ -244,6 +246,7 @@ def _fingerprint(config: Any, binary: str, model_path: str) -> str:
         "model_size": int(stat.st_size),
         "model_mtime_ns": int(stat.st_mtime_ns),
         "max_context": int(config.max_context),
+        "lora_config": lora_config_signature(config),
         "server": _server_version(binary),
         "hardware": _hardware_identity(),
         "ctx_override": os.environ.get("MMM_LLAMA_SERVER_CTX", "").strip(),
@@ -343,8 +346,6 @@ def _free_port(preferred: int) -> int:
 
 
 def _base_args(binary: str, model_path: str, config: Any, port: int) -> list[str]:
-    del config
-
     parallel = _env_optional_int("MMM_LLAMA_PARALLEL")
     context = _env_optional_int("MMM_LLAMA_SERVER_CTX")
     batch = _env_optional_int("MMM_LLAMA_BATCH")
@@ -386,6 +387,9 @@ def _base_args(binary: str, model_path: str, config: Any, port: int) -> list[str
         "--no-ui",
         "--log-disable",
     ]
+    from .llama_lora_runtime import lora_launch_args
+
+    args.extend(lora_launch_args(config))
     if context is not None:
         args.extend(("--ctx-size", str(context)))
     if batch is not None:
@@ -576,6 +580,9 @@ def _benchmark(
         try:
             process = _start_server(binary, model_path, config, variant, port)
             url = _wait_ready(process, port)
+            from .llama_lora_runtime import initialize_managed_server_loras
+
+            initialize_managed_server_loras(url, config)
             _probe_server(url, benchmark_request, max_tokens=1, variant=variant)
             probes.append(
                 _probe_server(
@@ -649,6 +656,9 @@ def _launch_selected(
     process = _start_server(binary, model_path, config, selected, port)
     try:
         url = _wait_ready(process, port)
+        from .llama_lora_runtime import initialize_managed_server_loras
+
+        initialize_managed_server_loras(url, config)
     except Exception:
         _stop_server(process)
         raise
