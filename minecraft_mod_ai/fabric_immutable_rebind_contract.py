@@ -139,48 +139,11 @@ def _literal_dependency_versions(root: Path) -> dict[str, set[str]]:
 
 
 def _write_full_platform_lock(root: Path, adapter: Any, receipt: dict[str, Any]) -> None:
-    """Persist the complete approval-bound receipt after scaffold rebind.
+    """Persist the canonical complete lock after immutable scaffold rebind."""
 
-    This is the final writer in the live Fabric bootstrap path. It must therefore emit
-    every field required by the offline execution lock contract, including the canonical
-    receipt digest. Writing a legacy v2/v3 lock here would overwrite a complete lock from
-    an earlier boundary and make the immediately following adapter_from_project() fail.
-    """
+    from .platform_generation_contract import write_platform_lock
 
-    target = root / ".minecraft_ai" / "platform-lock.json"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "schema_version": "mmm/generated-platform-lock-v4",
-        "adapter_id": adapter.adapter_id,
-        "edition": adapter.edition,
-        "loader": adapter.loader,
-        "minecraft_version": adapter.minecraft_version,
-        "java_version": adapter.java_version,
-        "yarn_mappings": adapter.yarn_mappings,
-        "mappings_kind": adapter.mappings_kind,
-        "mappings_version": adapter.mappings_version,
-        "fabric_loader": adapter.fabric_loader,
-        "fabric_api": adapter.fabric_api,
-        "fabric_loom": adapter.fabric_loom,
-        "gradle": adapter.gradle,
-        "gradle_sha256": adapter.gradle_sha256,
-        "gradle_distribution_url": (
-            f"https://services.gradle.org/distributions/gradle-{adapter.gradle}-bin.zip"
-        ),
-        "data_pack_version": adapter.data_pack_version,
-        "resource_pack_version": adapter.resource_pack_version,
-        "resource_pack_format": adapter.resource_pack_format,
-        "release_metadata_url": adapter.release_metadata_url,
-        "source_api_family": adapter.source_api_family,
-        "deterministic_module_kinds": sorted(adapter.deterministic_module_kinds),
-    }
-    payload["receipt_sha256"] = platform_receipt_sha256(payload)
-    payload["bootstrap"] = dict(receipt)
-    target.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-
+    write_platform_lock(root, adapter, bootstrap=receipt)
 
 def _rebind_scaffold(provider: Any, root: Path, adapter: Any) -> dict[str, str]:
     root = Path(root).resolve()
