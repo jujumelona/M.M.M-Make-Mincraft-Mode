@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import shutil
 import threading
 import time
@@ -154,6 +155,49 @@ def _gradle_execution_arguments(*tasks: str) -> tuple[str, ...]:
         "--build-cache",
         "--stacktrace",
     )
+
+
+def _executed_gametest_task(log_path: str | Path) -> str | None:
+    """Return a GameTest task that actually ran in the successful build log."""
+
+    path = Path(log_path)
+    if not path.is_file() or path.is_symlink():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for task in ("runGameTest", "runGameTestServer"):
+        pattern = re.compile(
+            rf"(?m)^\s*>\s*Task\s+:(?:[^\s:]+:)*{re.escape(task)}(?:\s|$)"
+        )
+        for match in pattern.finditer(text):
+            line_end = text.find("\n", match.start())
+            line = text[match.start() : None if line_end < 0 else line_end].upper()
+            if " FAILED" not in line and " SKIPPED" not in line:
+                return task
+    return None
+
+
+def _task_from_listing(log_path: str | Path) -> str | None:
+    """Choose only a GameTest task advertised by Gradle for this project."""
+
+    path = Path(log_path)
+    if not path.is_file() or path.is_symlink():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    available = {
+        task
+        for task in ("runGameTest", "runGameTestServer")
+        if re.search(rf"(?m)^\s*{re.escape(task)}(?:\s+-|\s*$)", text)
+    }
+    for preferred in ("runGameTest", "runGameTestServer"):
+        if preferred in available:
+            return preferred
+    return None
 
 
 def _build_cache_profile(self: Any) -> tuple[Any, ...]:
@@ -510,68 +554,146 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
                 error="Gradle build failed.",
             )
 
+        gametest_mode: str | None = None
+        gametest_task: str | None = None
         if run_gametest:
-            gametest_result = self._run(
-                name="gametest",
-                executable=gradle,
-                arguments=_gradle_execution_arguments("runGameTestServer"),
-                cwd=root,
-                env=environment,
-                log_path=logs / "gradle-gametest.log",
-            )
-            commands.append(gametest_result)
-            if gametest_result.exit_code != 0:
-                return runner_module.BuildReport(
-                    status="FAIL",
-                    gradle_version=version,
-                    commands=tuple(commands),
-                    jar_path=self._find_release_jar(root),
-                    gametest_report=None,
-                    error="Headless Fabric GameTest failed.",
-                )
-            resource_errors = validation_module.gametest_resource_errors(
-                root,
-                gametest_result.log_path,
-            )
-            if resource_errors:
-                return runner_module.BuildReport(
-                    status="FAIL",
-                    gradle_version=version,
-                    commands=tuple(commands),
-                    jar_path=self._find_release_jar(root),
-                    gametest_report=None,
-                    error=(
-                        "Headless Fabric GameTest resource evidence failed: "
-                        + " | ".join(resource_errors[:8])
-                    ),
-                )
             report_candidate = root / "build" / "gametest-report.xml"
             safe_report = _safe_regular_file(root, report_candidate)
-            if safe_report is None:
-                return runner_module.BuildReport(
-                    status="FAIL",
-                    gradle_version=version,
-                    commands=tuple(commands),
-                    jar_path=self._find_release_jar(root),
-                    gametest_report=None,
-                    error=(
-                        "GameTest reported success but no safe gametest-report.xml "
-                        "evidence was produced."
-                    ),
+            integrated_task = _executed_gametest_task(build_result.log_path)
+            integrated_evidence = (
+                integrated_task is not None
+                and safe_report is not None
+                and _passing_gametest_xml(root, safe_report)
+            )
+
+            if integrated_evidence:
+                resource_errors = validation_module.gametest_resource_errors(
+                    root,
+                    build_result.log_path,
                 )
-            if not _passing_gametest_xml(root, safe_report):
-                return runner_module.BuildReport(
-                    status="FAIL",
-                    gradle_version=version,
-                    commands=tuple(commands),
-                    jar_path=self._find_release_jar(root),
-                    gametest_report=str(safe_report),
-                    error=(
-                        "GameTest report is malformed, empty, skipped, or contains "
-                        "failing/error test evidence."
-                    ),
+                if resource_errors:
+                    return runner_module.BuildReport(
+                        status="FAIL",
+                        gradle_version=version,
+                        commands=tuple(commands),
+                        jar_path=self._find_release_jar(root),
+                        gametest_report=str(safe_report),
+                        error=(
+                            "Integrated Fabric GameTest resource evidence failed: "
+                            + " | ".join(resource_errors[:8])
+                        ),
+                        failure_class="verifier",
+                        error_code="GAMETEST_EVIDENCE_INVALID",
+                        repairable=False,
+                    )
+                gametest_mode = "integrated_build"
+                gametest_task = integrated_task
+                gametest_report = str(safe_report)
+            else:
+                capability_result = self._run(
+                    name="gametest_capabilities",
+                    executable=gradle,
+                    arguments=_gradle_execution_arguments("tasks", "--all", "--console=plain"),
+                    cwd=root,
+                    env=environment,
+                    log_path=logs / "gradle-gametest-capabilities.log",
                 )
-            gametest_report = str(safe_report)
+                commands.append(capability_result)
+                if capability_result.exit_code != 0 or capability_result.timed_out:
+                    return runner_module.BuildReport(
+                        status="FAIL",
+                        gradle_version=version,
+                        commands=tuple(commands),
+                        jar_path=self._find_release_jar(root),
+                        gametest_report=None,
+                        error="GameTest capability discovery failed.",
+                        failure_class="verifier",
+                        error_code="GAMETEST_CAPABILITY_DISCOVERY_FAILED",
+                        repairable=False,
+                    )
+
+                gametest_task = _task_from_listing(capability_result.log_path)
+                if gametest_task is None:
+                    return runner_module.BuildReport(
+                        status="FAIL",
+                        gradle_version=version,
+                        commands=tuple(commands),
+                        jar_path=self._find_release_jar(root),
+                        gametest_report=None,
+                        error=(
+                            "GameTest was requested, but Gradle exposes no supported "
+                            "GameTest task and the successful build produced no passing "
+                            "structured GameTest evidence."
+                        ),
+                        failure_class="verifier",
+                        error_code="GAMETEST_CAPABILITY_MISSING",
+                        repairable=False,
+                    )
+
+                gametest_result = self._run(
+                    name="gametest",
+                    executable=gradle,
+                    arguments=_gradle_execution_arguments(gametest_task),
+                    cwd=root,
+                    env=environment,
+                    log_path=logs / "gradle-gametest.log",
+                )
+                commands.append(gametest_result)
+                if gametest_result.exit_code != 0:
+                    return runner_module.BuildReport(
+                        status="FAIL",
+                        gradle_version=version,
+                        commands=tuple(commands),
+                        jar_path=self._find_release_jar(root),
+                        gametest_report=None,
+                        error="Headless Fabric GameTest failed.",
+                    )
+                resource_errors = validation_module.gametest_resource_errors(
+                    root,
+                    gametest_result.log_path,
+                )
+                if resource_errors:
+                    return runner_module.BuildReport(
+                        status="FAIL",
+                        gradle_version=version,
+                        commands=tuple(commands),
+                        jar_path=self._find_release_jar(root),
+                        gametest_report=None,
+                        error=(
+                            "Headless Fabric GameTest resource evidence failed: "
+                            + " | ".join(resource_errors[:8])
+                        ),
+                    )
+                safe_report = _safe_regular_file(root, report_candidate)
+                if safe_report is None:
+                    return runner_module.BuildReport(
+                        status="FAIL",
+                        gradle_version=version,
+                        commands=tuple(commands),
+                        jar_path=self._find_release_jar(root),
+                        gametest_report=None,
+                        error=(
+                            "GameTest reported success but no safe gametest-report.xml "
+                            "evidence was produced."
+                        ),
+                        failure_class="verifier",
+                        error_code="GAMETEST_EVIDENCE_MISSING",
+                        repairable=False,
+                    )
+                if not _passing_gametest_xml(root, safe_report):
+                    return runner_module.BuildReport(
+                        status="FAIL",
+                        gradle_version=version,
+                        commands=tuple(commands),
+                        jar_path=self._find_release_jar(root),
+                        gametest_report=str(safe_report),
+                        error=(
+                            "GameTest report is malformed, empty, skipped, or contains "
+                            "failing/error test evidence."
+                        ),
+                    )
+                gametest_mode = "explicit_task"
+                gametest_report = str(safe_report)
 
         jar_path = self._find_release_jar(root)
         if jar_path is None or _safe_regular_file(root, jar_path) is None:
@@ -590,6 +712,8 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
             jar_path=jar_path,
             gametest_report=gametest_report,
             error=None,
+            gametest_mode=gametest_mode,
+            gametest_task=gametest_task,
         )
 
     target_build_locked._mmm_target_parallel_build_locked = True
