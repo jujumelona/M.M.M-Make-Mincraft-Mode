@@ -295,6 +295,100 @@ def verify_runtime_artifact_binding(
     }
 
 
+def build_debug_fixture_coverage_receipt(
+    *,
+    proposal_hash: str,
+    acceptance_tests: Sequence[str],
+    artifact_sha256: str,
+    source_validation: Mapping[str, Any] | None,
+    build_report: Mapping[str, Any] | None,
+    jar_validation: Mapping[str, Any] | None,
+    gametest_passed: bool,
+    unresolved_gates: tuple[str, ...] | list[str],
+) -> dict[str, Any]:
+    """Bind the host-owned Debug fixture to real deterministic verification evidence.
+
+    This path is intentionally separate from production-contract coverage. It exists
+    only for the planner-bypass Debug fixture, whose purpose is to exercise the normal
+    implementation/build/JAR/GameTest/package pipeline without fabricating research or
+    external-runtime quality evidence.
+    """
+
+    statements = [
+        str(value).strip()
+        for value in acceptance_tests
+        if isinstance(value, str) and str(value).strip()
+    ]
+    unresolved = sorted(
+        {str(item) for item in unresolved_gates if str(item).strip()}
+    )
+
+    source_passed = bool(
+        isinstance(source_validation, Mapping)
+        and source_validation.get("status") == "PASS"
+        and isinstance(source_validation.get("checks_run"), int)
+        and source_validation.get("checks_run", 0) > 0
+        and isinstance(source_validation.get("findings"), list)
+        and not any(
+            isinstance(item, Mapping)
+            and str(item.get("severity") or "").casefold() in {"error", "fatal"}
+            for item in source_validation.get("findings", [])
+        )
+    )
+    build_passed = bool(
+        isinstance(build_report, Mapping)
+        and build_report.get("status") == "PASS"
+    )
+    jar_passed = bool(
+        isinstance(jar_validation, Mapping)
+        and jar_validation.get("status") == "PASS"
+        and isinstance(jar_validation.get("checks_run"), int)
+        and jar_validation.get("checks_run", 0) > 0
+        and isinstance(jar_validation.get("findings"), list)
+        and not any(
+            isinstance(item, Mapping)
+            and str(item.get("severity") or "").casefold() in {"error", "fatal"}
+            for item in jar_validation.get("findings", [])
+        )
+    )
+    passed = bool(
+        statements
+        and source_passed
+        and build_passed
+        and jar_passed
+        and gametest_passed is True
+        and not unresolved
+    )
+
+    requirements = [
+        {
+            "requirement_ref": f"debug-acceptance:{index:08d}",
+            "statement": statement,
+            "coverage_group_ref": "debug-fixture:deterministic-verification",
+            "status": "PASS" if passed else "BLOCKED",
+        }
+        for index, statement in enumerate(statements)
+    ]
+    core: dict[str, Any] = {
+        "schema_version": "mmm/requirement-coverage-receipt-v1",
+        "status": "PASS" if passed else "BLOCKED",
+        "coverage_mode": "debug_fixture",
+        "proposal_hash": str(proposal_hash),
+        "production_contract_sha256": "",
+        "artifact_sha256": normalize_sha256(artifact_sha256),
+        "unresolved_gates": unresolved,
+        "requirements": requirements,
+        "verification": {
+            "source_validation": source_passed,
+            "build": build_passed,
+            "jar_validation": jar_passed,
+            "gametest": gametest_passed is True,
+        },
+    }
+    core["coverage_sha256"] = _canonical_sha256(core)
+    return core
+
+
 def build_requirement_coverage_receipt(
     *,
     contract: Mapping[str, Any] | None,
