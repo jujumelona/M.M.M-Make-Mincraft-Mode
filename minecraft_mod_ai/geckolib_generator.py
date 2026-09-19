@@ -109,6 +109,14 @@ def generate_geckolib_entity_assets(
         )
 
     info = inspect_fabric_project(project_root)
+    from . import geckolib_generation_contract as generation_contract
+
+    try:
+        generation_contract.validate_geckolib_project_preflight(info)
+    except generation_contract.GeckoLibGenerationContractError as exc:
+        raise GeckoLibGenerationError(
+            f"GeckoLib generation preflight failed: {exc}"
+        ) from exc
     if info.mod_id != mod_id or info.package_name != package_name:
         raise GeckoLibGenerationError("GeckoLib target does not match fabric.mod.json.")
     cls = "".join(part.capitalize() for part in entity_id.split("_"))
