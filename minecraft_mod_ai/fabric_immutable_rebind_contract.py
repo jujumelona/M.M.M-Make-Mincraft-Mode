@@ -281,6 +281,7 @@ def install() -> None:
             "java": provider._java_release(root),
         }
         verified = _rebind_scaffold(provider, root, adapter)
+        runtime_contract = provider._install_host_runtime_contract(root, spec, adapter)
         gametest_contract = provider._install_host_gametest_contract(root, spec)
 
         if receipt is None:
@@ -303,6 +304,7 @@ def install() -> None:
         else:
             receipt = dict(receipt)
             receipt["schema_version"] = "mmm/fabric-official-template-v3"
+        receipt["runtime_contract"] = runtime_contract
         receipt["gametest_contract"] = gametest_contract
         receipt["scaffold_emitted_toolchain"] = emitted
         receipt["verified_generated_toolchain"] = verified
