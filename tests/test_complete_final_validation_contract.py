@@ -19,6 +19,7 @@ from minecraft_mod_ai.complete_orchestrator import (
     _persisted_runtime_evidence,
     _refresh_runtime_receipt_status,
     _runtime_verification_passed,
+    _runtime_visual_download_artifacts,
     _replace_stale_directory_target,
     _replace_stale_file_target,
     _stable_payload_sha256,
@@ -206,6 +207,7 @@ def test_required_runtime_needs_live_client_playtest_and_visual_evidence(tmp_pat
         "status": "PASS",
         "interaction_count": 1,
         "assertion_count": 1,
+        "artifact_sha256": artifact_sha,
     }
     visual = {
         "status": "PASS",
@@ -703,7 +705,12 @@ def test_runtime_visual_evidence_rejects_unbound_or_stale_receipts(tmp_path) -> 
         "server": {"server_running": True},
         "client": {"client_running": True},
     }
-    playtest = {"status": "PASS", "interaction_count": 1, "assertion_count": 1}
+    playtest = {
+        "status": "PASS",
+        "interaction_count": 1,
+        "assertion_count": 1,
+        "artifact_sha256": artifact_sha,
+    }
     screenshot = {
         "sha256": CompleteProductionOrchestrator._file_hash(evidence),
         "evidence_path": str(evidence),
@@ -816,3 +823,87 @@ def test_host_required_blockbench_review_is_independent_of_plan_gate(tmp_path) -
         proposal,
         [],
     ) == ["blockbench:dragon:missing-host-required-review"]
+
+
+def test_runtime_verification_rejects_playtest_from_other_artifact(tmp_path) -> None:
+    artifact_sha = "sha256:" + "1" * 64
+    evidence = tmp_path / "proof.png"
+    evidence.write_bytes(b"proof")
+    runtime = {
+        "status": "PASS",
+        "artifact_sha256": artifact_sha,
+        "prepared": {"instance_root": "/runtime/current"},
+        "server": {"server_running": True},
+        "client": {"client_running": True},
+    }
+    visual = {
+        "status": "PASS",
+        "artifact_sha256": artifact_sha,
+        "runtime_screenshots": [
+            {
+                "sha256": CompleteProductionOrchestrator._file_hash(evidence),
+                "evidence_path": str(evidence),
+                "server_running": True,
+                "client_running": True,
+            }
+        ],
+    }
+    playtest = {
+        "status": "PASS",
+        "interaction_count": 1,
+        "assertion_count": 1,
+        "artifact_sha256": "sha256:" + "2" * 64,
+        "runtime_instance_root": "/runtime/current",
+    }
+
+    assert not _runtime_verification_passed(
+        required=True,
+        runtime_receipt=runtime,
+        playtest_receipt=playtest,
+        visual_receipt=visual,
+    )
+
+    playtest["artifact_sha256"] = artifact_sha
+    playtest["runtime_instance_root"] = "/runtime/other"
+    assert not _runtime_verification_passed(
+        required=True,
+        runtime_receipt=runtime,
+        playtest_receipt=playtest,
+        visual_receipt=visual,
+    )
+
+
+def test_runtime_visual_download_artifacts_preserve_verified_screenshots(tmp_path) -> None:
+    evidence = tmp_path / "proof.png"
+    evidence.write_bytes(b"proof")
+    digest = CompleteProductionOrchestrator._file_hash(evidence)
+    artifacts = _runtime_visual_download_artifacts(
+        {
+            "status": "PASS",
+            "runtime_screenshots": [
+                {
+                    "evidence_path": str(evidence),
+                    "sha256": digest,
+                }
+            ],
+        }
+    )
+
+    assert artifacts == {
+        "runtime-screenshot-001.png": {
+            "path": str(evidence),
+            "sha256": digest,
+        }
+    }
+
+
+def test_release_readiness_is_decided_before_packaging() -> None:
+    source = inspect.getsource(CompleteProductionOrchestrator.execute)
+
+    readiness = source.index("release_ready = (")
+    package = source.index("tool_service.package_release(")
+    distribution = source.index("package_distribution_bundle(")
+
+    assert readiness < package < distribution
+    assert "release_zip: str | None = None" in source
+    assert "distribution_receipt: dict[str, Any] | None = None" in source
