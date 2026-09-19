@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 from minecraft_mod_ai.project_index import ProjectIndex
@@ -145,7 +146,7 @@ def test_repair_context_reuses_same_explorer_contract(tmp_path: Path) -> None:
     )
 
 
-def test_runtime_contract_installs_generation_and_repair_grounding() -> None:
+def test_generation_and_repair_grounding_are_source_owned() -> None:
     from minecraft_mod_ai import custom_module_generator, repair_engine
 
     assert getattr(
@@ -153,8 +154,8 @@ def test_runtime_contract_installs_generation_and_repair_grounding() -> None:
         "__mmm_repository_grounding_live_context__",
         False,
     )
-    assert getattr(
-        repair_engine.RepairEngine._context,
-        "__mmm_repository_grounding_live_context__",
-        False,
-    )
+    assert inspect.getmodule(repair_engine.RepairEngine._context) is repair_engine
+    assert not hasattr(repair_engine.RepairEngine._context, "__wrapped__")
+    source = inspect.getsource(repair_engine.RepairEngine._context)
+    assert "build_repair_repository_context" in source
+    assert "active_repair_project_index" in source
