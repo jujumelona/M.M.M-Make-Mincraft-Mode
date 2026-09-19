@@ -78,10 +78,20 @@ def _deterministic_coder(
     assert grounding["artifact_kind"] == "item"
     fact = grounding["facts"][0]
     imports = list(dict.fromkeys(fact["required_imports"]))
-    templates = {item["template_id"]: item for item in fact["templates"]}
+    templates = list(fact["templates"])
+    key_template = next(
+        item
+        for item in templates
+        if "resource_key_create" in item.get("symbol_usage", ())
+    )
+    register_template = next(
+        item
+        for item in templates
+        if "register_item" in item.get("symbol_usage", ())
+    )
 
-    key_body = templates["fabric/item/key_identifier"]["render_body"]
-    register_body = templates["fabric/item/register_keyed"]["render_body"]
+    key_body = key_template["render_body"]
+    register_body = register_template["render_body"]
     replacements = {
         "{{java_constant}}": "DEBUG_TOKEN",
         "{{mod_id}}": "mmm_debug_fixture",
