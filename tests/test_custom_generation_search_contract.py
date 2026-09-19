@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from minecraft_mod_ai import coder_max_efficiency_contract as coder_efficiency
 from minecraft_mod_ai import custom_generation_search_contract as custom_search
 from minecraft_mod_ai import progress_aware_tool_loop as tool_loop
 from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
@@ -105,22 +106,52 @@ def test_custom_generation_public_target_overrides_are_not_exposed() -> None:
     assert "mappings" not in signature.parameters
 
 
-def _generation_receipt(status: str) -> dict:
+def _generation_receipt(
+    status: str,
+    *,
+    target_path: str = "src/main/java/demo/Test.java",
+    verifier_tool: str | None = "target_compile",
+    compile_backed_java: bool = True,
+    validation_status: str | None = None,
+    termination_reason: str | None = None,
+) -> dict:
     return {
         "schema_version": "mmm/generation-verification-v1",
         "status": status,
         "authority": "generation_tool_loop",
         "validation_status": (
-            "PASS" if status == "PASS" else "DEFERRED"
+            validation_status
+            if validation_status is not None
+            else ("PASS" if status == "PASS" else "DEFERRED")
         ),
         "termination_reason": (
-            "VERIFICATION_PASSED"
-            if status == "PASS"
-            else "VERIFICATION_DEFERRED_TO_TARGET_COMPILE"
+            termination_reason
+            if termination_reason is not None
+            else (
+                "VERIFICATION_PASSED"
+                if status == "PASS"
+                else "VERIFICATION_DEFERRED_TO_TARGET_COMPILE"
+            )
         ),
-        "verifier_tool": "target_compile",
-        "target_path": "src/main/java/demo/Test.java",
-        "compile_backed_java": True,
+        "verifier_tool": verifier_tool,
+        "target_path": target_path,
+        "compile_backed_java": compile_backed_java,
+        "downstream_required_gate": (
+            "target_compile"
+            if status == "DEFERRED_TO_TARGET_COMPILE"
+            else None
+        ),
+    }
+
+
+def _admissible_verifier(status: str) -> dict:
+    return {
+        "generation_status": status,
+        "verification_authority": "generation_tool_loop",
+        "source_status": "SOURCE_GENERATED",
+        "receipt_target_matches": True,
+        "receipt_semantics_valid": True,
+        "target_compile_required": True,
         "downstream_required_gate": (
             "target_compile"
             if status == "DEFERRED_TO_TARGET_COMPILE"
@@ -131,28 +162,40 @@ def _generation_receipt(status: str) -> dict:
 
 def test_candidate_verifier_tiers_exact_host_terminal_state() -> None:
     assert custom_search._generation_verifier_tier(
-        {
-            "generation_status": "PASS",
-            "target_compile_required": True,
-        }
+        _admissible_verifier("PASS")
     ) == 2
     assert custom_search._generation_verifier_tier(
-        {
-            "generation_status": "DEFERRED_TO_TARGET_COMPILE",
-            "target_compile_required": True,
-            "downstream_required_gate": "target_compile",
-        }
+        _admissible_verifier("DEFERRED_TO_TARGET_COMPILE")
     ) == 1
-    assert custom_search._generation_verifier_tier(
-        {
-            "generation_status": "DEFERRED_TO_TARGET_COMPILE",
-            "target_compile_required": False,
-            "downstream_required_gate": "target_compile",
-        }
-    ) == 0
-    assert custom_search._generation_verifier_tier(
-        {"generation_status": "FAIL"}
-    ) == 0
+
+    missing_authority = _admissible_verifier("PASS")
+    missing_authority["verification_authority"] = "unknown"
+    assert custom_search._generation_verifier_tier(missing_authority) == 0
+
+    mismatched_target = _admissible_verifier("PASS")
+    mismatched_target["receipt_target_matches"] = False
+    assert custom_search._generation_verifier_tier(mismatched_target) == 0
+
+    bad_semantics = _admissible_verifier("PASS")
+    bad_semantics["receipt_semantics_valid"] = False
+    assert custom_search._generation_verifier_tier(bad_semantics) == 0
+
+
+def test_candidate_rank_is_lexicographic_not_magic_score_offset() -> None:
+    passed = custom_search._candidate_rank_key(
+        score=-1_000_000_000.0,
+        candidate_index=9,
+        verifier=_admissible_verifier("PASS"),
+        patch_size=10_000_000,
+    )
+    deferred = custom_search._candidate_rank_key(
+        score=1_000_000_000.0,
+        candidate_index=0,
+        verifier=_admissible_verifier("DEFERRED_TO_TARGET_COMPILE"),
+        patch_size=1,
+    )
+
+    assert passed < deferred
 
 
 def test_candidate_selection_preserves_nonselectable_verification_evidence() -> None:
@@ -239,7 +282,9 @@ def test_candidate_verifier_uses_exact_generation_pass_receipt(tmp_path) -> None
     assert verifier["verification_authority"] == "generation_tool_loop"
     assert verifier["target_compile_required"] is True
     assert verifier["verifier_tier"] == 2
-    assert score >= 2_000_000.0
+    assert score < 1_000_000.0
+    assert verifier["receipt_target_matches"] is True
+    assert verifier["receipt_semantics_valid"] is True
     assert verifier["jdt_status"] == "NOT_RUN"
 
 
@@ -261,9 +306,73 @@ def test_candidate_verifier_preserves_deferred_target_compile_state(tmp_path) ->
     assert verifier["generation_status"] == "DEFERRED_TO_TARGET_COMPILE"
     assert verifier["verifier_tier"] == 1
     assert verifier["downstream_required_gate"] == "target_compile"
-    assert score >= 1_000_000.0
-    assert score < 2_000_000.0
+    assert verifier["receipt_target_matches"] is True
+    assert verifier["receipt_semantics_valid"] is True
+    assert score < 1_000_000.0
     assert custom_search._candidate_verifier_selectable(verifier)
+
+
+def test_candidate_verifier_rejects_receipt_for_different_target(tmp_path) -> None:
+    _score, verifier = custom_search._verify_candidate(
+        tmp_path,
+        {
+            "status": "SOURCE_GENERATED",
+            "generation_verification": _generation_receipt(
+                "PASS",
+                target_path="src/main/java/demo/Other.java",
+            ),
+            "touched_paths": ["src/main/java/demo/Test.java"],
+            "operation_count": 1,
+            "runtime_tests": [],
+            "required_gates": ["target_compile"],
+        },
+    )
+
+    assert verifier["receipt_target_matches"] is False
+    assert verifier["receipt_semantics_valid"] is False
+    assert verifier["verifier_tier"] == 0
+    assert not custom_search._candidate_verifier_selectable(verifier)
+
+
+def test_compile_backed_pass_requires_target_compile_as_actual_verifier(tmp_path) -> None:
+    _score, verifier = custom_search._verify_candidate(
+        tmp_path,
+        {
+            "status": "SOURCE_GENERATED",
+            "generation_verification": _generation_receipt(
+                "PASS",
+                verifier_tool="java_diagnostics",
+            ),
+            "touched_paths": ["src/main/java/demo/Test.java"],
+            "operation_count": 1,
+            "runtime_tests": [],
+            "required_gates": ["target_compile"],
+        },
+    )
+
+    assert verifier["receipt_target_matches"] is True
+    assert verifier["receipt_semantics_valid"] is False
+    assert verifier["verifier_tier"] == 0
+
+
+def test_deferred_compile_requires_exact_deferred_terminal_semantics(tmp_path) -> None:
+    _score, verifier = custom_search._verify_candidate(
+        tmp_path,
+        {
+            "status": "SOURCE_GENERATED",
+            "generation_verification": _generation_receipt(
+                "DEFERRED_TO_TARGET_COMPILE",
+                validation_status="PASS",
+            ),
+            "touched_paths": ["src/main/java/demo/Test.java"],
+            "operation_count": 1,
+            "runtime_tests": [],
+            "required_gates": ["target_compile"],
+        },
+    )
+
+    assert verifier["receipt_semantics_valid"] is False
+    assert verifier["verifier_tier"] == 0
 
 
 def test_candidate_verifier_rejects_source_generated_without_terminal_receipt(
@@ -342,6 +451,13 @@ def test_candidate_verifier_has_no_candidate_local_jdt_dependency() -> None:
     assert "JavaLanguageService" not in source
     assert "diagnostic_errors" not in source
     assert "timeout_seconds=60" not in source
+
+
+def test_both_parallel_search_paths_use_strict_candidate_rank_key() -> None:
+    assert "_candidate_rank_key" in inspect.getsource(custom_search.install)
+    assert "_candidate_rank_key" in inspect.getsource(
+        coder_efficiency._parallel_generate
+    )
 
 
 def test_target_values_fail_closed_without_complete_host_target() -> None:
