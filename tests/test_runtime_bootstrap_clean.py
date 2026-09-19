@@ -90,6 +90,16 @@ def test_package_has_no_legacy_installation_modules() -> None:
     assert list(PACKAGE.glob("*_installation.py")) == []
 
 
+def test_removed_runtime_patch_modules_do_not_return() -> None:
+    for name in (
+        "mutation_authority_final_guard.py",
+        "planir_mutation_authority_contract.py",
+        "repair_mutation_recovery_contract.py",
+        "execution_feedback_semantic_convergence_installation.py",
+    ):
+        assert not (PACKAGE / name).exists()
+
+
 def test_managed_llama_reuse_is_owned_by_model_runtime_stage() -> None:
     init_source = _text('__init__.py')
     assert 'managed_llama_reuse_contract' not in init_source
