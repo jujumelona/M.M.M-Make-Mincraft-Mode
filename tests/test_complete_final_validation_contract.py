@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 
 from minecraft_mod_ai.complete_orchestrator import (
+    CompleteProductionOrchestrator,
     _blocking_jdt_errors,
     _final_validation_failure,
     _gametest_attestation_status,
@@ -108,3 +110,12 @@ def test_requested_gametest_without_report_is_not_attested() -> None:
         SimpleNamespace(mod_id="demo"),
         requested=False,
     ) == "NOT_REQUIRED"
+
+
+def test_execute_wires_required_gate_failures_into_both_release_paths() -> None:
+    source = inspect.getsource(CompleteProductionOrchestrator.execute)
+
+    assert source.count("self._required_gate_failures(") == 2
+    assert "build_report=None" in source
+    assert "build_report=build" in source
+    assert source.count("unresolved.extend(") >= 2
