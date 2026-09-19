@@ -1023,6 +1023,14 @@ def test_runtime_visual_download_artifacts_preserve_verified_screenshots(tmp_pat
     }
 
 
+def test_validate_jar_checkpoint_uses_versioned_pass_only_cache_policy() -> None:
+    source = inspect.getsource(CompleteProductionOrchestrator.execute)
+
+    assert "validation_checkpoint_input(\n                'validate-jar'" in source
+    assert "cached_validation_is_reusable('validate-jar', cached)" in source
+    assert "validate_cached=lambda _cached: jar_path.is_file()" not in source
+
+
 def test_release_readiness_is_decided_before_packaging() -> None:
     source = inspect.getsource(CompleteProductionOrchestrator.execute)
 
