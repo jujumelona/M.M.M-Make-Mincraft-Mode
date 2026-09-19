@@ -41,7 +41,6 @@ def finalize_runtime() -> None:
             complete_orchestrator_support,
             complete_spec,
             custom_module_generator,
-            execution_feedback_replan_contract,
             external_agent_bridge,
             external_mcp_router,
             external_procedural_skill_contract,
@@ -151,11 +150,6 @@ def finalize_runtime() -> None:
             orchestrator_module=complete_orchestrator,
             template_module=planner_template_schema,
         )
-        execution_feedback_replan_contract.install(
-            orchestrator_module=complete_orchestrator,
-            work_graph_module=work_graph,
-        )
-
         install_immutable_platform_execution()
         install_fabric_immutable_rebind()
         install_runtime_regression_reconciliation()
