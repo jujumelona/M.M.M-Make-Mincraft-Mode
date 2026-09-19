@@ -301,7 +301,7 @@ def _debug_java_code_surface(source: str) -> tuple[str, str]:
     comments = re.compile(r"//[^\\n]*|/\\*.*?\\*/", re.DOTALL)
     commentless = comments.sub(" ", source)
     literals = re.compile(
-        r'"(?:\\\\.|[^"\\\\])*"|\\'(?:\\\\.|[^\\'\\\\])*\\'',
+        r"\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'",
         re.DOTALL,
     )
     code = literals.sub(" ", commentless)
