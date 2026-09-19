@@ -159,3 +159,13 @@ def test_contract_composition_is_limited_to_explicit_owners() -> None:
         offenders.extend((f'{path.name}: {module}.install via {local_name}()' for local_name, module in installers.items() if local_name in direct_calls))
         offenders.extend((f'{path.name}: {module}.install via {local_name}.install()' for local_name, module in modules.items() if local_name in module_calls))
     assert offenders == [], 'nested contract composition:\n' + '\n'.join(offenders)
+
+
+def test_model_output_atomicity_has_one_install_owner() -> None:
+    bootstrap = _BOOTSTRAP.read_text(encoding="utf-8")
+    finalization = _FINALIZATION.read_text(encoding="utf-8")
+
+    assert bootstrap.count("install_model_output_atomicity()") == 1
+    assert "install as install_model_output_atomicity" not in finalization
+    assert "install_model_output_atomicity(" not in finalization
+    assert "assert_model_output_atomicity" in finalization
