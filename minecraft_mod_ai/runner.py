@@ -227,14 +227,21 @@ class GradleRunner:
             "yes",
             "on",
         }
+        gametest_task = self._gametest_task(prepared.project_root) if run_gametest else None
+        build_arguments = (
+            ["--no-daemon", "clean", "build"]
+            if force_clean
+            else ["--no-daemon", "build"]
+        )
+        # Fabric API configureTests wires runGameTest into check/build. Keep the
+        # pipeline's structured GameTest evidence as one explicit execution instead.
+        if gametest_task == "runGameTest":
+            build_arguments.extend(("-x", "runGameTest"))
+        build_arguments.append("--stacktrace")
         build_result = self._run(
             name="clean_build" if force_clean else "build",
             executable=prepared.gradle,
-            arguments=(
-                ("--no-daemon", "clean", "build", "--stacktrace")
-                if force_clean
-                else ("--no-daemon", "build", "--stacktrace")
-            ),
+            arguments=tuple(build_arguments),
             cwd=prepared.project_root,
             env=prepared.environment,
             log_path=prepared.logs / "gradle-build.log",
@@ -243,7 +250,7 @@ class GradleRunner:
         if build_result.exit_code != 0:
             return self._failed_build(prepared, commands, "Gradle build failed.")
         if run_gametest:
-            gametest_task = self._gametest_task(prepared.project_root)
+            assert gametest_task is not None
             gametest_result = self._run(
                 name="gametest",
                 executable=prepared.gradle,
