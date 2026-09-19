@@ -8,6 +8,7 @@ from minecraft_mod_ai.complete_orchestrator import (
     _blocking_jdt_errors,
     _final_validation_failure,
     _gametest_attestation_status,
+    _persisted_runtime_evidence,
     _runtime_verification_passed,
 )
 
@@ -223,3 +224,19 @@ def test_optional_runtime_is_not_required_for_release_readiness() -> None:
         playtest_receipt=None,
         visual_receipt=None,
     )
+
+
+def test_required_runtime_missing_receipt_is_not_recorded_as_not_required() -> None:
+    missing = _persisted_runtime_evidence(
+        None,
+        required=True,
+        artifact_sha256="sha256:" + "a" * 64,
+    )
+    optional = _persisted_runtime_evidence(
+        None,
+        required=False,
+        artifact_sha256="sha256:" + "b" * 64,
+    )
+
+    assert missing["status"] == "REQUIRED_NOT_RUN"
+    assert optional["status"] == "NOT_REQUIRED"
