@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import minecraft_mod_ai.small_model_write_scope_enforcement as write_scope
 from minecraft_mod_ai.coder_mutation_authority_contract import (
     _install_creation_conflict_classification,
 )
@@ -10,6 +9,7 @@ from minecraft_mod_ai.direct_task_mutation_authority_contract import (
     _CURRENT_AUTHORITY,
     compile_direct_task_mutation_authority,
 )
+from minecraft_mod_ai.small_model_write_scope_enforcement import generation_authority_scoped
 from minecraft_mod_ai.mutation_authority import (
     CURRENT_MUTATION_AUTHORITY,
     MutationAuthorityMode,
@@ -86,6 +86,7 @@ def test_existing_write_scope_owner_activates_same_authority_for_tool_and_final_
     holder = {}
 
     class Generator:
+        @generation_authority_scoped
         def generate(
             self,
             project_root,
@@ -133,26 +134,11 @@ def test_existing_write_scope_owner_activates_same_authority_for_tool_and_final_
         def _mutation_target_error(tool_name, arguments, context):
             return "MUTATION_TARGET_DRIFT: localized evidence target differs"
 
-    class HostGrounding:
-        @staticmethod
-        def custom_module_path_allowed(path):
-            return current_mutation_error(path) is None
-
-    custom_module = SimpleNamespace(
-        CustomModuleGenerator=Generator,
-        CustomModuleGenerationError=RuntimeError,
-        _agent_mutable_path=lambda path: True,
-    )
     loop_module = Loop()
     holder["loop"] = loop_module
     _install_creation_conflict_classification(loop_module)
-    monkeypatch.setattr(write_scope, "_INSTALLED", False)
-    write_scope.install(
-        custom_module_generator_module=custom_module,
-        host_grounding_module=HostGrounding,
-    )
 
-    generator = custom_module.CustomModuleGenerator()
+    generator = Generator()
     assert generator.generate(".", module=_authored_module()) == {"active": True}
     assert _CURRENT_AUTHORITY.get() is None
     assert CURRENT_MUTATION_AUTHORITY.get() is None
