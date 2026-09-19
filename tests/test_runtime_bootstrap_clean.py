@@ -114,6 +114,9 @@ def test_removed_runtime_patch_modules_do_not_return() -> None:
         "repair_mutation_recovery_contract.py",
         "execution_feedback_semantic_convergence_installation.py",
         "coder_mutation_authority_contract.py",
+        "execution_feedback_owner_precision_contract.py",
+        "generation_verifier_runtime_contract.py",
+        "model_tool_alias_permission_policy.py",
     ):
         assert not (PACKAGE / name).exists()
 
