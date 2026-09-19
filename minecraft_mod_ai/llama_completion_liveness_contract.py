@@ -17,6 +17,7 @@ from types import TracebackType
 from typing import Any
 
 from .llama_sse_protocol import LlamaSseServerError, sse_error_from_line
+from .model_concurrency import refresh_model_execution_deadline
 
 _MARKER = "_mmm_progress_aware_completion_transport_v1"
 _STREAM_MARKER = "_mmm_progress_aware_completion_stream_v1"
@@ -297,6 +298,8 @@ class _ProgressCheckedResponse:
                     status, error = parsed_error
                     raise LlamaSseServerError(status, error)
                 progressed = watchdog.observe(raw_line)
+                if progressed:
+                    refresh_model_execution_deadline(self._idle_seconds)
                 if progressed and not self._first_progress and not _done_line(raw_line):
                     self._first_progress = True
                     print(
