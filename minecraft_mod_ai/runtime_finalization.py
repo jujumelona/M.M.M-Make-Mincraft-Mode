@@ -60,7 +60,6 @@ def finalize_runtime() -> None:
             production_tools,
             quality_evidence,
             reference_source_research,
-            repository_grounding,
             research_rag_performance,
             retrieval_cpu_budget_contract,
             small_model_hybrid_search_contract,
@@ -146,10 +145,6 @@ def finalize_runtime() -> None:
 
         retrieval_cpu_budget_contract._install_live_hybrid_budget(small_model_hybrid_search_contract)
         retrieval_cpu_budget_contract._install_production_tool_budget(production_tools)
-        if not retrieval_cpu_budget_contract._dense_opted_in():
-            repository_grounding._explore_with_degraded_fallback = (
-                retrieval_cpu_budget_contract._lexical_repository_exploration
-            )
         install_repository_grounding()
 
         install_model_tool_alias_permissions(agent_capability_context, model_tool_aliases)
