@@ -1740,6 +1740,22 @@ class CompleteProductionOrchestrator:
                 raise CompleteProductionError(f'Approved proposal does not match the existing Fabric project: expected {expected.mod_id}/{expected.package_name}, found {info.mod_id}/{info.package_name}.')
             return project_root
         base = approved.base_proposal
+        from .platform_catalog import adapter_for_lock_values
+        from .platform_live_execution_contract import (
+            _uses_official_scaffold,
+            prepare_official_fabric_project,
+        )
+
+        adapter = adapter_for_lock_values(base.spec.platform)
+        if _uses_official_scaffold(adapter):
+            return prepare_official_fabric_project(
+                self,
+                approved,
+                run_root=run_root,
+                adapter=adapter,
+                error_type=CompleteProductionError,
+            )
+
         base.approve(base.calculate_hash())
         project_root = run_root / 'base/workspaces' / base.spec.mod_id
         if project_root.exists():
