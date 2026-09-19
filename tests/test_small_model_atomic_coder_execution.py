@@ -9,6 +9,14 @@ from minecraft_mod_ai.small_model_atomic_coder_execution import (
     atomicize_coder_messages,
 )
 
+from minecraft_mod_ai.small_model_task_capsule_contract import (
+    TaskAnchor,
+    TaskCapsule,
+    TaskCapsuleContractError,
+    _atomic_request_scope,
+    bind_source_edit_arguments,
+)
+
 
 def _messages(*, step_count: int = 3):
     checklist = [f"check-{index}" for index in range(8)]
@@ -481,4 +489,105 @@ def test_atomic_summary_aggregation_rejects_mixed_summary_transport():
             response_format="text",
             tool_stage="generation",
             enable_tools=True,
+        )
+
+
+def _two_target_capsule() -> TaskCapsule:
+    anchors = (
+        TaskAnchor(
+            kind="symbol",
+            path="src/main/java/demo/Feature.java",
+            symbol="Feature",
+            status="existing",
+        ),
+        TaskAnchor(
+            kind="test",
+            path="src/test/java/demo/FeatureTest.java",
+            symbol="FeatureTest",
+            status="existing",
+        ),
+    )
+    return TaskCapsule(
+        task_id="task_feature",
+        module_kind="custom_java",
+        primary_path=anchors[0].path,
+        primary_symbol=anchors[0].symbol,
+        anchors=anchors,
+        reuse_action="fresh",
+        required_gates=("target_compile",),
+        task_sha256="sha256:" + "a" * 64,
+        capsule_sha256="sha256:" + "b" * 64,
+    )
+
+
+def _atomic_scope_messages(target_ref: str, *, step_index: int = 2):
+    return (
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "phase": "implement_module",
+                    "atomic_execution": {
+                        "schema_version": "mmm/atomic-coder-step",
+                        "step_index": step_index,
+                        "step_count": 2,
+                    },
+                    "module": {
+                        "module_id": "task_feature",
+                        "kind": "custom_java",
+                        "evidence_task": {
+                            "task_id": "task_feature",
+                            "coder_execution_contract": {
+                                "schema_version": "mmm/atomic-coder-step",
+                                "step": {
+                                    "index": step_index,
+                                    "count": 2,
+                                    "target_refs": [target_ref],
+                                },
+                            },
+                        },
+                    },
+                }
+            ),
+        },
+    )
+
+
+def test_atomic_step_capsule_exposes_only_step_owned_target() -> None:
+    parent = _two_target_capsule()
+    scoped, metadata = _atomic_request_scope(
+        parent,
+        _atomic_scope_messages(
+            "src/test/java/demo/FeatureTest.java#FeatureTest"
+        ),
+    )
+
+    assert metadata == {"step_index": 2, "step_count": 2}
+    assert scoped.primary_path == "src/test/java/demo/FeatureTest.java"
+    assert scoped.primary_symbol == "FeatureTest"
+    assert scoped.writable_paths == ("src/test/java/demo/FeatureTest.java",)
+    assert scoped.capsule_sha256 != parent.capsule_sha256
+
+    with pytest.raises(TaskCapsuleContractError, match="MUTATION_TARGET_DRIFT"):
+        bind_source_edit_arguments(
+            {
+                "operation": "replace_exact",
+                "path": "src/main/java/demo/Feature.java",
+                "old": "old",
+                "new": "new",
+            },
+            scoped,
+        )
+
+
+def test_atomic_step_capsule_rejects_target_outside_parent_task() -> None:
+    with pytest.raises(
+        TaskCapsuleContractError,
+        match="TASK_CAPSULE_ATOMIC_SCOPE_ESCAPE",
+    ):
+        _atomic_request_scope(
+            _two_target_capsule(),
+            _atomic_scope_messages(
+                "src/main/java/demo/Foreign.java#Foreign",
+            ),
         )
