@@ -160,6 +160,9 @@ def _plain_completion(
         _server_payload(adapter, request),
         structured_output=request.response_format == "json",
     )
+    from ..llama_lora_runtime import apply_request_lora
+
+    apply_request_lora(payload, server_url, adapter.config, request)
     message = _completion_message(server_url, payload)
     _report_server_connection(server_url)
     if message.get("tool_calls"):
@@ -192,6 +195,9 @@ def _native_tool_completion(
         _tool_server_payload(adapter, request),
         structured_output=False,
     )
+    from ..llama_lora_runtime import apply_request_lora
+
+    apply_request_lora(payload, server_url, adapter.config, request)
     message = _completion_message(server_url, payload)
     _report_server_connection(server_url)
     return _native_tool_generation_response(message, request)
