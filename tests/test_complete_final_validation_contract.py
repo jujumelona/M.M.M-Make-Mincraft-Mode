@@ -10,6 +10,7 @@ from minecraft_mod_ai.complete_orchestrator import (
     _gametest_attestation_status,
     _persisted_runtime_evidence,
     _runtime_verification_passed,
+    _stable_payload_sha256,
 )
 
 
@@ -240,3 +241,47 @@ def test_required_runtime_missing_receipt_is_not_recorded_as_not_required() -> N
 
     assert missing["status"] == "REQUIRED_NOT_RUN"
     assert optional["status"] == "NOT_REQUIRED"
+
+
+def test_package_cache_requires_matching_file_digest(tmp_path) -> None:
+    package = tmp_path / "bundle.zip"
+    package.write_bytes(b"first")
+    receipt = {
+        "status": "PACKAGED",
+        "path": str(package),
+        "sha256": CompleteProductionOrchestrator._file_hash(package),
+    }
+
+    assert CompleteProductionOrchestrator._cached_package_exists(
+        receipt,
+        path_key="path",
+    )
+
+    package.write_bytes(b"tampered")
+    assert not CompleteProductionOrchestrator._cached_package_exists(
+        receipt,
+        path_key="path",
+    )
+
+
+def test_release_package_fingerprint_changes_with_evidence() -> None:
+    base = {
+        "jar_sha256": "sha256:" + "a" * 64,
+        "coverage_sha256": "sha256:" + "b" * 64,
+    }
+    changed = {
+        **base,
+        "coverage_sha256": "sha256:" + "c" * 64,
+    }
+
+    assert _stable_payload_sha256(base) != _stable_payload_sha256(changed)
+
+
+def test_execute_checkpoints_distribution_packaging_for_resume() -> None:
+    source = inspect.getsource(CompleteProductionOrchestrator.execute)
+
+    assert "'package-distribution'" in source
+    assert "distribution-bundle-" in source
+    assert "release_package_input" in source
+    assert "runtime_receipt_sha256" in source
+    assert "coverage_sha256" in source
