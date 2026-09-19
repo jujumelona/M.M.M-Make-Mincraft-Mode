@@ -133,9 +133,11 @@ public final class MmmDebugFixtureModGameTests {
     main_text = main_source.read_text(encoding="utf-8")
     gametest_text = gametest_source.read_text(encoding="utf-8")
     assert "MMM_DEBUG_FIXTURE_RUNTIME_BINDING" in main_text
-    assert "DebugToken.DEBUG_TOKEN == null" in main_text
+    assert 'Class.forName("dev.mmm.debugfixture.DebugToken", true,' in main_text
+    assert 'getField("DEBUG_TOKEN").get(null) == null' in main_text
     assert "MMM_DEBUG_FIXTURE_REGISTRY_ASSERTION" in gametest_text
-    assert "DebugToken.DEBUG_TOKEN == null" in gametest_text
+    assert 'Class.forName("dev.mmm.debugfixture.DebugToken", true,' in gametest_text
+    assert 'getField("DEBUG_TOKEN").get(null) == null' in gametest_text
 
     CompleteProductionOrchestrator._bind_debug_fixture_runtime(proposal, root)
     assert (
