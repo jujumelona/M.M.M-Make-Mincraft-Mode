@@ -168,6 +168,26 @@ def _validate_host_facts_namespace(
         raise SpecValidationError(
             "Platform host_facts_json must be a JSON object."
         )
+    declared_namespace = str(payload.get("api_namespace") or "").strip().casefold()
+    if not declared_namespace:
+        # Existing packaged host bundles predate namespace-family admission. They remain
+        # readable until they are regenerated with an explicit namespace declaration;
+        # strict namespace checks apply to every newly admitted/migrated bundle.
+        return
+    if declared_namespace not in {"mojang", "yarn", "native"}:
+        raise SpecValidationError(
+            "Platform host facts api_namespace must be mojang, yarn, or native."
+        )
+    if native_names:
+        if declared_namespace not in {"native", "mojang"}:
+            raise SpecValidationError(
+                "Platform host facts namespace disagrees with the native-name target."
+            )
+    elif declared_namespace != mappings_kind:
+        raise SpecValidationError(
+            "Platform host facts namespace disagrees with the target mappings_kind."
+        )
+
     symbols = payload.get("api_symbols")
     if symbols in (None, {}, []):
         return
