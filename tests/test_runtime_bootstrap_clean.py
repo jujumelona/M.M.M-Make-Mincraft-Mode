@@ -81,6 +81,7 @@ def test_package_init_has_one_bootstrap_and_no_contract_patch_chain() -> None:
         'source_set_boundary_installation',
         'versioned_reference_context_installation',
         'prepared_project_resume_integrity',
+        'execution_feedback_semantic_convergence_installation',
     ):
         assert legacy not in source
 
