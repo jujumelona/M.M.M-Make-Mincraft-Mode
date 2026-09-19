@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import pytest
 
 from minecraft_mod_ai import complete_orchestrator, work_graph
@@ -32,6 +33,15 @@ def _ledger_and_node(tmp_path):
     )
     ledger.sync_plan(plan)
     return ledger, node
+
+
+def test_claim_fencing_preserves_run_work_node_call_signature() -> None:
+    wrapped = complete_orchestrator.CompleteProductionOrchestrator._run_work_node
+    original = inspect.unwrap(wrapped)
+    assert inspect.signature(wrapped, follow_wrapped=False) == inspect.signature(
+        original,
+        follow_wrapped=False,
+    )
 
 
 def test_stale_attempt_cannot_complete_reclaimed_node(tmp_path) -> None:
