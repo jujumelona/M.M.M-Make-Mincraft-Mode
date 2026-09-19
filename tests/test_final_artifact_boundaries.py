@@ -101,6 +101,7 @@ def _debug_source_contract() -> dict[str, object]:
         "schema_version": "mmm/debug-source-contract-v1",
         "path": "src/main/java/dev/mmm/debugfixture/DebugToken.java",
         "identifier": "debug_token",
+        "binding_field": "DEBUG_TOKEN",
         "semantic_kind": "item",
         "required_host_symbol_keys": [
             "register_item",
@@ -175,7 +176,7 @@ public final class DebugToken {
         Registries.ITEM,
         Identifier.fromNamespaceAndPath("mmm_debug_fixture", "debug_token")
     );
-    public static final Item ITEM = Registry.register(
+    public static final Item DEBUG_TOKEN = Registry.register(
         BuiltInRegistries.ITEM,
         KEY,
         new Item(new Item.Properties().setId(KEY))
@@ -194,8 +195,59 @@ public final class DebugToken {
 
     assert receipt["status"] == "PASS"
     assert receipt["identifier_present"] is True
+    assert receipt["binding_assignment_proven"] is True
     assert receipt["lifecycle_clear"] is True
     assert all(receipt["symbol_results"].values())
+
+
+def test_debug_fixture_source_acceptance_rejects_unbound_registry_result(
+    tmp_path: Path,
+) -> None:
+    source = (
+        tmp_path
+        / "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+    )
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        """
+package dev.mmm.debugfixture;
+
+import net.minecraft.core.Registry;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.item.Item;
+
+public final class DebugToken {
+    public static final ResourceKey<Item> KEY = ResourceKey.create(
+        Registries.ITEM,
+        Identifier.fromNamespaceAndPath("mmm_debug_fixture", "debug_token")
+    );
+    public static final Item DEBUG_TOKEN =
+        new Item(new Item.Properties().setId(KEY));
+    public static final Item OTHER = Registry.register(
+        BuiltInRegistries.ITEM,
+        KEY,
+        DEBUG_TOKEN
+    );
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    receipt = verify_debug_fixture_source(
+        tmp_path,
+        source_contract=_debug_source_contract(),
+        host_facts_json=_debug_host_facts(),
+    )
+
+    assert receipt["status"] == "BLOCKED"
+    assert receipt["identifier_present"] is True
+    assert receipt["binding_assignment_proven"] is False
+    assert all(receipt["symbol_results"].values())
+    assert any("binding field" in item for item in receipt["findings"])
 
 
 def test_debug_fixture_source_acceptance_rejects_compile_only_placeholder(
