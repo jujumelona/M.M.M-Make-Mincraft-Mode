@@ -234,10 +234,13 @@ def _parallel_generate(
             verifier_index=5,
         )
         selectable.sort(
-            key=lambda item: (
-                -item[0],
-                search_module._json_size(item[4].get("operations", [])),
-                item[1],
+            key=lambda item: search_module._candidate_rank_key(
+                score=float(item[0]),
+                candidate_index=int(item[1]),
+                verifier=item[5],
+                patch_size=search_module._json_size(
+                    item[4].get("operations", [])
+                ),
             )
         )
         score, winner_index, winner_root, result, capture, verifier = selectable[0]
