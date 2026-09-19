@@ -43,6 +43,11 @@ def test_official_scaffold_is_gametest_ready_before_first_build(tmp_path: Path) 
     assert "enableGameTests = true" in build
     assert "enableClientGameTests = false" in build
     assert "fabric-api.gametest.report-file" in build
+    assert (
+        'property "fabric-api.gametest.report-file", '
+        "file('build/gametest-report.xml').absolutePath"
+    ) in build
+    assert 'vmArg "-Dfabric-api.gametest.report-file=' not in build
     assert "gameTest {" in build
     assert "gameTestServer" not in build
     assert receipt == {
