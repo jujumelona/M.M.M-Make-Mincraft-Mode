@@ -9,9 +9,6 @@ from minecraft_mod_ai import execution_feedback_replan_contract as feedback
 from minecraft_mod_ai.execution_feedback_exception_scope_contract import (
     _checkpoint_for_exception,
 )
-from minecraft_mod_ai.execution_feedback_owner_precision_contract import (
-    install as install_owner_precision,
-)
 
 
 class _FakeLedger:
@@ -162,10 +159,7 @@ def test_path_binding_does_not_use_basename_only():
 
 def test_batched_receipt_ownership_does_not_inherit_positional_member():
     module = SimpleNamespace(module_id="wrong-positional-owner")
-    dummy = SimpleNamespace(_receipt_owner_ids=lambda _module, _receipt: [])
-    install_owner_precision(dummy)
-
-    owners = dummy._receipt_owner_ids(
+    owners = feedback._receipt_owner_ids(
         module,
         {
             "schema_version": "mmm/extended-content-v2",
