@@ -304,7 +304,12 @@ def _anchor_candidate(
     status = normalize_target_status(anchor.get("status"))
     if status and not target_is_writable(status):
         return None
-    fresh = target_is_creatable(status) if status else reuse == "fresh"
+    if target_is_existing(status):
+        fresh = False
+    elif reuse:
+        fresh = reuse == "fresh"
+    else:
+        fresh = target_is_creatable(status)
     symbolic = str(anchor.get("kind") or "").strip().casefold() == "symbol"
     return path, symbol, fresh, symbolic
 
@@ -426,10 +431,10 @@ def _task_authority_context(payload: Mapping[str, Any]) -> TargetMutationContext
     status = _task_anchor_status(task, path)
     if isinstance(task, Mapping) and target_is_existing(status):
         evidence_source = "evidence_existing_owned_anchor"
-    elif isinstance(task, Mapping) and target_is_creatable(status):
-        evidence_source = "evidence_host_reserved_owned_anchor"
     elif fresh and isinstance(task, Mapping):
         evidence_source = "evidence_fresh_owned_anchor"
+    elif isinstance(task, Mapping) and target_is_creatable(status):
+        evidence_source = "evidence_host_reserved_owned_anchor"
     else:
         evidence_source = "host_task_authority"
     return TargetMutationContext(
