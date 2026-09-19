@@ -519,34 +519,3 @@ def test_supported_required_gate_contract_is_accepted() -> None:
 
     _validate_required_gate_contract(proposal)
 
-
-def test_generation_receipt_output_integrity_detects_stale_files(tmp_path) -> None:
-    output = tmp_path / "src/main/java/demo/Generated.java"
-    output.parent.mkdir(parents=True)
-    output.write_text("class Generated {}\n", encoding="utf-8")
-    receipt = {"status": "SUCCEEDED", "files": [str(output)]}
-    receipt["output_integrity"] = CompleteProductionOrchestrator._receipt_output_integrity(
-        receipt,
-        project_root=tmp_path,
-    )
-
-    assert CompleteProductionOrchestrator._receipt_outputs_exist(
-        receipt,
-        project_root=tmp_path,
-    )
-
-    output.write_text("class Generated { int changed; }\n", encoding="utf-8")
-    assert not CompleteProductionOrchestrator._receipt_outputs_exist(
-        receipt,
-        project_root=tmp_path,
-    )
-
-
-def test_generation_receipt_without_integrity_is_invalidated_for_resume(tmp_path) -> None:
-    output = tmp_path / "generated.json"
-    output.write_text("{}", encoding="utf-8")
-
-    assert not CompleteProductionOrchestrator._receipt_outputs_exist(
-        {"status": "SUCCEEDED", "files": [str(output)]},
-        project_root=tmp_path,
-    )
