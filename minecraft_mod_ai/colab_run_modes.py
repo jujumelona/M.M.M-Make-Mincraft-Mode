@@ -204,6 +204,7 @@ def _debug_task_contract(platform: Any) -> dict[str, Any]:
         "schema_version": "mmm/debug-source-contract-v1",
         "path": "src/main/java/dev/mmm/debugfixture/DebugToken.java",
         "identifier": "debug_token",
+        "binding_field": "DEBUG_TOKEN",
         "semantic_kind": "item",
         "required_host_symbol_keys": [
             "register_item",
@@ -241,7 +242,8 @@ def _debug_task_contract(platform: Any) -> dict[str, Any]:
         "implementation_obligations": [
             "Use only the host-grounded item registration API admitted for the immutable target.",
             "Materialize the debug_token identifier through the host symbols register_item, builtin_item_registry, registries_item, resource_key_create, and identifier_factory.",
-            "Keep all production source changes inside the owned DebugToken.java target.",
+            "Expose the registered item as public static field DEBUG_TOKEN so the host-owned entrypoint can force class initialization.",
+            "Keep all model-authored production source changes inside the owned DebugToken.java target.",
             "Do not implement ModInitializer, create another entrypoint, add item groups/tabs, or invent lifecycle hooks; this is a compile-backed API fixture.",
         ],
         "observable_source_contract": observable_source_contract,
@@ -252,7 +254,8 @@ def _debug_task_contract(platform: Any) -> dict[str, Any]:
                 "Create the exact owned DebugToken Java source.",
                 "Use the host-projected target item API/template facts instead of remembered mappings or package names.",
                 "Resolve and use the host symbol keys register_item, builtin_item_registry, registries_item, resource_key_create, and identifier_factory.",
-                "Implement only the minimal debug_token item-registration source needed to exercise target compilation.",
+                "Assign the direct result of the host register_item call to public static field DEBUG_TOKEN.",
+                "Implement only the minimal debug_token item-registration source needed to exercise target compilation and host runtime binding.",
                 "Keep the fixture deterministic and self-contained for repeatable pipeline debugging.",
             ],
             "boundaries": [
@@ -277,6 +280,7 @@ def _debug_task_contract(platform: Any) -> dict[str, Any]:
         "required_gates": ["target_compile"],
         "acceptance": [
             "The exact owned DebugToken.java source contains the host-grounded debug_token item-registration fixture.",
+            "The registered item is exposed as DebugToken.DEBUG_TOKEN for the host-owned main entrypoint binding.",
             "The source does not introduce a second Fabric entrypoint or unrelated lifecycle/API surface.",
             "The selected target compile gate passes for the generated project.",
         ],
