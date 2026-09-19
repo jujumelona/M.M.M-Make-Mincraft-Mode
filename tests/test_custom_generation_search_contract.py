@@ -199,28 +199,25 @@ def test_candidate_rank_is_lexicographic_not_magic_score_offset() -> None:
 
 
 def test_candidate_selection_preserves_nonselectable_verification_evidence() -> None:
+    passed = _admissible_verifier("PASS")
+    failed = _admissible_verifier("PASS")
+    failed["receipt_semantics_valid"] = False
+    failed["generation_status"] = "FAIL"
+
     evaluations = [
         (
             2_000_001.0,
             0,
             None,
             {},
-            {
-                "generation_status": "PASS",
-                "verification_authority": "generation_tool_loop",
-                "verifier_tier": 2,
-            },
+            passed,
         ),
         (
             0.0,
             1,
             None,
             {},
-            {
-                "generation_status": "FAIL",
-                "verification_authority": "generation_tool_loop",
-                "verifier_tier": 0,
-            },
+            failed,
         ),
     ]
 
