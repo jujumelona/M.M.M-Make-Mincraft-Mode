@@ -490,18 +490,10 @@ def _bounded_reuse_context(
     )
 
 
-def install(*, custom_module_generator_module: Any, model_router_module: Any) -> None:
-    """Install atomic coding only on the custom-module coder call seam."""
+def atomic_coder_call(func: Any) -> Any:
+    """Attach atomic state-transition scheduling at the reviewed coder seam."""
 
-    del model_router_module  # Bootstrap compatibility; global ModelRouter stays untouched.
-    if getattr(custom_module_generator_module._generate_coder_text, _MARKER, False):
-        return
-
-    original_generate_text = custom_module_generator_module._generate_coder_text
-    original_collect = custom_module_generator_module._collect_initial_observations
-    original_reuse = custom_module_generator_module._materialize_owned_reuse_context
-
-    @wraps(original_generate_text)
+    @wraps(func)
     def generate_text(
         router: Any,
         role: str,
@@ -510,13 +502,13 @@ def install(*, custom_module_generator_module: Any, model_router_module: Any) ->
         **kwargs: Any,
     ) -> Any:
         if str(role).strip().casefold() not in {"coder", "coder_safe"}:
-            return original_generate_text(router, role, messages, *args, **kwargs)
+            return func(router, role, messages, *args, **kwargs)
         if not _is_sequence(messages):
-            return original_generate_text(router, role, messages, *args, **kwargs)
+            return func(router, role, messages, *args, **kwargs)
 
         batches = atomicize_coder_messages(messages)
         if len(batches) == 1:
-            return original_generate_text(router, role, batches[0], *args, **kwargs)
+            return func(router, role, batches[0], *args, **kwargs)
 
         from .model_response_templates import (
             parse_response_text,
@@ -533,7 +525,7 @@ def install(*, custom_module_generator_module: Any, model_router_module: Any) ->
         raw_summaries: list[str] = []
         contract_results: list[bool] = []
         for index, batch in enumerate(batches, start=1):
-            result = original_generate_text(router, role, batch, *args, **kwargs)
+            result = func(router, role, batch, *args, **kwargs)
             try:
                 parsed = parse_response_text("coder_summary", result)
             except ValueError:
@@ -566,6 +558,18 @@ def install(*, custom_module_generator_module: Any, model_router_module: Any) ->
             )
         return combined
 
+    setattr(generate_text, _MARKER, True)
+    return generate_text
+
+
+def bounded_initial_observations(
+    func: Any,
+    *,
+    generator_module: Any | None = None,
+) -> Any:
+    """Own the bounded bootstrap source page directly instead of late rebinding."""
+
+    @wraps(func)
     def collect_initial_observations(
         index: Any,
         *,
@@ -573,15 +577,34 @@ def install(*, custom_module_generator_module: Any, model_router_module: Any) ->
         byte_budget: int,
         diagnostic_paths: Iterable[str] = (),
     ) -> dict[str, Any]:
+        module = generator_module
+        if module is None:
+            from . import custom_module_generator as module
         return _bounded_initial_observations(
-            custom_module_generator_module,
+            module,
             index,
             query=query,
             byte_budget=byte_budget,
             diagnostic_paths=diagnostic_paths,
         )
 
-    @wraps(original_reuse)
+    setattr(collect_initial_observations, _MARKER, True)
+    # The old runtime order first installed adaptive repository grounding, then
+    # replaced it with this bounded atomic collector while copying this marker.
+    # Publish the final ownership directly so adaptive_retrieval does not install
+    # a dead wrapper that is immediately discarded later.
+    setattr(
+        collect_initial_observations,
+        "__mmm_repository_grounding_live_context__",
+        True,
+    )
+    return collect_initial_observations
+
+
+def bounded_reuse_context(func: Any) -> Any:
+    """Cap approved donor materialization at the source-owned helper boundary."""
+
+    @wraps(func)
     def materialize_owned_reuse_context(
         project_root: Any,
         module: Any,
@@ -589,20 +612,33 @@ def install(*, custom_module_generator_module: Any, model_router_module: Any) ->
         byte_budget: int = _MAX_APPROVED_REUSE_BYTES,
     ) -> Any:
         return _bounded_reuse_context(
-            original_reuse,
+            func,
             project_root,
             module,
             byte_budget=byte_budget,
         )
 
-    setattr(generate_text, _MARKER, True)
-    setattr(collect_initial_observations, _MARKER, True)
-    if getattr(original_collect, "__mmm_repository_grounding_live_context__", False):
-        setattr(collect_initial_observations, "__mmm_repository_grounding_live_context__", True)
     setattr(materialize_owned_reuse_context, _MARKER, True)
-    custom_module_generator_module._generate_coder_text = generate_text
-    custom_module_generator_module._collect_initial_observations = collect_initial_observations
-    custom_module_generator_module._materialize_owned_reuse_context = materialize_owned_reuse_context
+    return materialize_owned_reuse_context
+
+
+def install(*, custom_module_generator_module: Any, model_router_module: Any) -> None:
+    """Compatibility installer for external stubs; production ownership is source-defined."""
+
+    del model_router_module
+    if not getattr(custom_module_generator_module._generate_coder_text, _MARKER, False):
+        custom_module_generator_module._generate_coder_text = atomic_coder_call(
+            custom_module_generator_module._generate_coder_text
+        )
+    if not getattr(custom_module_generator_module._collect_initial_observations, _MARKER, False):
+        custom_module_generator_module._collect_initial_observations = bounded_initial_observations(
+            custom_module_generator_module._collect_initial_observations,
+            generator_module=custom_module_generator_module,
+        )
+    if not getattr(custom_module_generator_module._materialize_owned_reuse_context, _MARKER, False):
+        custom_module_generator_module._materialize_owned_reuse_context = bounded_reuse_context(
+            custom_module_generator_module._materialize_owned_reuse_context
+        )
 
 
 def assert_installed(*, custom_module_generator_module: Any, model_router_module: Any) -> None:
@@ -619,6 +655,9 @@ def assert_installed(*, custom_module_generator_module: Any, model_router_module
 __all__ = [
     "AtomicCoderContractError",
     "assert_installed",
+    "atomic_coder_call",
     "atomicize_coder_messages",
+    "bounded_initial_observations",
+    "bounded_reuse_context",
     "install",
 ]
