@@ -13,9 +13,10 @@ from .centroid_vector_rag import direct_centroid_vector_search
 from .model_router import ModelRouter
 from .retrieval_adaptation import (
     _embedding_rows,
-    adapt_query_vector,
+    adapt_query_vector as _adapt_query_vector_dense,
     extract_hit_texts,
 )
+from .retrieval_cpu_budget_contract import _dense_opted_in
 
 _SYMBOL = re.compile(r"\b(?:[A-Z][A-Za-z0-9_]{2,}|[a-z_][A-Za-z0-9_]*\.[A-Za-z0-9_.]+|[A-Za-z0-9_./-]+\.(?:java|json|gradle|kts))\b")
 _MC_VERSION = re.compile(r"(?<![0-9])(?:1\.)?[0-9]{1,2}(?:\.[0-9]{1,3}){1,2}(?![0-9])")
@@ -71,6 +72,12 @@ def _quality(result: Mapping[str, Any]) -> tuple[bool, float, float, int]:
 
 
 def _modes(route: str, caller_semantic: bool, caller_rerank: bool):
+    if not _dense_opted_in():
+        labels = {
+            "dependency": "lexical+relations",
+            "global": "lexical+global-relations",
+        }
+        return ((False, False, labels.get(route, "lexical")),)
     if route in {"exact_version", "exact_symbol"}:
         return (
             (False, False, "lexical"),
@@ -102,6 +109,20 @@ def _modes(route: str, caller_semantic: bool, caller_rerank: bool):
         (True, True, "semantic+rerank"),
         (caller_semantic, caller_rerank, "caller-fallback"),
     )
+
+
+def adapt_query_vector(
+    router: Any,
+    query: str,
+    hit_texts: Sequence[str],
+    *,
+    alpha: float = 0.65,
+) -> list[float]:
+    """Apply dense centroid adaptation only after explicit CPU-dense opt-in."""
+
+    if not _dense_opted_in():
+        return []
+    return _adapt_query_vector_dense(router, query, hit_texts, alpha=alpha)
 
 
 def _centroid_terms(
