@@ -13,6 +13,7 @@ _VALIDATION_CHECKPOINT_FAMILIES = {
     "validate-source-final": "validate-source",
     "validate-jdt": "validate-jdt",
     "validate-jdt-final": "validate-jdt",
+    "validate-jar": "validate-jar",
 }
 
 
@@ -59,6 +60,10 @@ def _validation_modules(checkpoint_id: str) -> tuple[Any, ...]:
                 platform_validation_contract,
             )
         )
+    elif checkpoint_id == "validate-jar":
+        from . import scale_policy, toolchain_contract, validator
+
+        common.extend((validator, scale_policy, toolchain_contract))
     else:
         from . import (
             java_lsp,
@@ -126,6 +131,27 @@ def _nonnegative_int(value: Any) -> int | None:
 
 
 def _complete_source_receipt(value: Mapping[str, Any]) -> bool:
+    checks_run = _nonnegative_int(value.get("checks_run"))
+    findings = value.get("findings")
+    if (
+        value.get("status") != "PASS"
+        or checks_run is None
+        or checks_run <= 0
+        or not isinstance(findings, list)
+    ):
+        return False
+    for finding in findings:
+        if not isinstance(finding, Mapping):
+            return False
+        severity = finding.get("severity")
+        if not isinstance(severity, str):
+            return False
+        if severity.casefold() in {"error", "fatal"}:
+            return False
+    return True
+
+
+def _complete_jar_receipt(value: Mapping[str, Any]) -> bool:
     checks_run = _nonnegative_int(value.get("checks_run"))
     findings = value.get("findings")
     if (
@@ -253,6 +279,8 @@ def cached_validation_is_reusable(checkpoint_id: str, value: Any) -> bool:
         return _complete_source_receipt(value)
     if checkpoint_family == "validate-jdt":
         return _complete_jdt_receipt(value)
+    if checkpoint_family == "validate-jar":
+        return _complete_jar_receipt(value)
     return False
 
 
