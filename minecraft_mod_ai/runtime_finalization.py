@@ -71,7 +71,6 @@ def finalize_runtime() -> None:
         from .external_mcp_binding_concurrency_contract import install as install_external_mcp_binding_concurrency
         from .external_mcp_binding_contract import install as install_external_mcp_binding
         from .fabric_immutable_rebind_contract import install as install_fabric_immutable_rebind
-        from .generation_boundary_reconciliation import install as install_generation_boundary_reconciliation
         from .generation_concurrency_safety import install as install_generation_safety
         from .implementation_kind_boundary_contract import install as install_implementation_kind_boundary
         from .immutable_platform_execution_contract import install as install_immutable_platform_execution
@@ -151,7 +150,6 @@ def finalize_runtime() -> None:
         )
         install_immutable_platform_execution()
         install_fabric_immutable_rebind()
-        install_generation_boundary_reconciliation()
 
         assert_small_model_task_capsule()
         assert_small_model_write_scope(custom_module_generator_module=custom_module_generator, host_grounding_module=host_grounding)
