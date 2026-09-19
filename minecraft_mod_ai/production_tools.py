@@ -13,7 +13,7 @@ from .blockbench_client import BlockbenchMCPClient, allowed_blockbench_operation
 from .geckolib_generator import generate_geckolib_entity_assets
 from .java_lsp_trace import TracedJavaLanguageService as JavaLanguageService
 from .model_router import ModelRouter
-from .project_java_diagnostics_installation import run_project_java_diagnostics
+from .project_java_diagnostics import run_project_java_diagnostics
 from .model_smoke import run_model_smoke
 from .rag_index import ProjectRAGIndex
 from .spec import Proposal, ProposalStatus, SpecValidationError
