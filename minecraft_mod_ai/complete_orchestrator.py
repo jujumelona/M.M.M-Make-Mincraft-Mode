@@ -745,7 +745,40 @@ def _collect_runtime_screenshot_receipts(
             raise CompleteProductionError(
                 "Runtime screenshot receipt is not bound to a live client session."
             )
-        receipts.append(receipt)
+        expected_sha = str(receipt["sha256"])
+        digest = expected_sha.removeprefix("sha256:")
+        evidence_root = (
+            Path(runtime_manager.workspace_root).expanduser().resolve()
+            / "integration-evidence"
+            / "runtime-screenshots"
+        )
+        evidence_root.mkdir(parents=True, exist_ok=True)
+        evidence_path = evidence_root / (digest + path.suffix.lower())
+        if evidence_path.exists():
+            if (
+                evidence_path.is_symlink()
+                or not evidence_path.is_file()
+                or CompleteProductionOrchestrator._file_hash(evidence_path)
+                != expected_sha
+            ):
+                raise CompleteProductionError(
+                    "Existing runtime screenshot evidence does not match its digest."
+                )
+        else:
+            shutil.copy2(path, evidence_path)
+            if CompleteProductionOrchestrator._file_hash(evidence_path) != expected_sha:
+                evidence_path.unlink(missing_ok=True)
+                raise CompleteProductionError(
+                    "Runtime screenshot changed while preserving visual evidence."
+                )
+        receipts.append(
+            {
+                **receipt,
+                "runtime_source_path": str(path),
+                "path": str(evidence_path),
+                "evidence_path": str(evidence_path),
+            }
+        )
     return receipts
 
 
@@ -775,6 +808,13 @@ def _visual_runtime_evidence_passed(
             and item.get("client_running") is True
             and isinstance(item.get("sha256"), str)
             and bool(item.get("sha256"))
+            and isinstance(item.get("evidence_path"), str)
+            and Path(str(item["evidence_path"])).is_file()
+            and not Path(str(item["evidence_path"])).is_symlink()
+            and CompleteProductionOrchestrator._file_hash(
+                Path(str(item["evidence_path"]))
+            )
+            == item.get("sha256")
             for item in screenshots
         )
     )
