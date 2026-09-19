@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 from types import SimpleNamespace
 
 import pytest
 
+from minecraft_mod_ai import complete_orchestrator, work_graph
+from minecraft_mod_ai.complete_orchestrator_support import CompleteProductionError
 from minecraft_mod_ai import execution_feedback_replan_contract as feedback
 from minecraft_mod_ai.execution_feedback_exception_scope_contract import (
     _checkpoint_for_exception,
@@ -272,7 +275,7 @@ def test_compiler_log_path_binds_failed_build_to_generation_owner(tmp_path):
     assert matches[0]["match"]["observed_path"] is True
 
 
-class _FeedbackLoopError(RuntimeError):
+class _FeedbackLoopError(CompleteProductionError):
     pass
 
 
@@ -303,6 +306,7 @@ def _feedback_loop_module(*, failures_before_success: int | None):
         def _open_run(self, _run_name, _plan, *, resume):
             return None, self._mmm_feedback_ledger, bool(resume)
 
+        @feedback.execution_feedback_scoped
         def execute(self, *_args, **_kwargs):
             self.calls += 1
             if failures_before_success is None or self.calls <= failures_before_success:
@@ -325,7 +329,6 @@ def _install_feedback_loop(monkeypatch, *, failures_before_success: int | None):
 
     monkeypatch.setattr(feedback, "_latest_failed_feedback", latest_failed_feedback)
     module = _feedback_loop_module(failures_before_success=failures_before_success)
-    feedback._install_run_context(module)
     return module.CompleteProductionOrchestrator(), feedback_rows
 
 
@@ -387,3 +390,23 @@ def test_feedback_execute_wrapper_carries_semantic_convergence_marker(monkeypatc
     assert getattr(orchestrator.execute, "_mmm_impacted_feedback_loop", False)
     assert getattr(orchestrator.execute, "_mmm_semantic_convergence", False)
 
+
+
+def test_execution_feedback_boundaries_are_source_owned() -> None:
+    assert inspect.getmodule(
+        work_graph.DurableWorkLedger.invalidate_execution_feedback
+    ) is work_graph
+    assert (
+        complete_orchestrator._semantic_execution_observation
+        is feedback.semantic_execution_observation
+    )
+    assert getattr(
+        complete_orchestrator.CompleteProductionOrchestrator.execute,
+        "_mmm_impacted_feedback_loop",
+        False,
+    )
+    assert getattr(
+        complete_orchestrator.CompleteProductionOrchestrator._open_run,
+        "_mmm_feedback_context",
+        False,
+    )
