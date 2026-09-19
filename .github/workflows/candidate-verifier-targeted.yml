@@ -6,6 +6,7 @@ on:
     paths:
       - "minecraft_mod_ai/custom_generation_search_contract.py"
       - "minecraft_mod_ai/generation_verification_contract.py"
+      - "minecraft_mod_ai/inference_time_scaling.py"
       - "minecraft_mod_ai/progress_aware_tool_loop.py"
       - "minecraft_mod_ai/custom_module_generator.py"
       - "minecraft_mod_ai/coder_max_efficiency_contract.py"
@@ -25,6 +26,7 @@ on:
     paths:
       - "minecraft_mod_ai/custom_generation_search_contract.py"
       - "minecraft_mod_ai/generation_verification_contract.py"
+      - "minecraft_mod_ai/inference_time_scaling.py"
       - "minecraft_mod_ai/progress_aware_tool_loop.py"
       - "minecraft_mod_ai/custom_module_generator.py"
       - "minecraft_mod_ai/coder_max_efficiency_contract.py"
