@@ -3081,6 +3081,12 @@ class CompleteProductionOrchestrator:
     def _full_gradle_build_receipt_passed(
         build_report: dict[str, Any] | None,
     ) -> bool:
+        """Require a successful receipt for the Gradle `build` task itself.
+
+        Optimized validation may label the command `incremental_build` because it
+        skips `clean`, but it is still release-grade only when its recorded argv
+        proves that the full Gradle `build` task actually ran.
+        """
         if not isinstance(build_report, dict) or build_report.get('status') != 'PASS':
             return False
         for command in build_report.get('commands', ()):
