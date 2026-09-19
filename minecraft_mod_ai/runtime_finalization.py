@@ -99,7 +99,6 @@ def finalize_runtime() -> None:
         from .mcp_schema_integrity_contract import install as install_mcp_schema_integrity
         from .mcp_transport_pool import install_agent_mcp_transport_pool
         from .model_output_atomicity_contract import assert_installed as assert_model_output_atomicity
-        from .model_output_atomicity_contract import install as install_model_output_atomicity
         from .model_prefetch_resilience import install as install_prefetch_resilience
         from .model_tool_alias_permission_policy import install as install_model_tool_alias_permissions
         from .planner_design_readiness_contract import install as install_planner_design_readiness
@@ -211,7 +210,6 @@ def finalize_runtime() -> None:
             model_router_module=model_router,
         )
 
-        install_model_output_atomicity(model_router_module=model_router)
         assert_model_output_atomicity(model_router_module=model_router)
 
         # progress_aware_tool_loop owns mutation authority, repair transitions, verifier
