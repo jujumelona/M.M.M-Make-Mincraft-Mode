@@ -1,41 +1,15 @@
 from __future__ import annotations
 
-from functools import wraps
-from types import SimpleNamespace
+from dataclasses import dataclass
 
 import pytest
 
+from minecraft_mod_ai import production_tools
 from minecraft_mod_ai import retrieval_cpu_budget_contract as policy
+from minecraft_mod_ai import small_model_hybrid_search_contract as hybrid
 from minecraft_mod_ai.model_adapters import embedding as embedding_module
 from minecraft_mod_ai.model_adapters import reranker as reranker_module
 from minecraft_mod_ai.model_adapters.base import AdapterConfig, ModelConfigurationError
-
-
-class _Explorer:
-    def __init__(self) -> None:
-        self.calls: list[dict[str, object]] = []
-
-    def explore(self, query: str, **kwargs):
-        self.calls.append({"query": query, **kwargs})
-        return self.calls[-1]
-
-
-def _wrapped_search_chain():
-    def lexical(index_path, query):
-        return {"mode": "lexical", "index_path": index_path, "query": query}
-
-    @wraps(lexical)
-    def hybrid(index_path, query):
-        return {"mode": "dense", "index_path": index_path, "query": query}
-
-    hybrid._mmm_small_model_hybrid_code_rag = True  # type: ignore[attr-defined]
-
-    @wraps(hybrid)
-    def demand_driven(index_path, query):
-        return hybrid(index_path, query)
-
-    demand_driven._mmm_demand_driven_dense_pre_design = True  # type: ignore[attr-defined]
-    return lexical, demand_driven
 
 
 def _retrieval_config(*, role: str, adapter: str, model_id: str) -> AdapterConfig:
@@ -48,52 +22,94 @@ def _retrieval_config(*, role: str, adapter: str, model_id: str) -> AdapterConfi
     )
 
 
-def test_repository_grounding_never_implicitly_loads_dense_models() -> None:
-    explorer = _Explorer()
+def test_dense_cpu_retrieval_requires_explicit_opt_in(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_RAG_ENABLE_CPU_DENSE", raising=False)
+    assert policy._dense_opted_in() is False
 
-    result = policy._lexical_repository_exploration(
-        explorer,
-        "register custom block",
-        diagnostics=("src/main/java/example/Mod.java",),
-        line_budget=96,
-        degraded=[],
-        lane="task",
+    monkeypatch.setenv("MMM_RAG_ENABLE_CPU_DENSE", "1")
+    assert policy._dense_opted_in() is True
+
+
+def test_hybrid_modes_are_source_owned_lexical_without_opt_in(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_RAG_ENABLE_CPU_DENSE", raising=False)
+
+    assert hybrid._modes("exact_symbol", True, True) == (
+        (False, False, "lexical"),
+    )
+    assert hybrid._modes("dependency", True, True) == (
+        (False, False, "lexical+relations"),
+    )
+    assert hybrid._modes("global", True, True) == (
+        (False, False, "lexical+global-relations"),
     )
 
-    assert result["semantic"] is False
-    assert result["rerank"] is False
-    assert result["diagnostic_paths"] == ("src/main/java/example/Mod.java",)
 
-
-def test_pre_design_dense_wrappers_unwrap_to_lexical_owner() -> None:
-    lexical, current = _wrapped_search_chain()
-
-    assert policy._lexical_pre_design_owner(current) is lexical
-
-
-def test_install_defaults_to_cheap_retrieval(monkeypatch) -> None:
+def test_hybrid_centroid_adaptation_does_not_touch_dense_backend_without_opt_in(
+    monkeypatch,
+) -> None:
     monkeypatch.delenv("MMM_RAG_ENABLE_CPU_DENSE", raising=False)
-    lexical, current = _wrapped_search_chain()
-    repository_grounding = SimpleNamespace(_explore_with_degraded_fallback=object())
-    pre_design = SimpleNamespace(_search_code_index=current)
+    monkeypatch.setattr(
+        hybrid,
+        "_adapt_query_vector_dense",
+        lambda *args, **kwargs: pytest.fail("dense adaptation must not run"),
+    )
 
-    policy.install(repository_grounding, pre_design)
-
-    assert repository_grounding._explore_with_degraded_fallback is policy._lexical_repository_exploration
-    assert pre_design._search_code_index is lexical
+    assert hybrid.adapt_query_vector(object(), "query", ["hit"]) == []
 
 
-def test_explicit_dense_opt_in_preserves_existing_paths(monkeypatch) -> None:
-    monkeypatch.setenv("MMM_RAG_ENABLE_CPU_DENSE", "1")
-    _lexical, current = _wrapped_search_chain()
-    grounding_owner = object()
-    repository_grounding = SimpleNamespace(_explore_with_degraded_fallback=grounding_owner)
-    pre_design = SimpleNamespace(_search_code_index=current)
+def test_production_search_forces_lexical_without_opt_in(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("MMM_RAG_ENABLE_CPU_DENSE", raising=False)
+    captured: dict[str, object] = {}
 
-    policy.install(repository_grounding, pre_design)
+    @dataclass
+    class Receipt:
+        result_count: int = 0
 
-    assert repository_grounding._explore_with_degraded_fallback is grounding_owner
-    assert pre_design._search_code_index is current
+    class Result:
+        hits = ()
+        receipt = Receipt()
+
+    class FakeIndex:
+        def __init__(self, target):
+            captured["target"] = target
+
+        def search_with_receipt(
+            self,
+            query,
+            *,
+            limit,
+            router,
+            semantic,
+            rerank,
+            required_metadata,
+        ):
+            captured.update(
+                {
+                    "query": query,
+                    "limit": limit,
+                    "router": router,
+                    "semantic": semantic,
+                    "rerank": rerank,
+                    "required_metadata": required_metadata,
+                }
+            )
+            return Result()
+
+    monkeypatch.setattr(production_tools, "ProjectRAGIndex", FakeIndex)
+    service = production_tools.ProductionToolService(workspace_root=tmp_path)
+    result = service.search_code_rag(
+        "find symbol",
+        semantic=True,
+        rerank=True,
+    )
+
+    assert result["hits"] == []
+    assert captured["semantic"] is False
+    assert captured["rerank"] is False
+    assert captured["router"] is None
 
 
 def test_embedding_loader_fails_closed_before_dependency_or_model_load(monkeypatch) -> None:
