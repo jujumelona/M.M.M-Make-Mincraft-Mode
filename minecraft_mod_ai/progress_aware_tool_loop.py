@@ -2348,15 +2348,11 @@ def _generate_turn_with_context_recovery(
         if callable(declared_accounting)
         else None
     )
-    if callable(exact_accounting):
-        accounting = exact_accounting(turn_request)
-        fitted = (
-            tuple(messages)
-            if accounting.input_tokens < accounting.context_tokens
-            else fit_messages_to_context(messages, config=config, tools=request.tools)
-        )
-    else:
-        fitted = fit_messages_to_context(messages, config=config, tools=request.tools)
+    # Canonical fitting is not only an overflow fallback: it removes duplicated
+    # implementation receipts and bounds exact-source seed data on every small-model
+    # turn. Exact accounting must never bypass that semantic compaction merely because
+    # the unprojected prompt happens to fit inside the runtime slot.
+    fitted = fit_messages_to_context(messages, config=config, tools=request.tools)
     _replace_live_messages(messages, fitted)
     turn_request = replace(turn_request, messages=tuple(messages))
 
