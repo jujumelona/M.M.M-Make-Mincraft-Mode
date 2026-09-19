@@ -447,3 +447,12 @@ def test_checkpoint_miss_replaces_stale_package_targets(tmp_path) -> None:
     assert _replace_stale_directory_target(stale_dir, rebuild_dir) == "dir-ok"
     assert not (stale_dir / "partial").exists()
     assert (stale_dir / "complete").read_text(encoding="utf-8") == "ok"
+
+
+def test_generation_executor_quiesces_mutating_workers_before_return() -> None:
+    source = inspect.getsource(CompleteProductionOrchestrator._execute_generation_work)
+
+    assert "run_with_model_execution_deadline" in source
+    assert "time.monotonic() + lease_seconds" in source
+    assert "shutdown(wait=False" not in source
+    assert source.count("shutdown(wait=True, cancel_futures=True)") == 5
