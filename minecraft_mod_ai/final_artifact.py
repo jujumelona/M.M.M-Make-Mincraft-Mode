@@ -295,6 +295,192 @@ def verify_runtime_artifact_binding(
     }
 
 
+def _debug_java_code_surface(source: str) -> tuple[str, str]:
+    """Return commentless source plus executable-token surface for deterministic checks."""
+
+    comments = re.compile(r"//[^\\n]*|/\\*.*?\\*/", re.DOTALL)
+    commentless = comments.sub(" ", source)
+    literals = re.compile(
+        r'"(?:\\\\.|[^"\\\\])*"|\\'(?:\\\\.|[^\\'\\\\])*\\'',
+        re.DOTALL,
+    )
+    code = literals.sub(" ", commentless)
+    return commentless, code
+
+
+def _debug_host_symbol_used(code: str, symbol: Mapping[str, Any]) -> bool:
+    owner = str(symbol.get("owner") or "").strip()
+    name = str(symbol.get("name") or "").strip()
+    kind = str(symbol.get("kind") or "").strip().casefold()
+    if not owner or not name or kind not in {"method", "field"}:
+        return False
+
+    owner_simple = owner.rsplit(".", 1)[-1].split("$", 1)[0]
+    static_import = bool(
+        re.search(
+            rf"\\bimport\\s+static\\s+{re.escape(owner)}\\.{re.escape(name)}\\s*;",
+            code,
+        )
+    )
+    if kind == "method":
+        if re.search(
+            rf"\\b{re.escape(owner_simple)}\\s*\\.\\s*{re.escape(name)}\\s*\\(",
+            code,
+        ):
+            return True
+        return bool(
+            static_import
+            and re.search(rf"(?<![\\w.]){re.escape(name)}\\s*\\(", code)
+        )
+
+    if re.search(
+        rf"\\b{re.escape(owner_simple)}\\s*\\.\\s*{re.escape(name)}\\b",
+        code,
+    ):
+        return True
+    return bool(
+        static_import and re.search(rf"(?<![\\w.]){re.escape(name)}\\b", code)
+    )
+
+
+def verify_debug_fixture_source(
+    project_root: str | Path,
+    *,
+    source_contract: Mapping[str, Any] | None,
+    host_facts_json: str,
+) -> dict[str, Any]:
+    """Prove the Debug fixture's observable source semantics against host facts."""
+
+    findings: list[str] = []
+    contract = source_contract if isinstance(source_contract, Mapping) else {}
+    if contract.get("schema_version") != "mmm/debug-source-contract-v1":
+        findings.append("debug source contract is missing or has an unsupported schema")
+
+    relative_path = str(contract.get("path") or "").strip()
+    identifier = str(contract.get("identifier") or "").strip()
+    required_keys_raw = contract.get("required_host_symbol_keys")
+    forbidden_raw = contract.get("forbidden_lifecycle_symbols")
+    required_keys = (
+        tuple(str(value).strip() for value in required_keys_raw if str(value).strip())
+        if isinstance(required_keys_raw, Sequence)
+        and not isinstance(required_keys_raw, (str, bytes, bytearray))
+        else ()
+    )
+    forbidden = (
+        tuple(str(value).strip() for value in forbidden_raw if str(value).strip())
+        if isinstance(forbidden_raw, Sequence)
+        and not isinstance(forbidden_raw, (str, bytes, bytearray))
+        else ()
+    )
+    if not relative_path or Path(relative_path).is_absolute() or ".." in Path(relative_path).parts:
+        findings.append("debug source contract path is unsafe or empty")
+    if not identifier:
+        findings.append("debug source contract identifier is empty")
+    if not required_keys:
+        findings.append("debug source contract has no required host symbols")
+
+    try:
+        host_facts = json.loads(host_facts_json)
+    except (TypeError, json.JSONDecodeError):
+        host_facts = {}
+        findings.append("platform host facts are missing or malformed")
+    api_symbols = host_facts.get("api_symbols") if isinstance(host_facts, Mapping) else None
+    if not isinstance(api_symbols, Mapping):
+        api_symbols = {}
+        findings.append("platform host facts contain no api_symbols map")
+
+    root = Path(project_root).expanduser().resolve()
+    target: Path | None = None
+    source = ""
+    source_sha256 = ""
+    if relative_path and not findings[:1]:
+        candidate = root / relative_path
+        safe = _safe_existing_file(candidate)
+        if safe is None:
+            findings.append("debug source target is missing, unsafe, or not a regular file")
+        else:
+            try:
+                safe.relative_to(root)
+            except ValueError:
+                findings.append("debug source target escaped the project root")
+            else:
+                target = safe
+                try:
+                    source = safe.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    findings.append("debug source target is not readable UTF-8")
+                else:
+                    source_sha256 = "sha256:" + hashlib.sha256(
+                        source.encode("utf-8")
+                    ).hexdigest()
+
+    symbol_results: dict[str, bool] = {}
+    identifier_present = False
+    lifecycle_clear = False
+    if source:
+        commentless, code = _debug_java_code_surface(source)
+        identifier_present = bool(
+            re.search(
+                rf'"{re.escape(identifier)}"',
+                commentless,
+            )
+        )
+        if not identifier_present:
+            findings.append(
+                f"debug source does not contain the exact registry identifier {identifier!r}"
+            )
+
+        for key in required_keys:
+            symbol = api_symbols.get(key)
+            used = isinstance(symbol, Mapping) and _debug_host_symbol_used(code, symbol)
+            symbol_results[key] = bool(used)
+            if not isinstance(symbol, Mapping):
+                findings.append(f"required host symbol {key!r} is absent from platform facts")
+            elif not used:
+                findings.append(f"debug source does not use required host symbol {key!r}")
+
+        lifecycle_hits = [
+            token
+            for token in forbidden
+            if token and re.search(rf"\\b{re.escape(token)}\\b", code)
+        ]
+        lifecycle_clear = not lifecycle_hits
+        if lifecycle_hits:
+            findings.append(
+                "debug source introduces forbidden lifecycle surface: "
+                + ", ".join(sorted(lifecycle_hits))
+            )
+
+    passed = bool(
+        target is not None
+        and source
+        and source_sha256
+        and identifier_present
+        and required_keys
+        and all(symbol_results.get(key) is True for key in required_keys)
+        and lifecycle_clear
+        and not findings
+    )
+    return {
+        "schema_version": "mmm/debug-source-acceptance-v1",
+        "status": "PASS" if passed else "BLOCKED",
+        "source_path": relative_path,
+        "source_sha256": source_sha256,
+        "identifier": identifier,
+        "required_host_symbol_keys": list(required_keys),
+        "symbol_results": symbol_results,
+        "forbidden_lifecycle_symbols": list(forbidden),
+        "identifier_present": identifier_present,
+        "lifecycle_clear": lifecycle_clear,
+        "host_revision": (
+            str(host_facts.get("host_revision") or "")
+            if isinstance(host_facts, Mapping)
+            else ""
+        ),
+        "findings": findings,
+    }
+
+
 def build_debug_fixture_coverage_receipt(
     *,
     proposal_hash: str,
@@ -304,6 +490,7 @@ def build_debug_fixture_coverage_receipt(
     build_report: Mapping[str, Any] | None,
     jar_validation: Mapping[str, Any] | None,
     gametest_passed: bool,
+    observable_acceptance: Mapping[str, Any] | None,
     unresolved_gates: tuple[str, ...] | list[str],
 ) -> dict[str, Any]:
     """Bind the host-owned Debug fixture to real deterministic verification evidence.
@@ -351,12 +538,20 @@ def build_debug_fixture_coverage_receipt(
             for item in jar_validation.get("findings", [])
         )
     )
+    observable_passed = bool(
+        isinstance(observable_acceptance, Mapping)
+        and observable_acceptance.get("status") == "PASS"
+        and isinstance(observable_acceptance.get("source_sha256"), str)
+        and str(observable_acceptance.get("source_sha256") or "").startswith("sha256:")
+        and not observable_acceptance.get("findings")
+    )
     passed = bool(
         statements
         and source_passed
         and build_passed
         and jar_passed
         and gametest_passed is True
+        and observable_passed
         and not unresolved
     )
 
@@ -383,7 +578,13 @@ def build_debug_fixture_coverage_receipt(
             "build": build_passed,
             "jar_validation": jar_passed,
             "gametest": gametest_passed is True,
+            "observable_acceptance": observable_passed,
         },
+        "debug_source_acceptance": (
+            dict(observable_acceptance)
+            if isinstance(observable_acceptance, Mapping)
+            else {"status": "BLOCKED", "findings": ["missing observable acceptance receipt"]}
+        ),
     }
     core["coverage_sha256"] = _canonical_sha256(core)
     return core
