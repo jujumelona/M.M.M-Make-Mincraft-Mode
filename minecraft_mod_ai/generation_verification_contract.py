@@ -87,6 +87,8 @@ def classify_generation_verification(
     )
     compile_backed_java = candidate_receipt.get("compile_backed_java") is True
     target_compile_required = "target_compile" in normalized_gate_keys
+    java_target = receipt_target_path.lower().endswith(".java")
+    compile_required = target_compile_required or compile_backed_java
     downstream_required_gate = str(
         candidate_receipt.get("downstream_required_gate") or ""
     ).strip()
@@ -97,10 +99,14 @@ def classify_generation_verification(
         and termination_reason == "VERIFICATION_PASSED"
         and not downstream_required_gate
         and (
-            not compile_backed_java
+            (
+                not compile_required
+                and not compile_backed_java
+            )
             or (
                 target_compile_required
-                and receipt_target_path.lower().endswith(".java")
+                and compile_backed_java
+                and java_target
                 and verification_tool == "target_compile"
             )
         )
@@ -111,7 +117,7 @@ def classify_generation_verification(
         and termination_reason == "VERIFICATION_DEFERRED_TO_TARGET_COMPILE"
         and compile_backed_java
         and target_compile_required
-        and receipt_target_path.lower().endswith(".java")
+        and java_target
         and verification_tool == "target_compile"
         and downstream_required_gate == "target_compile"
     )
@@ -154,6 +160,8 @@ def classify_generation_verification(
         "target_compile_required": target_compile_required,
         "downstream_required_gate": downstream_required_gate or None,
         "compile_backed_java": compile_backed_java,
+        "java_target": java_target,
+        "compile_required": compile_required,
         "receipt_target_path": receipt_target_path or None,
         "receipt_target_matches": receipt_target_matches,
         "receipt_semantics_valid": receipt_semantics_valid,
