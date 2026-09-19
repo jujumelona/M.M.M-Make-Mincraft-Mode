@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from minecraft_mod_ai import custom_generation_search_contract as custom_search
+from minecraft_mod_ai import java_lsp
 from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
 
 
@@ -161,6 +162,41 @@ def test_candidate_search_fails_closed_when_every_verifier_is_unusable() -> None
             evaluations,
             verifier_index=4,
         )
+
+
+def test_candidate_verifier_closes_jdt_session(tmp_path, monkeypatch) -> None:
+    class _FakeService:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def diagnostics(self, project_root, *, relative_files, timeout_seconds):
+            assert project_root == tmp_path
+            assert relative_files == ("src/main/java/demo/Test.java",)
+            assert timeout_seconds == 60
+            return {
+                "status": "PASS",
+                "diagnostics": {},
+            }
+
+        def close(self) -> None:
+            self.closed = True
+
+    service = _FakeService()
+    monkeypatch.setenv("MMM_CUSTOM_CANDIDATE_JDT", "auto")
+    monkeypatch.setattr(java_lsp, "JavaLanguageService", lambda: service)
+
+    _score, verifier = custom_search._verify_candidate(
+        tmp_path,
+        {
+            "touched_paths": ["src/main/java/demo/Test.java"],
+            "operation_count": 1,
+            "runtime_tests": [],
+        },
+    )
+
+    assert service.closed is True
+    assert verifier["jdt_status"] == "AVAILABLE"
+    assert verifier["jdt_error_count"] == 0
 
 
 def test_candidate_verifier_uses_canonical_diagnostic_contract() -> None:
