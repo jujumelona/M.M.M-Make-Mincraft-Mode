@@ -11,6 +11,8 @@ _INITIALIZED = False
 
 
 def initialize_runtime() -> None:
+    """Compose, validate, and finalize the package runtime exactly once."""
+
     global _INITIALIZED
     if _INITIALIZED:
         return
@@ -18,11 +20,27 @@ def initialize_runtime() -> None:
         if _INITIALIZED:
             return
         _install_runtime_contracts()
+        _validate_runtime_template_authority()
+        from .runtime_finalization import finalize_runtime
+
+        finalize_runtime()
         _INITIALIZED = True
 
 
 def runtime_initialized() -> bool:
     return _INITIALIZED
+
+
+def _validate_runtime_template_authority() -> None:
+    """Validate package-owned runtime templates before late runtime finalization."""
+
+    from .task_template_catalog import RUNTIME_TEMPLATE_ROOT
+    from .template_contract_validation import runtime_consumer_roots, validate_catalog
+
+    validate_catalog(
+        RUNTIME_TEMPLATE_ROOT,
+        consumer_roots=runtime_consumer_roots(),
+    )
 
 
 def _install_runtime_contracts() -> None:
