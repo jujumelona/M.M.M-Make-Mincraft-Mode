@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import inspect
+
+import pytest
 from types import SimpleNamespace
 
 from minecraft_mod_ai.complete_orchestrator import (
@@ -11,6 +13,7 @@ from minecraft_mod_ai.complete_orchestrator import (
     _persisted_runtime_evidence,
     _runtime_verification_passed,
     _stable_payload_sha256,
+    _validate_external_execution_preflight,
 )
 
 
@@ -316,3 +319,45 @@ def test_execute_checkpoints_publish_and_download_side_effects() -> None:
     assert "'package-downloadable'" in source
     assert "final-mod-download-" in source
     assert "validate_cached=self._cached_download_bundle_exists" in source
+
+
+def test_external_runtime_preflight_fails_before_generation_on_missing_inputs() -> None:
+    proposal = SimpleNamespace(external_runtime_required=True)
+    options = SimpleNamespace(
+        source_only=False,
+        run_runtime=False,
+        run_client=False,
+        run_mineflayer=False,
+        run_visual_review=False,
+        eula_accepted=False,
+        server_launcher=None,
+        playtest_actions=(),
+        screenshot_paths=(),
+    )
+
+    with pytest.raises(Exception, match="external runtime verification"):
+        _validate_external_execution_preflight(proposal, options)
+
+
+def test_external_runtime_preflight_allows_optional_checks_to_be_disabled() -> None:
+    proposal = SimpleNamespace(external_runtime_required=False)
+    options = SimpleNamespace(
+        source_only=False,
+        run_runtime=False,
+        run_client=False,
+        run_mineflayer=False,
+        run_visual_review=False,
+        eula_accepted=False,
+        server_launcher=None,
+        playtest_actions=(),
+        screenshot_paths=(),
+    )
+
+    _validate_external_execution_preflight(proposal, options)
+
+
+def test_source_only_skips_external_runtime_preflight() -> None:
+    _validate_external_execution_preflight(
+        SimpleNamespace(external_runtime_required=True),
+        SimpleNamespace(source_only=True),
+    )
