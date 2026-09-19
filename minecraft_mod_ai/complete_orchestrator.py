@@ -1521,10 +1521,32 @@ class CompleteProductionOrchestrator:
                 json.dumps(reuse_manifest, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
                 encoding='utf-8',
             )
+        normalized_unresolved = tuple(sorted(set(unresolved)))
         release_ready = (
-            not unresolved
+            not normalized_unresolved
             and quality_passed
             and coverage_receipt.get('status') == 'PASS'
+        )
+        emit_root_cause(
+            'release_gate_evaluation',
+            stage='verify',
+            operation='evaluate_release_readiness',
+            gate='release_readiness',
+            result='PASS' if release_ready else 'FAIL',
+            reason=(
+                ''
+                if release_ready
+                else 'Required release evidence remains unresolved.'
+            ),
+            details={
+                'unresolved_gates': list(normalized_unresolved),
+                'quality_passed': quality_passed,
+                'coverage_status': coverage_receipt.get('status'),
+                'gametest_receipt_passed': self._gametest_receipt_passed(build, spec),
+                'gametest_mode': build.get('gametest_mode') if isinstance(build, dict) else None,
+                'gametest_task': build.get('gametest_task') if isinstance(build, dict) else None,
+                'gametest_report': build.get('gametest_report') if isinstance(build, dict) else None,
+            },
         )
         if options.publish_provider and (not release_ready):
             raise CompleteProductionError(
