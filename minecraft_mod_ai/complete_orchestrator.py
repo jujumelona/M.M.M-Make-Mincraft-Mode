@@ -2424,7 +2424,17 @@ class CompleteProductionOrchestrator:
         ledger.raise_if_cancelled()
         if current['state'] != 'running':
             ledger.begin(node.node_id, worker_id='complete-orchestrator')
-        claim_attempt, claim_owner = _snapshot_claim(ledger, node.node_id)
+        running = ledger.task(node.node_id)
+        claim_attempt = running.get('attempt')
+        claim_owner = running.get('lease_owner')
+        claim_fenced = (
+            type(claim_attempt) is int
+            and claim_attempt >= 1
+            and isinstance(claim_owner, str)
+            and bool(claim_owner)
+        )
+        if claim_fenced:
+            claim_attempt, claim_owner = _snapshot_claim(ledger, node.node_id)
 
         receipt: dict[str, Any] | None = None
         committed = False
@@ -2445,15 +2455,25 @@ class CompleteProductionOrchestrator:
                     f'Work node {node.node_id} returned a non-object receipt.'
                 )
             ledger.raise_if_cancelled()
-            _commit_success(
-                ledger,
-                node.node_id,
-                receipt,
-                attempt=claim_attempt,
-                owner=claim_owner,
-                shared_index=shared_index,
-                index_error_type=CompleteProductionError,
-            )
+            if claim_fenced:
+                _commit_success(
+                    ledger,
+                    node.node_id,
+                    receipt,
+                    attempt=claim_attempt,
+                    owner=claim_owner,
+                    shared_index=shared_index,
+                    index_error_type=CompleteProductionError,
+                )
+            else:
+                ledger.succeed(node.node_id, receipt)
+                if shared_index is not None:
+                    from .scheduler_parallel_safety_contract import _receipt_touched_paths
+
+                    touched = _receipt_touched_paths(receipt)
+                    if touched:
+                        shared_index.update_files(touched)
+                        shared_index.write_manifest()
             committed = True
             if on_commit is not None:
                 on_commit(receipt)
@@ -2469,7 +2489,7 @@ class CompleteProductionOrchestrator:
 
         project_root = (
             getattr(shared_index, 'root', None)
-            if node.resource_class == 'commit' and shared_index is not None
+            if getattr(node, 'resource_class', '') == 'commit' and shared_index is not None
             else None
         )
         try:
@@ -2491,13 +2511,20 @@ class CompleteProductionOrchestrator:
                         reason=f'{type(abort_exc).__name__}: {abort_exc}',
                         exc=abort_exc,
                     )
-            _fenced_fail(
-                ledger,
-                node.node_id,
-                attempt=claim_attempt,
-                owner=claim_owner,
-                error=exc,
-            )
+            if claim_fenced:
+                _fenced_fail(
+                    ledger,
+                    node.node_id,
+                    attempt=claim_attempt,
+                    owner=claim_owner,
+                    error=exc,
+                )
+            else:
+                try:
+                    if ledger.task(node.node_id)['state'] == 'running':
+                        ledger.fail(node.node_id, f'{type(exc).__name__}: {exc}')
+                except WorkGraphError:
+                    pass
             emit_root_cause(
                 'orchestrator_node_action_failure',
                 stage=node.stage,
