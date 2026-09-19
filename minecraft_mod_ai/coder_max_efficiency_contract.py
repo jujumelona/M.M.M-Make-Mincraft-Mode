@@ -229,6 +229,10 @@ def _parallel_generate(
             raise RuntimeError("Custom generation search produced no candidate.")
 
         evaluations = _evaluate_candidates(candidates, search_module=search_module)
+        evaluations = search_module._require_selectable_evaluations(
+            evaluations,
+            verifier_index=5,
+        )
         evaluations.sort(
             key=lambda item: (
                 -item[0],
