@@ -193,8 +193,10 @@ def test_cached_build_requires_real_build_command_and_requested_gametest(tmp_pat
 
 
 def test_required_runtime_needs_live_client_playtest_and_visual_evidence() -> None:
+    artifact_sha = "sha256:" + "a" * 64
     runtime = {
         "status": "PASS",
+        "artifact_sha256": artifact_sha,
         "server": {"server_running": True},
         "client": {"client_running": True},
     }
@@ -203,7 +205,17 @@ def test_required_runtime_needs_live_client_playtest_and_visual_evidence() -> No
         "interaction_count": 1,
         "assertion_count": 1,
     }
-    visual = {"status": "PASS"}
+    visual = {
+        "status": "PASS",
+        "artifact_sha256": artifact_sha,
+        "runtime_screenshots": [
+            {
+                "sha256": "sha256:" + "b" * 64,
+                "server_running": True,
+                "client_running": True,
+            }
+        ],
+    }
 
     assert _runtime_verification_passed(
         required=True,
@@ -227,7 +239,7 @@ def test_required_runtime_needs_live_client_playtest_and_visual_evidence() -> No
         required=True,
         runtime_receipt=runtime,
         playtest_receipt=playtest,
-        visual_receipt={"status": "FAIL"},
+        visual_receipt={**visual, "status": "FAIL"},
     )
 
 
@@ -676,3 +688,53 @@ def test_parallel_generation_receipts_sort_deterministically() -> None:
 
     assert forward == reverse
     assert [item["module_id"] for item in forward] == ["a", "a", "b"]
+
+
+def test_runtime_visual_evidence_rejects_unbound_or_stale_receipts() -> None:
+    artifact_sha = "sha256:" + "c" * 64
+    runtime = {
+        "status": "PASS",
+        "artifact_sha256": artifact_sha,
+        "server": {"server_running": True},
+        "client": {"client_running": True},
+    }
+    playtest = {"status": "PASS", "interaction_count": 1, "assertion_count": 1}
+    base_visual = {
+        "status": "PASS",
+        "artifact_sha256": artifact_sha,
+        "runtime_screenshots": [
+            {
+                "sha256": "sha256:" + "d" * 64,
+                "server_running": True,
+                "client_running": True,
+            }
+        ],
+    }
+
+    assert not _runtime_verification_passed(
+        required=True,
+        runtime_receipt=runtime,
+        playtest_receipt=playtest,
+        visual_receipt={**base_visual, "artifact_sha256": "sha256:" + "e" * 64},
+    )
+    assert not _runtime_verification_passed(
+        required=True,
+        runtime_receipt=runtime,
+        playtest_receipt=playtest,
+        visual_receipt={**base_visual, "runtime_screenshots": []},
+    )
+    assert not _runtime_verification_passed(
+        required=True,
+        runtime_receipt=runtime,
+        playtest_receipt=playtest,
+        visual_receipt={
+            **base_visual,
+            "runtime_screenshots": [
+                {
+                    "sha256": "sha256:" + "d" * 64,
+                    "server_running": True,
+                    "client_running": False,
+                }
+            ],
+        },
+    )
