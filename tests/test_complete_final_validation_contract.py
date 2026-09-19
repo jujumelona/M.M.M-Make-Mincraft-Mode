@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import zipfile
 
 import pytest
@@ -42,6 +43,113 @@ def _jdt_error_receipt() -> dict:
             ]
         },
     }
+
+
+def test_debug_fixture_prepare_binds_generated_token_into_host_runtime(
+    tmp_path,
+) -> None:
+    root = tmp_path / "project"
+    package = root / "src/main/java/dev/mmm/debugfixture"
+    metadata = root / ".minecraft_ai"
+    package.mkdir(parents=True)
+    metadata.mkdir(parents=True)
+
+    main_source = package / "MmmDebugFixtureMod.java"
+    main_source.write_text(
+        """
+package dev.mmm.debugfixture;
+
+public final class MmmDebugFixtureMod {
+    public void onInitialize() {
+    }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    gametest_source = package / "MmmDebugFixtureModGameTests.java"
+    gametest_source.write_text(
+        """
+package dev.mmm.debugfixture;
+
+public final class MmmDebugFixtureModGameTests {
+    public void generatedRegistriesAreLive(Object context) {
+        context.succeed();
+    }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (metadata / "fabric-template-receipt.json").write_text(
+        json.dumps(
+            {
+                "runtime_contract": {
+                    "main_source": (
+                        "src/main/java/dev/mmm/debugfixture/MmmDebugFixtureMod.java"
+                    )
+                },
+                "gametest_contract": {
+                    "source": (
+                        "src/main/java/dev/mmm/debugfixture/"
+                        "MmmDebugFixtureModGameTests.java"
+                    )
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    module = SimpleNamespace(
+        module_id="debug_token",
+        config={
+            "observable_source_contract": {
+                "schema_version": "mmm/debug-source-contract-v1",
+                "binding_field": "DEBUG_TOKEN",
+            }
+        },
+    )
+    proposal = SimpleNamespace(
+        schema_version="mmm/complete-proposal-v1",
+        game_design={
+            "mode": "debug_fixture",
+            "fixture": {"module_id": "debug_token"},
+        },
+        modules=(module,),
+        base_proposal=SimpleNamespace(
+            spec=SimpleNamespace(
+                package_name="dev.mmm.debugfixture",
+                mod_id="mmm_debug_fixture",
+            )
+        ),
+    )
+
+    bound = CompleteProductionOrchestrator._bind_debug_fixture_runtime(
+        proposal,
+        root,
+    )
+
+    assert bound == root.resolve()
+    main_text = main_source.read_text(encoding="utf-8")
+    gametest_text = gametest_source.read_text(encoding="utf-8")
+    assert "MMM_DEBUG_FIXTURE_RUNTIME_BINDING" in main_text
+    assert "DebugToken.DEBUG_TOKEN == null" in main_text
+    assert "MMM_DEBUG_FIXTURE_REGISTRY_ASSERTION" in gametest_text
+    assert "DebugToken.DEBUG_TOKEN == null" in gametest_text
+
+    CompleteProductionOrchestrator._bind_debug_fixture_runtime(proposal, root)
+    assert (
+        main_source.read_text(encoding="utf-8").count(
+            "MMM_DEBUG_FIXTURE_RUNTIME_BINDING"
+        )
+        == 1
+    )
+    assert (
+        gametest_source.read_text(encoding="utf-8").count(
+            "MMM_DEBUG_FIXTURE_REGISTRY_ASSERTION"
+        )
+        == 1
+    )
 
 
 def test_final_source_validation_failure_cannot_be_marked_pass() -> None:
