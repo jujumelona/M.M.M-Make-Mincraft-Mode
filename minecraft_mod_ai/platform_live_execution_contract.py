@@ -32,6 +32,61 @@ def _uses_official_scaffold(adapter: Any) -> bool:
     )
 
 
+def prepare_official_fabric_project(
+    self: Any,
+    approved: Any,
+    *,
+    run_root: Path,
+    adapter: Any,
+    error_type: type[Exception],
+) -> Path:
+    """Prepare one fresh Fabric project from the authoritative provider scaffold."""
+
+    base = approved.base_proposal
+    base.approve(base.calculate_hash())
+    project_root = run_root / "base/workspaces" / base.spec.mod_id
+    if project_root.exists():
+        if _matches_live_target(self, project_root, base.spec, adapter):
+            self._write_base_proposal(project_root, base)
+            return project_root.resolve()
+        self._preserve_partial_project(project_root)
+
+    staging = project_root.with_name(f".{project_root.name}.staging")
+    if staging.exists():
+        self._preserve_partial_project(staging)
+    try:
+        receipt = bootstrap_fabric_project(
+            project_root=staging,
+            spec=base.spec,
+            adapter=adapter,
+            cache_root=run_root / ".cache/platform-bootstrap",
+        )
+    except FabricTemplateProviderError as exc:
+        raise error_type("Official Fabric project bootstrap failed: " + str(exc)) from exc
+
+    self._write_base_proposal(staging, base)
+    metadata = staging / ".minecraft_ai"
+    metadata.mkdir(parents=True, exist_ok=True)
+    (metadata / "fabric-template-receipt.json").write_text(
+        json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    try:
+        actual = adapter_from_project(staging)
+    except ValueError as exc:
+        raise error_type(
+            "Official Fabric bootstrap could not be rebound to the approved target: "
+            + str(exc)
+        ) from exc
+    if actual.minecraft_version != adapter.minecraft_version or actual.loader != adapter.loader:
+        raise error_type("Official Fabric bootstrap target changed after approval.")
+
+    if project_root.exists():
+        self._preserve_partial_project(project_root)
+    staging.replace(project_root)
+    return project_root.resolve()
+
+
 def install(orchestrator_module: Any) -> None:
     """Install official-scaffold project preparation and live migration behavior."""
     cls = orchestrator_module.CompleteProductionOrchestrator
@@ -71,61 +126,15 @@ def install(orchestrator_module: Any) -> None:
                 selection=selection,
             )
 
-        if existing_input is not None or not _uses_official_scaffold(adapter):
-            return original(
-                self,
-                approved,
-                run_root=run_root,
-                existing_input=existing_input,
-            )
-
-        base = approved.base_proposal
-        base.approve(base.calculate_hash())
-        project_root = run_root / "base/workspaces" / base.spec.mod_id
-        if project_root.exists():
-            if _matches_live_target(self, project_root, base.spec, adapter):
-                self._write_base_proposal(project_root, base)
-                return project_root.resolve()
-            self._preserve_partial_project(project_root)
-
-        staging = project_root.with_name(f".{project_root.name}.staging")
-        if staging.exists():
-            self._preserve_partial_project(staging)
-        try:
-            receipt = bootstrap_fabric_project(
-                project_root=staging,
-                spec=base.spec,
-                adapter=adapter,
-                cache_root=run_root / ".cache/platform-bootstrap",
-            )
-        except FabricTemplateProviderError as exc:
-            raise orchestrator_module.CompleteProductionError(
-                "Official Fabric project bootstrap failed: " + str(exc)
-            ) from exc
-
-        self._write_base_proposal(staging, base)
-        metadata = staging / ".minecraft_ai"
-        metadata.mkdir(parents=True, exist_ok=True)
-        (metadata / "fabric-template-receipt.json").write_text(
-            json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
+        # Fresh-project scaffold selection is source-owned by
+        # CompleteProductionOrchestrator._prepare_project. This late wrapper owns only
+        # existing-project migration semantics.
+        return original(
+            self,
+            approved,
+            run_root=run_root,
+            existing_input=existing_input,
         )
-        try:
-            actual = adapter_from_project(staging)
-        except ValueError as exc:
-            raise orchestrator_module.CompleteProductionError(
-                "Official Fabric bootstrap could not be rebound to the approved target: "
-                + str(exc)
-            ) from exc
-        if actual.minecraft_version != adapter.minecraft_version or actual.loader != adapter.loader:
-            raise orchestrator_module.CompleteProductionError(
-                "Official Fabric bootstrap target changed after approval."
-            )
-
-        if project_root.exists():
-            self._preserve_partial_project(project_root)
-        staging.replace(project_root)
-        return project_root.resolve()
 
     prepare_project._mmm_live_official_bootstrap = True
     cls._prepare_project = prepare_project
