@@ -43,7 +43,11 @@ def _canonical_hash(value: Any) -> str:
 
 
 def _command_is_full_gradle_build(item: Mapping[str, Any]) -> bool:
-    """Recognize a release-grade Gradle build receipt by executed task evidence."""
+    """Recognize a release-grade Gradle build receipt by executed task evidence.
+
+    Optimized builds may be labeled `incremental_build`; that label is accepted only
+    when the recorded argv proves the full Gradle `build` task actually executed.
+    """
 
     if item.get("exit_code") != 0 or item.get("timed_out") is True:
         return False
