@@ -1305,7 +1305,43 @@ class CompleteProductionOrchestrator:
             ),
         )
         if jar_validation.get('status') != 'PASS':
-            raise CompleteProductionError('Built JAR failed independent validation.')
+            raw_findings = jar_validation.get('findings')
+            findings = (
+                [item for item in raw_findings if isinstance(item, dict)]
+                if isinstance(raw_findings, list)
+                else []
+            )
+            compact_findings = [
+                {
+                    'code': str(item.get('code') or ''),
+                    'path': str(item.get('path') or ''),
+                    'message': str(item.get('message') or ''),
+                    'severity': str(item.get('severity') or ''),
+                }
+                for item in findings[:8]
+            ]
+            emit_root_cause(
+                'jar_validation_failed',
+                stage='verify',
+                operation='validate_jar',
+                gate='independent_jar_validation',
+                result='FAIL',
+                reason='Built JAR failed independent validation.',
+                details={
+                    'status': jar_validation.get('status'),
+                    'checks_run': jar_validation.get('checks_run'),
+                    'finding_count': len(findings),
+                    'findings': compact_findings,
+                },
+            )
+            summary = ' | '.join(
+                f"{item['code']}:{item['path']}:{item['message']}"
+                for item in compact_findings
+            )
+            raise CompleteProductionError(
+                'Built JAR failed independent validation.'
+                + (f' {summary}' if summary else '')
+            )
         self._succeed_work_node(ledger, 'validate-jar', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'PASS', 'jar_sha256': self._file_hash(jar_path), 'checks_run': jar_validation.get('checks_run', 0)})
         runtime_manager: MinecraftRuntimeManager | None = None
         try:
