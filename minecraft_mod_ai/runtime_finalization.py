@@ -73,8 +73,6 @@ def finalize_runtime() -> None:
         from .design_resolution_provenance_contract import install_design_resolution_provenance_contract
         from .evidence_first_pipeline_contract import install as install_evidence_first_pipeline
         from .evidence_obligation_contract import install_evidence_obligation_contract
-        from .execution_feedback_exception_scope_contract import install as install_execution_feedback_exception_scope
-        from .execution_feedback_owner_precision_contract import install as install_execution_feedback_owner_precision
         from .external_mcp_binding_concurrency_contract import install as install_external_mcp_binding_concurrency
         from .external_mcp_binding_contract import install as install_external_mcp_binding
         from .fabric_immutable_rebind_contract import install as install_fabric_immutable_rebind
@@ -163,8 +161,6 @@ def finalize_runtime() -> None:
             orchestrator_module=complete_orchestrator,
             template_module=planner_template_schema,
         )
-        install_execution_feedback_exception_scope(execution_feedback_replan_contract)
-        install_execution_feedback_owner_precision(execution_feedback_replan_contract)
         execution_feedback_replan_contract.install(
             orchestrator_module=complete_orchestrator,
             work_graph_module=work_graph,
