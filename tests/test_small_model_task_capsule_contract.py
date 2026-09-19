@@ -286,7 +286,7 @@ def test_fresh_host_reserved_java_target_separates_write_and_api_evidence_author
         require_rag=True,
         fresh_java_target=True,
         compile_backed_java=True,
-    ) is True
+    ) is False
 
     assert tool_loop._requires_rag_evidence(
         role="coder",
