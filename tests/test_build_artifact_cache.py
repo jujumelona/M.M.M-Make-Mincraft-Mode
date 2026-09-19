@@ -197,6 +197,11 @@ def test_build_locked_preserves_clean_build_evidence_and_rejects_bad_xml(
         calls.append((name, tuple(arguments)))
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text("clean\n", encoding="utf-8")
+        if name == "gametest_capabilities":
+            log_path.write_text(
+                "runGameTest - Runs server game tests\n",
+                encoding="utf-8",
+            )
         if name == "gametest":
             report = root / "build/gametest-report.xml"
             report.write_text(
