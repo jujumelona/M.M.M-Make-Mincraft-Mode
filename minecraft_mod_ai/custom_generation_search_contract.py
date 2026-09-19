@@ -256,6 +256,18 @@ def _capture_candidate(
 
 
 def _generation_verifier_tier(verifier: Mapping[str, Any]) -> int:
+    """Map exact host verification evidence to a strict admission tier."""
+
+    if (
+        str(verifier.get("verification_authority") or "").strip()
+        != "generation_tool_loop"
+        or str(verifier.get("source_status") or "").strip().upper()
+        != "SOURCE_GENERATED"
+        or verifier.get("receipt_target_matches") is not True
+        or verifier.get("receipt_semantics_valid") is not True
+    ):
+        return 0
+
     status = str(verifier.get("generation_status") or "").strip().upper()
     if status == "PASS":
         return 2
@@ -267,6 +279,23 @@ def _generation_verifier_tier(verifier: Mapping[str, Any]) -> int:
     ):
         return 1
     return 0
+
+
+def _candidate_rank_key(
+    *,
+    score: float,
+    candidate_index: int,
+    verifier: Mapping[str, Any],
+    patch_size: int,
+) -> tuple[int, float, int, int]:
+    """Order by verifier authority first, then local quality and deterministic ties."""
+
+    return (
+        -_generation_verifier_tier(verifier),
+        -float(score),
+        int(patch_size),
+        int(candidate_index),
+    )
 
 
 def _candidate_verifier_selectable(verifier: Mapping[str, Any]) -> bool:
@@ -317,10 +346,11 @@ def _verify_candidate(
 
     del candidate_root
     touched = [
-        str(value).replace("\\", "/")
+        str(value).replace("\\", "/").strip()
         for value in result.get("touched_paths", [])
-        if isinstance(value, str)
+        if isinstance(value, str) and str(value).strip()
     ]
+    touched_set = frozenset(touched)
     java_paths = tuple(
         sorted(path for path in touched if path.lower().endswith(".java"))
     )
@@ -346,11 +376,7 @@ def _verify_candidate(
     )
     source_status = str(result.get("status") or "").strip().upper()
     generation_receipt = result.get("generation_verification")
-    receipt = (
-        generation_receipt
-        if isinstance(generation_receipt, Mapping)
-        else {}
-    )
+    receipt = generation_receipt if isinstance(generation_receipt, Mapping) else {}
     receipt_valid = bool(
         receipt.get("schema_version") == "mmm/generation-verification-v1"
         and receipt.get("authority") == "generation_tool_loop"
@@ -360,20 +386,60 @@ def _verify_candidate(
         if receipt_valid
         else "MISSING"
     )
+    validation_status = str(
+        receipt.get("validation_status") or ""
+    ).strip().upper()
+    termination_reason = str(
+        receipt.get("termination_reason") or ""
+    ).strip()
+    verification_tool = str(receipt.get("verifier_tool") or "").strip()
+    receipt_target_path = (
+        str(receipt.get("target_path") or "").replace("\\", "/").strip()
+    )
+    receipt_target_matches = bool(
+        receipt_target_path and receipt_target_path in touched_set
+    )
+    compile_backed_java = receipt.get("compile_backed_java") is True
     target_compile_required = "target_compile" in required_gates
     downstream_required_gate = str(
         receipt.get("downstream_required_gate") or ""
     ).strip()
 
-    if source_status != "SOURCE_GENERATED" or not receipt_valid:
-        generation_status = "FAIL"
-    elif terminal_status == "PASS":
-        generation_status = "PASS"
-    elif (
+    pass_semantics = bool(
+        terminal_status == "PASS"
+        and validation_status == "PASS"
+        and termination_reason == "VERIFICATION_PASSED"
+        and not downstream_required_gate
+        and (
+            not compile_backed_java
+            or (
+                target_compile_required
+                and receipt_target_path.lower().endswith(".java")
+                and verification_tool == "target_compile"
+            )
+        )
+    )
+    deferred_semantics = bool(
         terminal_status == "DEFERRED_TO_TARGET_COMPILE"
+        and validation_status == "DEFERRED"
+        and termination_reason == "VERIFICATION_DEFERRED_TO_TARGET_COMPILE"
+        and compile_backed_java
         and target_compile_required
+        and receipt_target_path.lower().endswith(".java")
+        and verification_tool == "target_compile"
         and downstream_required_gate == "target_compile"
-    ):
+    )
+    receipt_semantics_valid = bool(
+        receipt_valid
+        and receipt_target_matches
+        and (pass_semantics or deferred_semantics)
+    )
+
+    if source_status != "SOURCE_GENERATED" or not receipt_semantics_valid:
+        generation_status = "FAIL"
+    elif pass_semantics:
+        generation_status = "PASS"
+    elif deferred_semantics:
         generation_status = "DEFERRED_TO_TARGET_COMPILE"
     else:
         generation_status = "FAIL"
@@ -390,17 +456,17 @@ def _verify_candidate(
             else "unknown"
         ),
         "terminal_verification_status": terminal_status,
-        "validation_status": str(
-            receipt.get("validation_status") or ""
-        ).strip().upper(),
-        "termination_reason": str(
-            receipt.get("termination_reason") or ""
-        ).strip(),
-        "verification_tool": receipt.get("verifier_tool"),
+        "validation_status": validation_status,
+        "termination_reason": termination_reason,
+        "verification_tool": verification_tool or None,
         "source_status": source_status or "MISSING",
         "required_gates": list(required_gates),
         "target_compile_required": target_compile_required,
         "downstream_required_gate": downstream_required_gate or None,
+        "compile_backed_java": compile_backed_java,
+        "receipt_target_path": receipt_target_path or None,
+        "receipt_target_matches": receipt_target_matches,
+        "receipt_semantics_valid": receipt_semantics_valid,
         "java_path_count": len(java_paths),
         "jdt_status": "NOT_RUN",
         "jdt_error_count": None,
@@ -411,9 +477,7 @@ def _verify_candidate(
         ),
         "selection_policy": "verifier_tier_then_locality",
     }
-    verifier_tier = _generation_verifier_tier(verifier)
-    verifier["verifier_tier"] = verifier_tier
-    score += 1_000_000.0 * verifier_tier
+    verifier["verifier_tier"] = _generation_verifier_tier(verifier)
     return (score, verifier)
 
 def install(custom_module_generator_module: Any) -> None:
@@ -547,10 +611,11 @@ def install(custom_module_generator_module: Any) -> None:
                 verifier_index=4,
             )
             selectable.sort(
-                key=lambda item: (
-                    -float(item[0]),
-                    _json_size(item[3]),
-                    int(item[1]),
+                key=lambda item: _candidate_rank_key(
+                    score=float(item[0]),
+                    candidate_index=int(item[1]),
+                    verifier=item[4],
+                    patch_size=_json_size(item[3]),
                 )
             )
             score, winner_index, winner_root, result, verifier = selectable[0]
@@ -632,6 +697,7 @@ __all__ = [
     "_StrategyRouter",
     "_active_native_slots",
     "_candidate_patch_capture",
+    "_candidate_rank_key",
     "_candidate_verifier_selectable",
     "_generation_verifier_tier",
     "_require_selectable_evaluations",
