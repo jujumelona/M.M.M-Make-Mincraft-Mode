@@ -139,3 +139,40 @@ def test_generated_receipt_cannot_add_unapproved_release_gate():
     )
 
     assert failures == []
+
+
+def test_blockbench_required_gate_uses_entity_review_receipt(tmp_path):
+    preview = tmp_path / "entity-preview.png"
+    preview.write_bytes(b"png")
+    module = SimpleNamespace(
+        module_id="boss_dragon",
+        required_gates=("Blockbench UV and bone hierarchy review",),
+        kind="boss",
+        config={},
+    )
+    proposal = SimpleNamespace(
+        modules=(module,),
+        base_proposal=SimpleNamespace(spec=SimpleNamespace()),
+    )
+
+    failures = CompleteProductionOrchestrator._required_gate_failures(
+        proposal,
+        generated_receipts=(),
+        project_root=None,
+        source_validation={"status": "PASS"},
+        jdt_receipt=None,
+        build_report=None,
+        jar_validation=None,
+        blockbench_receipts=(
+            {
+                "entity": "boss_dragon",
+                "uv": {"status": "PASS"},
+                "preview": str(preview),
+            },
+        ),
+        runtime_receipt=None,
+        playtest_receipt=None,
+        visual_receipt=None,
+    )
+
+    assert failures == []
