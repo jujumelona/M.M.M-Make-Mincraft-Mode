@@ -23,7 +23,6 @@ from .implementation_template_contract import build_implementation_template
 from .mutation_authority import CURRENT_MUTATION_AUTHORITY
 
 _SCOPE = threading.local()
-_INSTALLED = False
 
 
 def _normalize_path(value: Any) -> str:
@@ -127,18 +126,10 @@ def _active_generation_authority(module: Any):
         _CURRENT_AUTHORITY.reset(envelope_token)
 
 
-def install(*, custom_module_generator_module: Any, host_grounding_module: Any) -> None:
-    """Compose host mutation authority into the existing custom-coder transaction path."""
+def generation_authority_scoped(func: Any) -> Any:
+    """Bind host mutation authority directly at the reviewed generation definition."""
 
-    global _INSTALLED
-    if _INSTALLED:
-        return
-
-    generator_type = custom_module_generator_module.CustomModuleGenerator
-    original_generate = generator_type.generate
-    original_validate = generator_type._validate_operations
-
-    @wraps(original_generate)
+    @wraps(func)
     def scoped_generate(
         self: Any,
         project_root: Any,
@@ -150,7 +141,7 @@ def install(*, custom_module_generator_module: Any, host_grounding_module: Any) 
         mappings: str | None = None,
     ) -> Any:
         with _active_generation_authority(module):
-            return original_generate(
+            return func(
                 self,
                 project_root,
                 module=module,
@@ -160,26 +151,41 @@ def install(*, custom_module_generator_module: Any, host_grounding_module: Any) 
                 mappings=mappings,
             )
 
-    @wraps(original_validate)
-    def exact_validate(self: Any, operations: list[dict[str, Any]]) -> None:
-        original_validate(self, operations)
-        writable_paths = getattr(_SCOPE, "allowed_paths", None)
-        if writable_paths is None:
-            return
-        validate_exact_task_operations(
-            operations,
-            writable_paths,
-            error_type=custom_module_generator_module.CustomModuleGenerationError,
-        )
-
     scoped_generate._mmm_exact_task_write_scope = True  # type: ignore[attr-defined]
-    exact_validate._mmm_exact_task_write_scope = True  # type: ignore[attr-defined]
-    generator_type.generate = scoped_generate
-    generator_type._validate_operations = exact_validate
-    custom_module_generator_module._agent_mutable_path = (
-        host_grounding_module.custom_module_path_allowed
+    return scoped_generate
+
+
+def exact_task_operation_validator(
+    error_type: type[Exception],
+):
+    """Attach exact task-path validation at the source-owned validator definition."""
+
+    def decorate(func: Any) -> Any:
+        @wraps(func)
+        def exact_validate(self: Any, operations: list[dict[str, Any]]) -> None:
+            func(self, operations)
+            writable_paths = getattr(_SCOPE, "allowed_paths", None)
+            if writable_paths is None:
+                return
+            validate_exact_task_operations(
+                operations,
+                writable_paths,
+                error_type=error_type,
+            )
+
+        exact_validate._mmm_exact_task_write_scope = True  # type: ignore[attr-defined]
+        return exact_validate
+
+    return decorate
+
+
+def install(*, custom_module_generator_module: Any, host_grounding_module: Any) -> None:
+    """Compatibility assertion; runtime mutation is source-owned and no longer installed late."""
+
+    assert_installed(
+        custom_module_generator_module=custom_module_generator_module,
+        host_grounding_module=host_grounding_module,
     )
-    _INSTALLED = True
 
 
 def assert_installed(*, custom_module_generator_module: Any, host_grounding_module: Any) -> None:
@@ -194,7 +200,9 @@ def assert_installed(*, custom_module_generator_module: Any, host_grounding_modu
 
 __all__ = [
     "assert_installed",
+    "exact_task_operation_validator",
     "exact_task_writable_paths",
+    "generation_authority_scoped",
     "install",
     "validate_exact_task_operations",
 ]
