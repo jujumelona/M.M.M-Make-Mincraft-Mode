@@ -1746,19 +1746,41 @@ class CompleteProductionOrchestrator:
             emit_root_cause('orchestrator_node_action_failure', stage=node.stage, operation=node.node_id, gate='work_node_action', result='FAIL', reason=f'{type(exc).__name__}: {exc}', details={'ledger_state': current, 'payload': node.payload}, exc=exc)
             raise
 
+    def _inspect_existing_project_input(
+        self,
+        approved: CompleteProposal,
+        *,
+        run_root: Path,
+        existing_input: str | Path,
+    ) -> tuple[Any, Path]:
+        try:
+            report = inspect_existing_project_archive(
+                existing_input,
+                extract_root=run_root / 'existing-source',
+                expected_archive_sha256=approved.existing_input_sha256,
+            )
+        except ExistingProjectImportError as exc:
+            raise CompleteProductionError(str(exc)) from exc
+        if not report.has_sources or not report.has_gradle_project or (not report.extracted_to):
+            raise CompleteProductionError('Existing mod modification requires a source Gradle ZIP.')
+        project_root = self._locate_imported_project(report, run_root=run_root)
+        info = inspect_fabric_project(project_root)
+        expected = approved.base_proposal.spec
+        if info.mod_id != expected.mod_id or info.package_name != expected.package_name:
+            raise CompleteProductionError(
+                f'Approved proposal does not match the existing Fabric project: '
+                f'expected {expected.mod_id}/{expected.package_name}, '
+                f'found {info.mod_id}/{info.package_name}.'
+            )
+        return report, project_root
+
     def _prepare_project(self, approved: CompleteProposal, *, run_root: Path, existing_input: str | Path | None) -> Path:
         if existing_input is not None:
-            try:
-                report = inspect_existing_project_archive(existing_input, extract_root=run_root / 'existing-source', expected_archive_sha256=approved.existing_input_sha256)
-            except ExistingProjectImportError as exc:
-                raise CompleteProductionError(str(exc)) from exc
-            if not report.has_sources or not report.has_gradle_project or (not report.extracted_to):
-                raise CompleteProductionError('Existing mod modification requires a source Gradle ZIP.')
-            project_root = self._locate_imported_project(report, run_root=run_root)
-            info = inspect_fabric_project(project_root)
-            expected = approved.base_proposal.spec
-            if info.mod_id != expected.mod_id or info.package_name != expected.package_name:
-                raise CompleteProductionError(f'Approved proposal does not match the existing Fabric project: expected {expected.mod_id}/{expected.package_name}, found {info.mod_id}/{info.package_name}.')
+            _report, project_root = self._inspect_existing_project_input(
+                approved,
+                run_root=run_root,
+                existing_input=existing_input,
+            )
             return project_root
         base = approved.base_proposal
         from .platform_catalog import adapter_for_lock_values
