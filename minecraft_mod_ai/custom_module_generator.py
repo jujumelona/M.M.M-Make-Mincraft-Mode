@@ -1435,9 +1435,6 @@ def finalize_persisted_generation_checkpoint(
     if not isinstance(identity, str):
         return False
     root = Path(project_root).expanduser().resolve()
-    if not _committed_patch_receipt_matches(result, project_root=root):
-        return False
-
     configured = (
         Path(checkpoint_root).expanduser()
         if checkpoint_root is not None
@@ -1449,7 +1446,13 @@ def finalize_persisted_generation_checkpoint(
     with _CHECKPOINT_ACTIVE_LOCK:
         if resolved in _CHECKPOINT_ACTIVE_PATHS:
             return False
+
+    # The durable work-node receipt can outlive the ephemeral checkpoint.  A later
+    # build-repair pass may legitimately change the generated file after cleanup, so
+    # only compare the old patch digest when an orphan checkpoint still exists.
     if path.exists():
+        if not _committed_patch_receipt_matches(result, project_root=root):
+            return False
         try:
             manifest = _read_generation_checkpoint_manifest(path)
         except (OSError, ValueError, json.JSONDecodeError):
