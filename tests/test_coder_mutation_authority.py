@@ -135,7 +135,7 @@ def test_host_reserved_anchor_is_still_a_new_file_target() -> None:
     assert context.target_path == JAVA_PATH
     assert context.is_new_file is True
     assert context.localization_stage == tool_loop.LocalizationStage.READY
-    assert context.evidence_source == "evidence_host_reserved_owned_anchor"
+    assert context.evidence_source == "evidence_fresh_owned_anchor"
 
 
 def test_unknown_primary_status_still_fails_closed() -> None:
