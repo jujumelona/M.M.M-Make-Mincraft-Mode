@@ -46,7 +46,6 @@ def finalize_runtime() -> None:
             external_agent_bridge,
             external_mcp_router,
             external_procedural_skill_contract,
-            generation_verifier_resilience,
             host_grounding,
             llama_server_autotune,
             llama_server_runtime_tuning,
@@ -78,9 +77,6 @@ def finalize_runtime() -> None:
         from .fabric_immutable_rebind_contract import install as install_fabric_immutable_rebind
         from .generation_boundary_reconciliation import install as install_generation_boundary_reconciliation
         from .generation_concurrency_safety import install as install_generation_safety
-        from .generation_verifier_runtime_contract import (
-            install as install_generation_verifier_runtime_contract,
-        )
         from .implementation_kind_boundary_contract import install as install_implementation_kind_boundary
         from .immutable_platform_execution_contract import install as install_immutable_platform_execution
         from .llama_mtp_cache_policy import install as install_llama_mtp_cache_policy
@@ -169,10 +165,6 @@ def finalize_runtime() -> None:
         install_fabric_immutable_rebind()
         install_runtime_regression_reconciliation()
         install_generation_boundary_reconciliation()
-        install_generation_verifier_runtime_contract(
-            agent_tool_runtime_module=agent_tool_runtime,
-            verifier_module=generation_verifier_resilience,
-        )
 
         assert_small_model_task_capsule()
         assert_small_model_write_scope(custom_module_generator_module=custom_module_generator, host_grounding_module=host_grounding)
