@@ -132,6 +132,14 @@ _SOURCE_CREATE_OPERATIONS = frozenset({
     "write", "write_file",
 })
 _SOURCE_ATOMIC_REWRITE_OPERATIONS = frozenset({"create", "create_file", "write", "write_file"})
+_REPAIR_CONTEXT_PREFIX = "MMM_CORE_VERIFIER_REPAIR_V1"
+_REPAIR_FORBIDDEN_OPERATIONS = frozenset({
+    "create",
+    "create_file",
+    "create_java_type",
+    "delete",
+    "delete_file",
+})
 _MODEL_REJECTION_TOOL_NAME = "__mmm_rejected_tool_call__"
 _HOST_AUTHORITY_ROLES = frozenset({"system", "developer", "tool"})
 _EXISTING_TARGET_EVIDENCE_SOURCES = frozenset({
@@ -423,6 +431,137 @@ def _filter_donor_tool_schemas(schemas: Sequence[Any]) -> tuple[Any, ...]:
     from .donor_source_authority import filter_donor_tool_schemas
 
     return filter_donor_tool_schemas(schemas)
+
+
+def _repair_tool_schema_name(schema: Any) -> str:
+    if not isinstance(schema, Mapping):
+        return ""
+    function = schema.get("function")
+    if not isinstance(function, Mapping):
+        return ""
+    return str(function.get("name") or "").strip()
+
+
+def _existing_repair_context(
+    messages: Sequence[Mapping[str, Any]],
+) -> Mapping[str, Any] | None:
+    """Return the latest host repair receipt for an existing pinned target."""
+
+    for message in reversed(messages):
+        if not isinstance(message, Mapping):
+            continue
+        if str(message.get("role") or "").strip().casefold() != "system":
+            continue
+        raw_content = message.get("content")
+        if (
+            not isinstance(raw_content, str)
+            or not raw_content.startswith(_REPAIR_CONTEXT_PREFIX)
+        ):
+            continue
+        raw = raw_content.rsplit("\n", 1)[-1].strip()
+        try:
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+        if not isinstance(payload, Mapping):
+            return None
+        if payload.get("target_is_new_file") is not False:
+            return None
+        path = _canonical_mutation_path(payload.get("target_path"))
+        if not path:
+            return None
+        return payload
+    return None
+
+
+def _constrain_existing_repair_schema(
+    schema: Mapping[str, Any],
+    *,
+    target_path: str,
+) -> Mapping[str, Any]:
+    """Clone source-edit schema and remove create/delete choices for repair."""
+
+    cloned = deepcopy(dict(schema))
+    function = cloned.get("function")
+    if not isinstance(function, dict):
+        raise ModelConfigurationError(
+            "REPAIR_TOOL_SCHEMA_INVALID: apply_source_edit has no function schema"
+        )
+    parameters = function.get("parameters")
+    if not isinstance(parameters, dict):
+        raise ModelConfigurationError(
+            "REPAIR_TOOL_SCHEMA_INVALID: apply_source_edit has no parameter schema"
+        )
+    properties = parameters.get("properties")
+    if not isinstance(properties, dict):
+        raise ModelConfigurationError(
+            "REPAIR_TOOL_SCHEMA_INVALID: apply_source_edit has no properties schema"
+        )
+    operation = properties.get("operation")
+    if not isinstance(operation, dict):
+        raise ModelConfigurationError(
+            "REPAIR_TOOL_SCHEMA_INVALID: apply_source_edit has no operation schema"
+        )
+    values = operation.get("enum")
+    if not isinstance(values, list):
+        raise ModelConfigurationError(
+            "REPAIR_TOOL_SCHEMA_INVALID: apply_source_edit operation is not enumerated"
+        )
+    allowed = [
+        value
+        for value in values
+        if str(value).strip().casefold() not in _REPAIR_FORBIDDEN_OPERATIONS
+    ]
+    if not allowed:
+        raise ModelConfigurationError(
+            "REPAIR_TOOL_SCHEMA_INVALID: no existing-file repair operations remain"
+        )
+    operation["enum"] = allowed
+    operation["description"] = (
+        str(operation.get("description") or "").rstrip()
+        + " Existing-file repair turn: creation and deletion operations are structurally unavailable."
+    ).strip()
+
+    path_schema = properties.get("path")
+    if not isinstance(path_schema, dict):
+        raise ModelConfigurationError(
+            "REPAIR_TOOL_SCHEMA_INVALID: apply_source_edit has no path schema"
+        )
+    path_schema["enum"] = [target_path]
+    path_schema["description"] = (
+        str(path_schema.get("description") or "").rstrip()
+        + " This repair turn is pinned to the existing host target."
+    ).strip()
+    return cloned
+
+
+def _constrain_existing_repair_tools(
+    tools: Sequence[Any],
+    messages: Sequence[Mapping[str, Any]],
+) -> tuple[Any, ...]:
+    """Narrow the model-visible repair frontier without mutating canonical schemas."""
+
+    context = _existing_repair_context(messages)
+    if context is None:
+        return tuple(tools)
+    target_path = _canonical_mutation_path(context.get("target_path"))
+    if not target_path:
+        return tuple(tools)
+    result: list[Any] = []
+    found = False
+    for schema in tools:
+        if _repair_tool_schema_name(schema) == "apply_source_edit":
+            if not isinstance(schema, Mapping):
+                raise ModelConfigurationError(
+                    "REPAIR_TOOL_SCHEMA_INVALID: apply_source_edit schema is not a mapping"
+                )
+            result.append(
+                _constrain_existing_repair_schema(schema, target_path=target_path)
+            )
+            found = True
+        else:
+            result.append(schema)
+    return tuple(result) if found else tuple(tools)
 
 
 def _trusted_internal_user_payload(payload: Mapping[str, Any]) -> bool:
@@ -2033,6 +2172,28 @@ def _generate_turn_with_context_recovery(
     verifier_relative_files: tuple[str, ...] = (),
 ) -> Any:
     """Fit one live turn and recover typed completion boundaries in-place."""
+
+    constrained_tools = _constrain_existing_repair_tools(request.tools, messages)
+    if constrained_tools != tuple(request.tools):
+        request = replace(request, tools=constrained_tools)
+        emit_root_cause(
+            "repair_tool_frontier_constrained",
+            stage="generation",
+            operation="apply_source_edit",
+            gate="repair_mutation_schema",
+            result="PASS",
+            reason=(
+                "existing-file repair removed create/delete operations and pinned "
+                "the source-edit target"
+            ),
+            details={
+                "selected_tools": [
+                    _repair_tool_schema_name(schema)
+                    for schema in constrained_tools
+                    if _repair_tool_schema_name(schema)
+                ]
+            },
+        )
 
     if _forced_tool_choice_name(tool_choice) == "java_diagnostics":
         from .generation_verifier_resilience import synthesized_verifier_turn
