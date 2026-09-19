@@ -295,16 +295,30 @@ def test_cached_download_bundle_validates_every_member_digest(tmp_path) -> None:
     root.mkdir()
     jar = root / "demo.jar"
     jar.write_bytes(b"jar")
+    members = [
+        {
+            "path": "demo.jar",
+            "sha256": CompleteProductionOrchestrator._file_hash(jar),
+        }
+    ]
     receipt = {
         "status": "PASS",
         "path": str(root),
-        "members": [
-            {
-                "path": "demo.jar",
-                "sha256": CompleteProductionOrchestrator._file_hash(jar),
-            }
-        ],
+        "artifact_sha256": "sha256:" + "a" * 64,
+        "members": members,
+        "manifest_sha256": "sha256:" + "b" * 64,
     }
+    (root / "bundle-receipt.json").write_text(
+        __import__("json").dumps(
+            {
+                "status": "PASS",
+                "artifact_sha256": receipt["artifact_sha256"],
+                "members": members,
+                "manifest_sha256": receipt["manifest_sha256"],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     assert CompleteProductionOrchestrator._cached_download_bundle_exists(receipt)
 
