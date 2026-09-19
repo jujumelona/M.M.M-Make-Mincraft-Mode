@@ -189,7 +189,7 @@ def test_debug_fixture_runs_real_build_and_packaging_without_live_model(
         options=CompleteExecutionOptions(
             source_only=False,
             run_jdt=False,
-            run_gametest=False,
+            run_gametest=True,
             auto_repair=False,
             run_blockbench=False,
             run_runtime=False,
