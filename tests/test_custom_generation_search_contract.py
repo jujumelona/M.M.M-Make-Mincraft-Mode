@@ -471,7 +471,15 @@ def test_runtime_candidate_verifier_is_the_canonical_source_implementation() -> 
         verifier.__module__,
         verifier,
     )
-    assert len(wrapper_chain) == 1, wrapper_chain
+    chain_summary = " | ".join(
+        (
+            f"{index}:module={item['module']};qualname={item['qualname']};"
+            f"file={item['file']};line={item['line']};"
+            f"markers={','.join(item['markers'])}"
+        )
+        for index, item in enumerate(wrapper_chain)
+    )
+    assert len(wrapper_chain) == 1, chain_summary
     assert wrapper_chain[0]["file"].endswith(
         "custom_generation_search_contract.py"
     ), wrapper_chain
