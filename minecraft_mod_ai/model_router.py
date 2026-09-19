@@ -366,6 +366,7 @@ class ModelRouter:
             tools=(schema,),
             tool_choice={"type": "function", "function": {"name": name}},
             parallel_tool_calls=False,
+            metadata={"tool_stage": _ROLE_TOOL_STAGE.get(role, ""), "role": role},
         )
         with self._generation_scope(config):
             turn = adapter.generate_turn(request)
@@ -452,6 +453,7 @@ class ModelRouter:
             tools=tools,
             tool_choice="auto" if tools else None,
             parallel_tool_calls=True,
+            metadata={"tool_stage": stage, "role": role},
         )
         return stage, runtime, tools, request
 
