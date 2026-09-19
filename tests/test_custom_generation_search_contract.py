@@ -446,11 +446,35 @@ def test_generation_terminal_receipt_is_context_local_and_structured() -> None:
 def test_runtime_candidate_verifier_is_the_canonical_source_implementation() -> None:
     verifier = custom_search._verify_candidate
     source = inspect.getsource(verifier)
+    wrapper_chain = []
+    current = verifier
+    seen = set()
+    while callable(current) and id(current) not in seen:
+        seen.add(id(current))
+        code = getattr(current, "__code__", None)
+        wrapper_chain.append(
+            {
+                "module": getattr(current, "__module__", None),
+                "qualname": getattr(current, "__qualname__", None),
+                "file": getattr(code, "co_filename", None),
+                "line": getattr(code, "co_firstlineno", None),
+                "markers": sorted(
+                    key
+                    for key, value in getattr(current, "__dict__", {}).items()
+                    if key.startswith("_mmm_") and value is True
+                ),
+            }
+        )
+        current = getattr(current, "__wrapped__", None)
 
     assert verifier.__module__ == "minecraft_mod_ai.custom_generation_search_contract", (
         verifier.__module__,
         verifier,
     )
+    assert len(wrapper_chain) == 1, wrapper_chain
+    assert wrapper_chain[0]["file"].endswith(
+        "custom_generation_search_contract.py"
+    ), wrapper_chain
     assert "classification = classify_generation_verification" in source, source
     assert "score += 1_000_000" not in source, source
     assert "JavaLanguageService" not in source, source
