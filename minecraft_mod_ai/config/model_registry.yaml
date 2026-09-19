@@ -153,9 +153,6 @@ _qwen35_9b: &qwen35_9b
       roles:
         - coder
         - coder_safe
-      stages:
-        - generation
-        - quality
       when_tools: any
 
 profiles:
