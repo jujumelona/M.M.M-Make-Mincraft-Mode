@@ -692,6 +692,241 @@ def _derive_impacted_seeds(
     return seed_nodes, owner_ids, requirement_ids, matched
 
 
+def invalidate_execution_feedback(
+    ledger: Any, feedback: Mapping[str, Any]
+) -> dict[str, Any]:
+    seed_nodes, owner_ids, requirement_ids, matched = _derive_impacted_seeds(
+        ledger, feedback
+    )
+    before = {
+        str(task.get("node_id")): {
+            "state": task.get("state"),
+            "output_hash": task.get("output_hash"),
+        }
+        for task in _generation_rows(ledger)
+    }
+    diagnostics = feedback.get("diagnostics")
+    diagnostics = diagnostics if isinstance(diagnostics, Sequence) else ()
+    feedback_fingerprint = _sha(
+        {
+            "checkpoint_id": feedback.get("checkpoint_id"),
+            "diagnostics": list(diagnostics),
+            "seed_nodes": sorted(seed_nodes),
+        }
+    )
+
+    if not seed_nodes:
+        receipt = {
+            "schema_version": _SCHEMA,
+            "status": "GLOBAL_REPLAN_REQUIRED",
+            "global_replan_required": True,
+            "reason": "validation feedback could not be bound to an observed generation owner",
+            "feedback_fingerprint": feedback_fingerprint,
+            "diagnostic_paths": sorted(
+                {
+                    _norm_path(item.get("path"))
+                    for item in diagnostics
+                    if isinstance(item, Mapping) and _norm_path(item.get("path"))
+                }
+            ),
+            "seed_node_ids": [],
+            "impacted_node_ids": [],
+            "preserved_generation_node_ids": sorted(before),
+            "owner_ids": [],
+            "requirement_ids": sorted(requirement_ids),
+            "matches": [],
+        }
+        _persist_feedback_receipt(ledger, receipt)
+        return receipt
+
+    with ledger._connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        impacted = ledger._invalidate_many(connection, sorted(seed_nodes))
+        connection.commit()
+    impacted_set = set(impacted)
+    all_rows: list[dict[str, Any]] = []
+    cursor = ""
+    while True:
+        page = ledger.tasks(cursor=cursor, limit=1000)
+        all_rows.extend(
+            dict(item) for item in page.get("tasks", ()) if isinstance(item, Mapping)
+        )
+        cursor = str(page.get("next_cursor") or "")
+        if not cursor:
+            break
+    preserved = sorted(
+        str(item.get("node_id"))
+        for item in all_rows
+        if str(item.get("node_id")) not in impacted_set
+        and str(item.get("state")) == "succeeded"
+    )
+    impacted_generation = sorted(
+        node_id for node_id in impacted if node_id in before
+    )
+    receipt = {
+        "schema_version": _SCHEMA,
+        "status": "IMPACTED_SUBGRAPH_INVALIDATED",
+        "global_replan_required": False,
+        "feedback_fingerprint": feedback_fingerprint,
+        "seed_node_ids": sorted(seed_nodes),
+        "impacted_node_ids": list(impacted),
+        "impacted_generation_node_ids": impacted_generation,
+        "preserved_succeeded_node_ids": preserved,
+        "owner_ids": sorted(owner_ids),
+        "requirement_ids": sorted(requirement_ids),
+        "matches": matched,
+        "previous_generation_state": before,
+    }
+    receipt["receipt_sha256"] = _sha(receipt)
+    _persist_feedback_receipt(ledger, receipt)
+    return receipt
+
+
+def feedback_run_context(current_open: Any) -> Any:
+    """Bind the durable ledger to the orchestrator without late method rebinding."""
+
+    if getattr(current_open, "_mmm_feedback_context", False):
+        return current_open
+
+    @wraps(current_open)
+    def open_run(self: Any, run_name: str, plan: Any, *, resume: bool):
+        root, ledger, resumed = current_open(self, run_name, plan, resume=resume)
+        self._mmm_feedback_run_root = root
+        self._mmm_feedback_ledger = ledger
+        self._mmm_feedback_plan = plan
+        return root, ledger, resumed
+
+    open_run._mmm_feedback_context = True  # type: ignore[attr-defined]
+    return open_run
+
+
+def execution_feedback_scoped(current_execute: Any) -> Any:
+    """Run one production execution with bounded semantic feedback re-entry."""
+
+    if getattr(current_execute, "_mmm_impacted_feedback_loop", False):
+        return current_execute
+
+    @wraps(current_execute)
+    def execute_with_feedback(self: Any, *args: Any, **kwargs: Any):
+        from .complete_orchestrator import CompleteExecutionOptions
+        from .complete_orchestrator_support import CompleteProductionError
+
+        seen: set[str] = set()
+        call_kwargs = dict(kwargs)
+        with trace_scope("complete_production"):
+            emit_root_cause(
+                "pipeline_boundary_start",
+                stage="runtime",
+                operation="complete_production",
+                gate="end_to_end_execution",
+                result="START",
+                details={"args": args, "kwargs": kwargs},
+            )
+            try:
+                while True:
+                    try:
+                        result = current_execute(self, *args, **call_kwargs)
+                        break
+                    except CompleteProductionError as exc:
+                        emit_root_cause(
+                            "execution_feedback_failure_observed",
+                            stage="generation",
+                            operation="execute_with_feedback",
+                            gate="adjudication",
+                            result="FAIL",
+                            reason=f"{type(exc).__name__}: {exc}",
+                            details={"seen_fingerprints": sorted(seen)},
+                            exc=exc,
+                        )
+                        ledger = getattr(self, "_mmm_feedback_ledger", None)
+                        if ledger is None or not hasattr(
+                            ledger, "invalidate_execution_feedback"
+                        ):
+                            raise
+                        feedback = _latest_failed_feedback(ledger)
+                        if not isinstance(feedback, Mapping):
+                            raise
+
+                        _abort_verifier_infrastructure_retry(feedback, seen, exc)
+                        receipt = ledger.invalidate_execution_feedback(feedback)
+                        fingerprint = str(receipt.get("feedback_fingerprint") or "")
+                        emit_root_cause(
+                            "execution_feedback_adjudicated",
+                            stage="generation",
+                            operation="execute_with_feedback",
+                            gate="impact_analysis",
+                            result="PASS",
+                            details={
+                                "feedback": feedback,
+                                "invalidation_receipt": receipt,
+                                "fingerprint": fingerprint,
+                            },
+                        )
+                        if (
+                            receipt.get("global_replan_required") is True
+                            or not receipt.get("impacted_generation_node_ids")
+                            or not fingerprint
+                            or fingerprint in seen
+                        ):
+                            emit_root_cause(
+                                "execution_feedback_abort",
+                                stage="generation",
+                                operation="execute_with_feedback",
+                                gate="retry_eligibility",
+                                result="FAIL",
+                                reason="feedback cannot produce a novel owner-bound retry",
+                                details={
+                                    "receipt": receipt,
+                                    "seen_fingerprints": sorted(seen),
+                                },
+                            )
+                            raise
+                        seen.add(fingerprint)
+                        options = call_kwargs.get("options")
+                        if options is None:
+                            options = CompleteExecutionOptions(resume=True)
+                        else:
+                            options = replace(options, resume=True)
+                        call_kwargs["options"] = options
+                        emit_root_cause(
+                            "execution_feedback_retry",
+                            stage="generation",
+                            operation="execute_with_feedback",
+                            gate="retry_eligibility",
+                            result="START",
+                            reason="novel impacted nodes invalidated",
+                            details={
+                                "fingerprint": fingerprint,
+                                "options": options,
+                                "seen_fingerprint_count": len(seen),
+                            },
+                        )
+            except BaseException as exc:
+                emit_root_cause(
+                    "pipeline_boundary_failure",
+                    stage="runtime",
+                    operation="complete_production",
+                    gate="end_to_end_execution",
+                    result="FAIL",
+                    reason=f"{type(exc).__name__}: {exc}",
+                    exc=exc,
+                )
+                raise
+            emit_root_cause(
+                "pipeline_boundary_result",
+                stage="runtime",
+                operation="complete_production",
+                gate="end_to_end_execution",
+                result="PASS",
+                details={"result": result},
+            )
+            return result
+
+    execute_with_feedback._mmm_impacted_feedback_loop = True  # type: ignore[attr-defined]
+    execute_with_feedback._mmm_semantic_convergence = True  # type: ignore[attr-defined]
+    return execute_with_feedback
+
+
 def _install_ledger_feedback(work_graph_module: Any) -> None:
     cls = work_graph_module.DurableWorkLedger
     if hasattr(cls, "invalidate_execution_feedback"):
