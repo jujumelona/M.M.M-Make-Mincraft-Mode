@@ -633,6 +633,37 @@ def _validate_external_execution_preflight(
             raise CompleteProductionError(
                 "Mineflayer verification requires explicit playtest_actions before generation starts."
             )
+        expected_tests = tuple(
+            str(value) for value in getattr(proposal, "acceptance_tests", ())
+        )
+        if expected_tests:
+            expected_set = set(expected_tests)
+            covered: set[str] = set()
+            unknown: set[str] = set()
+            for action in actions:
+                if not isinstance(action, dict):
+                    continue
+                if str(action.get("action") or "") != "wait_for":
+                    continue
+                raw_test = action.get("acceptance_test")
+                if raw_test is None:
+                    continue
+                test = str(raw_test)
+                if test in expected_set:
+                    covered.add(test)
+                else:
+                    unknown.add(test)
+            missing = [test for test in expected_tests if test not in covered]
+            if missing or unknown:
+                details: list[str] = []
+                if missing:
+                    details.append("missing=" + ", ".join(missing))
+                if unknown:
+                    details.append("unknown=" + ", ".join(sorted(unknown)))
+                raise CompleteProductionError(
+                    "Mineflayer playtest actions do not match the approved acceptance tests: "
+                    + "; ".join(details)
+                )
 
     if bool(getattr(options, "run_visual_review", False)) and not bool(
         getattr(options, "run_runtime", False)
