@@ -1285,7 +1285,25 @@ class CompleteProductionOrchestrator:
                 'refreshed_after_build': validation_refreshed,
             },
         )
-        jar_validation = run_named_checkpoint(ledger, 'validate-jar', stage='validate:jar', input_value={'graph_hash': work_plan.graph_hash, 'jar_sha256': self._file_hash(jar_path)}, action=lambda: validate_jar(jar_path, spec).to_dict(), encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda _cached: jar_path.is_file())
+        jar_validation = run_named_checkpoint(
+            ledger,
+            'validate-jar',
+            stage='validate:jar',
+            input_value=validation_checkpoint_input(
+                'validate-jar',
+                {
+                    'graph_hash': work_plan.graph_hash,
+                    'jar_sha256': self._file_hash(jar_path),
+                },
+            ),
+            action=lambda: validate_jar(jar_path, spec).to_dict(),
+            encode=lambda value: value,
+            decode=lambda cached: cached,
+            validate_cached=lambda cached: (
+                jar_path.is_file()
+                and cached_validation_is_reusable('validate-jar', cached)
+            ),
+        )
         if jar_validation.get('status') != 'PASS':
             raise CompleteProductionError('Built JAR failed independent validation.')
         self._succeed_work_node(ledger, 'validate-jar', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'PASS', 'jar_sha256': self._file_hash(jar_path), 'checks_run': jar_validation.get('checks_run', 0)})
