@@ -12,6 +12,7 @@ on:
       - 'minecraft_mod_ai/small_model_write_scope_enforcement.py'
       - 'minecraft_mod_ai/platform_custom_coder_contract.py'
       - 'minecraft_mod_ai/platform_live_execution_contract.py'
+      - 'minecraft_mod_ai/fabric_official_template_provider.py'
       - 'minecraft_mod_ai/agent_tool_runtime.py'
       - 'minecraft_mod_ai/generation_verifier_resilience.py'
       - 'minecraft_mod_ai/generation_implementation_grounding.py'
@@ -33,6 +34,7 @@ on:
       - 'tests/test_custom_generation_efficiency_contract.py'
       - 'tests/test_platform_dynamic_coder_contract.py'
       - 'tests/test_platform_live_execution_contract.py'
+      - 'tests/test_fabric_official_template_provider_contract.py'
       - 'tests/test_debug_mode_fixture_roundtrip.py'
       - 'tests/test_debug_mode_task_contract.py'
       - 'tests/test_fresh_mutation_target_grounding.py'
@@ -51,6 +53,7 @@ on:
       - 'minecraft_mod_ai/small_model_write_scope_enforcement.py'
       - 'minecraft_mod_ai/platform_custom_coder_contract.py'
       - 'minecraft_mod_ai/platform_live_execution_contract.py'
+      - 'minecraft_mod_ai/fabric_official_template_provider.py'
       - 'minecraft_mod_ai/agent_tool_runtime.py'
       - 'minecraft_mod_ai/generation_verifier_resilience.py'
       - 'minecraft_mod_ai/generation_implementation_grounding.py'
@@ -72,6 +75,7 @@ on:
       - 'tests/test_custom_generation_efficiency_contract.py'
       - 'tests/test_platform_dynamic_coder_contract.py'
       - 'tests/test_platform_live_execution_contract.py'
+      - 'tests/test_fabric_official_template_provider_contract.py'
       - 'tests/test_debug_mode_fixture_roundtrip.py'
       - 'tests/test_debug_mode_task_contract.py'
       - 'tests/test_fresh_mutation_target_grounding.py'
@@ -114,6 +118,7 @@ jobs:
             minecraft_mod_ai/small_model_write_scope_enforcement.py \
             minecraft_mod_ai/platform_custom_coder_contract.py \
             minecraft_mod_ai/platform_live_execution_contract.py \
+            minecraft_mod_ai/fabric_official_template_provider.py \
             minecraft_mod_ai/agent_tool_runtime.py \
             minecraft_mod_ai/generation_verifier_resilience.py \
             minecraft_mod_ai/generation_implementation_grounding.py \
@@ -134,6 +139,7 @@ jobs:
             tests/test_custom_generation_efficiency_contract.py \
             tests/test_platform_dynamic_coder_contract.py \
             tests/test_platform_live_execution_contract.py \
+            tests/test_fabric_official_template_provider_contract.py \
             tests/test_debug_mode_fixture_roundtrip.py \
             tests/test_debug_mode_task_contract.py \
             tests/test_fresh_mutation_target_grounding.py \
