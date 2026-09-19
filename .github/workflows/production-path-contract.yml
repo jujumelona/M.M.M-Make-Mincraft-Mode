@@ -6,6 +6,7 @@ on:
     paths:
       - 'minecraft_mod_ai/model_adapters/**'
       - 'minecraft_mod_ai/custom_module_generator.py'
+      - 'minecraft_mod_ai/small_model_task_capsule_contract.py'
       - 'minecraft_mod_ai/custom_generation_research.py'
       - 'minecraft_mod_ai/complete_orchestrator.py'
       - 'minecraft_mod_ai/scheduler_claim_fencing_contract.py'
@@ -39,6 +40,7 @@ on:
       - 'tests/test_production_path_contract.py'
       - 'tests/conftest.py'
       - 'tests/test_small_model_atomic_coder_execution.py'
+      - 'tests/test_generation_checkpoint_commit_lifecycle.py'
       - 'tests/test_small_model_write_scope_enforcement.py'
       - 'tests/test_custom_generation_efficiency_contract.py'
       - 'tests/test_platform_dynamic_coder_contract.py'
@@ -62,6 +64,7 @@ on:
     paths:
       - 'minecraft_mod_ai/model_adapters/**'
       - 'minecraft_mod_ai/custom_module_generator.py'
+      - 'minecraft_mod_ai/small_model_task_capsule_contract.py'
       - 'minecraft_mod_ai/custom_generation_research.py'
       - 'minecraft_mod_ai/complete_orchestrator.py'
       - 'minecraft_mod_ai/scheduler_claim_fencing_contract.py'
@@ -95,6 +98,7 @@ on:
       - 'tests/test_production_path_contract.py'
       - 'tests/conftest.py'
       - 'tests/test_small_model_atomic_coder_execution.py'
+      - 'tests/test_generation_checkpoint_commit_lifecycle.py'
       - 'tests/test_small_model_write_scope_enforcement.py'
       - 'tests/test_custom_generation_efficiency_contract.py'
       - 'tests/test_platform_dynamic_coder_contract.py'
@@ -142,6 +146,7 @@ jobs:
             minecraft_mod_ai/model_router.py \
             minecraft_mod_ai/progress_aware_tool_loop.py \
             minecraft_mod_ai/custom_module_generator.py \
+            minecraft_mod_ai/small_model_task_capsule_contract.py \
             minecraft_mod_ai/custom_generation_research.py \
             minecraft_mod_ai/complete_orchestrator.py \
             minecraft_mod_ai/scheduler_claim_fencing_contract.py \
@@ -173,6 +178,7 @@ jobs:
             tests/test_production_tool_call_isolation_contract.py \
             tests/test_production_path_contract.py \
             tests/test_small_model_atomic_coder_execution.py \
+            tests/test_generation_checkpoint_commit_lifecycle.py \
             tests/test_small_model_write_scope_enforcement.py \
             tests/test_custom_generation_efficiency_contract.py \
             tests/test_platform_dynamic_coder_contract.py \
