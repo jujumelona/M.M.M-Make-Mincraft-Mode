@@ -5,6 +5,10 @@ from types import SimpleNamespace
 
 from minecraft_mod_ai.model_concurrency import (
     ReentrantReadWriteLock,
+    bind_model_execution_deadline,
+    current_model_execution_deadline,
+    refresh_model_execution_deadline,
+    remaining_model_execution_seconds,
     router_native_model_parallelism,
     router_owns_native_model,
 )
@@ -74,3 +78,27 @@ def test_native_router_parallelism_requires_local_exclusive_model(monkeypatch) -
     shared = _router(exclusive_gpu=False, provider="local", adapter="llama_cpp")
     assert router_owns_native_model(shared) is False
     assert router_native_model_parallelism(shared) == 1
+
+
+def test_semantic_progress_refreshes_active_model_deadline(monkeypatch) -> None:
+    clock = {"now": 100.0}
+    monkeypatch.setattr("minecraft_mod_ai.model_concurrency.time.monotonic", lambda: clock["now"])
+
+    with bind_model_execution_deadline(150.0):
+        assert current_model_execution_deadline() == 150.0
+        clock["now"] = 145.0
+        refreshed = refresh_model_execution_deadline(120.0)
+        assert refreshed == 265.0
+        assert current_model_execution_deadline() == 265.0
+        assert remaining_model_execution_seconds() == 120.0
+
+    assert current_model_execution_deadline() is None
+
+
+def test_deadline_refresh_never_shortens_existing_budget(monkeypatch) -> None:
+    clock = {"now": 100.0}
+    monkeypatch.setattr("minecraft_mod_ai.model_concurrency.time.monotonic", lambda: clock["now"])
+
+    with bind_model_execution_deadline(500.0):
+        assert refresh_model_execution_deadline(120.0) == 500.0
+        assert current_model_execution_deadline() == 500.0
