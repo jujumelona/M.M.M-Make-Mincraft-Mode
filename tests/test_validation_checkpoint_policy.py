@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from minecraft_mod_ai import validation_checkpoint_policy
+from minecraft_mod_ai.work_graph import DurableWorkLedger, run_named_checkpoint
 
 
 def test_validation_resume_reuses_only_stable_exact_results() -> None:
@@ -144,6 +145,74 @@ def test_jar_checkpoint_input_binds_validation_implementation() -> None:
     assert scoped["graph_hash"] == "g"
     assert scoped["jar_sha256"] == "sha256:jar"
     assert str(scoped["_mmm_validation_implementation"]).startswith("sha256:")
+
+
+def test_failed_jar_checkpoint_is_rerun_instead_of_reused(tmp_path) -> None:
+    ledger = DurableWorkLedger(
+        tmp_path / "work.sqlite3",
+        proposal_hash="sha256:proposal",
+        graph_hash="sha256:graph",
+    )
+    input_value = validation_checkpoint_policy.validation_checkpoint_input(
+        "validate-jar",
+        {"graph_hash": "sha256:graph", "jar_sha256": "sha256:jar"},
+    )
+    calls = {"count": 0}
+
+    def first_action() -> dict[str, object]:
+        calls["count"] += 1
+        return {
+            "status": "FAIL",
+            "checks_run": 1,
+            "findings": [
+                {
+                    "code": "JAR_RESOURCE_MISSING",
+                    "severity": "error",
+                    "path": "demo",
+                    "message": "missing",
+                }
+            ],
+        }
+
+    first = run_named_checkpoint(
+        ledger,
+        "validate-jar",
+        stage="validate:jar",
+        input_value=input_value,
+        action=first_action,
+        encode=lambda value: value,
+        decode=lambda value: value,
+        validate_cached=lambda cached: (
+            validation_checkpoint_policy.cached_validation_is_reusable(
+                "validate-jar",
+                cached,
+            )
+        ),
+    )
+    assert first["status"] == "FAIL"
+
+    def second_action() -> dict[str, object]:
+        calls["count"] += 1
+        return {"status": "PASS", "checks_run": 7, "findings": []}
+
+    second = run_named_checkpoint(
+        ledger,
+        "validate-jar",
+        stage="validate:jar",
+        input_value=input_value,
+        action=second_action,
+        encode=lambda value: value,
+        decode=lambda value: value,
+        validate_cached=lambda cached: (
+            validation_checkpoint_policy.cached_validation_is_reusable(
+                "validate-jar",
+                cached,
+            )
+        ),
+    )
+
+    assert second == {"status": "PASS", "checks_run": 7, "findings": []}
+    assert calls["count"] == 2
 
 
 def test_jar_fingerprint_covers_validator_and_toolchain_contract() -> None:
