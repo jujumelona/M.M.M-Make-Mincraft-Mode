@@ -16,6 +16,7 @@ from .model_router import ModelRouter
 from .project_java_diagnostics import run_project_java_diagnostics
 from .model_smoke import run_model_smoke
 from .rag_index import ProjectRAGIndex
+from .retrieval_cpu_budget_contract import _dense_opted_in
 from .spec import Proposal, ProposalStatus, SpecValidationError
 from .system_pack_generator import generate_system_pack, supported_system_packs
 
@@ -80,7 +81,7 @@ class ProductionToolService:
             bool(metadata.get('source_commit'))
             and str(metadata.get('license', '')) == 'project-local'
         )
-        global_cpu_dense = os.environ.get('MMM_RAG_ENABLE_CPU_DENSE', '').strip() == '1'
+        global_cpu_dense = _dense_opted_in()
         eager_repair_semantic = os.environ.get('MMM_RAG_EAGER_REPAIR_SEMANTIC', '').strip() == '1'
         effective_semantic = bool(
             semantic
@@ -106,8 +107,18 @@ class ProductionToolService:
             canonical = self._resolve('rag/project-index.json', allow_root=True)
             if canonical.is_file():
                 target = canonical
-        router = self.model_router if semantic or rerank else None
-        result = ProjectRAGIndex(target).search_with_receipt(query, limit=limit, router=router, semantic=semantic, rerank=rerank, required_metadata=required_metadata)
+        dense = _dense_opted_in()
+        effective_semantic = bool(semantic and dense)
+        effective_rerank = bool(rerank and dense)
+        router = self.model_router if effective_semantic or effective_rerank else None
+        result = ProjectRAGIndex(target).search_with_receipt(
+            query,
+            limit=limit,
+            router=router,
+            semantic=effective_semantic,
+            rerank=effective_rerank,
+            required_metadata=required_metadata,
+        )
         return {'schema_version': 'mmm/code-rag-result-v1', 'query': query, 'hits': [asdict(hit) for hit in result.hits], 'receipt': asdict(result.receipt)}
 
     def read_reuse_source(
