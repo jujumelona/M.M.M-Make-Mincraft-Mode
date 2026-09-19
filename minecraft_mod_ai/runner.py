@@ -243,10 +243,11 @@ class GradleRunner:
         if build_result.exit_code != 0:
             return self._failed_build(prepared, commands, "Gradle build failed.")
         if run_gametest:
+            gametest_task = self._gametest_task(prepared.project_root)
             gametest_result = self._run(
                 name="gametest",
                 executable=prepared.gradle,
-                arguments=("--no-daemon", "runGameTestServer", "--stacktrace"),
+                arguments=("--no-daemon", gametest_task, "--stacktrace"),
                 cwd=prepared.project_root,
                 env=prepared.environment,
                 log_path=prepared.logs / "gradle-gametest.log",
@@ -295,6 +296,30 @@ class GradleRunner:
                 self._gametest_report(prepared.project_root) if include_artifacts else None
             ),
             error=error,
+        )
+
+    @staticmethod
+    def _gametest_task(project_root: Path) -> str:
+        """Return the task declared by the generated Fabric scaffold, without probing/retrying."""
+
+        scripts = (project_root / "build.gradle", project_root / "build.gradle.kts")
+        rendered: list[str] = []
+        for script in scripts:
+            if not script.is_file() or script.is_symlink():
+                continue
+            try:
+                rendered.append(script.read_text(encoding="utf-8", errors="strict"))
+            except (OSError, UnicodeError) as exc:
+                raise BuildRunnerError(
+                    f"Could not read generated Gradle script for GameTest selection: {script}"
+                ) from exc
+        text = "\n".join(rendered)
+        if "gameTestServer" in text:
+            return "runGameTestServer"
+        if "configureTests" in text or "gameTest {" in text:
+            return "runGameTest"
+        raise BuildRunnerError(
+            "Generated Fabric project has no host-owned GameTest configuration."
         )
 
     @staticmethod
