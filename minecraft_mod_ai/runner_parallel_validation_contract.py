@@ -378,10 +378,11 @@ def _structured_gametest_report(
     log_path: str | Path,
     native_report: str | Path,
 ) -> Path | None:
-    """Return native XML or reconstruct a host-bound XML receipt from Fabric output.
+    """Return exact host XML or reconstruct a host-bound receipt from Fabric output.
 
-    The reconstruction path is intentionally fail-closed: it requires the pinned
-    host GameTest contract plus Fabric's terminal required-test pass summary.
+    A native passing XML is reusable only when it names the mandatory host testcase.
+    Other passing native layouts are canonicalized only when the verified host
+    contract and Fabric's terminal required-test pass summary both agree.
     """
 
     contract = _host_gametest_contract(root)

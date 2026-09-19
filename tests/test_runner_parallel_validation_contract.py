@@ -490,6 +490,7 @@ def test_fallback_discovers_real_gradle_task_instead_of_hardcoding_server(
     install(runner_module=runner_module, validation_module=_validation_module())
     runner = _FakeGradleRunner(tmp_path / "cache")
     project = _project(tmp_path, "fallback", "8.10.2", "e" * 64)
+    _install_host_gametest_fixture(project)
 
     report = runner.build(project, run_gametest=True)
 
