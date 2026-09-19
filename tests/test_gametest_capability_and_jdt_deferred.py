@@ -112,6 +112,38 @@ def test_junit_classname_and_method_are_valid_gametest_evidence(tmp_path: Path) 
     )
 
 
+def test_namespaced_gametest_id_is_valid_execution_evidence(tmp_path: Path) -> None:
+    report = tmp_path / "gametest-report.xml"
+    report.write_text(
+        '<testsuite tests="1" failures="0" errors="0" skipped="0">'
+        '<testcase name="mmm_debug_fixture:generated_registries_are_live"/>'
+        "</testsuite>",
+        encoding="utf-8",
+    )
+    build_log = tmp_path / "gradle-build.log"
+    build_log.write_text("> Task :runGameTest\nBUILD SUCCESSFUL\n", encoding="utf-8")
+    build = {
+        "status": "PASS",
+        "gametest_mode": "integrated_build",
+        "gametest_task": "runGameTest",
+        "gametest_report": str(report),
+        "commands": [
+            {
+                "name": "build",
+                "command": ["gradle", "build"],
+                "exit_code": 0,
+                "timed_out": False,
+                "log_path": str(build_log),
+            }
+        ],
+    }
+
+    assert CompleteProductionOrchestrator._gametest_receipt_passed(
+        build,
+        SimpleNamespace(mod_id="mmm_debug_fixture"),
+    )
+
+
 def test_deferred_jdt_is_not_misclassified_as_unavailable() -> None:
     receipt = {
         "schema_version": "mmm/java-diagnostics-v3",
