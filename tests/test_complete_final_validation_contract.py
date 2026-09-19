@@ -17,6 +17,7 @@ from minecraft_mod_ai.complete_orchestrator import (
     _replace_stale_file_target,
     _stable_payload_sha256,
     _validate_external_execution_preflight,
+    _validate_required_gate_contract,
 )
 
 
@@ -485,3 +486,35 @@ def test_asset_shard_cache_validates_asset_and_document_digests(tmp_path) -> Non
 
     document.write_text('{"changed": true}', encoding="utf-8")
     assert not CompleteProductionOrchestrator._cached_asset_shard(receipt)
+
+
+def test_unsupported_required_gate_fails_before_generation() -> None:
+    proposal = SimpleNamespace(
+        modules=(
+            SimpleNamespace(
+                module_id="broken_gate",
+                required_gates=("Imaginary verifier that does not exist",),
+            ),
+        ),
+    )
+
+    with pytest.raises(Exception, match="unsupported required gates"):
+        _validate_required_gate_contract(proposal)
+
+
+def test_supported_required_gate_contract_is_accepted() -> None:
+    proposal = SimpleNamespace(
+        modules=(
+            SimpleNamespace(
+                module_id="entity",
+                required_gates=(
+                    "JDT diagnostics",
+                    "Gradle clean build",
+                    "Blockbench UV and bone hierarchy review",
+                    "runtime animation review",
+                ),
+            ),
+        ),
+    )
+
+    _validate_required_gate_contract(proposal)
