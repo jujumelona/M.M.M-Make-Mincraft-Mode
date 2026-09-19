@@ -42,6 +42,71 @@ def test_claim_fencing_is_source_owned_with_full_lifecycle_signature() -> None:
     assert "_fenced_fail(" in source
 
 
+def test_run_work_node_preserves_commit_cache_and_abort_callbacks(tmp_path) -> None:
+    ledger, node = _ledger_and_node(tmp_path)
+    events: list[tuple[str, object, str]] = []
+
+    receipt = complete_orchestrator.CompleteProductionOrchestrator._run_work_node(
+        ledger,
+        node,
+        action=lambda: {"status": "PASS"},
+        validate_cached=lambda _: False,
+        on_commit=lambda value: events.append(
+            ("commit", value["status"], ledger.task(node.node_id)["state"])
+        ),
+        on_abort=lambda value: events.append(
+            ("abort", value, ledger.task(node.node_id)["state"])
+        ),
+    )
+    assert receipt == {"status": "PASS"}
+    assert events == [("commit", "PASS", work_graph.WorkState.SUCCEEDED.value)]
+
+    cached = complete_orchestrator.CompleteProductionOrchestrator._run_work_node(
+        ledger,
+        node,
+        action=lambda: pytest.fail("cached work node must not execute its action"),
+        validate_cached=lambda _: True,
+        on_commit=lambda value: events.append(
+            ("cached", value["status"], ledger.task(node.node_id)["state"])
+        ),
+        on_abort=lambda value: events.append(
+            ("abort", value, ledger.task(node.node_id)["state"])
+        ),
+    )
+    assert cached == receipt
+    assert events[-1] == ("cached", "PASS", work_graph.WorkState.SUCCEEDED.value)
+
+    failure_root = tmp_path / "failure"
+    failure_root.mkdir()
+    failed_ledger, failed_node = _ledger_and_node(failure_root)
+    failed_events: list[tuple[str, object, str]] = []
+
+    def fail_action() -> dict[str, object]:
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        complete_orchestrator.CompleteProductionOrchestrator._run_work_node(
+            failed_ledger,
+            failed_node,
+            action=fail_action,
+            validate_cached=lambda _: False,
+            on_commit=lambda value: failed_events.append(
+                ("commit", value, failed_ledger.task(failed_node.node_id)["state"])
+            ),
+            on_abort=lambda value: failed_events.append(
+                ("abort", value, failed_ledger.task(failed_node.node_id)["state"])
+            ),
+        )
+
+    assert failed_events == [
+        ("abort", {}, work_graph.WorkState.RUNNING.value),
+    ]
+    assert (
+        failed_ledger.task(failed_node.node_id)["state"]
+        == work_graph.WorkState.FAILED.value
+    )
+
+
 def test_stale_attempt_cannot_complete_reclaimed_node(tmp_path) -> None:
     ledger, node = _ledger_and_node(tmp_path)
     first = ledger.claim_ready(
