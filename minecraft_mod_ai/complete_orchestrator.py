@@ -565,7 +565,11 @@ class CompleteProductionOrchestrator:
             validation_manifest=validation_manifest, project_root=project_root,
             run_root=run_root, options=options, router=router,
             router_factory=self.router_factory, policy=self.policy,
-            validate_cached=self._cached_build_exists,
+            validate_cached=lambda cached: self._cached_build_exists(
+                cached,
+                require_gametest=options.run_gametest,
+                spec=spec,
+            ),
         )
         build = build_bundle['build']
         repair = build_bundle.get('repair')
@@ -1596,14 +1600,31 @@ class CompleteProductionOrchestrator:
         return 'sha256:' + digest.hexdigest()
 
     @staticmethod
-    def _cached_build_exists(build: Any) -> bool:
+    def _cached_build_exists(
+        build: Any,
+        *,
+        require_gametest: bool = False,
+        spec: Any = None,
+    ) -> bool:
         if not isinstance(build, dict) or build.get('status') != 'PASS':
+            return False
+        if not (
+            CompleteProductionOrchestrator._command_receipt_passed(build, 'build')
+            or CompleteProductionOrchestrator._command_receipt_passed(build, 'clean_build')
+        ):
             return False
         raw = build.get('jar_path')
         if not isinstance(raw, str):
             return False
         path = Path(raw).expanduser().resolve()
-        return path.is_file() and (not path.is_symlink())
+        if not path.is_file() or path.is_symlink():
+            return False
+        if require_gametest:
+            if spec is None:
+                return False
+            if not CompleteProductionOrchestrator._gametest_receipt_passed(build, spec):
+                return False
+        return True
 
     @staticmethod
     def _required_gate_failures(proposal: CompleteProposal, *, generated_receipts: Iterable[Any], project_root: Path | None=None, source_validation: dict[str, Any] | None, jdt_receipt: dict[str, Any] | None, build_report: dict[str, Any] | None, jar_validation: dict[str, Any] | None, blockbench_receipts: Iterable[dict[str, Any]], runtime_receipt: dict[str, Any] | None, playtest_receipt: dict[str, Any] | None, visual_receipt: dict[str, Any] | None) -> list[str]:
