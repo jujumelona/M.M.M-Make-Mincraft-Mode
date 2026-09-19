@@ -1574,6 +1574,7 @@ def _record_unapplied_mutation(state: Any, signature: str) -> bool:
     repeated = signature in state.unchanged_mutation_fingerprints
     state.unchanged_mutation_fingerprints.add(signature)
     if repeated:
+        state.unapplied_mutation_fixed_point = True
         state.semantic_fixed_point = True
     return False
 
@@ -1633,6 +1634,9 @@ def _record_applied_mutation(
 ) -> bool:
     if signature:
         state.mutation_fingerprints.add(signature)
+    state.unchanged_mutation_fingerprints.clear()
+    state.unapplied_mutation_fixed_point = False
+    state.semantic_fixed_point = False
     state.applied_mutations.append(tool_name)
     state.workspace_changed = True
     state.validation_status = "PENDING"
@@ -1693,6 +1697,7 @@ class HostRunState:
     applied_mutations: list[str] = field(default_factory=list)
     mutation_fingerprints: set[str] = field(default_factory=set)
     unchanged_mutation_fingerprints: set[str] = field(default_factory=set)
+    unapplied_mutation_fixed_point: bool = False
     created_paths: set[str] = field(default_factory=set)
     workspace_changed: bool = False
     validation_status: str = "PENDING"
@@ -1840,7 +1845,7 @@ class HostRunState:
     def clear_no_progress_result(self) -> None:
         with self._lock:
             self.seen_no_progress_digests.clear()
-            self.semantic_fixed_point = False
+            self.semantic_fixed_point = self.unapplied_mutation_fixed_point
             self.no_progress_streak = 0
 
     def next_untried_internal_tool(
@@ -2669,6 +2674,8 @@ def _generate_with_tools_impl(
             return _host_coder_summary(verification="PASS")
 
         if state.semantic_fixed_point:
+            if state.unapplied_mutation_fixed_point:
+                raise _fixed_point_error(state)
             actionable_mutation = bool(
                 implementation_requires_mutation
                 and baseline_ready
