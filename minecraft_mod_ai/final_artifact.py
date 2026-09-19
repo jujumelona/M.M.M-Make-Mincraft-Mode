@@ -490,8 +490,8 @@ def build_debug_fixture_coverage_receipt(
     build_report: Mapping[str, Any] | None,
     jar_validation: Mapping[str, Any] | None,
     gametest_passed: bool,
-    observable_acceptance: Mapping[str, Any] | None,
     unresolved_gates: tuple[str, ...] | list[str],
+    observable_acceptance: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Bind the host-owned Debug fixture to real deterministic verification evidence.
 
