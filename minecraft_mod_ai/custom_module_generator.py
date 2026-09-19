@@ -921,6 +921,34 @@ class CustomModuleGenerator:
             _transfer_checkpoint_lease(checkpoint_lease)
         return token
 
+    def finalize_committed_generation_checkpoint(
+        self,
+        result: Any,
+        *,
+        project_root: str | Path,
+    ) -> bool:
+        """Clean one checkpoint only after the durable work-node commit succeeded."""
+
+        checkpoint = result.get("generation_checkpoint") if isinstance(result, dict) else None
+        if not isinstance(checkpoint, dict):
+            return True
+        if checkpoint.get("status") == "CLEANED_AFTER_LIVE_COMMIT":
+            return True
+        token = checkpoint.get("cleanup_token")
+        with self._checkpoint_cleanup_lock:
+            owned = (
+                self._checkpoint_cleanup_tokens.get(token)
+                if isinstance(token, str)
+                else None
+            )
+        if owned is not None:
+            return self.acknowledge_generation_checkpoint(result)
+        return finalize_persisted_generation_checkpoint(
+            result,
+            project_root=project_root,
+            checkpoint_root=self._checkpoint_root,
+        )
+
     def acknowledge_generation_checkpoint(self, result: Any) -> bool:
         if not isinstance(result, dict):
             return False
@@ -1341,6 +1369,100 @@ def _prepare_generation_checkpoint(
         lease.close()
         raise
     return checkpoint_root, staged_root, False, lease
+
+
+def _committed_patch_receipt_matches(
+    result: Any,
+    *,
+    project_root: Path,
+) -> bool:
+    if not isinstance(result, Mapping):
+        return False
+    patch = result.get("patch_receipt")
+    if not isinstance(patch, Mapping) or patch.get("status") not in {"APPLIED", "UNCHANGED"}:
+        return False
+    operations = patch.get("operations")
+    if not isinstance(operations, list) or not operations:
+        return False
+    root = project_root.expanduser().resolve()
+    for item in operations:
+        if not isinstance(item, Mapping):
+            return False
+        raw_path = item.get("path")
+        if not isinstance(raw_path, str) or not raw_path:
+            return False
+        candidate = (root / raw_path).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            return False
+        expected = item.get("after_sha256")
+        if expected is None:
+            if candidate.exists():
+                return False
+            continue
+        if (
+            not isinstance(expected, str)
+            or not candidate.is_file()
+            or candidate.is_symlink()
+            or ("sha256:" + content_digest(candidate).hex()) != expected
+        ):
+            return False
+    return True
+
+
+def finalize_persisted_generation_checkpoint(
+    result: Any,
+    *,
+    project_root: str | Path,
+    checkpoint_root: str | Path | None = None,
+) -> bool:
+    """Recover cleanup after ledger commit survived but in-memory ownership did not."""
+
+    if not isinstance(result, dict):
+        return False
+    checkpoint = result.get("generation_checkpoint")
+    if not isinstance(checkpoint, dict):
+        return True
+    if checkpoint.get("status") == "CLEANED_AFTER_LIVE_COMMIT":
+        return True
+    if (
+        checkpoint.get("schema_version") != _CHECKPOINT_SCHEMA
+        or checkpoint.get("status") != "AWAITING_LIVE_COMMIT"
+    ):
+        return False
+    identity = checkpoint.get("identity_sha256")
+    if not isinstance(identity, str):
+        return False
+    root = Path(project_root).expanduser().resolve()
+    if not _committed_patch_receipt_matches(result, project_root=root):
+        return False
+
+    configured = (
+        Path(checkpoint_root).expanduser()
+        if checkpoint_root is not None
+        else None
+    )
+    base = _checkpoint_directory(root, configured)
+    path = _safe_checkpoint_path(base, _checkpoint_key(identity))
+    resolved = path.resolve()
+    with _CHECKPOINT_ACTIVE_LOCK:
+        if resolved in _CHECKPOINT_ACTIVE_PATHS:
+            return False
+    if path.exists():
+        try:
+            manifest = _read_generation_checkpoint_manifest(path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            return False
+        if (
+            manifest.get("schema_version") != _CHECKPOINT_SCHEMA
+            or manifest.get("identity_sha256") != identity
+        ):
+            return False
+        _remove_generation_checkpoint(path)
+    checkpoint["status"] = "CLEANED_AFTER_LIVE_COMMIT"
+    checkpoint.pop("cleanup_token", None)
+    return True
 
 
 def _project_snapshot(root: Path) -> dict[str, str]:
