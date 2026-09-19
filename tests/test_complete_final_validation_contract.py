@@ -11,6 +11,7 @@ from minecraft_mod_ai.mcp_tools import MMMToolService
 
 from minecraft_mod_ai.complete_orchestrator import (
     CompleteProductionOrchestrator,
+    _attach_verified_release_artifact,
     _blocking_jdt_errors,
     _final_validation_failure,
     _gametest_attestation_status,
@@ -607,15 +608,48 @@ def test_downloadable_bundle_keeps_verified_additional_resource_pack(tmp_path) -
     )
 
 
-def test_primary_release_zip_path_accepts_attested_additional_artifacts() -> None:
-    package_source = inspect.getsource(MMMToolService.package_release)
-    execute_source = inspect.getsource(CompleteProductionOrchestrator.execute)
+def test_primary_release_zip_keeps_mcp_authority_narrow_and_attaches_privately(tmp_path) -> None:
+    assert "additional_artifacts" not in inspect.signature(
+        MMMToolService.package_release
+    ).parameters
 
-    assert "additional_artifacts" in package_source
-    assert "Additional release artifact digest mismatch" in package_source
-    assert "Path('additional') / name" in package_source
-    assert "'resource_pack_sha256'" in execute_source
-    assert "'generated-resource-pack.zip': resource_pack_bundle" in execute_source
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    release_zip = run_root / "release.zip"
+    with zipfile.ZipFile(release_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("source/demo.txt", "source")
+        archive.writestr(
+            "release-manifest.json",
+            '{"schema_version":"mmm/release-manifest-v2"}',
+        )
+    pack = run_root / "generated-resource-pack.zip"
+    pack.write_bytes(b"pack")
+    release = {
+        "status": "PACKAGED",
+        "release_zip": str(release_zip),
+        "sha256": CompleteProductionOrchestrator._file_hash(release_zip),
+    }
+    pack_sha = CompleteProductionOrchestrator._file_hash(pack)
+
+    updated = _attach_verified_release_artifact(
+        release,
+        {"path": str(pack), "sha256": pack_sha},
+        archive_name="generated-resource-pack.zip",
+        allowed_root=run_root,
+    )
+
+    assert updated["sha256"] == CompleteProductionOrchestrator._file_hash(release_zip)
+    assert updated["additional_artifacts"] == {
+        "generated-resource-pack.zip": pack_sha
+    }
+    with zipfile.ZipFile(release_zip) as archive:
+        assert archive.read("additional/generated-resource-pack.zip") == b"pack"
+        manifest = __import__("json").loads(
+            archive.read("release-manifest.json").decode("utf-8")
+        )
+    assert manifest["additional_artifacts"] == {
+        "generated-resource-pack.zip": pack_sha
+    }
 
 
 def test_blockbench_checkpoint_dependency_tracks_geometry_digest(tmp_path) -> None:
