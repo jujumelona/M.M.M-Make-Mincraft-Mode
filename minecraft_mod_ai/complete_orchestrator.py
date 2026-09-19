@@ -71,7 +71,7 @@ from .prepared_project_resume_integrity import (
     prepared_project_cache_valid,
     prepared_project_matches_spec,
 )
-from .project_edit import ProjectEditError, inspect_fabric_project
+from .project_edit import inspect_fabric_project
 from .project_index import ProjectIndex
 from .project_index_execution_reuse_contract import (
     execution_scoped,
