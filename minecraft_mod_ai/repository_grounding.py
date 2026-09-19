@@ -282,6 +282,16 @@ def _explore_with_degraded_fallback(
     degraded: list[str],
     lane: str,
 ):
+    from .retrieval_cpu_budget_contract import _dense_opted_in
+
+    if not _dense_opted_in():
+        return explorer.explore(
+            query,
+            diagnostic_paths=diagnostics,
+            line_budget=line_budget,
+            semantic=False,
+            rerank=False,
+        )
     try:
         return explorer.explore(
             query,
