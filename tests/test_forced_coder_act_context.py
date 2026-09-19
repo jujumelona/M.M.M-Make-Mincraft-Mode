@@ -154,3 +154,59 @@ def test_output_boundary_recovery_matches_visible_source_edit_protocol() -> None
     assert "apply_source_edit exactly once" in instruction
     assert "operation=create_file" in instruction
     assert "create_java_type" not in instruction
+
+
+
+class _ExactAccountingAdapter:
+    def __init__(self) -> None:
+        self.requests = []
+
+    def input_context_accounting(self, request):
+        del request
+        return SimpleNamespace(input_tokens=100, context_tokens=32768)
+
+    def generate_turn(self, request):
+        self.requests.append(request)
+        return SimpleNamespace(content="", tool_calls=())
+
+
+def test_exact_accounting_cannot_bypass_canonical_implementation_compaction() -> None:
+    adapter = _ExactAccountingAdapter()
+    config = SimpleNamespace(
+        adapter="test",
+        max_context=32768,
+        max_input_tokens=0,
+        max_new_tokens=8192,
+    )
+    messages = [
+        {"role": "system", "content": "coder"},
+        {
+            "role": "user",
+            "content": (
+                '{"phase":"implement_module","workspace_project_root":".",'
+                '"research_context":"' + ("x" * 12000) + '",'
+                '"task":"write one file"}'
+            ),
+        },
+    ]
+    request = GenerationRequest(messages=tuple(messages), tools=())
+
+    tool_loop._generate_turn_with_context_recovery(
+        SimpleNamespace(),
+        config=config,
+        adapter=adapter,
+        request=request,
+        messages=messages,
+        media_paths=(),
+        tool_choice=None,
+        parallel_tool_calls=False,
+    )
+
+    assert len(adapter.requests) == 1
+    forwarded_user = next(
+        message
+        for message in adapter.requests[0].messages
+        if message.get("role") == "user"
+    )
+    assert '"research_context"' not in forwarded_user["content"]
+    assert '"task":"write one file"' in forwarded_user["content"]
