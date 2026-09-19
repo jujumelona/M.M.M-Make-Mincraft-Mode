@@ -366,3 +366,30 @@ def test_execution_feedback_repair_stops_on_repeated_fingerprint(monkeypatch):
     assert orchestrator.calls == 2
     assert orchestrator._mmm_feedback_ledger.invalidations == 2
     assert len(feedback_rows) == 2
+
+def test_verifier_infrastructure_failure_is_classified_by_feedback_owner():
+    result = feedback._verifier_infrastructure_failure(
+        {
+            "diagnostics": [
+                {
+                    "code": "JDT_DIAGNOSTICS_UNAVAILABLE",
+                    "message": "release 25 is not found in the system",
+                }
+            ]
+        }
+    )
+
+    assert result is not None
+    assert result["code"] == "JDT_DIAGNOSTICS_UNAVAILABLE"
+    assert result["required_java"] == 25
+    assert str(result["fingerprint"]).startswith("sha256:")
+
+
+def test_feedback_execute_wrapper_carries_semantic_convergence_marker(monkeypatch):
+    orchestrator, _feedback_rows = _install_feedback_loop(
+        monkeypatch, failures_before_success=0
+    )
+
+    assert getattr(orchestrator.execute, "_mmm_impacted_feedback_loop", False)
+    assert getattr(orchestrator.execute, "_mmm_semantic_convergence", False)
+
