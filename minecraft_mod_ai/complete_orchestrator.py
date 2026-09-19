@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import traceback
 import zipfile
@@ -2707,6 +2708,166 @@ class CompleteProductionOrchestrator:
             )
         return report, project_root
 
+    @staticmethod
+    def _bind_debug_fixture_runtime(
+        approved: CompleteProposal,
+        project_root: Path,
+    ) -> Path:
+        """Bind the model-owned DebugToken source to host-owned runtime execution."""
+
+        root = project_root.expanduser().resolve()
+        if not (
+            approved.schema_version == 'mmm/complete-proposal-v1'
+            and approved.game_design.get('mode') == 'debug_fixture'
+        ):
+            return root
+
+        fixture = approved.game_design.get('fixture')
+        fixture_module_id = (
+            str(fixture.get('module_id') or '').strip()
+            if isinstance(fixture, dict)
+            else ''
+        )
+        fixture_module = next(
+            (
+                module
+                for module in approved.modules
+                if module.module_id == fixture_module_id
+            ),
+            None,
+        )
+        source_contract = (
+            fixture_module.config.get('observable_source_contract')
+            if fixture_module is not None and isinstance(fixture_module.config, dict)
+            else None
+        )
+        if not isinstance(source_contract, dict):
+            raise CompleteProductionError(
+                'Debug fixture is missing its observable source contract.'
+            )
+        binding_field = str(source_contract.get('binding_field') or '').strip()
+        if not binding_field or re.fullmatch(r'[A-Za-z_$][A-Za-z0-9_$]*', binding_field) is None:
+            raise CompleteProductionError(
+                'Debug fixture binding_field is missing or invalid.'
+            )
+
+        package_name = approved.base_proposal.spec.package_name
+        package_path = package_name.replace('.', '/')
+        main_class = ''.join(
+            part.capitalize()
+            for part in approved.base_proposal.spec.mod_id.split('_')
+        ) + 'Mod'
+        main_relative = f'src/main/java/{package_path}/{main_class}.java'
+        gametest_relative = (
+            f'src/main/java/{package_path}/{main_class}GameTests.java'
+        )
+
+        bootstrap_receipt = root / '.minecraft_ai/fabric-template-receipt.json'
+        if bootstrap_receipt.is_file() and not bootstrap_receipt.is_symlink():
+            try:
+                bootstrap = json.loads(
+                    bootstrap_receipt.read_text(encoding='utf-8')
+                )
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise CompleteProductionError(
+                    'Debug fixture Fabric template receipt is invalid.'
+                ) from exc
+            runtime_contract = bootstrap.get('runtime_contract')
+            gametest_contract = bootstrap.get('gametest_contract')
+            if isinstance(runtime_contract, dict):
+                candidate = runtime_contract.get('main_source')
+                if isinstance(candidate, str) and candidate.strip():
+                    main_relative = candidate.strip()
+            if isinstance(gametest_contract, dict):
+                candidate = gametest_contract.get('source')
+                if isinstance(candidate, str) and candidate.strip():
+                    gametest_relative = candidate.strip()
+
+        def owned_source(relative: str, label: str) -> Path:
+            candidate = (root / relative).resolve()
+            try:
+                candidate.relative_to(root)
+            except ValueError as exc:
+                raise CompleteProductionError(
+                    f'Debug fixture {label} escaped the project root.'
+                ) from exc
+            if not candidate.is_file() or candidate.is_symlink():
+                raise CompleteProductionError(
+                    f'Debug fixture {label} is missing: {relative}'
+                )
+            return candidate
+
+        main_source = owned_source(main_relative, 'main entrypoint source')
+        gametest_source = owned_source(gametest_relative, 'GameTest source')
+        binding_expression = f'DebugToken.{binding_field}'
+
+        main_text = main_source.read_text(encoding='utf-8')
+        main_marker = 'MMM_DEBUG_FIXTURE_RUNTIME_BINDING'
+        if main_marker not in main_text:
+            match = re.search(
+                r'public\s+void\s+onInitialize\s*\(\s*\)\s*\{',
+                main_text,
+            )
+            if match is None:
+                raise CompleteProductionError(
+                    'Debug fixture host main entrypoint has no onInitialize method.'
+                )
+            injection = (
+                match.group(0)
+                + '\n        // '
+                + main_marker
+                + '\n        if ('
+                + binding_expression
+                + ' == null) {\n'
+                + '            throw new IllegalStateException('
+                + '"debug_token registration binding is null");\n'
+                + '        }'
+            )
+            main_text = (
+                main_text[: match.start()]
+                + injection
+                + main_text[match.end() :]
+            )
+            main_source.write_text(main_text, encoding='utf-8', newline='\n')
+
+        gametest_text = gametest_source.read_text(encoding='utf-8')
+        gametest_marker = 'MMM_DEBUG_FIXTURE_REGISTRY_ASSERTION'
+        if gametest_marker not in gametest_text:
+            terminal = next(
+                (
+                    value
+                    for value in ('context.succeed();', 'context.complete();')
+                    if value in gametest_text
+                ),
+                None,
+            )
+            if terminal is None:
+                raise CompleteProductionError(
+                    'Debug fixture host GameTest has no terminal success call.'
+                )
+            assertion = (
+                '        // '
+                + gametest_marker
+                + '\n        if ('
+                + binding_expression
+                + ' == null) {\n'
+                + '            throw new AssertionError('
+                + '"debug_token runtime registry binding is null");\n'
+                + '        }\n'
+            )
+            gametest_text = gametest_text.replace(
+                '        ' + terminal,
+                assertion + '        ' + terminal,
+                1,
+            )
+            gametest_source.write_text(
+                gametest_text,
+                encoding='utf-8',
+                newline='\n',
+            )
+
+        return root
+
     def _prepare_project(self, approved: CompleteProposal, *, run_root: Path, existing_input: str | Path | None) -> Path:
         if existing_input is not None:
             _report, project_root = self._inspect_existing_project_input(
@@ -2714,7 +2875,7 @@ class CompleteProductionOrchestrator:
                 run_root=run_root,
                 existing_input=existing_input,
             )
-            return project_root
+            return self._bind_debug_fixture_runtime(approved, project_root)
         base = approved.base_proposal
         from .platform_catalog import adapter_for_lock_values
         from .platform_live_execution_contract import (
@@ -2724,20 +2885,21 @@ class CompleteProductionOrchestrator:
 
         adapter = adapter_for_lock_values(base.spec.platform)
         if _uses_official_scaffold(adapter):
-            return prepare_official_fabric_project(
+            project_root = prepare_official_fabric_project(
                 self,
                 approved,
                 run_root=run_root,
                 adapter=adapter,
                 error_type=CompleteProductionError,
             )
+            return self._bind_debug_fixture_runtime(approved, project_root)
 
         base.approve(base.calculate_hash())
         project_root = run_root / 'base/workspaces' / base.spec.mod_id
         if project_root.exists():
             if self._project_matches_spec(project_root, base.spec):
                 self._write_base_proposal(project_root, base)
-                return project_root.resolve()
+                return self._bind_debug_fixture_runtime(approved, project_root)
             self._preserve_partial_project(project_root)
         staging = project_root.with_name(f'.{project_root.name}.staging')
         if staging.exists():
@@ -2747,10 +2909,10 @@ class CompleteProductionOrchestrator:
         if project_root.exists():
             if self._project_matches_spec(project_root, base.spec):
                 self._preserve_partial_project(staging)
-                return project_root.resolve()
+                return self._bind_debug_fixture_runtime(approved, project_root)
             self._preserve_partial_project(project_root)
         staging.replace(project_root)
-        return project_root.resolve()
+        return self._bind_debug_fixture_runtime(approved, project_root)
 
     def _locate_imported_project(self, report: Any, *, run_root: Path) -> Path:
         extracted = Path(str(report.extracted_to)).resolve()
