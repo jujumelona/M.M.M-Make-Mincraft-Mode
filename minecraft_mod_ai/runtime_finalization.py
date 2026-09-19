@@ -120,7 +120,6 @@ def finalize_runtime() -> None:
         from .small_model_task_capsule_contract import assert_installed as assert_small_model_task_capsule
         from .small_model_task_capsule_contract import install as install_small_model_task_capsule
         from .small_model_write_scope_enforcement import assert_installed as assert_small_model_write_scope
-        from .small_model_write_scope_enforcement import install as install_small_model_write_scope
         from .source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
         from .task_artifact_contract import install_task_artifact_contract
         from .tool_schema_ownership_contract import install as install_tool_schema_ownership
@@ -202,7 +201,6 @@ def finalize_runtime() -> None:
         assert_small_model_task_capsule()
         install_coder_mutation_authority()
         assert_coder_mutation_authority()
-        install_small_model_write_scope(custom_module_generator_module=custom_module_generator, host_grounding_module=host_grounding)
         assert_small_model_write_scope(custom_module_generator_module=custom_module_generator, host_grounding_module=host_grounding)
         install_small_model_atomic_coder(
             custom_module_generator_module=custom_module_generator,
