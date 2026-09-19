@@ -323,10 +323,28 @@ class MinecraftRuntimeManager:
         path = self._existing_file(screenshot_path)
         if path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
             raise RuntimePolicyError("Runtime screenshot has an unsupported format.")
+        with self._lock:
+            instance_root = self.instance_root
+            server_running = self._process_running(self.server_process)
+            client_running = self._process_running(self.client_process)
+        if instance_root is None:
+            raise RuntimePolicyError("Prepare a runtime instance before registering screenshots.")
+        client_root = (instance_root / "client").resolve()
+        try:
+            path.relative_to(client_root)
+        except ValueError as exc:
+            raise RuntimePolicyError(
+                "Runtime screenshots must come from the current disposable client directory."
+            ) from exc
         return {
-            "schema_version": "mmm/runtime-screenshot-v1",
+            "schema_version": "mmm/runtime-screenshot-v2",
             "path": str(path),
+            "sha256": self._sha256_file(path),
             "size_bytes": path.stat().st_size,
+            "mtime_ns": path.stat().st_mtime_ns,
+            "instance_root": str(instance_root),
+            "server_running": server_running,
+            "client_running": client_running,
         }
 
     def tail_logs(self, lines: int = 120) -> dict[str, Any]:
