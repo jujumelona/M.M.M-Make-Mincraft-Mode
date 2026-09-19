@@ -28,7 +28,11 @@ from typing import Any
 
 from .coder_execution_contract import project_task_for_coder
 from .complete_spec import ProductionModule
-from .host_grounding import build_coder_grounding, custom_module_path_protected
+from .host_grounding import (
+    build_coder_grounding,
+    custom_module_path_allowed,
+    custom_module_path_protected,
+)
 from .llama_finish_reason_contract import OUTPUT_EXHAUSTED, completion_boundary_kind
 from .model_context_budget import request_message_budget
 from .model_router import ModelRouter
@@ -36,6 +40,10 @@ from .platform_catalog import adapter_for_target, adapter_from_project
 from .project_index import ProjectIndex
 from .research_ledger import select_module_research_context
 from .scale_policy import ScalePolicy
+from .small_model_write_scope_enforcement import (
+    exact_task_operation_validator,
+    generation_authority_scoped,
+)
 from .source_patch import SourcePatchError, TransactionalSourcePatcher
 from .target_contract import TargetContractError, validate_target_coordinates
 
@@ -313,12 +321,6 @@ def _task_local_module_contract(module: ProductionModule) -> dict[str, Any]:
     )
 
 
-_AGENT_MUTABLE_PREFIXES = (
-    "src/main/java/",
-    "src/main/resources/",
-    "src/test/java/",
-    "src/gametest/",
-)
 _STAGE_IGNORED_DIRS = {".git", ".gradle", ".minecraft_ai", "build", "run"}
 _CONTINUATION_PATH_PREVIEW = 64
 _CHECKPOINT_DIRECTORY = ".mmm-custom-checkpoints"
@@ -510,6 +512,7 @@ class CustomModuleGenerator:
             tuple[str, Path, _GenerationCheckpointLease],
         ] = {}
 
+    @generation_authority_scoped
     @_checkpoint_lease_scoped
     def generate(
         self,
@@ -986,6 +989,7 @@ class CustomModuleGenerator:
                 checkpoint.pop("cleanup_token", None)
         return removed
 
+    @exact_task_operation_validator(CustomModuleGenerationError)
     def _validate_operations(self, operations: list[dict[str, Any]]) -> None:
         for item in operations:
             if not isinstance(item, dict):
@@ -1006,23 +1010,7 @@ class CustomModuleGenerator:
             )
 
 
-_GRADLE_METADATA_FILES = {
-    "build.gradle",
-    "build.gradle.kts",
-    "settings.gradle",
-    "settings.gradle.kts",
-    "gradle.properties",
-    "gradle/libs.versions.toml",
-}
-
-
-def _agent_mutable_path(path: str) -> bool:
-    normalized = PurePosixPath(path.replace("\\", "/")).as_posix()
-    return (
-        any(normalized.startswith(prefix) for prefix in _AGENT_MUTABLE_PREFIXES)
-        or normalized.startswith(".minecraft_ai/")
-        or normalized in _GRADLE_METADATA_FILES
-    )
+_agent_mutable_path = custom_module_path_allowed
 
 
 def _stage_ignore(_directory: str, names: list[str]) -> set[str]:
