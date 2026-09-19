@@ -744,6 +744,107 @@ class _TaskBoundAdapter:
         return normalized
 
 
+def _atomic_request_scope(
+    capsule: TaskCapsule,
+    messages: Sequence[Mapping[str, Any]],
+) -> tuple[TaskCapsule, dict[str, int] | None]:
+    """Narrow module authority to the exact targets of one atomic coder step."""
+
+    for message in reversed(tuple(messages)):
+        if str(message.get("role") or "").strip().casefold() != "user":
+            continue
+        content = message.get("content")
+        if not isinstance(content, str):
+            continue
+        try:
+            payload = json.loads(content)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, Mapping):
+            continue
+        atomic = payload.get("atomic_execution")
+        module = payload.get("module")
+        if not isinstance(atomic, Mapping) or not isinstance(module, Mapping):
+            continue
+        task = module.get("evidence_task")
+        contract = task.get("coder_execution_contract") if isinstance(task, Mapping) else None
+        step = contract.get("step") if isinstance(contract, Mapping) else None
+        if not isinstance(step, Mapping):
+            continue
+        raw_refs = step.get("target_refs")
+        if not isinstance(raw_refs, Sequence) or isinstance(
+            raw_refs, (str, bytes, bytearray)
+        ):
+            raise TaskCapsuleContractError(
+                "TASK_CAPSULE_ATOMIC_TARGETS_MISSING: atomic step has no target_refs."
+            )
+
+        requested: list[tuple[str, str]] = []
+        for raw in raw_refs:
+            path, symbol = _canonical_path(raw)
+            if not path:
+                raise TaskCapsuleContractError(
+                    "TASK_CAPSULE_ATOMIC_TARGET_INVALID: atomic step target is not a "
+                    "writable workspace locator."
+                )
+            item = (path, symbol)
+            if item not in requested:
+                requested.append(item)
+        if not requested:
+            raise TaskCapsuleContractError(
+                "TASK_CAPSULE_ATOMIC_TARGETS_MISSING: atomic step has no concrete targets."
+            )
+
+        by_path = {anchor.path: anchor for anchor in capsule.anchors}
+        narrowed: list[TaskAnchor] = []
+        for path, symbol in requested:
+            anchor = by_path.get(path)
+            if anchor is None:
+                raise TaskCapsuleContractError(
+                    "TASK_CAPSULE_ATOMIC_SCOPE_ESCAPE: atomic step target is outside "
+                    f"the approved task: {path}"
+                )
+            scoped_anchor = (
+                replace(anchor, symbol=symbol)
+                if symbol and symbol != anchor.symbol
+                else anchor
+            )
+            if scoped_anchor not in narrowed:
+                narrowed.append(scoped_anchor)
+
+        primary_path, primary_symbol = requested[0]
+        primary = next(
+            (anchor for anchor in narrowed if anchor.path == primary_path),
+            None,
+        )
+        if primary is None:
+            raise TaskCapsuleContractError(
+                "TASK_CAPSULE_ATOMIC_PRIMARY_MISSING: first atomic target is not owned."
+            )
+        step_index = int(atomic.get("step_index") or 0)
+        step_count = int(atomic.get("step_count") or 0)
+        scoped = TaskCapsule(
+            task_id=capsule.task_id,
+            module_kind=capsule.module_kind,
+            primary_path=primary_path,
+            primary_symbol=primary_symbol or primary.symbol,
+            anchors=tuple(narrowed),
+            reuse_action=capsule.reuse_action,
+            required_gates=capsule.required_gates,
+            task_sha256=capsule.task_sha256,
+            capsule_sha256=_sha256(
+                {
+                    "parent_capsule_sha256": capsule.capsule_sha256,
+                    "target_refs": [anchor.locator for anchor in narrowed],
+                    "step_index": step_index,
+                    "step_count": step_count,
+                }
+            ),
+        )
+        return scoped, {"step_index": step_index, "step_count": step_count}
+    return capsule, None
+
+
 def _authority_message(capsule: TaskCapsule) -> dict[str, str]:
     return {
         "role": "developer",
@@ -854,6 +955,7 @@ def task_capsule_tool_loop(func: Any) -> Any:
                 stage=stage,
                 role=role,
             )
+        capsule, atomic_scope = _atomic_request_scope(capsule, request.messages)
         tools = tuple(
             narrow_task_tool_schema(schema, capsule)
             for schema in tuple(request.tools)
@@ -872,7 +974,12 @@ def task_capsule_tool_loop(func: Any) -> Any:
             f"reuse={capsule.reuse_action}",
             flush=True,
         )
-        with trace_scope(f"task:{capsule.task_id}"):
+        trace_name = (
+            f"task:{capsule.task_id}:step:{atomic_scope['step_index']}"
+            if atomic_scope is not None
+            else f"task:{capsule.task_id}"
+        )
+        with trace_scope(trace_name):
             emit_root_cause(
                 "task_capsule_activated",
                 stage=stage,
@@ -886,6 +993,7 @@ def task_capsule_tool_loop(func: Any) -> Any:
                     "test_paths": capsule.test_paths,
                     "required_gates": capsule.required_gates,
                     "reuse_action": capsule.reuse_action,
+                    "atomic_scope": atomic_scope,
                     "messages": request.messages,
                     "narrowed_tools": request.tools,
                 },
