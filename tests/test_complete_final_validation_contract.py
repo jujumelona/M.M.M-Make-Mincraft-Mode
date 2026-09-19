@@ -110,6 +110,83 @@ def test_requested_gametest_requires_structured_matching_evidence(tmp_path) -> N
     ) == "PASS"
 
 
+def test_incremental_full_build_receipt_is_release_grade_evidence(
+    tmp_path,
+) -> None:
+    jar = tmp_path / "demo.jar"
+    jar.write_bytes(b"jar")
+    build = {
+        "status": "PASS",
+        "jar_path": str(jar),
+        "commands": [
+            {
+                "name": "incremental_build",
+                "command": [
+                    "/opt/gradle/bin/gradle",
+                    "--daemon",
+                    "--parallel",
+                    "--max-workers=4",
+                    "build",
+                    "--build-cache",
+                    "--stacktrace",
+                ],
+                "exit_code": 0,
+                "timed_out": False,
+            }
+        ],
+        "gametest_report": None,
+    }
+
+    assert CompleteProductionOrchestrator._full_gradle_build_receipt_passed(build)
+    assert CompleteProductionOrchestrator._cached_build_exists(build)
+
+
+def test_incremental_receipt_without_gradle_build_task_is_not_release_grade() -> None:
+    build = {
+        "status": "PASS",
+        "commands": [
+            {
+                "name": "incremental_build",
+                "command": ["gradle", "compileJava", "--stacktrace"],
+                "exit_code": 0,
+                "timed_out": False,
+            }
+        ],
+    }
+
+    assert not CompleteProductionOrchestrator._full_gradle_build_receipt_passed(build)
+
+
+def test_integrated_gametest_accepts_incremental_build_receipt(tmp_path) -> None:
+    report = tmp_path / "gametest-report.xml"
+    report.write_text(
+        '<testsuites><testsuite tests="1" failures="0" errors="0" skipped="0">'
+        '<testcase name="DemoModGameTests.generatedRegistriesAreLive"/>'
+        "</testsuite></testsuites>",
+        encoding="utf-8",
+    )
+    build = {
+        "status": "PASS",
+        "gametest_mode": "integrated_build",
+        "gametest_task": "runGameTest",
+        "commands": [
+            {
+                "name": "incremental_build",
+                "command": ["gradle", "build", "--build-cache", "--stacktrace"],
+                "exit_code": 0,
+                "timed_out": False,
+            }
+        ],
+        "gametest_report": str(report),
+    }
+
+    assert _gametest_attestation_status(
+        build,
+        SimpleNamespace(mod_id="demo"),
+        requested=True,
+    ) == "PASS"
+
+
 def test_requested_gametest_without_report_is_not_attested() -> None:
     build = {
         "status": "PASS",
