@@ -24,13 +24,6 @@ _DEFAULT_DIAGNOSTIC_PAGE_MAX_FILES = 128
 _DEFAULT_DIAGNOSTIC_PAGE_MAX_SOURCE_BYTES = 8 * 1024 * 1024
 _DEFAULT_DIAGNOSTIC_QUIET_SECONDS = 2.0
 _DEFAULT_PROJECT_JAVA_VERSION = 17
-_SEMANTIC_PROBE_NAME = "__MmmJdtReadinessProbe"
-_SEMANTIC_PROBE_SOURCE = (
-    f"final class {_SEMANTIC_PROBE_NAME} {{\n"
-    "    Object objectValue;\n"
-    "    String stringValue;\n"
-    "}\n"
-)
 _JAVA_CORE_UNRESOLVED = re.compile(
     r"(?:"
     r"(?:the type\s+)?java\.lang\.(?:Object|String).*cannot be resolved"
@@ -833,19 +826,6 @@ def _read_source_page(
     return sources, total_bytes
 
 
-def _java_source_root(root: Path) -> Path:
-    for relative in ("src/main/java", "src/client/java", "src/test/java"):
-        candidate = root / relative
-        if candidate.is_dir():
-            return candidate.resolve()
-    files = _java_files(root, None)
-    if files:
-        return files[0].parent
-    raise JDTWorkspaceBootstrapError(
-        "JDT workspace bootstrap failure: no Java source root exists for the semantic readiness probe."
-    )
-
-
 def _java_core_bootstrap_messages(
     diagnostics: dict[str, list[dict[str, Any]]],
 ) -> list[str]:
@@ -871,17 +851,14 @@ def _raise_on_java_core_bootstrap_failure(
     )
 
 
-def _document_symbols_contain_name(value: Any, expected: str) -> bool:
-    if isinstance(value, Mapping):
-        if str(value.get("name") or "").strip() == expected:
-            return True
-        return any(
-            _document_symbols_contain_name(child, expected)
-            for child in value.values()
-        )
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return any(_document_symbols_contain_name(child, expected) for child in value)
-    return False
+def _jdt_service_ready(message: Mapping[str, Any]) -> bool:
+    if message.get("method") != "language/status":
+        return False
+    params = message.get("params")
+    return (
+        isinstance(params, Mapping)
+        and str(params.get("type") or "").strip() == "ServiceReady"
+    )
 
 
 def _await_java_core_ready(
@@ -892,61 +869,57 @@ def _await_java_core_ready(
     quiet_seconds: float,
     deadline: float | None = None,
 ) -> None:
-    """Wait until JDT LS can parse a real project-source readiness document.
+    """Wait for JDT LS explicit service-readiness notification.
 
-    publishDiagnostics is not a mandatory acknowledgement for a clean opened document,
-    so waiting for an empty diagnostics notification can falsely fail a healthy JDT
-    workspace with observed=0. The exact project JDK is already validated before this
-    point. Here we only require JDT LS to parse and return the materialized probe symbol;
-    ordinary Java diagnostics and compilation remain separate downstream gates.
+    Feature requests such as documentSymbol and publishDiagnostics are not lifecycle
+    acknowledgements. During Gradle import they may legitimately block or stay silent,
+    which made the previous readiness probes report a healthy workspace as unavailable.
+    JDT LS emits language/status with type=ServiceReady after workspace initialization.
+    Actual Java/classpath correctness remains fail-closed in the normal diagnostics
+    pass that follows this gate.
     """
 
     del quiet_seconds
-    source_root = _java_source_root(root)
-    probe_name = f"{_SEMANTIC_PROBE_NAME}_{os.getpid()}_{threading.get_ident()}"
-    probe_path = source_root / f"{probe_name}.java"
-    probe_source = _SEMANTIC_PROBE_SOURCE.replace(_SEMANTIC_PROBE_NAME, probe_name)
-    uri = probe_path.resolve(strict=False).as_uri()
-    deadline = deadline if deadline is not None else time.monotonic() + float(timeout_seconds)
-    last_reason = "document symbol probe has not completed"
-
+    deadline = (
+        deadline
+        if deadline is not None
+        else time.monotonic() + float(timeout_seconds)
+    )
+    deferred: list[dict[str, Any]] = []
+    last_status = ""
     try:
-        probe_path.write_text(probe_source, encoding="utf-8")
-        rpc.notify("textDocument/didOpen", {"textDocument": {
-            "uri": uri,
-            "languageId": "java",
-            "version": 1,
-            "text": probe_source,
-        }})
-        while time.monotonic() < deadline:
+        while True:
+            _raise_diagnostic_transport_failure(rpc)
+            remaining = float(deadline) - time.monotonic()
+            if remaining <= 0:
+                break
             try:
-                remaining = _remaining_jdt_deadline(deadline, operation="semantic readiness")
-                result = rpc.request(
-                    "textDocument/documentSymbol",
-                    {"textDocument": {"uri": uri}},
-                    timeout=min(remaining, 5.0),
-                )
-                if _document_symbols_contain_name(result, probe_name):
-                    return
-                last_reason = "documentSymbol returned without the materialized probe class"
-            except (JDTLanguageServerError, TimeoutError) as exc:
-                last_reason = f"{type(exc).__name__}: {exc}"
-
-            remaining = deadline - time.monotonic()
-            if remaining > 0:
-                time.sleep(min(0.25, remaining))
+                message = rpc.messages.get(timeout=min(0.25, remaining))
+            except queue.Empty:
+                continue
+            if _respond_to_server_request(rpc, message):
+                continue
+            if _jdt_service_ready(message):
+                return
+            if message.get("method") == "language/status":
+                params = message.get("params")
+                if isinstance(params, Mapping):
+                    status_type = str(params.get("type") or "").strip()
+                    status_message = str(params.get("message") or "").strip()
+                    last_status = (
+                        f"{status_type}: {status_message}"
+                        if status_message
+                        else status_type
+                    )
+            deferred.append(message)
     finally:
-        try:
-            rpc.notify("textDocument/didClose", {"textDocument": {"uri": uri}})
-        finally:
-            # A readiness probe must never become project source. Fail closed if the
-            # temporary file cannot be removed instead of silently contaminating output.
-            probe_path.unlink(missing_ok=True)
+        for message in deferred:
+            rpc.messages.put(message)
 
+    detail = f" Last language/status: {last_status}." if last_status else ""
     raise JDTWorkspaceBootstrapError(
-        "JDT workspace bootstrap failure: the language server did not acknowledge "
-        "the materialized project-source readiness probe before validation. "
-        f"Last probe state: {last_reason}"
+        "JDT workspace bootstrap failure: language/status ServiceReady was not "
+        f"observed before validation for {root}.{detail}"
     )
 
 
