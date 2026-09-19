@@ -1551,7 +1551,7 @@ class CompleteProductionOrchestrator:
                 if not ids or any(item not in asset_lookup for item in ids):
                     raise CompleteProductionError(f'Work node {node.node_id} has invalid assets.')
                 shard_proposal = replace(approved, assets=tuple(asset_lookup[item] for item in ids), approval_hash='')
-                asset_shards.append(self._run_work_node(ledger, node, action=lambda proposal=shard_proposal: self._generate_assets(get_router(), proposal, project_root, run_root), validate_cached=lambda cached: all(Path(str(item.get('target', ''))).is_file() for item in cached.get('assets', [])), shared_index=shared_project_index))
+                asset_shards.append(self._run_work_node(ledger, node, action=lambda proposal=shard_proposal: self._generate_assets(get_router(), proposal, project_root, run_root), validate_cached=self._cached_asset_shard, shared_index=shared_project_index))
             else:
                 raise CompleteProductionError(f'Unsupported work node payload kind: {kind}')
         capacities = scheduler_safety._capacities()
@@ -1962,6 +1962,42 @@ class CompleteProductionOrchestrator:
             'release_zip': str(target),
             'sha256': CompleteProductionOrchestrator._file_hash(target),
         }
+
+    @staticmethod
+    def _cached_asset_shard(receipt: Any) -> bool:
+        if (
+            not isinstance(receipt, dict)
+            or receipt.get('status') != 'TEXTURE_PRODUCTION_PASS'
+        ):
+            return False
+        for collection, path_key in (
+            (receipt.get('assets'), 'target'),
+            (receipt.get('documents'), 'resolved_path'),
+        ):
+            if not isinstance(collection, list):
+                return False
+            for item in collection:
+                if not isinstance(item, dict):
+                    return False
+                raw = item.get(path_key)
+                expected = item.get('sha256')
+                if not isinstance(raw, str) or not isinstance(expected, str):
+                    return False
+                path = Path(raw).expanduser().resolve()
+                if (
+                    not path.is_file()
+                    or path.is_symlink()
+                    or CompleteProductionOrchestrator._file_hash(path) != expected
+                ):
+                    return False
+        graph = receipt.get('resource_graph_validation')
+        contract = receipt.get('resource_contract_validation')
+        return (
+            isinstance(graph, dict)
+            and graph.get('status') == 'PASS'
+            and isinstance(contract, dict)
+            and contract.get('status') == 'PASS'
+        )
 
     @staticmethod
     def _cached_blockbench_review(receipt: Any) -> bool:
