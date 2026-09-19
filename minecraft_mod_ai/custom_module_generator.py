@@ -450,6 +450,12 @@ def _generate_coder_text(
     return router.generate_text(role, messages, *args, **kwargs)
 
 
+def _receipt_required_gates(module: ProductionModule) -> list[str]:
+    """Preserve only gates explicitly declared by the approved module."""
+
+    return list(dict.fromkeys(module.required_gates))
+
+
 def _coder_project_context_budget(
     router: ModelRouter,
     policy: ScalePolicy,
@@ -876,7 +882,7 @@ class CustomModuleGenerator:
                 "identity_sha256": checkpoint_identity,
                 "cleanup_token": checkpoint_token,
             },
-            "required_gates": ["JDT", "Gradle", "GameTest", *module.required_gates],
+            "required_gates": _receipt_required_gates(module),
         }
         if reuse_application_receipt is not None:
             result["reuse_application_receipt"] = reuse_application_receipt
