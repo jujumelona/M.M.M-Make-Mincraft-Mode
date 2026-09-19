@@ -115,3 +115,30 @@ def test_runtime_completion_transport_has_one_progress_aware_owner() -> None:
         "_mmm_single_progress_aware_completion_owner_v1",
         False,
     )
+
+
+def test_semantic_progress_refreshes_execution_deadline(monkeypatch) -> None:
+    refreshed: list[float] = []
+    monkeypatch.setattr(
+        contract,
+        "refresh_model_execution_deadline",
+        lambda seconds: refreshed.append(float(seconds)),
+    )
+    response = SimpleNamespace(
+        iter_lines=lambda: iter(
+            [
+                'data: {"choices":[{"delta":{"content":"x"}}]}',
+                ": ping",
+                "data: [DONE]",
+            ]
+        )
+    )
+    wrapped = contract._ProgressCheckedResponse(
+        response,
+        120.0,
+        request_id="test-refresh-deadline",
+        started_at=0.0,
+    )
+
+    assert list(wrapped.iter_lines())[-1] == "data: [DONE]"
+    assert refreshed == [120.0, 120.0]
