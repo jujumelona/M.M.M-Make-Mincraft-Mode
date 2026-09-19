@@ -84,11 +84,13 @@ def test_exact_validator_rejects_other_source_file_even_inside_allowed_source_tr
         )
 
 
-def test_runtime_installs_single_coarse_authority_then_exact_task_scope_narrows_it() -> None:
+def test_custom_generator_owns_coarse_authority_and_exact_task_scope_in_source() -> None:
     assert_installed(
         custom_module_generator_module=custom_module_generator,
         host_grounding_module=host_grounding,
     )
+    assert getattr(custom_module_generator.CustomModuleGenerator.generate, "_mmm_exact_task_write_scope", False)
+    assert getattr(custom_module_generator.CustomModuleGenerator._validate_operations, "_mmm_exact_task_write_scope", False)
     assert custom_module_generator._agent_mutable_path is host_grounding.custom_module_path_allowed
     assert custom_module_generator._agent_mutable_path("src/main/java/demo/Owned.java") is True
     assert custom_module_generator._agent_mutable_path("build.gradle") is True
