@@ -235,7 +235,6 @@ def _install_architecture_contracts() -> None:
     from .clean_room_verification_contract import install as install_clean_room
     from .coder_max_efficiency_contract import install_coder_max_efficiency
     from .custom_generation_search_contract import install as install_custom_generation_search
-    from .fast_mode_quality_contract_installation import install as install_fast_mode_quality_contract
     from .repair_diagnostics_contract import install as install_repair_diagnostics
     from .repair_memory_budget_contract import install as install_repair_memory_budget
     from .research_evidence_handoff_contract import install as install_research_evidence_handoff
@@ -264,7 +263,6 @@ def _install_architecture_contracts() -> None:
     )
     install_custom_generation_search(custom_module_generator)
     install_coder_max_efficiency()
-    install_fast_mode_quality_contract(custom_module_generator)
     install_repair_memory_budget(agentic_optimization_contract)
     install_visual_scope(complete_orchestrator)
     install_gate_compatibility(complete_orchestrator)
