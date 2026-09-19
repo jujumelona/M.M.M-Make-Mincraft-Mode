@@ -4,14 +4,9 @@ import inspect
 import pytest
 
 from minecraft_mod_ai import complete_orchestrator, work_graph
-from minecraft_mod_ai.scheduler_claim_fencing_contract import install
 
 
 def _ledger_and_node(tmp_path):
-    install(
-        work_graph_module=work_graph,
-        orchestrator_module=complete_orchestrator,
-    )
     proposal_hash = "sha256:" + "1" * 64
     node = work_graph.WorkNode(
         node_id="node",
@@ -35,13 +30,16 @@ def _ledger_and_node(tmp_path):
     return ledger, node
 
 
-def test_claim_fencing_preserves_run_work_node_call_signature() -> None:
-    wrapped = complete_orchestrator.CompleteProductionOrchestrator._run_work_node
-    original = inspect.unwrap(wrapped)
-    assert inspect.signature(wrapped, follow_wrapped=False) == inspect.signature(
-        original,
-        follow_wrapped=False,
-    )
+def test_claim_fencing_is_source_owned_with_full_lifecycle_signature() -> None:
+    owner = complete_orchestrator.CompleteProductionOrchestrator._run_work_node
+    signature = inspect.signature(owner, follow_wrapped=False)
+
+    assert "on_commit" in signature.parameters
+    assert "on_abort" in signature.parameters
+    source = inspect.getsource(owner)
+    assert "_snapshot_claim(" in source
+    assert "_commit_success(" in source
+    assert "_fenced_fail(" in source
 
 
 def test_stale_attempt_cannot_complete_reclaimed_node(tmp_path) -> None:
