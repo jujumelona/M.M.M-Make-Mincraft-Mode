@@ -378,6 +378,36 @@ def _blocking_jdt_errors(
     ]
 
 
+def _runtime_verification_passed(
+    *,
+    required: bool,
+    runtime_receipt: dict[str, Any] | None,
+    playtest_receipt: dict[str, Any] | None,
+    visual_receipt: dict[str, Any] | None,
+) -> bool:
+    if not required:
+        return True
+    if not isinstance(runtime_receipt, dict) or runtime_receipt.get("status") != "PASS":
+        return False
+    server = runtime_receipt.get("server")
+    client = runtime_receipt.get("client")
+    if not (
+        isinstance(server, dict)
+        and server.get("server_running") is True
+        and isinstance(client, dict)
+        and client.get("client_running") is True
+    ):
+        return False
+    if not (
+        isinstance(playtest_receipt, dict)
+        and playtest_receipt.get("status") == "PASS"
+        and int(playtest_receipt.get("interaction_count", 0)) > 0
+        and int(playtest_receipt.get("assertion_count", 0)) > 0
+    ):
+        return False
+    return isinstance(visual_receipt, dict) and visual_receipt.get("status") == "PASS"
+
+
 def _final_validation_failure(
     *,
     source_report: dict[str, Any],
@@ -797,10 +827,16 @@ class CompleteProductionOrchestrator:
             json.dumps(persisted_runtime_receipt, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
             encoding='utf-8',
         )
-        runtime_verified = not approved.external_runtime_required or (runtime_receipt is not None and playtest_receipt is not None and (visual_receipt is not None))
+        runtime_verified = _runtime_verification_passed(
+            required=approved.external_runtime_required,
+            runtime_receipt=runtime_receipt,
+            playtest_receipt=playtest_receipt,
+            visual_receipt=visual_receipt,
+        )
         if runtime_verified:
             self._succeed_work_node(ledger, 'runtime-playtest', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'NOT_REQUIRED' if not approved.external_runtime_required else 'PASS', 'runtime': runtime_receipt, 'playtest': playtest_receipt, 'visual': visual_receipt})
         else:
+            unresolved.append('runtime:verification-incomplete')
             ledger.fail('runtime-playtest', 'Runtime, interaction, and visual evidence are still required.', input_required=True)
         self._persist_work_evidence(project_root, ledger, work_plan)
         quality_report = self._evaluate_quality(approved=approved, run_root=run_root, project_root=project_root, source_validation=source_report, build_report=build, jar_validation=jar_validation, module_receipts=module_receipts, asset_receipt=asset_receipt, blockbench_receipts=blockbench_receipts, runtime_receipt=runtime_receipt, playtest_receipt=playtest_receipt, visual_receipt=visual_receipt)
