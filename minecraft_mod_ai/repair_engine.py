@@ -342,53 +342,76 @@ class RepairEngine:
         )
 
     def _context(self, root: Path, evidence: dict[str, Any]) -> dict[str, Any]:
+        """Build bounded exact repository grounding directly at the repair owner."""
+
+        from .model_context_budget import request_message_budget
+        from .repository_grounding import build_repair_repository_context
+
         diagnostic_paths: list[str] = []
         query_parts: list[str] = []
         for item in _diagnostic_items(evidence.get("diagnostics")):
             if not isinstance(item, dict):
                 continue
-            path = item.get("path") or item.get("uri")
-            if isinstance(path, str):
-                diagnostic_paths.append(path)
+            path_value = item.get("path") or item.get("uri")
+            if isinstance(path_value, str) and path_value.strip():
+                diagnostic_paths.append(path_value)
             message = item.get("message")
-            if isinstance(message, str):
+            if isinstance(message, str) and message.strip():
                 query_parts.append(message)
+
+        build = evidence.get("build")
+        build = build if isinstance(build, dict) else {}
+        build_error = build.get("error")
+        if isinstance(build_error, str) and build_error.strip():
+            query_parts.append(build_error)
+
         build_logs = _failed_build_log_diagnostics(evidence)
         for command in build_logs:
             output = command.get("output")
             if isinstance(output, str) and output:
                 query_parts.append(output)
-        from .production_tools import ProjectRAGIndex
-        rag_hits = []
-        try:
-            rag = ProjectRAGIndex(root / ".minecraft_ai" / "rag_index")
-            bounded_query_parts = query_parts[-_REPAIR_QUERY_PART_LIMIT:]
-            query = " ".join(bounded_query_parts) if bounded_query_parts else "Minecraft Fabric mod build repair"
-            manifest = active_repair_project_index(root, self.policy).manifest_receipt()
-            search = rag.search(
-                query,
-                limit=4,
-                router=self.router,
-                semantic=False,
-                rerank=False,
-                required_metadata=_repair_rag_metadata(root, manifest),
-            )
-            rag_hits = [
+
+        query = "\n".join(query_parts[-_REPAIR_QUERY_PART_LIMIT:]).strip()
+        if not query:
+            query = json.dumps(
                 {
-                    "path": hit.source_path,
-                    "text": hit.text,
-                    "start_line": hit.start_line,
-                    "end_line": hit.end_line,
-                }
-                for hit in search.hits
-            ]
-        except Exception:
-            rag_hits = []
-        return {
-            "diagnostics_files": tuple(sorted(set(diagnostic_paths))),
-            "build_logs": build_logs,
-            "rag": {"hits": rag_hits},
-        }
+                    "diagnostics_status": (
+                        evidence.get("diagnostics", {}).get("status")
+                        if isinstance(evidence.get("diagnostics"), dict)
+                        else None
+                    ),
+                    "build_status": build.get("status"),
+                },
+                sort_keys=True,
+            )
+
+        requested = max(1024, int(self.policy.model_context_bytes))
+        registry = getattr(self.router, "registry", None)
+        resolve = getattr(registry, "role", None)
+        profile = str(getattr(self.router, "profile", "") or "").strip()
+        if callable(resolve) and profile:
+            try:
+                config = resolve(profile, "coder_safe")
+                live_request_bytes = request_message_budget(config, ())
+                byte_budget = min(
+                    requested,
+                    max(4 * 1024, int(live_request_bytes) // 2),
+                )
+            except Exception:
+                byte_budget = min(requested, 32 * 1024)
+        else:
+            byte_budget = min(requested, 32 * 1024)
+
+        index = active_repair_project_index(root, self.policy)
+        context = build_repair_repository_context(
+            self.router,
+            index,
+            query=query,
+            diagnostic_paths=diagnostic_paths,
+            byte_budget=byte_budget,
+        )
+        context["build_logs"] = build_logs
+        return context
 
     def _request_patch(
         self,
