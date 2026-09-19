@@ -356,7 +356,7 @@ def test_materialized_java_edit_schema_allows_atomic_same_path_rewrite() -> None
     assert "SHA-bound replace" in narrowed["function"]["description"]
 
 
-def test_fresh_java_optional_observe_frontier_stays_local() -> None:
+def test_fresh_java_optional_observe_frontier_exposes_all_reviewed_grounding_routes() -> None:
     schemas = {
         name: {
             "type": "function",
@@ -384,7 +384,12 @@ def test_fresh_java_optional_observe_frontier_stays_local() -> None:
         set(),
         context,
         semantic_retrieval_choice=True,
-    ) == ["search_code_rag", "java_workspace_symbols"]
+    ) == [
+        "search_code_rag",
+        "java_workspace_symbols",
+        "external_mcp_call",
+        "inspect_modrinth_project",
+    ]
 
 
 def test_nested_current_project_java_hit_authorizes_fresh_java() -> None:
