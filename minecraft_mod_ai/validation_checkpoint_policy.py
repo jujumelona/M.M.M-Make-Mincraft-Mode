@@ -152,6 +152,8 @@ def _complete_source_receipt(value: Mapping[str, Any]) -> bool:
 
 
 def _complete_jar_receipt(value: Mapping[str, Any]) -> bool:
+    """Allow resume only from a structurally complete passing JAR validation."""
+
     checks_run = _nonnegative_int(value.get("checks_run"))
     findings = value.get("findings")
     if (
