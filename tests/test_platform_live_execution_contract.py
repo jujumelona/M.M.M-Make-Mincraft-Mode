@@ -184,3 +184,72 @@ def test_source_owned_prepare_routes_fresh_unreviewed_target_before_legacy_gener
             complete_orchestrator.CompleteProductionError,
         )
     ]
+
+
+def test_live_migration_uses_explicit_existing_project_import_primitive_once(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "existing"
+    project_root.mkdir()
+    report = SimpleNamespace(minecraft_version="1.20.1", loader="fabric")
+    calls: list[tuple[object, Path, object]] = []
+
+    class Owner:
+        def _inspect_existing_project_input(
+            self,
+            approved,
+            *,
+            run_root,
+            existing_input,
+        ):
+            calls.append((approved, Path(run_root), existing_input))
+            return report, project_root
+
+        def _write_base_proposal(self, root, base):
+            assert Path(root) == project_root
+            assert base is approved.base_proposal
+
+    approved = SimpleNamespace(
+        base_proposal=object(),
+        existing_input_sha256="sha256:" + ("b" * 64),
+        calculate_hash=lambda: "sha256:" + ("c" * 64),
+    )
+    adapter = SimpleNamespace(
+        adapter_id="official-fabric-1.21.8",
+        edition="java",
+        loader="fabric",
+        minecraft_version="1.21.8",
+        java_version="21",
+        yarn_mappings="mojang",
+        fabric_loader="0.19.5",
+        fabric_api="0.136.1+1.21.8",
+        fabric_loom="1.17.20",
+        gradle="9.5.1",
+        gradle_sha256="d" * 64,
+        source_api_family="mojang",
+    )
+    existing_input = tmp_path / "input.zip"
+
+    result = contract._prepare_live_migration(
+        Owner(),
+        complete_orchestrator,
+        approved=approved,
+        run_root=tmp_path / "run",
+        existing_input=existing_input,
+        adapter=adapter,
+        selection={
+            "migration_from": {
+                "minecraft_version": "1.20.1",
+                "loader": "fabric",
+            }
+        },
+    )
+
+    assert result == project_root.resolve()
+    assert calls == [(approved, tmp_path / "run", existing_input)]
+    metadata = project_root / ".minecraft_ai"
+    assert (metadata / "platform-migration-intent.json").is_file()
+    assert (metadata / "platform-lock.json").is_file()
+    assert "wrapped_prepare" not in inspect.signature(
+        contract._prepare_live_migration
+    ).parameters
