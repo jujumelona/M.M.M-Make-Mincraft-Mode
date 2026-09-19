@@ -10,7 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
-from minecraft_mod_ai.runner_parallel_validation_contract import install
+from minecraft_mod_ai.runner_parallel_validation_contract import (
+    _executed_gametest_task,
+    _task_from_listing,
+    install,
+)
 
 
 @dataclass(frozen=True)
@@ -31,6 +35,11 @@ class _BuildReport:
     jar_path: str | None
     gametest_report: str | None
     error: str | None = None
+    gametest_mode: str | None = None
+    gametest_task: str | None = None
+    failure_class: str | None = None
+    error_code: str | None = None
+    repairable: bool | None = None
 
     @property
     def passed(self) -> bool:
@@ -41,6 +50,7 @@ class _FakeGradleRunner:
     active_builds = 0
     max_active_builds = 0
     build_calls = 0
+    run_calls: list[str] = []
     counter_lock = threading.Lock()
 
     def __init__(self, cache_dir: Path) -> None:
@@ -63,6 +73,7 @@ class _FakeGradleRunner:
 
     def _run(self, *, name, executable, arguments, cwd, env, log_path):
         del executable, env
+        type(self).run_calls.append(name)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text(name, encoding="utf-8")
         if name == "wrapper":
@@ -80,6 +91,19 @@ class _FakeGradleRunner:
                 encoding="utf-8",
             )
         elif name in {"clean_build", "incremental_build"}:
+            if name == "incremental_build" and (cwd / "simulate-integrated-gametest").is_file():
+                log_path.write_text(
+                    "> Task :configureLaunch\n> Task :runGameTest\nBUILD SUCCESSFUL\n",
+                    encoding="utf-8",
+                )
+                report = cwd / "build/gametest-report.xml"
+                report.parent.mkdir(parents=True, exist_ok=True)
+                report.write_text(
+                    '<testsuite tests="1" failures="0" errors="0" skipped="0">'
+                    '<testcase name="MmmDebugFixtureModGameTests.generatedRegistriesAreLive"/>'
+                    "</testsuite>",
+                    encoding="utf-8",
+                )
             with self.counter_lock:
                 type(self).active_builds += 1
                 type(self).build_calls += 1
@@ -95,6 +119,20 @@ class _FakeGradleRunner:
             finally:
                 with self.counter_lock:
                     type(self).active_builds -= 1
+        elif name == "gametest_capabilities":
+            log_path.write_text(
+                "runGameTest - Runs server game tests\n",
+                encoding="utf-8",
+            )
+        elif name == "gametest":
+            report = cwd / "build/gametest-report.xml"
+            report.parent.mkdir(parents=True, exist_ok=True)
+            report.write_text(
+                '<testsuite tests="1" failures="0" errors="0" skipped="0">'
+                '<testcase name="MmmDebugFixtureModGameTests.generatedRegistriesAreLive"/>'
+                "</testsuite>",
+                encoding="utf-8",
+            )
         return _CommandResult(
             name=name,
             command=(name,),
@@ -189,6 +227,7 @@ def _reset() -> None:
     _FakeGradleRunner.active_builds = 0
     _FakeGradleRunner.max_active_builds = 0
     _FakeGradleRunner.build_calls = 0
+    _FakeGradleRunner.run_calls = []
 
 
 def test_target_distribution_api_uses_explicit_version_and_sha(tmp_path: Path) -> None:
@@ -272,3 +311,57 @@ def test_same_project_is_single_writer_and_exact_cache_reused(tmp_path: Path) ->
     assert all(report.passed for report in reports)
     assert _FakeGradleRunner.max_active_builds == 1
     assert _FakeGradleRunner.build_calls == 1
+
+
+def test_integrated_build_gametest_is_reused_without_legacy_task_call(
+    tmp_path: Path,
+) -> None:
+    _reset()
+    runner_module = _runner_module()
+    install(runner_module=runner_module, validation_module=_validation_module())
+    runner = _FakeGradleRunner(tmp_path / "cache")
+    project = _project(tmp_path, "integrated", "8.10.2", "d" * 64)
+    (project / "simulate-integrated-gametest").write_text("1", encoding="utf-8")
+
+    report = runner.build(project, run_gametest=True)
+
+    assert report.passed
+    assert report.gametest_mode == "integrated_build"
+    assert report.gametest_task == "runGameTest"
+    assert "gametest" not in _FakeGradleRunner.run_calls
+    assert "gametest_capabilities" not in _FakeGradleRunner.run_calls
+
+
+def test_gametest_helpers_prefer_real_run_game_test_evidence(tmp_path: Path) -> None:
+    build_log = tmp_path / "build.log"
+    build_log.write_text(
+        "> Task :configureLaunch\n> Task :runGameTest\nBUILD SUCCESSFUL\n",
+        encoding="utf-8",
+    )
+    tasks_log = tmp_path / "tasks.log"
+    tasks_log.write_text(
+        "runGameTestServer - Legacy run configuration\n"
+        "runGameTest - Runs server game tests\n",
+        encoding="utf-8",
+    )
+
+    assert _executed_gametest_task(build_log) == "runGameTest"
+    assert _task_from_listing(tasks_log) == "runGameTest"
+
+
+def test_fallback_discovers_real_gradle_task_instead_of_hardcoding_server(
+    tmp_path: Path,
+) -> None:
+    _reset()
+    runner_module = _runner_module()
+    install(runner_module=runner_module, validation_module=_validation_module())
+    runner = _FakeGradleRunner(tmp_path / "cache")
+    project = _project(tmp_path, "fallback", "8.10.2", "e" * 64)
+
+    report = runner.build(project, run_gametest=True)
+
+    assert report.passed
+    assert report.gametest_mode == "explicit_task"
+    assert report.gametest_task == "runGameTest"
+    assert "gametest_capabilities" in _FakeGradleRunner.run_calls
+    assert "gametest" in _FakeGradleRunner.run_calls
