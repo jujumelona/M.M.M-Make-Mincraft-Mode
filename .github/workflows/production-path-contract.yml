@@ -46,7 +46,7 @@ on:
       - 'tests/test_fresh_mutation_target_grounding.py'
       - 'tests/test_generation_implementation_grounding.py'
       - 'tests/test_required_target_compile_gate.py'
-      - 'tests/test_complete_final_validation_contract.py'
+            tests/test_complete_final_validation_contract.py \
       - 'tests/test_scheduler_claim_fencing_contract.py'
       - '.github/workflows/production-path-contract.yml'
   push:
@@ -94,7 +94,7 @@ on:
       - 'tests/test_fresh_mutation_target_grounding.py'
       - 'tests/test_generation_implementation_grounding.py'
       - 'tests/test_required_target_compile_gate.py'
-      - 'tests/test_complete_final_validation_contract.py'
+            tests/test_complete_final_validation_contract.py \
       - 'tests/test_scheduler_claim_fencing_contract.py'
       - '.github/workflows/production-path-contract.yml'
 
@@ -165,5 +165,5 @@ jobs:
             tests/test_fresh_mutation_target_grounding.py \
             tests/test_generation_implementation_grounding.py \
             tests/test_required_target_compile_gate.py \
-            tests/test_complete_final_validation_contract.py \\
+            tests/test_complete_final_validation_contract.py \
             tests/test_scheduler_claim_fencing_contract.py
