@@ -229,18 +229,18 @@ def _parallel_generate(
             raise RuntimeError("Custom generation search produced no candidate.")
 
         evaluations = _evaluate_candidates(candidates, search_module=search_module)
-        evaluations = search_module._require_selectable_evaluations(
+        selectable = search_module._require_selectable_evaluations(
             evaluations,
             verifier_index=5,
         )
-        evaluations.sort(
+        selectable.sort(
             key=lambda item: (
                 -item[0],
                 search_module._json_size(item[4].get("operations", [])),
                 item[1],
             )
         )
-        score, winner_index, winner_root, result, capture, verifier = evaluations[0]
+        score, winner_index, winner_root, result, capture, verifier = selectable[0]
         commit_receipt = _commit_winner(
             root,
             winner_root,
