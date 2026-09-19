@@ -369,6 +369,13 @@ class DurableWorkLedger:
             connection.commit()
         return changed
 
+    def invalidate_execution_feedback(self, feedback: dict[str, Any]) -> dict[str, Any]:
+        """Invalidate only the generation subgraph bound to validation feedback."""
+
+        from .execution_feedback_replan_contract import invalidate_execution_feedback
+
+        return invalidate_execution_feedback(self, feedback)
+
     def cached_receipt(self, node_id: str, *, input_hash: str | None=None) -> dict[str, Any] | None:
         with self._connect() as connection:
             row = connection.execute('\n                SELECT state, input_hash, receipt_json\n                FROM tasks WHERE node_id = ?\n                ', (node_id,)).fetchone()
