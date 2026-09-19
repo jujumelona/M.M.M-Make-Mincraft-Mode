@@ -256,15 +256,9 @@ def _capture_candidate(
 
 
 def _candidate_verifier_selectable(verifier: Mapping[str, Any]) -> bool:
-    """Return whether candidate verification is trustworthy enough to commit."""
+    """Return whether the host-owned generation verifier completed successfully."""
 
-    status = str(verifier.get('jdt_status') or '').strip().upper()
-    if status == 'NOT_RUN':
-        return True
-    if status != 'AVAILABLE':
-        return False
-    error_count = verifier.get('jdt_error_count')
-    return type(error_count) is int and error_count == 0
+    return str(verifier.get("generation_status") or "").strip().upper() == "PASS"
 
 
 def _require_selectable_evaluations(
@@ -289,54 +283,72 @@ def _require_selectable_evaluations(
             if len(item) > verifier_index and isinstance(item[verifier_index], Mapping)
             else {}
         )
-        status = str(verifier.get('jdt_status') or 'MISSING')
-        error_count = verifier.get('jdt_error_count')
-        verifier_error = str(verifier.get('verifier_error') or '').strip()
-        detail = f"status={status}, errors={error_count}"
-        if verifier_error:
-            detail += f", verifier_error={verifier_error}"
-        failures.append(detail)
+        status = str(verifier.get("generation_status") or "MISSING")
+        authority = str(verifier.get("verification_authority") or "unknown")
+        failures.append(f"status={status}, authority={authority}")
     raise RuntimeError(
-        'Custom generation search has no candidate with trustworthy verification: '
-        + ' | '.join(failures)
+        "Custom generation search has no candidate with trustworthy verification: "
+        + " | ".join(failures)
     )
 
 
 def _verify_candidate(candidate_root: Path, result: Mapping[str, Any]) -> tuple[float, dict[str, Any]]:
-    touched = [str(value).replace('\\', '/') for value in result.get('touched_paths', []) if isinstance(value, str)]
-    java_paths = tuple(sorted(path for path in touched if path.lower().endswith('.java')))
-    operation_count = int(result.get('operation_count', 0) or 0)
-    runtime_tests = result.get('runtime_tests', [])
+    """Score a candidate already admitted by the host-owned generation verifier.
+
+    Custom generation reaches this function only after the coder/tool loop has
+    completed. Java candidates are compile-backed in that loop before completion,
+    and the normal live-workspace verification pipeline still owns JDT diagnostics.
+    Starting a second JDT LS for every disposable candidate duplicated validation,
+    forced a cold Gradle import per candidate, and could turn a successful
+    target_compile into a false candidate failure when JDT bootstrap was slow.
+    """
+
+    del candidate_root
+    touched = [
+        str(value).replace("\\", "/")
+        for value in result.get("touched_paths", [])
+        if isinstance(value, str)
+    ]
+    java_paths = tuple(sorted(path for path in touched if path.lower().endswith(".java")))
+    operation_count = int(result.get("operation_count", 0) or 0)
+    runtime_tests = result.get("runtime_tests", [])
     runtime_tests = runtime_tests if isinstance(runtime_tests, list) else []
-    research = result.get('research_code_context')
-    research_score = min(2.0, float(research.get('evidence_count', 0)) / 4.0) if isinstance(research, Mapping) else 0.0
-    score = 2.0 * len(runtime_tests) - 0.3 * operation_count - 0.05 * len(touched) + research_score
-    verifier: dict[str, Any] = {'operation_count': operation_count, 'touched_path_count': len(touched), 'runtime_test_count': len(runtime_tests), 'research_evidence_score': research_score, 'jdt_status': 'NOT_RUN', 'jdt_error_count': None}
-    if not java_paths or os.environ.get('MMM_CUSTOM_CANDIDATE_JDT', 'auto').strip().lower() == 'off':
-        return (score, verifier)
-    try:
-        from .java_lsp import JavaLanguageService
-        from .validation_diagnostic_contract import diagnostic_errors
-
-        service = JavaLanguageService()
-        try:
-            diagnostics = service.diagnostics(
-                candidate_root,
-                relative_files=java_paths,
-                timeout_seconds=60,
-            )
-        finally:
-            service.close()
-        errors = diagnostic_errors(diagnostics)
-        verifier['jdt_status'] = 'AVAILABLE'
-        verifier['jdt_error_count'] = len(errors)
-        score += 1000.0 if not errors else -120.0 * len(errors)
-    except Exception as exc:
-        verifier['jdt_status'] = 'VERIFIER_ERROR'
-        verifier['verifier_error'] = f'{type(exc).__name__}: {exc}'[:1000]
-        score -= 5.0
+    research = result.get("research_code_context")
+    research_score = (
+        min(2.0, float(research.get("evidence_count", 0)) / 4.0)
+        if isinstance(research, Mapping)
+        else 0.0
+    )
+    score = (
+        2.0 * len(runtime_tests)
+        - 0.3 * operation_count
+        - 0.05 * len(touched)
+        + research_score
+    )
+    required_gates = tuple(
+        str(value).strip()
+        for value in result.get("required_gates", ())
+        if str(value).strip()
+    )
+    verifier: dict[str, Any] = {
+        "operation_count": operation_count,
+        "touched_path_count": len(touched),
+        "runtime_test_count": len(runtime_tests),
+        "research_evidence_score": research_score,
+        "generation_status": "PASS",
+        "verification_authority": "generation_tool_loop",
+        "required_gates": list(required_gates),
+        "target_compile_required": "target_compile" in required_gates,
+        "java_path_count": len(java_paths),
+        "jdt_status": "NOT_RUN",
+        "jdt_error_count": None,
+        "jdt_reason": (
+            "candidate-local JDT is intentionally not run; generation-time host "
+            "verification already admitted the candidate and live-workspace JDT "
+            "remains in the normal verification pipeline"
+        ),
+    }
     return (score, verifier)
-
 
 def install(custom_module_generator_module: Any) -> None:
     from . import performance_final_contract as performance_module
