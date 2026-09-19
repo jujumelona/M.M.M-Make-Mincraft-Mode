@@ -146,7 +146,6 @@ _qwen35_9b: &qwen35_9b
       enabled: true
       base_model_id: Qwen/Qwen3.5-9B
       repo_id: blackshell69/Qwen3.5-9B-distilled-coding-agentic
-      revision: 6d062a45464f305f19dcb1513f9bd71e4e22122c
       filename: Qwen3.5-9B-distilled-LoRA-F16.gguf
       scale: 1.0
       priority: 100
