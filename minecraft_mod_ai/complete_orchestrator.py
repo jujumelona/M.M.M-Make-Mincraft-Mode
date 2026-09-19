@@ -3206,8 +3206,22 @@ class CompleteProductionOrchestrator:
         if any(testcase.find('failure') is not None or testcase.find('error') is not None or testcase.find('skipped') is not None for testcase in testcases):
             return False
         main_class = ''.join(part.capitalize() for part in spec.mod_id.split('_')) + 'Mod'
-        expected = f'{main_class}GameTests.generatedRegistriesAreLive'.lower()
-        return any(testcase.attrib.get('name', '').lower() == expected for testcase in testcases)
+        expected_class = f'{main_class}GameTests'.lower()
+        expected_method = 'generatedRegistriesAreLive'.lower()
+        expected_combined = f'{expected_class}.{expected_method}'
+
+        for testcase in testcases:
+            name = str(testcase.attrib.get('name') or '').strip().lower()
+            classname = str(testcase.attrib.get('classname') or '').strip().lower()
+            if name == expected_combined:
+                return True
+            if (
+                name == expected_method
+                and classname
+                and classname.rsplit('.', 1)[-1] == expected_class
+            ):
+                return True
+        return False
 
     def _generate_assets(self, router: ModelRouter, proposal: CompleteProposal, project_root: Path, run_root: Path) -> dict[str, Any]:
         return generate_assets(router, proposal, project_root, run_root)
