@@ -2799,7 +2799,7 @@ class CompleteProductionOrchestrator:
 
         main_source = owned_source(main_relative, 'main entrypoint source')
         gametest_source = owned_source(gametest_relative, 'GameTest source')
-        binding_expression = f'DebugToken.{binding_field}'
+        debug_class_name = package_name + '.DebugToken'
 
         main_text = main_source.read_text(encoding='utf-8')
         main_marker = 'MMM_DEBUG_FIXTURE_RUNTIME_BINDING'
@@ -2816,11 +2816,18 @@ class CompleteProductionOrchestrator:
                 match.group(0)
                 + '\n        // '
                 + main_marker
-                + '\n        if ('
-                + binding_expression
-                + ' == null) {\n'
-                + '            throw new IllegalStateException('
+                + '\n        try {\n'
+                + '            Class<?> debugTokenClass = Class.forName('
+                + f'"{debug_class_name}", true, {main_class}.class.getClassLoader());'
+                + '\n            if (debugTokenClass.getField("'
+                + binding_field
+                + '").get(null) == null) {\n'
+                + '                throw new IllegalStateException('
                 + '"debug_token registration binding is null");\n'
+                + '            }\n'
+                + '        } catch (ReflectiveOperationException exc) {\n'
+                + '            throw new IllegalStateException('
+                + '"debug_token runtime binding failed", exc);\n'
                 + '        }'
             )
             main_text = (
@@ -2845,14 +2852,22 @@ class CompleteProductionOrchestrator:
                 raise CompleteProductionError(
                     'Debug fixture host GameTest has no terminal success call.'
                 )
+            gametest_class = main_class + 'GameTests'
             assertion = (
                 '        // '
                 + gametest_marker
-                + '\n        if ('
-                + binding_expression
-                + ' == null) {\n'
-                + '            throw new AssertionError('
+                + '\n        try {\n'
+                + '            Class<?> debugTokenClass = Class.forName('
+                + f'"{debug_class_name}", true, {gametest_class}.class.getClassLoader());'
+                + '\n            if (debugTokenClass.getField("'
+                + binding_field
+                + '").get(null) == null) {\n'
+                + '                throw new AssertionError('
                 + '"debug_token runtime registry binding is null");\n'
+                + '            }\n'
+                + '        } catch (ReflectiveOperationException exc) {\n'
+                + '            throw new AssertionError('
+                + '"debug_token runtime registry binding is unavailable", exc);\n'
                 + '        }\n'
             )
             gametest_text = gametest_text.replace(
