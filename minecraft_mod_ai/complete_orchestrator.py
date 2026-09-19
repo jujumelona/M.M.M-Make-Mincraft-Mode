@@ -1954,8 +1954,8 @@ class CompleteProductionOrchestrator:
     def _required_gate_failures(proposal: CompleteProposal, *, generated_receipts: Iterable[Any], project_root: Path | None=None, source_validation: dict[str, Any] | None, jdt_receipt: dict[str, Any] | None, build_report: dict[str, Any] | None, jar_validation: dict[str, Any] | None, blockbench_receipts: Iterable[dict[str, Any]], runtime_receipt: dict[str, Any] | None, playtest_receipt: dict[str, Any] | None, visual_receipt: dict[str, Any] | None) -> list[str]:
         """Resolve every declared gate against an explicit evidence receipt.
 
-        Unknown gate names are deliberately unresolved. Merely generating a
-        ``required_gates`` string is never treated as proof that the gate ran.
+        Unknown approved gate names are deliberately unresolved. Generated receipts
+        are evidence only and cannot introduce release obligations beyond the approved plan.
         """
         receipt_values = tuple(generated_receipts)
         requirements: set[tuple[str, str]] = {(module.module_id, gate.strip()) for module in proposal.modules for gate in module.required_gates if gate.strip()}
@@ -1966,9 +1966,9 @@ class CompleteProductionOrchestrator:
                 if value.get('schema_version') == 'mmm/research-ledger-write-receipt-v1':
                     research_ledger_receipts.append(value)
                 local_owner = next((str(value[key]) for key in ('module_id', 'entity_id', 'pack_id', 'sound_id') if isinstance(value.get(key), str) and value[key]), owner)
-                gates = value.get('required_gates')
-                if isinstance(gates, (list, tuple)):
-                    requirements.update((local_owner, gate.strip()) for gate in gates if isinstance(gate, str) and gate.strip())
+                # Release-gate authority is owned only by the approved proposal.
+                # Receipts may describe checks they performed, but they cannot add
+                # obligations that were never approved by the plan.
                 for key, nested in value.items():
                     if key != 'required_gates':
                         collect(nested, local_owner)
