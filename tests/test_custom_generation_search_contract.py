@@ -194,6 +194,7 @@ def test_candidate_verifier_reuses_generation_gate_without_starting_jdt(tmp_path
     _score, verifier = custom_search._verify_candidate(
         tmp_path,
         {
+            "status": "SOURCE_GENERATED",
             "touched_paths": ["src/main/java/demo/Test.java"],
             "operation_count": 1,
             "runtime_tests": [],
@@ -207,6 +208,23 @@ def test_candidate_verifier_reuses_generation_gate_without_starting_jdt(tmp_path
     assert verifier["java_path_count"] == 1
     assert verifier["jdt_status"] == "NOT_RUN"
     assert verifier["jdt_error_count"] is None
+
+
+def test_candidate_verifier_rejects_malformed_generation_receipt(tmp_path) -> None:
+    _score, verifier = custom_search._verify_candidate(
+        tmp_path,
+        {
+            "status": "BROKEN",
+            "touched_paths": ["src/main/java/demo/Test.java"],
+            "operation_count": 1,
+            "runtime_tests": [],
+            "required_gates": ["target_compile"],
+        },
+    )
+
+    assert verifier["generation_status"] == "FAIL"
+    assert verifier["source_status"] == "BROKEN"
+    assert not custom_search._candidate_verifier_selectable(verifier)
 
 
 def test_candidate_verifier_has_no_candidate_local_jdt_dependency() -> None:
