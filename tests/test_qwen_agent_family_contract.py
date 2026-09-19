@@ -161,21 +161,30 @@ def test_family_wrapper_accepts_request_without_tools_attribute() -> None:
     assert payload["temperature"] == 0.0
 
 
-def test_named_required_action_stays_deterministic_and_non_thinking() -> None:
+def test_named_required_action_keeps_qwen_template_default() -> None:
     request = _request(
         tool_choice={
             "type": "function",
             "function": {"name": "read_project_file"},
         }
     )
-    payload = hardware._server_payload(_Adapter(), request)
+
+    for family in ("qwen3.5", "qwen3.6", "qwen3.8"):
+        payload = hardware._server_payload(_Adapter(family=family), request)
+
+        assert payload["tool_choice"] == "required"
+        assert payload["temperature"] == 0.0
+        assert "chat_template_kwargs" not in payload
+        assert "reasoning_effort" not in payload
+
+
+def test_generic_required_action_keeps_qwen_template_default() -> None:
+    request = _request(tool_choice="required")
+    payload = hardware._server_payload(_Adapter(family="qwen3.5"), request)
 
     assert payload["tool_choice"] == "required"
     assert payload["temperature"] == 0.0
-    assert payload["chat_template_kwargs"] == {
-        "enable_thinking": False,
-        "preserve_thinking": False,
-    }
+    assert "chat_template_kwargs" not in payload
     assert "reasoning_effort" not in payload
 
 
