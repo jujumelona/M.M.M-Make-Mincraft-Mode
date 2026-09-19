@@ -110,6 +110,7 @@ from .validation_diagnostic_contract import (
 from .validation_diagnostic_contract import (
     run_diagnostics as run_jdt_diagnostics,
 )
+from .validation_diagnostic_contract import unwrap_diagnostic_receipt
 from .validator import validate_jar
 from .work_graph import (
     DurableWorkLedger,
@@ -311,7 +312,14 @@ def _unchanged_postbuild_validation(
     jdt_receipt: dict[str, Any] | None,
     validate_jdt: Callable[[], dict[str, Any]] | None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None, bool]:
-    if jdt_receipt is None and validate_jdt is not None:
+    needs_postbuild_jdt = jdt_receipt is None
+    if jdt_receipt is not None:
+        normalized, _path = unwrap_diagnostic_receipt(jdt_receipt)
+        needs_postbuild_jdt = (
+            str(normalized.get("status") or "").strip().upper()
+            == "DEFERRED_TO_POST_BUILD"
+        )
+    if validate_jdt is not None and needs_postbuild_jdt:
         return source_report, validate_jdt(), True
     return source_report, jdt_receipt, False
 
@@ -3086,7 +3094,20 @@ class CompleteProductionOrchestrator:
 
     @staticmethod
     def _gametest_receipt_passed(build_report: dict[str, Any] | None, spec: Any) -> bool:
-        if not CompleteProductionOrchestrator._command_receipt_passed(build_report, 'gametest') or not isinstance(build_report, dict) or (not isinstance(build_report.get('gametest_report'), str)):
+        if not isinstance(build_report, dict) or not isinstance(build_report.get('gametest_report'), str):
+            return False
+        mode = str(build_report.get('gametest_mode') or '').strip()
+        if mode == 'integrated_build':
+            execution_passed = (
+                CompleteProductionOrchestrator._command_receipt_passed(build_report, 'build')
+                or CompleteProductionOrchestrator._command_receipt_passed(build_report, 'clean_build')
+            )
+        else:
+            # Backward compatible with older receipts that had no gametest_mode.
+            execution_passed = CompleteProductionOrchestrator._command_receipt_passed(
+                build_report, 'gametest'
+            )
+        if not execution_passed:
             return False
         raw_report_path = Path(build_report['gametest_report']).expanduser()
         if raw_report_path.is_symlink():
