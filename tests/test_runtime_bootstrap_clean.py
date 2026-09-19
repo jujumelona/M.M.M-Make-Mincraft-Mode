@@ -86,6 +86,10 @@ def test_package_init_has_one_bootstrap_and_no_contract_patch_chain() -> None:
         assert legacy not in source
 
 
+def test_package_has_no_legacy_installation_modules() -> None:
+    assert list(PACKAGE.glob("*_installation.py")) == []
+
+
 def test_managed_llama_reuse_is_owned_by_model_runtime_stage() -> None:
     init_source = _text('__init__.py')
     assert 'managed_llama_reuse_contract' not in init_source
