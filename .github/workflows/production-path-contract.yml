@@ -8,6 +8,7 @@ on:
       - 'minecraft_mod_ai/custom_module_generator.py'
       - 'minecraft_mod_ai/custom_generation_research.py'
       - 'minecraft_mod_ai/complete_orchestrator.py'
+      - 'minecraft_mod_ai/scheduler_claim_fencing_contract.py'
       - 'minecraft_mod_ai/complete_orchestrator_services.py'
       - 'minecraft_mod_ai/resource_asset_production.py'
       - 'minecraft_mod_ai/final_artifact.py'
@@ -46,6 +47,7 @@ on:
       - 'tests/test_generation_implementation_grounding.py'
       - 'tests/test_required_target_compile_gate.py'
       - 'tests/test_complete_final_validation_contract.py'
+      - 'tests/test_scheduler_claim_fencing_contract.py'
       - '.github/workflows/production-path-contract.yml'
   push:
     branches: [main]
@@ -54,6 +56,7 @@ on:
       - 'minecraft_mod_ai/custom_module_generator.py'
       - 'minecraft_mod_ai/custom_generation_research.py'
       - 'minecraft_mod_ai/complete_orchestrator.py'
+      - 'minecraft_mod_ai/scheduler_claim_fencing_contract.py'
       - 'minecraft_mod_ai/complete_orchestrator_services.py'
       - 'minecraft_mod_ai/resource_asset_production.py'
       - 'minecraft_mod_ai/final_artifact.py'
@@ -92,6 +95,7 @@ on:
       - 'tests/test_generation_implementation_grounding.py'
       - 'tests/test_required_target_compile_gate.py'
       - 'tests/test_complete_final_validation_contract.py'
+      - 'tests/test_scheduler_claim_fencing_contract.py'
       - '.github/workflows/production-path-contract.yml'
 
 permissions:
@@ -124,6 +128,7 @@ jobs:
             minecraft_mod_ai/custom_module_generator.py \
             minecraft_mod_ai/custom_generation_research.py \
             minecraft_mod_ai/complete_orchestrator.py \
+            minecraft_mod_ai/scheduler_claim_fencing_contract.py \
             minecraft_mod_ai/complete_orchestrator_services.py \
             minecraft_mod_ai/resource_asset_production.py \
             minecraft_mod_ai/final_artifact.py \
@@ -160,4 +165,5 @@ jobs:
             tests/test_fresh_mutation_target_grounding.py \
             tests/test_generation_implementation_grounding.py \
             tests/test_required_target_compile_gate.py \
-            tests/test_complete_final_validation_contract.py
+            tests/test_complete_final_validation_contract.py \\
+            tests/test_scheduler_claim_fencing_contract.py
