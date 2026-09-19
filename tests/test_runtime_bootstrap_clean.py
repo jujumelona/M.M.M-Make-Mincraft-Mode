@@ -69,6 +69,9 @@ def test_package_init_has_one_bootstrap_and_no_contract_patch_chain() -> None:
     path = PACKAGE / '__init__.py'
     source = path.read_text(encoding='utf-8')
     assert source.count('initialize_runtime()') == 1
+    assert 'finalize_runtime' not in source
+    assert 'validate_catalog' not in source
+    assert 'runtime_finalization' not in source
     assert '_install_' not in source
     installers, modules = _policy_imports(path)
     direct_calls, module_calls = _composition_calls(path)
@@ -84,6 +87,20 @@ def test_package_init_has_one_bootstrap_and_no_contract_patch_chain() -> None:
         'execution_feedback_semantic_convergence_installation',
     ):
         assert legacy not in source
+
+
+def test_runtime_bootstrap_owns_full_initialization_order() -> None:
+    source = _BOOTSTRAP.read_text(encoding='utf-8')
+    start = source.index('def initialize_runtime() -> None:')
+    end = source.index('def runtime_initialized() -> bool:')
+    initialize = source[start:end]
+    positions = [
+        initialize.index('_install_runtime_contracts()'),
+        initialize.index('_validate_runtime_template_authority()'),
+        initialize.index('finalize_runtime()'),
+        initialize.index('_INITIALIZED = True'),
+    ]
+    assert positions == sorted(positions)
 
 
 def test_package_has_no_legacy_installation_modules() -> None:
