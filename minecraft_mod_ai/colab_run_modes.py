@@ -200,6 +200,27 @@ def _debug_task_contract(platform: Any) -> dict[str, Any]:
         "module_id": ":",
         "source_set": "main",
     }
+    observable_source_contract = {
+        "schema_version": "mmm/debug-source-contract-v1",
+        "path": "src/main/java/dev/mmm/debugfixture/DebugToken.java",
+        "identifier": "debug_token",
+        "semantic_kind": "item",
+        "required_host_symbol_keys": [
+            "register_item",
+            "builtin_item_registry",
+            "registries_item",
+            "resource_key_create",
+            "identifier_factory",
+        ],
+        "forbidden_lifecycle_symbols": [
+            "ModInitializer",
+            "ClientModInitializer",
+            "DedicatedServerModInitializer",
+            "onInitialize",
+            "onInitializeClient",
+            "onInitializeServer",
+        ],
+    }
     task: dict[str, Any] = {
         "task_id": task_id,
         "task_sha256": "",
@@ -219,15 +240,18 @@ def _debug_task_contract(platform: Any) -> dict[str, Any]:
         "depends_on": [],
         "implementation_obligations": [
             "Use only the host-grounded item registration API admitted for the immutable target.",
+            "Materialize the debug_token identifier through the host symbols register_item, builtin_item_registry, registries_item, resource_key_create, and identifier_factory.",
             "Keep all production source changes inside the owned DebugToken.java target.",
             "Do not implement ModInitializer, create another entrypoint, add item groups/tabs, or invent lifecycle hooks; this is a compile-backed API fixture.",
         ],
+        "observable_source_contract": observable_source_contract,
         "engineering_worksheet": {
             "schema_version": "mmm/debug-engineering-worksheet-v1",
             "objective": "Exercise the real task-local custom coding path without running the planner.",
             "implementation": [
                 "Create the exact owned DebugToken Java source.",
                 "Use the host-projected target item API/template facts instead of remembered mappings or package names.",
+                "Resolve and use the host symbol keys register_item, builtin_item_registry, registries_item, resource_key_create, and identifier_factory.",
                 "Implement only the minimal debug_token item-registration source needed to exercise target compilation.",
                 "Keep the fixture deterministic and self-contained for repeatable pipeline debugging.",
             ],
@@ -346,6 +370,7 @@ def write_debug_example_plan(
                     "semantic_kind": "item",
                     "implementation_responsibilities": ["registry"],
                     "registry_path": "debug_token",
+                    "observable_source_contract": evidence_task["observable_source_contract"],
                     "evidence_task": evidence_task,
                     "coder_execution_contract": coder_contract,
                 },
