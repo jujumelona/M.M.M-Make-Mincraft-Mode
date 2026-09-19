@@ -5,12 +5,16 @@ on:
     branches: [main]
     paths:
       - "minecraft_mod_ai/custom_generation_search_contract.py"
+      - "minecraft_mod_ai/progress_aware_tool_loop.py"
+      - "minecraft_mod_ai/custom_module_generator.py"
       - "minecraft_mod_ai/coder_max_efficiency_contract.py"
       - "tests/test_custom_generation_search_contract.py"
       - ".github/workflows/candidate-verifier-targeted.yml"
   pull_request:
     paths:
       - "minecraft_mod_ai/custom_generation_search_contract.py"
+      - "minecraft_mod_ai/progress_aware_tool_loop.py"
+      - "minecraft_mod_ai/custom_module_generator.py"
       - "minecraft_mod_ai/coder_max_efficiency_contract.py"
       - "tests/test_custom_generation_search_contract.py"
       - ".github/workflows/candidate-verifier-targeted.yml"
