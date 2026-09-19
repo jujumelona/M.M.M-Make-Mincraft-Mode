@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import inspect
+import zipfile
 
 import pytest
 from types import SimpleNamespace
+
+from minecraft_mod_ai.final_artifact import write_downloadable_bundle
 
 from minecraft_mod_ai.complete_orchestrator import (
     CompleteProductionOrchestrator,
@@ -519,3 +522,84 @@ def test_supported_required_gate_contract_is_accepted() -> None:
 
     _validate_required_gate_contract(proposal)
 
+
+
+def test_resource_pack_bundle_is_finalized_deterministically(tmp_path) -> None:
+    run_root = tmp_path / "run"
+    pack_root = run_root / "resource-pack"
+    (pack_root / "assets/demo/textures").mkdir(parents=True)
+    (pack_root / "pack.mcmeta").write_text('{"pack":{"pack_format":1}}\n', encoding="utf-8")
+    (pack_root / "assets/demo/textures/item.txt").write_text("payload", encoding="utf-8")
+    shard = {
+        "container_validation": {
+            "standalone_resource_pack": {
+                "status": "PASS",
+                "root": str(pack_root),
+            }
+        }
+    }
+
+    first = CompleteProductionOrchestrator._finalize_resource_pack_bundle(
+        [shard],
+        run_root=run_root,
+    )
+    second = CompleteProductionOrchestrator._finalize_resource_pack_bundle(
+        [shard],
+        run_root=run_root,
+    )
+
+    assert first is not None and second is not None
+    assert first["sha256"] == second["sha256"]
+    assert first["file_count"] == 2
+    with zipfile.ZipFile(first["path"]) as archive:
+        assert archive.namelist() == [
+            "assets/demo/textures/item.txt",
+            "pack.mcmeta",
+        ]
+
+
+def test_downloadable_bundle_keeps_verified_additional_resource_pack(tmp_path) -> None:
+    jar = tmp_path / "demo.jar"
+    jar.write_bytes(b"jar")
+    pack = tmp_path / "resource-pack.zip"
+    pack.write_bytes(b"pack")
+    artifact_sha = CompleteProductionOrchestrator._file_hash(jar)
+    pack_sha = CompleteProductionOrchestrator._file_hash(pack)
+
+    bundle = write_downloadable_bundle(
+        tmp_path / "download",
+        artifact_receipt={
+            "status": "PASS",
+            "artifact_path": str(jar),
+            "sha256": artifact_sha,
+        },
+        requirement_coverage={
+            "status": "PASS",
+            "artifact_sha256": artifact_sha,
+        },
+        reuse_manifest={},
+        build_receipt={
+            "status": "PASS",
+            "artifact_sha256": artifact_sha,
+        },
+        runtime_receipt={
+            "status": "NOT_REQUIRED",
+            "artifact_sha256": artifact_sha,
+        },
+        additional_artifacts={
+            "generated-resource-pack.zip": {
+                "path": str(pack),
+                "sha256": pack_sha,
+            }
+        },
+    )
+
+    assert bundle["additional_artifacts"] == {
+        "generated-resource-pack.zip": pack_sha
+    }
+    assert (tmp_path / "download" / "generated-resource-pack.zip").read_bytes() == b"pack"
+    assert any(
+        item["path"] == "generated-resource-pack.zip"
+        and item["sha256"] == pack_sha
+        for item in bundle["members"]
+    )
