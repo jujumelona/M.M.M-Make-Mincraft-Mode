@@ -47,6 +47,7 @@ from .custom_module_generator import (
 from .extended_content_generator import generate_extended_content
 from .final_artifact import (
     FinalArtifactError,
+    build_debug_fixture_coverage_receipt,
     build_requirement_coverage_receipt,
     load_or_empty_reuse_manifest,
     verify_final_mod_artifact,
@@ -1502,13 +1503,29 @@ class CompleteProductionOrchestrator:
         )
         self._persist_work_evidence(project_root, ledger, work_plan)
         contract = approved.game_design.get('_production_contract')
-        coverage_receipt = build_requirement_coverage_receipt(
-            contract=contract if isinstance(contract, dict) else None,
-            proposal_hash=approved.calculate_hash(),
-            quality_report=quality_report,
-            artifact_sha256=str(artifact_receipt['sha256']),
-            unresolved_gates=tuple(sorted(set(unresolved))),
-        )
+        normalized_unresolved = tuple(sorted(set(unresolved)))
+        if (
+            approved.schema_version == 'mmm/complete-proposal-v1'
+            and approved.game_design.get('mode') == 'debug_fixture'
+        ):
+            coverage_receipt = build_debug_fixture_coverage_receipt(
+                proposal_hash=approved.calculate_hash(),
+                acceptance_tests=approved.acceptance_tests,
+                artifact_sha256=str(artifact_receipt['sha256']),
+                source_validation=source_report,
+                build_report=build,
+                jar_validation=jar_validation,
+                gametest_passed=self._gametest_receipt_passed(build, spec),
+                unresolved_gates=normalized_unresolved,
+            )
+        else:
+            coverage_receipt = build_requirement_coverage_receipt(
+                contract=contract if isinstance(contract, dict) else None,
+                proposal_hash=approved.calculate_hash(),
+                quality_report=quality_report,
+                artifact_sha256=str(artifact_receipt['sha256']),
+                unresolved_gates=normalized_unresolved,
+            )
         (metadata_root / 'requirement-coverage.json').write_text(
             json.dumps(coverage_receipt, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
             encoding='utf-8',
@@ -1521,7 +1538,6 @@ class CompleteProductionOrchestrator:
                 json.dumps(reuse_manifest, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
                 encoding='utf-8',
             )
-        normalized_unresolved = tuple(sorted(set(unresolved)))
         release_ready = (
             not normalized_unresolved
             and quality_passed
