@@ -40,6 +40,11 @@ from .platform_catalog import adapter_for_target, adapter_from_project
 from .project_index import ProjectIndex
 from .research_ledger import select_module_research_context
 from .scale_policy import ScalePolicy
+from .small_model_atomic_coder_execution import (
+    atomic_coder_call,
+    bounded_initial_observations,
+    bounded_reuse_context,
+)
 from .small_model_write_scope_enforcement import (
     exact_task_operation_validator,
     generation_authority_scoped,
@@ -106,6 +111,7 @@ def _source_donor_decisions(
     )
 
 
+@bounded_reuse_context
 def _materialize_owned_reuse_context(
     project_root: Path,
     module: ProductionModule,
@@ -440,6 +446,7 @@ def persist_active_generation_checkpoint(project_root: str | Path) -> bool:
     return True
 
 
+@atomic_coder_call
 def _generate_coder_text(
     router: ModelRouter,
     role: str,
@@ -1444,6 +1451,7 @@ def _is_stale_project_index_error(exc: ValueError) -> bool:
     return str(exc).startswith("Project source changed after its context index was built:")
 
 
+@bounded_initial_observations
 def _collect_initial_observations(
     index: ProjectIndex,
     *,
