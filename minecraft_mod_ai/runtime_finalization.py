@@ -35,7 +35,6 @@ def finalize_runtime() -> None:
         _FINALIZING = True
 
         from . import (
-            agent_capability_context,
             agent_tool_runtime,
             central_intelligence_amplifier,
             complete_orchestrator,
@@ -55,7 +54,6 @@ def finalize_runtime() -> None:
             parallel_runtime_contract,
             planner_template_schema,
             production_contract,
-            production_tools,
             quality_evidence,
             reference_source_research,
             research_rag_performance,
