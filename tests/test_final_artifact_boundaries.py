@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import zipfile
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from minecraft_mod_ai.final_artifact import (
     append_github_outputs,
     build_debug_fixture_coverage_receipt,
     sha256_file,
+    verify_debug_fixture_source,
     write_downloadable_bundle,
 )
 from minecraft_mod_ai.pipeline import MinecraftModPipeline
@@ -49,6 +51,12 @@ def _debug_coverage_inputs() -> dict[str, object]:
         },
         "gametest_passed": True,
         "unresolved_gates": (),
+        "observable_acceptance": {
+            "schema_version": "mmm/debug-source-acceptance-v1",
+            "status": "PASS",
+            "source_sha256": "sha256:" + "3" * 64,
+            "findings": [],
+        },
     }
 
 
@@ -62,6 +70,7 @@ def test_debug_fixture_coverage_requires_all_real_verification_gates() -> None:
         "build": True,
         "jar_validation": True,
         "gametest": True,
+        "observable_acceptance": True,
     }
     assert all(item["status"] == "PASS" for item in receipt["requirements"])
 
@@ -70,12 +79,159 @@ def test_debug_fixture_coverage_requires_all_real_verification_gates() -> None:
         ("build_report", {"status": "FAIL"}),
         ("jar_validation", {"status": "FAIL", "checks_run": 6, "findings": []}),
         ("gametest_passed", False),
+        (
+            "observable_acceptance",
+            {
+                "schema_version": "mmm/debug-source-acceptance-v1",
+                "status": "BLOCKED",
+                "source_sha256": "sha256:" + "3" * 64,
+                "findings": ["missing item registration"],
+            },
+        ),
         ("unresolved_gates", ("required-gate:debug_token:target_compile:missing",)),
     ):
         blocked = build_debug_fixture_coverage_receipt(
             **{**inputs, field: value}
         )
         assert blocked["status"] == "BLOCKED"
+
+
+def _debug_source_contract() -> dict[str, object]:
+    return {
+        "schema_version": "mmm/debug-source-contract-v1",
+        "path": "src/main/java/dev/mmm/debugfixture/DebugToken.java",
+        "identifier": "debug_token",
+        "semantic_kind": "item",
+        "required_host_symbol_keys": [
+            "register_item",
+            "builtin_item_registry",
+            "registries_item",
+            "resource_key_create",
+            "identifier_factory",
+        ],
+        "forbidden_lifecycle_symbols": [
+            "ModInitializer",
+            "onInitialize",
+        ],
+    }
+
+
+def _debug_host_facts() -> str:
+    return json.dumps(
+        {
+            "host_revision": "sha256:" + "4" * 64,
+            "api_symbols": {
+                "register_item": {
+                    "owner": "net.minecraft.core.Registry",
+                    "name": "register",
+                    "kind": "method",
+                },
+                "builtin_item_registry": {
+                    "owner": "net.minecraft.core.registries.BuiltInRegistries",
+                    "name": "ITEM",
+                    "kind": "field",
+                },
+                "registries_item": {
+                    "owner": "net.minecraft.core.registries.Registries",
+                    "name": "ITEM",
+                    "kind": "field",
+                },
+                "resource_key_create": {
+                    "owner": "net.minecraft.resources.ResourceKey",
+                    "name": "create",
+                    "kind": "method",
+                },
+                "identifier_factory": {
+                    "owner": "net.minecraft.resources.Identifier",
+                    "name": "fromNamespaceAndPath",
+                    "kind": "method",
+                },
+            },
+        }
+    )
+
+
+def test_debug_fixture_source_acceptance_binds_real_host_item_symbols(
+    tmp_path: Path,
+) -> None:
+    source = (
+        tmp_path
+        / "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+    )
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        """
+package dev.mmm.debugfixture;
+
+import net.minecraft.core.Registry;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.item.Item;
+
+public final class DebugToken {
+    public static final ResourceKey<Item> KEY = ResourceKey.create(
+        Registries.ITEM,
+        Identifier.fromNamespaceAndPath("mmm_debug_fixture", "debug_token")
+    );
+    public static final Item ITEM = Registry.register(
+        BuiltInRegistries.ITEM,
+        KEY,
+        new Item(new Item.Properties().setId(KEY))
+    );
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    receipt = verify_debug_fixture_source(
+        tmp_path,
+        source_contract=_debug_source_contract(),
+        host_facts_json=_debug_host_facts(),
+    )
+
+    assert receipt["status"] == "PASS"
+    assert receipt["identifier_present"] is True
+    assert receipt["lifecycle_clear"] is True
+    assert all(receipt["symbol_results"].values())
+
+
+def test_debug_fixture_source_acceptance_rejects_compile_only_placeholder(
+    tmp_path: Path,
+) -> None:
+    source = (
+        tmp_path
+        / "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+    )
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        """
+package dev.mmm.debugfixture;
+
+public final class DebugToken {
+    private static final String TOKEN = "debug_token_fixture";
+
+    public static String getToken() {
+        return TOKEN;
+    }
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    receipt = verify_debug_fixture_source(
+        tmp_path,
+        source_contract=_debug_source_contract(),
+        host_facts_json=_debug_host_facts(),
+    )
+
+    assert receipt["status"] == "BLOCKED"
+    assert receipt["identifier_present"] is False
+    assert set(receipt["symbol_results"].values()) == {False}
+    assert any("required host symbol" in item for item in receipt["findings"])
 
 
 def test_sha256_rejects_direct_and_parent_symlink_aliases(tmp_path: Path) -> None:
