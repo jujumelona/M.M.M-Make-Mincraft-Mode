@@ -1450,136 +1450,150 @@ class CompleteProductionOrchestrator:
                 json.dumps(reuse_manifest, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
                 encoding='utf-8',
             )
-        from .mcp_tools import MMMToolService
-        tool_service = MMMToolService(workspace_root=run_root, profile=self.profile)
-        resource_pack_bundle = (
-            asset_receipt.get('resource_pack_bundle')
-            if isinstance(asset_receipt, dict)
-            and isinstance(asset_receipt.get('resource_pack_bundle'), dict)
-            else None
-        )
-        release_package_input = {
-            'graph_hash': work_plan.graph_hash,
-            'proposal_hash': base.calculate_hash(),
-            'jar_sha256': self._file_hash(jar_path),
-            'coverage_sha256': str(coverage_receipt.get('coverage_sha256') or ''),
-            'runtime_receipt_sha256': _stable_payload_sha256(persisted_runtime_receipt),
-            'build_receipt_sha256': _stable_payload_sha256(build_receipt),
-            'reuse_manifest_sha256': _stable_payload_sha256(reuse_manifest),
-            'quality_report_sha256': _stable_payload_sha256(quality_report),
-            'resource_pack_sha256': str(
-                resource_pack_bundle.get('sha256') if resource_pack_bundle else ''
-            ),
-        }
-        release_package_sha256 = _stable_payload_sha256(release_package_input)
-        release_output = (
-            'releases/complete-release-'
-            + release_package_sha256.split(':', 1)[1][:16]
-            + '.zip'
-        )
-        release_result = run_named_checkpoint(
-            ledger,
-            'package-release',
-            stage='package',
-            input_value=release_package_input,
-            action=lambda: _replace_stale_file_target(
-                run_root / release_output,
-                lambda: _attach_verified_release_artifact(
-                    tool_service.package_release(
-                        str(project_root),
-                        base.to_dict(),
-                        base.calculate_hash(),
-                        output_zip=release_output,
-                        jar_path=str(jar_path),
-                    ),
-                    resource_pack_bundle,
-                    archive_name='generated-resource-pack.zip',
-                    allowed_root=run_root,
-                ),
-            ),
-            encode=lambda value: value,
-            decode=lambda cached: cached,
-            validate_cached=lambda cached: self._cached_package_exists(
-                cached, path_key='release_zip'
-            ),
-        )
-        release_zip = str(release_result['release_zip'])
-        metadata = build_distribution_metadata(jar_path=jar_path, mod_id=spec.mod_id, version=spec.version, name=spec.mod_name, changelog=options.changelog, platform_lock=spec.platform)
-        distribution_input = {
-            'metadata_sha256': _stable_payload_sha256(metadata),
-            'source_zip_sha256': str(release_result.get('sha256') or ''),
-        }
-        distribution_sha256 = _stable_payload_sha256(distribution_input)
-        distribution_output = (
-            run_root
-            / 'releases'
-            / (
-                'distribution-bundle-'
-                + distribution_sha256.split(':', 1)[1][:16]
-                + '.zip'
-            )
-        )
-        bundle = run_named_checkpoint(
-            ledger,
-            'package-distribution',
-            stage='package:distribution',
-            input_value=distribution_input,
-            action=lambda: _replace_stale_file_target(
-                distribution_output,
-                lambda: package_distribution_bundle(
-                    metadata,
-                    output_zip=distribution_output,
-                    source_zip=release_zip,
-                ),
-            ),
-            encode=lambda value: value,
-            decode=lambda cached: cached,
-            validate_cached=lambda cached: self._cached_package_exists(
-                cached, path_key='path'
-            ),
-        )
-        distribution_receipt = {'metadata': metadata, 'bundle': bundle}
         release_ready = (
             not unresolved
             and quality_passed
             and coverage_receipt.get('status') == 'PASS'
         )
         if options.publish_provider and (not release_ready):
-            raise CompleteProductionError('Publishing is blocked because required verification gates remain unresolved.')
-        if options.publish_provider in {'modrinth', 'curseforge'}:
-            provider = str(options.publish_provider)
-            publish_input = {
-                'provider': provider,
-                'project_id': str(options.publish_project_id),
-                'metadata_sha256': _stable_payload_sha256(metadata),
-                'jar_sha256': str(metadata.get('jar_sha256') or ''),
+            raise CompleteProductionError(
+                'Publishing is blocked because required verification gates remain unresolved.'
+            )
+
+        release_zip: str | None = None
+        distribution_receipt: dict[str, Any] | None = None
+        if release_ready:
+            from .mcp_tools import MMMToolService
+            tool_service = MMMToolService(workspace_root=run_root, profile=self.profile)
+            resource_pack_bundle = (
+                asset_receipt.get('resource_pack_bundle')
+                if isinstance(asset_receipt, dict)
+                and isinstance(asset_receipt.get('resource_pack_bundle'), dict)
+                else None
+            )
+            release_package_input = {
+                'graph_hash': work_plan.graph_hash,
+                'proposal_hash': base.calculate_hash(),
+                'jar_sha256': self._file_hash(jar_path),
+                'coverage_sha256': str(coverage_receipt.get('coverage_sha256') or ''),
+                'runtime_receipt_sha256': _stable_payload_sha256(persisted_runtime_receipt),
+                'build_receipt_sha256': _stable_payload_sha256(build_receipt),
+                'reuse_manifest_sha256': _stable_payload_sha256(reuse_manifest),
+                'quality_report_sha256': _stable_payload_sha256(quality_report),
+                'resource_pack_sha256': str(
+                    resource_pack_bundle.get('sha256') if resource_pack_bundle else ''
+                ),
             }
-            distribution_receipt['publish'] = run_named_checkpoint(
+            release_package_sha256 = _stable_payload_sha256(release_package_input)
+            release_output = (
+                'releases/complete-release-'
+                + release_package_sha256.split(':', 1)[1][:16]
+                + '.zip'
+            )
+            release_result = run_named_checkpoint(
                 ledger,
-                'publish-' + provider,
-                stage='publish:' + provider,
-                input_value=publish_input,
-                action=(
-                    (lambda: publish_modrinth(
-                        metadata,
-                        project_id=str(options.publish_project_id),
-                    ))
-                    if provider == 'modrinth'
-                    else (lambda: publish_curseforge(
-                        metadata,
-                        project_id=str(options.publish_project_id),
-                    ))
+                'package-release',
+                stage='package',
+                input_value=release_package_input,
+                action=lambda: _replace_stale_file_target(
+                    run_root / release_output,
+                    lambda: _attach_verified_release_artifact(
+                        tool_service.package_release(
+                            str(project_root),
+                            base.to_dict(),
+                            base.calculate_hash(),
+                            output_zip=release_output,
+                            jar_path=str(jar_path),
+                        ),
+                        resource_pack_bundle,
+                        archive_name='generated-resource-pack.zip',
+                        allowed_root=run_root,
+                    ),
                 ),
                 encode=lambda value: value,
                 decode=lambda cached: cached,
-                validate_cached=lambda cached: (
-                    isinstance(cached, dict)
-                    and cached.get('status') == 'PUBLISHED'
-                    and cached.get('provider') == provider
-                    and cached.get('jar_sha256') == metadata.get('jar_sha256')
+                validate_cached=lambda cached: self._cached_package_exists(
+                    cached, path_key='release_zip'
                 ),
             )
-        if release_ready:
+            release_zip = str(release_result['release_zip'])
+            metadata = build_distribution_metadata(
+                jar_path=jar_path,
+                mod_id=spec.mod_id,
+                version=spec.version,
+                name=spec.mod_name,
+                changelog=options.changelog,
+                platform_lock=spec.platform,
+            )
+            distribution_input = {
+                'metadata_sha256': _stable_payload_sha256(metadata),
+                'source_zip_sha256': str(release_result.get('sha256') or ''),
+            }
+            distribution_sha256 = _stable_payload_sha256(distribution_input)
+            distribution_output = (
+                run_root
+                / 'releases'
+                / (
+                    'distribution-bundle-'
+                    + distribution_sha256.split(':', 1)[1][:16]
+                    + '.zip'
+                )
+            )
+            bundle = run_named_checkpoint(
+                ledger,
+                'package-distribution',
+                stage='package:distribution',
+                input_value=distribution_input,
+                action=lambda: _replace_stale_file_target(
+                    distribution_output,
+                    lambda: package_distribution_bundle(
+                        metadata,
+                        output_zip=distribution_output,
+                        source_zip=release_zip,
+                    ),
+                ),
+                encode=lambda value: value,
+                decode=lambda cached: cached,
+                validate_cached=lambda cached: self._cached_package_exists(
+                    cached, path_key='path'
+                ),
+            )
+            distribution_receipt = {'metadata': metadata, 'bundle': bundle}
+
+            if options.publish_provider in {'modrinth', 'curseforge'}:
+                provider = str(options.publish_provider)
+                publish_input = {
+                    'provider': provider,
+                    'project_id': str(options.publish_project_id),
+                    'metadata_sha256': _stable_payload_sha256(metadata),
+                    'jar_sha256': str(metadata.get('jar_sha256') or ''),
+                }
+                distribution_receipt['publish'] = run_named_checkpoint(
+                    ledger,
+                    'publish-' + provider,
+                    stage='publish:' + provider,
+                    input_value=publish_input,
+                    action=(
+                        (lambda: publish_modrinth(
+                            metadata,
+                            project_id=str(options.publish_project_id),
+                        ))
+                        if provider == 'modrinth'
+                        else (lambda: publish_curseforge(
+                            metadata,
+                            project_id=str(options.publish_project_id),
+                        ))
+                    ),
+                    encode=lambda value: value,
+                    decode=lambda cached: cached,
+                    validate_cached=lambda cached: (
+                        isinstance(cached, dict)
+                        and cached.get('status') == 'PUBLISHED'
+                        and cached.get('provider') == provider
+                        and cached.get('jar_sha256') == metadata.get('jar_sha256')
+                    ),
+                )
+
             downloadable_input = {
                 'artifact_sha256': str(artifact_receipt.get('sha256') or ''),
                 'coverage_sha256': str(coverage_receipt.get('coverage_sha256') or ''),
@@ -1626,10 +1640,21 @@ class CompleteProductionOrchestrator:
                 decode=lambda cached: cached,
                 validate_cached=self._cached_download_bundle_exists,
             )
-        if release_ready:
-            self._succeed_work_node(ledger, 'package-release', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'PASS', 'release_zip': release_zip})
+            self._succeed_work_node(
+                ledger,
+                'package-release',
+                {
+                    'schema_version': 'mmm/work-node-receipt-v1',
+                    'status': 'PASS',
+                    'release_zip': release_zip,
+                },
+            )
         else:
-            ledger.fail('package-release', 'Release quality evidence is incomplete.', input_required=True)
+            ledger.fail(
+                'package-release',
+                'Release quality evidence is incomplete.',
+                input_required=True,
+            )
         self._persist_work_evidence(project_root, ledger, work_plan)
         return CompletePipelineResult(schema_version='mmm/complete-pipeline-result-v3', status='VERIFIED' if release_ready else 'BUILT_WITH_UNRESOLVED_GATES', project_root=str(project_root), release_zip=release_zip, jar_path=str(jar_path), complete_proposal_hash=approved.calculate_hash(), source_validation=source_report, build_report=build, jar_validation=jar_validation, module_receipts=tuple(module_receipts), asset_receipt=asset_receipt, blockbench_receipts=tuple(blockbench_receipts), runtime_receipt=runtime_receipt, playtest_receipt=playtest_receipt, visual_receipt=visual_receipt, distribution_receipt=distribution_receipt, unresolved_gates=tuple(sorted(set(unresolved))), release_ready=release_ready, work_graph_hash=work_plan.graph_hash, work_ledger_path=str(ledger.path), run_resumed=run_resumed, quality_report=quality_report)
 
