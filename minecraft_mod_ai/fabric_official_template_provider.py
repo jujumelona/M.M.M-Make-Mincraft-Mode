@@ -358,6 +358,7 @@ fabricApi {
     if "fabric-api.gametest.report-file" not in build_text:
         additions.append(
             """// M.M.M structured GameTest evidence
+// Bind the property on Loom's generated gameTest run so runGameTest inherits it.
 loom {
     runs {
         gameTest {

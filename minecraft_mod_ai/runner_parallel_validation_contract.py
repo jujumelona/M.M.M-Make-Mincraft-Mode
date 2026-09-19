@@ -297,7 +297,11 @@ def _structured_gametest_report(
     log_path: str | Path,
     native_report: str | Path,
 ) -> Path | None:
-    """Return native XML or reconstruct a host-bound XML receipt from Fabric output."""
+    """Return native XML or reconstruct a host-bound XML receipt from Fabric output.
+
+    The reconstruction path is intentionally fail-closed: it requires the pinned
+    host GameTest contract plus Fabric's terminal required-test pass summary.
+    """
 
     safe_native = _safe_regular_file(root, native_report)
     if safe_native is not None and _passing_gametest_xml(root, safe_native):
