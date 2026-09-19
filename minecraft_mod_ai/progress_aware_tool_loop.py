@@ -29,6 +29,13 @@ from .llama_finish_reason_contract import (
     mark_context_recovery_exhausted,
 )
 from .model_adapters import GenerationRequest, ModelConfigurationError
+from .mutation_authority import CURRENT_MUTATION_AUTHORITY, MutationAuthorityMode
+from .owned_target_contract import (
+    normalize_target_status,
+    target_is_creatable,
+    target_is_existing,
+    target_is_writable,
+)
 from .model_context_budget import (
     bounded_tool_message,
     emergency_fit_messages,
@@ -293,8 +300,10 @@ def _anchor_candidate(
     path, symbol = _anchor_path_and_symbol(anchor)
     if not path:
         return None
-    status_reserved = str(anchor.get("status") or "").strip().casefold() == "host_reserved"
-    fresh = reuse == "fresh" if reuse else status_reserved
+    status = normalize_target_status(anchor.get("status"))
+    if status and not target_is_writable(status):
+        return None
+    fresh = target_is_creatable(status) if status else reuse == "fresh"
     symbolic = str(anchor.get("kind") or "").strip().casefold() == "symbol"
     return path, symbol, fresh, symbolic
 
@@ -315,7 +324,7 @@ def _collect_task_anchors(
             continue
         path, symbol, fresh, symbolic = candidate
         _append_unique(writable, path)
-        reserved = str(raw_anchor.get("status") or "").strip().casefold() == "host_reserved"
+        reserved = target_is_creatable(raw_anchor.get("status"))
         if fresh or reserved:
             _append_unique(creatable, path)
         if symbolic:
@@ -369,6 +378,25 @@ def _choose_authority_candidate(
     return unique[0] if len(unique) == 1 else None
 
 
+def _task_anchor_status(task: Mapping[str, Any] | None, path: str) -> str:
+    if not isinstance(task, Mapping):
+        return ""
+    groups: list[Any] = []
+    for binding in _sequence(task.get("production_bindings")):
+        if isinstance(binding, Mapping):
+            groups.extend(_sequence(binding.get("owned_anchors")))
+    groups.extend(_sequence(task.get("owned_anchors")))
+    for anchor in groups:
+        if not isinstance(anchor, Mapping):
+            continue
+        anchor_path, _symbol = _anchor_path_and_symbol(anchor)
+        if anchor_path == path:
+            status = normalize_target_status(anchor.get("status"))
+            if status:
+                return status
+    return ""
+
+
 def _task_authority_context(payload: Mapping[str, Any]) -> TargetMutationContext | None:
     task = _evidence_task_from_module(payload.get("module"))
     direct_primary = _canonical_mutation_path(payload.get("primary_path"))
@@ -394,14 +422,20 @@ def _task_authority_context(payload: Mapping[str, Any]) -> TargetMutationContext
     _append_unique(writable, path)
     if fresh:
         _append_unique(creatable, path)
+    status = _task_anchor_status(task, path)
+    if isinstance(task, Mapping) and target_is_existing(status):
+        evidence_source = "evidence_existing_owned_anchor"
+    elif isinstance(task, Mapping) and target_is_creatable(status):
+        evidence_source = "evidence_host_reserved_owned_anchor"
+    elif fresh and isinstance(task, Mapping):
+        evidence_source = "evidence_fresh_owned_anchor"
+    else:
+        evidence_source = "host_task_authority"
     return TargetMutationContext(
         target_path=path,
         target_symbol=symbol or None,
         is_new_file=fresh,
-        evidence_source=(
-            "evidence_fresh_owned_anchor" if fresh and isinstance(task, Mapping)
-            else "host_task_authority"
-        ),
+        evidence_source=evidence_source,
         writable_paths=tuple(writable),
         creatable_paths=tuple(creatable),
         target_pinned=True,
@@ -1073,6 +1107,16 @@ def _mutation_target_error(
 ) -> str | None:
     if tool_name != "apply_source_edit":
         return None
+    authority = CURRENT_MUTATION_AUTHORITY.get()
+    if authority is not None:
+        error = authority.mutation_error(
+            _source_edit_path(arguments),
+            operation=arguments.get("operation"),
+        )
+        if error is not None:
+            return error
+        if authority.mode is MutationAuthorityMode.BOUNDED_ROOTS:
+            return None
     if context is None:
         return "MUTATION_TARGET_UNBOUND: no host-pinned mutation target is READY"
     if not context.is_mutation_ready:
