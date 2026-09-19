@@ -7,6 +7,7 @@ import pytest
 from types import SimpleNamespace
 
 from minecraft_mod_ai.final_artifact import write_downloadable_bundle
+from minecraft_mod_ai.mcp_tools import MMMToolService
 
 from minecraft_mod_ai.complete_orchestrator import (
     CompleteProductionOrchestrator,
@@ -603,3 +604,14 @@ def test_downloadable_bundle_keeps_verified_additional_resource_pack(tmp_path) -
         and item["sha256"] == pack_sha
         for item in bundle["members"]
     )
+
+
+def test_primary_release_zip_path_accepts_attested_additional_artifacts() -> None:
+    package_source = inspect.getsource(MMMToolService.package_release)
+    execute_source = inspect.getsource(CompleteProductionOrchestrator.execute)
+
+    assert "additional_artifacts" in package_source
+    assert "Additional release artifact digest mismatch" in package_source
+    assert "Path('additional') / name" in package_source
+    assert "'resource_pack_sha256'" in execute_source
+    assert "'generated-resource-pack.zip': resource_pack_bundle" in execute_source
