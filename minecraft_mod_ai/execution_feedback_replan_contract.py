@@ -21,7 +21,6 @@ This contract makes that link explicit:
 import hashlib
 import json
 import re
-import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from functools import wraps
@@ -63,7 +62,6 @@ _VERIFIER_UNAVAILABLE_TEXT = re.compile(
     r"\b(?:jdt(?:\s+diagnostics)?|verifier)\b[^\n]{0,160}\bunavailable\b",
     re.IGNORECASE,
 )
-_INSTALLED = False
 
 
 def _sha(value: Any) -> str:
@@ -927,103 +925,6 @@ def execution_feedback_scoped(current_execute: Any) -> Any:
     return execute_with_feedback
 
 
-def _install_ledger_feedback(work_graph_module: Any) -> None:
-    cls = work_graph_module.DurableWorkLedger
-    if hasattr(cls, "invalidate_execution_feedback"):
-        return
-
-    def invalidate_execution_feedback(
-        self: Any, feedback: Mapping[str, Any]
-    ) -> dict[str, Any]:
-        seed_nodes, owner_ids, requirement_ids, matched = _derive_impacted_seeds(
-            self, feedback
-        )
-        before = {
-            str(task.get("node_id")): {
-                "state": task.get("state"),
-                "output_hash": task.get("output_hash"),
-            }
-            for task in _generation_rows(self)
-        }
-        diagnostics = feedback.get("diagnostics")
-        diagnostics = diagnostics if isinstance(diagnostics, Sequence) else ()
-        feedback_fingerprint = _sha(
-            {
-                "checkpoint_id": feedback.get("checkpoint_id"),
-                "diagnostics": list(diagnostics),
-                "seed_nodes": sorted(seed_nodes),
-            }
-        )
-
-        if not seed_nodes:
-            receipt = {
-                "schema_version": _SCHEMA,
-                "status": "GLOBAL_REPLAN_REQUIRED",
-                "global_replan_required": True,
-                "reason": "validation feedback could not be bound to an observed generation owner",
-                "feedback_fingerprint": feedback_fingerprint,
-                "diagnostic_paths": sorted(
-                    {
-                        _norm_path(item.get("path"))
-                        for item in diagnostics
-                        if isinstance(item, Mapping) and _norm_path(item.get("path"))
-                    }
-                ),
-                "seed_node_ids": [],
-                "impacted_node_ids": [],
-                "preserved_generation_node_ids": sorted(before),
-                "owner_ids": [],
-                "requirement_ids": sorted(requirement_ids),
-                "matches": [],
-            }
-            _persist_feedback_receipt(self, receipt)
-            return receipt
-
-        with self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            impacted = self._invalidate_many(connection, sorted(seed_nodes))
-            connection.commit()
-        impacted_set = set(impacted)
-        all_rows: list[dict[str, Any]] = []
-        cursor = ""
-        while True:
-            page = self.tasks(cursor=cursor, limit=1000)
-            all_rows.extend(
-                dict(item) for item in page.get("tasks", ()) if isinstance(item, Mapping)
-            )
-            cursor = str(page.get("next_cursor") or "")
-            if not cursor:
-                break
-        preserved = sorted(
-            str(item.get("node_id"))
-            for item in all_rows
-            if str(item.get("node_id")) not in impacted_set
-            and str(item.get("state")) == "succeeded"
-        )
-        impacted_generation = sorted(
-            node_id for node_id in impacted if node_id in before
-        )
-        receipt = {
-            "schema_version": _SCHEMA,
-            "status": "IMPACTED_SUBGRAPH_INVALIDATED",
-            "global_replan_required": False,
-            "feedback_fingerprint": feedback_fingerprint,
-            "seed_node_ids": sorted(seed_nodes),
-            "impacted_node_ids": list(impacted),
-            "impacted_generation_node_ids": impacted_generation,
-            "preserved_succeeded_node_ids": preserved,
-            "owner_ids": sorted(owner_ids),
-            "requirement_ids": sorted(requirement_ids),
-            "matches": matched,
-            "previous_generation_state": before,
-        }
-        receipt["receipt_sha256"] = _sha(receipt)
-        _persist_feedback_receipt(self, receipt)
-        return receipt
-
-    cls.invalidate_execution_feedback = invalidate_execution_feedback
-
-
 def _persist_feedback_receipt(ledger: Any, receipt: Mapping[str, Any]) -> None:
     target = Path(ledger.path).resolve().parent / "execution-feedback-replan.jsonl"
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -1040,190 +941,13 @@ def _persist_feedback_receipt(ledger: Any, receipt: Mapping[str, Any]) -> None:
         )
 
 
-def _install_observation_owner(orchestrator_module: Any) -> None:
-    current = orchestrator_module._semantic_execution_observation
-    if getattr(current, "_mmm_multi_owner_observation", False):
-        return
-
-    def semantic_execution_observation(
-        module: Any,
-        receipt: dict[str, Any],
-        *,
-        dependent_ids: Iterable[str],
-    ) -> dict[str, Any] | None:
-        if not isinstance(receipt, Mapping):
-            return None
-        return _semantic_observation(
-            module, receipt, dependent_ids=dependent_ids
-        )
-
-    semantic_execution_observation._mmm_multi_owner_observation = True
-    semantic_execution_observation.__wrapped__ = current
-    orchestrator_module._semantic_execution_observation = semantic_execution_observation
-
-
-def _install_run_context(orchestrator_module: Any) -> None:
-    cls = orchestrator_module.CompleteProductionOrchestrator
-    current_open = cls._open_run
-    if not getattr(current_open, "_mmm_feedback_context", False):
-        @wraps(current_open)
-        def open_run(self: Any, run_name: str, plan: Any, *, resume: bool):
-            root, ledger, resumed = current_open(self, run_name, plan, resume=resume)
-            self._mmm_feedback_run_root = root
-            self._mmm_feedback_ledger = ledger
-            self._mmm_feedback_plan = plan
-            return root, ledger, resumed
-
-        open_run._mmm_feedback_context = True
-        open_run.__wrapped__ = current_open
-        cls._open_run = open_run
-
-    current_execute = cls.execute
-    if getattr(current_execute, "_mmm_impacted_feedback_loop", False):
-        return
-
-    def execute_feedback_loop(self: Any, *args: Any, **kwargs: Any):
-        seen: set[str] = set()
-        call_kwargs = dict(kwargs)
-        while True:
-            try:
-                return current_execute(self, *args, **call_kwargs)
-            except orchestrator_module.CompleteProductionError as exc:
-                emit_root_cause(
-                    "execution_feedback_failure_observed",
-                    stage="generation",
-                    operation="execute_with_feedback",
-                    gate="adjudication",
-                    result="FAIL",
-                    reason=f"{type(exc).__name__}: {exc}",
-                    details={"seen_fingerprints": sorted(seen)},
-                    exc=exc,
-                )
-                ledger = getattr(self, "_mmm_feedback_ledger", None)
-                if ledger is None or not hasattr(ledger, "invalidate_execution_feedback"):
-                    raise
-                feedback = _latest_failed_feedback(ledger)
-                if not isinstance(feedback, Mapping):
-                    raise
-
-                _abort_verifier_infrastructure_retry(feedback, seen, exc)
-                receipt = ledger.invalidate_execution_feedback(feedback)
-                fingerprint = str(receipt.get("feedback_fingerprint") or "")
-                emit_root_cause(
-                    "execution_feedback_adjudicated",
-                    stage="generation",
-                    operation="execute_with_feedback",
-                    gate="impact_analysis",
-                    result="PASS",
-                    details={
-                        "feedback": feedback,
-                        "invalidation_receipt": receipt,
-                        "fingerprint": fingerprint,
-                    },
-                )
-                if (
-                    receipt.get("global_replan_required") is True
-                    or not receipt.get("impacted_generation_node_ids")
-                    or not fingerprint
-                    or fingerprint in seen
-                ):
-                    emit_root_cause(
-                        "execution_feedback_abort",
-                        stage="generation",
-                        operation="execute_with_feedback",
-                        gate="retry_eligibility",
-                        result="FAIL",
-                        reason="feedback cannot produce a novel owner-bound retry",
-                        details={
-                            "receipt": receipt,
-                            "seen_fingerprints": sorted(seen),
-                        },
-                    )
-                    raise
-                seen.add(fingerprint)
-                options = call_kwargs.get("options")
-                if options is None:
-                    options = orchestrator_module.CompleteExecutionOptions(resume=True)
-                else:
-                    options = replace(options, resume=True)
-                call_kwargs["options"] = options
-                emit_root_cause(
-                    "execution_feedback_retry",
-                    stage="generation",
-                    operation="execute_with_feedback",
-                    gate="retry_eligibility",
-                    result="START",
-                    reason="novel impacted nodes invalidated",
-                    details={
-                        "fingerprint": fingerprint,
-                        "options": options,
-                        "seen_fingerprint_count": len(seen),
-                    },
-                )
-
-    @wraps(current_execute)
-    def execute_with_feedback(self: Any, *args: Any, **kwargs: Any):
-        with trace_scope("complete_production"):
-            emit_root_cause(
-                "pipeline_boundary_start",
-                stage="runtime",
-                operation="complete_production",
-                gate="end_to_end_execution",
-                result="START",
-                details={"args": args, "kwargs": kwargs},
-            )
-            try:
-                result = execute_feedback_loop(self, *args, **kwargs)
-            except BaseException as exc:
-                emit_root_cause(
-                    "pipeline_boundary_failure",
-                    stage="runtime",
-                    operation="complete_production",
-                    gate="end_to_end_execution",
-                    result="FAIL",
-                    reason=f"{type(exc).__name__}: {exc}",
-                    exc=exc,
-                )
-                raise
-            emit_root_cause(
-                "pipeline_boundary_result",
-                stage="runtime",
-                operation="complete_production",
-                gate="end_to_end_execution",
-                result="PASS",
-                details={"result": result},
-            )
-            return result
-
-    execute_with_feedback._mmm_impacted_feedback_loop = True
-    execute_with_feedback._mmm_semantic_convergence = True
-    execute_with_feedback.__wrapped__ = current_execute
-    cls.execute = execute_with_feedback
-
-
-def install(*, orchestrator_module: Any, work_graph_module: Any) -> None:
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _install_ledger_feedback(work_graph_module)
-    _install_observation_owner(orchestrator_module)
-    _install_run_context(orchestrator_module)
-
-    # Repair wrappers imported class methods before this late contract in some test
-    # processes.  Update only direct aliases that still point at the old class method;
-    # do not overwrite independently wrapped callables.
-    for name, module in tuple(sys.modules.items()):
-        if not name.startswith("minecraft_mod_ai.") or module is None:
-            continue
-        if getattr(module, "DurableWorkLedger", None) is work_graph_module.DurableWorkLedger:
-            setattr(module, "DurableWorkLedger", work_graph_module.DurableWorkLedger)
-    _INSTALLED = True
-
-
 __all__ = [
     "_derive_impacted_seeds",
     "_diagnostics_from_value",
     "_path_equivalent",
     "_verifier_infrastructure_failure",
-    "install",
+    "execution_feedback_scoped",
+    "feedback_run_context",
+    "invalidate_execution_feedback",
+    "semantic_execution_observation",
 ]
