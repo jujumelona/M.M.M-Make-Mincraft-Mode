@@ -67,41 +67,14 @@ def _runtime_grounding_budget(router: Any, requested: int, *, role: str) -> int:
 
 
 def _install_repository_grounding() -> None:
-    from . import custom_module_generator, repair_engine
-    from .repository_grounding import (
-        build_repair_repository_context,
-        build_repository_observation_ledger,
-    )
+    """Install adaptive repository grounding only where it still owns runtime behavior."""
 
-    current_collect = custom_module_generator._collect_initial_observations
-    if not getattr(current_collect, _GROUNDING_MARKER, False):
+    from . import repair_engine
+    from .repository_grounding import build_repair_repository_context
 
-        @wraps(current_collect)
-        def _collect_initial_observations(
-            index: Any,
-            *,
-            query: str,
-            byte_budget: int,
-            diagnostic_paths=(),
-        ) -> dict[str, Any]:
-            try:
-                return build_repository_observation_ledger(
-                    None,
-                    index,
-                    query=query,
-                    byte_budget=_runtime_grounding_budget(
-                        None,
-                        byte_budget,
-                        role="coder",
-                    ),
-                    diagnostic_paths=diagnostic_paths,
-                )
-            except ValueError as exc:
-                raise custom_module_generator.CustomModuleGenerationError(str(exc)) from exc
-
-        setattr(_collect_initial_observations, _GROUNDING_MARKER, True)
-        custom_module_generator._collect_initial_observations = _collect_initial_observations
-
+    # Custom generation owns its bounded initial source page directly in
+    # custom_module_generator. The historical wrapper here was installed first and
+    # then replaced by the atomic-coder finalizer, so it never owned the final runtime.
     current_context = repair_engine.RepairEngine._context
     if getattr(current_context, _GROUNDING_MARKER, False):
         return
