@@ -369,6 +369,31 @@ _JDT_INFRASTRUCTURE_CODES = frozenset({
 })
 
 
+def _runtime_visual_download_artifacts(
+    visual_receipt: dict[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    if not isinstance(visual_receipt, dict):
+        return {}
+    screenshots = visual_receipt.get("runtime_screenshots")
+    if not isinstance(screenshots, list):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for index, item in enumerate(screenshots, start=1):
+        if not isinstance(item, dict):
+            continue
+        raw = item.get("evidence_path")
+        digest = item.get("sha256")
+        if not isinstance(raw, str) or not isinstance(digest, str):
+            continue
+        path = Path(raw).expanduser().resolve()
+        suffix = path.suffix.lower()
+        result[f"runtime-screenshot-{index:03d}{suffix}"] = {
+            "path": str(path),
+            "sha256": digest,
+        }
+    return result
+
+
 def _stable_payload_sha256(value: Any) -> str:
     rendered = json.dumps(
         value,
@@ -696,6 +721,8 @@ def _validate_external_execution_preflight(
 def _collect_runtime_screenshot_receipts(
     runtime_manager: MinecraftRuntimeManager,
     explicit_paths: Iterable[str],
+    *,
+    evidence_root: Path | None = None,
 ) -> list[dict[str, Any]]:
     status = runtime_manager.status()
     instance_raw = status.get("instance_root")
@@ -747,13 +774,17 @@ def _collect_runtime_screenshot_receipts(
             )
         expected_sha = str(receipt["sha256"])
         digest = expected_sha.removeprefix("sha256:")
-        evidence_root = (
-            Path(runtime_manager.workspace_root).expanduser().resolve()
-            / "integration-evidence"
-            / "runtime-screenshots"
+        preserved_root = (
+            evidence_root.expanduser().resolve()
+            if evidence_root is not None
+            else (
+                Path(runtime_manager.workspace_root).expanduser().resolve()
+                / "integration-evidence"
+                / "runtime-screenshots"
+            )
         )
-        evidence_root.mkdir(parents=True, exist_ok=True)
-        evidence_path = evidence_root / (digest + path.suffix.lower())
+        preserved_root.mkdir(parents=True, exist_ok=True)
+        evidence_path = preserved_root / (digest + path.suffix.lower())
         if evidence_path.exists():
             if (
                 evidence_path.is_symlink()
@@ -912,6 +943,19 @@ def _runtime_verification_passed(
         and server.get("server_running") is True
         and isinstance(client, dict)
         and client.get("client_running") is True
+    ):
+        return False
+    if (
+        not isinstance(playtest_receipt, dict)
+        or playtest_receipt.get("artifact_sha256")
+        != runtime_receipt.get("artifact_sha256")
+    ):
+        return False
+    prepared = runtime_receipt.get("prepared")
+    if (
+        isinstance(prepared, dict)
+        and isinstance(prepared.get("instance_root"), str)
+        and playtest_receipt.get("runtime_instance_root") != prepared.get("instance_root")
     ):
         return False
     if not _playtest_evidence_passed(
@@ -1337,6 +1381,14 @@ class CompleteProductionOrchestrator:
                     options.playtest_actions,
                     approved.acceptance_tests,
                 )
+                current_runtime_status = (
+                    runtime_manager.status() if runtime_manager is not None else {}
+                )
+                playtest_receipt = {
+                    **playtest_receipt,
+                    'artifact_sha256': str(artifact_receipt['sha256']),
+                    'runtime_instance_root': current_runtime_status.get('instance_root'),
+                }
             else:
                 if approved.external_runtime_required:
                     unresolved.append('mineflayer:not-requested')
@@ -1348,6 +1400,7 @@ class CompleteProductionOrchestrator:
                 screenshot_receipts = _collect_runtime_screenshot_receipts(
                     runtime_manager,
                     options.screenshot_paths,
+                    evidence_root=metadata_root / 'runtime-screenshots',
                 )
                 router = router or self.router_factory()
                 visual_receipt = self._visual_review(
@@ -1375,21 +1428,30 @@ class CompleteProductionOrchestrator:
             if runtime_manager is not None and options.cleanup_runtime:
                 cleanup = runtime_manager.cleanup()
                 runtime_receipt = {**(runtime_receipt or {}), 'cleanup': cleanup}
-        persisted_runtime_receipt = _persisted_runtime_evidence(
-            runtime_receipt,
-            required=approved.external_runtime_required,
-            artifact_sha256=str(artifact_receipt['sha256']),
-        )
-        (metadata_root / 'runtime-receipt.json').write_text(
-            json.dumps(persisted_runtime_receipt, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
-            encoding='utf-8',
-        )
         runtime_verified = _runtime_verification_passed(
             required=approved.external_runtime_required,
             runtime_receipt=runtime_receipt,
             playtest_receipt=playtest_receipt,
             visual_receipt=visual_receipt,
             expected_acceptance_tests=approved.acceptance_tests,
+        )
+        persisted_runtime_receipt = {
+            **_persisted_runtime_evidence(
+                runtime_receipt,
+                required=approved.external_runtime_required,
+                artifact_sha256=str(artifact_receipt['sha256']),
+            ),
+            'verification_status': (
+                'PASS'
+                if runtime_verified
+                else ('NOT_REQUIRED' if not approved.external_runtime_required else 'FAIL')
+            ),
+            'playtest': playtest_receipt,
+            'visual': visual_receipt,
+        }
+        (metadata_root / 'runtime-receipt.json').write_text(
+            json.dumps(persisted_runtime_receipt, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
+            encoding='utf-8',
         )
         if runtime_verified:
             self._succeed_work_node(ledger, 'runtime-playtest', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'NOT_REQUIRED' if not approved.external_runtime_required else 'PASS', 'runtime': runtime_receipt, 'playtest': playtest_receipt, 'visual': visual_receipt})
@@ -1482,6 +1544,9 @@ class CompleteProductionOrchestrator:
                 'quality_report_sha256': _stable_payload_sha256(quality_report),
                 'resource_pack_sha256': str(
                     resource_pack_bundle.get('sha256') if resource_pack_bundle else ''
+                ),
+                'visual_evidence_sha256': _stable_payload_sha256(
+                    _runtime_visual_download_artifacts(visual_receipt)
                 ),
             }
             release_package_sha256 = _stable_payload_sha256(release_package_input)
@@ -1627,13 +1692,16 @@ class CompleteProductionOrchestrator:
                         reuse_manifest=reuse_manifest,
                         build_receipt=build_receipt,
                         runtime_receipt=persisted_runtime_receipt,
-                        additional_artifacts=(
-                            {
-                                'generated-resource-pack.zip': resource_pack_bundle
-                            }
-                            if resource_pack_bundle is not None
-                            else None
-                        ),
+                        additional_artifacts={
+                            **(
+                                {
+                                    'generated-resource-pack.zip': resource_pack_bundle
+                                }
+                                if resource_pack_bundle is not None
+                                else {}
+                            ),
+                            **_runtime_visual_download_artifacts(visual_receipt),
+                        } or None,
                     ),
                 ),
                 encode=lambda value: value,
