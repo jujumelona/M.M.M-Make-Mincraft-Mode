@@ -1,87 +1,120 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+from dataclasses import dataclass
 
+from minecraft_mod_ai import production_tools
 from minecraft_mod_ai import retrieval_cpu_budget_contract as policy
+from minecraft_mod_ai import small_model_hybrid_search_contract as hybrid
 
 
-def _dense_modes(_route: str, _semantic: bool, _rerank: bool):
-    return (
-        (False, False, "lexical"),
-        (False, True, "lexical+rerank"),
-        (True, True, "semantic+rerank"),
-    )
+@dataclass(frozen=True)
+class _Receipt:
+    status: str = "FOUND"
+    result_count: int = 0
 
 
-def test_live_hybrid_guard_rebinds_after_late_owner_replacement(monkeypatch) -> None:
+@dataclass(frozen=True)
+class _SearchResult:
+    hits: tuple = ()
+    receipt: _Receipt = _Receipt()
+
+
+class _FakeIndex:
+    search_calls: list[tuple[object, bool, bool]] = []
+    build_calls: list[tuple[object, bool]] = []
+
+    def __init__(self, _target) -> None:
+        pass
+
+    def search_with_receipt(
+        self,
+        _query,
+        *,
+        limit,
+        router,
+        semantic,
+        rerank,
+        required_metadata,
+    ):
+        del limit, required_metadata
+        self.search_calls.append((router, bool(semantic), bool(rerank)))
+        return _SearchResult()
+
+    def build(self, _roots, *, metadata, router, semantic):
+        del metadata
+        self.build_calls.append((router, bool(semantic)))
+        return {"status": "OK"}
+
+
+def test_hybrid_dense_work_is_source_gated(monkeypatch) -> None:
     monkeypatch.delenv("MMM_RAG_ENABLE_CPU_DENSE", raising=False)
-    hybrid = SimpleNamespace(
-        _modes=_dense_modes,
-        adapt_query_vector=lambda _router, _query, _texts: [1.0],
+
+    assert hybrid._modes("semantic", False, False) == (
+        (False, False, "lexical"),
     )
-
-    policy._install_live_hybrid_budget(hybrid)
-    assert hybrid._modes("semantic", False, False) == ((False, False, "lexical"),)
-    assert hybrid.adapt_query_vector(None, "q", ("x",)) == []
-
-    # Simulate a later runtime composer replacing both executable owners while an old
-    # module-level installation marker would still be present.
-    hybrid._modes = _dense_modes
-    hybrid.adapt_query_vector = lambda _router, _query, _texts: [2.0]
-    hybrid._mmm_cpu_dense_hybrid_guard_v1 = True
-
-    policy._install_live_hybrid_budget(hybrid)
     assert hybrid._modes("dependency", False, False) == (
         (False, False, "lexical+relations"),
     )
     assert hybrid.adapt_query_vector(None, "q", ("x",)) == []
 
+    monkeypatch.setenv("MMM_RAG_ENABLE_CPU_DENSE", "1")
+    monkeypatch.setattr(
+        hybrid,
+        "_adapt_query_vector_dense",
+        lambda _router, _query, _texts, *, alpha: [alpha],
+    )
+    assert hybrid.adapt_query_vector(None, "q", ("x",), alpha=0.7) == [0.7]
+    assert any(semantic or rerank for semantic, rerank, _label in hybrid._modes(
+        "semantic", False, False
+    ))
 
-def test_production_tool_boundary_cannot_enable_dense_without_opt_in(monkeypatch) -> None:
+
+def test_production_tool_boundary_cannot_enable_dense_without_opt_in(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    _FakeIndex.search_calls.clear()
+    _FakeIndex.build_calls.clear()
+    monkeypatch.setattr(production_tools, "ProjectRAGIndex", _FakeIndex)
+    router = object()
+    monkeypatch.setattr(
+        production_tools,
+        "ModelRouter",
+        lambda *, profile: router,
+    )
+
+    service = production_tools.ProductionToolService(
+        workspace_root=tmp_path,
+        profile="test",
+    )
+    index_path = tmp_path / "rag" / "project-index.json"
+    index_path.parent.mkdir(parents=True)
+    index_path.write_text("{}", encoding="utf-8")
+
     monkeypatch.delenv("MMM_RAG_ENABLE_CPU_DENSE", raising=False)
-
-    class Service:
-        def __init__(self) -> None:
-            self.search_calls: list[tuple[bool, bool]] = []
-            self.index_calls: list[bool] = []
-
-        def search_code_rag(
-            self,
-            query: str,
-            *,
-            index_path: str = "rag/project-index.json",
-            limit: int = 8,
-            semantic: bool = False,
-            rerank: bool = False,
-            required_metadata=None,
-        ):
-            del query, index_path, limit, required_metadata
-            self.search_calls.append((semantic, rerank))
-            return {"ok": True}
-
-        def index_project_rag(
-            self,
-            roots,
-            *,
-            index_path: str = "rag/project-index.json",
-            metadata,
-            semantic: bool = False,
-        ):
-            del roots, index_path, metadata
-            self.index_calls.append(semantic)
-            return {"ok": True}
-
-    module = SimpleNamespace(ProductionToolService=Service)
-    policy._install_production_tool_budget(module)
-    service = Service()
-
     service.search_code_rag("repair", semantic=True, rerank=True)
-    service.index_project_rag(("src",), metadata={}, semantic=True)
-    assert service.search_calls == [(False, False)]
-    assert service.index_calls == [False]
+    service.index_project_rag(
+        ("rag/project-index.json",),
+        index_path="rag/rebuilt-index.json",
+        metadata={},
+        semantic=True,
+    )
+    assert _FakeIndex.search_calls[-1] == (None, False, False)
+    assert _FakeIndex.build_calls[-1] == (None, False)
 
     monkeypatch.setenv("MMM_RAG_ENABLE_CPU_DENSE", "1")
     service.search_code_rag("repair", semantic=True, rerank=True)
-    service.index_project_rag(("src",), metadata={}, semantic=True)
-    assert service.search_calls[-1] == (True, True)
-    assert service.index_calls[-1] is True
+    service.index_project_rag(
+        ("rag/project-index.json",),
+        index_path="rag/rebuilt-index.json",
+        metadata={},
+        semantic=True,
+    )
+    assert _FakeIndex.search_calls[-1] == (router, True, True)
+    assert _FakeIndex.build_calls[-1] == (router, True)
+
+
+def test_cpu_budget_policy_has_no_runtime_installers() -> None:
+    assert not hasattr(policy, "_install_live_hybrid_budget")
+    assert not hasattr(policy, "_install_production_tool_budget")
+    assert not hasattr(policy, "install")
