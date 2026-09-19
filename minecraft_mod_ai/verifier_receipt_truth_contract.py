@@ -42,15 +42,28 @@ def _canonical_hash(value: Any) -> str:
     return "sha256:" + hashlib.sha256(rendered.encode("utf-8")).hexdigest()
 
 
+def _command_is_full_gradle_build(item: Mapping[str, Any]) -> bool:
+    """Recognize a release-grade Gradle build receipt by executed task evidence."""
+
+    if item.get("exit_code") != 0 or item.get("timed_out") is True:
+        return False
+    name = str(item.get("name") or "")
+    if name in {"build", "clean_build"}:
+        return True
+    if name != "incremental_build":
+        return False
+    argv = item.get("command")
+    if not isinstance(argv, Sequence) or isinstance(argv, (str, bytes, bytearray)):
+        return False
+    return any(str(argument) == "build" for argument in argv)
+
+
 def _commands_passed(build: Mapping[str, Any]) -> bool:
     commands = build.get("commands")
     if not isinstance(commands, Sequence) or isinstance(commands, (str, bytes, bytearray)):
         return False
     return any(
-        isinstance(item, Mapping)
-        and str(item.get("name") or "") in {"build", "clean_build"}
-        and item.get("exit_code") == 0
-        and item.get("timed_out") is not True
+        isinstance(item, Mapping) and _command_is_full_gradle_build(item)
         for item in commands
     )
 
