@@ -874,6 +874,27 @@ class CustomModuleGenerator:
 
         self._validate_operations(operations)
         self._validate_total_patch_bytes(operations)
+
+        from .generation_verification_contract import (
+            classify_generation_verification,
+        )
+
+        generation_binding = classify_generation_verification(
+            source_status="SOURCE_GENERATED",
+            receipt=generation_verification,
+            touched_paths=touched_paths,
+            required_gates=_receipt_required_gates(module),
+        )
+        if int(generation_binding.get("verifier_tier", 0) or 0) <= 0:
+            raise CustomModuleGenerationError(
+                "GENERATION_VERIFICATION_RECEIPT_INVALID: terminal verifier evidence "
+                "does not bind to the generated source mutation: "
+                f"status={generation_binding.get('generation_status')}, "
+                f"target={generation_binding.get('receipt_target_path')}, "
+                f"target_matches={generation_binding.get('receipt_target_matches')}, "
+                f"semantics_valid={generation_binding.get('receipt_semantics_valid')}."
+            )
+
         reuse_application_receipt = None
         if approved_reuse_context is not None:
             reuse_application_receipt = _verify_reuse_application(
