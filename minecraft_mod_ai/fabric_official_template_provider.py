@@ -361,7 +361,7 @@ fabricApi {
 loom {
     runs {
         gameTest {
-            vmArg "-Dfabric-api.gametest.report-file=${file('build/gametest-report.xml').absolutePath}"
+            property "fabric-api.gametest.report-file", file('build/gametest-report.xml').absolutePath
         }
     }
 }
