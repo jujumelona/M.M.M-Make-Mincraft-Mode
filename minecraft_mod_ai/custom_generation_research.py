@@ -105,14 +105,20 @@ class _ResearchEvidenceRouter:
         engine = self._engine()
         sanitized = _sanitized_messages(messages, minecraft_version=self._minecraft_version, loader=self._loader, mappings=self._mappings)
         engine.ingest_code_owned_request(sanitized)
+
+        # The tool-capable coder path has one canonical evidence owner:
+        # progress_aware_tool_loop. Prepending a static research bundle here duplicates
+        # that owner's retrieval decision and can swamp a forced one-tool ACT turn even
+        # when the loop has already proved require_rag=False.
+        if kwargs.get('enable_tools') is True:
+            return self._router.generate_text(role, sanitized, **kwargs)
+
         bundle = engine.initial_bundle()
         failure_bundle = engine.evolve_from_failure(sanitized) if _contains_validation_failure(sanitized) else None
         if failure_bundle is not None:
             bundle = failure_bundle
         request_messages = _inject_research_context(sanitized, bundle, reason='validation_failure_research' if failure_bundle is not None else 'initial_plan_docs_examples')
         text = self._router.generate_text(role, request_messages, **kwargs)
-        if kwargs.get('enable_tools') is True:
-            return text
         seen_states: set[str] = set()
         while True:
             evolved, violations = engine.evolve_from_generation(text)
