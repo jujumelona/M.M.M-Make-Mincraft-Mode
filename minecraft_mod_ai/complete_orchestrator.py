@@ -982,18 +982,72 @@ class CompleteProductionOrchestrator:
         )
         if options.publish_provider and (not release_ready):
             raise CompleteProductionError('Publishing is blocked because required verification gates remain unresolved.')
-        if options.publish_provider == 'modrinth':
-            distribution_receipt['publish'] = publish_modrinth(metadata, project_id=str(options.publish_project_id))
-        elif options.publish_provider == 'curseforge':
-            distribution_receipt['publish'] = publish_curseforge(metadata, project_id=str(options.publish_project_id))
+        if options.publish_provider in {'modrinth', 'curseforge'}:
+            provider = str(options.publish_provider)
+            publish_input = {
+                'provider': provider,
+                'project_id': str(options.publish_project_id),
+                'metadata_sha256': _stable_payload_sha256(metadata),
+                'jar_sha256': str(metadata.get('jar_sha256') or ''),
+            }
+            distribution_receipt['publish'] = run_named_checkpoint(
+                ledger,
+                'publish-' + provider,
+                stage='publish:' + provider,
+                input_value=publish_input,
+                action=(
+                    (lambda: publish_modrinth(
+                        metadata,
+                        project_id=str(options.publish_project_id),
+                    ))
+                    if provider == 'modrinth'
+                    else (lambda: publish_curseforge(
+                        metadata,
+                        project_id=str(options.publish_project_id),
+                    ))
+                ),
+                encode=lambda value: value,
+                decode=lambda cached: cached,
+                validate_cached=lambda cached: (
+                    isinstance(cached, dict)
+                    and cached.get('status') == 'PUBLISHED'
+                    and cached.get('provider') == provider
+                    and cached.get('jar_sha256') == metadata.get('jar_sha256')
+                ),
+            )
         if release_ready:
-            distribution_receipt['downloadable_bundle'] = write_downloadable_bundle(
-                run_root / 'releases/final-mod-download',
-                artifact_receipt=artifact_receipt,
-                requirement_coverage=coverage_receipt,
-                reuse_manifest=reuse_manifest,
-                build_receipt=build_receipt,
-                runtime_receipt=persisted_runtime_receipt,
+            downloadable_input = {
+                'artifact_sha256': str(artifact_receipt.get('sha256') or ''),
+                'coverage_sha256': str(coverage_receipt.get('coverage_sha256') or ''),
+                'reuse_manifest_sha256': _stable_payload_sha256(reuse_manifest),
+                'build_receipt_sha256': _stable_payload_sha256(build_receipt),
+                'runtime_receipt_sha256': _stable_payload_sha256(persisted_runtime_receipt),
+            }
+            downloadable_sha256 = _stable_payload_sha256(downloadable_input)
+            downloadable_target = (
+                run_root
+                / 'releases'
+                / (
+                    'final-mod-download-'
+                    + downloadable_sha256.split(':', 1)[1][:16]
+                )
+            )
+            distribution_receipt['downloadable_bundle'] = run_named_checkpoint(
+                ledger,
+                'package-downloadable',
+                stage='package:downloadable',
+                input_value=downloadable_input,
+                action=lambda: write_downloadable_bundle(
+                    downloadable_target,
+                    artifact_receipt=artifact_receipt,
+                    requirement_coverage=coverage_receipt,
+                    reuse_manifest=reuse_manifest,
+                    build_receipt=build_receipt,
+                    runtime_receipt=persisted_runtime_receipt,
+                ),
+                encode=lambda value: value,
+                decode=lambda cached: cached,
+                validate_cached=self._cached_download_bundle_exists,
             )
         if release_ready:
             self._succeed_work_node(ledger, 'package-release', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'PASS', 'release_zip': release_zip})
@@ -1722,6 +1776,31 @@ class CompleteProductionOrchestrator:
             for chunk in iter(lambda: stream.read(1024 * 1024), b''):
                 digest.update(chunk)
         return 'sha256:' + digest.hexdigest()
+
+    @staticmethod
+    def _cached_download_bundle_exists(receipt: Any) -> bool:
+        if not isinstance(receipt, dict) or receipt.get('status') != 'PASS':
+            return False
+        raw = receipt.get('path')
+        members = receipt.get('members')
+        if not isinstance(raw, str) or not isinstance(members, list):
+            return False
+        root = Path(raw).expanduser().resolve()
+        if not root.is_dir() or root.is_symlink():
+            return False
+        for item in members:
+            if not isinstance(item, dict):
+                return False
+            name = str(item.get('path') or '')
+            expected = str(item.get('sha256') or '')
+            if not name or Path(name).name != name or not expected:
+                return False
+            target = root / name
+            if not target.is_file() or target.is_symlink():
+                return False
+            if CompleteProductionOrchestrator._file_hash(target) != expected:
+                return False
+        return True
 
     @staticmethod
     def _cached_package_exists(receipt: Any, *, path_key: str) -> bool:
