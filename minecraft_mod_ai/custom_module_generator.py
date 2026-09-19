@@ -45,6 +45,10 @@ from .small_model_atomic_coder_execution import (
     bounded_initial_observations,
     bounded_reuse_context,
 )
+from .small_model_task_capsule_contract import (
+    task_capsule_generation_scope,
+    task_local_module_contract_owner,
+)
 from .small_model_write_scope_enforcement import (
     exact_task_operation_validator,
     generation_authority_scoped,
@@ -319,6 +323,7 @@ def _verify_reuse_application(
     return receipt
 
 
+@task_local_module_contract_owner
 def _task_local_module_contract(module: ProductionModule) -> dict[str, Any]:
     return _architecture_task_contract(
         module,
@@ -519,6 +524,7 @@ class CustomModuleGenerator:
             tuple[str, Path, _GenerationCheckpointLease],
         ] = {}
 
+    @task_capsule_generation_scope
     @generation_authority_scoped
     @_checkpoint_lease_scoped
     def generate(
