@@ -634,12 +634,99 @@ def _validate_external_execution_preflight(
                 "Mineflayer verification requires explicit playtest_actions before generation starts."
             )
 
-    if bool(getattr(options, "run_visual_review", False)):
-        screenshots = getattr(options, "screenshot_paths", ())
-        if not isinstance(screenshots, (list, tuple)) or not screenshots:
+    if bool(getattr(options, "run_visual_review", False)) and not bool(
+        getattr(options, "run_runtime", False)
+    ):
+        raise CompleteProductionError(
+            "Visual verification requires the disposable runtime."
+        )
+
+
+def _collect_runtime_screenshot_receipts(
+    runtime_manager: MinecraftRuntimeManager,
+    explicit_paths: Iterable[str],
+) -> list[dict[str, Any]]:
+    status = runtime_manager.status()
+    instance_raw = status.get("instance_root")
+    if (
+        not isinstance(instance_raw, str)
+        or status.get("server_running") is not True
+        or status.get("client_running") is not True
+    ):
+        raise CompleteProductionError(
+            "Runtime visual evidence requires a live server and client."
+        )
+    client_root = (Path(instance_raw).expanduser().resolve() / "client").resolve()
+    explicit = tuple(str(value) for value in explicit_paths if str(value).strip())
+    if explicit:
+        candidates = [Path(value).expanduser().resolve() for value in explicit]
+    else:
+        screenshots_root = client_root / "screenshots"
+        candidates = (
+            [
+                path.resolve()
+                for path in sorted(screenshots_root.rglob("*"))
+                if path.is_file()
+                and not path.is_symlink()
+                and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+            ]
+            if screenshots_root.is_dir()
+            else []
+        )
+    if not candidates:
+        raise CompleteProductionError(
+            "No screenshots were produced by the current disposable runtime client."
+        )
+    receipts: list[dict[str, Any]] = []
+    for path in candidates:
+        try:
+            path.relative_to(client_root)
+        except ValueError as exc:
             raise CompleteProductionError(
-                "Visual verification requires screenshot_paths before generation starts."
+                "Visual evidence must come from the current disposable client directory."
+            ) from exc
+        receipt = runtime_manager.register_screenshot(path)
+        if (
+            receipt.get("server_running") is not True
+            or receipt.get("client_running") is not True
+            or not isinstance(receipt.get("sha256"), str)
+        ):
+            raise CompleteProductionError(
+                "Runtime screenshot receipt is not bound to a live client session."
             )
+        receipts.append(receipt)
+    return receipts
+
+
+def _visual_runtime_evidence_passed(
+    visual_receipt: dict[str, Any] | None,
+    runtime_receipt: dict[str, Any] | None,
+) -> bool:
+    if (
+        not isinstance(visual_receipt, dict)
+        or visual_receipt.get("status") != "PASS"
+        or not isinstance(runtime_receipt, dict)
+    ):
+        return False
+    artifact_sha = runtime_receipt.get("artifact_sha256")
+    if (
+        not isinstance(artifact_sha, str)
+        or visual_receipt.get("artifact_sha256") != artifact_sha
+    ):
+        return False
+    screenshots = visual_receipt.get("runtime_screenshots")
+    return (
+        isinstance(screenshots, list)
+        and bool(screenshots)
+        and all(
+            isinstance(item, dict)
+            and item.get("server_running") is True
+            and item.get("client_running") is True
+            and isinstance(item.get("sha256"), str)
+            and bool(item.get("sha256"))
+            for item in screenshots
+        )
+    )
 
 
 def _persisted_runtime_evidence(
@@ -715,7 +802,7 @@ def _runtime_verification_passed(
         and int(playtest_receipt.get("assertion_count", 0)) > 0
     ):
         return False
-    return isinstance(visual_receipt, dict) and visual_receipt.get("status") == "PASS"
+    return _visual_runtime_evidence_passed(visual_receipt, runtime_receipt)
 
 
 def _final_validation_failure(
@@ -1134,10 +1221,25 @@ class CompleteProductionOrchestrator:
                 if approved.external_runtime_required:
                     unresolved.append('mineflayer:not-requested')
             if options.run_visual_review:
-                if not options.screenshot_paths:
-                    raise CompleteProductionError('Visual review requires explicit runtime screenshot paths.')
+                if runtime_manager is None:
+                    raise CompleteProductionError(
+                        'Visual review requires the disposable runtime.'
+                    )
+                screenshot_receipts = _collect_runtime_screenshot_receipts(
+                    runtime_manager,
+                    options.screenshot_paths,
+                )
                 router = router or self.router_factory()
-                visual_receipt = self._visual_review(router, approved, options.screenshot_paths)
+                visual_receipt = self._visual_review(
+                    router,
+                    approved,
+                    tuple(str(item['path']) for item in screenshot_receipts),
+                )
+                visual_receipt = {
+                    **visual_receipt,
+                    'artifact_sha256': str(artifact_receipt['sha256']),
+                    'runtime_screenshots': screenshot_receipts,
+                }
                 if visual_receipt.get('status') != 'PASS':
                     raise CompleteProductionError('VisualCritic rejected the runtime screenshots.')
             else:
@@ -2482,7 +2584,7 @@ class CompleteProductionOrchestrator:
             and int(jdt_receipt.get('error_count', -1)) == 0
             and int(jdt_receipt.get('files_opened', 0)) > 0
         )
-        evidence = {'source': isinstance(source_validation, dict) and source_validation.get('status') == 'PASS', 'jdt': jdt_passed, 'gradle': gradle_passed, 'gametest': gradle_passed and CompleteProductionOrchestrator._gametest_receipt_passed(build_report, proposal.base_proposal.spec), 'jar': isinstance(jar_validation, dict) and jar_validation.get('status') == 'PASS', 'runtime_client': isinstance(runtime_receipt, dict) and isinstance(runtime_receipt.get('server'), dict) and (runtime_receipt['server'].get('server_running') is True) and isinstance(runtime_receipt.get('client'), dict) and (runtime_receipt['client'].get('client_running') is True), 'playtest': isinstance(playtest_receipt, dict) and playtest_receipt.get('status') == 'PASS' and (int(playtest_receipt.get('interaction_count', 0)) > 0) and (int(playtest_receipt.get('assertion_count', 0)) > 0), 'visual': isinstance(visual_receipt, dict) and visual_receipt.get('status') == 'PASS', 'research_ledger': bool(expected_research) and all((passed_research.get(module_id) == hashes for module_id, hashes in expected_research.items()))}
+        evidence = {'source': isinstance(source_validation, dict) and source_validation.get('status') == 'PASS', 'jdt': jdt_passed, 'gradle': gradle_passed, 'gametest': gradle_passed and CompleteProductionOrchestrator._gametest_receipt_passed(build_report, proposal.base_proposal.spec), 'jar': isinstance(jar_validation, dict) and jar_validation.get('status') == 'PASS', 'runtime_client': isinstance(runtime_receipt, dict) and isinstance(runtime_receipt.get('server'), dict) and (runtime_receipt['server'].get('server_running') is True) and isinstance(runtime_receipt.get('client'), dict) and (runtime_receipt['client'].get('client_running') is True), 'playtest': isinstance(playtest_receipt, dict) and playtest_receipt.get('status') == 'PASS' and (int(playtest_receipt.get('interaction_count', 0)) > 0) and (int(playtest_receipt.get('assertion_count', 0)) > 0), 'visual': _visual_runtime_evidence_passed(visual_receipt, runtime_receipt), 'research_ledger': bool(expected_research) and all((passed_research.get(module_id) == hashes for module_id, hashes in expected_research.items()))}
         evidence['runtime_visual'] = evidence['runtime_client'] and evidence['visual']
         evidence['playtest_visual'] = evidence['playtest'] and evidence['visual']
         blockbench = tuple(blockbench_receipts)
