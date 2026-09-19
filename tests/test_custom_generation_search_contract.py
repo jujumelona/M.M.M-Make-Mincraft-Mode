@@ -103,6 +103,72 @@ def test_custom_generation_public_target_overrides_are_not_exposed() -> None:
     assert "mappings" not in signature.parameters
 
 
+def test_candidate_verifier_rejects_errors_and_transport_failures() -> None:
+    assert custom_search._candidate_verifier_selectable(
+        {
+            "jdt_status": "AVAILABLE",
+            "jdt_error_count": 0,
+        }
+    )
+    assert not custom_search._candidate_verifier_selectable(
+        {
+            "jdt_status": "AVAILABLE",
+            "jdt_error_count": 1,
+        }
+    )
+    assert not custom_search._candidate_verifier_selectable(
+        {
+            "jdt_status": "VERIFIER_ERROR",
+            "jdt_error_count": None,
+            "verifier_error": "ImportError: broken verifier",
+        }
+    )
+    assert custom_search._candidate_verifier_selectable(
+        {
+            "jdt_status": "NOT_RUN",
+            "jdt_error_count": None,
+        }
+    )
+
+
+def test_candidate_search_fails_closed_when_every_verifier_is_unusable() -> None:
+    evaluations = [
+        (
+            -2.85,
+            0,
+            None,
+            {},
+            {
+                "jdt_status": "VERIFIER_ERROR",
+                "jdt_error_count": None,
+                "verifier_error": "ImportError: broken verifier",
+            },
+        ),
+        (
+            -118.0,
+            1,
+            None,
+            {},
+            {
+                "jdt_status": "AVAILABLE",
+                "jdt_error_count": 1,
+            },
+        ),
+    ]
+
+    with pytest.raises(RuntimeError, match="no candidate with trustworthy verification"):
+        custom_search._require_selectable_evaluations(
+            evaluations,
+            verifier_index=4,
+        )
+
+
+def test_candidate_verifier_uses_canonical_diagnostic_contract() -> None:
+    source = inspect.getsource(custom_search._verify_candidate)
+    assert "validation_diagnostic_contract import diagnostic_errors" in source
+    assert "repair_diagnostics_contract import diagnostic_errors" not in source
+
+
 def test_target_values_fail_closed_without_complete_host_target() -> None:
     with pytest.raises(ValueError, match="mappings"):
         custom_search._target_values(
