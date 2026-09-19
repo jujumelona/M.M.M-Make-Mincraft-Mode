@@ -1267,9 +1267,11 @@ def _atomic_output_recovery_instruction(request: GenerationRequest) -> str:
     if "apply_source_edit" in names:
         return (
             "The preceding assistant action exceeded the bounded output allowance and is discarded. "
-            "Do not continue or reconstruct that oversized payload. Call apply_source_edit exactly once "
-            "with no prose. For a fresh host-pinned Java target, use operation=create_file and provide one "
-            "complete minimal compilable source file at the already-authorized path. For an existing target, "
+            "Do not continue, reproduce, or complete that oversized payload. The host will preserve the "
+            "same mutation target and workspace state. Use exactly one visible source-mutation tool: "
+            "call apply_source_edit exactly once with no prose and make one small semantic edit. "
+            "For a fresh host-pinned Java target, use operation=create_file and provide one complete Java "
+            "file that is minimal and compilable at the already-authorized path. For an existing target, "
             "use one bounded replace/insert operation, or create_file only as an atomic whole-file rewrite "
             "of that exact same path. Do not invent Java mutation tools that are not visible in this turn."
         )
