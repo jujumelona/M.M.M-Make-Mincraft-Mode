@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 from minecraft_mod_ai import progress_aware_tool_loop
-from minecraft_mod_ai.mutation_authority_final_guard import (
-    _is_post_argument_semantic_failure_code,
-)
 from minecraft_mod_ai.mutation_failure_classification import (
+    is_post_argument_semantic_failure_code as _is_post_argument_semantic_failure_code,
     is_recoverable_mutation_failure,
 )
 from minecraft_mod_ai.repair_mutation_recovery_contract import (
