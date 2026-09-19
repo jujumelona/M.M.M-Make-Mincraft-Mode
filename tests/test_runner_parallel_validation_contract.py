@@ -107,6 +107,30 @@ class _FakeGradleRunner:
                 )
             elif (
                 name == "incremental_build"
+                and (cwd / "simulate-integrated-gametest-native-generic").is_file()
+            ):
+                log_path.write_text(
+                    "> Task :configureLaunch\n"
+                    "> Task :runGameTest\n"
+                    "[13:05:15] [Server thread/INFO] (Minecraft) "
+                    "========= 2 GAME TESTS COMPLETE IN 3.962 s ======================\n"
+                    "[13:05:15] [Server thread/INFO] (Minecraft) "
+                    "All 2 required tests passed :)\n"
+                    "> Task :build\n"
+                    "BUILD SUCCESSFUL\n",
+                    encoding="utf-8",
+                )
+                report = cwd / "build/gametest-report.xml"
+                report.parent.mkdir(parents=True, exist_ok=True)
+                report.write_text(
+                    '<testsuite tests="2" failures="0" errors="0" skipped="0">'
+                    '<testcase name="minecraft:generatedregistriesarelive"/>'
+                    '<testcase name="minecraft:other_required_test"/>'
+                    "</testsuite>",
+                    encoding="utf-8",
+                )
+            elif (
+                name == "incremental_build"
                 and (cwd / "simulate-integrated-gametest-log-only").is_file()
             ):
                 log_path.write_text(
@@ -429,6 +453,7 @@ def test_integrated_build_gametest_is_reused_without_legacy_task_call(
     install(runner_module=runner_module, validation_module=_validation_module())
     runner = _FakeGradleRunner(tmp_path / "cache")
     project = _project(tmp_path, "integrated", "8.10.2", "d" * 64)
+    _install_host_gametest_fixture(project)
     (project / "simulate-integrated-gametest").write_text("1", encoding="utf-8")
 
     report = runner.build(project, run_gametest=True)
@@ -580,3 +605,55 @@ def test_log_only_gametest_rejects_tampered_host_source_without_bootstrap(
         log,
         project / "build/gametest-report.xml",
     ) is None
+
+
+def test_native_passing_xml_with_noncanonical_testcase_is_canonicalized(
+    tmp_path: Path,
+) -> None:
+    _reset()
+    runner_module = _runner_module()
+    install(runner_module=runner_module, validation_module=_validation_module())
+    runner = _FakeGradleRunner(tmp_path / "cache")
+    project = _project(tmp_path, "native-generic", "8.10.2", "f" * 64)
+    _install_host_gametest_fixture(project, include_bootstrap=False)
+    (project / "simulate-integrated-gametest-native-generic").write_text(
+        "1",
+        encoding="utf-8",
+    )
+
+    report = runner.build(project, run_gametest=True)
+
+    assert report.passed
+    assert report.gametest_mode == "integrated_build"
+    assert report.gametest_task == "runGameTest"
+    assert report.gametest_report is not None
+    report_path = Path(report.gametest_report)
+    assert report_path.name == "mmm-gametest-attestation.xml"
+    assert "MmmDebugFixtureModGameTests.generatedRegistriesAreLive" in (
+        report_path.read_text(encoding="utf-8")
+    )
+    assert "gametest_capabilities" not in _FakeGradleRunner.run_calls
+    assert "gametest" not in _FakeGradleRunner.run_calls
+
+
+def test_generic_native_xml_without_required_pass_summary_is_not_evidence(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path, "native-generic-no-summary", "8.10.2", "f" * 64)
+    _install_host_gametest_fixture(project, include_bootstrap=False)
+    native = project / "build/gametest-report.xml"
+    native.parent.mkdir(parents=True, exist_ok=True)
+    native.write_text(
+        '<testsuite tests="1" failures="0" errors="0" skipped="0">'
+        '<testcase name="minecraft:generatedregistriesarelive"/>'
+        "</testsuite>",
+        encoding="utf-8",
+    )
+    log = project / ".minecraft_ai/logs/gradle-build.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(
+        "> Task :runGameTest\nBUILD SUCCESSFUL\n",
+        encoding="utf-8",
+    )
+
+    assert _structured_gametest_report(project, log, native) is None

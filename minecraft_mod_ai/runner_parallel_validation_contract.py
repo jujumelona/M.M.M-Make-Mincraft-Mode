@@ -347,6 +347,32 @@ def _gametest_pass_summary(log_path: str | Path) -> int | None:
     return completed_count
 
 
+def _report_contains_contract_testcase(
+    root: Path,
+    path_value: str | Path | None,
+    contract: dict[str, str],
+) -> bool:
+    """Require native XML to identify the exact host-owned mandatory testcase."""
+
+    path = _safe_regular_file(root, path_value)
+    expected = str(contract.get("testcase") or "").strip().casefold()
+    if path is None or not expected:
+        return False
+    try:
+        for _event, element in ET.iterparse(path, events=("end",)):
+            tag = element.tag.rsplit("}", 1)[-1]
+            if (
+                tag == "testcase"
+                and str(element.attrib.get("name") or "").strip().casefold()
+                == expected
+            ):
+                return True
+            element.clear()
+    except (ET.ParseError, OSError):
+        return False
+    return False
+
+
 def _structured_gametest_report(
     root: Path,
     log_path: str | Path,
@@ -358,11 +384,16 @@ def _structured_gametest_report(
     host GameTest contract plus Fabric's terminal required-test pass summary.
     """
 
+    contract = _host_gametest_contract(root)
     safe_native = _safe_regular_file(root, native_report)
-    if safe_native is not None and _passing_gametest_xml(root, safe_native):
+    if (
+        contract is not None
+        and safe_native is not None
+        and _passing_gametest_xml(root, safe_native)
+        and _report_contains_contract_testcase(root, safe_native, contract)
+    ):
         return safe_native
 
-    contract = _host_gametest_contract(root)
     passed_count = _gametest_pass_summary(log_path)
     if contract is None or passed_count is None:
         return None

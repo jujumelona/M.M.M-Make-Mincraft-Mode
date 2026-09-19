@@ -1033,3 +1033,34 @@ def test_release_readiness_is_decided_before_packaging() -> None:
     assert readiness < package < distribution
     assert "release_zip: str | None = None" in source
     assert "distribution_receipt: dict[str, Any] | None = None" in source
+
+
+def test_generic_native_gametest_name_is_not_release_attestation(tmp_path) -> None:
+    report = tmp_path / "gametest-report.xml"
+    report.write_text(
+        '<testsuite tests="2" failures="0" errors="0" skipped="0">'
+        '<testcase name="minecraft:generatedregistriesarelive"/>'
+        '<testcase name="minecraft:other_required_test"/>'
+        "</testsuite>",
+        encoding="utf-8",
+    )
+    build = {
+        "status": "PASS",
+        "gametest_mode": "integrated_build",
+        "gametest_task": "runGameTest",
+        "commands": [
+            {
+                "name": "incremental_build",
+                "command": ["gradle", "build", "--build-cache", "--stacktrace"],
+                "exit_code": 0,
+                "timed_out": False,
+            }
+        ],
+        "gametest_report": str(report),
+    }
+
+    assert _gametest_attestation_status(
+        build,
+        SimpleNamespace(mod_id="demo"),
+        requested=True,
+    ) == "NO_EVIDENCE"
