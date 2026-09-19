@@ -775,12 +775,40 @@ def _refresh_runtime_receipt_status(
     }
 
 
+def _playtest_evidence_passed(
+    playtest_receipt: dict[str, Any] | None,
+    expected_acceptance_tests: Iterable[str] = (),
+) -> bool:
+    if (
+        not isinstance(playtest_receipt, dict)
+        or playtest_receipt.get("status") != "PASS"
+        or int(playtest_receipt.get("interaction_count", 0)) <= 0
+        or int(playtest_receipt.get("assertion_count", 0)) <= 0
+    ):
+        return False
+    expected = tuple(str(value) for value in expected_acceptance_tests)
+    if not expected:
+        return True
+    return (
+        playtest_receipt.get("acceptance_tests") == list(expected)
+        and playtest_receipt.get("covered_acceptance_tests") == list(expected)
+        and isinstance(playtest_receipt.get("acceptance_test_results"), list)
+        and {
+            str(item.get("test"))
+            for item in playtest_receipt["acceptance_test_results"]
+            if isinstance(item, dict) and item.get("status") == "PASS"
+        }
+        >= set(expected)
+    )
+
+
 def _runtime_verification_passed(
     *,
     required: bool,
     runtime_receipt: dict[str, Any] | None,
     playtest_receipt: dict[str, Any] | None,
     visual_receipt: dict[str, Any] | None,
+    expected_acceptance_tests: Iterable[str] = (),
 ) -> bool:
     if not required:
         return True
@@ -795,11 +823,9 @@ def _runtime_verification_passed(
         and client.get("client_running") is True
     ):
         return False
-    if not (
-        isinstance(playtest_receipt, dict)
-        and playtest_receipt.get("status") == "PASS"
-        and int(playtest_receipt.get("interaction_count", 0)) > 0
-        and int(playtest_receipt.get("assertion_count", 0)) > 0
+    if not _playtest_evidence_passed(
+        playtest_receipt,
+        expected_acceptance_tests,
     ):
         return False
     return _visual_runtime_evidence_passed(visual_receipt, runtime_receipt)
@@ -1216,7 +1242,10 @@ class CompleteProductionOrchestrator:
             if options.run_mineflayer:
                 if not options.run_runtime:
                     raise CompleteProductionError('Mineflayer requires the disposable runtime.')
-                playtest_receipt = self._run_playtest(options.playtest_actions)
+                playtest_receipt = self._run_playtest(
+                    options.playtest_actions,
+                    approved.acceptance_tests,
+                )
             else:
                 if approved.external_runtime_required:
                     unresolved.append('mineflayer:not-requested')
@@ -1269,6 +1298,7 @@ class CompleteProductionOrchestrator:
             runtime_receipt=runtime_receipt,
             playtest_receipt=playtest_receipt,
             visual_receipt=visual_receipt,
+            expected_acceptance_tests=approved.acceptance_tests,
         )
         if runtime_verified:
             self._succeed_work_node(ledger, 'runtime-playtest', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'NOT_REQUIRED' if not approved.external_runtime_required else 'PASS', 'runtime': runtime_receipt, 'playtest': playtest_receipt, 'visual': visual_receipt})
@@ -2584,7 +2614,7 @@ class CompleteProductionOrchestrator:
             and int(jdt_receipt.get('error_count', -1)) == 0
             and int(jdt_receipt.get('files_opened', 0)) > 0
         )
-        evidence = {'source': isinstance(source_validation, dict) and source_validation.get('status') == 'PASS', 'jdt': jdt_passed, 'gradle': gradle_passed, 'gametest': gradle_passed and CompleteProductionOrchestrator._gametest_receipt_passed(build_report, proposal.base_proposal.spec), 'jar': isinstance(jar_validation, dict) and jar_validation.get('status') == 'PASS', 'runtime_client': isinstance(runtime_receipt, dict) and isinstance(runtime_receipt.get('server'), dict) and (runtime_receipt['server'].get('server_running') is True) and isinstance(runtime_receipt.get('client'), dict) and (runtime_receipt['client'].get('client_running') is True), 'playtest': isinstance(playtest_receipt, dict) and playtest_receipt.get('status') == 'PASS' and (int(playtest_receipt.get('interaction_count', 0)) > 0) and (int(playtest_receipt.get('assertion_count', 0)) > 0), 'visual': _visual_runtime_evidence_passed(visual_receipt, runtime_receipt), 'research_ledger': bool(expected_research) and all((passed_research.get(module_id) == hashes for module_id, hashes in expected_research.items()))}
+        evidence = {'source': isinstance(source_validation, dict) and source_validation.get('status') == 'PASS', 'jdt': jdt_passed, 'gradle': gradle_passed, 'gametest': gradle_passed and CompleteProductionOrchestrator._gametest_receipt_passed(build_report, proposal.base_proposal.spec), 'jar': isinstance(jar_validation, dict) and jar_validation.get('status') == 'PASS', 'runtime_client': isinstance(runtime_receipt, dict) and isinstance(runtime_receipt.get('server'), dict) and (runtime_receipt['server'].get('server_running') is True) and isinstance(runtime_receipt.get('client'), dict) and (runtime_receipt['client'].get('client_running') is True), 'playtest': _playtest_evidence_passed(playtest_receipt, proposal.acceptance_tests), 'visual': _visual_runtime_evidence_passed(visual_receipt, runtime_receipt), 'research_ledger': bool(expected_research) and all((passed_research.get(module_id) == hashes for module_id, hashes in expected_research.items()))}
         evidence['runtime_visual'] = evidence['runtime_client'] and evidence['visual']
         evidence['playtest_visual'] = evidence['playtest'] and evidence['visual']
         blockbench = tuple(blockbench_receipts)
@@ -2659,8 +2689,11 @@ class CompleteProductionOrchestrator:
         return blockbench_review(gecko_receipt, run_root)
 
     @staticmethod
-    def _run_playtest(actions: Iterable[dict[str, Any]]) -> dict[str, Any]:
-        return run_playtest(actions)
+    def _run_playtest(
+        actions: Iterable[dict[str, Any]],
+        acceptance_tests: Iterable[str] = (),
+    ) -> dict[str, Any]:
+        return run_playtest(actions, acceptance_tests)
 
     @staticmethod
     def _visual_review(router: ModelRouter, proposal: CompleteProposal, screenshots: tuple[str, ...]) -> dict[str, Any]:
