@@ -298,10 +298,10 @@ def verify_runtime_artifact_binding(
 def _debug_java_code_surface(source: str) -> tuple[str, str]:
     """Return commentless source plus executable-token surface for deterministic checks."""
 
-    comments = re.compile(r"//[^\\n]*|/\\*.*?\\*/", re.DOTALL)
+    comments = re.compile(r"//[^\r\n]*|/\*.*?\*/", re.DOTALL)
     commentless = comments.sub(" ", source)
     literals = re.compile(
-        r"\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'",
+        r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'",
         re.DOTALL,
     )
     code = literals.sub(" ", commentless)
@@ -316,31 +316,11 @@ def _debug_host_symbol_used(code: str, symbol: Mapping[str, Any]) -> bool:
         return False
 
     owner_simple = owner.rsplit(".", 1)[-1].split("$", 1)[0]
-    static_import = bool(
-        re.search(
-            rf"\\bimport\\s+static\\s+{re.escape(owner)}\\.{re.escape(name)}\\s*;",
-            code,
-        )
-    )
+    compact = re.sub(r"\s+", "", code)
+    direct = f"{owner_simple}.{name}"
     if kind == "method":
-        if re.search(
-            rf"\\b{re.escape(owner_simple)}\\s*\\.\\s*{re.escape(name)}\\s*\\(",
-            code,
-        ):
-            return True
-        return bool(
-            static_import
-            and re.search(rf"(?<![\\w.]){re.escape(name)}\\s*\\(", code)
-        )
-
-    if re.search(
-        rf"\\b{re.escape(owner_simple)}\\s*\\.\\s*{re.escape(name)}\\b",
-        code,
-    ):
-        return True
-    return bool(
-        static_import and re.search(rf"(?<![\\w.]){re.escape(name)}\\b", code)
-    )
+        return f"{direct}(" in compact
+    return direct in compact
 
 
 def verify_debug_fixture_source(
@@ -419,12 +399,7 @@ def verify_debug_fixture_source(
     lifecycle_clear = False
     if source:
         commentless, code = _debug_java_code_surface(source)
-        identifier_present = bool(
-            re.search(
-                rf'"{re.escape(identifier)}"',
-                commentless,
-            )
-        )
+        identifier_present = f'"{identifier}"' in commentless
         if not identifier_present:
             findings.append(
                 f"debug source does not contain the exact registry identifier {identifier!r}"
@@ -439,10 +414,9 @@ def verify_debug_fixture_source(
             elif not used:
                 findings.append(f"debug source does not use required host symbol {key!r}")
 
+        code_identifiers = set(re.findall(r"[A-Za-z_$][A-Za-z0-9_$]*", code))
         lifecycle_hits = [
-            token
-            for token in forbidden
-            if token and re.search(rf"\\b{re.escape(token)}\\b", code)
+            token for token in forbidden if token and token in code_identifiers
         ]
         lifecycle_clear = not lifecycle_hits
         if lifecycle_hits:
