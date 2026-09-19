@@ -94,38 +94,48 @@ def bootstrap_fabric_project(
             "Fabric official template generated a different Minecraft target: "
             f"expected={adapter.minecraft_version}, actual={actual_mc!r}"
         )
-    actual_loader = properties.get("loader_version", "")
-    if actual_loader and actual_loader != adapter.fabric_loader:
-        raise FabricTemplateProviderError(
-            "Fabric official template loader changed after target discovery; "
-            "restart planning so the user approves one immutable target receipt."
-        )
-    actual_api = properties.get("fabric_version", "") or properties.get(
-        "fabric_api_version", ""
-    )
-    if actual_api and actual_api != adapter.fabric_api:
-        raise FabricTemplateProviderError(
-            "Fabric official template API changed after target discovery; "
-            "restart planning so the user approves the new coordinates."
-        )
-    actual_loom = properties.get("loom_version", "")
-    if actual_loom and actual_loom != adapter.fabric_loom:
-        raise FabricTemplateProviderError(
-            "Fabric official template Loom version changed after target discovery; "
-            "restart planning so the user approves the new coordinates."
-        )
-
-    actual_gradle = _gradle_wrapper_version(root)
-    if actual_gradle != adapter.gradle:
-        raise FabricTemplateProviderError(
-            "Fabric official template Gradle wrapper changed after target discovery; "
-            f"expected={adapter.gradle}, actual={actual_gradle!r}. Restart planning."
-        )
     actual_java = _java_release(root)
     if actual_java != str(adapter.java_version):
         raise FabricTemplateProviderError(
             "Fabric official template Java target changed after target discovery; "
             f"expected={adapter.java_version}, actual={actual_java!r}. Restart planning."
+        )
+
+    provider_defaults = {
+        "minecraft_version": actual_mc,
+        "loader_version": properties.get("loader_version", ""),
+        "fabric_api": properties.get("fabric_version", "")
+        or properties.get("fabric_api_version", ""),
+        "loom": properties.get("loom_version", ""),
+        "gradle": _gradle_wrapper_version(root),
+        "java": actual_java,
+    }
+    _pin_generated_toolchain(root, adapter)
+
+    properties = _read_properties(root / "gradle.properties")
+    actual_loader = properties.get("loader_version", "")
+    actual_api = properties.get("fabric_version", "") or properties.get(
+        "fabric_api_version", ""
+    )
+    actual_loom = properties.get("loom_version", "")
+    actual_gradle = _gradle_wrapper_version(root)
+    mismatches = {
+        key: (actual, expected)
+        for key, actual, expected in (
+            ("loader", actual_loader, adapter.fabric_loader),
+            ("fabric_api", actual_api, adapter.fabric_api),
+            ("loom", actual_loom, adapter.fabric_loom),
+            ("gradle", actual_gradle, adapter.gradle),
+        )
+        if actual != expected
+    }
+    if mismatches:
+        raise FabricTemplateProviderError(
+            "Pinned Fabric scaffold still disagrees with the approved target receipt: "
+            + ", ".join(
+                f"{key} expected={expected!r} actual={actual!r}"
+                for key, (actual, expected) in sorted(mismatches.items())
+            )
         )
 
     receipt = {
@@ -141,6 +151,7 @@ def bootstrap_fabric_project(
         "java": adapter.java_version,
         "mappings": "mojang",
         "deno": _deno_version(deno),
+        "provider_defaults_before_pin": provider_defaults,
         "verified_generated_toolchain": {
             "minecraft_version": actual_mc,
             "loader_version": actual_loader,
@@ -239,6 +250,83 @@ def _download_text(url: str) -> str:
         return _download_bytes(url).decode("utf-8")
     except UnicodeDecodeError as exc:
         raise FabricTemplateProviderError(f"Official bootstrap text was not UTF-8: {url}") from exc
+
+
+def _pin_generated_toolchain(root: Path, adapter: Any) -> None:
+    """Pin volatile official-template defaults to the approved immutable receipt."""
+
+    properties_path = root / "gradle.properties"
+    if not properties_path.is_file() or properties_path.is_symlink():
+        raise FabricTemplateProviderError("Fabric template omitted gradle.properties.")
+
+    raw_lines = properties_path.read_text(encoding="utf-8").splitlines()
+    present_keys = {
+        line.split("=", 1)[0].strip()
+        for line in raw_lines
+        if "=" in line and not line.lstrip().startswith("#")
+    }
+    api_key = (
+        "fabric_api_version"
+        if "fabric_api_version" in present_keys
+        else "fabric_version"
+        if "fabric_version" in present_keys
+        else ""
+    )
+    if not api_key:
+        raise FabricTemplateProviderError(
+            "Fabric template exposes no recognized Fabric API version property."
+        )
+
+    replacements = {
+        "loader_version": str(adapter.fabric_loader),
+        "loom_version": str(adapter.fabric_loom),
+        api_key: str(adapter.fabric_api),
+    }
+    missing = set(replacements) - present_keys
+    if missing:
+        raise FabricTemplateProviderError(
+            "Fabric template omitted required dependency properties: "
+            + ", ".join(sorted(missing))
+        )
+
+    rewritten: list[str] = []
+    for raw in raw_lines:
+        if "=" not in raw or raw.lstrip().startswith("#"):
+            rewritten.append(raw)
+            continue
+        key, _value = raw.split("=", 1)
+        normalized = key.strip()
+        if normalized in replacements:
+            rewritten.append(f"{key[: len(key) - len(key.lstrip())]}{normalized}={replacements[normalized]}")
+        else:
+            rewritten.append(raw)
+    properties_path.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
+
+    wrapper = root / "gradle/wrapper/gradle-wrapper.properties"
+    if not wrapper.is_file() or wrapper.is_symlink():
+        raise FabricTemplateProviderError("Fabric template omitted the Gradle wrapper properties.")
+    wrapper_lines = wrapper.read_text(encoding="utf-8").splitlines()
+    distribution_seen = False
+    checksum_seen = False
+    pinned_lines: list[str] = []
+    for raw in wrapper_lines:
+        if raw.startswith("distributionUrl="):
+            distribution_seen = True
+            pinned_lines.append(
+                "distributionUrl=https\\://services.gradle.org/distributions/"
+                f"gradle-{adapter.gradle}-bin.zip"
+            )
+            continue
+        if raw.startswith("distributionSha256Sum="):
+            checksum_seen = True
+            pinned_lines.append(f"distributionSha256Sum={adapter.gradle_sha256}")
+            continue
+        pinned_lines.append(raw)
+    if not distribution_seen:
+        raise FabricTemplateProviderError("Fabric template Gradle wrapper has no distributionUrl.")
+    if not checksum_seen:
+        pinned_lines.append(f"distributionSha256Sum={adapter.gradle_sha256}")
+    wrapper.write_text("\n".join(pinned_lines) + "\n", encoding="utf-8")
 
 
 def _read_properties(path: Path) -> dict[str, str]:
