@@ -1533,7 +1533,7 @@ class CompleteProductionOrchestrator:
                 if not member_ids or any(item not in module_lookup for item in member_ids):
                     raise CompleteProductionError(f'Work node {node.node_id} has invalid module members.')
                 members = [module_lookup[item] for item in member_ids]
-                receipt = self._run_work_node(ledger, node, action=lambda node=node, members=members: module_node_action(node, members), validate_cached=lambda value: self._receipt_outputs_exist(value, project_root=project_root), shared_index=shared_project_index)
+                receipt = self._run_work_node(ledger, node, action=lambda node=node, members=members: module_node_action(node, members), validate_cached=lambda value: self._receipt_outputs_exist(value, project_root=project_root), shared_index=shared_project_index, project_root=project_root)
                 children = [item for item in receipt.get('receipts', []) if isinstance(item, dict)]
                 module_receipts.extend(children)
                 if node.payload.get('generation_stage') == 'entity':
@@ -1569,7 +1569,7 @@ class CompleteProductionOrchestrator:
                 if not ids or any(item not in asset_lookup for item in ids):
                     raise CompleteProductionError(f'Work node {node.node_id} has invalid assets.')
                 shard_proposal = replace(approved, assets=tuple(asset_lookup[item] for item in ids), approval_hash='')
-                asset_shards.append(self._run_work_node(ledger, node, action=lambda proposal=shard_proposal: self._generate_assets(get_router(), proposal, project_root, run_root), validate_cached=self._cached_asset_shard, shared_index=shared_project_index))
+                asset_shards.append(self._run_work_node(ledger, node, action=lambda proposal=shard_proposal: self._generate_assets(get_router(), proposal, project_root, run_root), validate_cached=self._cached_asset_shard, shared_index=shared_project_index, project_root=project_root))
             else:
                 raise CompleteProductionError(f'Unsupported work node payload kind: {kind}')
         capacities = scheduler_safety._capacities()
@@ -1687,7 +1687,15 @@ class CompleteProductionOrchestrator:
         return {'module_receipts': module_receipts, 'blockbench_receipts': blockbench_receipts, 'asset_receipt': asset_receipt, 'unresolved': unresolved, 'router': router}
 
     @staticmethod
-    def _run_work_node(ledger: DurableWorkLedger, node: WorkNode, *, action: Callable[[], dict[str, Any]], validate_cached: Callable[[dict[str, Any]], bool], shared_index: ProjectIndex | None=None) -> dict[str, Any]:
+    def _run_work_node(
+        ledger: DurableWorkLedger,
+        node: WorkNode,
+        *,
+        action: Callable[[], dict[str, Any]],
+        validate_cached: Callable[[dict[str, Any]], bool],
+        shared_index: ProjectIndex | None = None,
+        project_root: Path | None = None,
+    ) -> dict[str, Any]:
         cached = ledger.cached_receipt(node.node_id, input_hash=node.input_hash)
         emit_root_cause(
             'orchestrator_node_decision',
@@ -1716,6 +1724,13 @@ class CompleteProductionOrchestrator:
             receipt = action()
             if not isinstance(receipt, dict):
                 raise CompleteProductionError(f'Work node {node.node_id} returned a non-object receipt.')
+            if project_root is not None:
+                integrity = CompleteProductionOrchestrator._receipt_output_integrity(
+                    receipt,
+                    project_root=project_root,
+                )
+                if integrity:
+                    receipt = {**receipt, 'output_integrity': integrity}
             ledger.raise_if_cancelled()
             ledger.succeed(node.node_id, receipt)
             emit_root_cause('orchestrator_node_action_result', stage=node.stage, operation=node.node_id, gate='work_node_action', result='PASS', details={'receipt': receipt})
@@ -1937,6 +1952,64 @@ class CompleteProductionOrchestrator:
         return prepared_project_cache_valid(path)
 
     @staticmethod
+    def _receipt_output_paths(
+        receipt: dict[str, Any],
+        *,
+        project_root: Path,
+    ) -> tuple[Path, ...]:
+        raw_paths: list[str] = []
+
+        def collect(value: Any) -> None:
+            if isinstance(value, dict):
+                for key, nested in value.items():
+                    if key == 'output_integrity':
+                        continue
+                    if key in {'files', 'generated_files', 'touched_paths', 'written_files'} and isinstance(nested, (list, tuple)):
+                        raw_paths.extend(str(item) for item in nested if isinstance(item, str))
+                    elif isinstance(nested, (dict, list)):
+                        collect(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    collect(nested)
+
+        collect(receipt)
+        root = project_root.expanduser().resolve()
+        resolved: dict[str, Path] = {}
+        for raw in raw_paths:
+            path = Path(raw)
+            path = path.resolve() if path.is_absolute() else (root / path).resolve()
+            try:
+                path.relative_to(root)
+            except ValueError:
+                return ()
+            resolved[str(path)] = path
+        return tuple(resolved[key] for key in sorted(resolved))
+
+    @staticmethod
+    def _receipt_output_integrity(
+        receipt: dict[str, Any],
+        *,
+        project_root: Path,
+    ) -> list[dict[str, str]]:
+        root = project_root.expanduser().resolve()
+        result: list[dict[str, str]] = []
+        for path in CompleteProductionOrchestrator._receipt_output_paths(
+            receipt,
+            project_root=root,
+        ):
+            if not path.is_file() or path.is_symlink():
+                raise CompleteProductionError(
+                    f'Generation receipt references a missing or unsafe output: {path}'
+                )
+            result.append(
+                {
+                    'path': path.relative_to(root).as_posix(),
+                    'sha256': CompleteProductionOrchestrator._file_hash(path),
+                }
+            )
+        return result
+
+    @staticmethod
     def _receipt_outputs_exist(receipt: dict[str, Any], *, project_root: Path) -> bool:
         if receipt.get('status') == 'SKIPPED':
             return True
@@ -1972,12 +2045,38 @@ class CompleteProductionOrchestrator:
                 return False
         if not raw_paths:
             return CompleteProductionOrchestrator._valid_project_root(project_root)
+        integrity = receipt.get('output_integrity')
+        if not isinstance(integrity, list) or not integrity:
+            return False
+        expected: dict[str, str] = {}
+        root = project_root.expanduser().resolve()
+        for item in integrity:
+            if not isinstance(item, dict):
+                return False
+            raw = item.get('path')
+            digest = item.get('sha256')
+            if not isinstance(raw, str) or not isinstance(digest, str):
+                return False
+            path = (root / raw).resolve()
+            try:
+                path.relative_to(root)
+            except ValueError:
+                return False
+            expected[str(path)] = digest
+        actual_paths: set[str] = set()
         for raw in raw_paths:
             path = Path(raw)
-            path = path.resolve() if path.is_absolute() else (project_root / path).resolve()
+            path = path.resolve() if path.is_absolute() else (root / path).resolve()
+            try:
+                path.relative_to(root)
+            except ValueError:
+                return False
             if not path.is_file() or path.is_symlink():
                 return False
-        return True
+            actual_paths.add(str(path))
+            if expected.get(str(path)) != CompleteProductionOrchestrator._file_hash(path):
+                return False
+        return actual_paths == set(expected)
 
     def _project_manifest_hash(self, project_root: Path) -> str:
         return str(execution_project_index(ProjectIndex, project_root, policy=self.policy).manifest_receipt()['sha256'])
