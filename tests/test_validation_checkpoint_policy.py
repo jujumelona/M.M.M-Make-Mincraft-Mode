@@ -106,6 +106,58 @@ def test_jdt_resume_cross_checks_orchestrator_transformed_receipt() -> None:
     )
 
 
+def test_jar_resume_reuses_only_complete_passing_receipts() -> None:
+    assert validation_checkpoint_policy.cached_validation_is_reusable(
+        "validate-jar",
+        {"status": "PASS", "checks_run": 12, "findings": []},
+    )
+    assert not validation_checkpoint_policy.cached_validation_is_reusable(
+        "validate-jar",
+        {
+            "status": "FAIL",
+            "checks_run": 12,
+            "findings": [
+                {
+                    "code": "JAR_RESOURCE_MISSING",
+                    "severity": "error",
+                    "path": "demo",
+                    "message": "missing",
+                }
+            ],
+        },
+    )
+    assert not validation_checkpoint_policy.cached_validation_is_reusable(
+        "validate-jar",
+        {"status": "PASS", "checks_run": 0, "findings": []},
+    )
+    assert not validation_checkpoint_policy.cached_validation_is_reusable(
+        "validate-jar",
+        {"status": "PASS", "checks_run": 12},
+    )
+
+
+def test_jar_checkpoint_input_binds_validation_implementation() -> None:
+    scoped = validation_checkpoint_policy.validation_checkpoint_input(
+        "validate-jar",
+        {"graph_hash": "g", "jar_sha256": "sha256:jar"},
+    )
+    assert scoped["graph_hash"] == "g"
+    assert scoped["jar_sha256"] == "sha256:jar"
+    assert str(scoped["_mmm_validation_implementation"]).startswith("sha256:")
+
+
+def test_jar_fingerprint_covers_validator_and_toolchain_contract() -> None:
+    names = {
+        module.__name__
+        for module in validation_checkpoint_policy._validation_modules("validate-jar")
+    }
+    assert {
+        "minecraft_mod_ai.validator",
+        "minecraft_mod_ai.scale_policy",
+        "minecraft_mod_ai.toolchain_contract",
+    } <= names
+
+
 def test_jdt_fingerprint_covers_every_runtime_owner() -> None:
     names = {
         module.__name__
