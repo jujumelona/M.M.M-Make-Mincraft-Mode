@@ -168,6 +168,7 @@ def test_blockbench_required_gate_uses_entity_review_receipt(tmp_path):
                 "entity": "boss_dragon",
                 "uv": {"status": "PASS"},
                 "preview": str(preview),
+                "preview_sha256": CompleteProductionOrchestrator._file_hash(preview),
             },
         ),
         runtime_receipt=None,
