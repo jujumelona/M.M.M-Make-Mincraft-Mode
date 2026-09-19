@@ -21,7 +21,6 @@ def _config(*, role: str = "coder", base: str = "Qwen/Qwen3.5-9B"):
                     "scale": 1.0,
                     "priority": 100,
                     "roles": ["coder", "coder_safe"],
-                    "stages": ["generation", "quality"],
                     "when_tools": "any",
                 }
             },
@@ -34,14 +33,14 @@ def test_configured_lora_rejects_base_mismatch() -> None:
         lora.configured_lora_specs(_config(base="Qwen/Qwen3.8-27B"))
 
 
-def test_request_lora_routes_only_matching_role_and_stage(monkeypatch) -> None:
+def test_request_lora_routes_only_matching_role(monkeypatch) -> None:
     monkeypatch.setattr(
         lora,
         "_adapter_id_map",
         lambda *_args, **_kwargs: {"coding_agentic": 7},
     )
     coder_request = SimpleNamespace(
-        metadata={"tool_stage": "generation"},
+        metadata={},
         tools=(),
     )
     assert lora.request_lora_payload(
