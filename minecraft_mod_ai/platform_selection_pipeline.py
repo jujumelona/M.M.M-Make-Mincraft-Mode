@@ -196,12 +196,12 @@ def resolve_platform_fail_closed(
     # A revise/port request is an optimization problem: the authored version is a
     # migration hint, not permission to bypass evidence ranking with a pinned host receipt.
     if existing_version and migration_requested:
-        optimization = resolver._optimize(
+        optimization = optimize_platform_fail_closed(
             text,
             design=design,
             module_kinds=kinds,
             loader_constraint=explicit_loader or existing_loader,
-            version_hint=explicit_version,
+            version_constraint=None,
             target_research_fn=target_research_fn,
         )
         return resolver._optimized_selection(
