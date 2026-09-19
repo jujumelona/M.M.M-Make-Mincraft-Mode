@@ -81,6 +81,29 @@ def remaining_model_execution_seconds(
     return max(0.0, deadline - time.monotonic())
 
 
+def refresh_model_execution_deadline(
+    minimum_remaining_seconds: float,
+) -> float | None:
+    """Keep active inference alive while semantic progress remains healthy.
+
+    The outer work-unit deadline protects queue/capacity waits from hanging forever.
+    Once native inference is demonstrably making semantic progress, its liveness owner
+    may extend that deadline by exactly the same inactivity window that already bounds
+    the stream. This avoids killing a valid long decode at the fixed work-node lease
+    boundary while still failing closed when semantic progress stops.
+    """
+
+    existing = current_model_execution_deadline()
+    if existing is None:
+        return None
+    window = float(minimum_remaining_seconds)
+    if not math.isfinite(window) or window <= 0.0:
+        raise ValueError("minimum_remaining_seconds must be a positive finite number")
+    refreshed = max(existing, time.monotonic() + window)
+    _MODEL_EXECUTION_DEADLINE.set(refreshed)
+    return refreshed
+
+
 @contextmanager
 def bind_model_execution_deadline(deadline_monotonic: float) -> Iterator[float]:
     """Bind the earliest execution deadline to the current context."""
@@ -308,6 +331,7 @@ __all__ = [
     "planning_stage_deadline",
     "planning_work_unit_timeout_seconds",
     "remaining_model_execution_seconds",
+    "refresh_model_execution_deadline",
     "router_native_model_parallelism",
     "router_owns_native_model",
     "run_with_model_execution_deadline",
