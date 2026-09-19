@@ -88,7 +88,7 @@ def prepare_official_fabric_project(
 
 
 def install(orchestrator_module: Any) -> None:
-    """Install official-scaffold project preparation and live migration behavior."""
+    """Install only the remaining live-migration routing compatibility layer."""
     cls = orchestrator_module.CompleteProductionOrchestrator
     original = cls._prepare_project
     if getattr(original, "_mmm_live_official_bootstrap", False):
@@ -118,7 +118,6 @@ def install(orchestrator_module: Any) -> None:
             return _prepare_live_migration(
                 self,
                 orchestrator_module,
-                original,
                 approved=approved,
                 run_root=run_root,
                 existing_input=existing_input,
@@ -143,7 +142,6 @@ def install(orchestrator_module: Any) -> None:
 def _prepare_live_migration(
     self: Any,
     orchestrator_module: Any,
-    wrapped_prepare: Any,
     *,
     approved: Any,
     run_root: Path,
@@ -152,12 +150,12 @@ def _prepare_live_migration(
     selection: dict[str, Any],
 ) -> Path:
     """Import the old source, bind approved migration intent, then let AI port it."""
-    try:
-        report = orchestrator_module.inspect_existing_project_archive(existing_input)
-    except Exception as exc:
-        raise orchestrator_module.CompleteProductionError(
-            "Could not inspect the Revise migration input: " + str(exc)
-        ) from exc
+    report, root = self._inspect_existing_project_input(
+        approved,
+        run_root=run_root,
+        existing_input=existing_input,
+    )
+    root = Path(root).resolve()
 
     if report.loader and str(report.loader).strip().lower() != "fabric":
         raise orchestrator_module.CompleteProductionError(
@@ -178,18 +176,6 @@ def _prepare_live_migration(
                 "Approved migration source loader does not match the bound Revise ZIP."
             )
 
-    inner_prepare = getattr(wrapped_prepare, "__wrapped__", None)
-    if not callable(inner_prepare):
-        raise orchestrator_module.CompleteProductionError(
-            "Migration preparation chain is not inspectable; refusing to bypass target guards."
-        )
-    root = inner_prepare(
-        self,
-        approved,
-        run_root=run_root,
-        existing_input=existing_input,
-    )
-    root = Path(root).resolve()
     self._write_base_proposal(root, approved.base_proposal)
 
     metadata = root / ".minecraft_ai"
