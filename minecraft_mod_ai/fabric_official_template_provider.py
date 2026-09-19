@@ -111,6 +111,7 @@ def bootstrap_fabric_project(
         "java": actual_java,
     }
     _pin_generated_toolchain(root, adapter)
+    runtime_contract = _install_host_runtime_contract(root, spec, adapter)
     gametest_contract = _install_host_gametest_contract(root, spec)
 
     properties = _read_properties(root / "gradle.properties")
@@ -161,6 +162,7 @@ def bootstrap_fabric_project(
             "gradle": actual_gradle,
             "java": actual_java,
         },
+        "runtime_contract": runtime_contract,
         "gametest_contract": gametest_contract,
         "project_manifest_sha256": _manifest_hash(root),
     }
@@ -329,6 +331,138 @@ def _pin_generated_toolchain(root: Path, adapter: Any) -> None:
     if not checksum_seen:
         pinned_lines.append(f"distributionSha256Sum={adapter.gradle_sha256}")
     wrapper.write_text("\n".join(pinned_lines) + "\n", encoding="utf-8")
+
+
+def _install_host_runtime_contract(
+    root: Path,
+    spec: Any,
+    adapter: Any,
+) -> dict[str, Any]:
+    """Normalize the official scaffold to MMM's immutable runtime/JAR contract."""
+
+    metadata_path = root / "src/main/resources/fabric.mod.json"
+    if not metadata_path.is_file() or metadata_path.is_symlink():
+        raise FabricTemplateProviderError(
+            "Fabric official template omitted src/main/resources/fabric.mod.json."
+        )
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise FabricTemplateProviderError(
+            "Fabric official template fabric.mod.json is invalid."
+        ) from exc
+    if not isinstance(metadata, dict):
+        raise FabricTemplateProviderError(
+            "Fabric official template fabric.mod.json must be an object."
+        )
+
+    expected_depends = {
+        "fabricloader": str(adapter.fabric_loader),
+        "minecraft": str(adapter.minecraft_version),
+        "java": str(adapter.java_version),
+        "fabric-api": str(adapter.fabric_api),
+    }
+    depends = metadata.setdefault("depends", {})
+    if not isinstance(depends, dict):
+        raise FabricTemplateProviderError(
+            "Fabric official template depends must be an object."
+        )
+    depends.update(expected_depends)
+    metadata["environment"] = "*"
+
+    main_class = "".join(
+        part.capitalize() for part in str(spec.mod_id).split("_")
+    ) + "Mod"
+    main_entrypoint = f"{spec.package_name}.{main_class}"
+    entrypoints = metadata.setdefault("entrypoints", {})
+    if not isinstance(entrypoints, dict):
+        raise FabricTemplateProviderError(
+            "Fabric official template entrypoints must be an object."
+        )
+    main_entrypoints = entrypoints.setdefault("main", [])
+    if not isinstance(main_entrypoints, list):
+        raise FabricTemplateProviderError(
+            "Fabric official template main entrypoint must be a list."
+        )
+
+    def entrypoint_value(item: Any) -> str | None:
+        if isinstance(item, str):
+            return item
+        if isinstance(item, dict) and isinstance(item.get("value"), str):
+            return str(item["value"])
+        return None
+
+    if main_entrypoint not in {
+        value
+        for item in main_entrypoints
+        if (value := entrypoint_value(item)) is not None
+    }:
+        main_entrypoints.append(main_entrypoint)
+
+    metadata_path.write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    source_path = (
+        root
+        / "src/main/java"
+        / Path(*str(spec.package_name).split("."))
+        / f"{main_class}.java"
+    )
+    if source_path.is_symlink():
+        raise FabricTemplateProviderError(
+            "Canonical Fabric main entrypoint source must not be a symlink."
+        )
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    if not source_path.exists():
+        source_path.write_text(
+            f"""package {spec.package_name};
+
+import net.fabricmc.api.ModInitializer;
+
+public final class {main_class} implements ModInitializer {{
+    @Override
+    public void onInitialize() {{
+        // Host-owned baseline. Generated feature binders may append calls here.
+    }}
+}}
+""",
+            encoding="utf-8",
+        )
+    elif not source_path.is_file():
+        raise FabricTemplateProviderError(
+            "Canonical Fabric main entrypoint source is not a regular file."
+        )
+
+    lang_resources: list[str] = []
+    for locale in ("en_us", "ko_kr"):
+        path = (
+            root
+            / "src/main/resources/assets"
+            / str(spec.mod_id)
+            / "lang"
+            / f"{locale}.json"
+        )
+        if path.is_symlink():
+            raise FabricTemplateProviderError(
+                f"Canonical language resource must not be a symlink: {locale}"
+            )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            path.write_text("{}\n", encoding="utf-8")
+        elif not path.is_file():
+            raise FabricTemplateProviderError(
+                f"Canonical language resource is not a regular file: {locale}"
+            )
+        lang_resources.append(path.relative_to(root).as_posix())
+
+    return {
+        "main_entrypoint": main_entrypoint,
+        "main_source": source_path.relative_to(root).as_posix(),
+        "lang_resources": lang_resources,
+        "depends": expected_depends,
+    }
 
 
 def _install_host_gametest_contract(root: Path, spec: Any) -> dict[str, str]:
