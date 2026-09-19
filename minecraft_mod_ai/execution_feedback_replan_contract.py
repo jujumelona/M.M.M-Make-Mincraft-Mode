@@ -275,11 +275,10 @@ def _collect_paths(value: Any, *, limit: int = 4096) -> list[str]:
 
 
 def _receipt_owner_ids(module: Any, receipt: Mapping[str, Any]) -> list[str]:
+    """Use receipt-declared semantic ownership before positional module fallback."""
+
     owners: set[str] = set()
-    module_id = str(getattr(module, "module_id", "") or "").strip()
-    if module_id:
-        owners.add(module_id)
-    for key in ("module_id", "entity_id", "pack_id"):
+    for key in ("module_id", "entity_id"):
         raw = receipt.get(key)
         if isinstance(raw, str) and raw.strip():
             owners.add(raw.strip())
@@ -294,6 +293,10 @@ def _receipt_owner_ids(module: Any, receipt: Mapping[str, Any]) -> list[str]:
                 raw_id = str(raw.get("module_id") or "").strip()
                 if raw_id:
                     owners.add(raw_id)
+    if not owners:
+        module_id = str(getattr(module, "module_id", "") or "").strip()
+        if module_id:
+            owners.add(module_id)
     return sorted(owners)
 
 
@@ -458,37 +461,50 @@ def _validation_failed(checkpoint_id: str, receipt: Mapping[str, Any]) -> bool:
 
 
 def _latest_failed_feedback(ledger: Any) -> dict[str, Any] | None:
+    """Return failed validation evidence scoped to the exception being adjudicated."""
+
+    from .execution_feedback_exception_scope_contract import (
+        _active_exception,
+        _checkpoint_for_exception,
+    )
+
+    checkpoint_id = _checkpoint_for_exception(_active_exception())
+    if checkpoint_id is None:
+        return None
     with ledger._connect() as connection:
-        rows = connection.execute(
+        row = connection.execute(
             """
-            SELECT checkpoint_id, receipt_json, state, updated_at
+            SELECT checkpoint_id, input_hash, state, updated_at
             FROM checkpoints
-            WHERE receipt_json IS NOT NULL
-            ORDER BY updated_at DESC, checkpoint_id
-            """
-        ).fetchall()
-    for checkpoint_id, receipt_json, state, updated_at in rows:
-        try:
-            receipt = json.loads(receipt_json)
-        except (TypeError, json.JSONDecodeError):
-            continue
-        if not isinstance(receipt, Mapping) or not _validation_failed(
-            str(checkpoint_id), receipt
-        ):
-            continue
-        diagnostics = _merge_diagnostics(
-            _diagnostics_from_value(receipt),
-            _compiler_log_diagnostics(receipt),
-        )
-        return {
-            "schema_version": "mmm/execution-validation-feedback-v1",
-            "checkpoint_id": str(checkpoint_id),
-            "checkpoint_state": str(state),
-            "checkpoint_updated_at": float(updated_at),
-            "diagnostics": diagnostics,
-            "diagnostic_fingerprint": _sha(diagnostics),
-        }
-    return None
+            WHERE checkpoint_id = ? AND receipt_json IS NOT NULL
+            LIMIT 1
+            """,
+            (checkpoint_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    raw_id, input_hash, state, updated_at = row
+    receipt = ledger.cached_checkpoint(
+        str(raw_id),
+        input_hash=str(input_hash),
+    )
+    if not isinstance(receipt, Mapping):
+        return None
+    if not _validation_failed(str(raw_id), receipt):
+        return None
+    diagnostics = _merge_diagnostics(
+        _diagnostics_from_value(receipt),
+        _compiler_log_diagnostics(receipt),
+    )
+    return {
+        "schema_version": "mmm/execution-validation-feedback-v1",
+        "checkpoint_id": str(raw_id),
+        "checkpoint_state": str(state),
+        "checkpoint_updated_at": float(updated_at),
+        "diagnostics": diagnostics,
+        "diagnostic_fingerprint": _sha(diagnostics),
+        "failure_scope": "current_exception",
+    }
 
 
 def _generation_rows(ledger: Any) -> list[dict[str, Any]]:
