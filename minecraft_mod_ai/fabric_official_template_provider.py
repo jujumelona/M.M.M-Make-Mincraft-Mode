@@ -111,6 +111,7 @@ def bootstrap_fabric_project(
         "java": actual_java,
     }
     _pin_generated_toolchain(root, adapter)
+    gametest_contract = _install_host_gametest_contract(root, spec)
 
     properties = _read_properties(root / "gradle.properties")
     actual_loader = properties.get("loader_version", "")
@@ -160,6 +161,7 @@ def bootstrap_fabric_project(
             "gradle": actual_gradle,
             "java": actual_java,
         },
+        "gametest_contract": gametest_contract,
         "project_manifest_sha256": _manifest_hash(root),
     }
     _write_platform_lock(root, adapter, receipt)
@@ -327,6 +329,120 @@ def _pin_generated_toolchain(root: Path, adapter: Any) -> None:
     if not checksum_seen:
         pinned_lines.append(f"distributionSha256Sum={adapter.gradle_sha256}")
     wrapper.write_text("\n".join(pinned_lines) + "\n", encoding="utf-8")
+
+
+def _install_host_gametest_contract(root: Path, spec: Any) -> dict[str, str]:
+    """Make the provider scaffold satisfy MMM's mandatory server GameTest gate."""
+
+    build_path = root / "build.gradle"
+    if not build_path.is_file() or build_path.is_symlink():
+        raise FabricTemplateProviderError(
+            "Fabric official template omitted the Groovy build.gradle required by "
+            "the host GameTest contract."
+        )
+
+    build_text = build_path.read_text(encoding="utf-8", errors="strict")
+    additions: list[str] = []
+    if "configureTests" not in build_text:
+        additions.append(
+            """// M.M.M host-owned server GameTest contract
+fabricApi {
+    configureTests {
+        createSourceSet = false
+        enableGameTests = true
+        enableClientGameTests = false
+    }
+}
+"""
+        )
+    if "fabric-api.gametest.report-file" not in build_text:
+        additions.append(
+            """// M.M.M structured GameTest evidence
+loom {
+    runs {
+        gameTest {
+            vmArg "-Dfabric-api.gametest.report-file=${file('build/gametest-report.xml').absolutePath}"
+        }
+    }
+}
+"""
+        )
+    if additions:
+        build_path.write_text(
+            build_text.rstrip() + "\n\n" + "\n".join(additions).rstrip() + "\n",
+            encoding="utf-8",
+        )
+
+    main_class = "".join(part.capitalize() for part in str(spec.mod_id).split("_")) + "Mod"
+    gametest_class = main_class + "GameTests"
+    gametest_entrypoint = f"{spec.package_name}.{gametest_class}"
+
+    metadata_path = root / "src/main/resources/fabric.mod.json"
+    if not metadata_path.is_file() or metadata_path.is_symlink():
+        raise FabricTemplateProviderError(
+            "Fabric official template omitted src/main/resources/fabric.mod.json."
+        )
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise FabricTemplateProviderError(
+            "Fabric official template fabric.mod.json is invalid."
+        ) from exc
+    if not isinstance(metadata, dict):
+        raise FabricTemplateProviderError(
+            "Fabric official template fabric.mod.json must be an object."
+        )
+
+    entrypoints = metadata.setdefault("entrypoints", {})
+    if not isinstance(entrypoints, dict):
+        raise FabricTemplateProviderError(
+            "Fabric official template entrypoints must be an object."
+        )
+    gametest_entrypoints = entrypoints.setdefault("fabric-gametest", [])
+    if not isinstance(gametest_entrypoints, list):
+        raise FabricTemplateProviderError(
+            "Fabric official template fabric-gametest entrypoint must be a list."
+        )
+    if gametest_entrypoint not in gametest_entrypoints:
+        gametest_entrypoints.append(gametest_entrypoint)
+        metadata_path.write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    source_path = (
+        root
+        / "src/main/java"
+        / Path(*str(spec.package_name).split("."))
+        / f"{gametest_class}.java"
+    )
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text(
+        f"""package {spec.package_name};
+
+import net.fabricmc.fabric.api.gametest.v1.GameTest;
+import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.gametest.framework.GameTestHelper;
+
+public final class {gametest_class} {{
+    @GameTest
+    public void generatedRegistriesAreLive(GameTestHelper context) {{
+        if (!FabricLoader.getInstance().isModLoaded("{spec.mod_id}")) {{
+            throw new AssertionError("generated mod was not loaded by Fabric");
+        }}
+        context.succeed();
+    }}
+}}
+""",
+        encoding="utf-8",
+    )
+
+    return {
+        "task": "runGameTest",
+        "report": "build/gametest-report.xml",
+        "entrypoint": gametest_entrypoint,
+        "source": source_path.relative_to(root).as_posix(),
+    }
 
 
 def _read_properties(path: Path) -> dict[str, str]:
