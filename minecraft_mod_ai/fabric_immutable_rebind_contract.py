@@ -13,7 +13,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .spec import platform_receipt_sha256
 
 _INSTALLED = False
 
