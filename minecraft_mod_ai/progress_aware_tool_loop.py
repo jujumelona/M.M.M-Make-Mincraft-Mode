@@ -43,6 +43,7 @@ from .model_context_budget import (
     request_message_budget,
 )
 from .root_cause_trace import emit_root_cause, trace_scope
+from .small_model_task_capsule_contract import task_capsule_tool_loop
 from .source_mutation_contract import mutation_history_applied, mutation_payload_applied
 from .value_shapes import as_sequence as _sequence, structured_payload as _structured_payload
 
@@ -3353,6 +3354,7 @@ def _generate_with_tools_impl(
         )
 
 
+@task_capsule_tool_loop
 def generate_with_tools(
     router: Any,
     *,
