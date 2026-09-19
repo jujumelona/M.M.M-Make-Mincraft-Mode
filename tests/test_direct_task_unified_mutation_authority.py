@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from minecraft_mod_ai.coder_mutation_authority_contract import (
-    _install_creation_conflict_classification,
-)
+from minecraft_mod_ai import progress_aware_tool_loop as tool_loop
 from minecraft_mod_ai.direct_task_mutation_authority_contract import (
     _CURRENT_AUTHORITY,
     compile_direct_task_mutation_authority,
@@ -80,10 +78,7 @@ def test_ordinary_planir_task_stays_exact_and_cannot_follow_localization_drift()
     assert error.startswith("MUTATION_TARGET_DRIFT:")
 
 
-def test_existing_write_scope_owner_activates_same_authority_for_tool_and_final_guard(
-    monkeypatch,
-) -> None:
-    holder = {}
+def test_source_owned_progress_loop_uses_same_active_bounded_authority() -> None:
 
     class Generator:
         @generation_authority_scoped
@@ -100,13 +95,13 @@ def test_existing_write_scope_owner_activates_same_authority_for_tool_and_final_
             active = _CURRENT_AUTHORITY.get()
             assert active is not None
             assert CURRENT_MUTATION_AUTHORITY.get() is active.mutation_authority
-            tool_error = holder["loop"]._mutation_target_error(
+            tool_error = tool_loop._mutation_target_error(
                 "apply_source_edit",
                 {
                     "operation": "create",
                     "path": "src/main/java/ai/minecraft/generated/SpaceModeMod.java",
                 },
-                SimpleNamespace(target_path="src/main/resources/fabric.mod.json"),
+                None,
             )
             assert tool_error is None
             assert current_mutation_error(
@@ -121,22 +116,6 @@ def test_existing_write_scope_owner_activates_same_authority_for_tool_and_final_
 
         def _validate_operations(self, operations):
             return None
-
-    class Loop:
-        _SOURCE_EDIT_PATH_KEYS = ("path",)
-        _SOURCE_CREATE_OPERATIONS = frozenset({"create"})
-
-        @staticmethod
-        def _canonical_mutation_path(value):
-            return str(value or "").replace("\\", "/")
-
-        @staticmethod
-        def _mutation_target_error(tool_name, arguments, context):
-            return "MUTATION_TARGET_DRIFT: localized evidence target differs"
-
-    loop_module = Loop()
-    holder["loop"] = loop_module
-    _install_creation_conflict_classification(loop_module)
 
     generator = Generator()
     assert generator.generate(".", module=_authored_module()) == {"active": True}
