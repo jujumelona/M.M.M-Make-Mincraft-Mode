@@ -13,7 +13,7 @@ import re
 import shutil
 import tomllib
 import zipfile
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
