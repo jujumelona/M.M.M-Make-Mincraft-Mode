@@ -133,6 +133,8 @@ _REQUIRED_GATE_TO_EVIDENCE = {
     'mineflayer playtest': 'playtest',
     'runtime interaction tests': 'playtest',
     'runtime animation review': 'runtime_visual',
+    'blockbench uv and bone hierarchy review': 'blockbench',
+    'blockbench uv render review': 'blockbench',
     'visual review': 'visual',
     'client gui and validated network action test': 'playtest_visual',
     'research ledger integrity': 'research_ledger',
