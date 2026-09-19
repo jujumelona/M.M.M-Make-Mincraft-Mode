@@ -35,6 +35,11 @@ from .complete_orchestrator_support import (
 )
 from .complete_build_repair import run_build_repair_checkpoint
 from .complete_spec import CompleteProposal, CompleteProposalStatus, ProductionModule
+from .execution_feedback_replan_contract import (
+    execution_feedback_scoped,
+    feedback_run_context,
+    semantic_execution_observation as _semantic_execution_observation,
+)
 from .custom_module_generator import CustomModuleGenerator
 from .extended_content_generator import generate_extended_content
 from .final_artifact import (
@@ -148,61 +153,6 @@ def _fork_custom_work_router(router: Any) -> Any:
     from .custom_generation_research import _fork_router_for_candidate
 
     return _fork_router_for_candidate(router)
-
-
-def _semantic_execution_observation(
-    module: ProductionModule,
-    receipt: dict[str, Any],
-    *,
-    dependent_ids: Iterable[str],
-) -> dict[str, Any] | None:
-    """Bind one persisted edit receipt back to its immutable semantic task."""
-
-    config = module.config if isinstance(module.config, dict) else {}
-    task = config.get("evidence_task")
-    if not isinstance(task, dict):
-        return None
-    touched = sorted(
-        {
-            str(value).replace("\\", "/")
-            for value in receipt.get("touched_paths", ())
-            if isinstance(value, str) and value.strip()
-        }
-    )
-    core: dict[str, Any] = {
-        "schema_version": "mmm/semantic-task-observation-v1",
-        "task_id": module.module_id,
-        "task_sha256": str(task.get("task_sha256") or ""),
-        "requirement_refs": list(task.get("requirement_refs") or ()),
-        "gap_refs": list(task.get("gap_refs") or ()),
-        "applied_action_count": int(receipt.get("operation_count") or 0),
-        "touched_paths": touched,
-        "touched_paths_sha256": "sha256:"
-        + hashlib.sha256(
-            json.dumps(
-                touched,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest(),
-        "patch_receipt": receipt.get("patch_receipt"),
-        "source_observation_receipt": receipt.get("source_observation_receipt"),
-        "impact_probes": list(task.get("impact_probes") or ()),
-        "affected_downstream_task_ids": sorted(set(dependent_ids)),
-        "status": "OBSERVED",
-    }
-    core["observation_sha256"] = "sha256:" + hashlib.sha256(
-        json.dumps(
-            core,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        ).encode("utf-8")
-    ).hexdigest()
-    return core
-
 
 
 def _receipt_owned_module_ids(receipt: dict[str, Any]) -> tuple[str, ...]:
@@ -1031,6 +981,7 @@ class CompleteProductionOrchestrator:
         self.policy = policy or ScalePolicy.from_environment()
         self.policy.validate()
 
+    @execution_feedback_scoped
     @execution_scoped
     def execute(self, proposal: CompleteProposal | dict[str, Any], *, approval_hash: str, run_name: str, options: CompleteExecutionOptions | None=None, existing_input: str | Path | None=None) -> CompletePipelineResult:
         options = options or CompleteExecutionOptions()
@@ -2479,6 +2430,7 @@ class CompleteProductionOrchestrator:
         for path in (project_root / '.minecraft_ai/complete-proposal.json', project_root / 'src/main/resources/META-INF/mmm-complete-proposal.json'):
             write_sharded_complete_proposal(proposal, path, shard_size=max(1, self.policy.java_shard_size), policy=self.policy)
 
+    @feedback_run_context
     def _open_run(self, run_name: str, plan: WorkGraphPlan, *, resume: bool) -> tuple[Path, DurableWorkLedger, bool]:
         if not run_name or any(character not in 'abcdefghijklmnopqrstuvwxyz0123456789_-' for character in run_name):
             raise CompleteProductionError('run_name must use lowercase letters, numbers, underscore or hyphen.')
