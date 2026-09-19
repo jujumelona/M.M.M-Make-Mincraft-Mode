@@ -534,6 +534,18 @@ def bundle_from_pipeline_result(
         build_payload = dict(build)
         build_payload["schema_version"] = "mmm/final-build-receipt-v1"
         build_payload["artifact_sha256"] = artifact["sha256"]
+    asset_receipt = result.get("asset_receipt")
+    resource_pack_bundle = (
+        asset_receipt.get("resource_pack_bundle")
+        if isinstance(asset_receipt, Mapping)
+        and isinstance(asset_receipt.get("resource_pack_bundle"), Mapping)
+        else None
+    )
+    additional_artifacts = (
+        {"generated-resource-pack.zip": resource_pack_bundle}
+        if resource_pack_bundle is not None
+        else None
+    )
     return write_downloadable_bundle(
         bundle_dir,
         artifact_receipt=artifact,
@@ -541,6 +553,7 @@ def bundle_from_pipeline_result(
         reuse_manifest=reuse,
         build_receipt=build_payload,
         runtime_receipt=runtime_payload,
+        additional_artifacts=additional_artifacts,
     )
 
 
