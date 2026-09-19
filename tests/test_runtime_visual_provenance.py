@@ -4,6 +4,7 @@ import threading
 
 import pytest
 
+from minecraft_mod_ai.complete_orchestrator import _collect_runtime_screenshot_receipts
 from minecraft_mod_ai.runtime_manager import MinecraftRuntimeManager, RuntimePolicyError
 
 
@@ -53,3 +54,25 @@ def test_runtime_screenshot_rejects_external_workspace_image(tmp_path) -> None:
         match="current disposable client directory",
     ):
         manager.register_screenshot(outside)
+
+
+def test_runtime_screenshot_is_preserved_before_disposable_cleanup(tmp_path) -> None:
+    manager = _manager(tmp_path)
+    screenshot = manager.instance_root / "client" / "screenshots" / "proof.png"
+    screenshot.parent.mkdir(parents=True)
+    screenshot.write_bytes(b"current-runtime-image")
+
+    receipts = _collect_runtime_screenshot_receipts(manager, ())
+    assert len(receipts) == 1
+    receipt = receipts[0]
+    evidence = __import__("pathlib").Path(receipt["evidence_path"])
+    source = __import__("pathlib").Path(receipt["runtime_source_path"])
+
+    assert evidence.is_file()
+    assert receipt["path"] == str(evidence)
+    assert receipt["sha256"] == manager._sha256_file(evidence)
+
+    source.unlink()
+    assert not source.exists()
+    assert evidence.is_file()
+    assert manager._sha256_file(evidence) == receipt["sha256"]
