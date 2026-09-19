@@ -13,6 +13,7 @@ from minecraft_mod_ai.final_artifact import (
     _read_jar_metadata,
     _write_json_receipt,
     append_github_outputs,
+    build_debug_fixture_coverage_receipt,
     sha256_file,
     write_downloadable_bundle,
 )
@@ -25,6 +26,56 @@ def _symlink(link: Path, target: Path, *, directory: bool = False) -> None:
         link.symlink_to(target, target_is_directory=directory)
     except (OSError, NotImplementedError) as exc:
         pytest.skip(f"symlink creation unavailable: {exc}")
+
+
+def _debug_coverage_inputs() -> dict[str, object]:
+    return {
+        "proposal_hash": "sha256:" + "1" * 64,
+        "acceptance_tests": (
+            "The debug fixture compiles against the selected target API.",
+            "The debug fixture passes the deterministic verification pipeline.",
+        ),
+        "artifact_sha256": "sha256:" + "2" * 64,
+        "source_validation": {
+            "status": "PASS",
+            "checks_run": 4,
+            "findings": [],
+        },
+        "build_report": {"status": "PASS"},
+        "jar_validation": {
+            "status": "PASS",
+            "checks_run": 6,
+            "findings": [],
+        },
+        "gametest_passed": True,
+        "unresolved_gates": (),
+    }
+
+
+def test_debug_fixture_coverage_requires_all_real_verification_gates() -> None:
+    inputs = _debug_coverage_inputs()
+    receipt = build_debug_fixture_coverage_receipt(**inputs)
+    assert receipt["status"] == "PASS"
+    assert receipt["coverage_mode"] == "debug_fixture"
+    assert receipt["verification"] == {
+        "source_validation": True,
+        "build": True,
+        "jar_validation": True,
+        "gametest": True,
+    }
+    assert all(item["status"] == "PASS" for item in receipt["requirements"])
+
+    for field, value in (
+        ("source_validation", {"status": "FAIL", "checks_run": 4, "findings": []}),
+        ("build_report", {"status": "FAIL"}),
+        ("jar_validation", {"status": "FAIL", "checks_run": 6, "findings": []}),
+        ("gametest_passed", False),
+        ("unresolved_gates", ("required-gate:debug_token:target_compile:missing",)),
+    ):
+        blocked = build_debug_fixture_coverage_receipt(
+            **{**inputs, field: value}
+        )
+        assert blocked["status"] == "BLOCKED"
 
 
 def test_sha256_rejects_direct_and_parent_symlink_aliases(tmp_path: Path) -> None:
