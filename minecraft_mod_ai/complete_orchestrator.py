@@ -2364,6 +2364,13 @@ class CompleteProductionOrchestrator:
         on_commit: Callable[[dict[str, Any]], None] | None = None,
         on_abort: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
+        from .project_write_lock import project_write_lock
+        from .scheduler_claim_fencing_contract import (
+            _commit_success,
+            _fenced_fail,
+            _snapshot_claim,
+        )
+
         cached = ledger.cached_receipt(node.node_id, input_hash=node.input_hash)
         emit_root_cause(
             'orchestrator_node_decision',
@@ -2371,55 +2378,105 @@ class CompleteProductionOrchestrator:
             operation=node.node_id,
             gate='cache_and_ledger_state',
             result='START',
-            details={'node': node.to_dict() if hasattr(node, 'to_dict') else str(node), 'cached_receipt': cached},
+            details={
+                'node': node.to_dict() if hasattr(node, 'to_dict') else str(node),
+                'cached_receipt': cached,
+            },
         )
         if cached is not None and validate_cached(cached):
-            emit_root_cause('orchestrator_node_cache_hit', stage=node.stage, operation=node.node_id, gate='cached_receipt_validation', result='PASS', details={'receipt': cached})
+            emit_root_cause(
+                'orchestrator_node_cache_hit',
+                stage=node.stage,
+                operation=node.node_id,
+                gate='cached_receipt_validation',
+                result='PASS',
+                details={'receipt': cached},
+            )
             if on_commit is not None:
                 on_commit(cached)
             return cached
         if cached is not None:
-            emit_root_cause('orchestrator_node_cache_invalidated', stage=node.stage, operation=node.node_id, gate='cached_receipt_validation', result='FAIL', reason='cached outputs failed existence/integrity validation', details={'receipt': cached})
+            emit_root_cause(
+                'orchestrator_node_cache_invalidated',
+                stage=node.stage,
+                operation=node.node_id,
+                gate='cached_receipt_validation',
+                result='FAIL',
+                reason='cached outputs failed existence/integrity validation',
+                details={'receipt': cached},
+            )
             ledger.invalidate(node.node_id)
+
         current = ledger.task(node.node_id)
         if current['state'] in {'failed', 'input_required', 'cancelled'}:
-            emit_root_cause('orchestrator_node_retry', stage=node.stage, operation=node.node_id, gate='retry_policy', result='START', reason=str(current.get('error') or current['state']), details={'before': current})
+            emit_root_cause(
+                'orchestrator_node_retry',
+                stage=node.stage,
+                operation=node.node_id,
+                gate='retry_policy',
+                result='START',
+                reason=str(current.get('error') or current['state']),
+                details={'before': current},
+            )
             ledger.retry(node.node_id)
             current = ledger.task(node.node_id)
+
         ledger.raise_if_cancelled()
         if current['state'] != 'running':
             ledger.begin(node.node_id, worker_id='complete-orchestrator')
+        claim_attempt, claim_owner = _snapshot_claim(ledger, node.node_id)
+
         receipt: dict[str, Any] | None = None
         committed = False
-        try:
-            emit_root_cause('orchestrator_node_action_start', stage=node.stage, operation=node.node_id, gate='work_node_action', result='START', details={'ledger_state': current, 'payload': node.payload})
+
+        def execute_and_commit() -> dict[str, Any]:
+            nonlocal receipt, committed
+            emit_root_cause(
+                'orchestrator_node_action_start',
+                stage=node.stage,
+                operation=node.node_id,
+                gate='work_node_action',
+                result='START',
+                details={'ledger_state': current, 'payload': node.payload},
+            )
             receipt = action()
             if not isinstance(receipt, dict):
-                raise CompleteProductionError(f'Work node {node.node_id} returned a non-object receipt.')
+                raise CompleteProductionError(
+                    f'Work node {node.node_id} returned a non-object receipt.'
+                )
             ledger.raise_if_cancelled()
-            ledger.succeed(node.node_id, receipt)
+            _commit_success(
+                ledger,
+                node.node_id,
+                receipt,
+                attempt=claim_attempt,
+                owner=claim_owner,
+                shared_index=shared_index,
+                index_error_type=CompleteProductionError,
+            )
             committed = True
             if on_commit is not None:
                 on_commit(receipt)
-            emit_root_cause('orchestrator_node_action_result', stage=node.stage, operation=node.node_id, gate='work_node_action', result='PASS', details={'receipt': receipt})
-            if shared_index is not None:
-                touched = receipt.get('touched_paths') or receipt.get('written_files') or []
-                if touched:
-                    try:
-                        shared_index.update_files(touched)
-                        shared_index.write_manifest()
-                    except Exception as index_exc:  # noqa: BLE001 - index refresh is non-fatal
-                        emit_root_cause(
-                            'orchestrator_index_refresh_failure',
-                            stage=node.stage,
-                            operation=node.node_id,
-                            gate='shared_project_index',
-                            result='FAIL',
-                            reason=f'{type(index_exc).__name__}: {index_exc}',
-                            details={'touched_paths': touched},
-                            exc=index_exc,
-                        )
+            emit_root_cause(
+                'orchestrator_node_action_result',
+                stage=node.stage,
+                operation=node.node_id,
+                gate='work_node_action',
+                result='PASS',
+                details={'receipt': receipt},
+            )
             return receipt
+
+        project_root = (
+            getattr(shared_index, 'root', None)
+            if node.resource_class == 'commit' and shared_index is not None
+            else None
+        )
+        try:
+            if project_root is not None:
+                with project_write_lock(project_root):
+                    return execute_and_commit()
+            return execute_and_commit()
         except BaseException as exc:
             if not committed and on_abort is not None:
                 try:
@@ -2434,12 +2491,23 @@ class CompleteProductionOrchestrator:
                         reason=f'{type(abort_exc).__name__}: {abort_exc}',
                         exc=abort_exc,
                     )
-            try:
-                if ledger.task(node.node_id)['state'] == 'running':
-                    ledger.fail(node.node_id, f'{type(exc).__name__}: {exc}')
-            except WorkGraphError:
-                pass
-            emit_root_cause('orchestrator_node_action_failure', stage=node.stage, operation=node.node_id, gate='work_node_action', result='FAIL', reason=f'{type(exc).__name__}: {exc}', details={'ledger_state': current, 'payload': node.payload}, exc=exc)
+            _fenced_fail(
+                ledger,
+                node.node_id,
+                attempt=claim_attempt,
+                owner=claim_owner,
+                error=exc,
+            )
+            emit_root_cause(
+                'orchestrator_node_action_failure',
+                stage=node.stage,
+                operation=node.node_id,
+                gate='work_node_action',
+                result='FAIL',
+                reason=f'{type(exc).__name__}: {exc}',
+                details={'ledger_state': current, 'payload': node.payload},
+                exc=exc,
+            )
             raise
 
     def _inspect_existing_project_input(
