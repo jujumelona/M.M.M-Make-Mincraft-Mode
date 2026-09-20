@@ -21,6 +21,10 @@ class _InnerRouter:
 class _ToolPathEngine:
     def __init__(self) -> None:
         self.ingested = []
+        # dependency_decode_monitor may already be installed by another collected
+        # test module. Mirror the production engine protocol so this test is
+        # independent of pytest collection/import order.
+        self.monitor = SimpleNamespace(enforce_stream=lambda *_args, **_kwargs: None)
 
     def ingest_code_owned_request(self, messages):
         self.ingested.append(tuple(dict(message) for message in messages))
