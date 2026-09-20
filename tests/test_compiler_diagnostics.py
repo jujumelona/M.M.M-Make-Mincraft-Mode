@@ -5,6 +5,45 @@ from pathlib import Path
 from minecraft_mod_ai.compiler_diagnostics import compiler_log_diagnostics
 
 
+def test_diagnostic_file_uri_resolves_to_project_owned_source(tmp_path):
+    from minecraft_mod_ai.compiler_diagnostics import normalize_source_path
+
+    source = tmp_path / "src/main/java/with space/Token.java"
+    assert normalize_source_path(source.as_uri(), project_root=tmp_path) == (
+        "src/main/java/with space/Token.java"
+    )
+
+
+def test_javac_keeps_symbol_location_and_overload_details_without_gradle_noise(tmp_path):
+    log = tmp_path / "build.log"
+    first = (
+        "src/main/java/Token.java:6: error: cannot find symbol\n"
+        "import net.minecraft.resources.Registries;\n"
+        "                              ^\n"
+        "  symbol:   class Registries\n"
+        "  location: package net.minecraft.resources\n"
+    )
+    second = (
+        "src/main/java/Token.java:19: error: method register cannot be applied\n"
+        "  Registry.register(key, item);\n"
+        "          ^\n"
+        "  required: Registry,ResourceKey,Object\n"
+        "  found:    ResourceKey,Item\n"
+        "  reason: actual and formal argument lists differ in length\n"
+    )
+    log.write_text(first + second + "2 errors\n> Task :compileJava FAILED\n"
+                   + first + second, encoding="utf-8")
+    rows = compiler_log_diagnostics({"commands": [{"exit_code": 1, "log_path": str(log)}]})
+    assert len(rows) == 2
+    assert "class Registries" in rows[0]["message"]
+    assert "package net.minecraft.resources" in rows[0]["message"]
+    assert "import net.minecraft.resources.Registries;" in rows[0]["message"]
+    assert "required: Registry,ResourceKey,Object" in rows[1]["message"]
+    assert "found:    ResourceKey,Item" in rows[1]["message"]
+    assert "2 errors" not in rows[1]["message"]
+    assert "Task" not in rows[1]["message"]
+
+
 def test_javac_log_diagnostics_normalize_indented_absolute_source_path(
     tmp_path: Path,
 ) -> None:

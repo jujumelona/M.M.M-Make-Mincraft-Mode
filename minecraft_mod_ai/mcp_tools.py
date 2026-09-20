@@ -327,12 +327,12 @@ class MMMToolService:
         if target.exists():
             raise FileExistsError(f'Release already exists: {target}')
         with zipfile.ZipFile(target, 'w', compression=zipfile.ZIP_DEFLATED) as zipped:
-            for path in sorted(root.rglob('*')):
-                if not path.is_file() or path.is_symlink():
+            from .release_source_files import release_source_files
+
+            for path in release_source_files(root):
+                if path.resolve() == target.resolve():
                     continue
                 relative = path.relative_to(root)
-                if any(part in {'.gradle', '.cache', 'gradle-user-home', 'run'} for part in relative.parts):
-                    continue
                 zipped.write(path, Path('source') / relative)
             if jar is not None:
                 zipped.write(jar, Path('binary') / jar.name)

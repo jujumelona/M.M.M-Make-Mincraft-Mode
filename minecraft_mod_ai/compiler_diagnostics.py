@@ -12,6 +12,8 @@ import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 _JAVAC_DIAGNOSTIC = re.compile(
     r"^\s*(?P<path>(?:[A-Za-z]:)?[^:\r\n]+\.java):(?P<line>\d+):\s*"
@@ -19,6 +21,7 @@ _JAVAC_DIAGNOSTIC = re.compile(
     re.MULTILINE,
 )
 _BUILD_LOG_WINDOW_BYTES = 256 * 1024
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _RUNTIME_STACK_FRAME = re.compile(
     r"^\s*at\s+(?:(?:[A-Za-z0-9_.-]+)//)?"
     r"(?P<class>[A-Za-z_$][A-Za-z0-9_$.]*)\.[^\s(]+"
@@ -56,10 +59,10 @@ def _sha(value: Mapping[str, Any]) -> str:
 
 def normalize_source_path(value: Any, *, project_root: str | Path | None = None) -> str:
     text = str(value or "").strip().replace("\\", "/")
-    while "//" in text:
-        text = text.replace("//", "/")
-    if text.startswith("file://"):
-        text = text[7:]
+    if text.startswith("file:"):
+        uri = urlsplit(text)
+        text = url2pathname(("//" + uri.netloc if uri.netloc else "") + uri.path)
+        text = text.replace("\\", "/")
     if not text:
         return ""
 
@@ -111,10 +114,27 @@ def compiler_log_diagnostics(
             not isinstance(exit_code, int) or isinstance(exit_code, bool) or exit_code == 0
         ):
             return
-        text = bounded_build_log_text(command.get("log_path"))
+        text = _ANSI_ESCAPE.sub("", bounded_build_log_text(command.get("log_path")))
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
         for match in _JAVAC_DIAGNOSTIC.finditer(text):
             if len(diagnostics) >= limit:
                 break
+            # Javac's first line often says only "cannot find symbol". Preserve
+            # the source/caret and symbol/overload details used by the repairer,
+            # without attaching the remainder of the Gradle stack trace.
+            details = []
+            following = text[match.end():].lstrip("\n").splitlines()[:16]
+            if len(following) >= 2 and re.fullmatch(r"\s*\^+\s*", following[1]):
+                details.extend(line.strip() for line in following[:2])
+                following = following[2:]
+            for line in following:
+                if re.match(r"\s*(symbol|location|required|found|reason|where):", line) or details and line.startswith("    ") and line.strip() and not (
+                    _JAVAC_DIAGNOSTIC.match(line) or line.lstrip().startswith((">", "at "))
+                ):
+                    details.append(line.strip())
+                else:
+                    break
+            message = "\n".join([match.group("message").strip(), *details])
             body = {
                 "path": normalize_source_path(
                     match.group("path"), project_root=project_root
@@ -122,7 +142,7 @@ def compiler_log_diagnostics(
                 "line": int(match.group("line")),
                 "severity": 1 if match.group("kind") == "error" else 2,
                 "source": "javac",
-                "message": match.group("message").strip()[:2000],
+                "message": message[:2000],
                 "code": f"javac:{match.group('kind')}:{match.group('line')}",
             }
             fingerprint = _sha(body)

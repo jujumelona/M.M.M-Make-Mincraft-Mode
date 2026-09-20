@@ -1,26 +1,22 @@
 from __future__ import annotations
 
-from .fixed_template_generation import generate_fixed_template_text
-from .model_response_templates import response_schema
-
 import hashlib
 import json
 import os
 import zipfile
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import replace
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
 from .blockbench_client import BlockbenchMCPClient
 from .complete_orchestrator_support import CompleteProductionError, _extract_json
-from .complete_spec import CompleteProposal, CompleteProposalStatus
+from .complete_spec import CompleteProposal
+from .fixed_template_generation import generate_fixed_template_text
 from .mineflayer_bridge import MineflayerBridge
+from .model_response_templates import response_schema
 from .model_router import ModelRouter
+from .resource_asset_production import generate_assets
 from .task_template_catalog import load_template
-
-
-from .resource_asset_production import generate_assets as generate_assets
 
 generate_assets._mmm_adaptive_image_gpu_session = True  # type: ignore[attr-defined]
 
@@ -341,15 +337,12 @@ def package_source_only(
         "w",
         compression=zipfile.ZIP_DEFLATED,
     ) as archive:
-        for path in sorted(project_root.rglob("*")):
-            if not path.is_file() or path.is_symlink():
+        from .release_source_files import release_source_files
+
+        for path in release_source_files(project_root, include_build_evidence=False):
+            if path.resolve() == target.resolve():
                 continue
             relative = path.relative_to(project_root)
-            if any(
-                part in {".gradle", "build", "run", ".cache"}
-                for part in relative.parts
-            ):
-                continue
             archive.write(path, Path("source") / relative)
         archive.writestr(
             "complete-proposal-location.json",

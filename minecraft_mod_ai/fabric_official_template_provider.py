@@ -17,6 +17,10 @@ class FabricTemplateProviderError(RuntimeError):
     pass
 
 
+class FabricTemplateSafetyError(FabricTemplateProviderError):
+    """An unsafe scaffold cannot be repaired by rebinding toolchain versions."""
+
+
 _FABRIC_CLI = "https://fabricmc.net/cli"
 _DENO_LATEST = "https://dl.deno.land/release-latest.txt"
 _DENO_RELEASE = "https://dl.deno.land/release/{version}/{asset}"
@@ -111,6 +115,7 @@ def bootstrap_fabric_project(
         "java": actual_java,
     }
     _pin_generated_toolchain(root, adapter)
+    _clean_fresh_template_examples(root, spec)
     runtime_contract = _install_host_runtime_contract(root, spec, adapter)
     gametest_contract = _install_host_gametest_contract(root, spec)
 
@@ -331,6 +336,65 @@ def _pin_generated_toolchain(root: Path, adapter: Any) -> None:
     if not checksum_seen:
         pinned_lines.append(f"distributionSha256Sum={adapter.gradle_sha256}")
     wrapper.write_text("\n".join(pinned_lines) + "\n", encoding="utf-8")
+
+
+def _clean_fresh_template_examples(root: Path, spec: Any) -> None:
+    """Remove CLI demonstration code only during bootstrap of an empty project.
+
+    Never call this on imported or already implemented projects. At this point
+    every Java source is owned by the official scaffold, before MMM generation.
+    Keep the upstream license and wrapper/build infrastructure intact.
+    """
+    root = root.resolve()
+
+    def require_owned(path: Path) -> None:
+        if path.is_symlink() or not path.resolve().is_relative_to(root):
+            raise FabricTemplateSafetyError(f"Fabric template path escaped the project: {path}")
+
+    resources = root / "src/main/resources"
+    metadata_path = resources / "fabric.mod.json"
+    readme = root / "README.md"
+    require_owned(metadata_path)
+    require_owned(readme)
+    require_owned(root / "src")
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise FabricTemplateProviderError("Fabric template metadata is invalid.") from exc
+    if not isinstance(metadata, dict):
+        raise FabricTemplateProviderError("Fabric template metadata must be an object.")
+    removals: list[Path] = []
+    for entry in metadata.get("mixins", []):
+        name = entry.get("config") if isinstance(entry, dict) else entry
+        if not isinstance(name, str):
+            raise FabricTemplateProviderError("Fabric template mixin config is invalid.")
+        for resource_root in (resources, root / "src/client/resources"):
+            require_owned(resource_root)
+            path = resource_root / name
+            require_owned(path)
+            if not path.resolve().is_relative_to(resource_root.resolve()) or path.is_symlink():
+                raise FabricTemplateSafetyError("Fabric template mixin config escaped resources.")
+            if path.is_file():
+                removals.append(path)
+    for path in (root / "src").rglob("*.java"):
+        require_owned(path)
+        removals.append(path)
+    # Validate every destination before removing even a single scaffold file.
+    for path in dict.fromkeys(removals):
+        path.unlink()
+    metadata["entrypoints"] = {}
+    metadata.pop("mixins", None)
+    metadata["description"] = str(spec.summary)
+    metadata["authors"] = []
+    metadata["contact"] = {}
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    readme.write_text(
+        f"# {spec.mod_name}\n\n{spec.summary}\n\n"
+        "Build with `./gradlew build` (Windows: `gradlew.bat build`).\n"
+        "The Gradle wrapper and gradle.properties pin the target toolchain.\n\n"
+        "See LICENSE for the scaffold license.\n",
+        encoding="utf-8",
+    )
 
 
 def _install_host_runtime_contract(

@@ -5,9 +5,21 @@ from types import SimpleNamespace
 from minecraft_mod_ai.complete_orchestrator import (
     CompleteProductionOrchestrator,
     _jdt_release_evidence_passed,
-    _run_release_jdt_verification,
     _requested_verification_failures,
+    _run_release_jdt_verification,
 )
+
+
+def test_absent_optional_jdt_evidence_does_not_emit_a_failure(monkeypatch):
+    import minecraft_mod_ai.validation_diagnostic_contract as diagnostics
+
+    events = []
+    monkeypatch.setattr(diagnostics, "emit_root_cause", lambda *a, **kw: events.append(kw))
+    assert not _jdt_release_evidence_passed(None)
+    assert events == []
+    assert _requested_verification_failures(run_jdt=True, jdt_receipt=None) == [
+        "execution-gate:jdt:missing-jdt"
+    ]
 
 
 def _proposal():

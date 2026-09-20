@@ -13,7 +13,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-
 _INSTALLED = False
 
 
@@ -252,6 +251,13 @@ def install() -> None:
         cache_root: str | Path,
     ) -> dict[str, Any]:
         root = Path(project_root).expanduser().resolve()
+        # Recovery is allowed only for a scaffold created by this invocation.
+        # Never reinterpret the original provider's nonempty-target rejection as
+        # a toolchain mismatch and mutate an existing user's project.
+        if root.exists() and (not root.is_dir() or any(root.iterdir())):
+            raise provider.FabricTemplateProviderError(
+                f"Fabric official template target must be empty: {root}"
+            )
         scaffold_error: Exception | None = None
         receipt: dict[str, Any] | None = None
         try:
@@ -262,6 +268,8 @@ def install() -> None:
                 cache_root=cache_root,
             )
         except provider.FabricTemplateProviderError as exc:
+            if isinstance(exc, provider.FabricTemplateSafetyError):
+                raise
             scaffold_error = exc
             # Recover only after the official CLI actually produced the exact approved
             # Minecraft scaffold. CLI/download/path failures remain terminal.
@@ -281,6 +289,8 @@ def install() -> None:
             "java": provider._java_release(root),
         }
         verified = _rebind_scaffold(provider, root, adapter)
+        if receipt is None:
+            provider._clean_fresh_template_examples(root, spec)
         runtime_contract = provider._install_host_runtime_contract(root, spec, adapter)
         gametest_contract = provider._install_host_gametest_contract(root, spec)
 

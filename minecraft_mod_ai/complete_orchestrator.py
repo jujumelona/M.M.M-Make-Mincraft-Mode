@@ -6,8 +6,8 @@ import os
 import re
 import shutil
 import traceback
-import zipfile
 import xml.etree.ElementTree as ET
+import zipfile
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
@@ -17,6 +17,7 @@ from typing import Any
 from .artifact_graph_executor import execute_artifact_graph
 from .artifact_job import ArtifactJob
 from .artifact_materializer import ensure_artifact_scaffolding
+from .complete_build_repair import run_build_repair_checkpoint
 from .complete_orchestrator_services import (
     blockbench_review,
     generate_assets,
@@ -34,24 +35,25 @@ from .complete_orchestrator_support import (
     _normalize_modules,
     _system_groups,
 )
-from .complete_build_repair import run_build_repair_checkpoint
 from .complete_spec import CompleteProposal, CompleteProposalStatus, ProductionModule
-from .execution_feedback_replan_contract import (
-    execution_feedback_scoped,
-    feedback_run_context,
-    semantic_execution_observation as _semantic_execution_observation,
-)
 from .custom_module_generator import (
     CustomModuleGenerator,
     finalize_persisted_generation_checkpoint,
+)
+from .execution_feedback_replan_contract import (
+    execution_feedback_scoped,
+    feedback_run_context,
+)
+from .execution_feedback_replan_contract import (
+    semantic_execution_observation as _semantic_execution_observation,
 )
 from .extended_content_generator import generate_extended_content
 from .final_artifact import (
     FinalArtifactError,
     build_debug_fixture_coverage_receipt,
     build_requirement_coverage_receipt,
-    verify_debug_fixture_source,
     load_or_empty_reuse_manifest,
+    verify_debug_fixture_source,
     verify_final_mod_artifact,
     verify_runtime_artifact_binding,
     write_build_artifact_bundle,
@@ -66,16 +68,16 @@ from .local_ai_sidecar_generator import (
 from .local_ai_sidecar_generator import generate_local_ai_sidecar
 from .model_concurrency import run_with_model_execution_deadline
 from .model_router import ModelRouter
+from .platform_catalog import adapter_for_lock_values, adapter_from_project
+from .prepared_project_resume_integrity import (
+    prepared_project_cache_valid,
+    prepared_project_matches_spec,
+)
 from .production_contract import (
     evaluate_quality_contract,
     persist_quality_report,
     quality_unresolved,
 )
-from .prepared_project_resume_integrity import (
-    prepared_project_cache_valid,
-    prepared_project_matches_spec,
-)
-from .platform_catalog import adapter_for_lock_values, adapter_from_project
 from .project_edit import inspect_fabric_project
 from .project_index import ProjectIndex
 from .project_index_execution_reuse_contract import (
@@ -125,6 +127,7 @@ from .work_graph import (
     build_production_work_plan,
     run_named_checkpoint,
 )
+
 
 def _jdt_verification_timeout_seconds() -> int:
     """Return bounded verifier time for Gradle-backed JDT workspace bootstrap."""
@@ -650,6 +653,10 @@ def _blocking_jdt_errors(
 def _jdt_release_evidence_passed(receipt: dict[str, Any] | None) -> bool:
     """Require one real, clean JDT receipt for release authority."""
 
+    # Gate evaluation probes optional evidence too. Absence is not a malformed
+    # tool response; callers still enforce any explicitly requested JDT gate.
+    if receipt is None:
+        return False
     normalized, _path = unwrap_diagnostic_receipt(receipt)
     if not normalized:
         return False
@@ -2865,7 +2872,9 @@ class CompleteProductionOrchestrator:
             else:
                 ledger.succeed(node.node_id, receipt)
                 if shared_index is not None:
-                    from .scheduler_parallel_safety_contract import _receipt_touched_paths
+                    from .scheduler_parallel_safety_contract import (
+                        _receipt_touched_paths,
+                    )
 
                     touched = _receipt_touched_paths(receipt)
                     if touched:
@@ -2898,7 +2907,7 @@ class CompleteProductionOrchestrator:
             if not committed and on_abort is not None:
                 try:
                     on_abort(receipt or {})
-                except BaseException as abort_exc:
+                except BaseException as abort_exc:  # noqa: BLE001 - retain the original failure after cleanup
                     emit_root_cause(
                         'orchestrator_node_abort_cleanup_failure',
                         stage=node.stage,
