@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,13 @@ from .owner_rpc import OwnerRPC, OwnerRPCError
 from .project_model import ProjectModelInputs, ResolvedBuildModel
 from .project_mutation import mutation_owner
 from .project_write_lock import project_write_lock
+
+
+def _remaining_verifier_seconds(deadline: float, *, operation: str) -> float:
+    remaining = float(deadline) - time.monotonic()
+    if remaining <= 0.0:
+        raise TimeoutError(f"JDT Core {operation} deadline exceeded")
+    return remaining
 
 
 class JavaCoreService:
@@ -28,18 +36,44 @@ class JavaCoreService:
                     timeout_seconds: int = 600, full_scan: bool = False) -> dict[str, Any]:
         root = Path(project_root).resolve()
         requested_files = self._normalize_relative_files(root, relative_files)
-        # The owner snapshot must never overlap a multi-file transaction halfway through commit.
-        with self._lock, project_write_lock(root):
-            try:
-                return self._diagnostics(
-                    root,
-                    timeout_seconds,
-                    full_scan,
-                    requested_files=requested_files,
-                )
-            except (OSError, ValueError, TypeError, OwnerRPCError):
-                self.close()
-                raise
+        if isinstance(timeout_seconds, bool):
+            raise ValueError("JDT Core timeout must be a positive number")
+        try:
+            timeout_value = float(timeout_seconds)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("JDT Core timeout must be a positive number") from exc
+        if timeout_value <= 0.0 or timeout_value != timeout_value:
+            raise ValueError("JDT Core timeout must be a positive finite number")
+        deadline = time.monotonic() + timeout_value
+
+        # The owner snapshot must never overlap a multi-file transaction halfway through
+        # commit. Lock acquisition itself consumes the same verifier deadline instead of
+        # silently waiting outside the caller's budget.
+        acquired = self._lock.acquire(
+            timeout=_remaining_verifier_seconds(deadline, operation="service lock")
+        )
+        if not acquired:
+            raise TimeoutError("JDT Core service lock deadline exceeded")
+        try:
+            with project_write_lock(
+                root,
+                timeout_seconds=_remaining_verifier_seconds(
+                    deadline,
+                    operation="project lock",
+                ),
+            ):
+                try:
+                    return self._diagnostics(
+                        root,
+                        deadline,
+                        full_scan,
+                        requested_files=requested_files,
+                    )
+                except (OSError, ValueError, TypeError, OwnerRPCError, TimeoutError):
+                    self.close()
+                    raise
+        finally:
+            self._lock.release()
 
     @staticmethod
     def _normalize_relative_files(
@@ -84,13 +118,35 @@ class JavaCoreService:
                 )
             )
 
-    def _resolve_and_open(self, root: Path, timeout: int) -> dict[str, Any]:
+    def _resolve_and_open(self, root: Path, timeout: float) -> dict[str, Any]:
         assert self._rpc is not None
-        raw = self._rpc.request('resolve', self._owner_resolve_parameters(root), timeout=timeout)
+        deadline = time.monotonic() + float(timeout)
+        params = self._owner_resolve_parameters(
+            root,
+            timeout_seconds=_remaining_verifier_seconds(
+                deadline,
+                operation="Gradle model materialization",
+            ),
+        )
+        raw = self._rpc.request(
+            'resolve',
+            params,
+            timeout=_remaining_verifier_seconds(
+                deadline,
+                operation="Gradle model resolution",
+            ),
+        )
         model = ResolvedBuildModel.from_dict(raw)
         if Path(model.project_root).resolve() != root:
             raise OwnerRPCError('Resolved model belongs to another project')
-        response = self._rpc.request('open', {'model': model.to_dict()}, timeout=timeout)
+        response = self._rpc.request(
+            'open',
+            {'model': model.to_dict()},
+            timeout=_remaining_verifier_seconds(
+                deadline,
+                operation="JDT owner open",
+            ),
+        )
         self._model = model
         return response
 
@@ -117,7 +173,12 @@ class JavaCoreService:
             params['java_home'] = str(_resolve_project_java_home(int(major)))
         return params
 
-    def _owner_resolve_parameters(self, root: Path) -> dict[str, str]:
+    def _owner_resolve_parameters(
+        self,
+        root: Path,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, str]:
         """Materialize execution dependencies after pure target resolution."""
 
         params = self._resolve_parameters(root)
@@ -131,15 +192,26 @@ class JavaCoreService:
         from .runner import GradleRunner
 
         cache = Path.home() / '.cache' / 'mmm' / 'project-model-gradle'
-        executable = GradleRunner(cache).ensure_gradle(
-            gradle_version,
-            gradle_sha256,
-        )
+        if timeout_seconds is None:
+            executable = GradleRunner(cache).ensure_gradle(
+                gradle_version,
+                gradle_sha256,
+            )
+        else:
+            bounded_timeout = max(1, int(timeout_seconds))
+            executable = GradleRunner(
+                cache,
+                download_timeout_seconds=min(300, bounded_timeout),
+            ).ensure_gradle(
+                gradle_version,
+                gradle_sha256,
+                lock_timeout_seconds=bounded_timeout,
+            )
         params['gradle_home'] = str(executable.parent.parent.resolve())
         params['gradle_user_home'] = str((cache / 'gradle-user-home').resolve())
         return params
 
-    def _incremental_build(self, owner, revision, timeout: int, full_scan: bool) -> dict[str, Any]:
+    def _incremental_build(self, owner, revision, timeout: float, full_scan: bool) -> dict[str, Any]:
         assert self._rpc is not None
         changes = []
         if self._revision is not None and self._revision.owner_id == revision.owner_id:
@@ -222,21 +294,41 @@ class JavaCoreService:
     def _diagnostics(
         self,
         root: Path,
-        timeout: int,
+        deadline: float,
         full_scan: bool,
         *,
         requested_files: tuple[str, ...] | None = None,
     ) -> dict[str, Any]:
-        self._prepare_project(root, timeout)
+        self._prepare_project(
+            root,
+            _remaining_verifier_seconds(
+                deadline,
+                operation="JVM owner bootstrap",
+            ),
+        )
         assert self._inputs is not None
         owner = mutation_owner(root)
         revision = owner.revision
         inputs = self._inputs.revision()
         refresh = self._model is None or inputs != self._model_revision
         response = (
-            self._resolve_and_open(root, timeout)
+            self._resolve_and_open(
+                root,
+                _remaining_verifier_seconds(
+                    deadline,
+                    operation="cold project resolution",
+                ),
+            )
             if refresh
-            else self._incremental_build(owner, revision, timeout, full_scan)
+            else self._incremental_build(
+                owner,
+                revision,
+                _remaining_verifier_seconds(
+                    deadline,
+                    operation="incremental build",
+                ),
+                full_scan,
+            )
         )
         self._validate_response(response)
         if inputs != self._inputs.revision() or owner.revision != revision:
