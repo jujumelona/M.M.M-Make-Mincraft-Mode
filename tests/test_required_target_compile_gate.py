@@ -133,7 +133,7 @@ def test_run_jdt_option_blocks_release_when_jdt_is_unavailable():
 
 def test_run_jdt_option_accepts_real_clean_jdt_receipt():
     receipt = {
-        "status": "PASS",
+        "schema_version": "mmm/java-diagnostics-v2",
         "diagnostics": {},
         "error_count": 0,
         "files_opened": 1,
@@ -160,7 +160,7 @@ def test_run_jdt_option_is_independent_from_proposal_required_gates():
 def test_jdt_release_evidence_unwraps_reviewed_transport_envelope():
     receipt = {
         "structured_content": {
-            "status": "PASS",
+            "schema_version": "mmm/java-diagnostics-v2",
             "diagnostics": {},
             "error_count": 0,
             "files_opened": 2,
@@ -168,6 +168,17 @@ def test_jdt_release_evidence_unwraps_reviewed_transport_envelope():
     }
 
     assert _jdt_release_evidence_passed(receipt)
+
+
+def test_jdt_release_evidence_rejects_deferred_postbuild_state():
+    receipt = {
+        "status": "DEFERRED_TO_POST_BUILD",
+        "diagnostics": {},
+        "error_count": 0,
+        "files_opened": 1,
+    }
+
+    assert not _jdt_release_evidence_passed(receipt)
 
 
 def test_generated_receipt_cannot_add_unapproved_release_gate():
