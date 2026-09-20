@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from minecraft_mod_ai import custom_module_generator as generator
+import minecraft_mod_ai.complete_orchestrator as complete_orchestrator_module
 from minecraft_mod_ai.colab_run_modes import write_debug_example_plan
 from minecraft_mod_ai.complete_orchestrator import (
     CompleteExecutionOptions,
@@ -211,9 +212,82 @@ def test_debug_fixture_runs_real_build_and_packaging_without_live_model(
     )
     assert result.jar_validation is not None
     assert result.jar_validation["status"] == "PASS"
+    assert result.build_bundle_zip is not None
+    assert Path(result.build_bundle_zip).is_file()
     assert result.release_zip is not None
     assert Path(result.release_zip).is_file()
     assert not any(
         gate.startswith("required-gate:debug_token:target_compile:")
         for gate in result.unresolved_gates
     )
+
+
+def test_debug_fixture_keeps_build_bundle_when_jdt_is_unavailable(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(generator, "_generate_coder_text", _deterministic_coder)
+    monkeypatch.setattr(
+        complete_orchestrator_module,
+        "_run_release_jdt_verification",
+        lambda _project_root: {
+            "status": "UNAVAILABLE",
+            "error": (
+                "JDTWorkspaceBootstrapError: language/status ServiceReady "
+                "was not observed before validation"
+            ),
+            "diagnostics": {},
+            "error_count": 0,
+            "files_opened": 0,
+            "verification_attempts": 2,
+        },
+    )
+    plan_path = write_debug_example_plan(
+        tmp_path / "proposal.json",
+        minecraft_version="1.21.8",
+        loader="fabric",
+    )
+    proposal = CompleteProposal.from_dict(
+        json.loads(plan_path.read_text(encoding="utf-8"))
+    )
+    orchestrator = CompleteProductionOrchestrator(
+        workspace_root=tmp_path / "workspace",
+        profile="deterministic-e2e",
+        router_factory=_DeterministicRouter,
+    )
+
+    result = orchestrator.execute(
+        proposal,
+        approval_hash=proposal.calculate_hash(),
+        run_name="debug-jdt-unavailable-build-bundle",
+        options=CompleteExecutionOptions(
+            source_only=False,
+            run_jdt=True,
+            run_gametest=True,
+            auto_repair=False,
+            run_blockbench=False,
+            run_runtime=False,
+            run_client=False,
+            run_mineflayer=False,
+            run_visual_review=False,
+            cleanup_runtime=True,
+            eula_accepted=False,
+        ),
+    )
+
+    assert result.status == "BUILT_WITH_UNRESOLVED_GATES"
+    assert result.release_ready is False
+    assert result.release_zip is None
+    assert result.jar_path is not None
+    assert Path(result.jar_path).is_file()
+    assert result.build_bundle_zip is not None
+    assert Path(result.build_bundle_zip).is_file()
+    assert "execution-gate:jdt:missing-jdt" in result.unresolved_gates
+
+    with __import__("zipfile").ZipFile(result.build_bundle_zip, "r") as archive:
+        manifest = json.loads(archive.read("build-manifest.json"))
+        names = set(archive.namelist())
+    assert manifest["release_certified"] is False
+    assert manifest["release_ready"] is False
+    assert "execution-gate:jdt:missing-jdt" in manifest["unresolved_gates"]
+    assert any(name.startswith("artifact/") and name.endswith(".jar") for name in names)
