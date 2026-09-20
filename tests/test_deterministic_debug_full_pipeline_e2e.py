@@ -224,6 +224,37 @@ def test_debug_fixture_runs_real_build_and_packaging_without_live_model(
     )
     assert result.jar_validation is not None
     assert result.jar_validation["status"] == "PASS"
+    texture = (
+        project_root
+        / "src/main/resources/assets/mmm_debug_fixture/textures/item/debug_token.png"
+    )
+    assert texture.is_file()
+    assert texture.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+    en_us = json.loads(
+        (
+            project_root
+            / "src/main/resources/assets/mmm_debug_fixture/lang/en_us.json"
+        ).read_text(encoding="utf-8")
+    )
+    ko_kr = json.loads(
+        (
+            project_root
+            / "src/main/resources/assets/mmm_debug_fixture/lang/ko_kr.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert en_us["item.mmm_debug_fixture.debug_token"] == "Debug Token"
+    assert ko_kr["item.mmm_debug_fixture.debug_token"] == "디버그 토큰"
+
+    with __import__("zipfile").ZipFile(result.jar_path, "r") as jar:
+        jar_names = set(jar.namelist())
+        assert "assets/mmm_debug_fixture/textures/item/debug_token.png" in jar_names
+        assert "assets/mmm_debug_fixture/lang/en_us.json" in jar_names
+        assert "assets/mmm_debug_fixture/lang/ko_kr.json" in jar_names
+        assert any(
+            name.startswith("assets/mmm_debug_fixture/")
+            and name.endswith("/debug_token.json")
+            for name in jar_names
+        )
     assert result.build_bundle_zip is not None
     assert Path(result.build_bundle_zip).is_file()
     assert result.release_zip is not None
