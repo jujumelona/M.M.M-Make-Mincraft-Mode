@@ -2738,6 +2738,12 @@ def _host_coder_summary(*, verification: str) -> str:
             "Applied the approved source mutation; the mandatory target_compile gate is "
             "the canonical Java verifier."
         )
+    elif verification == "DEFERRED_TO_PROJECT_BUILD":
+        summary = (
+            "Applied the approved authored-design mutation; generation-time JDT verification "
+            "was unavailable, so the mandatory project build gate must verify the complete "
+            "generated workspace."
+        )
     else:
         raise ModelConfigurationError(
             f"HOST_SUMMARY_STATE_INVALID: unsupported terminal verification state {verification!r}"
@@ -2898,6 +2904,31 @@ def _generate_with_tools_impl(
             fresh_java_target=fresh_java_target,
             compile_backed_java=compile_backed_java,
         )
+        if (
+            implementation_requires_mutation
+            and state.workspace_changed
+            and state.validation_status == "PROJECT_BUILD_DEFERRED"
+            and bounded_root_execution_authority
+            and baseline_ready
+        ):
+            state.termination_reason = "VERIFICATION_DEFERRED_TO_PROJECT_BUILD"
+            emit_root_cause(
+                "generation_verifier_deferred_to_project_build",
+                stage=stage,
+                operation="generate_with_tools",
+                gate="generation_verifier",
+                result="SKIP",
+                reason=(
+                    "generation-time JDT unavailable for authored bounded-root generation; "
+                    "the outer host must bind all touched paths to the mandatory project build gate"
+                ),
+                details={"required_gate": "project_build"},
+            )
+            # Do not emit a per-fragment generation-verification receipt here. The outer
+            # custom-module host owns the complete touched-path set across authored fragments
+            # and will synthesize the project-scoped deferred receipt after all fragments finish.
+            return _host_coder_summary(verification="DEFERRED_TO_PROJECT_BUILD")
+
         if (
             implementation_requires_mutation
             and state.workspace_changed
@@ -3528,7 +3559,19 @@ def _generate_with_tools_impl(
                 if status == "UNAVAILABLE":
                     state.record_failure(call.name, payload.get("error", "verifier unavailable"))
                     unavailable_verifiers.add(call.name)
-                    state.validation_status = "UNAVAILABLE"
+                    if (
+                        bounded_root_execution_authority
+                        and implementation_requires_mutation
+                        and state.workspace_changed
+                    ):
+                        # Authored-design generation intentionally has no exact task target.
+                        # A JDT infrastructure failure (for example Loom dependency download)
+                        # must not erase already-authored source. Defer verification to the
+                        # project-scoped build gate, which the outer host binds to every
+                        # touched path after all authored fragments finish.
+                        state.validation_status = "PROJECT_BUILD_DEFERRED"
+                    else:
+                        state.validation_status = "UNAVAILABLE"
                     state.phase = LoopPhase.VERIFY
                     continue
                 if state.record_verification(call.name, payload, status):
