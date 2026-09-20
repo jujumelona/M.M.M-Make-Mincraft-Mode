@@ -465,9 +465,119 @@ def _generate_coder_text(
 
 
 def _receipt_required_gates(module: ProductionModule) -> list[str]:
-    """Preserve only gates explicitly declared by the approved module."""
+    """Use the same approved gate set as the active task capsule and final receipt."""
 
-    return list(dict.fromkeys(module.required_gates))
+    from .small_model_task_capsule_contract import current_task_required_gates
+
+    return list(
+        dict.fromkeys(
+            (
+                *tuple(module.required_gates),
+                *tuple(current_task_required_gates()),
+            )
+        )
+    )
+
+
+def _host_finalize_missing_generation_verification(
+    staged_root: Path,
+    *,
+    generation_verification: dict[str, Any] | None,
+    touched_paths: Sequence[str],
+    required_gates: Sequence[str],
+) -> dict[str, Any] | None:
+    """Host-own the final compile evidence when a noncanonical router omitted it.
+
+    Existing receipts are never repaired or replaced here. A malformed receipt must
+    remain visible to the fail-closed binding contract. Only a genuinely missing
+    receipt can be recovered, and only for one exact Java target with a mandatory
+    target_compile gate.
+    """
+
+    if generation_verification is not None:
+        return generation_verification
+
+    normalized_gates = {
+        re.sub(r"[^a-z0-9]+", "_", str(value).strip().casefold()).strip("_")
+        for value in required_gates
+        if str(value).strip()
+    }
+    java_paths = tuple(
+        dict.fromkeys(
+            str(path).replace("\\", "/").strip()
+            for path in touched_paths
+            if str(path).strip().casefold().endswith(".java")
+        )
+    )
+    if "target_compile" not in normalized_gates or len(java_paths) != 1:
+        return None
+
+    target_path = java_paths[0]
+    has_gradle_model = any(
+        (staged_root / relative).is_file()
+        for relative in (
+            "gradlew",
+            "gradlew.bat",
+            "build.gradle",
+            "build.gradle.kts",
+            "settings.gradle",
+            "settings.gradle.kts",
+        )
+    )
+    compile_receipt: dict[str, Any]
+    if has_gradle_model:
+        from .generation_target_compile import run_generation_target_compile
+
+        try:
+            compile_receipt = run_generation_target_compile(
+                staged_root,
+                target_path=target_path,
+            )
+        except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
+            compile_receipt = {
+                "status": "UNAVAILABLE",
+                "reason": f"{type(exc).__name__}: {exc}",
+                "diagnostics": [],
+            }
+    else:
+        compile_receipt = {
+            "status": "UNAVAILABLE",
+            "reason": "staged workspace has no Gradle build model yet",
+            "diagnostics": [],
+        }
+
+    compile_status = str(compile_receipt.get("status") or "").strip().upper()
+    if compile_status == "FAIL":
+        diagnostics = compile_receipt.get("diagnostics")
+        raise CustomModuleGenerationError(
+            "GENERATION_TARGET_COMPILE_FAILED: host fallback compiler rejected "
+            f"{target_path}: {diagnostics!r}"
+        )
+
+    if compile_status == "PASS":
+        terminal_status = "PASS"
+        validation_status = "PASS"
+        termination_reason = "VERIFICATION_PASSED"
+        downstream_required_gate = None
+    else:
+        terminal_status = "DEFERRED_TO_TARGET_COMPILE"
+        validation_status = "DEFERRED"
+        termination_reason = "VERIFICATION_DEFERRED_TO_TARGET_COMPILE"
+        downstream_required_gate = "target_compile"
+
+    return {
+        "schema_version": "mmm/generation-verification-v1",
+        "status": terminal_status,
+        "authority": "generation_tool_loop",
+        "validation_status": validation_status,
+        "termination_reason": termination_reason,
+        "verifier_tool": "target_compile",
+        "target_path": target_path,
+        "compile_backed_java": True,
+        "downstream_required_gate": downstream_required_gate,
+        "verifier_origin": "custom_module_host_fallback",
+        "compile_receipt": compile_receipt,
+    }
 
 
 def _coder_project_context_budget(
@@ -846,18 +956,6 @@ class CustomModuleGenerator:
             ) from exc
 
         summary_text = _parse_coder_summary(summary)
-        if (
-            not isinstance(generation_verification, dict)
-            or generation_verification.get("schema_version")
-            != "mmm/generation-verification-v1"
-            or generation_verification.get("authority") != "generation_tool_loop"
-            or generation_verification.get("status")
-            not in {"PASS", "DEFERRED_TO_TARGET_COMPILE"}
-        ):
-            raise CustomModuleGenerationError(
-                "GENERATION_VERIFICATION_RECEIPT_MISSING: coder/tool loop completed "
-                "without a trustworthy terminal verification receipt."
-            )
 
         operations, touched_paths, discarded_paths = _collect_staged_operations(
             root,
@@ -875,6 +973,26 @@ class CustomModuleGenerator:
         self._validate_operations(operations)
         self._validate_total_patch_bytes(operations)
 
+        required_gates = _receipt_required_gates(module)
+        generation_verification = _host_finalize_missing_generation_verification(
+            staged_root,
+            generation_verification=generation_verification,
+            touched_paths=touched_paths,
+            required_gates=required_gates,
+        )
+        if (
+            not isinstance(generation_verification, dict)
+            or generation_verification.get("schema_version")
+            != "mmm/generation-verification-v1"
+            or generation_verification.get("authority") != "generation_tool_loop"
+            or generation_verification.get("status")
+            not in {"PASS", "DEFERRED_TO_TARGET_COMPILE"}
+        ):
+            raise CustomModuleGenerationError(
+                "GENERATION_VERIFICATION_RECEIPT_MISSING: coder/tool loop and host "
+                "fallback completed without trustworthy terminal verification evidence."
+            )
+
         from .generation_verification_contract import (
             classify_generation_verification,
         )
@@ -883,7 +1001,7 @@ class CustomModuleGenerator:
             source_status="SOURCE_GENERATED",
             receipt=generation_verification,
             touched_paths=touched_paths,
-            required_gates=_receipt_required_gates(module),
+            required_gates=required_gates,
         )
         if int(generation_binding.get("verifier_tier", 0) or 0) <= 0:
             raise CustomModuleGenerationError(
@@ -940,7 +1058,7 @@ class CustomModuleGenerator:
                 "identity_sha256": checkpoint_identity,
                 "cleanup_token": checkpoint_token,
             },
-            "required_gates": _receipt_required_gates(module),
+            "required_gates": required_gates,
         }
         if reuse_application_receipt is not None:
             result["reuse_application_receipt"] = reuse_application_receipt
