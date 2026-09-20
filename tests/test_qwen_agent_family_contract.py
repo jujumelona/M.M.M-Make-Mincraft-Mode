@@ -177,7 +177,12 @@ def test_named_required_action_uses_calibrated_non_thinking_template() -> None:
         if family in {"qwen3.6", "qwen3.8"}:
             expected_template["preserve_thinking"] = False
         assert payload["tool_choice"] == "required"
-        assert payload["temperature"] == 0.0
+        assert payload["temperature"] == _SAMPLING["non_thinking"]["temperature"]
+        assert payload["top_p"] == _SAMPLING["non_thinking"]["top_p"]
+        assert payload["top_k"] == _SAMPLING["non_thinking"]["top_k"]
+        assert payload["min_p"] == _SAMPLING["non_thinking"]["min_p"]
+        assert payload["presence_penalty"] == _SAMPLING["non_thinking"]["presence_penalty"]
+        assert payload["repeat_penalty"] == _SAMPLING["non_thinking"]["repeat_penalty"]
         assert payload["chat_template_kwargs"] == expected_template
         assert "reasoning_effort" not in payload
 
@@ -187,7 +192,8 @@ def test_generic_required_action_uses_non_thinking_template() -> None:
     payload = hardware._server_payload(_Adapter(family="qwen3.5"), request)
 
     assert payload["tool_choice"] == "required"
-    assert payload["temperature"] == 0.0
+    assert payload["temperature"] == _SAMPLING["non_thinking"]["temperature"]
+    assert payload["presence_penalty"] == _SAMPLING["non_thinking"]["presence_penalty"]
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert "reasoning_effort" not in payload
 
