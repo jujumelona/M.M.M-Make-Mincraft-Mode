@@ -152,6 +152,17 @@ def test_authored_bounded_authority_enters_act_without_localization_rag() -> Non
                 "type": "function",
                 "function": {"name": "apply_source_edit"},
             }
+            contents = [str(message.get("content") or "") for message in request.messages]
+            assert not any(
+                value.startswith("MMM reviewed Skill/tool/Minecraft-MCP routing context:")
+                for value in contents
+            )
+            assert any(
+                "saved authored design has host-owned bounded-root write authority" in value
+                and "src/main/java/" in value
+                and "src/main/resources/" in value
+                for value in contents
+            )
             arguments = {
                 "operation": "create_file",
                 "path": target,
