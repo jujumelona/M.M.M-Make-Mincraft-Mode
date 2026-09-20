@@ -3988,10 +3988,10 @@ def _generate_with_tools_impl(
                         refreshed = _reconcile_materialized_target_from_workspace(state, runtime)
                         if refreshed is not None:
                             # The verifier obligation is still valid, but the model's exact-match
-                            # precondition was stale. Re-issue the repair contract against the live
-                            # workspace snapshot instead of replaying the same stale edit.
+                            # precondition was stale. Re-issue one repair contract against the live
+                            # workspace snapshot instead of replaying the stale edit or duplicating
+                            # the full source in a second refresh message.
                             state.repair_guidance_fingerprint = None
-                            messages.append(_existing_target_refresh_message(refreshed))
                         state.phase = (
                             LoopPhase.ACT
                             if state.mutation_context and state.mutation_context.is_mutation_ready
