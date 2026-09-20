@@ -24,6 +24,8 @@ _ATOMIC_SCHEMA = "mmm/atomic-coder-step"
 _MAX_INITIAL_SOURCE_BYTES = 4 * 1024
 _MAX_APPROVED_REUSE_BYTES = 4 * 1024
 _MAX_SUMMARY_CHARS_PER_STEP = 1024
+_MAX_AUTHORED_FRAGMENT_BYTES = 2 * 1024
+_AUTHORED_FRAGMENT_SCHEMA = "mmm/authored-plan-fragment-v1"
 
 
 class AtomicCoderContractError(RuntimeError):
@@ -282,6 +284,146 @@ def _implementation_request(
     return None
 
 
+def _authored_implementation_request(
+    messages: Sequence[Mapping[str, Any]],
+) -> tuple[int, dict[str, Any]] | None:
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if str(message.get("role") or "").strip().casefold() != "user":
+            continue
+        content = message.get("content")
+        if not isinstance(content, str):
+            continue
+        try:
+            request = json.loads(content)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if isinstance(request, dict) and request.get("phase") == "implement_authored_design":
+            module = request.get("module")
+            authored = module.get("authored_plan") if isinstance(module, Mapping) else None
+            if isinstance(authored, Mapping):
+                return index, request
+    return None
+
+
+def _split_authored_text(text: str, *, max_bytes: int) -> tuple[str, ...]:
+    """Split exact authored text into deterministic UTF-8-safe bounded fragments."""
+
+    encoded = text.encode("utf-8")
+    limit = max(256, int(max_bytes))
+    if len(encoded) <= limit:
+        return (text,)
+
+    fragments: list[str] = []
+    start = 0
+    while start < len(encoded):
+        end = min(len(encoded), start + limit)
+        if end < len(encoded):
+            while end > start and (encoded[end] & 0xC0) == 0x80:
+                end -= 1
+        if end <= start:
+            _fail("authored design could not be split on a UTF-8 boundary")
+        fragment = encoded[start:end].decode("utf-8")
+        if end < len(encoded):
+            newline = fragment.rfind("\n")
+            if newline >= len(fragment) // 2:
+                preferred = fragment[: newline + 1]
+                preferred_bytes = preferred.encode("utf-8")
+                if preferred_bytes:
+                    fragment = preferred
+                    end = start + len(preferred_bytes)
+        fragments.append(fragment)
+        start = end
+
+    if "".join(fragments) != text:
+        _fail("authored design fragmentation changed the approved text")
+    return tuple(fragments)
+
+
+def _atomicize_authored_coder_messages(
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    user_index: int,
+    request: Mapping[str, Any],
+) -> tuple[tuple[dict[str, Any], ...], ...]:
+    module = request.get("module")
+    if not isinstance(module, Mapping):
+        _fail("implement_authored_design request has no module object")
+    authored = module.get("authored_plan")
+    if not isinstance(authored, Mapping):
+        _fail("implement_authored_design request has no authored_plan object")
+    text = authored.get("text")
+    if not isinstance(text, str):
+        _fail("implement_authored_design authored_plan.text is not a string")
+
+    fragments = _split_authored_text(text, max_bytes=_MAX_AUTHORED_FRAGMENT_BYTES)
+    if len(fragments) == 1:
+        return (tuple(dict(message) for message in messages),)
+
+    source_sha256 = "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+    batches: list[tuple[dict[str, Any], ...]] = []
+    start_byte = 0
+    count = len(fragments)
+    for index, fragment in enumerate(fragments):
+        fragment_bytes = fragment.encode("utf-8")
+        end_byte = start_byte + len(fragment_bytes)
+        current = copy.deepcopy(dict(request))
+        current_module = _mapping(current.get("module"))
+        current_authored = _mapping(current_module.get("authored_plan"))
+        current_authored["text"] = fragment
+        current_authored["fragment_contract"] = {
+            "schema_version": _AUTHORED_FRAGMENT_SCHEMA,
+            "fragment_index": index + 1,
+            "fragment_count": count,
+            "source_text_sha256": source_sha256,
+            "start_byte": start_byte,
+            "end_byte": end_byte,
+            "source_bytes": len(text.encode("utf-8")),
+            "policy": (
+                "This text is an exact ordered fragment of the approved authored design. "
+                "Implement it without redesigning or discarding behavior from earlier fragments."
+            ),
+        }
+        current_module["authored_plan"] = current_authored
+        current["module"] = current_module
+        current["task"] = (
+            "Implement only this bounded authored-design fragment in the preserved staged "
+            "workspace. Treat earlier fragments as already-approved behavior that must remain "
+            "intact; do not reinterpret this fragment as a standalone replacement design."
+        )
+        rules = [str(item) for item in current.get("rules", ()) if str(item).strip()]
+        current["rules"] = [
+            "authored_plan.text is one exact host-scheduled fragment; preserve its wording and semantics.",
+            "Use the fragment_contract byte range and source_text_sha256 as integrity metadata; never invent omitted authored text.",
+            "Inspect the current staged workspace before editing so later fragments extend rather than overwrite earlier work.",
+            *rules,
+        ]
+        if index > 0 and "initial_exact_source_context" in current:
+            current["initial_exact_source_context"] = {
+                "mode": "retrieve_current_authored_fragment_with_tools",
+                "reason": (
+                    "Earlier authored fragments may have changed the staged workspace; "
+                    "do not replay the stale pre-fragment source page."
+                ),
+            }
+        current["authored_execution"] = {
+            "schema_version": _AUTHORED_FRAGMENT_SCHEMA,
+            "fragment_index": index + 1,
+            "fragment_count": count,
+            "source_text_sha256": source_sha256,
+            "policy": "one_model_call_one_bounded_authored_design_fragment",
+        }
+
+        batch = [dict(message) for message in messages]
+        batch[user_index] = {
+            **batch[user_index],
+            "content": json.dumps(current, ensure_ascii=False, separators=(",", ":")),
+        }
+        batches.append(tuple(batch))
+        start_byte = end_byte
+    return tuple(batches)
+
+
 def atomicize_coder_messages(
     messages: Sequence[Mapping[str, Any]],
 ) -> tuple[tuple[dict[str, Any], ...], ...]:
@@ -294,7 +436,15 @@ def atomicize_coder_messages(
 
     parsed = _implementation_request(messages)
     if parsed is None:
-        return (tuple(dict(message) for message in messages),)
+        authored = _authored_implementation_request(messages)
+        if authored is None:
+            return (tuple(dict(message) for message in messages),)
+        user_index, request = authored
+        return _atomicize_authored_coder_messages(
+            messages,
+            user_index=user_index,
+            request=request,
+        )
     user_index, request = parsed
     module = request.get("module")
     if not isinstance(module, Mapping):
