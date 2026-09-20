@@ -234,6 +234,24 @@ def test_authored_bounded_authority_enters_act_without_localization_rag() -> Non
                         "phase": "implement_authored_design",
                         "task": "Implement the saved authored design.",
                         "module": module.config,
+                        "host_grounding": {
+                            "schema_version": "mmm/host-owned-coder-grounding-v1",
+                            "policy": {
+                                "resolved_before_first_coder_decode": True,
+                                "baseline_grounding_owned_by_host": True,
+                                "baseline_grounding_optional_for_model": False,
+                                "model_tool_choice_required_for_baseline": False,
+                            },
+                            "evidence_bindings": {
+                                "project_exact_rag": {
+                                    "receipt": {
+                                        "observation_count": 1,
+                                        "project_sha256": "sha256:" + "1" * 64,
+                                        "observations_sha256": "sha256:" + "2" * 64,
+                                    }
+                                }
+                            },
+                        },
                     },
                     separators=(",", ":"),
                 ),
