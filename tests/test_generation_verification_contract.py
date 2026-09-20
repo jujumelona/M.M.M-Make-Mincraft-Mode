@@ -191,3 +191,86 @@ def test_single_candidate_generator_enforces_shared_verifier_contract() -> None:
 
     assert "classify_generation_verification" in source
     assert "GENERATION_VERIFICATION_RECEIPT_INVALID" in source
+
+
+def _project_receipt(touched_paths):
+    normalized = tuple(sorted(set(touched_paths)))
+    payload = json.dumps(
+        normalized,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return {
+        "schema_version": "mmm/generation-verification-v1",
+        "status": "DEFERRED_TO_PROJECT_BUILD",
+        "authority": "generation_tool_loop",
+        "validation_status": "DEFERRED",
+        "termination_reason": "VERIFICATION_DEFERRED_TO_PROJECT_BUILD",
+        "verifier_tool": "project_build",
+        "target_path": None,
+        "compile_backed_java": False,
+        "downstream_required_gate": "project_build",
+        "verification_scope": "project",
+        "touched_paths_sha256": "sha256:" + hashlib.sha256(payload).hexdigest(),
+        "touched_path_count": len(normalized),
+    }
+
+
+def test_project_build_deferral_binds_complete_touched_path_set() -> None:
+    touched = (JAVA_PATH, RESOURCE_PATH)
+    result = classify_generation_verification(
+        source_status="SOURCE_GENERATED",
+        receipt=_project_receipt(touched),
+        touched_paths=touched,
+        required_gates=("project build",),
+    )
+
+    assert result["generation_status"] == "DEFERRED_TO_PROJECT_BUILD"
+    assert result["verifier_tier"] == 1
+    assert result["project_build_required"] is True
+    assert result["project_scope_matches"] is True
+    assert result["receipt_target_matches"] is False
+
+
+def test_project_build_deferral_rejects_changed_touched_path_set() -> None:
+    receipt = _project_receipt((JAVA_PATH, RESOURCE_PATH))
+    result = classify_generation_verification(
+        source_status="SOURCE_GENERATED",
+        receipt=receipt,
+        touched_paths=(JAVA_PATH,),
+        required_gates=("project build",),
+    )
+
+    assert result["generation_status"] == "FAIL"
+    assert result["project_scope_matches"] is False
+    assert result["verifier_tier"] == 0
+
+
+def test_authored_project_build_scope_overrides_fragment_local_pass(tmp_path) -> None:
+    fragment_receipt = _receipt(
+        target_path=JAVA_PATH,
+        verifier_tool=None,
+        compile_backed_java=False,
+    )
+    touched = (JAVA_PATH, RESOURCE_PATH)
+    receipt = _host_finalize_missing_generation_verification(
+        tmp_path,
+        generation_verification=fragment_receipt,
+        touched_paths=touched,
+        required_gates=("project build",),
+    )
+
+    assert receipt is not None
+    assert receipt["status"] == "DEFERRED_TO_PROJECT_BUILD"
+    assert receipt["verification_scope"] == "project"
+    assert receipt["touched_path_count"] == 2
+    assert receipt["generation_time_receipt"] == fragment_receipt
+
+    classified = classify_generation_verification(
+        source_status="SOURCE_GENERATED",
+        receipt=receipt,
+        touched_paths=touched,
+        required_gates=("project build",),
+    )
+    assert classified["generation_status"] == "DEFERRED_TO_PROJECT_BUILD"
+    assert classified["verifier_tier"] == 1
