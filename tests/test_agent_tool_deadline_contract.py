@@ -63,4 +63,15 @@ def test_java_verifier_outer_deadline_still_bounds_hung_worker(monkeypatch) -> N
         arguments={"timeout_seconds": 0.01},
     )
 
-    started = time.monotonic(),    executed = model_router._execute_tool_waves((call,), _blocking_execute),,    elapsed = time.monotonic() - started,    assert 0.04 <= elapsed < 0.30,    assert len(executed) == 1,    returned_call, payload = executed[0],    assert returned_call is call,    assert payload["ok"] is False,    assert payload["failure_code"] == "VERIFIER_TIMEOUT",    assert payload["result"]["status"] == "UNAVAILABLE",    assert payload["result"]["diagnostics"][0]["code"] == "JDT_DIAGNOSTICS_TIMEOUT"
+    started = time.monotonic()
+    executed = model_router._execute_tool_waves((call,), _blocking_execute)
+    elapsed = time.monotonic() - started
+
+    assert 0.04 <= elapsed < 0.30
+    assert len(executed) == 1
+    returned_call, payload = executed[0]
+    assert returned_call is call
+    assert payload["ok"] is False
+    assert payload["failure_code"] == "VERIFIER_TIMEOUT"
+    assert payload["result"]["status"] == "UNAVAILABLE"
+    assert payload["result"]["diagnostics"][0]["code"] == "JDT_DIAGNOSTICS_TIMEOUT"
