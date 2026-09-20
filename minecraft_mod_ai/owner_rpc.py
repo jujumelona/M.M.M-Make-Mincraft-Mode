@@ -45,6 +45,10 @@ class OwnerRPC:
         self._stdout_noise: deque[str] = deque(maxlen=40)
         self._timeout_diagnostics = ""
         self._lock = threading.RLock()
+        # Retirement must be callable out-of-band while request() owns _lock.
+        # This separate lock lets a watchdog kill a wedged JVM owner without
+        # waiting for the very request that needs to be interrupted.
+        self._retire_lock = threading.Lock()
         self._closed = False
         self._sequence = 0
         self._reader = threading.Thread(target=self._read, daemon=True, name='mmm-owner-rpc')
@@ -224,21 +228,46 @@ class OwnerRPC:
         if not self._process_exited(2):
             self._terminate_or_kill()
 
-    def close(self) -> None:
-        with self._lock:
+    def _retire_io(self) -> None:
+        try:
+            if self.process.stdin is not None:
+                try:
+                    self.process.stdin.close()
+                except (OSError, ValueError):
+                    pass
+            self._retire_process()
+        finally:
+            self._reader.join(timeout=2)
+            self._errors.join(timeout=2)
+            for stream in (self.process.stdout, self.process.stderr):
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except (OSError, ValueError):
+                        pass
+
+    def abort(self) -> None:
+        """Retire the owner without acquiring the request serialization lock.
+
+        request() intentionally holds _lock while waiting for a response. A
+        verifier watchdog therefore cannot use close() to interrupt a wedged JVM:
+        it would block behind the same request. abort() owns only the retirement
+        lock, terminates the process, and lets the reader thread wake request().
+        """
+
+        with self._retire_lock:
             if self._closed:
                 return
             self._closed = True
-            try:
-                if self.process.stdin is not None:
-                    self.process.stdin.close()
-                self._retire_process()
-            finally:
-                self._reader.join(timeout=2)
-                self._errors.join(timeout=2)
-                for stream in (self.process.stdout, self.process.stderr):
-                    if stream is not None:
-                        stream.close()
+            self._retire_io()
+
+    def close(self) -> None:
+        with self._lock:
+            with self._retire_lock:
+                if self._closed:
+                    return
+                self._closed = True
+                self._retire_io()
 
     def __enter__(self) -> OwnerRPC:  # noqa: PYI034 -- Python 3.10 support
         if self._closed:
