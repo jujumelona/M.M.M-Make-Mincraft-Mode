@@ -68,6 +68,7 @@ _EXTERNAL_RAG_CAPABILITIES = frozenset(
     }
 )
 _VERIFIER_TIMEOUT_ISOLATION_TOOLS = frozenset({"java_diagnostics", "jdt_diagnostics"})
+_CORE_EXACT_READ_WAVE_DEDUP = True
 _PARALLEL_READ_TOOLS = frozenset(
     {
         "search_code_rag",
@@ -754,6 +755,23 @@ def _parallel_read_call(call: Any) -> bool:
     return access == "read"
 
 
+def _canonical_parallel_read_key(call: Any) -> tuple[str, str] | None:
+    """Return a stable exact-read identity for single-flight deduplication."""
+
+    try:
+        name = str(call.name)
+        arguments = json.dumps(
+            dict(call.arguments),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return name, arguments
+
+
 def _execute_tool_waves(
     calls: Sequence[Any],
     execute: Callable[[Any], tuple[Any, Mapping[str, Any]]],
@@ -846,13 +864,34 @@ def _execute_tool_waves(
             return
         batch = tuple(pending_reads)
         pending_reads.clear()
-        completed.extend(
-            execute_batch(
-                batch,
-                workers=min(len(batch), _parallel_read_workers()),
-                stage="agent_read_wave",
-            )
+
+        # Exact read dedup belongs to the core scheduler so verifier/barrier policy
+        # and read-wave optimization have one owner. Preserve every original call id
+        # while executing only one representative for byte-identical read requests.
+        unique: list[Any] = []
+        representative_index: list[int] = []
+        exact: dict[tuple[str, str], int] = {}
+        for call in batch:
+            key = _canonical_parallel_read_key(call)
+            if key is None:
+                representative_index.append(len(unique))
+                unique.append(call)
+                continue
+            index = exact.get(key)
+            if index is None:
+                index = len(unique)
+                exact[key] = index
+                unique.append(call)
+            representative_index.append(index)
+
+        executed_unique = execute_batch(
+            tuple(unique),
+            workers=min(len(unique), _parallel_read_workers()),
+            stage="agent_read_wave",
         )
+        for call, index in zip(batch, representative_index, strict=True):
+            _representative, payload = executed_unique[index]
+            completed.append((call, payload))
 
     for call in calls:
         if _parallel_read_call(call):
