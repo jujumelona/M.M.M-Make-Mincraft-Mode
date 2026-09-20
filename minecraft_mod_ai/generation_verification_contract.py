@@ -33,6 +33,16 @@ def _normalized_gate(value: Any) -> str:
     ).strip("_")
 
 
+def _touched_paths_sha256(paths: Sequence[str]) -> str:
+    normalized = tuple(sorted(set(paths)))
+    payload = json.dumps(
+        normalized,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
 def classify_generation_verification(
     *,
     source_status: Any,
@@ -87,11 +97,30 @@ def classify_generation_verification(
     )
     compile_backed_java = candidate_receipt.get("compile_backed_java") is True
     target_compile_required = "target_compile" in normalized_gate_keys
+    project_build_required = "project_build" in normalized_gate_keys
     java_target = receipt_target_path.lower().endswith(".java")
     compile_required = target_compile_required or compile_backed_java
     downstream_required_gate = str(
         candidate_receipt.get("downstream_required_gate") or ""
     ).strip()
+    verification_scope = str(
+        candidate_receipt.get("verification_scope") or ""
+    ).strip().casefold()
+    receipt_touched_paths_sha256 = str(
+        candidate_receipt.get("touched_paths_sha256") or ""
+    ).strip()
+    try:
+        receipt_touched_path_count = int(
+            candidate_receipt.get("touched_path_count")
+        )
+    except (TypeError, ValueError):
+        receipt_touched_path_count = -1
+    project_scope_matches = bool(
+        verification_scope == "project"
+        and normalized_touched
+        and receipt_touched_path_count == len(touched_set)
+        and receipt_touched_paths_sha256 == _touched_paths_sha256(normalized_touched)
+    )
 
     pass_semantics = bool(
         terminal_status == "PASS"
@@ -121,10 +150,25 @@ def classify_generation_verification(
         and verification_tool == "target_compile"
         and downstream_required_gate == "target_compile"
     )
+    project_deferred_semantics = bool(
+        terminal_status == "DEFERRED_TO_PROJECT_BUILD"
+        and validation_status == "DEFERRED"
+        and termination_reason == "VERIFICATION_DEFERRED_TO_PROJECT_BUILD"
+        and not compile_backed_java
+        and project_build_required
+        and verification_tool == "project_build"
+        and downstream_required_gate == "project_build"
+        and project_scope_matches
+    )
     receipt_semantics_valid = bool(
         receipt_valid
-        and receipt_target_matches
-        and (pass_semantics or deferred_semantics)
+        and (
+            (
+                receipt_target_matches
+                and (pass_semantics or deferred_semantics)
+            )
+            or project_deferred_semantics
+        )
     )
 
     if source != "SOURCE_GENERATED" or not receipt_semantics_valid:
@@ -133,12 +177,17 @@ def classify_generation_verification(
         generation_status = "PASS"
     elif deferred_semantics:
         generation_status = "DEFERRED_TO_TARGET_COMPILE"
+    elif project_deferred_semantics:
+        generation_status = "DEFERRED_TO_PROJECT_BUILD"
     else:
         generation_status = "FAIL"
 
     if generation_status == "PASS":
         tier = 2
-    elif generation_status == "DEFERRED_TO_TARGET_COMPILE":
+    elif generation_status in {
+        "DEFERRED_TO_TARGET_COMPILE",
+        "DEFERRED_TO_PROJECT_BUILD",
+    }:
         tier = 1
     else:
         tier = 0
@@ -158,10 +207,13 @@ def classify_generation_verification(
         "source_status": source or "MISSING",
         "required_gates": list(normalized_gates),
         "target_compile_required": target_compile_required,
+        "project_build_required": project_build_required,
         "downstream_required_gate": downstream_required_gate or None,
         "compile_backed_java": compile_backed_java,
         "java_target": java_target,
         "compile_required": compile_required,
+        "verification_scope": verification_scope or None,
+        "project_scope_matches": project_scope_matches,
         "receipt_target_path": receipt_target_path or None,
         "receipt_target_matches": receipt_target_matches,
         "receipt_semantics_valid": receipt_semantics_valid,
@@ -176,18 +228,26 @@ def generation_verifier_tier(verifier: Mapping[str, Any]) -> int:
         != GENERATION_VERIFICATION_AUTHORITY
         or str(verifier.get("source_status") or "").strip().upper()
         != "SOURCE_GENERATED"
-        or verifier.get("receipt_target_matches") is not True
         or verifier.get("receipt_semantics_valid") is not True
     ):
         return 0
     status = str(verifier.get("generation_status") or "").strip().upper()
     if status == "PASS":
-        return 2
+        return 2 if verifier.get("receipt_target_matches") is True else 0
     if (
         status == "DEFERRED_TO_TARGET_COMPILE"
+        and verifier.get("receipt_target_matches") is True
         and verifier.get("target_compile_required") is True
         and str(verifier.get("downstream_required_gate") or "").strip()
         == "target_compile"
+    ):
+        return 1
+    if (
+        status == "DEFERRED_TO_PROJECT_BUILD"
+        and verifier.get("project_scope_matches") is True
+        and verifier.get("project_build_required") is True
+        and str(verifier.get("downstream_required_gate") or "").strip()
+        == "project_build"
     ):
         return 1
     return 0
