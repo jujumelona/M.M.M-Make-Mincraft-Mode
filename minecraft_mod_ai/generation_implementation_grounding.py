@@ -286,16 +286,16 @@ def build_generation_implementation_grounding(
                 }
             )
 
-        _complete_item_registration_semantics(
-            symbols,
-            templates,
-            minecraft_version=target.minecraft_version,
-        )
         _complete_template_symbol_authority(
             context,
             symbols,
             templates,
             artifact_kind=kind,
+        )
+        _complete_item_registration_semantics(
+            symbols,
+            templates,
+            minecraft_version=target.minecraft_version,
         )
         _bind_template_symbol_usage(templates, symbols)
         required_imports = list(
