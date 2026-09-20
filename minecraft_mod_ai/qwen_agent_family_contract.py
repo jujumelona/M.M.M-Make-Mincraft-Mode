@@ -89,10 +89,10 @@ def _qwen_sampling_mode(role: object, request: Any) -> str | None:
     """Map MMM request semantics onto registry-declared generation modes."""
 
     tools = getattr(request, "tools", ()) or ()
-    if _forced_tool_choice(getattr(request, "tool_choice", None)):
-        return None
     if tools:
         return "non_thinking"
+    if _forced_tool_choice(getattr(request, "tool_choice", None)):
+        return None
     if getattr(request, "response_format", None) == "json" and not tools:
         return "non_thinking"
     normalized_role = str(role or "").strip().casefold()
