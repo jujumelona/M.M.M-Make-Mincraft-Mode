@@ -119,7 +119,10 @@ def test_read_wave_exact_dedup_preserves_ids_and_mutation_barriers():
     module._PARALLEL_READ_TOOLS = frozenset({"read"})
     module._parallel_read_call = lambda call: call.name in module._PARALLEL_READ_TOOLS
 
+    delegated_batches: list[list[str]] = []
+
     def original(calls, execute):
+        delegated_batches.append([call.id for call in calls])
         return tuple(execute(call) for call in calls)
 
     module._execute_tool_waves = original
@@ -143,6 +146,7 @@ def test_read_wave_exact_dedup_preserves_ids_and_mutation_barriers():
 
     assert [call.id for call, _payload in results] == [call.id for call in calls]
     assert [item[0] for item in executed] == ["r1", "r3", "w1", "r4", "w2"]
+    assert delegated_batches == [["r1", "r3"], ["w1"], ["r4"], ["w2"]]
     assert results[0][1] is results[1][1]
     assert results[0][1]["result"] == "result:r1"
     assert results[4][1]["result"] == "result:r4"
