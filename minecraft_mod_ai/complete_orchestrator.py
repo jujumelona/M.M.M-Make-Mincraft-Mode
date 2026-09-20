@@ -565,6 +565,37 @@ def _blocking_jdt_errors(
     ]
 
 
+def _jdt_release_evidence_passed(receipt: dict[str, Any] | None) -> bool:
+    """Require one real, clean JDT receipt for release authority."""
+
+    normalized, _path = unwrap_diagnostic_receipt(receipt)
+    if not normalized:
+        return False
+    if jdt_diagnostic_errors(receipt):
+        return False
+    status = str(normalized.get("status") or "").strip().upper()
+    if status not in {"PASS", "OK", "AVAILABLE"}:
+        return False
+    try:
+        error_count = int(normalized.get("error_count", -1))
+        files_opened = int(normalized.get("files_opened", 0))
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return error_count == 0 and files_opened > 0
+
+
+def _requested_verification_failures(
+    *,
+    run_jdt: bool,
+    jdt_receipt: dict[str, Any] | None,
+) -> list[str]:
+    """Keep explicitly requested verifier work release-blocking when it is unavailable."""
+
+    if run_jdt and not _jdt_release_evidence_passed(jdt_receipt):
+        return ["execution-gate:jdt:missing-jdt"]
+    return []
+
+
 def _validate_required_gate_contract(proposal: Any) -> None:
     unsupported: list[str] = []
     for module in getattr(proposal, "modules", ()):
@@ -1169,6 +1200,12 @@ class CompleteProductionOrchestrator:
             )
             release = str(source_package['release_zip'])
             unresolved.extend(_external_gates(approved, options))
+            unresolved.extend(
+                _requested_verification_failures(
+                    run_jdt=options.run_jdt,
+                    jdt_receipt=jdt_receipt,
+                )
+            )
             quality_report = self._evaluate_quality(approved=approved, run_root=run_root, project_root=project_root, source_validation=source_report, build_report=None, jar_validation=None, module_receipts=module_receipts, asset_receipt=asset_receipt, blockbench_receipts=blockbench_receipts, runtime_receipt=None, playtest_receipt=None, visual_receipt=None)
             if quality_report is not None:
                 unresolved.extend(f'quality:{dimension_id}' for dimension_id in quality_unresolved(quality_report))
@@ -1534,6 +1571,12 @@ class CompleteProductionOrchestrator:
         if quality_report is not None:
             unresolved.extend(f'quality:{dimension_id}' for dimension_id in quality_unresolved(quality_report))
             self._record_quality_nodes(ledger, quality_report, allow_success=True)
+        unresolved.extend(
+            _requested_verification_failures(
+                run_jdt=options.run_jdt,
+                jdt_receipt=jdt_receipt,
+            )
+        )
         unresolved.extend(
             self._required_gate_failures(
                 approved,
@@ -3392,12 +3435,7 @@ class CompleteProductionOrchestrator:
         gradle_passed = CompleteProductionOrchestrator._full_gradle_build_receipt_passed(
             build_report
         )
-        jdt_passed = (
-            isinstance(jdt_receipt, dict)
-            and jdt_receipt.get('status') != 'UNAVAILABLE'
-            and int(jdt_receipt.get('error_count', -1)) == 0
-            and int(jdt_receipt.get('files_opened', 0)) > 0
-        )
+        jdt_passed = _jdt_release_evidence_passed(jdt_receipt)
         evidence = {'source': isinstance(source_validation, dict) and source_validation.get('status') == 'PASS', 'jdt': jdt_passed, 'gradle': gradle_passed, 'gametest': gradle_passed and CompleteProductionOrchestrator._gametest_receipt_passed(build_report, proposal.base_proposal.spec), 'jar': isinstance(jar_validation, dict) and jar_validation.get('status') == 'PASS', 'runtime_client': isinstance(runtime_receipt, dict) and isinstance(runtime_receipt.get('server'), dict) and (runtime_receipt['server'].get('server_running') is True) and isinstance(runtime_receipt.get('client'), dict) and (runtime_receipt['client'].get('client_running') is True), 'playtest': _playtest_evidence_passed(playtest_receipt, getattr(proposal, 'acceptance_tests', ())), 'visual': _visual_runtime_evidence_passed(visual_receipt, runtime_receipt), 'research_ledger': bool(expected_research) and all((passed_research.get(module_id) == hashes for module_id, hashes in expected_research.items()))}
         evidence['runtime_visual'] = evidence['runtime_client'] and evidence['visual']
         evidence['playtest_visual'] = evidence['playtest'] and evidence['visual']
