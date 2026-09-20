@@ -1145,12 +1145,35 @@ class CompleteProductionOrchestrator:
                 if fixture_module is not None and isinstance(fixture_module.config, dict)
                 else None
             )
-            debug_source_acceptance = verify_debug_fixture_source(
-                project_root,
-                source_contract=(
-                    source_contract if isinstance(source_contract, dict) else None
+            normalized_source_contract = (
+                source_contract if isinstance(source_contract, dict) else None
+            )
+            host_facts_json = approved.base_proposal.spec.platform.host_facts_json
+            debug_source_acceptance = run_named_checkpoint(
+                ledger,
+                'validate-debug-source',
+                stage='validate:debug-source',
+                input_value={
+                    'graph_hash': work_plan.graph_hash,
+                    'project_manifest': validation_manifest,
+                    'source_contract_sha256': _stable_payload_sha256(
+                        normalized_source_contract or {}
+                    ),
+                    'host_facts_sha256': 'sha256:' + hashlib.sha256(
+                        host_facts_json.encode('utf-8')
+                    ).hexdigest(),
+                },
+                action=lambda: verify_debug_fixture_source(
+                    project_root,
+                    source_contract=normalized_source_contract,
+                    host_facts_json=host_facts_json,
                 ),
-                host_facts_json=approved.base_proposal.spec.platform.host_facts_json,
+                encode=lambda value: value,
+                decode=lambda cached: cached,
+                # Always re-evaluate after generation replay. The input hash is still
+                # persisted for audit, but a stale passing source contract must never
+                # survive a source mutation.
+                validate_cached=lambda _cached: False,
             )
             module_receipts.append(
                 {
