@@ -226,7 +226,11 @@ def claim_orchestrator_ready(
             for lane, capacity in capacities.items()
             if running.get(lane, 0) < capacity
         }
-        if bool(getattr(ledger, "_mmm_shared_local_gpu_lane", False)):
+        shared_local_gpu = bool(
+            getattr(ledger, "_mmm_shared_local_gpu_lane", False)
+            or _SHARED_LOCAL_GPU_LANE.get()
+        )
+        if shared_local_gpu:
             if running.get("image_gpu", 0) > 0:
                 free_lanes.discard("llm")
             if running.get("llm", 0) > 0:
