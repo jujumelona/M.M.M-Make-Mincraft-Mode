@@ -843,7 +843,18 @@ _RAG_CONTENT_KEYS = (
     "parsed_text", "text", "content", "snippet", "code", "source", "source_text", "body",
 )
 _RAG_COLLECTION_KEYS = (
-    "hits", "results", "records", "documents", "chunks", "resources", "sources", "items",
+    "hits",
+    "results",
+    "records",
+    "documents",
+    "chunks",
+    "resources",
+    "sources",
+    "items",
+    # MCP transport wraps structured tool payloads here. This is an envelope,
+    # not evidence by itself; recursive semantic checks still require concrete
+    # hits/text inside it before the result is considered usable.
+    "structured_content",
 )
 _RAG_HIT_LOCATOR_KEYS = ("path", "source_path", "file", "uri", "line", "location")
 
