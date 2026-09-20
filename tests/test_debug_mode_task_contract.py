@@ -80,7 +80,9 @@ def test_debug_fixture_constraint_steps_compile_to_one_coder_state_transition(
 
     batches = atomicize_coder_messages(messages)
 
-    assert len(task["coder_execution_contract"]["implementation_steps"]) == 3
+    implementation_steps = task["coder_execution_contract"]["implementation_steps"]
+    assert len(implementation_steps) == len(task["implementation_obligations"])
+    assert len(implementation_steps) == 6
     assert len(batches) == 1
     lowered = json.loads(batches[0][-1]["content"])
     assert lowered["atomic_execution"]["step_count"] == 1

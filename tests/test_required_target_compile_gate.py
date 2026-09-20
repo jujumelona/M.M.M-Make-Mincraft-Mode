@@ -107,7 +107,13 @@ def test_required_jdt_does_not_fallback_to_successful_gradle_build():
 
 def test_required_jdt_accepts_only_real_clean_jdt_receipt():
     assert _jdt_failures(
-        {"status": "PASS", "error_count": 0, "files_opened": 1},
+        {
+            "schema_version": "mmm/java-diagnostics-v2",
+            "status": "PASS",
+            "diagnostics": {},
+            "error_count": 0,
+            "files_opened": 1,
+        },
         build_report={
             "status": "PASS",
             "commands": [{"name": "build", "exit_code": 0, "timed_out": False}],

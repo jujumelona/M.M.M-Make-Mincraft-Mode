@@ -2845,13 +2845,17 @@ class CompleteProductionOrchestrator:
         """Bind the model-owned DebugToken source to host-owned runtime execution."""
 
         root = project_root.expanduser().resolve()
+        schema_version = str(getattr(approved, 'schema_version', '') or '')
+        game_design = getattr(approved, 'game_design', {})
+        if not isinstance(game_design, dict):
+            game_design = {}
         if not (
-            approved.schema_version == 'mmm/complete-proposal-v1'
-            and approved.game_design.get('mode') == 'debug_fixture'
+            schema_version == 'mmm/complete-proposal-v1'
+            and game_design.get('mode') == 'debug_fixture'
         ):
             return root
 
-        fixture = approved.game_design.get('fixture')
+        fixture = game_design.get('fixture')
         fixture_module_id = (
             str(fixture.get('module_id') or '').strip()
             if isinstance(fixture, dict)
