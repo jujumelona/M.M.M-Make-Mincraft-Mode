@@ -19,6 +19,26 @@ _JAVAC_DIAGNOSTIC = re.compile(
     re.MULTILINE,
 )
 _BUILD_LOG_WINDOW_BYTES = 256 * 1024
+_RUNTIME_STACK_FRAME = re.compile(
+    r"^\s*at\s+(?:(?:[A-Za-z0-9_.-]+)//)?"
+    r"(?P<class>[A-Za-z_$][A-Za-z0-9_$.]*)\.[^\s(]+"
+    r"\((?P<file>[A-Za-z0-9_$.-]+\.java):(?P<line>\d+)\)\s*$"
+)
+_RUNTIME_EXCEPTION = re.compile(
+    r"^\s*(?:Caused by:\s*)?"
+    r"(?P<type>[A-Za-z_$][A-Za-z0-9_$.]*(?:Exception|Error))"
+    r"(?::\s*(?P<message>.*))?\s*$"
+)
+_RUNTIME_FRAME_EXCLUDED_PREFIXES = (
+    "java.",
+    "javax.",
+    "jdk.",
+    "sun.",
+    "org.gradle.",
+    "net.fabricmc.",
+    "net.minecraft.",
+    "com.mojang.",
+)
 
 
 def _sha(value: Mapping[str, Any]) -> str:
@@ -78,7 +98,7 @@ def compiler_log_diagnostics(
     project_root: str | Path | None = None,
     limit: int = 256,
 ) -> list[dict[str, Any]]:
-    """Extract canonical path-bearing javac diagnostics from build command logs."""
+    """Extract canonical source-owned javac and runtime diagnostics from build logs."""
 
     diagnostics: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -104,6 +124,42 @@ def compiler_log_diagnostics(
                 "source": "javac",
                 "message": match.group("message").strip()[:2000],
                 "code": f"javac:{match.group('kind')}:{match.group('line')}",
+            }
+            fingerprint = _sha(body)
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            diagnostics.append({**body, "diagnostic_sha256": fingerprint})
+
+        runtime_message = ""
+        for raw_line in text.splitlines():
+            exception = _RUNTIME_EXCEPTION.match(raw_line)
+            if exception is not None:
+                detail = str(exception.group("message") or "").strip()
+                runtime_message = str(exception.group("type"))
+                if detail:
+                    runtime_message += ": " + detail
+                continue
+
+            frame = _RUNTIME_STACK_FRAME.match(raw_line)
+            if frame is None or len(diagnostics) >= limit:
+                continue
+            class_name = str(frame.group("class") or "")
+            if class_name.startswith(_RUNTIME_FRAME_EXCLUDED_PREFIXES):
+                continue
+            source_class = class_name.split("$", 1)[0]
+            if "." not in source_class:
+                continue
+            source_path = "src/main/java/" + source_class.replace(".", "/") + ".java"
+            body = {
+                "path": normalize_source_path(
+                    source_path, project_root=project_root
+                ),
+                "line": int(frame.group("line")),
+                "severity": 1,
+                "source": "runtime",
+                "message": runtime_message or "runtime exception reached generated source",
+                "code": f"runtime:stack:{frame.group('line')}",
             }
             fingerprint = _sha(body)
             if fingerprint in seen:
