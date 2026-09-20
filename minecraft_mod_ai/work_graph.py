@@ -154,7 +154,23 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
             quality_dependency = 'validate-jar' if dimension_id in {'correctness', 'build', 'research'} else 'runtime-playtest'
             nodes.append(_node(node_id, 'validate:quality', (quality_dependency,), {'kind': 'quality-validation', 'dimension_id': dimension_id, 'evidence_route_ref': dimension['evidence_route_ref'], 'contract_sha256': contract['contract_sha256']}))
             quality_nodes.append(node_id)
-    nodes.append(_node('package-release', 'package', tuple(quality_nodes or ['runtime-playtest']), {'kind': 'release'}))
+    package_dependencies = tuple(quality_nodes or ['runtime-playtest'])
+    nodes.append(
+        _node(
+            'package-build-artifact',
+            'package:build-artifact',
+            package_dependencies,
+            {'kind': 'build-artifact'},
+        )
+    )
+    nodes.append(
+        _node(
+            'package-release',
+            'package',
+            ('package-build-artifact',),
+            {'kind': 'release'},
+        )
+    )
     graph_body = {'schema_version': 'mmm/production-work-graph-v1', 'proposal_hash': proposal_hash, 'nodes': [node.to_dict() for node in nodes]}
     return WorkGraphPlan(schema_version='mmm/production-work-graph-v1', proposal_hash=proposal_hash, graph_hash=_hash_json(graph_body), module_count=len(selected_modules), nodes=tuple(nodes))
 

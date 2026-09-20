@@ -7,7 +7,11 @@ import zipfile
 import pytest
 from types import SimpleNamespace
 
-from minecraft_mod_ai.final_artifact import write_downloadable_bundle
+from minecraft_mod_ai.final_artifact import (
+    sha256_file,
+    write_build_artifact_bundle,
+    write_downloadable_bundle,
+)
 from minecraft_mod_ai.mcp_tools import MMMToolService
 
 from minecraft_mod_ai.complete_orchestrator import (
@@ -16,7 +20,9 @@ from minecraft_mod_ai.complete_orchestrator import (
     _blocking_jdt_errors,
     _final_validation_failure,
     _gametest_attestation_status,
+    _jdt_verification_attempts,
     _jdt_verification_timeout_seconds,
+    _retryable_jdt_bootstrap_failure,
     _generation_receipt_sort_key,
     _persisted_runtime_evidence,
     _refresh_runtime_receipt_status,
@@ -1199,3 +1205,55 @@ def test_jdt_verification_timeout_is_bounded_and_configurable(monkeypatch) -> No
     assert _jdt_verification_timeout_seconds() == 600
     monkeypatch.setenv("MMM_JDT_VERIFICATION_TIMEOUT_SECONDS", "bad")
     assert _jdt_verification_timeout_seconds() == 180
+
+
+def test_build_artifact_bundle_preserves_unresolved_release_state(tmp_path) -> None:
+    jar = tmp_path / "demo.jar"
+    jar.write_bytes(b"jar")
+    digest = sha256_file(jar)
+    bundle = write_build_artifact_bundle(
+        tmp_path / "build-artifact.zip",
+        artifact_receipt={
+            "status": "PASS",
+            "artifact": jar.name,
+            "artifact_path": str(jar),
+            "sha256": digest,
+        },
+        build_receipt={"status": "PASS", "artifact_sha256": digest},
+        unresolved_gates=("execution-gate:jdt:missing-jdt",),
+        release_ready=False,
+        proposal_hash="sha256:" + "1" * 64,
+        receipts={
+            "jdt-receipt.json": {"status": "UNAVAILABLE", "diagnostics": {}}
+        },
+    )
+    assert Path(bundle["build_bundle_zip"]).is_file()
+    assert bundle["release_ready"] is False
+    assert bundle["unresolved_gates"] == ["execution-gate:jdt:missing-jdt"]
+    with zipfile.ZipFile(bundle["build_bundle_zip"], "r") as archive:
+        names = set(archive.namelist())
+        manifest = json.loads(archive.read("build-manifest.json"))
+    assert "artifact/demo.jar" in names
+    assert "receipts/build-receipt.json" in names
+    assert "receipts/jdt-receipt.json" in names
+    assert manifest["release_certified"] is False
+
+
+def test_jdt_verification_attempts_default_and_bounds(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_JDT_VERIFICATION_ATTEMPTS", raising=False)
+    assert _jdt_verification_attempts() == 2
+    monkeypatch.setenv("MMM_JDT_VERIFICATION_ATTEMPTS", "99")
+    assert _jdt_verification_attempts() == 3
+
+
+def test_only_service_ready_bootstrap_miss_is_retryable() -> None:
+    assert _retryable_jdt_bootstrap_failure({
+        "status": "UNAVAILABLE",
+        "error": "JDTWorkspaceBootstrapError: ServiceReady was not observed before validation",
+        "diagnostics": {},
+    })
+    assert not _retryable_jdt_bootstrap_failure({
+        "status": "UNAVAILABLE",
+        "error": "JDTWorkspaceBootstrapError: no project JDK matching Java 25",
+        "diagnostics": {},
+    })

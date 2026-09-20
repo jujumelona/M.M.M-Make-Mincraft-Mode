@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from minecraft_mod_ai.complete_orchestrator import (
     CompleteProductionOrchestrator,
     _jdt_release_evidence_passed,
+    _run_release_jdt_verification,
     _requested_verification_failures,
 )
 
@@ -253,3 +254,54 @@ def test_blockbench_required_gate_uses_entity_review_receipt(tmp_path):
     )
 
     assert failures == []
+
+
+def test_release_jdt_retries_transient_service_ready_once(monkeypatch, tmp_path):
+    calls = []
+    receipts = iter([
+        {
+            "status": "UNAVAILABLE",
+            "error": "JDTWorkspaceBootstrapError: ServiceReady was not observed before validation",
+            "diagnostics": {},
+            "error_count": 0,
+            "files_opened": 0,
+        },
+        {
+            "schema_version": "mmm/java-diagnostics-v2",
+            "status": "PASS",
+            "diagnostics": {},
+            "error_count": 0,
+            "files_opened": 2,
+        },
+    ])
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return next(receipts)
+    monkeypatch.setattr(
+        "minecraft_mod_ai.complete_orchestrator.run_jdt_diagnostics",
+        fake_run,
+    )
+    receipt = _run_release_jdt_verification(tmp_path, timeout_seconds=7, attempts=2)
+    assert receipt["verification_attempts"] == 2
+    assert receipt["files_opened"] == 2
+    assert len(calls) == 2
+
+
+def test_release_jdt_does_not_retry_nontransient_unavailable(monkeypatch, tmp_path):
+    calls = []
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {
+            "status": "UNAVAILABLE",
+            "error": "JDTWorkspaceBootstrapError: no project JDK matching Java 25",
+            "diagnostics": {},
+            "error_count": 0,
+            "files_opened": 0,
+        }
+    monkeypatch.setattr(
+        "minecraft_mod_ai.complete_orchestrator.run_jdt_diagnostics",
+        fake_run,
+    )
+    receipt = _run_release_jdt_verification(tmp_path, timeout_seconds=7, attempts=3)
+    assert receipt["verification_attempts"] == 1
+    assert len(calls) == 1

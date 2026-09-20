@@ -739,6 +739,92 @@ def load_or_empty_reuse_manifest(
     return _load_reuse_manifest(_project_root(project_root), project_name)
 
 
+def write_build_artifact_bundle(
+    output_zip: str | Path,
+    *,
+    artifact_receipt: Mapping[str, Any],
+    build_receipt: Mapping[str, Any],
+    unresolved_gates: Sequence[str],
+    release_ready: bool,
+    proposal_hash: str,
+    receipts: Mapping[str, Mapping[str, Any] | None] | None = None,
+) -> dict[str, Any]:
+    """Package a successful build independently from release certification."""
+
+    if artifact_receipt.get("status") != "PASS":
+        raise FinalArtifactError("Build artifact bundle requires a passing artifact receipt.")
+    artifact = _safe_existing_file(str(artifact_receipt.get("artifact_path") or ""))
+    if artifact is None:
+        raise FinalArtifactError("Build artifact path is missing or unsafe.")
+    artifact_sha256 = normalize_sha256(artifact_receipt.get("sha256"))
+    if sha256_file(artifact) != artifact_sha256:
+        raise FinalArtifactError("Build artifact changed after verification.")
+    if build_receipt.get("status") != "PASS":
+        raise FinalArtifactError("Build artifact bundle requires a passing build receipt.")
+    _require_artifact_sha(
+        build_receipt,
+        label="Build",
+        expected_sha256=artifact_sha256,
+    )
+
+    target = _safe_write_target(output_zip)
+    if target.exists():
+        target.unlink()
+    unresolved = sorted({str(value) for value in unresolved_gates if str(value).strip()})
+    manifest = {
+        "schema_version": "mmm/build-artifact-bundle-v1",
+        "status": "BUILT",
+        "release_ready": bool(release_ready),
+        "release_certified": False,
+        "artifact": artifact.name,
+        "artifact_sha256": artifact_sha256,
+        "proposal_hash": str(proposal_hash),
+        "unresolved_gates": unresolved,
+    }
+    receipt_payloads: dict[str, Mapping[str, Any]] = {
+        "artifact-receipt.json": dict(artifact_receipt),
+        "build-receipt.json": dict(build_receipt),
+    }
+    for name, payload in sorted((receipts or {}).items()):
+        if payload is None:
+            continue
+        if not isinstance(name, str) or not name or Path(name).name != name:
+            raise FinalArtifactError(f"Build bundle receipt name is unsafe: {name!r}")
+        if not isinstance(payload, Mapping):
+            raise FinalArtifactError(f"Build bundle receipt is invalid: {name}")
+        receipt_payloads[name] = dict(payload)
+
+    temp = target.with_name("." + target.name + ".tmp")
+    if temp.exists():
+        if temp.is_symlink() or not temp.is_file():
+            raise FinalArtifactError("Build bundle temporary target is unsafe.")
+        temp.unlink()
+    try:
+        with zipfile.ZipFile(temp, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.write(artifact, arcname="artifact/" + artifact.name)
+            archive.writestr(
+                "build-manifest.json",
+                json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            )
+            for name, payload in sorted(receipt_payloads.items()):
+                archive.writestr(
+                    "receipts/" + name,
+                    json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                )
+        temp.replace(target)
+    except BaseException:
+        temp.unlink(missing_ok=True)
+        target.unlink(missing_ok=True)
+        raise
+
+    return {
+        **manifest,
+        "build_bundle_zip": str(target),
+        "sha256": sha256_file(target),
+        "size_bytes": target.stat().st_size,
+    }
+
+
 def write_downloadable_bundle(
     bundle_dir: str | Path,
     *,

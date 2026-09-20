@@ -54,6 +54,7 @@ from .final_artifact import (
     load_or_empty_reuse_manifest,
     verify_final_mod_artifact,
     verify_runtime_artifact_binding,
+    write_build_artifact_bundle,
     write_downloadable_bundle,
 )
 from .geckolib_generator import generate_geckolib_entity_assets
@@ -134,6 +135,75 @@ def _jdt_verification_timeout_seconds() -> int:
     except (TypeError, ValueError):
         value = 180
     return max(30, min(value, 600))
+
+
+def _jdt_verification_attempts() -> int:
+    raw = os.environ.get("MMM_JDT_VERIFICATION_ATTEMPTS", "2").strip()
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = 2
+    return max(1, min(value, 3))
+
+
+def _retryable_jdt_bootstrap_failure(receipt: dict[str, Any] | None) -> bool:
+    normalized, _path = unwrap_diagnostic_receipt(receipt)
+    if not normalized:
+        return False
+    if str(normalized.get("status") or "").strip().upper() != "UNAVAILABLE":
+        return False
+    error = str(normalized.get("error") or "").casefold()
+    return "serviceready" in error and "not observed" in error
+
+
+def _run_release_jdt_verification(
+    project_root: str | Path,
+    *,
+    timeout_seconds: int | None = None,
+    attempts: int | None = None,
+) -> dict[str, Any]:
+    """Retry only transient JDT ServiceReady bootstrap misses; remain fail-closed."""
+
+    per_attempt = (
+        int(timeout_seconds)
+        if timeout_seconds is not None
+        else _jdt_verification_timeout_seconds()
+    )
+    total_attempts = (
+        int(attempts) if attempts is not None else _jdt_verification_attempts()
+    )
+    total_attempts = max(1, min(total_attempts, 3))
+    receipt: dict[str, Any] = {}
+    for attempt in range(1, total_attempts + 1):
+        receipt = run_jdt_diagnostics(
+            JavaLanguageService,
+            project_root,
+            timeout_seconds=per_attempt,
+        )
+        if _jdt_release_evidence_passed(receipt):
+            result = dict(receipt)
+            result["verification_attempts"] = attempt
+            return result
+        if _blocking_jdt_errors(receipt) or not _retryable_jdt_bootstrap_failure(receipt):
+            result = dict(receipt)
+            result["verification_attempts"] = attempt
+            return result
+        emit_root_cause(
+            "jdt_release_retry",
+            stage="verify",
+            operation="java_diagnostics",
+            gate="jdt_service_ready",
+            result="RETRY",
+            reason="JDT ServiceReady was not observed; retrying cold bootstrap",
+            details={
+                "attempt": attempt,
+                "max_attempts": total_attempts,
+                "timeout_seconds": per_attempt,
+            },
+        )
+    result = dict(receipt)
+    result["verification_attempts"] = total_attempts
+    return result
 
 
 _REQUIRED_GATE_TO_EVIDENCE = {
@@ -327,6 +397,7 @@ class CompletePipelineResult:
     work_ledger_path: str
     run_resumed: bool
     quality_report: dict[str, Any] | None = None
+    build_bundle_zip: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1105,11 +1176,7 @@ class CompleteProductionOrchestrator:
 
         def validate_jdt() -> dict[str, Any]:
             def run_jdt() -> dict[str, Any]:
-                return run_jdt_diagnostics(
-                    JavaLanguageService,
-                    project_root,
-                    timeout_seconds=_jdt_verification_timeout_seconds(),
-                )
+                return _run_release_jdt_verification(project_root)
             return run_named_checkpoint(ledger, 'validate-jdt', stage='validate:jdt', input_value=validation_checkpoint_input('validate-jdt', {'graph_hash': work_plan.graph_hash, 'project_manifest': validation_manifest}), action=run_jdt, encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: cached_validation_is_reusable('validate-jdt', cached))
 
         jdt_receipt = None
@@ -1377,11 +1444,7 @@ class CompleteProductionOrchestrator:
                     'validate-jdt-final',
                     {'graph_hash': work_plan.graph_hash, 'project_manifest': final_manifest},
                 ),
-                action=lambda: run_jdt_diagnostics(
-                    JavaLanguageService,
-                    project_root,
-                    timeout_seconds=_jdt_verification_timeout_seconds(),
-                ),
+                action=lambda: _run_release_jdt_verification(project_root),
                 encode=lambda value: value,
                 decode=lambda cached: cached,
                 validate_cached=lambda cached: cached_validation_is_reusable('validate-jdt-final', cached),
@@ -1704,6 +1767,68 @@ class CompleteProductionOrchestrator:
                 'gametest_report': build.get('gametest_report') if isinstance(build, dict) else None,
             },
         )
+        build_bundle_input = {
+            'artifact_sha256': str(artifact_receipt.get('sha256') or ''),
+            'build_receipt_sha256': _stable_payload_sha256(build_receipt),
+            'source_validation_sha256': _stable_payload_sha256(source_report),
+            'jdt_receipt_sha256': _stable_payload_sha256(jdt_receipt),
+            'jar_validation_sha256': _stable_payload_sha256(jar_validation),
+            'coverage_sha256': str(coverage_receipt.get('coverage_sha256') or ''),
+            'unresolved_sha256': _stable_payload_sha256(list(normalized_unresolved)),
+            'release_ready': release_ready,
+        }
+        build_bundle_sha256 = _stable_payload_sha256(build_bundle_input)
+        build_bundle_output = (
+            run_root
+            / 'releases'
+            / (
+                'build-artifact-'
+                + build_bundle_sha256.split(':', 1)[1][:16]
+                + '.zip'
+            )
+        )
+        build_bundle_receipt = run_named_checkpoint(
+            ledger,
+            'package-build-artifact',
+            stage='package:build-artifact',
+            input_value=build_bundle_input,
+            action=lambda: _replace_stale_file_target(
+                build_bundle_output,
+                lambda: write_build_artifact_bundle(
+                    build_bundle_output,
+                    artifact_receipt=artifact_receipt,
+                    build_receipt=build_receipt,
+                    unresolved_gates=normalized_unresolved,
+                    release_ready=release_ready,
+                    proposal_hash=approved.calculate_hash(),
+                    receipts={
+                        'source-validation.json': source_report,
+                        'jdt-receipt.json': jdt_receipt,
+                        'jar-validation.json': jar_validation,
+                        'requirement-coverage.json': coverage_receipt,
+                        'quality-report.json': quality_report,
+                    },
+                ),
+            ),
+            encode=lambda value: value,
+            decode=lambda cached: cached,
+            validate_cached=lambda cached: self._cached_package_exists(
+                cached, path_key='build_bundle_zip'
+            ),
+        )
+        build_bundle_zip = str(build_bundle_receipt['build_bundle_zip'])
+        self._succeed_work_node(
+            ledger,
+            'package-build-artifact',
+            {
+                'schema_version': 'mmm/work-node-receipt-v1',
+                'status': 'PASS',
+                'build_bundle_zip': build_bundle_zip,
+                'release_ready': release_ready,
+                'unresolved_gates': list(normalized_unresolved),
+            },
+        )
+
         if options.publish_provider and (not release_ready):
             raise CompleteProductionError(
                 'Publishing is blocked because required verification gates remain unresolved.'
@@ -1911,7 +2036,7 @@ class CompleteProductionOrchestrator:
                 input_required=True,
             )
         self._persist_work_evidence(project_root, ledger, work_plan)
-        return CompletePipelineResult(schema_version='mmm/complete-pipeline-result-v3', status='VERIFIED' if release_ready else 'BUILT_WITH_UNRESOLVED_GATES', project_root=str(project_root), release_zip=release_zip, jar_path=str(jar_path), complete_proposal_hash=approved.calculate_hash(), source_validation=source_report, build_report=build, jar_validation=jar_validation, module_receipts=tuple(module_receipts), asset_receipt=asset_receipt, blockbench_receipts=tuple(blockbench_receipts), runtime_receipt=runtime_receipt, playtest_receipt=playtest_receipt, visual_receipt=visual_receipt, distribution_receipt=distribution_receipt, unresolved_gates=tuple(sorted(set(unresolved))), release_ready=release_ready, work_graph_hash=work_plan.graph_hash, work_ledger_path=str(ledger.path), run_resumed=run_resumed, quality_report=quality_report)
+        return CompletePipelineResult(schema_version='mmm/complete-pipeline-result-v3', status='VERIFIED' if release_ready else 'BUILT_WITH_UNRESOLVED_GATES', project_root=str(project_root), release_zip=release_zip, jar_path=str(jar_path), complete_proposal_hash=approved.calculate_hash(), source_validation=source_report, build_report=build, jar_validation=jar_validation, module_receipts=tuple(module_receipts), asset_receipt=asset_receipt, blockbench_receipts=tuple(blockbench_receipts), runtime_receipt=runtime_receipt, playtest_receipt=playtest_receipt, visual_receipt=visual_receipt, distribution_receipt=distribution_receipt, unresolved_gates=tuple(sorted(set(unresolved))), release_ready=release_ready, work_graph_hash=work_plan.graph_hash, work_ledger_path=str(ledger.path), run_resumed=run_resumed, quality_report=quality_report, build_bundle_zip=build_bundle_zip)
 
     def _evaluate_quality(self, *, approved: CompleteProposal, run_root: Path, project_root: Path, source_validation: dict[str, Any] | None, build_report: dict[str, Any] | None, jar_validation: dict[str, Any] | None, module_receipts: Iterable[dict[str, Any]], asset_receipt: dict[str, Any] | None, blockbench_receipts: Iterable[dict[str, Any]], runtime_receipt: dict[str, Any] | None, playtest_receipt: dict[str, Any] | None, visual_receipt: dict[str, Any] | None) -> dict[str, Any] | None:
         contract = approved.game_design.get('_production_contract')
