@@ -1,7 +1,11 @@
 """The owner runtime and project compile toolchain are intentionally distinct."""
+import inspect
+import threading
+
 from pathlib import Path
 
 from minecraft_mod_ai import java_lsp, platform_catalog
+import minecraft_mod_ai.java_core as java_core_module
 from minecraft_mod_ai.java_core import JavaCoreService
 
 
@@ -106,3 +110,103 @@ def test_owner_resolution_materializes_exact_pinned_gradle(tmp_path, monkeypatch
     assert 'gradle_version' not in params
     assert 'gradle_sha256' not in params
     assert 'java_home' not in params
+
+
+
+def test_java_core_forwards_verifier_budget_to_owner_bootstrap(tmp_path, monkeypatch):
+    from minecraft_mod_ai import jvm_owner_bootstrap
+
+    seen: list[float] = []
+
+    def fake_owner_command(workspace, *, timeout_seconds=600):
+        assert workspace.is_absolute()
+        seen.append(float(timeout_seconds))
+        return ["fake-owner"]
+
+    class FakeRPC:
+        def __init__(self, command):
+            assert command == ["fake-owner"]
+
+    monkeypatch.setattr(jvm_owner_bootstrap, "owner_command", fake_owner_command)
+    monkeypatch.setattr(java_core_module, "OwnerRPC", FakeRPC)
+
+    service = JavaCoreService()
+    service._prepare_project(tmp_path.resolve(), 123.5)
+
+    assert seen == [123.5]
+
+
+def test_owner_gradle_materialization_honors_remaining_verifier_budget(
+    tmp_path,
+    monkeypatch,
+):
+    from minecraft_mod_ai.platform_generation_contract import _write_platform_lock
+    from minecraft_mod_ai.runner import GradleRunner
+
+    target = platform_catalog.adapter_for_target("1.20.1", "fabric")
+    _write_platform_lock(tmp_path, target)
+    gradle_home = tmp_path / "verified-gradle"
+    executable = gradle_home / "bin" / "gradle"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("", encoding="utf-8")
+    calls = []
+
+    def ensure(self, version, sha256, *, lock_timeout_seconds=None):
+        calls.append(
+            (
+                version,
+                sha256,
+                self.download_timeout_seconds,
+                lock_timeout_seconds,
+            )
+        )
+        return executable
+
+    monkeypatch.setattr(GradleRunner, "ensure_gradle", ensure)
+
+    params = JavaCoreService()._owner_resolve_parameters(
+        tmp_path,
+        timeout_seconds=47.9,
+    )
+
+    assert calls == [
+        (target.gradle, target.gradle_sha256, 47, 47)
+    ]
+    assert params["gradle_home"] == str(gradle_home.resolve())
+
+
+def test_jvm_owner_bootstrap_uses_one_remaining_deadline() -> None:
+    from minecraft_mod_ai.jvm_owner_bootstrap import owner_command
+
+    source = inspect.getsource(owner_command)
+
+    assert "remaining_timeout()" in source
+    assert "timeout_seconds=remaining_timeout()" in source
+    assert "lock_timeout_seconds=gradle_budget" in source
+    assert "timeout=remaining_timeout()" in source
+    assert "timeout_seconds=600" not in source
+    assert "timeout=600" not in source
+
+
+def test_java_core_project_lock_wait_is_bounded(tmp_path) -> None:
+    from minecraft_mod_ai.project_write_lock import project_write_lock
+
+    outcome: list[str] = []
+    ready = threading.Event()
+
+    def contender() -> None:
+        ready.set()
+        try:
+            with project_write_lock(tmp_path, timeout_seconds=0.05):
+                outcome.append("acquired")
+        except TimeoutError:
+            outcome.append("timeout")
+
+    with project_write_lock(tmp_path):
+        thread = threading.Thread(target=contender)
+        thread.start()
+        assert ready.wait(timeout=1.0)
+        thread.join(timeout=1.0)
+
+    assert not thread.is_alive()
+    assert outcome == ["timeout"]
