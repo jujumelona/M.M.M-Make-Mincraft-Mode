@@ -913,6 +913,49 @@ def test_primary_release_zip_keeps_mcp_authority_narrow_and_attaches_privately(t
     }
 
 
+def test_release_manifest_rebinds_complete_provenance_without_attachment(tmp_path) -> None:
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    release_zip = run_root / "release.zip"
+    with zipfile.ZipFile(release_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("source/demo.txt", "source")
+        archive.writestr(
+            "release-manifest.json",
+            json.dumps(
+                {
+                    "schema_version": "mmm/release-manifest-v2",
+                    "proposal_hash": "sha256:base",
+                }
+            ),
+        )
+    release = {
+        "status": "PACKAGED",
+        "release_zip": str(release_zip),
+        "sha256": CompleteProductionOrchestrator._file_hash(release_zip),
+    }
+
+    updated = _attach_verified_release_artifact(
+        release,
+        None,
+        archive_name="generated-resource-pack.zip",
+        allowed_root=run_root,
+        manifest_provenance={
+            "proposal_hash": "sha256:complete",
+            "base_proposal_hash": "sha256:base",
+            "proposal_scope": "complete",
+        },
+    )
+
+    assert updated["sha256"] == CompleteProductionOrchestrator._file_hash(release_zip)
+    assert updated["manifest_provenance"]["proposal_hash"] == "sha256:complete"
+    with zipfile.ZipFile(release_zip) as archive:
+        manifest = json.loads(archive.read("release-manifest.json"))
+        assert "additional/generated-resource-pack.zip" not in archive.namelist()
+    assert manifest["proposal_hash"] == "sha256:complete"
+    assert manifest["base_proposal_hash"] == "sha256:base"
+    assert manifest["proposal_scope"] == "complete"
+
+
 def test_blockbench_checkpoint_dependency_tracks_geometry_digest(tmp_path) -> None:
     geo = tmp_path / "entity.geo.json"
     geo.write_text('{"minecraft:geometry":[]}', encoding="utf-8")
