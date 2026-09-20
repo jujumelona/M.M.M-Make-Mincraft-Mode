@@ -271,8 +271,19 @@ def test_hardener_adds_machine_model_and_registry_gametest(
         "processor" in path.read_text(encoding="utf-8")
         for path in units
     )
-    metadata = json.loads(
+    main_metadata = json.loads(
         (project / "src/main/resources/fabric.mod.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert not any(
+        "GeneratedRegistryGameTest" in str(entry)
+        for entry in main_metadata.get("entrypoints", {}).get(
+            "fabric-gametest", []
+        )
+    )
+    metadata = json.loads(
+        (project / "src/gametest/resources/fabric.mod.json").read_text(
             encoding="utf-8"
         )
     )
