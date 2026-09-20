@@ -176,6 +176,15 @@ def test_batched_receipt_ownership_does_not_inherit_positional_member():
 def test_exception_scope_never_reuses_old_validation_for_runtime_failure():
     assert (
         _checkpoint_for_exception(
+            RuntimeError(
+                "Debug fixture observable source acceptance failed: "
+                "debug source does not use required host symbol 'item_set_id'"
+            )
+        )
+        == "validate-debug-source"
+    )
+    assert (
+        _checkpoint_for_exception(
             RuntimeError("Generated complete project failed deterministic validation.")
         )
         == "validate-source"
@@ -193,6 +202,25 @@ def test_exception_scope_never_reuses_old_validation_for_runtime_failure():
         == "gradle-build"
     )
     assert _checkpoint_for_exception(RuntimeError("VisualCritic rejected screenshots")) is None
+
+
+def test_blocked_debug_source_receipt_is_failed_validation_feedback():
+    receipt = {
+        "status": "BLOCKED",
+        "diagnostics": [
+            {
+                "path": "src/main/java/dev/mmm/debugfixture/DebugToken.java",
+                "severity": 1,
+                "source": "debug-source-contract",
+                "code": "DEBUG_SOURCE_CONTRACT",
+                "message": "debug source does not use required host symbol 'item_set_id'",
+            }
+        ],
+    }
+    assert feedback._validation_failed("validate-debug-source", receipt) is True
+    diagnostics = feedback._diagnostics_from_value(receipt)
+    assert diagnostics[0]["path"] == "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+    assert "item_set_id" in diagnostics[0]["message"]
 
 
 def test_diagnostics_extract_path_from_gradle_message():
