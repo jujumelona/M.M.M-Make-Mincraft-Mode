@@ -2238,10 +2238,15 @@ def _retry_atomic_after_output_exhaustion(
             + _atomic_output_recovery_instruction(request)
         ),
     })
+    retry_metadata = (
+        dict(request.metadata) if isinstance(request.metadata, Mapping) else {}
+    )
+    retry_metadata["mmm_atomic_output_recovery"] = True
     retry_request = replace(
         request,
         messages=tuple(messages),
         media_paths=media_paths,
+        metadata=retry_metadata,
         parallel_tool_calls=False if request.tools else request.parallel_tool_calls,
     )
     emit_root_cause(

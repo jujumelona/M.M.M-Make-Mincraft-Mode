@@ -125,19 +125,13 @@ def _apply_family_payload_policy(
         return payload
 
     extra = _config_extra(config)
-    forced_tool_action = bool(tools) and _forced_tool_choice(
-        getattr(request, "tool_choice", None)
-    )
     if action_page:
         payload.pop("reasoning_effort", None)
-        if forced_tool_action:
-            # Keep llama.cpp's native required-tool constraint separate from Qwen's
-            # thinking-template switch. On affected Qwen/llama.cpp runtimes the
-            # combination of required tool choice and enable_thinking=False can fall
-            # back to unconstrained generation and exhaust the whole output budget.
-            payload.pop("chat_template_kwargs", None)
-        else:
-            payload["chat_template_kwargs"] = capabilities.action_template_kwargs()
+        # Production tool turns must use the same non-thinking Qwen template that
+        # runtime calibration validates. In particular, a named/required tool call
+        # must not fall back to the model-default thinking template or it can consume
+        # the entire decode allowance before emitting the required tool action.
+        payload["chat_template_kwargs"] = capabilities.action_template_kwargs()
     else:
         payload.pop("reasoning_effort", None)
         template_kwargs: dict[str, Any] = {"enable_thinking": True}

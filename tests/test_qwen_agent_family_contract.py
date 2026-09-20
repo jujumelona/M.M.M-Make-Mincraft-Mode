@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 from minecraft_mod_ai import llama_server_hardware_policy as hardware
@@ -161,7 +162,7 @@ def test_family_wrapper_accepts_request_without_tools_attribute() -> None:
     assert payload["temperature"] == 0.0
 
 
-def test_named_required_action_keeps_qwen_template_default() -> None:
+def test_named_required_action_uses_calibrated_non_thinking_template() -> None:
     request = _request(
         tool_choice={
             "type": "function",
@@ -172,20 +173,43 @@ def test_named_required_action_keeps_qwen_template_default() -> None:
     for family in ("qwen3.5", "qwen3.6", "qwen3.8"):
         payload = hardware._server_payload(_Adapter(family=family), request)
 
+        expected_template = {"enable_thinking": False}
+        if family in {"qwen3.6", "qwen3.8"}:
+            expected_template["preserve_thinking"] = False
         assert payload["tool_choice"] == "required"
         assert payload["temperature"] == 0.0
-        assert "chat_template_kwargs" not in payload
+        assert payload["chat_template_kwargs"] == expected_template
         assert "reasoning_effort" not in payload
 
 
-def test_generic_required_action_keeps_qwen_template_default() -> None:
+def test_generic_required_action_uses_non_thinking_template() -> None:
     request = _request(tool_choice="required")
     payload = hardware._server_payload(_Adapter(family="qwen3.5"), request)
 
     assert payload["tool_choice"] == "required"
     assert payload["temperature"] == 0.0
-    assert "chat_template_kwargs" not in payload
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert "reasoning_effort" not in payload
+
+
+def test_atomic_output_recovery_caps_required_tool_decode() -> None:
+    adapter = _Adapter(family="qwen3.5")
+    adapter.config.max_new_tokens = 20839
+    request = replace(
+        _request(
+            tool_choice={
+                "type": "function",
+                "function": {"name": "read_project_file"},
+            }
+        ),
+        metadata={"mmm_atomic_output_recovery": True},
+    )
+
+    payload = hardware._server_payload(adapter, request)
+
+    assert payload["max_tokens"] == 4096
+    assert payload["tool_choice"] == "required"
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
 
 def test_final_agent_continuation_keeps_thinking_without_tools() -> None:

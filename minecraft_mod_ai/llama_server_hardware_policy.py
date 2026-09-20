@@ -20,6 +20,7 @@ _TELEMETRY_TOTALS = {
     "generation_seconds": 0.0,
     "requests": 0,
 }
+_ATOMIC_OUTPUT_RECOVERY_MAX_TOKENS = 4096
 
 
 def _existing_built_server() -> str | None:
@@ -114,6 +115,19 @@ def _enforce_required_tool_sampling(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _request_max_tokens(adapter: Any, request: Any) -> int:
+    """Return the host-owned decode allowance for one request."""
+
+    configured = max(1, int(adapter.config.max_new_tokens))
+    metadata = getattr(request, "metadata", {})
+    if (
+        isinstance(metadata, Mapping)
+        and metadata.get("mmm_atomic_output_recovery") is True
+    ):
+        return min(configured, _ATOMIC_OUTPUT_RECOVERY_MAX_TOKENS)
+    return configured
+
+
 def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     """Build the base OpenAI-compatible llama-server chat payload.
 
@@ -125,7 +139,7 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": "local",
         "messages": [dict(message) for message in request.messages],
-        "max_tokens": int(adapter.config.max_new_tokens),
+        "max_tokens": _request_max_tokens(adapter, request),
         "temperature": 0.0,
     }
     tools = getattr(request, "tools", ()) or ()
