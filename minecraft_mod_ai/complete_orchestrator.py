@@ -125,6 +125,17 @@ from .work_graph import (
     run_named_checkpoint,
 )
 
+def _jdt_verification_timeout_seconds() -> int:
+    """Return bounded verifier time for Gradle-backed JDT workspace bootstrap."""
+
+    raw = os.environ.get("MMM_JDT_VERIFICATION_TIMEOUT_SECONDS", "180").strip()
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = 180
+    return max(30, min(value, 600))
+
+
 _REQUIRED_GATE_TO_EVIDENCE = {
     'registry': 'source',
     'resource': 'source',
@@ -1097,7 +1108,7 @@ class CompleteProductionOrchestrator:
                 return run_jdt_diagnostics(
                     JavaLanguageService,
                     project_root,
-                    timeout_seconds=90,
+                    timeout_seconds=_jdt_verification_timeout_seconds(),
                 )
             return run_named_checkpoint(ledger, 'validate-jdt', stage='validate:jdt', input_value=validation_checkpoint_input('validate-jdt', {'graph_hash': work_plan.graph_hash, 'project_manifest': validation_manifest}), action=run_jdt, encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: cached_validation_is_reusable('validate-jdt', cached))
 
@@ -1367,7 +1378,9 @@ class CompleteProductionOrchestrator:
                     {'graph_hash': work_plan.graph_hash, 'project_manifest': final_manifest},
                 ),
                 action=lambda: run_jdt_diagnostics(
-                    JavaLanguageService, project_root, timeout_seconds=90
+                    JavaLanguageService,
+                    project_root,
+                    timeout_seconds=_jdt_verification_timeout_seconds(),
                 ),
                 encode=lambda value: value,
                 decode=lambda cached: cached,

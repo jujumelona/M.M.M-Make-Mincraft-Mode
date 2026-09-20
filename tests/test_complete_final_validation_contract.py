@@ -16,6 +16,7 @@ from minecraft_mod_ai.complete_orchestrator import (
     _blocking_jdt_errors,
     _final_validation_failure,
     _gametest_attestation_status,
+    _jdt_verification_timeout_seconds,
     _generation_receipt_sort_key,
     _persisted_runtime_evidence,
     _refresh_runtime_receipt_status,
@@ -1182,3 +1183,19 @@ def test_generic_native_gametest_name_is_not_release_attestation(tmp_path) -> No
         SimpleNamespace(mod_id="demo"),
         requested=True,
     ) == "NO_EVIDENCE"
+
+
+def test_jdt_verification_timeout_defaults_to_colab_safe_window(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_JDT_VERIFICATION_TIMEOUT_SECONDS", raising=False)
+    assert _jdt_verification_timeout_seconds() == 180
+
+
+def test_jdt_verification_timeout_is_bounded_and_configurable(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_JDT_VERIFICATION_TIMEOUT_SECONDS", "240")
+    assert _jdt_verification_timeout_seconds() == 240
+    monkeypatch.setenv("MMM_JDT_VERIFICATION_TIMEOUT_SECONDS", "5")
+    assert _jdt_verification_timeout_seconds() == 30
+    monkeypatch.setenv("MMM_JDT_VERIFICATION_TIMEOUT_SECONDS", "9999")
+    assert _jdt_verification_timeout_seconds() == 600
+    monkeypatch.setenv("MMM_JDT_VERIFICATION_TIMEOUT_SECONDS", "bad")
+    assert _jdt_verification_timeout_seconds() == 180
