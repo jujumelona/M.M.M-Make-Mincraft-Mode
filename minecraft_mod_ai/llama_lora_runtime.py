@@ -293,6 +293,8 @@ def _selected_spec(config: Any, request: Any) -> LoraAdapterSpec | None:
     metadata = getattr(request, "metadata", {})
     if not isinstance(metadata, Mapping):
         metadata = {}
+    if metadata.get("mmm_disable_lora") is True:
+        return None
     stage = str(metadata.get("tool_stage", "") or "").strip().casefold()
     has_tools = bool(getattr(request, "tools", ()) or ())
 
