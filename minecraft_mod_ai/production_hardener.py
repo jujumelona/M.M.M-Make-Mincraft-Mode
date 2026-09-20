@@ -16,6 +16,24 @@ class ProductionHardeningError(RuntimeError):
     pass
 
 
+def _project_mappings_kind(root: Path) -> str:
+    lock = root / ".minecraft_ai" / "platform-lock.json"
+    if not lock.is_file() or lock.is_symlink():
+        return "yarn"
+    try:
+        payload = json.loads(lock.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return "yarn"
+    if not isinstance(payload, dict):
+        return "yarn"
+    value = str(
+        payload.get("mappings_kind")
+        or payload.get("yarn_mappings")
+        or ""
+    ).strip().casefold()
+    return "mojang" if value in {"mojang", "official", "official_mojang"} else "yarn"
+
+
 def harden_generated_project(
     project_root: str | Path,
     *,
@@ -44,6 +62,7 @@ def harden_generated_project(
         mod_id=info.mod_id,
         definitions=definitions,
         shard_size=policy.java_shard_size,
+        mappings_kind=_project_mappings_kind(info.root),
     )
     if test_files:
         write_receipt = write_text_files(
@@ -165,6 +184,7 @@ def _gametest_files(
     mod_id: str,
     definitions: list[dict[str, str]],
     shard_size: int,
+    mappings_kind: str = "yarn",
 ) -> tuple[dict[str, str], list[str], int]:
     if not definitions:
         return {}, [], 0
@@ -175,15 +195,27 @@ def _gametest_files(
     test_package_path = f"{package_path}/gametest"
     root_class_name = "GeneratedRegistryGameTest"
     unit_prefix = root_class_name + "Unit"
-    root_relative = (
-        f"src/main/java/{test_package_path}/{root_class_name}.java"
-    )
+    root_relative = f"src/gametest/java/{test_package_path}/{root_class_name}.java"
     files[root_relative] = discovered_gametest_root_java(
         package_name=test_package,
         mod_id=mod_id,
         root_class_name=root_class_name,
         unit_class_prefix=unit_prefix,
+        mappings_kind=mappings_kind,
     )
+
+    mojang = str(mappings_kind or "").strip().casefold() in {
+        "mojang",
+        "official",
+        "official_mojang",
+    }
+    registry_names = {
+        "ITEM": "ITEM",
+        "BLOCK": "BLOCK",
+        "STATUS_EFFECT": "MOB_EFFECT" if mojang else "STATUS_EFFECT",
+        "ENCHANTMENT": "ENCHANTMENT",
+        "ENTITY_TYPE": "ENTITY_TYPE",
+    }
 
     shard_count = 0
     for offset in range(0, len(definitions), shard_size):
@@ -191,19 +223,40 @@ def _gametest_files(
         index = offset // shard_size
         shard_count += 1
         class_name = f"{unit_prefix}{index:04d}"
-        relative = f"src/main/java/{test_package_path}/{class_name}.java"
-        checks = "\n".join(
-            f'        require(Registries.{item["registry"]}.containsId(new Identifier("{mod_id}", "{item["id"]}")), "{item["registry"]}:{item["id"]} missing");'
-            for item in shard
-        )
+        relative = f"src/gametest/java/{test_package_path}/{class_name}.java"
+        if mojang:
+            checks = "\n".join(
+                (
+                    f'        require(BuiltInRegistries.{registry_names[item["registry"]]}.keySet().stream()'
+                    f'.anyMatch(id -> id.getNamespace().equals("{mod_id}") '
+                    f'&& id.getPath().equals("{item["id"]}")), '
+                    f'"{item["registry"]}:{item["id"]} missing");'
+                )
+                for item in shard
+            )
+            imports = """import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.gametest.framework.GameTestHelper;"""
+            context_type = "GameTestHelper"
+        else:
+            checks = "\n".join(
+                (
+                    f'        require(Registries.{registry_names[item["registry"]]}.containsId('
+                    f'new Identifier("{mod_id}", "{item["id"]}")), '
+                    f'"{item["registry"]}:{item["id"]} missing");'
+                )
+                for item in shard
+            )
+            imports = """import net.minecraft.registry.Registries;
+import net.minecraft.test.TestContext;
+import net.minecraft.util.Identifier;"""
+            context_type = "TestContext"
+
         files[relative] = f'''package {test_package};
 
-import net.minecraft.registry.Registries;
-import net.minecraft.test.TestContext;
-import net.minecraft.util.Identifier;
+{imports}
 
 public final class {class_name} {{
-    public static void run(TestContext context) {{
+    public static void run({context_type} context) {{
 {checks}
     }}
 
@@ -226,16 +279,13 @@ def _prune_obsolete_gametest_files(
 ) -> dict[str, Any]:
     package_directory = (
         info.root
-        / "src/main/java"
+        / "src/gametest/java"
         / Path(*info.package_name.split("."))
         / "gametest"
     )
     if not package_directory.is_dir():
         return {"status": "UNCHANGED", "removed": []}
-    active = {
-        (info.root / relative).resolve()
-        for relative in active_paths
-    }
+    active = {(info.root / relative).resolve() for relative in active_paths}
     obsolete = [
         path
         for path in sorted(package_directory.glob("GeneratedRegistryGameTest*.java"))
@@ -256,42 +306,91 @@ def _prune_obsolete_gametest_files(
 
 
 def _ensure_gametest_entrypoints(info, entries: list[str]) -> dict[str, Any]:
-    metadata = json.loads(info.fabric_mod_json.read_text(encoding="utf-8"))
+    generated_prefix = f"{info.package_name}.gametest.GeneratedRegistryGameTest"
+    receipts: list[dict[str, Any]] = []
+
+    main_metadata = json.loads(info.fabric_mod_json.read_text(encoding="utf-8"))
+    main_entrypoints = main_metadata.get("entrypoints")
+    if isinstance(main_entrypoints, dict):
+        legacy = main_entrypoints.get("fabric-gametest")
+        if isinstance(legacy, list):
+            retained_main = [
+                item
+                for item in legacy
+                if not (
+                    isinstance(item, str)
+                    and item.startswith(generated_prefix)
+                )
+            ]
+            if retained_main != legacy:
+                if retained_main:
+                    main_entrypoints["fabric-gametest"] = retained_main
+                else:
+                    main_entrypoints.pop("fabric-gametest", None)
+                receipt = write_text_files(
+                    info,
+                    {
+                        "src/main/resources/fabric.mod.json": (
+                            json.dumps(main_metadata, ensure_ascii=False, indent=2) + "\n"
+                        )
+                    },
+                    replace_existing=True,
+                )
+                if receipt.get("status") != "UNCHANGED":
+                    receipts.append(receipt)
+
+    metadata_path = info.root / "src/gametest/resources/fabric.mod.json"
+    if metadata_path.is_file() and not metadata_path.is_symlink():
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if not isinstance(metadata, dict):
+            raise ProductionHardeningError(
+                "gametest fabric.mod.json must be an object."
+            )
+    else:
+        metadata = {
+            "schemaVersion": 1,
+            "id": f"{info.mod_id}_gametest",
+            "version": "1.0.0",
+            "name": f"{info.mod_id} GameTests",
+            "environment": "*",
+            "entrypoints": {},
+            "depends": {info.mod_id: "*"},
+        }
+
     entrypoints = metadata.setdefault("entrypoints", {})
     if not isinstance(entrypoints, dict):
-        raise ProductionHardeningError("fabric.mod.json entrypoints must be an object.")
+        raise ProductionHardeningError(
+            "gametest fabric.mod.json entrypoints must be an object."
+        )
     gametest = entrypoints.setdefault("fabric-gametest", [])
     if not isinstance(gametest, list):
-        raise ProductionHardeningError("fabric-gametest entrypoints must be a list.")
-    generated_prefix = f"{info.package_name}.gametest.GeneratedRegistryGameTest"
-
-    def entrypoint_value(item: Any) -> str | None:
-        if isinstance(item, str):
-            return item
-        if isinstance(item, dict):
-            value = item.get("value")
-            return value if isinstance(value, str) else None
-        return None
-
+        raise ProductionHardeningError(
+            "gametest fabric-gametest entrypoints must be a list."
+        )
     retained = [
         item
         for item in gametest
         if not (
-            (value := entrypoint_value(item))
-            and value.startswith(generated_prefix)
+            isinstance(item, str)
+            and item.startswith(generated_prefix)
         )
     ]
     replacement = retained + entries
-    if replacement == gametest:
-        return {"status": "UNCHANGED", "entries": entries}
-    entrypoints["fabric-gametest"] = replacement
-    return TransactionalSourcePatcher(info.root).apply(
-        [
+    if replacement != gametest or not metadata_path.is_file():
+        entrypoints["fabric-gametest"] = replacement
+        receipt = write_text_files(
+            info,
             {
-                "operation": "replace",
-                "path": "src/main/resources/fabric.mod.json",
-                "expected_sha256": sha256_file(info.fabric_mod_json),
-                "content": json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
-            }
-        ]
-    )
+                "src/gametest/resources/fabric.mod.json": (
+                    json.dumps(metadata, ensure_ascii=False, indent=2) + "\n"
+                )
+            },
+            replace_existing=True,
+        )
+        if receipt.get("status") != "UNCHANGED":
+            receipts.append(receipt)
+
+    if not receipts:
+        return {"status": "UNCHANGED", "entries": entries}
+    return {"status": "APPLIED", "entries": entries, "receipts": receipts}
+
