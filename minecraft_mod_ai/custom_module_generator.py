@@ -841,6 +841,7 @@ class CustomModuleGenerator:
         )
         from .generation_implementation_grounding import (
             build_generation_implementation_grounding,
+            render_generation_implementation_authority_prompt,
         )
 
         implementation_grounding = build_generation_implementation_grounding(
@@ -936,6 +937,11 @@ class CustomModuleGenerator:
                 "Donor files are read-only evidence; write only the exact task-owned target path.",
                 "The final source must retain an attributable verified donor symbol or concrete donor code structure; a fresh rewrite is not reuse.",
             ]
+        implementation_authority_prompt = (
+            render_generation_implementation_authority_prompt(implementation_grounding)
+            if implementation_grounding is not None
+            else ""
+        )
         initial_messages = [
             {
                 "role": "system",
@@ -947,6 +953,16 @@ class CustomModuleGenerator:
                     "entrypoints, files, lifecycle hooks, or a second patch/file-plan protocol."
                 ),
             },
+            *(
+                [
+                    {
+                        "role": "developer",
+                        "content": implementation_authority_prompt,
+                    }
+                ]
+                if implementation_authority_prompt
+                else []
+            ),
             {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
         ]
 
