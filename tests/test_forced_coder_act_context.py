@@ -214,3 +214,59 @@ def test_exact_accounting_cannot_bypass_canonical_implementation_compaction() ->
     )
     assert '"research_context"' not in forwarded_user["content"]
     assert '"task":"write one file"' in forwarded_user["content"]
+
+
+
+def test_forced_act_projects_after_required_rag_is_satisfied() -> None:
+    target = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+    state = SimpleNamespace(
+        phase=tool_loop.LoopPhase.ACT,
+        mutation_context=tool_loop.TargetMutationContext(
+            target_path=target,
+            target_symbol="DebugToken",
+            is_new_file=True,
+            evidence_source="evidence_fresh_owned_anchor",
+            writable_paths=(target,),
+            creatable_paths=(target,),
+            target_pinned=True,
+        ),
+    )
+    messages = (
+        {"role": "system", "content": "coder"},
+        {
+            "role": "system",
+            "content": "Host research context follows.\n" + "x" * 20000,
+        },
+        {
+            "role": "system",
+            "content": "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n" + "y" * 20000,
+        },
+        {
+            "role": "system",
+            "content": (
+                "MMM_PHASE_HANDOFF OBSERVE->ACT\n"
+                "Observation 1:\n"
+                '{"schema_version":"mmm/phase-tool-observation-v1","records":[{"path":"'
+                + target
+                + '","text":"class DebugToken {}"}]}'
+            ),
+        },
+        {"role": "user", "content": '{"phase":"implement_module"}'},
+    )
+
+    projected = tool_loop._forced_act_messages(
+        messages,
+        state=state,
+        require_rag=True,
+        evidence_ready=True,
+        phase_names={"apply_source_edit"},
+    )
+
+    contents = [str(message.get("content") or "") for message in projected]
+    assert not any(value.startswith("Host research context follows.") for value in contents)
+    assert not any(
+        value.startswith("MMM reviewed Skill/tool/Minecraft-MCP routing context:")
+        for value in contents
+    )
+    assert any(value.startswith("MMM_PHASE_HANDOFF OBSERVE->ACT") for value in contents)
+    assert any("HOST FORCED ACT:" in value for value in contents)
