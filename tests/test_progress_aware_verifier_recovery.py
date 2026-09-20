@@ -49,3 +49,64 @@ def test_recover_requires_a_tool_call_and_returns_to_act_only_after_evidence() -
     source = inspect.getsource(loop._generate_with_tools_impl)
     assert 'elif state.phase == LoopPhase.RECOVER:\n            tool_choice = "required"' in source
     assert 'state.phase in {LoopPhase.OBSERVE, LoopPhase.RECOVER}' in source
+
+
+
+def test_verify_to_recover_handoff_bounds_raw_verifier_receipt() -> None:
+    raw_receipt = "RAW_JDT_SENTINEL:" + ("x" * 100_000)
+    errors = tuple(
+        {
+            "path": f"src/main/java/demo/Broken{i}.java",
+            "line": i + 1,
+            "severity": 1,
+            "code": "JDT_ERROR",
+            "source": "jdt_core",
+            "message": "Unresolved symbol " + ("detail " * 200),
+        }
+        for i in range(20)
+    )
+    state = loop.HostRunState(
+        phase=loop.LoopPhase.RECOVER,
+        validation_status="FAIL",
+        latest_verifier_tool="java_diagnostics",
+        latest_verifier_errors=errors,
+        latest_verifier_fingerprint="sha256:test-verifier-fingerprint",
+    )
+    messages = [
+        {"role": "system", "content": "host authority"},
+        {"role": "user", "content": "repair the generated source"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "verify-1",
+                    "type": "function",
+                    "function": {
+                        "name": "java_diagnostics",
+                        "arguments": "{}",
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "verify-1",
+            "content": raw_receipt,
+        },
+    ]
+
+    phase = loop._sync_phase_tool_transcript(
+        messages,
+        state=state,
+        last_prompt_phase=loop.LoopPhase.VERIFY,
+        stage="generation",
+    )
+
+    assert phase is loop.LoopPhase.RECOVER
+    handoff = messages[-1]["content"]
+    assert "RAW_JDT_SENTINEL" not in handoff
+    assert "mmm/verifier-recovery-handoff-v1" in handoff
+    assert "diagnostics_fingerprint" in handoff
+    assert "omitted_diagnostic_count" in handoff
+    assert "Unresolved symbol" in handoff
+    assert len(handoff.encode("utf-8")) < 8 * 1024
