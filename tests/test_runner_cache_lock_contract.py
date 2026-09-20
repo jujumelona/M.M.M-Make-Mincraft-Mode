@@ -37,7 +37,7 @@ def test_ensure_gradle_honors_explicit_shorter_lock_budget(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    runner_instance = GradleRunner(
+    runner_instance = runner.GradleRunner(
         tmp_path / "cache",
         download_timeout_seconds=300,
     )
