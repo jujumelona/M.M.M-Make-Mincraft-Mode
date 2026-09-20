@@ -40,39 +40,8 @@ on:
       - ".github/workflows/runtime-generation-regression.yml"
   pull_request:
     paths:
-      - "minecraft_mod_ai/agent_tool_runtime.py"
-      - "minecraft_mod_ai/model_router.py"
-      - "minecraft_mod_ai/deadline_executor.py"
-      - "minecraft_mod_ai/repair_engine.py"
-      - "minecraft_mod_ai/repair_diagnostics_contract.py"
-      - "minecraft_mod_ai/custom_module_generator.py"
-      - "minecraft_mod_ai/custom_generation_search_contract.py"
-      - "minecraft_mod_ai/coder_max_efficiency_contract.py"
-      - "minecraft_mod_ai/generation_verification_contract.py"
-      - "minecraft_mod_ai/generation_target_compile.py"
-      - "minecraft_mod_ai/complete_orchestrator.py"
-      - "minecraft_mod_ai/evidence_first_pipeline_contract.py"
-      - "minecraft_mod_ai/platform_runtime_contract.py"
-      - "minecraft_mod_ai/resource_asset_production.py"
-      - "minecraft_mod_ai/complete_orchestrator_services.py"
-      - "minecraft_mod_ai/scheduler_parallel_safety_contract.py"
-      - "minecraft_mod_ai/parallel_result_determinism_contract.py"
-      - "minecraft_mod_ai/performance_final_contract.py"
-      - "minecraft_mod_ai/filesystem_copy.py"
-      - "tests/test_agent_tool_deadline_contract.py"
-      - "tests/test_repair_project_index_efficiency.py"
-      - "tests/test_custom_module_structural_repair_efficiency.py"
-      - "tests/test_deterministic_debug_full_pipeline_e2e.py"
-      - "tests/test_project_context_pagination.py"
-      - "tests/test_prepared_project_resume_integrity.py"
-      - "tests/test_resource_asset_preflight_contract.py"
-      - "tests/test_production_generation_preflight.py"
-      - "tests/test_repository_grounding.py"
-      - "tests/test_scheduler_claim_efficiency.py"
-      - "tests/test_validation_repair_regressions.py"
-      - "tests/test_shared_gpu_scheduler_contract.py"
-      - "tests/test_runtime_efficiency_contract.py"
-      - "tests/test_runtime_hardening_regressions.py"
+      - "minecraft_mod_ai/**"
+      - "tests/**"
       - ".github/workflows/runtime-generation-regression.yml"
   workflow_dispatch:
 
@@ -81,8 +50,28 @@ permissions:
 
 jobs:
   runtime-generation-regression:
+    name: runtime-regression / ${{ matrix.test_file }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      max-parallel: 14
+      matrix:
+        test_file:
+          - tests/test_agent_tool_deadline_contract.py
+          - tests/test_repair_project_index_efficiency.py
+          - tests/test_custom_module_structural_repair_efficiency.py
+          - tests/test_deterministic_debug_full_pipeline_e2e.py
+          - tests/test_project_context_pagination.py
+          - tests/test_prepared_project_resume_integrity.py
+          - tests/test_resource_asset_preflight_contract.py
+          - tests/test_production_generation_preflight.py
+          - tests/test_repository_grounding.py
+          - tests/test_scheduler_claim_efficiency.py
+          - tests/test_validation_repair_regressions.py
+          - tests/test_shared_gpu_scheduler_contract.py
+          - tests/test_runtime_efficiency_contract.py
+          - tests/test_runtime_hardening_regressions.py
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -96,21 +85,5 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install -e ".[dev]"
 
-      - name: Run runtime and generation regression cluster
-        run: >-
-          python -m pytest
-          tests/test_agent_tool_deadline_contract.py
-          tests/test_repair_project_index_efficiency.py
-          tests/test_custom_module_structural_repair_efficiency.py
-          tests/test_deterministic_debug_full_pipeline_e2e.py
-          tests/test_project_context_pagination.py
-          tests/test_prepared_project_resume_integrity.py
-          tests/test_resource_asset_preflight_contract.py
-          tests/test_production_generation_preflight.py
-          tests/test_repository_grounding.py
-          tests/test_scheduler_claim_efficiency.py
-          tests/test_validation_repair_regressions.py
-          tests/test_shared_gpu_scheduler_contract.py
-          tests/test_runtime_efficiency_contract.py
-          tests/test_runtime_hardening_regressions.py
-          -q
+      - name: Run isolated regression cell
+        run: python -m pytest "${{ matrix.test_file }}" -q
