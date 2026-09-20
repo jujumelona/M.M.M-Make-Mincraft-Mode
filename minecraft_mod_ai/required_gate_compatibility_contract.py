@@ -12,6 +12,7 @@ from typing import Any
 _PLANNER_GATE_TO_EVIDENCE = {
     "source static validation": "source",
     "target compile": "gradle",
+    "project build": "gradle",
     "generated resource validation": "source",
     "network protocol validation": "playtest",
     "worldgen runtime validation": "gametest",
