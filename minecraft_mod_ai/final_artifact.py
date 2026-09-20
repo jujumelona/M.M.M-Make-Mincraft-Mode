@@ -510,6 +510,78 @@ def verify_debug_fixture_source(
                 + ", ".join(sorted(lifecycle_hits))
             )
 
+    resource_surface = {
+        "mod_id": "",
+        "texture": False,
+        "resource_document": False,
+        "en_us": False,
+        "ko_kr": False,
+    }
+    metadata_path = root / "src/main/resources/fabric.mod.json"
+    metadata_file = _safe_existing_file(metadata_path)
+    if metadata_file is None:
+        findings.append("debug fixture fabric.mod.json is missing or unsafe")
+    else:
+        try:
+            metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            metadata = {}
+            findings.append("debug fixture fabric.mod.json is not readable JSON")
+        mod_id = str(metadata.get("id") or "").strip() if isinstance(metadata, Mapping) else ""
+        resource_surface["mod_id"] = mod_id
+        if not mod_id:
+            findings.append("debug fixture mod id is missing from fabric.mod.json")
+        else:
+            asset_root = root / "src/main/resources/assets" / mod_id
+            texture = _safe_existing_file(
+                asset_root / "textures" / "item" / f"{identifier}.png"
+            )
+            if texture is None:
+                findings.append("debug fixture item texture is missing")
+            else:
+                try:
+                    resource_surface["texture"] = texture.read_bytes().startswith(
+                        b"\x89PNG\r\n\x1a\n"
+                    )
+                except OSError:
+                    resource_surface["texture"] = False
+                if not resource_surface["texture"]:
+                    findings.append("debug fixture item texture is not a valid PNG surface")
+
+            resource_documents = [
+                path
+                for path in asset_root.rglob(f"{identifier}.json")
+                if "lang" not in path.parts
+                and _safe_existing_file(path) is not None
+            ]
+            resource_surface["resource_document"] = bool(resource_documents)
+            if not resource_documents:
+                findings.append("debug fixture item resource document is missing")
+
+            translation_key = f"item.{mod_id}.{identifier}"
+            for locale in ("en_us", "ko_kr"):
+                lang_file = _safe_existing_file(asset_root / "lang" / f"{locale}.json")
+                valid = False
+                if lang_file is not None:
+                    try:
+                        lang_payload = json.loads(lang_file.read_text(encoding="utf-8"))
+                    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                        lang_payload = {}
+                    valid = bool(
+                        isinstance(lang_payload, Mapping)
+                        and isinstance(lang_payload.get(translation_key), str)
+                        and str(lang_payload.get(translation_key) or "").strip()
+                    )
+                resource_surface[locale] = valid
+                if not valid:
+                    findings.append(
+                        f"debug fixture {locale} translation is missing for {translation_key}"
+                    )
+
+    resource_surface_passed = all(
+        bool(resource_surface[key])
+        for key in ("texture", "resource_document", "en_us", "ko_kr")
+    )
     passed = bool(
         target is not None
         and source
@@ -519,6 +591,7 @@ def verify_debug_fixture_source(
         and required_keys
         and all(symbol_results.get(key) is True for key in required_keys)
         and lifecycle_clear
+        and resource_surface_passed
         and not findings
     )
     diagnostics = [
@@ -549,6 +622,8 @@ def verify_debug_fixture_source(
         "forbidden_lifecycle_symbols": list(forbidden),
         "identifier_present": identifier_present,
         "lifecycle_clear": lifecycle_clear,
+        "resource_surface": resource_surface,
+        "resource_surface_passed": resource_surface_passed,
         "host_revision": (
             str(host_facts.get("host_revision") or "")
             if isinstance(host_facts, Mapping)
