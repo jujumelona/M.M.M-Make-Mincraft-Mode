@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from types import SimpleNamespace
 
 from minecraft_mod_ai import agent_tool_runtime, java_lsp
