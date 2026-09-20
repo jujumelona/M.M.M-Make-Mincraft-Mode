@@ -216,6 +216,28 @@ def test_debug_fixture_runs_real_build_and_packaging_without_live_model(
     assert Path(result.build_bundle_zip).is_file()
     assert result.release_zip is not None
     assert Path(result.release_zip).is_file()
+    with __import__("zipfile").ZipFile(result.release_zip, "r") as archive:
+        manifest = json.loads(archive.read("release-manifest.json"))
+        receipt_rows = [
+            json.loads(line)
+            for line in archive.read(
+                "source/.minecraft_ai/production-receipts.jsonl"
+            ).decode("utf-8").splitlines()
+            if line.strip()
+        ]
+    assert manifest["proposal_hash"] == proposal.calculate_hash()
+    assert manifest["base_proposal_hash"] == proposal.base_proposal.calculate_hash()
+    assert manifest["proposal_scope"] == "complete"
+    summary = next(row["value"] for row in receipt_rows if row["record_type"] == "summary")
+    task_states = {
+        row["node_id"]: row["state"]
+        for row in receipt_rows
+        if row["record_type"] == "task"
+    }
+    assert summary["task_count"] == 9
+    assert summary["counts"] == {"pending": 1, "succeeded": 8}
+    assert task_states["package-build-artifact"] == "succeeded"
+    assert task_states["package-release"] == "pending"
     assert not any(
         gate.startswith("required-gate:debug_token:target_compile:")
         for gate in result.unresolved_gates
