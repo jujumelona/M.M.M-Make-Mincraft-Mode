@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+import zipfile
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -63,16 +64,76 @@ def should_build(run_mode: str) -> bool:
     return validate_run_mode(run_mode) not in {PLAN_MODE, AUDIT_MODE}
 
 
-def build_result_download_target(build_result: Any) -> tuple[Path | None, str]:
-    """Return the best real artifact produced by one build.
+def _user_download_zip(build_result: Any) -> Path | None:
+    """Package only end-user mod artifacts from the verified downloadable bundle."""
 
-    A verified release ZIP is preferred. If release verification remains unresolved
-    but a passing build produced a JAR, return that JAR instead of pretending there
-    is no downloadable result.
+    distribution = getattr(build_result, "distribution_receipt", None)
+    if not isinstance(distribution, Mapping):
+        return None
+    bundle = distribution.get("downloadable_bundle")
+    if not isinstance(bundle, Mapping) or bundle.get("status") != "PASS":
+        return None
+
+    raw_root = bundle.get("path")
+    artifact_name = str(bundle.get("artifact") or "").strip()
+    if not isinstance(raw_root, str) or not raw_root.strip():
+        return None
+    if not artifact_name or Path(artifact_name).name != artifact_name:
+        return None
+
+    root = Path(raw_root).expanduser().resolve()
+    if not root.is_dir() or root.is_symlink():
+        return None
+
+    names = [artifact_name]
+    additional = bundle.get("additional_artifacts")
+    if (
+        isinstance(additional, Mapping)
+        and "generated-resource-pack.zip" in additional
+    ):
+        names.append("generated-resource-pack.zip")
+
+    members: list[Path] = []
+    for name in names:
+        candidate = (root / name).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            return None
+        if not candidate.is_file() or candidate.is_symlink():
+            return None
+        members.append(candidate)
+
+    target = root.with_name(root.name + "-user.zip")
+    temp = target.with_name("." + target.name + ".tmp")
+    temp.unlink(missing_ok=True)
+    try:
+        with zipfile.ZipFile(temp, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for member in members:
+                archive.write(member, arcname=member.name)
+        temp.replace(target)
+    except BaseException:
+        temp.unlink(missing_ok=True)
+        raise
+    return target
+
+
+def build_result_download_target(build_result: Any) -> tuple[Path | None, str]:
+    """Return the end-user artifact produced by one build.
+
+    Verified Full builds expose a user ZIP containing only the runnable mod JAR and,
+    when required, its separately installable generated resource pack. Internal
+    source/audit release ZIPs and receipt-heavy build bundles are fallback artifacts,
+    not the primary user download.
     """
 
     if build_result is None:
         return None, "none"
+
+    user_zip = _user_download_zip(build_result)
+    if user_zip is not None:
+        return user_zip, "user_mod_zip"
+
     for attribute, kind in (
         ("release_zip", "release_zip"),
         ("build_bundle_zip", "build_bundle_zip"),
