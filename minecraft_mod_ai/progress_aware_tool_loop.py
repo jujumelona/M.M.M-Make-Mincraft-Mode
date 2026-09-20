@@ -1626,6 +1626,41 @@ def _host_target_execution_authority(state: Any) -> bool:
     return target in state.created_paths
 
 
+def _authored_workspace_refresh_requested(
+    messages: Sequence[Mapping[str, Any]],
+) -> bool:
+    """Return whether a later authored fragment must inspect the live staged workspace."""
+
+    for message in reversed(messages):
+        if str(message.get("role") or "").strip().casefold() != "user":
+            continue
+        content = message.get("content")
+        if not isinstance(content, str):
+            continue
+        try:
+            payload = json.loads(content)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, Mapping):
+            continue
+        if str(payload.get("phase") or "").strip() != "implement_authored_design":
+            continue
+        source_context = payload.get("initial_exact_source_context")
+        execution = payload.get("authored_execution")
+        if not isinstance(source_context, Mapping) or not isinstance(execution, Mapping):
+            return False
+        try:
+            fragment_index = int(execution.get("fragment_index") or 0)
+        except (TypeError, ValueError):
+            return False
+        return bool(
+            fragment_index > 1
+            and str(source_context.get("mode") or "").strip()
+            == "retrieve_current_authored_fragment_with_tools"
+        )
+    return False
+
+
 def _requires_rag_evidence(
     *,
     role: str,
@@ -2925,6 +2960,10 @@ def _generate_with_tools_impl(
         active_mutation_authority is not None
         and active_mutation_authority.mode is MutationAuthorityMode.BOUNDED_ROOTS
     )
+    authored_workspace_refresh = bool(
+        bounded_root_execution_authority
+        and _authored_workspace_refresh_requested(request.messages)
+    )
     from .small_model_task_capsule_contract import current_task_required_gates
     compile_backed_java = bool(
         java_target
@@ -2934,12 +2973,15 @@ def _generate_with_tools_impl(
         and "target_compile" in current_task_required_gates()
     )
     router_requires_fresh_evidence = bool(router._agent_require_fresh_evidence)
-    require_rag = _requires_rag_evidence(
-        role=role,
-        host_grounded=host_grounded,
-        router_requires_fresh_evidence=router_requires_fresh_evidence,
-        implementation_requires_mutation=implementation_requires_mutation,
-        initial_execution_authority=initial_execution_authority,
+    require_rag = bool(
+        authored_workspace_refresh
+        or _requires_rag_evidence(
+            role=role,
+            host_grounded=host_grounded,
+            router_requires_fresh_evidence=router_requires_fresh_evidence,
+            implementation_requires_mutation=implementation_requires_mutation,
+            initial_execution_authority=initial_execution_authority,
+        )
     )
     required_evidence_choice = bool(require_rag)
 
@@ -2973,6 +3015,7 @@ def _generate_with_tools_impl(
             "require_rag": require_rag,
             "host_target_execution_authority": initial_execution_authority,
             "bounded_root_execution_authority": bounded_root_execution_authority,
+            "authored_workspace_refresh": authored_workspace_refresh,
             "implementation_requires_mutation": implementation_requires_mutation,
             "mutation_ready": mutation_ready,
             "compile_backed_java": compile_backed_java,
@@ -3113,6 +3156,18 @@ def _generate_with_tools_impl(
             localization_active=implementation_requires_mutation,
             semantic_retrieval_choice=bool(require_rag and not baseline_ready),
         )
+        if (
+            authored_workspace_refresh
+            and state.phase is LoopPhase.OBSERVE
+            and not state.has_fresh_evidence
+        ):
+            workspace_refresh_tools = tuple(
+                schema
+                for schema in phase_tools
+                if _tool_name(schema) == "search_code_rag"
+            )
+            if workspace_refresh_tools:
+                phase_tools = workspace_refresh_tools
 
         forced_verifier: str | None = None
         if state.phase == LoopPhase.VERIFY:
@@ -3686,6 +3741,16 @@ def _generate_with_tools_impl(
                 if localization_progress or evidence_progress:
                     progress = True
                     if (
+                        authored_workspace_refresh
+                        and bounded_root_execution_authority
+                        and evidence_progress
+                    ):
+                        # Later authored fragments retain model-owned file selection inside
+                        # bounded roots, but they must first observe the live staged code
+                        # produced by earlier fragments. Fresh workspace evidence satisfies
+                        # that refresh without falsely pinning the fragment to one file.
+                        state.phase = LoopPhase.ACT
+                    elif (
                         implementation_requires_mutation
                         and state.mutation_context
                         and state.mutation_context.is_mutation_ready
