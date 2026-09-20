@@ -14,6 +14,13 @@ on:
       - "minecraft_mod_ai/coder_max_efficiency_contract.py"
       - "minecraft_mod_ai/generation_verification_contract.py"
       - "minecraft_mod_ai/generation_target_compile.py"
+      - "minecraft_mod_ai/generation_implementation_grounding.py"
+      - "minecraft_mod_ai/compiler_diagnostics.py"
+      - "minecraft_mod_ai/execution_feedback_replan_contract.py"
+      - "minecraft_mod_ai/final_artifact.py"
+      - "minecraft_mod_ai/colab_run_modes.py"
+      - "minecraft_mod_ai/populate_version_artifact_rules.py"
+      - "minecraft_mod_ai/host_item_registration.py"
       - "minecraft_mod_ai/complete_orchestrator.py"
       - "minecraft_mod_ai/evidence_first_pipeline_contract.py"
       - "minecraft_mod_ai/platform_runtime_contract.py"
@@ -32,6 +39,11 @@ on:
       - "tests/test_resource_asset_preflight_contract.py"
       - "tests/test_production_generation_preflight.py"
       - "tests/test_repository_grounding.py"
+      - "tests/test_required_target_compile_gate.py"
+      - "tests/test_generation_implementation_grounding.py"
+      - "tests/test_compiler_diagnostics.py"
+      - "tests/test_execution_feedback_replan_contract.py"
+      - "tests/test_final_artifact_boundaries.py"
       - "tests/test_scheduler_claim_efficiency.py"
       - "tests/test_validation_repair_regressions.py"
       - "tests/test_shared_gpu_scheduler_contract.py"
@@ -68,6 +80,10 @@ jobs:
           - tests/test_production_generation_preflight.py
           - tests/test_repository_grounding.py
           - tests/test_required_target_compile_gate.py
+          - tests/test_generation_implementation_grounding.py
+          - tests/test_compiler_diagnostics.py
+          - tests/test_execution_feedback_replan_contract.py
+          - tests/test_final_artifact_boundaries.py
           - tests/test_scheduler_claim_efficiency.py
           - tests/test_validation_repair_regressions.py
           - tests/test_shared_gpu_scheduler_contract.py
