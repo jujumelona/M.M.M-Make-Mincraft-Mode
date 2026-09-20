@@ -361,4 +361,71 @@ def build_generation_implementation_grounding(
     }
 
 
-__all__ = ["build_generation_implementation_grounding"]
+
+def render_generation_implementation_authority_prompt(
+    grounding: Mapping[str, Any] | None,
+) -> str:
+    """Render the selected HOST facts as a short, high-salience coder instruction.
+
+    The JSON grounding remains the machine-readable authority. This view deliberately
+    repeats only the exact imports and admitted template bodies immediately before the
+    coder request so a small model does not replace target owners with remembered names.
+    """
+
+    if not isinstance(grounding, Mapping):
+        return ""
+    facts = grounding.get("facts")
+    if not isinstance(facts, list) or not facts:
+        return ""
+
+    lines = [
+        "MANDATORY HOST IMPLEMENTATION AUTHORITY.",
+        "Use the exact target owners and template topology below. These are binding target facts, not examples.",
+        "Do not substitute remembered, Yarn, intermediary, neighbouring-version, or similarly named classes.",
+    ]
+    target = str(grounding.get("minecraft_version") or "").strip()
+    if target:
+        lines.append(f"Target Minecraft version: {target}")
+
+    for index, raw_fact in enumerate(facts, start=1):
+        if not isinstance(raw_fact, Mapping):
+            continue
+        responsibility = str(raw_fact.get("responsibility") or "").strip()
+        lines.append(f"HOST FACT {index}: {responsibility or 'approved responsibility'}")
+
+        imports = raw_fact.get("required_imports")
+        if isinstance(imports, list) and imports:
+            lines.append("Exact imports; copy these fully-qualified owners verbatim when used:")
+            for owner in imports:
+                value = str(owner or "").strip()
+                if value:
+                    lines.append(f"import {value};")
+
+        templates = raw_fact.get("templates")
+        if isinstance(templates, list):
+            for raw_template in templates:
+                if not isinstance(raw_template, Mapping):
+                    continue
+                template_id = str(raw_template.get("template_id") or "").strip()
+                body = str(raw_template.get("render_body") or "").strip()
+                usage = raw_template.get("symbol_usage")
+                if template_id:
+                    lines.append(f"Admitted template: {template_id}")
+                if isinstance(usage, list) and usage:
+                    names = ", ".join(str(item) for item in usage if str(item).strip())
+                    if names:
+                        lines.append(f"Bound symbols: {names}")
+                if body:
+                    lines.append("Preserve this receiver/member/argument topology exactly:")
+                    lines.append(body)
+
+    lines.append(
+        "If the approved task needs a fact not present above, retrieve it; never guess an API owner."
+    )
+    return "\n".join(lines)
+
+
+__all__ = [
+    "build_generation_implementation_grounding",
+    "render_generation_implementation_authority_prompt",
+]
