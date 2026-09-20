@@ -286,7 +286,12 @@ def _install_read_wave_dedup(model_router_module: Any) -> None:
                 pending_reads.append(call)
                 continue
             flush_reads()
-            completed.append(execute(call))
+            executed_barrier = tuple(current((call,), execute))
+            if len(executed_barrier) != 1:
+                raise RuntimeError(
+                    "Tool-wave executor returned an invalid barrier result count."
+                )
+            completed.extend(executed_barrier)
         flush_reads()
         return tuple(completed)
 
