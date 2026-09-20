@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import inspect
+import json
 
-from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
+from minecraft_mod_ai.custom_module_generator import (
+    CustomModuleGenerator,
+    _host_finalize_missing_generation_verification,
+)
 from minecraft_mod_ai.generation_verification_contract import (
     candidate_rank_key,
     classify_generation_verification,
