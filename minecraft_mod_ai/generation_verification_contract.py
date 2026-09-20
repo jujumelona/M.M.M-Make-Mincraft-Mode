@@ -2,6 +2,8 @@ from __future__ import annotations
 
 """Pure validation contract for generation-time verifier receipts."""
 
+import hashlib
+import json
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
