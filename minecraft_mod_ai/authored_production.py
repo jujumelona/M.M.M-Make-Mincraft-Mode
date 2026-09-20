@@ -112,6 +112,7 @@ def compile_authored_design(
                 "authored_plan": plan.to_dict(),
                 **target,
             },
+            required_gates=("project build",),
         ),),
         acceptance_tests=acceptance,
         existing_input_sha256=existing_input_sha256 or plan.existing_input_sha256,
