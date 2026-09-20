@@ -2148,6 +2148,26 @@ class CompleteProductionOrchestrator:
                 nonlocal node_custom_generator
                 if node_custom_generator is None:
                     node_custom_generator = new_custom_generator()
+
+                execution_feedback = None
+                feedback_context = getattr(
+                    self, "_mmm_execution_feedback_context", None
+                )
+                if isinstance(feedback_context, dict):
+                    invalidation = feedback_context.get("invalidation_receipt")
+                    owner_ids = (
+                        invalidation.get("owner_ids")
+                        if isinstance(invalidation, dict)
+                        else ()
+                    )
+                    if (
+                        isinstance(owner_ids, (list, tuple))
+                        and module.module_id in owner_ids
+                    ):
+                        raw_feedback = feedback_context.get("feedback")
+                        if isinstance(raw_feedback, dict):
+                            execution_feedback = raw_feedback
+
                 result = node_custom_generator.generate(
                     project_root,
                     module=module,
@@ -2155,6 +2175,7 @@ class CompleteProductionOrchestrator:
                     minecraft_version=spec.platform.minecraft_version,
                     loader=spec.platform.loader,
                     mappings=spec.platform.yarn_mappings,
+                    execution_feedback=execution_feedback,
                 )
                 _register_checkpoint_owner(result, node_custom_generator)
                 uncommitted_custom_results.append(result)
