@@ -1483,6 +1483,7 @@ _JAVA_API_EVIDENCE_RE = re.compile(
     r"|\b(?:class|interface|record|enum)\s+[A-Za-z_$][\w$]*)"
 )
 _ATOMIC_OUTPUT_RECOVERY_MARKER = "MMM_ATOMIC_OUTPUT_RECOVERY_V1"
+_ATOMIC_SOURCE_EDIT_OUTPUT_TOKENS = 4096
 
 
 def _fresh_java_context(context: TargetMutationContext | None) -> bool:
@@ -2242,6 +2243,18 @@ def _retry_atomic_after_output_exhaustion(
         dict(request.metadata) if isinstance(request.metadata, Mapping) else {}
     )
     retry_metadata["mmm_atomic_output_recovery"] = True
+    retry_metadata["mmm_disable_lora"] = True
+    try:
+        existing_ceiling = int(
+            retry_metadata.get("mmm_output_token_ceiling")
+            or _ATOMIC_SOURCE_EDIT_OUTPUT_TOKENS
+        )
+    except (TypeError, ValueError):
+        existing_ceiling = _ATOMIC_SOURCE_EDIT_OUTPUT_TOKENS
+    retry_metadata["mmm_output_token_ceiling"] = min(
+        max(1, existing_ceiling),
+        _ATOMIC_SOURCE_EDIT_OUTPUT_TOKENS,
+    )
     retry_request = replace(
         request,
         messages=tuple(messages),
@@ -2386,10 +2399,27 @@ def _generate_turn_with_context_recovery(
             relative_files=verifier_relative_files or None,
         )
 
+    request_metadata = (
+        dict(request.metadata) if isinstance(request.metadata, Mapping) else {}
+    )
+    if _forced_tool_choice_name(tool_choice) == "apply_source_edit":
+        try:
+            existing_ceiling = int(
+                request_metadata.get("mmm_output_token_ceiling")
+                or _ATOMIC_SOURCE_EDIT_OUTPUT_TOKENS
+            )
+        except (TypeError, ValueError):
+            existing_ceiling = _ATOMIC_SOURCE_EDIT_OUTPUT_TOKENS
+        request_metadata["mmm_output_token_ceiling"] = min(
+            max(1, existing_ceiling),
+            _ATOMIC_SOURCE_EDIT_OUTPUT_TOKENS,
+        )
+
     turn_request = replace(
         request,
         messages=tuple(messages),
         media_paths=media_paths,
+        metadata=request_metadata,
         tool_choice=tool_choice,
         parallel_tool_calls=parallel_tool_calls,
     )
