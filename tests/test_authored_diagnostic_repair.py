@@ -51,7 +51,7 @@ def test_authored_diagnostics_repair_local_files_without_external_discovery(
     assert authority is not None
     calls = []
     repairs = []
-    stale_attempts = []
+    legacy_repair_arguments = []
 
     class Adapter:
         def generate_turn(self, request):
@@ -92,50 +92,24 @@ def test_authored_diagnostics_repair_local_files_without_external_discovery(
                 assert any("MISSING" in d["message"] for d in payload["diagnostics"])
                 assert all(d["path"] == target for d in payload["diagnostics"])
                 assert loop._existing_repair_context(request.messages) == payload
-                properties = request.tools[0]["function"]["parameters"]["properties"]
-                assert properties["path"]["enum"] == [target]
-                assert "replace_exact" in properties["operation"]["enum"]
-                assert "create_file" not in properties["operation"]["enum"]
-                assert "create_file/create" not in guidance
-                for message in request.messages:
-                    if message["role"] == "system":
-                        assert "same-path create_file/create" not in message["content"]
-                        assert "Future repairs stay on this exact path" not in message["content"]
-                if not stale_attempts and not repairs:
-                    # Reproduce the production failure: the model echoes a whole-file old
-                    # precondition that is almost, but not byte-for-byte, the live source.
-                    stale_attempts.append(target)
-                    name, arguments = (
-                        "apply_source_edit",
-                        {
-                            "operation": "replace_exact",
-                            "path": target,
-                            "old": source + " ",
-                            "new": source.replace("MISSING", "1"),
-                        },
-                    )
-                elif stale_attempts and not repairs:
-                    assert "OMIT old entirely" in guidance
-                    repairs.append(target)
-                    name, arguments = (
-                        "apply_source_edit",
-                        {
-                            "operation": "replace_exact",
-                            "path": target,
-                            "new": source.replace("MISSING", "1"),
-                        },
-                    )
-                else:
-                    repairs.append(target)
-                    name, arguments = (
-                        "apply_source_edit",
-                        {
-                            "operation": "replace_exact",
-                            "path": target,
-                            "old": "MISSING",
-                            "new": "1",
-                        },
-                    )
+                parameters = request.tools[0]["function"]["parameters"]
+                assert parameters["required"] == ["new"]
+                assert parameters["additionalProperties"] is False
+                assert set(parameters["properties"]) == {"new"}
+                assert "host-owned" in guidance
+                corrected = source.replace("MISSING", "1")
+                repairs.append(target)
+                # Emulate a legacy/non-validating adapter that still returns the stale
+                # model-owned fields seen in the production failure. The loop must strip
+                # them and bind the live target/operation itself before runtime execution.
+                arguments = {
+                    "operation": "replace_exact",
+                    "path": target,
+                    "old": source + " ",
+                    "new": corrected,
+                }
+                legacy_repair_arguments.append(dict(arguments))
+                name = "apply_source_edit"
             return GenerationResponse(
                 tool_calls=(
                     ToolCall(
@@ -162,18 +136,11 @@ def test_authored_diagnostics_repair_local_files_without_external_discovery(
                 if arguments["operation"] == "create_file":
                     text = arguments["content"]
                 else:
+                    assert set(arguments) == {"operation", "path", "new"}
+                    assert arguments["operation"] == "replace_exact"
                     current = path.read_bytes().decode()
-                    if "old" not in arguments:
-                        text = arguments["new"]
-                    else:
-                        old = arguments["old"]
-                        found = current.count(old)
-                        if found != 1:
-                            raise RuntimeError(
-                                "Exact source-edit precondition failed for "
-                                f"{arguments['path']}: expected 1 matches, found {found}"
-                            )
-                        text = current.replace(old, arguments["new"], 1)
+                    assert "MISSING" in current
+                    text = arguments["new"]
                 path.write_text(text, encoding="utf-8", newline="")
                 return {
                     "schema_version": "mmm/source-patch-receipt-v1",
@@ -286,12 +253,13 @@ def test_authored_diagnostics_repair_local_files_without_external_discovery(
         "apply_source_edit",
         "java_diagnostics",
         "apply_source_edit",
-        "apply_source_edit",
         "java_diagnostics",
         "apply_source_edit",
         "java_diagnostics",
     ]
     assert all("MISSING" not in (tmp_path / target).read_text() for target in targets)
+    assert legacy_repair_arguments
+    assert all("old" in item for item in legacy_repair_arguments)
 
 
 @pytest.mark.parametrize(
