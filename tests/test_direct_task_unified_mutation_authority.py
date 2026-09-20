@@ -509,3 +509,234 @@ def test_authored_jdt_unavailable_defers_to_project_build() -> None:
     assert adapter.calls == 1
     assert runtime.calls == ["apply_source_edit", "java_diagnostics"]
     assert tool_loop.current_generation_verification_receipt() is None
+
+
+
+def test_later_authored_fragment_refreshes_workspace_before_act() -> None:
+    import json
+
+    from minecraft_mod_ai.model_adapters import (
+        GenerationRequest,
+        GenerationResponse,
+        ToolCall,
+    )
+
+    module = _authored_module()
+    authority = compile_direct_task_mutation_authority(module)
+    assert authority is not None
+    assert authority.mutation_authority.mode is MutationAuthorityMode.BOUNDED_ROOTS
+
+    new_target = "src/main/java/com/example/spacemode/TradeSystem.java"
+
+    class Adapter:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate_turn(self, request):
+            self.calls += 1
+            names = {item["function"]["name"] for item in request.tools}
+            if self.calls == 1:
+                assert names == {"search_code_rag"}
+                assert request.tool_choice == {
+                    "type": "function",
+                    "function": {"name": "search_code_rag"},
+                }
+                arguments = {"query": "current generated package ModInitializer entrypoint"}
+                return GenerationResponse(
+                    tool_calls=(
+                        ToolCall(
+                            id="refresh-workspace",
+                            name="search_code_rag",
+                            arguments=arguments,
+                            raw_arguments=json.dumps(arguments, separators=(",", ":")),
+                        ),
+                    )
+                )
+            if self.calls == 2:
+                assert names == {"apply_source_edit"}
+                assert request.tool_choice == {
+                    "type": "function",
+                    "function": {"name": "apply_source_edit"},
+                }
+                rendered = "\n".join(
+                    str(message.get("content") or "") for message in request.messages
+                )
+                assert "SpaceModeModule" in rendered
+                arguments = {
+                    "operation": "create_file",
+                    "path": new_target,
+                    "content": (
+                        "package com.example.spacemode; "
+                        "public final class TradeSystem {}\n"
+                    ),
+                }
+                return GenerationResponse(
+                    tool_calls=(
+                        ToolCall(
+                            id="authored-fragment-edit",
+                            name="apply_source_edit",
+                            arguments=arguments,
+                            raw_arguments=json.dumps(arguments, separators=(",", ":")),
+                        ),
+                    )
+                )
+            raise AssertionError(f"unexpected coder call {self.calls}")
+
+    class Runtime:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def call(self, stage, name, arguments):
+            assert stage == "generation"
+            self.calls.append(name)
+            if name == "search_code_rag":
+                return {
+                    "schema_version": "mmm/code-rag-result-v1",
+                    "hits": [
+                        {
+                            "path": "src/main/java/com/example/spacemode/SpaceModeModule.java",
+                            "text": (
+                                "package com.example.spacemode; "
+                                "public final class SpaceModeModule {}"
+                            ),
+                        }
+                    ],
+                }
+            if name == "apply_source_edit":
+                assert arguments["path"] == new_target
+                return {
+                    "schema_version": "mmm/source-patch-receipt-v1",
+                    "status": "APPLIED",
+                    "operations": [
+                        {
+                            "operation": "create",
+                            "path": new_target,
+                            "before_sha256": None,
+                            "after_sha256": "sha256:" + "9" * 64,
+                        }
+                    ],
+                }
+            if name == "java_diagnostics":
+                return {
+                    "schema_version": "mmm/java-diagnostics-v3",
+                    "status": "PASS",
+                    "available": True,
+                    "complete": True,
+                    "session_id": "session",
+                    "model_id": "model",
+                    "files_opened": 2,
+                    "error_count": 0,
+                    "warning_count": 0,
+                    "diagnostics": {},
+                }
+            raise AssertionError(name)
+
+    request_payload = {
+        "phase": "implement_authored_design",
+        "task": "Implement the next saved authored-design fragment.",
+        "module": module.config,
+        "initial_exact_source_context": {
+            "mode": "retrieve_current_authored_fragment_with_tools",
+            "reason": "earlier authored fragments changed the staged workspace",
+        },
+        "authored_execution": {
+            "schema_version": "mmm/authored-plan-fragment-v1",
+            "fragment_index": 2,
+            "fragment_count": 3,
+            "source_text_sha256": "sha256:" + "a" * 64,
+        },
+        "host_grounding": {
+            "schema_version": "mmm/host-owned-coder-grounding-v1",
+            "policy": {
+                "resolved_before_first_coder_decode": True,
+                "baseline_grounding_owned_by_host": True,
+                "baseline_grounding_optional_for_model": False,
+                "model_tool_choice_required_for_baseline": False,
+            },
+            "evidence_bindings": {
+                "project_exact_rag": {
+                    "receipt": {
+                        "observation_count": 1,
+                        "project_sha256": "sha256:" + "1" * 64,
+                        "observations_sha256": "sha256:" + "2" * 64,
+                    }
+                }
+            },
+        },
+    }
+    request = GenerationRequest(
+        messages=(
+            {
+                "role": "user",
+                "content": json.dumps(request_payload, separators=(",", ":")),
+            },
+        ),
+        tools=(
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_code_rag",
+                    "description": "search current staged project code",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "apply_source_edit",
+                    "description": "edit one source/resource file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "operation": {"type": "string"},
+                            "path": {"type": "string"},
+                            "content": {"type": "string"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "java_diagnostics",
+                    "description": "verify Java",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ),
+    )
+
+    adapter = Adapter()
+    runtime = Runtime()
+    authority_token = CURRENT_MUTATION_AUTHORITY.set(authority.mutation_authority)
+    envelope_token = _CURRENT_AUTHORITY.set(authority)
+    try:
+        result = tool_loop.generate_with_tools(
+            SimpleNamespace(_agent_require_fresh_evidence=False),
+            config=SimpleNamespace(
+                adapter="test",
+                max_context=32768,
+                max_input_tokens=0,
+                max_new_tokens=512,
+            ),
+            adapter=adapter,
+            request=request,
+            runtime=runtime,
+            stage="generation",
+            role="coder",
+        )
+    finally:
+        _CURRENT_AUTHORITY.reset(envelope_token)
+        CURRENT_MUTATION_AUTHORITY.reset(authority_token)
+
+    assert json.loads(result)["summary"]
+    assert adapter.calls == 2
+    assert runtime.calls == [
+        "search_code_rag",
+        "apply_source_edit",
+        "java_diagnostics",
+    ]
