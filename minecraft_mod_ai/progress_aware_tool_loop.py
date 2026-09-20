@@ -143,7 +143,7 @@ _SOURCE_CREATE_OPERATIONS = frozenset({
     "write", "write_file",
 })
 _SOURCE_ATOMIC_REWRITE_OPERATIONS = frozenset({"create", "create_file", "write", "write_file"})
-_REPAIR_CONTEXT_PREFIX = "MMM_CORE_VERIFIER_REPAIR_V1"
+_REPAIR_CONTEXT_PREFIX = "MMM_CORE_VERIFIER_REPAIR_"
 _REPAIR_FORBIDDEN_OPERATIONS = frozenset({
     "create",
     "create_file",
@@ -204,6 +204,7 @@ _EXISTING_TARGET_EVIDENCE_SOURCES = frozenset({
     "mutation_receipt",
     "search_code_rag",
     "workspace_existing_target",
+    "verifier_workspace_source",
 })
 _CODE_MARKERS = frozenset({
     "class ", "interface ", "enum ", "record ", "public ", "private ", "protected ",
@@ -1168,7 +1169,9 @@ def _mutation_target_error(
         )
         if error is not None:
             return error
-        if authority.mode is MutationAuthorityMode.BOUNDED_ROOTS:
+        if authority.mode is MutationAuthorityMode.BOUNDED_ROOTS and not (
+            context is not None and context.evidence_source == "verifier_workspace_source"
+        ):
             return None
     if context is None:
         return "MUTATION_TARGET_UNBOUND: no host-pinned mutation target is READY"
@@ -1391,7 +1394,14 @@ def _forced_act_messages(
         )
         else ()
     )
-    if bounded_roots:
+    if context is not None and context.evidence_source == "verifier_workspace_source":
+        directive = (
+            f"HOST FORCED ACT: repair the verified defect in {target!r} using the fresh "
+            "workspace source and diagnostics supplied by the host. Make one exact edit "
+            "to this existing file. Preserve the approved behavior and other files. "
+            "Do not restart generation or look for unrelated external projects."
+        )
+    elif bounded_roots:
         directive = (
             "HOST FORCED ACT: this saved authored design has host-owned bounded-root write "
             "authority. Choose exactly one project-relative file below one of these roots: "
@@ -1822,6 +1832,7 @@ def _record_applied_mutation(
     state.validation_status = "PENDING"
     state.latest_verifier_tool = None
     state.latest_verifier_errors = ()
+    state.repair_target_diagnostics = ()
     state.latest_verifier_fingerprint = None
     state.repair_guidance_fingerprint = None
     operation = _mutation_operation(arguments)
@@ -1842,9 +1853,25 @@ def _repair_guidance_payload(state: Any) -> dict[str, Any] | None:
     state.repair_guidance_fingerprint = state.latest_verifier_fingerprint
     context = state.mutation_context
     source = context.source_body if context and isinstance(context.source_body, str) else None
+    diagnostic_snapshot = (
+        json.loads(_bounded_verifier_recovery_observation(
+            state, errors=state.repair_target_diagnostics,
+        ))
+        if context and context.evidence_source == "verifier_workspace_source"
+        else None
+    )
     return {
         "verifier": state.latest_verifier_tool,
-        "diagnostics": list(state.latest_verifier_errors),
+        "diagnostics": (
+            diagnostic_snapshot["diagnostics"]
+            if diagnostic_snapshot else list(state.latest_verifier_errors)
+        ),
+        **({
+            "omitted_diagnostic_count": diagnostic_snapshot["omitted_diagnostic_count"],
+            "other_file_diagnostic_count": (
+                len(state.latest_verifier_errors) - len(state.repair_target_diagnostics)
+            ),
+        } if diagnostic_snapshot else {}),
         "target_path": context.target_path if context else None,
         "target_is_new_file": context.is_new_file if context else None,
         "writable_paths": list(context.writable_paths) if context else [],
@@ -1883,6 +1910,7 @@ class HostRunState:
     validation_status: str = "PENDING"
     latest_verifier_tool: str | None = None
     latest_verifier_errors: tuple[dict[str, Any], ...] = ()
+    repair_target_diagnostics: tuple[dict[str, Any], ...] = ()
     latest_verifier_fingerprint: str | None = None
     repair_guidance_fingerprint: str | None = None
     last_failure_reason: str | None = None
@@ -1988,12 +2016,18 @@ class HostRunState:
             "do not search unrelated ecosystem candidates, and never write a different path. "
             "The payload includes the exact host-tracked current source and its SHA-256. "
             "Any earlier host_reserved/fresh metadata is pre-materialization history only. "
-            "When target_is_new_file is false, create_file/create on the exact target path is "
-            "an atomic whole-file repair: the host converts it to an expected-SHA replace. "
-            "You may use that for a coherent rewrite or use a smaller non-create exact edit. "
+            "For this existing file, use an admitted non-create edit such as replace_exact. "
+            "For a coherent whole-file rewrite, set old to the complete current_source "
+            "and new to the corrected source; otherwise use a unique exact source span. "
             "Use the diagnostics below against the host-pinned target and make one materially "
             "different source edit. The next successful mutation goes directly back to VERIFY.\n"
-            + _repair_guidance_source_section(payload)
+            + (
+                "" if (
+                    self.mutation_context
+                    and self.mutation_context.evidence_source == "verifier_workspace_source"
+                )
+                else _repair_guidance_source_section(payload)
+            )
             + json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
         )
 
@@ -2845,7 +2879,9 @@ def _bounded_phase_handoff_content(
     )
 
 
-def _bounded_verifier_recovery_observation(state: HostRunState) -> str:
+def _bounded_verifier_recovery_observation(
+    state: HostRunState, *, errors: Sequence[Mapping[str, Any]] | None = None,
+) -> str:
     """Serialize only prompt-useful verifier evidence across VERIFY->RECOVER.
 
     The raw JDT receipt can contain the complete workspace diagnostic graph and is
@@ -2855,14 +2891,14 @@ def _bounded_verifier_recovery_observation(state: HostRunState) -> str:
     plus a fingerprint of the complete extracted error set instead.
     """
 
-    raw_errors = tuple(state.latest_verifier_errors)
+    raw_errors = tuple(state.latest_verifier_errors if errors is None else errors)
     diagnostics: list[dict[str, Any]] = []
     budget = _PHASE_HANDOFF_VERIFIER_DIAGNOSTIC_BYTES
     for raw in raw_errors:
         if not isinstance(raw, Mapping):
             continue
         compact: dict[str, Any] = {}
-        for key in ("path", "file", "line", "severity", "code", "source", "message", "range"):
+        for key in ("path", "file", "uri", "line", "severity", "code", "source", "message", "range"):
             value = raw.get(key)
             if value in (None, "", [], {}):
                 continue
@@ -3111,6 +3147,7 @@ def _generate_with_tools_impl(
         reviewed_mcp_servers_for_model_role,
         skills_for_tool,
     )
+    from .generation_diagnostic_repair import read_authorized_diagnostic_source
     from .grounding_policy import host_baseline_evidence_ready
     from .model_router import (
         _RAG_EVIDENCE_TOOLS,
@@ -3229,6 +3266,40 @@ def _generate_with_tools_impl(
     )
 
     while True:
+        if state.phase is LoopPhase.RECOVER and state.validation_status == "FAIL":
+            snapshot = read_authorized_diagnostic_source(
+                state.latest_verifier_errors,
+                getattr(runtime, "workspace_root", None),
+                active_mutation_authority,
+            )
+            if snapshot is not None:
+                state.repair_target_diagnostics = tuple(snapshot["diagnostics"])
+                state.mutation_context = TargetMutationContext(
+                    target_path=snapshot["path"],
+                    source_body=snapshot["source"],
+                    base_revision_sha=snapshot["sha256"],
+                    evidence_source="verifier_workspace_source",
+                    writable_paths=(snapshot["path"],),
+                    target_pinned=True,
+                )
+                # This is fresh local evidence, not permission inferred from a
+                # search hit. It satisfies recovery without consuming external
+                # discovery routes for an already-known workspace defect.
+                state.record_evidence(snapshot, usable=True)
+                state.phase = LoopPhase.ACT
+                emit_root_cause(
+                    "verifier_workspace_repair_bound",
+                    stage=stage,
+                    operation="generate_with_tools",
+                    gate="diagnostic_source_binding",
+                    result="PASS",
+                    details={
+                        "target_path": snapshot["path"],
+                        "source_sha256": snapshot["sha256"],
+                        "source_bytes": len(snapshot["source"].encode("utf-8")),
+                        "diagnostics_fingerprint": state.latest_verifier_fingerprint,
+                    },
+                )
         last_prompt_phase = _sync_phase_tool_transcript(
             messages, state=state, last_prompt_phase=last_prompt_phase, stage=stage
         )
@@ -3454,6 +3525,13 @@ def _generate_with_tools_impl(
         if state.phase == LoopPhase.ACT:
             guidance = state.take_verifier_repair_guidance()
             if guidance:
+                messages[:] = [
+                    message for message in messages
+                    if not (
+                        message.get("role") == "system"
+                        and str(message.get("content") or "").startswith(_REPAIR_CONTEXT_PREFIX)
+                    )
+                ]
                 messages.append({"role": "system", "content": guidance})
 
         if (
@@ -3500,6 +3578,7 @@ def _generate_with_tools_impl(
             (state.mutation_context.target_path,)
             if (
                 forced_verifier == "java_diagnostics"
+                and not bounded_root_execution_authority
                 and state.mutation_context is not None
                 and state.mutation_context.target_path.casefold().endswith(".java")
             )
@@ -3868,9 +3947,9 @@ def _generate_with_tools_impl(
                                     "MMM_TARGET_MATERIALIZED_V1\n"
                                     f"The host has materialized {materialized_path!r}. It is now an existing "
                                     "workspace file. Any earlier host_reserved/fresh creation status describes "
-                                    "only the pre-create lifecycle. Future repairs stay on this exact path; "
-                                    "same-path create_file/create is lowered to a SHA-bound whole-file replace, "
-                                    "while creation of any other path remains forbidden."
+                                    "only the pre-create lifecycle. Future edits must follow the current "
+                                    "host-selected target and exposed tool schema. For existing-source "
+                                    "repairs, use an admitted non-create edit such as replace_exact."
                                 ),
                             })
                     if compile_backed_java:

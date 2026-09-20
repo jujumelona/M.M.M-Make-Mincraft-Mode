@@ -118,8 +118,9 @@ def test_repair_guidance_tracks_verifier_fingerprint_not_message_history():
     assert first is not None
     assert PATH in first
     assert "RegistryWrapper cannot be resolved to a type" in first
-    assert "atomic whole-file repair" in first
-    assert "expected-SHA replace" in first
+    assert "replace_exact" in first
+    assert "current_source" in first
+    assert "create_file/create" not in first
     assert state.take_verifier_repair_guidance() is None
 
     state.record_verification(
