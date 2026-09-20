@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
@@ -21,7 +22,11 @@ def _path_key(value: str | Path) -> str:
 
 
 @contextmanager
-def project_write_lock(project_root: str | Path) -> Iterator[None]:
+def project_write_lock(
+    project_root: str | Path,
+    *,
+    timeout_seconds: float | None = None,
+) -> Iterator[None]:
     """Acquire the coarse project mutation gate.
 
     This is the compatibility boundary for read/merge/write operations whose exact
@@ -30,6 +35,16 @@ def project_write_lock(project_root: str | Path) -> Iterator[None]:
     existing higher-level generators. Waiting coarse writers receive preference over
     new scoped transactions so a stream of small patches cannot starve shared merges.
     """
+
+    if timeout_seconds is not None:
+        if isinstance(timeout_seconds, bool):
+            raise ValueError("project write lock timeout must be a positive number")
+        timeout_value = float(timeout_seconds)
+        if timeout_value <= 0.0 or timeout_value != timeout_value:
+            raise ValueError("project write lock timeout must be a positive finite number")
+        deadline = time.monotonic() + timeout_value
+    else:
+        deadline = None
 
     state = _state_for(project_root)
     owner = threading.get_ident()
@@ -46,7 +61,15 @@ def project_write_lock(project_root: str | Path) -> Iterator[None]:
             state.condition.notify_all()
             try:
                 while state.writer_owner is not None or state.scoped_total:
-                    state.condition.wait()
+                    if deadline is None:
+                        state.condition.wait()
+                        continue
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0.0:
+                        raise TimeoutError(
+                            "Timed out waiting for the coarse project write lock."
+                        )
+                    state.condition.wait(timeout=remaining)
                 state.writer_owner = owner
                 state.writer_depth = 1
             finally:
