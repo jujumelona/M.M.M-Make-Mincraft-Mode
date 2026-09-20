@@ -337,3 +337,175 @@ def test_authored_bounded_authority_enters_act_without_localization_rag() -> Non
     assert json.loads(result)["summary"]
     assert adapter.calls == 1
     assert runtime.calls == ["apply_source_edit", "java_diagnostics"]
+
+
+def test_authored_jdt_unavailable_defers_to_project_build() -> None:
+    import json
+
+    from minecraft_mod_ai.model_adapters import (
+        GenerationRequest,
+        GenerationResponse,
+        ToolCall,
+    )
+
+    module = _authored_module()
+    authority = compile_direct_task_mutation_authority(module)
+    assert authority is not None
+    target = "src/main/java/ai/minecraft/generated/SpaceModeMod.java"
+
+    class Adapter:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate_turn(self, request):
+            self.calls += 1
+            assert self.calls == 1
+            assert {item["function"]["name"] for item in request.tools} == {
+                "apply_source_edit"
+            }
+            arguments = {
+                "operation": "create_file",
+                "path": target,
+                "content": (
+                    "package ai.minecraft.generated; "
+                    "public final class SpaceModeMod {}\n"
+                ),
+            }
+            return GenerationResponse(
+                tool_calls=(
+                    ToolCall(
+                        id="authored-edit-unavailable",
+                        name="apply_source_edit",
+                        arguments=arguments,
+                        raw_arguments=json.dumps(arguments, separators=(",", ":")),
+                    ),
+                )
+            )
+
+    class Runtime:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def call(self, stage, name, arguments):
+            assert stage == "generation"
+            self.calls.append(name)
+            if name == "apply_source_edit":
+                return {
+                    "schema_version": "mmm/source-patch-receipt-v1",
+                    "status": "APPLIED",
+                    "operations": [
+                        {
+                            "operation": "create",
+                            "path": target,
+                            "before_sha256": None,
+                            "after_sha256": "sha256:" + "8" * 64,
+                        }
+                    ],
+                }
+            if name == "java_diagnostics":
+                return {
+                    "schema_version": "mmm/java-diagnostics-v3",
+                    "status": "UNAVAILABLE",
+                    "available": False,
+                    "complete": False,
+                    "skipped": True,
+                    "error_count": 0,
+                    "warning_count": 0,
+                    "diagnostics": [
+                        {
+                            "severity": 1,
+                            "code": "JDT_DIAGNOSTICS_UNAVAILABLE",
+                            "source": "jdt_core",
+                            "message": "Loom dependency download failed",
+                        }
+                    ],
+                }
+            raise AssertionError(name)
+
+    request = GenerationRequest(
+        messages=(
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "phase": "implement_authored_design",
+                        "task": "Implement the saved authored design.",
+                        "module": module.config,
+                        "host_grounding": {
+                            "schema_version": "mmm/host-owned-coder-grounding-v1",
+                            "policy": {
+                                "resolved_before_first_coder_decode": True,
+                                "baseline_grounding_owned_by_host": True,
+                                "baseline_grounding_optional_for_model": False,
+                                "model_tool_choice_required_for_baseline": False,
+                            },
+                            "evidence_bindings": {
+                                "project_exact_rag": {
+                                    "receipt": {
+                                        "observation_count": 1,
+                                        "project_sha256": "sha256:" + "1" * 64,
+                                        "observations_sha256": "sha256:" + "2" * 64,
+                                    }
+                                }
+                            },
+                        },
+                    },
+                    separators=(",", ":"),
+                ),
+            },
+        ),
+        tools=(
+            {
+                "type": "function",
+                "function": {
+                    "name": "apply_source_edit",
+                    "description": "edit one source/resource file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "operation": {"type": "string"},
+                            "path": {"type": "string"},
+                            "content": {"type": "string"},
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "java_diagnostics",
+                    "description": "verify Java",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ),
+    )
+
+    adapter = Adapter()
+    runtime = Runtime()
+    authority_token = CURRENT_MUTATION_AUTHORITY.set(authority.mutation_authority)
+    envelope_token = _CURRENT_AUTHORITY.set(authority)
+    try:
+        result = tool_loop.generate_with_tools(
+            SimpleNamespace(_agent_require_fresh_evidence=False),
+            config=SimpleNamespace(
+                adapter="test",
+                max_context=32768,
+                max_input_tokens=0,
+                max_new_tokens=512,
+            ),
+            adapter=adapter,
+            request=request,
+            runtime=runtime,
+            stage="generation",
+            role="coder",
+        )
+    finally:
+        _CURRENT_AUTHORITY.reset(envelope_token)
+        CURRENT_MUTATION_AUTHORITY.reset(authority_token)
+
+    summary = json.loads(result)["summary"]
+    assert "project build" in summary
+    assert adapter.calls == 1
+    assert runtime.calls == ["apply_source_edit", "java_diagnostics"]
+    assert tool_loop.current_generation_verification_receipt() is None
