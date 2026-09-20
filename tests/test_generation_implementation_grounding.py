@@ -270,6 +270,26 @@ def test_real_26_2_item_registry_grounding_has_complete_native_import_authority(
     assert "builtin_item_registry" not in templates["fabric/item/key_identifier"]["symbol_usage"]
     json.dumps(result, ensure_ascii=False)
 
+
+def test_small_coder_authority_prompt_surfaces_exact_native_imports_and_templates() -> None:
+    result = grounding.build_generation_implementation_grounding(
+        _module(),
+        minecraft_version="26.2",
+    )
+
+    prompt = grounding.render_generation_implementation_authority_prompt(result)
+
+    assert "MANDATORY HOST IMPLEMENTATION AUTHORITY" in prompt
+    assert "import net.minecraft.core.registries.Registries;" in prompt
+    assert "import net.minecraft.core.registries.BuiltInRegistries;" in prompt
+    assert "import net.minecraft.resources.ResourceKey;" in prompt
+    assert "fabric/item/register_keyed" in prompt
+    assert "fabric/item/key_identifier" in prompt
+    assert "receiver/member/argument topology exactly" in prompt
+    assert "net.minecraft.resources.Registries" not in prompt
+    assert "ResourceKeys" not in prompt
+
+
 def test_generation_grounding_requires_explicit_structural_responsibility() -> None:
     module = SimpleNamespace(
         kind="custom_java",
