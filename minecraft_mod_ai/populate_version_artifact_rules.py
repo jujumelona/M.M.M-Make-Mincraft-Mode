@@ -52,7 +52,7 @@ TEMPLATE_REQUIREMENTS.update(
         },
         "fabric/item/register_keyed": {
             "requires_capabilities": ["REGISTER_ITEM"],
-            "required_symbols": ["register_item"],
+            "required_symbols": ["register_item", "item_set_id"],
         },
     }
 )
@@ -182,6 +182,15 @@ def _apply_item_host_authority(
                 owner="net.minecraft.world.item.Item$Properties",
                 name="stacksTo",
                 descriptor="(I)Lnet/minecraft/world/item/Item$Properties;",
+                static=False,
+            ),
+            "item_set_id": _symbol(
+                owner="net.minecraft.world.item.Item$Properties",
+                name="setId",
+                descriptor=(
+                    "(Lnet/minecraft/resources/ResourceKey;)"
+                    "Lnet/minecraft/world/item/Item$Properties;"
+                ),
                 static=False,
             ),
             "registries_item": _symbol(
