@@ -31,6 +31,12 @@ from .llama_finish_reason_contract import (
     mark_context_recovery_exhausted,
 )
 from .model_adapters import GenerationRequest, ModelConfigurationError
+from .model_context_budget import (
+    bounded_tool_message,
+    emergency_fit_messages,
+    fit_messages_to_context,
+    request_message_budget,
+)
 from .mutation_authority import CURRENT_MUTATION_AUTHORITY, MutationAuthorityMode
 from .owned_target_contract import (
     normalize_target_status,
@@ -38,16 +44,11 @@ from .owned_target_contract import (
     target_is_existing,
     target_is_writable,
 )
-from .model_context_budget import (
-    bounded_tool_message,
-    emergency_fit_messages,
-    fit_messages_to_context,
-    request_message_budget,
-)
 from .root_cause_trace import emit_root_cause, trace_scope
 from .small_model_task_capsule_contract import task_capsule_tool_loop
 from .source_mutation_contract import mutation_history_applied, mutation_payload_applied
-from .value_shapes import as_sequence as _sequence, structured_payload as _structured_payload
+from .value_shapes import as_sequence as _sequence
+from .value_shapes import structured_payload as _structured_payload
 
 
 class LoopPhase(str, Enum):
@@ -168,7 +169,7 @@ def current_generation_verification_receipt() -> dict[str, Any] | None:
 
 
 def _record_terminal_generation_verification(
-    state: "HostRunState",
+    state: HostRunState,
     *,
     terminal_status: str,
     compile_backed_java: bool,
@@ -725,12 +726,10 @@ def _existing_target_context(
     current: TargetMutationContext,
     other: TargetMutationContext,
 ) -> TargetMutationContext | None:
-    if not other.is_new_file:
-        if str(other.evidence_source or "").strip() in _EXISTING_TARGET_EVIDENCE_SOURCES:
-            return other
-    if not current.is_new_file:
-        if str(current.evidence_source or "").strip() in _EXISTING_TARGET_EVIDENCE_SOURCES:
-            return current
+    if not other.is_new_file and str(other.evidence_source or "").strip() in _EXISTING_TARGET_EVIDENCE_SOURCES:
+        return other
+    if not current.is_new_file and str(current.evidence_source or "").strip() in _EXISTING_TARGET_EVIDENCE_SOURCES:
+        return current
     return None
 
 
@@ -1562,9 +1561,12 @@ def _java_evidence_texts(value: Any) -> tuple[str, ...]:
 def _has_symbol_records(item: Any) -> bool:
     if isinstance(item, Mapping):
         symbols = item.get("symbols")
-        if isinstance(symbols, Sequence) and not isinstance(symbols, (str, bytes, bytearray)):
-            if any(isinstance(symbol, Mapping) and bool(symbol) for symbol in symbols):
-                return True
+        if (
+            isinstance(symbols, Sequence)
+            and not isinstance(symbols, (str, bytes, bytearray))
+            and any(isinstance(symbol, Mapping) and bool(symbol) for symbol in symbols)
+        ):
+            return True
         return any(_has_symbol_records(child) for child in item.values())
     if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
         return any(_has_symbol_records(child) for child in item)
@@ -1576,9 +1578,12 @@ def _has_mapping_records(item: Any) -> bool:
         mappings = item.get("mappings")
         if isinstance(mappings, Mapping) and bool(mappings):
             return True
-        if isinstance(mappings, Sequence) and not isinstance(mappings, (str, bytes, bytearray)):
-            if any(isinstance(entry, Mapping) and bool(entry) for entry in mappings):
-                return True
+        if (
+            isinstance(mappings, Sequence)
+            and not isinstance(mappings, (str, bytes, bytearray))
+            and any(isinstance(entry, Mapping) and bool(entry) for entry in mappings)
+        ):
+            return True
         return any(_has_mapping_records(child) for child in item.values())
     if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
         return any(_has_mapping_records(child) for child in item)
@@ -1688,7 +1693,7 @@ def _requires_rag_evidence(
 
 
 def _target_evidence_ready(
-    state: "HostRunState",
+    state: HostRunState,
     *,
     require_rag: bool,
     fresh_java_target: bool,
@@ -1735,9 +1740,8 @@ def _record_evidence_locked(state: Any, value: Any, fingerprint: str) -> bool:
     if fingerprint in state.evidence_fingerprints:
         return False
     state.evidence_fingerprints.add(fingerprint)
-    if _fresh_java_context(state.mutation_context):
-        if _authoritative_java_evidence(value):
-            state.authoritative_java_evidence_fingerprints.add(fingerprint)
+    if _fresh_java_context(state.mutation_context) and _authoritative_java_evidence(value):
+        state.authoritative_java_evidence_fingerprints.add(fingerprint)
     context = _extract_mutation_context_from_payload(value)
     if context is not None and state.mutation_context is not None:
         state.mutation_context = state.mutation_context.merge(context)
@@ -3102,7 +3106,11 @@ def _generate_with_tools_impl(
     stage: str,
     role: str,
 ) -> str:
-    from .agent_capability_context import reviewed_mcp_servers_for_model_role, skills_for_tool
+    from .agent_capability_context import (
+        project_agent_capability_context,
+        reviewed_mcp_servers_for_model_role,
+        skills_for_tool,
+    )
     from .grounding_policy import host_baseline_evidence_ready
     from .model_router import (
         _RAG_EVIDENCE_TOOLS,
@@ -3192,9 +3200,7 @@ def _generate_with_tools_impl(
         # contradicts that authority, wastes retrieval turns, and can inflate the
         # mandatory conversation until it no longer fits the active llama slot.
         state.phase = LoopPhase.ACT
-    elif compile_backed_java:
-        state.phase = LoopPhase.ACT
-    elif implementation_requires_mutation and mutation_ready and not mutation_history_applied(messages):
+    elif compile_backed_java or implementation_requires_mutation and mutation_ready and not mutation_history_applied(messages):
         state.phase = LoopPhase.ACT
     else:
         state.phase = LoopPhase.OBSERVE
@@ -3499,8 +3505,35 @@ def _generate_with_tools_impl(
             )
             else ()
         )
+        # Derive every phase from the original routing snapshot. A projection
+        # must never narrow the persistent snapshot needed by a later phase.
+        phase_messages = [dict(message) for message in messages]
+        if role in {"coder", "coder_safe"}:
+            for message in phase_messages:
+                if message.get("role") == "system" and isinstance(message.get("content"), str):
+                    message["content"] = project_agent_capability_context(
+                        message["content"], phase_tools
+                    )
+        if phase_messages != messages:
+            emit_root_cause(
+                "phase_capability_context_projected",
+                stage=stage,
+                operation="generate_with_tools",
+                gate="coder_input",
+                result="PASS",
+                details={
+                    "phase": state.phase.value,
+                    "selected_tools": sorted(phase_names),
+                    "content_bytes_before": sum(
+                        len(str(item.get("content") or "").encode("utf-8")) for item in messages
+                    ),
+                    "content_bytes_after": sum(
+                        len(str(item.get("content") or "").encode("utf-8")) for item in phase_messages
+                    ),
+                },
+            )
         turn_messages = _forced_act_messages(
-            messages,
+            phase_messages,
             state=state,
             require_rag=require_rag,
             phase_names=phase_names,
@@ -3726,12 +3759,14 @@ def _generate_with_tools_impl(
                 _external_rag_capability,
             )
 
-        def execute(call: Any) -> tuple[Any, Mapping[str, Any]]:
+        def execute(
+            call: Any, *, allowed_names: frozenset[str] = frozenset(phase_names)
+        ) -> tuple[Any, Mapping[str, Any]]:
             metadata = {"skills": list(skills_for_tool(stage, call.name, model_role=role))}
-            if call.name not in phase_names:
+            if call.name not in allowed_names:
                 error = (
                     f"PHASE_PROTOCOL_VIOLATION: {call.name!r} is not allowed in "
-                    f"{state.phase.value}; allowed={sorted(phase_names)}"
+                    f"{state.phase.value}; allowed={sorted(allowed_names)}"
                 )
                 return call, {
                     "ok": False,
@@ -3741,15 +3776,14 @@ def _generate_with_tools_impl(
                     "error": error,
                 }
 
-            if is_evidence_tool(call):
-                if state.is_query_attempted(call.name, call.arguments):
-                    return call, {
-                        "ok": False,
-                        "tool": call.name,
-                        **metadata,
-                        "failure_code": "DUPLICATE_QUERY",
-                        "error": "RetrievalNoProgress: equivalent query already attempted",
-                    }
+            if is_evidence_tool(call) and state.is_query_attempted(call.name, call.arguments):
+                return call, {
+                    "ok": False,
+                    "tool": call.name,
+                    **metadata,
+                    "failure_code": "DUPLICATE_QUERY",
+                    "error": "RetrievalNoProgress: equivalent query already attempted",
+                }
 
             target_error = _mutation_target_error(
                 call.name, call.arguments, state.mutation_context
@@ -3787,7 +3821,7 @@ def _generate_with_tools_impl(
                     **metadata,
                     "result": result,
                 }
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - tool failures become typed recovery observations
                 if is_evidence_tool(call):
                     state.record_query(call.name, call.arguments)
                 error = f"{type(exc).__name__}: {exc}"
@@ -4103,9 +4137,6 @@ __all__ = [
     "_READ_OBSERVE_TOOLS",
     "_RECOVERY_EVIDENCE_TOOLS",
     "_VERIFY_TOOLS",
-    "_atomic_output_recovery_instruction",
-    "_fixed_point_tool_results",
-    "_model_tool_rejection_feedback",
     "ExecutionStepTrace",
     "HostRunState",
     "LocalizationStage",
@@ -4115,6 +4146,9 @@ __all__ = [
     "RetrievalObservation",
     "RetrievalProgress",
     "TargetMutationContext",
+    "_atomic_output_recovery_instruction",
+    "_fixed_point_tool_results",
+    "_model_tool_rejection_feedback",
     "clear_generation_verification_receipt",
     "current_generation_verification_receipt",
     "evidence_fingerprint",

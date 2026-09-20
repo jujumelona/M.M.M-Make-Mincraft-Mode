@@ -509,6 +509,40 @@ def build_agent_capability_context(
     )
 
 
+def project_agent_capability_context(
+    content: str,
+    tool_schemas: Sequence[Mapping[str, Any]],
+) -> str:
+    """Project the original routing snapshot onto this turn's visible tools.
+
+    The tool loop retains the full snapshot for later phases. In particular, a
+    recovery turn must not carry every generator's Java-verification Skill just
+    because java_diagnostics was available when the conversation started.
+    Active Skill policies and external routing/access remain intact.
+    """
+
+    prefix = "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n"
+    if not content.startswith(prefix):
+        return content
+    try:
+        payload = json.loads(content[len(prefix):])
+    except json.JSONDecodeError:
+        return content
+    if not isinstance(payload, dict) or not isinstance(payload.get("eligible_skills"), list):
+        return content
+    names = frozenset(_tool_names(tool_schemas))
+    skills = []
+    for skill in payload["eligible_skills"]:
+        if not isinstance(skill, dict) or not isinstance(skill.get("model_tools"), list):
+            # Unknown policy shapes are not safe to discard.
+            return content
+        active_tools = [name for name in skill["model_tools"] if name in names]
+        if active_tools:
+            skills.append({**skill, "model_tools": active_tools})
+    payload["eligible_skills"] = skills
+    return prefix + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
 def prepare_agent_tool_surface(
     stage: str,
     model_role: str,

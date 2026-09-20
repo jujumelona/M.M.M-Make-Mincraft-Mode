@@ -41,6 +41,45 @@ def _external_proxy_schemas():
     )
 
 
+def test_phase_projection_retains_active_policies_and_external_access() -> None:
+    schemas = (
+        _schema("search_code_rag"),
+        _schema("java_workspace_symbols"),
+        _schema("search_project_rag"),
+        _schema("java_diagnostics"),
+        _schema("apply_source_edit"),
+        *_external_proxy_schemas(),
+    )
+    original = build_agent_capability_context("generation", schemas, model_role="coder")
+    original_payload = _decode_context(original)
+    recovery_tools = (_schema("search_project_rag"), *_external_proxy_schemas())
+    projected = capability_context.project_agent_capability_context(original, recovery_tools)
+    payload = _decode_context(projected)
+
+    assert len(projected.encode("utf-8")) < len(original.encode("utf-8")) - 8000
+    assert payload["eligible_skills"]
+    assert {**payload, "eligible_skills": []} == {**original_payload, "eligible_skills": []}
+    originals = {skill["name"]: skill for skill in original_payload["eligible_skills"]}
+    for skill in payload["eligible_skills"]:
+        assert skill["model_tools"] == ["search_project_rag"]
+        assert {**skill, "model_tools": []} == {**originals[skill["name"]], "model_tools": []}
+    assert capability_context.project_agent_capability_context(projected, recovery_tools) == projected
+    # A later phase projects from the untouched original snapshot.
+    verification = _decode_context(capability_context.project_agent_capability_context(
+        original, (_schema("java_diagnostics"),)
+    ))
+    assert len(verification["eligible_skills"]) > len(payload["eligible_skills"])
+
+
+def test_phase_projection_preserves_unknown_policy_shapes() -> None:
+    for content in (
+        "unrelated authority",
+        "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n{invalid",
+        'MMM reviewed Skill/tool/Minecraft-MCP routing context:\n{"eligible_skills":[{"new_policy":true}]}',
+    ):
+        assert capability_context.project_agent_capability_context(content, ()) == content
+
+
 def test_research_context_connects_role_skills_tools_and_external_mcp() -> None:
     context = _decode_context(
         build_agent_capability_context(
