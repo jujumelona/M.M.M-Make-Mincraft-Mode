@@ -272,7 +272,8 @@ def retrieval_query_signature(tool_name: str, arguments: Mapping[str, Any]) -> s
     for key in ("index_path", "path", "file", "target_path", "symbol", "symbol_name"):
         value = str(arguments.get(key) or "").strip().casefold()
         if value:
-            parts.append(f"{key}={value}")
+            label = "target" if key in {"index_path", "path", "file", "target_path"} else key
+            parts.append(f"{label}={value}")
     if query:
         parts.append(f"q={query}")
     cursor = arguments.get("cursor") or arguments.get("offset_bytes")
@@ -893,7 +894,7 @@ def _search_hit_context(hit: Mapping[str, Any]) -> TargetMutationContext | None:
 
 
 def _extract_search_context(payload: Mapping[str, Any]) -> TargetMutationContext | None:
-    hits = payload.get("hits") or payload.get("results")
+    hits = payload.get("hits") or payload.get("results") or payload.get("sources")
     for hit in _sequence(hits):
         if not isinstance(hit, Mapping):
             continue
@@ -1568,9 +1569,10 @@ def format_trajectory_summary(trajectory: Sequence[ExecutionStepTrace]) -> str:
             for result in item.tool_results
         ) or "<none>"
         lines.append(
-            f"Step {item.step_index} {item.phase_before}->{item.phase_after} "
-            f"{item.localization_stage_before}->{item.localization_stage_after} "
-            f"calls={calls} results={results} progress={item.turn_made_progress}"
+            f"Step {item.step_index} [{item.phase_before}:{item.localization_stage_before} -> "
+            f"{item.phase_after}:{item.localization_stage_after}] "
+            f"calls={calls} results={results} progress={item.turn_made_progress} "
+            f"streak={item.no_progress_streak_after}"
         )
     return "\n".join(lines)
 
