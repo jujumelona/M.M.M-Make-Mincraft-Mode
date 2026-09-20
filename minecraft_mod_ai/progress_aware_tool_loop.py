@@ -609,8 +609,23 @@ def _constrain_existing_repair_schema(
     operation["enum"] = allowed
     operation["description"] = (
         str(operation.get("description") or "").rstrip()
-        + " Existing-file repair turn: creation and deletion operations are structurally unavailable."
+        + " Existing-file repair turn: creation and deletion operations are structurally unavailable. "
+        "For a coherent whole-file repair use replace_exact with old omitted and put the complete "
+        "corrected file in new; the host binds that rewrite to the live file SHA."
     ).strip()
+
+    old_schema = properties.get("old")
+    if isinstance(old_schema, dict):
+        old_schema["description"] = (
+            "Exact text to match for a partial replace_exact repair. Copy a short unique span "
+            "byte-for-byte from current_source. Omit old entirely for a whole-file rewrite."
+        )
+    new_schema = properties.get("new")
+    if isinstance(new_schema, dict):
+        new_schema["description"] = (
+            "Replacement text for replace_exact. When old is omitted, this must be the complete "
+            "corrected file and the host performs an atomic live-SHA-bound whole-file rewrite."
+        )
 
     path_schema = properties.get("path")
     if not isinstance(path_schema, dict):
@@ -1095,7 +1110,9 @@ def _reconcile_materialized_target_from_workspace(
         root = Path(str(root_value)).expanduser().resolve()
         candidate = (root / target).resolve()
         candidate.relative_to(root)
-        source = candidate.read_text(encoding="utf-8")
+        raw_source = candidate.read_bytes()
+        source = raw_source.decode("utf-8")
+        source_sha256 = hashlib.sha256(raw_source).hexdigest()
     except (FileNotFoundError, OSError, UnicodeError, ValueError):
         return None
 
@@ -1111,6 +1128,7 @@ def _reconcile_materialized_target_from_workspace(
             source_body=source,
             is_new_file=False,
             evidence_source="workspace_existing_target",
+            base_revision_sha=source_sha256,
             creatable_paths=_without_target_path(current.creatable_paths, target),
         )
         state.mutation_context = reconciled
@@ -2017,8 +2035,9 @@ class HostRunState:
             "The payload includes the exact host-tracked current source and its SHA-256. "
             "Any earlier host_reserved/fresh metadata is pre-materialization history only. "
             "For this existing file, use an admitted non-create edit such as replace_exact. "
-            "For a coherent whole-file rewrite, set old to the complete current_source "
-            "and new to the corrected source; otherwise use a unique exact source span. "
+            "For a coherent whole-file rewrite, OMIT old entirely and put the complete corrected "
+            "source in new; the host reads the live file and binds the rewrite to its current SHA. "
+            "Use old only for a short unique partial span copied byte-for-byte from current_source. "
             "Use the diagnostics below against the host-pinned target and make one materially "
             "different source edit. The next successful mutation goes directly back to VERIFY.\n"
             + (
@@ -3968,6 +3987,10 @@ def _generate_with_tools_impl(
                     if code == "MUTATION_STALE_PRECONDITION":
                         refreshed = _reconcile_materialized_target_from_workspace(state, runtime)
                         if refreshed is not None:
+                            # The verifier obligation is still valid, but the model's exact-match
+                            # precondition was stale. Re-issue the repair contract against the live
+                            # workspace snapshot instead of replaying the same stale edit.
+                            state.repair_guidance_fingerprint = None
                             messages.append(_existing_target_refresh_message(refreshed))
                         state.phase = (
                             LoopPhase.ACT
