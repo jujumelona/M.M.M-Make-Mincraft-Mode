@@ -200,19 +200,40 @@ def _debug_task_contract(platform: Any) -> dict[str, Any]:
         "module_id": ":",
         "source_set": "main",
     }
+    from .host_item_registration import item_registration_epoch
+
+    item_epoch = item_registration_epoch(str(platform.minecraft_version))
+    required_host_symbol_keys = [
+        "register_item",
+        "builtin_item_registry",
+        "registries_item",
+        "resource_key_create",
+        "identifier_factory",
+    ]
+    required_host_symbol_specs: dict[str, dict[str, Any]] = {}
+    if item_epoch.get("requires_set_id") is True:
+        required_host_symbol_keys.append("item_set_id")
+        required_host_symbol_specs["item_set_id"] = {
+            "owner": "net.minecraft.world.item.Item$Properties",
+            "name": "setId",
+            "descriptor": (
+                "(Lnet/minecraft/resources/ResourceKey;)"
+                "Lnet/minecraft/world/item/Item$Properties;"
+            ),
+            "kind": "method",
+            "static": False,
+            "side": "common",
+            "namespace": "minecraft",
+        }
+
     observable_source_contract = {
         "schema_version": "mmm/debug-source-contract-v1",
         "path": "src/main/java/dev/mmm/debugfixture/DebugToken.java",
         "identifier": "debug_token",
         "binding_field": "DEBUG_TOKEN",
         "semantic_kind": "item",
-        "required_host_symbol_keys": [
-            "register_item",
-            "builtin_item_registry",
-            "registries_item",
-            "resource_key_create",
-            "identifier_factory",
-        ],
+        "required_host_symbol_keys": required_host_symbol_keys,
+        "required_host_symbol_specs": required_host_symbol_specs,
         "forbidden_lifecycle_symbols": [
             "ModInitializer",
             "ClientModInitializer",
@@ -242,6 +263,7 @@ def _debug_task_contract(platform: Any) -> dict[str, Any]:
         "implementation_obligations": [
             "Use only the host-grounded item registration API admitted for the immutable target.",
             "Materialize the debug_token identifier through the host symbols register_item, builtin_item_registry, registries_item, resource_key_create, and identifier_factory.",
+            "When the target item epoch requires it, bind the same ResourceKey into Item.Properties.setId before constructing the Item.",
             "Expose the registered item as public static field DEBUG_TOKEN so the host-owned entrypoint can force class initialization.",
             "Keep all model-authored production source changes inside the owned DebugToken.java target.",
             "Do not implement ModInitializer, create another entrypoint, add item groups/tabs, or invent lifecycle hooks; this is a compile-backed API fixture.",
@@ -254,6 +276,7 @@ def _debug_task_contract(platform: Any) -> dict[str, Any]:
                 "Create the exact owned DebugToken Java source.",
                 "Use the host-projected target item API/template facts instead of remembered mappings or package names.",
                 "Resolve and use the host symbol keys register_item, builtin_item_registry, registries_item, resource_key_create, and identifier_factory.",
+                "Preserve target-required Item.Properties.setId(ResourceKey) semantics from the host item epoch.",
                 "Assign the direct result of the host register_item call to public static field DEBUG_TOKEN.",
                 "Implement only the minimal debug_token item-registration source needed to exercise target compilation and host runtime binding.",
                 "Keep the fixture deterministic and self-contained for repeatable pipeline debugging.",
