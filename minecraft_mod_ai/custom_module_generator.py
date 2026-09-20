@@ -523,22 +523,57 @@ def _host_finalize_missing_generation_verification(
     touched_paths: Sequence[str],
     required_gates: Sequence[str],
 ) -> dict[str, Any] | None:
-    """Host-own the final compile evidence when a noncanonical router omitted it.
+    """Host-own the final downstream verification binding for generated source.
 
-    Existing receipts are never repaired or replaced here. A malformed receipt must
-    remain visible to the fail-closed binding contract. Only a genuinely missing
-    receipt can be recovered, and only for one exact Java target with a mandatory
-    target_compile gate.
+    Exact-path tasks keep target_compile semantics. Authored bounded-root generation
+    is split into fragments that may touch different files, so a fragment-local JDT
+    receipt cannot certify the complete generated module. A required project-build
+    gate therefore binds the complete final touched-path set to downstream Gradle.
     """
-
-    if generation_verification is not None:
-        return generation_verification
 
     normalized_gates = {
         re.sub(r"[^a-z0-9]+", "_", str(value).strip().casefold()).strip("_")
         for value in required_gates
         if str(value).strip()
     }
+
+    if "project_build" in normalized_gates:
+        normalized_paths = tuple(
+            sorted(
+                {
+                    str(path).replace("\\", "/").strip()
+                    for path in touched_paths
+                    if str(path).strip()
+                }
+            )
+        )
+        if not normalized_paths:
+            return None
+        touched_payload = json.dumps(
+            normalized_paths,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return {
+            "schema_version": "mmm/generation-verification-v1",
+            "status": "DEFERRED_TO_PROJECT_BUILD",
+            "authority": "generation_tool_loop",
+            "validation_status": "DEFERRED",
+            "termination_reason": "VERIFICATION_DEFERRED_TO_PROJECT_BUILD",
+            "verifier_tool": "project_build",
+            "target_path": None,
+            "compile_backed_java": False,
+            "downstream_required_gate": "project_build",
+            "verification_scope": "project",
+            "touched_paths_sha256": "sha256:"
+            + hashlib.sha256(touched_payload).hexdigest(),
+            "touched_path_count": len(normalized_paths),
+            "generation_time_receipt": generation_verification,
+        }
+
+    if generation_verification is not None:
+        return generation_verification
+
     java_paths = tuple(
         dict.fromkeys(
             str(path).replace("\\", "/").strip()
@@ -1059,7 +1094,11 @@ class CustomModuleGenerator:
             != "mmm/generation-verification-v1"
             or generation_verification.get("authority") != "generation_tool_loop"
             or generation_verification.get("status")
-            not in {"PASS", "DEFERRED_TO_TARGET_COMPILE"}
+            not in {
+                "PASS",
+                "DEFERRED_TO_TARGET_COMPILE",
+                "DEFERRED_TO_PROJECT_BUILD",
+            }
         ):
             raise CustomModuleGenerationError(
                 "GENERATION_VERIFICATION_RECEIPT_MISSING: coder/tool loop and host "
