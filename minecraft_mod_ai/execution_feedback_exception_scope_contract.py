@@ -9,6 +9,8 @@ def _checkpoint_for_exception(exc: BaseException | None) -> str | None:
     if exc is None:
         return None
     message = str(exc).casefold()
+    if "debug fixture observable source acceptance failed" in message:
+        return "validate-debug-source"
     if "failed deterministic validation" in message:
         return "validate-source"
     if "jdt reported errors" in message:
