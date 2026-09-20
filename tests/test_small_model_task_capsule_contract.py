@@ -331,13 +331,17 @@ def test_fresh_java_edit_schema_requires_one_complete_create_before_compile() ->
     narrowed = tool_loop._source_edit_schema_for_context(_tool_schema(), context)
     parameters = narrowed["function"]["parameters"]
     properties = parameters["properties"]
-    operations = properties["operation"]["enum"]
 
-    assert operations == ["create_file"]
-    assert set(properties) == {"operation", "path", "content"}
-    assert properties["path"]["enum"] == [JAVA_PATH]
-    assert parameters["required"] == ["operation", "path", "content"]
+    assert set(properties) == {"content"}
+    assert parameters["required"] == ["content"]
     assert parameters["additionalProperties"] is False
+
+    bound = bind_source_edit_arguments(
+        {"content": "package generated.generated_mod; public final class X {}"},
+        capsule,
+    )
+    assert bound["operation"] == "create_file"
+    assert bound["path"] == JAVA_PATH
 
 
 def test_materialized_java_edit_schema_allows_atomic_same_path_rewrite() -> None:

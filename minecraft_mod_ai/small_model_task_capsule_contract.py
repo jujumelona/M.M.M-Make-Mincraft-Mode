@@ -552,6 +552,9 @@ def bind_source_edit_arguments(
     bound["path"] = host_path
 
     operation = str(bound.get("operation") or "").strip().casefold()
+    if not operation and host_path in capsule.creatable_paths:
+        bound["operation"] = "create_file"
+        operation = "create_file"
     if operation in {"create_java_type", "create_type", "create_class"}:
         anchor = capsule.anchor_for_path(host_path)
         relative = ""

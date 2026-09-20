@@ -2071,32 +2071,21 @@ def _source_edit_schema_for_context(
                 ]
 
     if fresh_java and isinstance(parameters, dict) and isinstance(properties, dict):
-        minimal_properties = {
-            key: deepcopy(properties[key])
-            for key in ("operation", "path", "content")
-            if key in properties
-        }
-        path_schema = minimal_properties.get("path")
-        if isinstance(path_schema, dict):
-            path_schema["enum"] = [context.target_path]
-            path_schema["description"] = (
-                "Exact host-pinned fresh Java target; emit this path exactly."
-            )
-        operation_schema = minimal_properties.get("operation")
-        if isinstance(operation_schema, dict):
-            operation_schema["enum"] = ["create_file"]
-            operation_schema["description"] = (
-                "Create the complete fresh Java file exactly once."
-            )
-        content_schema = minimal_properties.get("content")
+        # Operation and destination are already host-owned by TargetMutationContext.
+        # Asking the small model to regenerate them creates avoidable tool-markup tokens
+        # and another opportunity for protocol drift. The TaskCapsule binds both after
+        # admission, so the model authors only the source body.
+        content_schema = deepcopy(properties.get("content") or {"type": "string"})
         if isinstance(content_schema, dict):
+            content_schema["type"] = "string"
             content_schema["description"] = (
-                "Complete minimal compilable Java source for the host-pinned target."
+                "Complete minimal compilable Java source for the already host-pinned "
+                "fresh target. Emit source text only; the host binds operation and path."
             )
-        parameters["properties"] = minimal_properties
-        parameters["required"] = ["operation", "path", "content"]
+        parameters["properties"] = {"content": content_schema}
+        parameters["required"] = ["content"]
         parameters["additionalProperties"] = False
-        properties = minimal_properties
+        properties = parameters["properties"]
     description = str(function.get("description") or "").strip()
     if context.is_new_file and context.target_path.casefold().endswith(".java"):
         suffix = (
