@@ -292,7 +292,11 @@ def install() -> None:
         if receipt is None:
             provider._clean_fresh_template_examples(root, spec)
         runtime_contract = provider._install_host_runtime_contract(root, spec, adapter)
-        gametest_contract = provider._install_host_gametest_contract(root, spec)
+        gametest_contract = provider._install_host_gametest_contract(
+            root,
+            spec,
+            adapter,
+        )
 
         if receipt is None:
             deno = provider._ensure_deno(Path(cache_root).expanduser().resolve())
