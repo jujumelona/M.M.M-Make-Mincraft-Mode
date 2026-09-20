@@ -55,7 +55,13 @@ def _jdt_error_receipt() -> dict:
 
 def test_debug_fixture_prepare_binds_generated_token_into_host_runtime(
     tmp_path,
+    monkeypatch,
 ) -> None:
+    monkeypatch.setattr(
+        CompleteProductionOrchestrator,
+        "_ensure_debug_fixture_resources",
+        staticmethod(lambda _approved, _root: None),
+    )
     root = tmp_path / "project"
     package = root / "src/main/java/dev/mmm/debugfixture"
     metadata = root / ".minecraft_ai"
