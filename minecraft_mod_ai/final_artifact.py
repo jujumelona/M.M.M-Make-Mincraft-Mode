@@ -322,12 +322,27 @@ def _debug_host_symbol_used(code: str, symbol: Mapping[str, Any]) -> bool:
     static = symbol.get("static") is not False
 
     if kind == "method" and not static:
-        # Instance methods such as Item.Properties.setId are invoked on an object,
-        # not as Item.setId. Require both the admitted owner type and the member call.
-        owner_present = (
+        # Instance methods such as Item.Properties.setId are invoked on an object.
+        return bool(
             owner_source in compact
-            or f"import{owner};" in compact
-            or f"import{owner.rsplit('
+            and re.search(rf"\.\s*{re.escape(name)}\s*\(", code)
+        )
+
+    direct = f"{owner_simple}.{name}"
+    if kind == "method":
+        if f"{direct}(" in compact:
+            return True
+        return bool(
+            f"importstatic{owner}.{name};" in compact
+            and re.search(rf"(?<![\w.]){re.escape(name)}\s*\(", code)
+        )
+
+    if direct in compact:
+        return True
+    return bool(
+        f"importstatic{owner}.{name};" in compact
+        and re.search(rf"(?<![\w.]){re.escape(name)}\b", code)
+    )
 
 def verify_debug_fixture_source(
     project_root: str | Path,
