@@ -402,16 +402,23 @@ def install(
 ) -> None:
     # Both scheduler delegation and shared-GPU admission are source-owned now.
     del work_graph_module
-    current = orchestrator_module.CompleteProductionOrchestrator._execute_generation_work
-    if getattr(current, "__module__", "") != orchestrator_module.__name__:
-        raise RuntimeError(
-            "Scheduler safety requires source-owned _execute_generation_work."
-        )
-    if hasattr(current, "__wrapped__"):
-        raise RuntimeError(
-            "Scheduler safety cannot install over a wrapped generation owner."
-        )
+    cls = orchestrator_module.CompleteProductionOrchestrator
+    current = cls._execute_generation_work
+    run_node = cls._run_work_node
+    for name, value in (
+        ("_execute_generation_work", current),
+        ("_run_work_node", run_node),
+    ):
+        if getattr(value, "__module__", "") != orchestrator_module.__name__:
+            raise RuntimeError(
+                f"Scheduler safety requires source-owned {name}."
+            )
+        if hasattr(value, "__wrapped__"):
+            raise RuntimeError(
+                f"Scheduler safety cannot install over wrapped {name}."
+            )
     current._mmm_profile_shared_gpu_lane = True  # type: ignore[attr-defined]
+    run_node._mmm_claim_fenced = True  # type: ignore[attr-defined]
 
 
 __all__ = [
