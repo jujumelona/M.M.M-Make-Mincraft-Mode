@@ -59,10 +59,14 @@ def test_real_compiler_hands_saved_text_to_coder_without_replanning(monkeypatch,
 
 
 def test_real_orchestrator_accepts_authored_handoff(monkeypatch, tmp_path):
-    from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator
+    from minecraft_mod_ai.complete_orchestrator import (
+        CompleteExecutionOptions,
+        CompleteProductionOrchestrator,
+    )
 
     plan = AuthoredPlan("Space mod for Fabric 1.21.11", "행성과 광물 거래")
     proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(plan)
+    assert proposal.external_runtime_required is False
     orchestrator = CompleteProductionOrchestrator(workspace_root=tmp_path)
 
     class ReachedProjectCreation(Exception):
@@ -74,4 +78,15 @@ def test_real_orchestrator_accepts_authored_handoff(monkeypatch, tmp_path):
 
     monkeypatch.setattr(orchestrator, "_prepare_project", prepare)
     with pytest.raises(ReachedProjectCreation):
-        orchestrator.execute(proposal, approval_hash=proposal.calculate_hash(), run_name="authored")
+        orchestrator.execute(
+            proposal,
+            approval_hash=proposal.calculate_hash(),
+            run_name="authored",
+            options=CompleteExecutionOptions(
+                run_blockbench=False,
+                run_runtime=False,
+                run_client=False,
+                run_mineflayer=False,
+                run_visual_review=False,
+            ),
+        )
