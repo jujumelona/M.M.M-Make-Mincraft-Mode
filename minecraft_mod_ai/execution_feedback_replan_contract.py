@@ -840,6 +840,7 @@ def execution_feedback_scoped(current_execute: Any) -> Any:
                 while True:
                     try:
                         result = current_execute(self, *args, **call_kwargs)
+                        self._mmm_execution_feedback_context = None
                         break
                     except CompleteProductionError as exc:
                         emit_root_cause(
@@ -896,6 +897,10 @@ def execution_feedback_scoped(current_execute: Any) -> Any:
                             )
                             raise
                         seen.add(fingerprint)
+                        self._mmm_execution_feedback_context = {
+                            "feedback": dict(feedback),
+                            "invalidation_receipt": dict(receipt),
+                        }
                         options = call_kwargs.get("options")
                         if options is None:
                             options = CompleteExecutionOptions(resume=True)
@@ -916,6 +921,7 @@ def execution_feedback_scoped(current_execute: Any) -> Any:
                             },
                         )
             except BaseException as exc:
+                self._mmm_execution_feedback_context = None
                 emit_root_cause(
                     "pipeline_boundary_failure",
                     stage="runtime",
