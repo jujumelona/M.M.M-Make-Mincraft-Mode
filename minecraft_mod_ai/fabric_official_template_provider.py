@@ -12,6 +12,8 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+from .gametest_discovery import modern_fabric_gametest_api
+
 
 class FabricTemplateProviderError(RuntimeError):
     pass
@@ -529,21 +531,6 @@ public final class {main_class} implements ModInitializer {{
     }
 
 
-def _modern_fabric_gametest_api(minecraft_version: str) -> bool:
-    numbers = [
-        int(part)
-        for part in re.findall(r"\d+", str(minecraft_version))
-    ]
-    if not numbers:
-        return False
-    if numbers[0] >= 2:
-        return True
-    major = numbers[0]
-    minor = numbers[1] if len(numbers) > 1 else 0
-    patch = numbers[2] if len(numbers) > 2 else 0
-    return (major, minor, patch) >= (1, 21, 5)
-
-
 def _install_host_gametest_contract(
     root: Path,
     spec: Any,
@@ -669,7 +656,7 @@ loom {
             "Canonical Fabric GameTest source must not be a symlink."
         )
     source_path.parent.mkdir(parents=True, exist_ok=True)
-    if _modern_fabric_gametest_api(adapter.minecraft_version):
+    if modern_fabric_gametest_api(adapter.minecraft_version):
         source_text = f"""package {spec.package_name};
 
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
