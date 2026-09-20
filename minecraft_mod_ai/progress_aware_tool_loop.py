@@ -1380,7 +1380,25 @@ def _forced_act_messages(
         and getattr(context, "is_new_file", False)
         and target.casefold().endswith(".java")
     )
-    if fresh_java:
+    active_authority = CURRENT_MUTATION_AUTHORITY.get()
+    bounded_roots = (
+        tuple(active_authority.roots)
+        if (
+            active_authority is not None
+            and active_authority.mode is MutationAuthorityMode.BOUNDED_ROOTS
+        )
+        else ()
+    )
+    if bounded_roots:
+        directive = (
+            "HOST FORCED ACT: this saved authored design has host-owned bounded-root write "
+            "authority. Choose exactly one project-relative file below one of these roots: "
+            f"{list(bounded_roots)!r}. Call the single visible mutation tool exactly once with "
+            "no prose. Create or edit only the file needed for the current authored-design "
+            "fragment; deletes, build files, host state, retrieval, replanning, narration, and "
+            "multi-file payloads are forbidden in this turn."
+        )
+    elif fresh_java:
         directive = (
             "HOST FORCED ACT: target localization, write authority, and evidence policy are already "
             f"resolved for {target!r}. Call the single visible mutation tool exactly once with no prose. "
