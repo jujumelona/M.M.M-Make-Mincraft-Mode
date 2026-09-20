@@ -120,6 +120,8 @@ def test_repair_guidance_tracks_verifier_fingerprint_not_message_history():
     assert "RegistryWrapper cannot be resolved to a type" in first
     assert "replace_exact" in first
     assert "current_source" in first
+    assert "OMIT old entirely" in first
+    assert "live file" in first
     assert "create_file/create" not in first
     assert state.take_verifier_repair_guidance() is None
 
