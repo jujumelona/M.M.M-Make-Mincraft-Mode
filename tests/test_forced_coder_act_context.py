@@ -270,3 +270,91 @@ def test_forced_act_projects_after_required_rag_is_satisfied() -> None:
     )
     assert any(value.startswith("MMM_PHASE_HANDOFF OBSERVE->ACT") for value in contents)
     assert any("HOST FORCED ACT:" in value for value in contents)
+
+
+
+def test_large_rag_transition_projects_to_bounded_act_context() -> None:
+    import json
+
+    target = "src/main/java/demo/SpaceModeMod.java"
+    state = tool_loop.HostRunState(
+        phase=tool_loop.LoopPhase.ACT,
+        evidence_fingerprints={"sha256:workspace-evidence"},
+    )
+    raw_tail = "RAW_RAG_PAYLOAD:" + ("z" * 100_000)
+    messages = [
+        {"role": "system", "content": "coder"},
+        {
+            "role": "system",
+            "content": "Host research context follows.\n" + "x" * 20_000,
+        },
+        {
+            "role": "system",
+            "content": "MMM reviewed Skill/tool/Minecraft-MCP routing context:\n" + "y" * 20_000,
+        },
+        {
+            "role": "user",
+            "content": '{"phase":"implement_authored_design","task":"continue space mode"}',
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "rag-large",
+                    "type": "function",
+                    "function": {
+                        "name": "search_code_rag",
+                        "arguments": "{}",
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "rag-large",
+            "name": "search_code_rag",
+            "content": json.dumps(
+                {
+                    "ok": True,
+                    "result": {
+                        "structured_content": {
+                            "schema_version": "mmm/code-rag-result-v1",
+                            "hits": [
+                                {
+                                    "path": target,
+                                    "source_path": target,
+                                    "text": "package demo; public final class SpaceModeMod {} "
+                                    + raw_tail,
+                                }
+                            ],
+                            "receipt": {"status": "FOUND", "result_count": 1},
+                        }
+                    },
+                }
+            ),
+        },
+    ]
+
+    tool_loop._sync_phase_tool_transcript(
+        messages,
+        state=state,
+        last_prompt_phase=tool_loop.LoopPhase.OBSERVE,
+        stage="generation",
+    )
+    projected = tool_loop._forced_act_messages(
+        messages,
+        state=state,
+        require_rag=True,
+        evidence_ready=True,
+        phase_names={"apply_source_edit"},
+    )
+
+    rendered = json.dumps(projected, ensure_ascii=False)
+    assert "Host research context follows." not in rendered
+    assert "MMM reviewed Skill/tool/Minecraft-MCP routing context:" not in rendered
+    assert rendered.count("MMM_PHASE_HANDOFF OBSERVE->ACT") == 1
+    assert target in rendered
+    assert "package demo; public final class SpaceModeMod {}" in rendered
+    assert raw_tail not in rendered
+    assert len(rendered.encode("utf-8")) < 16 * 1024
