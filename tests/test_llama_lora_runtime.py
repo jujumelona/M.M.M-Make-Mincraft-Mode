@@ -62,6 +62,24 @@ def test_request_lora_routes_only_matching_role(monkeypatch) -> None:
     ) == []
 
 
+def test_atomic_recovery_can_disable_request_lora(monkeypatch) -> None:
+    monkeypatch.setattr(
+        lora,
+        "_adapter_id_map",
+        lambda *_args, **_kwargs: {"coding_agentic": 7},
+    )
+    request = SimpleNamespace(
+        metadata={"mmm_disable_lora": True},
+        tools=({"type": "function"},),
+    )
+
+    assert lora.request_lora_payload(
+        "http://127.0.0.1:8910/v1",
+        _config(),
+        request,
+    ) == []
+
+
 def test_lora_launch_args_preload_gguf_and_zero_by_default(monkeypatch, tmp_path) -> None:
     adapter = tmp_path / "coding-agentic.gguf"
     adapter.write_bytes(b"gguf")
