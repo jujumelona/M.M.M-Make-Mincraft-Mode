@@ -1505,6 +1505,35 @@ def _model_tool_rejection_feedback(
     )
 
 
+def _model_rejection_progress_key(
+    state: Any,
+    rejection_payloads: Sequence[Mapping[str, Any]],
+    *,
+    forced_evidence_tool: str | None,
+) -> Mapping[str, Any]:
+    """Return a stable no-progress key for model tool-admission failures.
+
+    When the host has forced exactly one evidence route, varying rejected query text
+    must not reset convergence. The route and rejection class are the semantic state;
+    raw model arguments are incidental noise.
+    """
+
+    base: dict[str, Any] = {
+        "phase": state.phase.value,
+        "validation": state.validation_status,
+        "verifier": state.latest_verifier_fingerprint,
+    }
+    forced = str(forced_evidence_tool or "").strip()
+    if not forced:
+        base["model_tool_rejections"] = list(rejection_payloads)
+        return base
+    base["forced_evidence_tool"] = forced
+    base["rejection_codes"] = sorted({
+        str(payload.get("failure_code") or "MODEL_TOOL_CALL_REJECTED").strip()
+        for payload in rejection_payloads
+    })
+    return base
+
 @dataclass(frozen=True)
 class ExecutionStepTrace:
     step_index: int
@@ -3709,12 +3738,13 @@ def _generate_with_tools_impl(
                         or "model tool call rejected"
                     ),
                 )
-            repeated = state.record_no_progress_result({
-                "phase": state.phase.value,
-                "validation": state.validation_status,
-                "verifier": state.latest_verifier_fingerprint,
-                "model_tool_rejections": rejection_payloads,
-            })
+            repeated = state.record_no_progress_result(
+                _model_rejection_progress_key(
+                    state,
+                    rejection_payloads,
+                    forced_evidence_tool=forced_evidence_tool,
+                )
+            )
             if forced_evidence_tool is not None:
                 feedback += (
                     " The host has selected exactly one admissible evidence function for "
