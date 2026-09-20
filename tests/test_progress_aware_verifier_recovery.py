@@ -110,3 +110,119 @@ def test_verify_to_recover_handoff_bounds_raw_verifier_receipt() -> None:
     assert "omitted_diagnostic_count" in handoff
     assert "Unresolved symbol" in handoff
     assert len(handoff.encode("utf-8")) < 8 * 1024
+
+
+
+def test_observe_to_act_handoff_bounds_successful_rag_payload() -> None:
+    raw_sentinel = "RAW_RAG_SENTINEL:" + ("x" * 100_000)
+    payload = {
+        "ok": True,
+        "tool": "search_code_rag",
+        "result": {
+            "structured_content": {
+                "schema_version": "mmm/code-rag-result-v1",
+                "hits": [
+                    {
+                        "path": "src/main/java/demo/SpaceModeMod.java",
+                        "source_path": "src/main/java/demo/SpaceModeMod.java",
+                        "text": (
+                            "package demo; public final class SpaceModeMod {} "
+                            + raw_sentinel
+                        ),
+                    }
+                ],
+                "receipt": {"status": "FOUND", "result_count": 1},
+            }
+        },
+    }
+    state = loop.HostRunState(
+        phase=loop.LoopPhase.ACT,
+        evidence_fingerprints={"sha256:evidence"},
+    )
+    messages = [
+        {"role": "system", "content": "host authority"},
+        {"role": "user", "content": "implement the next authored fragment"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "rag-1",
+                    "type": "function",
+                    "function": {
+                        "name": "search_code_rag",
+                        "arguments": "{}",
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "rag-1",
+            "name": "search_code_rag",
+            "content": __import__("json").dumps(payload),
+        },
+    ]
+
+    phase = loop._sync_phase_tool_transcript(
+        messages,
+        state=state,
+        last_prompt_phase=loop.LoopPhase.OBSERVE,
+        stage="generation",
+    )
+
+    assert phase is loop.LoopPhase.ACT
+    handoff = messages[-1]["content"]
+    assert "mmm/phase-tool-observation-v1" in handoff
+    assert "src/main/java/demo/SpaceModeMod.java" in handoff
+    assert "RAW_RAG_SENTINEL:" in handoff
+    assert raw_sentinel not in handoff
+    assert "tool_result_fingerprint" in handoff
+    assert len(handoff.encode("utf-8")) <= 6 * 1024
+
+
+def test_phase_handoff_replaces_previous_snapshot_instead_of_accumulating() -> None:
+    state = loop.HostRunState(phase=loop.LoopPhase.ACT)
+    messages = [
+        {"role": "system", "content": "host authority"},
+        {"role": "user", "content": "continue"},
+        {
+            "role": "system",
+            "content": "MMM_PHASE_HANDOFF VERIFY->RECOVER\nold snapshot",
+        },
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "rag-2",
+                    "type": "function",
+                    "function": {
+                        "name": "search_code_rag",
+                        "arguments": "{}",
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "rag-2",
+            "name": "search_code_rag",
+            "content": '{"ok":true,"tool":"search_code_rag","result":{"hits":[{"path":"src/main/java/demo/Now.java","text":"class Now {}"}]}}',
+        },
+    ]
+
+    loop._sync_phase_tool_transcript(
+        messages,
+        state=state,
+        last_prompt_phase=loop.LoopPhase.OBSERVE,
+        stage="generation",
+    )
+
+    handoffs = [
+        message
+        for message in messages
+        if str(message.get("role") or "") == "system"
+        and str(message.get("content") or "").startswith("MMM_PHASE_HANDOFF ")
+    ]
+    assert len(handoffs) == 1
+    assert "old snapshot" not in handoffs[0]["content"]
+    assert "Now.java" in handoffs[0]["content"]
