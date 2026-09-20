@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 
 from minecraft_mod_ai import runner
@@ -29,3 +30,38 @@ def test_cache_lock_rejects_invalid_timeout(tmp_path: Path) -> None:
             raise AssertionError("unreachable")
     except runner.BuildRunnerError as exc:
         assert "positive integer" in str(exc)
+
+
+
+def test_ensure_gradle_honors_explicit_shorter_lock_budget(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runner_instance = GradleRunner(
+        tmp_path / "cache",
+        download_timeout_seconds=300,
+    )
+    seen: list[int] = []
+    sentinel = tmp_path / "gradle"
+
+    @contextmanager
+    def fake_lock(_cache_dir, *, timeout_seconds):
+        seen.append(timeout_seconds)
+        yield
+
+    monkeypatch.setattr(runner, "_exclusive_cache_lock", fake_lock)
+    monkeypatch.setattr(
+        runner_instance,
+        "_ensure_gradle_locked",
+        lambda _version, _sha256: sentinel,
+    )
+
+    assert (
+        runner_instance.ensure_gradle(
+            "test",
+            "0" * 64,
+            lock_timeout_seconds=47,
+        )
+        == sentinel
+    )
+    assert seen == [47]
