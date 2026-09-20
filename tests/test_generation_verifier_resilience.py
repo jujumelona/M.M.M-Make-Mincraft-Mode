@@ -488,3 +488,60 @@ def test_compile_pass_terminates_without_repair_or_jdt_turn(monkeypatch):
     assert "passed generation-time host verification" in payload["summary"]
     assert compile_calls == 1
 
+
+
+
+def test_generation_verifier_watchdog_aborts_hung_owner(monkeypatch, tmp_path):
+    import threading
+    import time
+
+    from minecraft_mod_ai import generation_verifier_resilience as resilience
+
+    project, _source = _project(tmp_path)
+    aborted = threading.Event()
+
+    class HangingJava:
+        def diagnostics(
+            self,
+            root,
+            *,
+            relative_files=None,
+            timeout_seconds=0,
+            full_scan=False,
+        ):
+            del root, relative_files, timeout_seconds, full_scan
+            while not aborted.wait(0.01):
+                pass
+            raise TimeoutError("owner aborted by watchdog")
+
+        def abort(self):
+            aborted.set()
+
+    monkeypatch.setattr(
+        resilience,
+        "host_jdt_startup_timeout_seconds",
+        lambda: 0.05,
+    )
+    monkeypatch.setattr(
+        resilience,
+        "_watchdog_grace_seconds",
+        lambda: 0.01,
+    )
+
+    runtime = SimpleNamespace(workspace_root=str(project))
+    started = time.monotonic()
+    result = run_generation_verifier(
+        runtime,
+        {"timeout_seconds": 0.02},
+        runtime_module=agent_tool_runtime,
+        java_service_factory=HangingJava,
+    )
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.5
+    assert aborted.is_set()
+    assert result["status"] == "UNAVAILABLE"
+    assert result["available"] is False
+    assert result["diagnostics"][0]["code"] == "JDT_DIAGNOSTICS_UNAVAILABLE"
+    assert "wall-clock deadline exceeded" in result["diagnostics"][0]["message"]
+    assert not hasattr(runtime, "_mmm_generation_java_service")
