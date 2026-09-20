@@ -184,82 +184,78 @@ def _install_handoff_owner() -> None:
     complete_planner._evidence_host_batches = evidence_host_batches
 
 
+def build_execution_context(
+    approved: Any,
+    project_root: str | Path,
+    *,
+    policy: Any,
+) -> _ExecutionContext | None:
+    """Build run-local evidence impact state without wrapping the orchestrator."""
+
+    game_design = getattr(approved, "game_design", None)
+    plan = (
+        game_design.get("_evidence_first_plan")
+        if isinstance(game_design, Mapping)
+        else None
+    )
+    if not isinstance(plan, Mapping):
+        return None
+
+    validate_evidence_first_plan(plan)
+    lowered = execution_plan(plan)
+    tasks = tuple(
+        dict(item)
+        for item in lowered.get("tasks", ())
+        if isinstance(item, Mapping)
+    )
+    index = ProjectIndex(Path(project_root), policy=policy)
+    return _ExecutionContext(
+        project_index=index,
+        previous_index=_project_index_snapshot(index),
+        tasks=tasks,
+    )
+
+
+def enrich_execution_observation(
+    observation: Mapping[str, Any] | None,
+    context: _ExecutionContext | None,
+) -> dict[str, Any] | None:
+    """Attach evidence impact to one observation through explicit run-local state."""
+
+    if observation is None or context is None:
+        return dict(observation) if isinstance(observation, Mapping) else None
+
+    context.project_index.update_files(observation.get("touched_paths", ()))
+    current_index = _project_index_snapshot(context.project_index)
+    enriched = _enrich_execution_observation(
+        observation,
+        tasks=context.tasks,
+        previous_index=context.previous_index,
+        current_index=current_index,
+        completed_task_ids=tuple(context.completed_task_ids),
+    )
+    task_id = str(enriched.get("task_id") or "")
+    if task_id:
+        context.completed_task_ids.add(task_id)
+    context.previous_index = current_index
+    return enriched
+
+
 def _install_execution_impact() -> None:
+    """Validate source-owned integration; never rebind production callables."""
+
     from . import complete_orchestrator
 
-    current_observation = complete_orchestrator._semantic_execution_observation
-    if not getattr(current_observation, "_mmm_evidence_index_impact", False):
-
-        @wraps(current_observation)
-        def semantic_execution_observation(*args: Any, **kwargs: Any):
-            observation = current_observation(*args, **kwargs)
-            context = _EXECUTION_CONTEXT.get()
-            if observation is None or context is None:
-                return observation
-            context.project_index.update_files(observation.get("touched_paths", ()))
-            current_index = _project_index_snapshot(context.project_index)
-            enriched = _enrich_execution_observation(
-                observation,
-                tasks=context.tasks,
-                previous_index=context.previous_index,
-                current_index=current_index,
-                completed_task_ids=tuple(context.completed_task_ids),
-            )
-            task_id = str(enriched.get("task_id") or "")
-            if task_id:
-                context.completed_task_ids.add(task_id)
-            context.previous_index = current_index
-            return enriched
-
-        semantic_execution_observation._mmm_evidence_index_impact = True  # type: ignore[attr-defined]
-        complete_orchestrator._semantic_execution_observation = semantic_execution_observation
-
-    cls = complete_orchestrator.CompleteProductionOrchestrator
-    current_generation = cls._execute_generation_work
-    if getattr(current_generation, "_mmm_evidence_execution_context", False):
-        return
-
-    @wraps(current_generation)
-    def execute_generation_work(self: Any, *args: Any, **kwargs: Any):
-        try:
-            bound = inspect.signature(current_generation).bind(self, *args, **kwargs)
-            bound.apply_defaults()
-        except (TypeError, ValueError):
-            return current_generation(self, *args, **kwargs)
-
-        approved = bound.arguments.get("approved")
-        game_design = getattr(approved, "game_design", None) if approved is not None else None
-        plan = (
-            game_design.get("_evidence_first_plan")
-            if isinstance(game_design, Mapping)
-            else None
+    current_generation = complete_orchestrator.CompleteProductionOrchestrator._execute_generation_work
+    if getattr(current_generation, "__module__", "") != complete_orchestrator.__name__:
+        raise RuntimeError(
+            "Evidence-first execution requires source-owned _execute_generation_work."
         )
-        project_root = bound.arguments.get("project_root")
-        if not isinstance(plan, Mapping) or project_root is None:
-            return current_generation(self, *args, **kwargs)
-
-        validate_evidence_first_plan(plan)
-        lowered = execution_plan(plan)
-        tasks = tuple(
-            dict(item)
-            for item in lowered.get("tasks", ())
-            if isinstance(item, Mapping)
+    if hasattr(current_generation, "__wrapped__"):
+        raise RuntimeError(
+            "Evidence-first execution cannot install over a wrapped generation owner."
         )
-        index = ProjectIndex(Path(project_root), policy=self.policy)
-        context = _ExecutionContext(
-            project_index=index,
-            previous_index=_project_index_snapshot(index),
-            tasks=tasks,
-        )
-        token = _EXECUTION_CONTEXT.set(context)
-        try:
-            return current_generation(self, *args, **kwargs)
-        finally:
-            _EXECUTION_CONTEXT.reset(token)
-
-    execute_generation_work._mmm_evidence_execution_context = True  # type: ignore[attr-defined]
-    cls._execute_generation_work = execute_generation_work
-
+    current_generation._mmm_evidence_execution_context = True  # type: ignore[attr-defined]
 
 def install() -> None:
     """Install only the missing live-path composition exactly once."""
@@ -272,4 +268,8 @@ def install() -> None:
     _INSTALLED = True
 
 
-__all__ = ["install"]
+__all__ = [
+    "build_execution_context",
+    "enrich_execution_observation",
+    "install",
+]
