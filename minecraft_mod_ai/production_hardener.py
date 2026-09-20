@@ -16,22 +16,27 @@ class ProductionHardeningError(RuntimeError):
     pass
 
 
-def _project_mappings_kind(root: Path) -> str:
+def _project_platform_identity(root: Path) -> tuple[str, str]:
     lock = root / ".minecraft_ai" / "platform-lock.json"
     if not lock.is_file() or lock.is_symlink():
-        return "yarn"
+        return "yarn", ""
     try:
         payload = json.loads(lock.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
-        return "yarn"
+        return "yarn", ""
     if not isinstance(payload, dict):
-        return "yarn"
+        return "yarn", ""
     value = str(
         payload.get("mappings_kind")
         or payload.get("yarn_mappings")
         or ""
     ).strip().casefold()
-    return "mojang" if value in {"mojang", "official", "official_mojang"} else "yarn"
+    mappings_kind = (
+        "mojang"
+        if value in {"mojang", "official", "official_mojang"}
+        else "yarn"
+    )
+    return mappings_kind, str(payload.get("minecraft_version") or "").strip()
 
 
 def harden_generated_project(
@@ -57,12 +62,14 @@ def harden_generated_project(
         receipts.append(machine_receipt)
 
     definitions = _registry_definitions(info.root)
+    mappings_kind, minecraft_version = _project_platform_identity(info.root)
     test_files, entrypoints, shard_count = _gametest_files(
         package_name=info.package_name,
         mod_id=info.mod_id,
         definitions=definitions,
         shard_size=policy.java_shard_size,
-        mappings_kind=_project_mappings_kind(info.root),
+        mappings_kind=mappings_kind,
+        minecraft_version=minecraft_version,
     )
     if test_files:
         write_receipt = write_text_files(
@@ -185,6 +192,7 @@ def _gametest_files(
     definitions: list[dict[str, str]],
     shard_size: int,
     mappings_kind: str = "yarn",
+    minecraft_version: str = "",
 ) -> tuple[dict[str, str], list[str], int]:
     if not definitions:
         return {}, [], 0
@@ -202,6 +210,7 @@ def _gametest_files(
         root_class_name=root_class_name,
         unit_class_prefix=unit_prefix,
         mappings_kind=mappings_kind,
+        minecraft_version=minecraft_version,
     )
 
     mojang = str(mappings_kind or "").strip().casefold() in {
