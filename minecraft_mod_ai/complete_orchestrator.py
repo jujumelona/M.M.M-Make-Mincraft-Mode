@@ -3311,7 +3311,7 @@ class CompleteProductionOrchestrator:
                 newline='\n',
             )
 
-        self._ensure_debug_fixture_resources(approved, root)
+        CompleteProductionOrchestrator._ensure_debug_fixture_resources(approved, root)
         return root
 
     def _prepare_project(self, approved: CompleteProposal, *, run_root: Path, existing_input: str | Path | None) -> Path:
