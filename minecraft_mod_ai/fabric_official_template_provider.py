@@ -117,7 +117,7 @@ def bootstrap_fabric_project(
     _pin_generated_toolchain(root, adapter)
     _clean_fresh_template_examples(root, spec)
     runtime_contract = _install_host_runtime_contract(root, spec, adapter)
-    gametest_contract = _install_host_gametest_contract(root, spec)
+    gametest_contract = _install_host_gametest_contract(root, spec, adapter)
 
     properties = _read_properties(root / "gradle.properties")
     actual_loader = properties.get("loader_version", "")
@@ -529,7 +529,26 @@ public final class {main_class} implements ModInitializer {{
     }
 
 
-def _install_host_gametest_contract(root: Path, spec: Any) -> dict[str, str]:
+def _modern_fabric_gametest_api(minecraft_version: str) -> bool:
+    numbers = [
+        int(part)
+        for part in re.findall(r"\d+", str(minecraft_version))
+    ]
+    if not numbers:
+        return False
+    if numbers[0] >= 2:
+        return True
+    major = numbers[0]
+    minor = numbers[1] if len(numbers) > 1 else 0
+    patch = numbers[2] if len(numbers) > 2 else 0
+    return (major, minor, patch) >= (1, 21, 5)
+
+
+def _install_host_gametest_contract(
+    root: Path,
+    spec: Any,
+    adapter: Any,
+) -> dict[str, str]:
     """Install Fabric GameTest in the dedicated Loom gametest source set."""
 
     build_path = root / "build.gradle"
@@ -650,8 +669,26 @@ loom {
             "Canonical Fabric GameTest source must not be a symlink."
         )
     source_path.parent.mkdir(parents=True, exist_ok=True)
-    source_path.write_text(
-        f"""package {spec.package_name};
+    if _modern_fabric_gametest_api(adapter.minecraft_version):
+        source_text = f"""package {spec.package_name};
+
+import net.fabricmc.fabric.api.gametest.v1.GameTest;
+import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.gametest.framework.GameTestHelper;
+
+public final class {gametest_class} {{
+    @GameTest
+    public void generatedRegistriesAreLive(GameTestHelper context) {{
+        if (!FabricLoader.getInstance().isModLoaded("{spec.mod_id}")) {{
+            throw new AssertionError("generated mod was not loaded by Fabric");
+        }}
+        context.succeed();
+    }}
+}}
+"""
+        api_generation = "fabric-gametest-v2"
+    else:
+        source_text = f"""package {spec.package_name};
 
 import net.fabricmc.fabric.api.gametest.v1.FabricGameTest;
 import net.fabricmc.loader.api.FabricLoader;
@@ -667,9 +704,9 @@ public final class {gametest_class} implements FabricGameTest {{
         context.succeed();
     }}
 }}
-""",
-        encoding="utf-8",
-    )
+"""
+        api_generation = "fabric-gametest-v1"
+    source_path.write_text(source_text, encoding="utf-8")
 
     return {
         "task": "runGameTest",
@@ -678,6 +715,8 @@ public final class {gametest_class} implements FabricGameTest {{
         "source": source_path.relative_to(root).as_posix(),
         "metadata": gametest_metadata_path.relative_to(root).as_posix(),
         "mod_id": test_mod_id,
+        "api_generation": api_generation,
+        "minecraft_version": str(adapter.minecraft_version),
     }
 
 
