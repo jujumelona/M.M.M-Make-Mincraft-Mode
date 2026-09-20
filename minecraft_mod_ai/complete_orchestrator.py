@@ -3061,8 +3061,6 @@ class CompleteProductionOrchestrator:
             render_kind='item.generated',
             subject_id='debug_token',
             container='mod',
-            requested_width=16,
-            requested_height=16,
         )
         request.validate(policy=ScalePolicy.from_environment())
         context = spec.platform.version_context if spec.platform.host_facts_json else None
