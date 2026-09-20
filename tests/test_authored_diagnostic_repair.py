@@ -262,6 +262,28 @@ def test_authored_diagnostics_repair_local_files_without_external_discovery(
     assert all("old" in item for item in legacy_repair_arguments)
 
 
+def test_atomic_output_recovery_keeps_host_bound_repair_shape() -> None:
+    schema = {
+        "type": "function",
+        "function": {
+            "name": "apply_source_edit",
+            "parameters": {
+                "type": "object",
+                "properties": {"new": {"type": "string"}},
+                "required": ["new"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    instruction = loop._atomic_output_recovery_instruction(
+        GenerationRequest(tools=(schema,))
+    )
+    assert "complete corrected" in instruction
+    assert "new argument" in instruction
+    assert "operation, path, old text" in instruction
+    assert "partial edits" in instruction
+
+
 @pytest.mark.parametrize(
     "kind", ["outside", "build", "missing", "remote_uri", "no_authority", "oversized"]
 )
