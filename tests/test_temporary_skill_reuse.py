@@ -171,3 +171,43 @@ def test_read_wave_dedup_never_deduplicates_mutations():
     )
     module._execute_tool_waves(calls, execute)
     assert seen == ["w1", "w2"]
+
+
+
+def test_read_wave_dedup_keeps_verifier_isolated_after_policy_change():
+    module = SimpleNamespace()
+    module._VERIFIER_TIMEOUT_ISOLATION_TOOLS = frozenset({"java_diagnostics"})
+    module._parallel_read_call = lambda call: call.name in {"read", "java_diagnostics"}
+
+    delegated_batches: list[list[str]] = []
+
+    def original(calls, execute):
+        delegated_batches.append([call.id for call in calls])
+        return tuple(execute(call) for call in calls)
+
+    module._execute_tool_waves = original
+    contract._install_read_wave_dedup(module)
+
+    # Simulate a live policy change after the wrapper has already been installed.
+    module._parallel_read_call = lambda call: call.name in {
+        "read",
+        "late_read",
+        "java_diagnostics",
+    }
+
+    seen: list[str] = []
+
+    def execute(call):
+        seen.append(call.id)
+        return call, {"ok": True, "tool": call.name}
+
+    calls = (
+        _Call("r1", "read", {"q": "a"}),
+        _Call("v1", "java_diagnostics", {"timeout_seconds": 90}),
+        _Call("r2", "late_read", {"q": "b"}),
+    )
+    results = module._execute_tool_waves(calls, execute)
+
+    assert [call.id for call, _payload in results] == ["r1", "v1", "r2"]
+    assert seen == ["r1", "v1", "r2"]
+    assert delegated_batches == [["r1"], ["v1"], ["r2"]]
