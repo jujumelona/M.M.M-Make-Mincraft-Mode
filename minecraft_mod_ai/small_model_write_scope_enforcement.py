@@ -139,6 +139,7 @@ def generation_authority_scoped(func: Any) -> Any:
         minecraft_version: str | None = None,
         loader: str | None = None,
         mappings: str | None = None,
+        execution_feedback: Mapping[str, Any] | None = None,
     ) -> Any:
         with _active_generation_authority(module):
             return func(
@@ -149,6 +150,7 @@ def generation_authority_scoped(func: Any) -> Any:
                 minecraft_version=minecraft_version,
                 loader=loader,
                 mappings=mappings,
+                execution_feedback=execution_feedback,
             )
 
     scoped_generate._mmm_exact_task_write_scope = True  # type: ignore[attr-defined]

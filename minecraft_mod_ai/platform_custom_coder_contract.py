@@ -100,6 +100,7 @@ def _install_custom_generator_scope(module_api: Any) -> None:
         minecraft_version: str | None = None,
         loader: str | None = None,
         mappings: str | None = None,
+        execution_feedback: Mapping[str, Any] | None = None,
     ):
         version, loader_id, mapping_id = _required_target(
             module_api,
@@ -140,6 +141,7 @@ def _install_custom_generator_scope(module_api: Any) -> None:
                 minecraft_version=adapter.minecraft_version,
                 loader=adapter.loader,
                 mappings=adapter.yarn_mappings,
+                execution_feedback=execution_feedback,
             )
         finally:
             _ACTIVE_CODER_TARGET.reset(token)
