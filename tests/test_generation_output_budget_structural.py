@@ -127,3 +127,30 @@ def test_llama_budget_uses_request_contract_when_qwen_removes_grammar() -> None:
     payload = hardware._server_payload(SimpleNamespace(config=_DynamicConfig()), request)
     assert payload["max_tokens"] >= 4096
     assert "response_format" not in payload
+
+def test_llama_budget_respects_request_owned_atomic_ceiling() -> None:
+    from types import SimpleNamespace
+    from minecraft_mod_ai.llama_generation_budget import install
+
+    tool = _source_edit_schema()
+    hardware = SimpleNamespace(_server_payload=lambda adapter, request: {
+        "messages": [{"role": "user", "content": "perform one atomic edit"}],
+        "tools": [tool],
+        "tool_choice": {
+            "type": "function",
+            "function": {"name": "apply_source_edit"},
+        },
+        "max_tokens": 8192,
+    })
+    install(hardware)
+    request = SimpleNamespace(
+        tools=(tool,),
+        response_format="text",
+        response_schema=None,
+        metadata={"mmm_output_token_ceiling": 4096},
+    )
+
+    payload = hardware._server_payload(SimpleNamespace(config=_DynamicConfig()), request)
+
+    assert payload["max_tokens"] == 4096
+
