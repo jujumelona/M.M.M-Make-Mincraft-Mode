@@ -1,5 +1,21 @@
 from __future__ import annotations
 
+import re
+
+
+def modern_fabric_gametest_api(minecraft_version: str) -> bool:
+    """Return whether Fabric's v2 GameTest annotation API is required."""
+
+    numbers = [int(part) for part in re.findall(r"\d+", str(minecraft_version))]
+    if not numbers:
+        return False
+    if numbers[0] >= 2:
+        return True
+    major = numbers[0]
+    minor = numbers[1] if len(numbers) > 1 else 0
+    patch = numbers[2] if len(numbers) > 2 else 0
+    return (major, minor, patch) >= (1, 21, 5)
+
 
 def discovered_gametest_root_java(
     *,
@@ -8,31 +24,41 @@ def discovered_gametest_root_java(
     root_class_name: str,
     unit_class_prefix: str,
     mappings_kind: str = "yarn",
+    minecraft_version: str = "",
 ) -> str:
-    """Render one fixed-size GameTest entrypoint for the locked mapping namespace."""
+    """Render one fixed-size GameTest entrypoint for the locked platform."""
 
     package_path = package_name.replace(".", "/")
     normalized = str(mappings_kind or "").strip().casefold()
     mojang = normalized in {"mojang", "official", "official_mojang"}
+    modern = modern_fabric_gametest_api(minecraft_version)
 
     if mojang:
-        test_imports = """import net.minecraft.gametest.framework.GameTest;
-import net.minecraft.gametest.framework.GameTestHelper;"""
-        annotation = "@GameTest(template = FabricGameTest.EMPTY_STRUCTURE)"
+        context_import = "import net.minecraft.gametest.framework.GameTestHelper;"
         context_type = "GameTestHelper"
         complete = "context.succeed();"
     else:
-        test_imports = """import net.minecraft.test.GameTest;
-import net.minecraft.test.TestContext;"""
-        annotation = "@GameTest(templateName = FabricGameTest.EMPTY_STRUCTURE)"
+        context_import = "import net.minecraft.test.TestContext;"
         context_type = "TestContext"
         complete = "context.complete();"
 
+    if modern:
+        api_imports = "import net.fabricmc.fabric.api.gametest.v1.GameTest;"
+        annotation = "@GameTest"
+    elif mojang:
+        api_imports = """import net.fabricmc.fabric.api.gametest.v1.FabricGameTest;
+import net.minecraft.gametest.framework.GameTest;"""
+        annotation = "@GameTest(template = FabricGameTest.EMPTY_STRUCTURE)"
+    else:
+        api_imports = """import net.fabricmc.fabric.api.gametest.v1.FabricGameTest;
+import net.minecraft.test.GameTest;"""
+        annotation = "@GameTest(templateName = FabricGameTest.EMPTY_STRUCTURE)"
+
     return f'''package {package_name};
 
-import net.fabricmc.fabric.api.gametest.v1.FabricGameTest;
+{api_imports}
 import net.fabricmc.loader.api.FabricLoader;
-{test_imports}
+{context_import}
 
 import java.lang.reflect.InvocationTargetException;
 import java.nio.file.Files;
@@ -53,7 +79,7 @@ public final class {root_class_name} {{
         Set<String> classes = new TreeSet<>();
         String relative = "{package_path}";
         FabricLoader.getInstance()
-            .getModContainer("{mod_id}")
+            .getModContainer("{mod_id}_gametest")
             .orElseThrow()
             .getRootPaths()
             .forEach(root -> collectUnits(root.resolve(relative), classes));
