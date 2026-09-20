@@ -428,6 +428,7 @@ def write_debug_example_plan(
     )
     acceptance = (
         "The generated project contains a target-API compile-verified debug_token item-registration fixture.",
+        "The packaged debug_token includes an installable item texture, item resource definition, and English/Korean display names.",
         "The generated Fabric project passes the normal build and validation pipeline.",
     )
     base = Proposal(
