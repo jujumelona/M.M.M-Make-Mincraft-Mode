@@ -2034,6 +2034,11 @@ def _source_edit_schema_for_context(
     schema: Mapping[str, Any],
     context: TargetMutationContext | None,
 ) -> Mapping[str, Any]:
+    """Project source-edit choices onto the exact live target mutation state.
+
+    A fresh Java target exposes only create_file/path/content; aliases and repair-only
+    operations remain host-side compatibility rather than model-facing choices.
+    """
     if _tool_name(schema) != "apply_source_edit" or context is None:
         return schema
     cloned = deepcopy(schema)

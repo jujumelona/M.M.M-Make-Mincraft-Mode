@@ -86,7 +86,11 @@ def _qwen_agent_request(request: Any) -> bool:
 
 
 def _qwen_sampling_mode(role: object, request: Any) -> str | None:
-    """Map MMM request semantics onto registry-declared generation modes."""
+    """Map MMM request semantics onto registry-declared generation modes.
+
+    Tool pages, including named/required calls, use the registry non-thinking profile so
+    they retain anti-repetition sampling instead of falling into deterministic loops.
+    """
 
     tools = getattr(request, "tools", ()) or ()
     if tools:
