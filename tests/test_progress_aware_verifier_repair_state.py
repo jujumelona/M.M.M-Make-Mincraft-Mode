@@ -176,3 +176,45 @@ def test_real_edit_invalidates_stale_verifier_fail_and_updates_source_body():
     assert state.latest_verifier_fingerprint is None
     assert state.mutation_context is not None
     assert "RegistryEntry" in (state.mutation_context.source_body or "")
+
+
+def test_whole_file_repair_without_old_updates_host_source_body():
+    state = HostRunState(
+        mutation_context=TargetMutationContext(
+            target_path=PATH,
+            target_symbol="DebugToken",
+            source_body="class DebugToken { int value = MISSING; }",
+            is_new_file=False,
+            evidence_source="workspace_existing_target",
+        )
+    )
+    state.record_verification(
+        "java_diagnostics",
+        _failed_diagnostics("MISSING cannot be resolved to a variable"),
+        "FAIL",
+    )
+    corrected = "class DebugToken { int value = 1; }"
+    args = {
+        "operation": "replace_exact",
+        "path": PATH,
+        "new": corrected,
+    }
+    receipt = {
+        "ok": True,
+        "result": {
+            "schema_version": "mmm/source-patch-receipt-v1",
+            "status": "APPLIED",
+            "operations": [
+                {
+                    "path": PATH,
+                    "before_sha256": "sha256:old",
+                    "after_sha256": "sha256:new",
+                }
+            ],
+        },
+    }
+    assert state.record_mutation("apply_source_edit", args, receipt)
+    assert state.validation_status == "PENDING"
+    assert state.latest_verifier_fingerprint is None
+    assert state.mutation_context is not None
+    assert state.mutation_context.source_body == corrected
