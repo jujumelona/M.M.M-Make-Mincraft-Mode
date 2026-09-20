@@ -457,7 +457,7 @@ def _merge_diagnostics(*groups: Sequence[Mapping[str, Any]]) -> list[dict[str, A
 
 def _validation_failed(checkpoint_id: str, receipt: Mapping[str, Any]) -> bool:
     status = str(receipt.get("status") or "").strip().casefold()
-    if status in {"fail", "failed", "error", "invalid", "rejected"}:
+    if status in {"fail", "failed", "error", "invalid", "rejected", "blocked"}:
         return True
     if checkpoint_id == "validate-jdt":
         diagnostics = receipt.get("diagnostics")
