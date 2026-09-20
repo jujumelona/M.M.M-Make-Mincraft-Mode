@@ -233,7 +233,10 @@ def _canonical_read_key(call: Any) -> tuple[str, str] | None:
 
 
 def _install_read_wave_dedup(model_router_module: Any) -> None:
-    """Single-flight exact duplicate read tools inside one mutation-free wave."""
+    """Install legacy read dedup only when the core router does not own it."""
+
+    if bool(getattr(model_router_module, "_CORE_EXACT_READ_WAVE_DEDUP", False)):
+        return
 
     current = model_router_module._execute_tool_waves
     if getattr(current, "_mmm_exact_read_wave_dedup", False):
