@@ -239,8 +239,6 @@ def _install_read_wave_dedup(model_router_module: Any) -> None:
     if getattr(current, "_mmm_exact_read_wave_dedup", False):
         return
 
-    parallel_read_call = model_router_module._parallel_read_call
-
     @wraps(current)
     def execute_with_dedup(
         calls: Sequence[Any],
@@ -282,7 +280,21 @@ def _install_read_wave_dedup(model_router_module: Any) -> None:
                 completed.append((call, payload))
 
         for call in calls:
-            if parallel_read_call(call):
+            # Tool-wave policy is host runtime state, not wrapper installation state.
+            # Resolve it dynamically so later verifier/isolation policy changes cannot
+            # be bypassed by a stale closure captured when the temporary skill loaded.
+            isolation_tools = frozenset(
+                getattr(
+                    model_router_module,
+                    "_VERIFIER_TIMEOUT_ISOLATION_TOOLS",
+                    frozenset(),
+                )
+            )
+            if str(getattr(call, "name", "") or "") in isolation_tools:
+                parallel = False
+            else:
+                parallel = bool(model_router_module._parallel_read_call(call))
+            if parallel:
                 pending_reads.append(call)
                 continue
             flush_reads()
