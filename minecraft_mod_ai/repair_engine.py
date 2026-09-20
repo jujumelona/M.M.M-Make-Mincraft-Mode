@@ -45,6 +45,7 @@ _ALLOWED_SUFFIXES = {
     ".yaml",
     ".yml",
 }
+_HARD_REPAIR_ATTEMPTS = 2
 _REPAIR_LOG_SNIPPET_CHARS = 6000
 _REPAIR_LOG_READ_BYTES = 32768
 _JAVAC_LINE = re.compile(
@@ -151,8 +152,9 @@ class RepairEngine:
 
     No file-count truncation is used. The whole project is indexed and relevant files
     are selected within an explicit byte budget. Repair remains progress-sensitive:
-    repeated verifier signatures terminate semantic fixed points. ``max_attempts``
-    is an optional explicit caller policy; None means no arbitrary attempt-count cap.
+    repeated verifier signatures terminate semantic fixed points. Host control also
+    enforces a hard per-call patch-attempt cap so distinct/no-op failures cannot spin
+    forever; ``max_attempts`` may lower that cap but cannot raise it.
     """
 
     def __init__(
@@ -186,9 +188,10 @@ class RepairEngine:
         ):
             raise RepairEngineError("max_attempts must be null or a positive integer.")
 
-        # With no explicit caller limit, convergence is semantic rather than
-        # attempt-count based: a repeated verifier signature terminates the loop.
-        attempt_limit = max_attempts
+        requested_limit = (
+            max_attempts if max_attempts is not None else _HARD_REPAIR_ATTEMPTS
+        )
+        attempt_limit = min(requested_limit, _HARD_REPAIR_ATTEMPTS)
 
         # Build the complete project index exactly once for this repair invocation.
         # ContextVar keeps concurrent/nested repairs isolated without storing mutable
@@ -224,12 +227,17 @@ class RepairEngine:
                     }
                 signatures.add(signature)
 
-                if attempt_limit is not None and repair_attempts >= attempt_limit:
+                if repair_attempts >= attempt_limit:
                     return {
                         "schema_version": "mmm/repair-result-v2",
                         "status": "FAIL",
                         "attempts": attempt,
-                        "stop_reason": "explicit_max_attempts",
+                        "stop_reason": (
+                            "explicit_max_attempts"
+                            if max_attempts is not None
+                            and max_attempts < _HARD_REPAIR_ATTEMPTS
+                            else "hard_max_attempts"
+                        ),
                         "evidence": evidence,
                         "patch_receipts": receipts,
                     }
