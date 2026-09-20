@@ -39,7 +39,8 @@ def test_official_scaffold_is_gametest_ready_before_first_build(tmp_path: Path) 
 
     build = (root / "build.gradle").read_text(encoding="utf-8")
     assert "configureTests" in build
-    assert "createSourceSet = false" in build
+    assert "createSourceSet = true" in build
+    assert 'modId = "mmm_debug_fixture_gametest"' in build
     assert "enableGameTests = true" in build
     assert "enableClientGameTests = false" in build
     assert "fabric-api.gametest.report-file" in build
@@ -55,18 +56,27 @@ def test_official_scaffold_is_gametest_ready_before_first_build(tmp_path: Path) 
         "report": "build/gametest-report.xml",
         "entrypoint": "dev.mmm.debugfixture.MmmDebugFixtureModGameTests",
         "source": (
-            "src/main/java/dev/mmm/debugfixture/"
+            "src/gametest/java/dev/mmm/debugfixture/"
             "MmmDebugFixtureModGameTests.java"
         ),
+        "metadata": "src/gametest/resources/fabric.mod.json",
+        "mod_id": "mmm_debug_fixture_gametest",
     }
 
     updated = json.loads(metadata.read_text(encoding="utf-8"))
-    assert updated["entrypoints"]["fabric-gametest"] == [
+    assert "fabric-gametest" not in updated["entrypoints"]
+    test_metadata = json.loads(
+        (root / receipt["metadata"]).read_text(encoding="utf-8")
+    )
+    assert test_metadata["id"] == "mmm_debug_fixture_gametest"
+    assert test_metadata["depends"]["mmm_debug_fixture"] == "*"
+    assert test_metadata["entrypoints"]["fabric-gametest"] == [
         "dev.mmm.debugfixture.MmmDebugFixtureModGameTests"
     ]
 
     source = (root / receipt["source"]).read_text(encoding="utf-8")
-    assert "net.fabricmc.fabric.api.gametest.v1.GameTest" in source
+    assert "net.fabricmc.fabric.api.gametest.v1.FabricGameTest" in source
+    assert "net.minecraft.gametest.framework.GameTest" in source
     assert "net.minecraft.gametest.framework.GameTestHelper" in source
     assert "generatedRegistriesAreLive" in source
     assert 'isModLoaded("mmm_debug_fixture")' in source
@@ -76,7 +86,9 @@ def test_official_scaffold_is_gametest_ready_before_first_build(tmp_path: Path) 
     repeated = (root / "build.gradle").read_text(encoding="utf-8")
     assert repeated.count("configureTests") == 1
     assert repeated.count("fabric-api.gametest.report-file") == 1
-    repeated_metadata = json.loads(metadata.read_text(encoding="utf-8"))
+    repeated_metadata = json.loads(
+        (root / receipt["metadata"]).read_text(encoding="utf-8")
+    )
     assert repeated_metadata["entrypoints"]["fabric-gametest"].count(
         "dev.mmm.debugfixture.MmmDebugFixtureModGameTests"
     ) == 1
