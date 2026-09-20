@@ -74,7 +74,6 @@ _PARALLEL_READ_TOOLS = frozenset(
         "inspect_huggingface_model",
         "inspect_existing_mod",
         "assess_technology_compatibility",
-        "java_diagnostics",
         "java_workspace_symbols",
         "read_complete_plan_section",
         "read_quality_contract",
@@ -691,6 +690,53 @@ def _agent_tool_timeout_seconds() -> float:
     return max(1.0, min(value, 600.0))
 
 
+def _agent_tool_return_grace_seconds() -> float:
+    """Give an internally bounded tool enough time to serialize its terminal receipt."""
+
+    raw = os.environ.get("MMM_AGENT_TOOL_RETURN_GRACE_SECONDS", "").strip()
+    if not raw:
+        return 30.0
+    try:
+        value = float(raw)
+    except ValueError:
+        return 30.0
+    if not math.isfinite(value) or value <= 0.0:
+        return 30.0
+    return max(1.0, min(value, 120.0))
+
+
+def _agent_tool_call_timeout_seconds(call: Any) -> float:
+    """Resolve the outer worker deadline without undercutting tool-owned budgets."""
+
+    base = _agent_tool_timeout_seconds()
+    name = str(getattr(call, "name", "") or "").strip()
+    if name != "java_diagnostics":
+        return base
+
+    # The generation verifier owns a longer cold-start budget because creating the
+    # shared JDT owner can include Gradle model import. The outer tool executor must
+    # expire after that budget, not before it, or a valid structured UNAVAILABLE/PASS
+    # receipt is replaced by a ParallelExecutionTimeout.
+    from .generation_verifier_resilience import host_jdt_startup_timeout_seconds
+
+    arguments = getattr(call, "arguments", None)
+    requested = 0.0
+    if isinstance(arguments, Mapping):
+        raw = arguments.get("timeout_seconds")
+        if not isinstance(raw, bool):
+            try:
+                candidate = float(raw)
+            except (TypeError, ValueError):
+                candidate = 0.0
+            if math.isfinite(candidate) and candidate > 0.0:
+                requested = candidate
+    internal_budget = max(
+        requested,
+        float(host_jdt_startup_timeout_seconds()),
+    )
+    return max(base, internal_budget + _agent_tool_return_grace_seconds())
+
+
 def _parallel_read_call(call: Any) -> bool:
     """Return whether a reviewed call is side-effect-free and safe in a read wave."""
 
@@ -715,7 +761,6 @@ def _execute_tool_waves(
 
     completed: list[tuple[Any, Mapping[str, Any]]] = []
     pending_reads: list[Any] = []
-    timeout_seconds = _agent_tool_timeout_seconds()
 
     def execute_indexed(
         item: tuple[int, Any],
@@ -731,6 +776,10 @@ def _execute_tool_waves(
     ) -> tuple[tuple[Any, Mapping[str, Any]], ...]:
         indexed_batch = tuple(enumerate(batch))
         ordered: list[tuple[Any, Mapping[str, Any]] | None] = [None] * len(batch)
+        timeout_seconds = max(
+            _agent_tool_call_timeout_seconds(call)
+            for call in batch
+        )
         for _item, indexed_result in iter_completed_with_deadlines(
             indexed_batch,
             execute_indexed,
