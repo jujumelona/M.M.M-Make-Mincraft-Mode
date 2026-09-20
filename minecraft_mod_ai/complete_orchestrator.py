@@ -503,8 +503,9 @@ def _attach_verified_release_artifact(
     *,
     archive_name: str,
     allowed_root: Path,
+    manifest_provenance: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    if descriptor is None:
+    if descriptor is None and not manifest_provenance:
         return dict(release_result)
     if (
         not isinstance(release_result, dict)
@@ -513,13 +514,22 @@ def _attach_verified_release_artifact(
         or not isinstance(release_result.get('sha256'), str)
     ):
         raise CompleteProductionError('Release package receipt is invalid before attachment.')
-    if not archive_name or Path(archive_name).name != archive_name:
+    if descriptor is not None and (
+        not archive_name or Path(archive_name).name != archive_name
+    ):
         raise CompleteProductionError('Release attachment name is unsafe.')
 
     root = allowed_root.expanduser().resolve()
     release_path = Path(str(release_result['release_zip'])).expanduser().resolve()
-    source = Path(str(descriptor.get('path') or '')).expanduser().resolve()
-    for candidate, label in ((release_path, 'release ZIP'), (source, 'release attachment')):
+    source = (
+        Path(str(descriptor.get('path') or '')).expanduser().resolve()
+        if descriptor is not None
+        else None
+    )
+    candidates = [(release_path, 'release ZIP')]
+    if source is not None:
+        candidates.append((source, 'release attachment'))
+    for candidate, label in candidates:
         try:
             candidate.relative_to(root)
         except ValueError as exc:
@@ -531,8 +541,10 @@ def _attach_verified_release_artifact(
 
     if CompleteProductionOrchestrator._file_hash(release_path) != release_result['sha256']:
         raise CompleteProductionError('Release ZIP changed before verified attachment.')
-    expected = str(descriptor.get('sha256') or '')
-    if not expected or CompleteProductionOrchestrator._file_hash(source) != expected:
+    expected = str(descriptor.get('sha256') or '') if descriptor is not None else ''
+    if source is not None and (
+        not expected or CompleteProductionOrchestrator._file_hash(source) != expected
+    ):
         raise CompleteProductionError('Release attachment digest mismatch.')
 
     temp = release_path.with_name('.' + release_path.name + '.rewrite.tmp')
@@ -540,7 +552,7 @@ def _attach_verified_release_artifact(
         if temp.is_symlink() or not temp.is_file():
             raise CompleteProductionError('Release rewrite temporary target is unsafe.')
         temp.unlink()
-    member_name = 'additional/' + archive_name
+    member_name = 'additional/' + archive_name if descriptor is not None else ''
     try:
         with zipfile.ZipFile(release_path, 'r') as original:
             infos = original.infolist()
@@ -549,7 +561,7 @@ def _attach_verified_release_artifact(
                 raise CompleteProductionError('Release ZIP contains duplicate member names.')
             if 'release-manifest.json' not in names:
                 raise CompleteProductionError('Release ZIP has no release manifest.')
-            if member_name in names:
+            if descriptor is not None and member_name in names:
                 raise CompleteProductionError(
                     f'Release ZIP already contains attachment member: {member_name}'
                 )
@@ -563,19 +575,28 @@ def _attach_verified_release_artifact(
                 ) from exc
             if not isinstance(manifest, dict):
                 raise CompleteProductionError('Release manifest is not a JSON object.')
-            additional = manifest.get('additional_artifacts')
-            if additional is None:
-                additional_map: dict[str, str] = {}
-            elif isinstance(additional, dict):
-                additional_map = {
-                    str(key): str(value) for key, value in additional.items()
-                }
-            else:
-                raise CompleteProductionError(
-                    'Release manifest additional_artifacts is invalid.'
-                )
-            additional_map[archive_name] = expected
-            manifest['additional_artifacts'] = dict(sorted(additional_map.items()))
+            if manifest_provenance:
+                for key, value in manifest_provenance.items():
+                    if not isinstance(key, str) or not key or not isinstance(value, str):
+                        raise CompleteProductionError(
+                            'Release manifest provenance must contain non-empty string keys and string values.'
+                        )
+                    manifest[key] = value
+
+            if descriptor is not None:
+                additional = manifest.get('additional_artifacts')
+                if additional is None:
+                    additional_map: dict[str, str] = {}
+                elif isinstance(additional, dict):
+                    additional_map = {
+                        str(key): str(value) for key, value in additional.items()
+                    }
+                else:
+                    raise CompleteProductionError(
+                        'Release manifest additional_artifacts is invalid.'
+                    )
+                additional_map[archive_name] = expected
+                manifest['additional_artifacts'] = dict(sorted(additional_map.items()))
 
             with zipfile.ZipFile(temp, 'w') as rewritten:
                 manifest_info: zipfile.ZipInfo | None = None
@@ -584,13 +605,14 @@ def _attach_verified_release_artifact(
                         manifest_info = info
                         continue
                     rewritten.writestr(info, original.read(info.filename))
-                attachment_info = zipfile.ZipInfo(
-                    member_name,
-                    date_time=(1980, 1, 1, 0, 0, 0),
-                )
-                attachment_info.compress_type = zipfile.ZIP_DEFLATED
-                attachment_info.external_attr = (0o644 & 0xFFFF) << 16
-                rewritten.writestr(attachment_info, source.read_bytes())
+                if source is not None:
+                    attachment_info = zipfile.ZipInfo(
+                        member_name,
+                        date_time=(1980, 1, 1, 0, 0, 0),
+                    )
+                    attachment_info.compress_type = zipfile.ZIP_DEFLATED
+                    attachment_info.external_attr = (0o644 & 0xFFFF) << 16
+                    rewritten.writestr(attachment_info, source.read_bytes())
                 if manifest_info is None:
                     raise CompleteProductionError('Release manifest metadata disappeared.')
                 rewritten.writestr(
@@ -609,18 +631,21 @@ def _attach_verified_release_artifact(
 
     updated = dict(release_result)
     updated['sha256'] = CompleteProductionOrchestrator._file_hash(release_path)
-    updated['additional_artifacts'] = dict(
-        sorted(
-            {
-                **(
-                    release_result.get('additional_artifacts')
-                    if isinstance(release_result.get('additional_artifacts'), dict)
-                    else {}
-                ),
-                archive_name: expected,
-            }.items()
+    if descriptor is not None:
+        updated['additional_artifacts'] = dict(
+            sorted(
+                {
+                    **(
+                        release_result.get('additional_artifacts')
+                        if isinstance(release_result.get('additional_artifacts'), dict)
+                        else {}
+                    ),
+                    archive_name: expected,
+                }.items()
+            )
         )
-    )
+    if manifest_provenance:
+        updated['manifest_provenance'] = dict(manifest_provenance)
     return updated
 
 
@@ -1835,6 +1860,10 @@ class CompleteProductionOrchestrator:
                 'unresolved_gates': list(normalized_unresolved),
             },
         )
+        # The release ZIP snapshots project-owned work evidence before packaging.
+        # Persist the completed build-artifact node now so the embedded ledger has
+        # exactly one expected pending node: package-release itself.
+        self._persist_work_evidence(project_root, ledger, work_plan)
 
         if options.publish_provider and (not release_ready):
             raise CompleteProductionError(
@@ -1854,7 +1883,8 @@ class CompleteProductionOrchestrator:
             )
             release_package_input = {
                 'graph_hash': work_plan.graph_hash,
-                'proposal_hash': base.calculate_hash(),
+                'proposal_hash': approved.calculate_hash(),
+                'base_proposal_hash': base.calculate_hash(),
                 'jar_sha256': self._file_hash(jar_path),
                 'coverage_sha256': str(coverage_receipt.get('coverage_sha256') or ''),
                 'runtime_receipt_sha256': _stable_payload_sha256(persisted_runtime_receipt),
@@ -1892,6 +1922,11 @@ class CompleteProductionOrchestrator:
                         resource_pack_bundle,
                         archive_name='generated-resource-pack.zip',
                         allowed_root=run_root,
+                        manifest_provenance={
+                            'proposal_hash': approved.calculate_hash(),
+                            'base_proposal_hash': base.calculate_hash(),
+                            'proposal_scope': 'complete',
+                        },
                     ),
                 ),
                 encode=lambda value: value,
