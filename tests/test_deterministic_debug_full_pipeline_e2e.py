@@ -72,6 +72,18 @@ def _deterministic_coder(
 ) -> str:
     del args, kwargs
     assert role == "coder"
+    authority_messages = [
+        str(message.get("content") or "")
+        for message in messages
+        if message.get("role") == "developer"
+        and "MANDATORY HOST IMPLEMENTATION AUTHORITY" in str(message.get("content") or "")
+    ]
+    assert len(authority_messages) == 1
+    authority = authority_messages[0]
+    assert "import net.minecraft.core.registries.Registries;" in authority
+    assert "import net.minecraft.core.registries.BuiltInRegistries;" in authority
+    assert "net.minecraft.resources.Registries" not in authority
+    assert "ResourceKeys" not in authority
     request = json.loads(messages[-1]["content"])
     grounding = request["host_grounding"]["evidence_bindings"][
         "implementation_contract"
