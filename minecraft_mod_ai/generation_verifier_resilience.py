@@ -12,6 +12,7 @@ verifier decision without re-entering a Gradle build path.
 import hashlib
 import json
 import os
+import threading
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,71 @@ def host_jdt_startup_timeout_seconds() -> int:
         minimum=90,
         maximum=600,
     )
+
+class _VerifierWatchdogTimeout(TimeoutError):
+    pass
+
+
+def _watchdog_grace_seconds() -> int:
+    return _bounded_int_env(
+        "MMM_JDT_DIAGNOSTIC_WATCHDOG_GRACE_SECONDS",
+        default=5,
+        minimum=1,
+        maximum=30,
+    )
+
+
+def _diagnostics_with_watchdog(
+    service: Any,
+    root: Path,
+    *,
+    relative_files: list[str] | None,
+    timeout_seconds: float,
+    full_scan: bool,
+) -> Mapping[str, Any]:
+    """Enforce the verifier wall-clock budget even if a lower layer wedges."""
+
+    completed = threading.Event()
+    result_box: dict[str, Any] = {}
+    error_box: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            result_box["result"] = service.diagnostics(
+                root,
+                relative_files=relative_files,
+                timeout_seconds=timeout_seconds,
+                full_scan=full_scan,
+            )
+        except BaseException as exc:  # noqa: BLE001 - preserve verifier failure
+            error_box.append(exc)
+        finally:
+            completed.set()
+
+    thread = threading.Thread(
+        target=worker,
+        daemon=True,
+        name="mmm-generation-jdt-watchdog",
+    )
+    thread.start()
+    wall_clock_budget = float(timeout_seconds) + float(_watchdog_grace_seconds())
+    if not completed.wait(wall_clock_budget):
+        abort = getattr(service, "abort", None)
+        if callable(abort):
+            try:
+                abort()
+            except Exception:
+                pass
+        completed.wait(2.0)
+        raise _VerifierWatchdogTimeout(
+            f"JDT diagnostics wall-clock deadline exceeded after {wall_clock_budget:.1f}s"
+        )
+    if error_box:
+        raise error_box[0]
+    result = result_box.get("result")
+    if not isinstance(result, Mapping):
+        raise TypeError("JDT diagnostics returned a non-mapping result")
+    return result
 
 
 def _requested_timeout_seconds(payload: Mapping[str, Any]) -> float:
@@ -230,8 +296,9 @@ def run_generation_verifier(
                 "effective_timeout_seconds": effective_timeout,
             },
         )
-        result = service.diagnostics(
-            root,
+        result = _diagnostics_with_watchdog(
+            service,
+            Path(root),
             relative_files=relative_files,
             timeout_seconds=effective_timeout,
             full_scan=bool(payload.get("full_scan", False)),
@@ -242,6 +309,26 @@ def run_generation_verifier(
             or not result.get("model_id")
         ):
             raise OwnerRPCError("JDT Core returned incomplete or unbound verification")
+    except _VerifierWatchdogTimeout as exc:
+        service = getattr(runtime, _JDT_SERVICE_ATTR, None)
+        if service is not None:
+            try:
+                delattr(runtime, _JDT_SERVICE_ATTR)
+            except AttributeError:
+                pass
+        emit_root_cause(
+            "generation_verifier_watchdog_timeout",
+            stage="generation",
+            operation=_VERIFIER_NAME,
+            result="FAIL",
+            reason=str(exc),
+            exc=exc,
+        )
+        return _unavailable_verifier_result(
+            Path(root),
+            exc,
+            runtime_module=runtime_module,
+        )
     except (
         OSError,
         ValueError,
