@@ -524,47 +524,6 @@ def _filter_donor_tool_schemas(schemas: Sequence[Any]) -> tuple[Any, ...]:
     return filter_donor_tool_schemas(schemas)
 
 
-def _repair_tool_schema_name(schema: Any) -> str:
-    if not isinstance(schema, Mapping):
-        return ""
-    function = schema.get("function")
-    if not isinstance(function, Mapping):
-        return ""
-    return str(function.get("name") or "").strip()
-
-
-def _existing_repair_context(
-    messages: Sequence[Mapping[str, Any]],
-) -> Mapping[str, Any] | None:
-    """Return the latest host repair receipt for an existing pinned target."""
-
-    for message in reversed(messages):
-        if not isinstance(message, Mapping):
-            continue
-        if str(message.get("role") or "").strip().casefold() != "system":
-            continue
-        raw_content = message.get("content")
-        if (
-            not isinstance(raw_content, str)
-            or not raw_content.startswith(_REPAIR_CONTEXT_PREFIX)
-        ):
-            continue
-        raw = raw_content.rsplit("\n", 1)[-1].strip()
-        try:
-            payload = json.loads(raw)
-        except (json.JSONDecodeError, TypeError, ValueError):
-            return None
-        if not isinstance(payload, Mapping):
-            return None
-        if payload.get("target_is_new_file") is not False:
-            return None
-        path = _canonical_mutation_path(payload.get("target_path"))
-        if not path:
-            return None
-        return payload
-    return None
-
-
 def _constrain_existing_repair_schema(
     schema: Mapping[str, Any],
     *,
@@ -612,6 +571,8 @@ def _constrain_existing_repair_schema(
         "complete corrected source in new; operation, path, old text, and SHA are host-owned."
     )
     return cloned
+
+
 def _bind_existing_verifier_repair_call(
     call: Any,
     state: Any,
@@ -645,33 +606,39 @@ def _bind_existing_verifier_repair_call(
         raw_arguments=json.dumps(bound, ensure_ascii=False, separators=(",", ":")),
     )
 
-def _constrain_existing_repair_tools(
-    tools: Sequence[Any],
-    messages: Sequence[Mapping[str, Any]],
-) -> tuple[Any, ...]:
-    """Narrow the model-visible repair frontier without mutating canonical schemas."""
 
-    context = _existing_repair_context(messages)
-    if context is None:
+def _constrain_verifier_repair_tools(
+    tools: Sequence[Any],
+    state: Any,
+) -> tuple[Any, ...]:
+    """Project a verifier repair directly from live host state.
+
+    Repair authority already lives in HostRunState; re-parsing a system prompt to
+    reconstruct that authority creates a second, stale control path.
+    """
+
+    if str(getattr(state, "validation_status", "") or "") != "FAIL":
         return tuple(tools)
-    target_path = _canonical_mutation_path(context.get("target_path"))
+    context = getattr(state, "mutation_context", None)
+    if context is None or context.is_new_file or not context.is_mutation_ready:
+        return tuple(tools)
+    target_path = _canonical_mutation_path(context.target_path)
     if not target_path:
         return tuple(tools)
-    result: list[Any] = []
-    found = False
+
+    projected: list[Any] = []
     for schema in tools:
-        if _repair_tool_schema_name(schema) == "apply_source_edit":
-            if not isinstance(schema, Mapping):
-                raise ModelConfigurationError(
-                    "REPAIR_TOOL_SCHEMA_INVALID: apply_source_edit schema is not a mapping"
-                )
-            result.append(
-                _constrain_existing_repair_schema(schema, target_path=target_path)
+        if _tool_name(schema) != "apply_source_edit":
+            projected.append(schema)
+            continue
+        if not isinstance(schema, Mapping):
+            raise ModelConfigurationError(
+                "REPAIR_TOOL_SCHEMA_INVALID: apply_source_edit schema is not a mapping"
             )
-            found = True
-        else:
-            result.append(schema)
-    return tuple(result) if found else tuple(tools)
+        projected.append(
+            _constrain_existing_repair_schema(schema, target_path=target_path)
+        )
+    return tuple(projected)
 
 
 def _trusted_internal_user_payload(payload: Mapping[str, Any]) -> bool:
@@ -1535,6 +1502,7 @@ def _model_rejection_progress_key(
     })
     return base
 
+
 @dataclass(frozen=True)
 class ExecutionStepTrace:
     step_index: int
@@ -1948,18 +1916,8 @@ def _repair_guidance_payload(state: Any) -> dict[str, Any] | None:
         "target_path": context.target_path if context else None,
         "target_is_new_file": context.is_new_file if context else None,
         "writable_paths": list(context.writable_paths) if context else [],
-        "current_source_sha256": (
-            hashlib.sha256(source.encode("utf-8")).hexdigest() if source is not None else None
-        ),
         "current_source": source,
     }
-
-
-def _repair_guidance_source_section(payload: Mapping[str, Any]) -> str:
-    source = payload.get("current_source")
-    if not isinstance(source, str):
-        return ""
-    return f"CURRENT_SOURCE_BEGIN\n{source}CURRENT_SOURCE_END\n"
 
 
 @dataclass
@@ -2087,20 +2045,13 @@ class HostRunState:
             "MMM_CORE_VERIFIER_REPAIR_V5\n"
             "The verifier failure is the active repair obligation. Do not restart generation, "
             "do not search unrelated ecosystem candidates, and never write a different path. "
-            "The payload includes the exact host-tracked current source and its SHA-256. "
+            "The payload includes the exact host-tracked current source. "
             "Any earlier host_reserved/fresh metadata is pre-materialization history only. "
             "This repair turn exposes only the complete corrected source body in new. "
             "Operation, path, old text, and optimistic-concurrency SHA are host-owned and must not "
             "be emitted by the model. The host binds new to an atomic live-SHA whole-file rewrite. "
             "Use the diagnostics below against the host-pinned target and make one materially "
             "different source edit. The next successful mutation goes directly back to VERIFY.\n"
-            + (
-                "" if (
-                    self.mutation_context
-                    and self.mutation_context.evidence_source == "verifier_workspace_source"
-                )
-                else _repair_guidance_source_section(payload)
-            )
             + json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
         )
 
@@ -2598,28 +2549,6 @@ def _generate_turn_with_context_recovery(
     verifier_relative_files: tuple[str, ...] = (),
 ) -> Any:
     """Fit one live turn and recover typed completion boundaries in-place."""
-
-    constrained_tools = _constrain_existing_repair_tools(request.tools, messages)
-    if constrained_tools != tuple(request.tools):
-        request = replace(request, tools=constrained_tools)
-        emit_root_cause(
-            "repair_tool_frontier_constrained",
-            stage="generation",
-            operation="apply_source_edit",
-            gate="repair_mutation_schema",
-            result="PASS",
-            reason=(
-                "existing-file repair removed create/delete operations and pinned "
-                "the source-edit target"
-            ),
-            details={
-                "selected_tools": [
-                    _repair_tool_schema_name(schema)
-                    for schema in constrained_tools
-                    if _repair_tool_schema_name(schema)
-                ]
-            },
-        )
 
     if _forced_tool_choice_name(tool_choice) == "java_diagnostics":
         from .generation_verifier_resilience import synthesized_verifier_turn
@@ -3505,6 +3434,23 @@ def _generate_with_tools_impl(
             localization_active=implementation_requires_mutation,
             semantic_retrieval_choice=bool(require_rag and not baseline_ready),
         )
+        constrained_repair_tools = _constrain_verifier_repair_tools(
+            phase_tools,
+            state,
+        )
+        if constrained_repair_tools != tuple(phase_tools):
+            phase_tools = constrained_repair_tools
+            emit_root_cause(
+                "repair_tool_frontier_constrained",
+                stage=stage,
+                operation="apply_source_edit",
+                gate="repair_mutation_schema",
+                result="PASS",
+                reason="live HostRunState projected verifier repair to a host-bound whole-file rewrite",
+                details={"selected_tools": [
+                    _tool_name(schema) for schema in phase_tools if _tool_name(schema)
+                ]},
+            )
         if (
             authored_workspace_refresh
             and state.phase is LoopPhase.OBSERVE
