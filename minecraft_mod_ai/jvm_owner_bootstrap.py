@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from .owner_rpc import OwnerRPCError
@@ -31,6 +32,13 @@ def owner_command(
     if not math.isfinite(timeout_value) or timeout_value <= 0.0:
         raise OwnerRPCError("JVM owner bootstrap timeout must be a positive finite number")
     bootstrap_timeout = max(1, int(math.ceil(timeout_value)))
+    deadline = time.monotonic() + timeout_value
+
+    def remaining_timeout() -> int:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            raise OwnerRPCError("JVM owner bootstrap deadline exceeded")
+        return max(1, int(math.ceil(remaining)))
 
     source = Path(__file__).with_name('jvm_owner')
     files = sorted(path for path in source.rglob('*') if path.is_file()
@@ -44,25 +52,26 @@ def owner_command(
     distribution = target / 'build' / 'install' / 'owner'
     from .runner import GradleRunner, _exclusive_cache_lock
 
-    with _exclusive_cache_lock(cache, timeout_seconds=bootstrap_timeout):
+    with _exclusive_cache_lock(cache, timeout_seconds=remaining_timeout()):
         if not (distribution / 'configuration' / 'config.ini').is_file():
             target.mkdir(parents=True, exist_ok=True)
             for path in files:
                 output = target / path.relative_to(source)
                 output.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(path, output)
+            gradle_budget = remaining_timeout()
             gradle = GradleRunner(
                 cache / 'gradle',
-                download_timeout_seconds=min(300, bootstrap_timeout),
+                download_timeout_seconds=min(300, gradle_budget),
             ).ensure_gradle(
                 GRADLE_VERSION,
                 GRADLE_SHA256,
-                lock_timeout_seconds=bootstrap_timeout,
+                lock_timeout_seconds=gradle_budget,
             )
             with tempfile.TemporaryFile(mode='w+b') as log:
                 result = subprocess.run([str(gradle), '--no-daemon', '--console=plain', 'installDist'],
                                         cwd=target, stdout=log, stderr=subprocess.STDOUT,
-                                        timeout=bootstrap_timeout, check=False, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                                        timeout=remaining_timeout(), check=False, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
                 if result.returncode:
                     log.seek(max(0, log.tell() - 12000))
                     raise OwnerRPCError('Owner build failed: ' + log.read().decode('utf-8', errors='replace'))
