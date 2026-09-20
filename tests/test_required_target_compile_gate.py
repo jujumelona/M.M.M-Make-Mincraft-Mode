@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator
+from minecraft_mod_ai.complete_orchestrator import (
+    CompleteProductionOrchestrator,
+    _jdt_release_evidence_passed,
+    _requested_verification_failures,
+)
 
 
 def _proposal():
@@ -109,6 +113,61 @@ def test_required_jdt_accepts_only_real_clean_jdt_receipt():
             "commands": [{"name": "build", "exit_code": 0, "timed_out": False}],
         },
     ) == []
+
+
+def test_run_jdt_option_blocks_release_when_jdt_is_unavailable():
+    receipt = {
+        "status": "UNAVAILABLE",
+        "error": "JDTLanguageServerError: ServiceReady was not observed before validation",
+        "diagnostics": {},
+        "error_count": 0,
+        "files_opened": 0,
+    }
+
+    assert not _jdt_release_evidence_passed(receipt)
+    assert _requested_verification_failures(
+        run_jdt=True,
+        jdt_receipt=receipt,
+    ) == ["execution-gate:jdt:missing-jdt"]
+
+
+def test_run_jdt_option_accepts_real_clean_jdt_receipt():
+    receipt = {
+        "status": "PASS",
+        "diagnostics": {},
+        "error_count": 0,
+        "files_opened": 1,
+    }
+
+    assert _jdt_release_evidence_passed(receipt)
+    assert _requested_verification_failures(
+        run_jdt=True,
+        jdt_receipt=receipt,
+    ) == []
+
+
+def test_run_jdt_option_is_independent_from_proposal_required_gates():
+    assert _requested_verification_failures(
+        run_jdt=False,
+        jdt_receipt=None,
+    ) == []
+    assert _requested_verification_failures(
+        run_jdt=True,
+        jdt_receipt=None,
+    ) == ["execution-gate:jdt:missing-jdt"]
+
+
+def test_jdt_release_evidence_unwraps_reviewed_transport_envelope():
+    receipt = {
+        "structured_content": {
+            "status": "PASS",
+            "diagnostics": {},
+            "error_count": 0,
+            "files_opened": 2,
+        }
+    }
+
+    assert _jdt_release_evidence_passed(receipt)
 
 
 def test_generated_receipt_cannot_add_unapproved_release_gate():
