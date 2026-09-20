@@ -1,69 +1,45 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
-from typing import Any
+"""Repair diagnostic compatibility markers for source-owned RepairEngine behavior.
 
-from .validation_diagnostic_contract import diagnostic_items
+RepairEngine._signature and RepairEngine._context are implemented directly in
+repair_engine.py. This module must never replace those functions at runtime: doing so
+made reviewed source differ from executed behavior and silently discarded newer
+repository-grounding/build-log logic.
+"""
+
+from typing import Any
 
 
 def install(repair_module: Any) -> None:
-    """Install repair context/index optimizations without redefining JDT semantics."""
+    """Assert and annotate the source-owned repair implementation without rebinding it."""
 
     cls = repair_module.RepairEngine
+    signature = cls._signature
+    context = cls._context
 
-    def signature(evidence: dict[str, Any]) -> str:
-        diagnostics = [
-            {
-                "path": item.get("path") or item.get("uri"),
-                "message": item.get("message"),
-                "code": item.get("code"),
-                "severity": item.get("severity"),
-            }
-            for item in diagnostic_items(evidence.get("diagnostics"))
-        ]
-        build = evidence.get("build", {})
-        return json.dumps(
-            {
-                "diagnostics": diagnostics,
-                "build_status": build.get("status"),
-                "build_error": build.get("error"),
-            },
-            ensure_ascii=False,
-            sort_keys=True,
+    if not callable(signature) or not callable(context):
+        raise RuntimeError(
+            "Repair diagnostics contract requires source-owned _signature and _context."
+        )
+    if getattr(signature, "__module__", "") != repair_module.__name__:
+        raise RuntimeError(
+            "RepairEngine._signature was rebound outside repair_engine before "
+            "repair diagnostics installation."
+        )
+    if getattr(context, "__module__", "") != repair_module.__name__:
+        raise RuntimeError(
+            "RepairEngine._context was rebound outside repair_engine before "
+            "repair diagnostics installation."
+        )
+    if hasattr(signature, "__wrapped__") or hasattr(context, "__wrapped__"):
+        raise RuntimeError(
+            "Repair diagnostic source owners must not be hidden behind runtime wrappers."
         )
 
-    def context(self: Any, root: Path, evidence: dict[str, Any]) -> dict[str, Any]:
-        diagnostic_paths: list[str] = []
-        query_parts: list[str] = []
-        for item in diagnostic_items(evidence.get("diagnostics")):
-            path = item.get("path") or item.get("uri")
-            if isinstance(path, str):
-                diagnostic_paths.append(path)
-            message = item.get("message")
-            if isinstance(message, str):
-                query_parts.append(message)
-        build = evidence.get("build", {})
-        if isinstance(build.get("error"), str):
-            query_parts.append(build["error"])
-        for command in build.get("commands", []):
-            if isinstance(command, dict) and isinstance(command.get("log_path"), str):
-                log = Path(command["log_path"])
-                if log.is_file() and not log.is_symlink():
-                    query_parts.append(
-                        log.read_text(encoding="utf-8", errors="replace")[-32_000:]
-                    )
-        index = repair_module.active_repair_project_index(root, self.policy)
-        return {
-            "manifest": index.manifest_receipt(),
-            "relevant": index.select(
-                query="\n".join(query_parts),
-                diagnostic_paths=diagnostic_paths,
-            ),
-        }
+    signature._mmm_flattened_jdt = True  # type: ignore[attr-defined]
+    context._mmm_flattened_jdt = True  # type: ignore[attr-defined]
+    context._mmm_reuses_repair_project_index = True  # type: ignore[attr-defined]
 
-    signature._mmm_flattened_jdt = True
-    context._mmm_flattened_jdt = True
-    context._mmm_reuses_repair_project_index = True
-    cls._signature = staticmethod(signature)
-    cls._context = context
+
+__all__ = ["install"]
