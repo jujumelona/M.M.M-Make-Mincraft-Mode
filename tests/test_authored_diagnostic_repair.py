@@ -51,6 +51,7 @@ def test_authored_diagnostics_repair_local_files_without_external_discovery(
     assert authority is not None
     calls = []
     repairs = []
+    stale_attempts = []
 
     class Adapter:
         def generate_turn(self, request):
@@ -100,16 +101,41 @@ def test_authored_diagnostics_repair_local_files_without_external_discovery(
                     if message["role"] == "system":
                         assert "same-path create_file/create" not in message["content"]
                         assert "Future repairs stay on this exact path" not in message["content"]
-                repairs.append(target)
-                name, arguments = (
-                    "apply_source_edit",
-                    {
-                        "operation": "replace_exact",
-                        "path": target,
-                        "old": "MISSING",
-                        "new": "1",
-                    },
-                )
+                if not stale_attempts and not repairs:
+                    # Reproduce the production failure: the model echoes a whole-file old
+                    # precondition that is almost, but not byte-for-byte, the live source.
+                    stale_attempts.append(target)
+                    name, arguments = (
+                        "apply_source_edit",
+                        {
+                            "operation": "replace_exact",
+                            "path": target,
+                            "old": source + " ",
+                            "new": source.replace("MISSING", "1"),
+                        },
+                    )
+                elif stale_attempts and not repairs:
+                    assert "OMIT old entirely" in guidance
+                    repairs.append(target)
+                    name, arguments = (
+                        "apply_source_edit",
+                        {
+                            "operation": "replace_exact",
+                            "path": target,
+                            "new": source.replace("MISSING", "1"),
+                        },
+                    )
+                else:
+                    repairs.append(target)
+                    name, arguments = (
+                        "apply_source_edit",
+                        {
+                            "operation": "replace_exact",
+                            "path": target,
+                            "old": "MISSING",
+                            "new": "1",
+                        },
+                    )
             return GenerationResponse(
                 tool_calls=(
                     ToolCall(
@@ -136,11 +162,18 @@ def test_authored_diagnostics_repair_local_files_without_external_discovery(
                 if arguments["operation"] == "create_file":
                     text = arguments["content"]
                 else:
-                    text = (
-                        path.read_bytes()
-                        .decode()
-                        .replace(arguments["old"], arguments["new"])
-                    )
+                    current = path.read_bytes().decode()
+                    if "old" not in arguments:
+                        text = arguments["new"]
+                    else:
+                        old = arguments["old"]
+                        found = current.count(old)
+                        if found != 1:
+                            raise RuntimeError(
+                                "Exact source-edit precondition failed for "
+                                f"{arguments['path']}: expected 1 matches, found {found}"
+                            )
+                        text = current.replace(old, arguments["new"], 1)
                 path.write_text(text, encoding="utf-8", newline="")
                 return {
                     "schema_version": "mmm/source-patch-receipt-v1",
@@ -252,6 +285,7 @@ def test_authored_diagnostics_repair_local_files_without_external_discovery(
         "search_code_rag",
         "apply_source_edit",
         "java_diagnostics",
+        "apply_source_edit",
         "apply_source_edit",
         "java_diagnostics",
         "apply_source_edit",
