@@ -9,7 +9,10 @@ from inspect import getattr_static
 from pathlib import Path
 from typing import Any
 
-from .deadline_executor import iter_completed_with_deadlines
+from .deadline_executor import (
+    ParallelExecutionTimeout,
+    iter_completed_with_deadlines,
+)
 from .model_adapters import (
     EmbeddingAdapter,
     GenerationRequest,
@@ -64,6 +67,7 @@ _EXTERNAL_RAG_CAPABILITIES = frozenset(
         "version_diff",
     }
 )
+_VERIFIER_TIMEOUT_ISOLATION_TOOLS = frozenset({"java_diagnostics", "jdt_diagnostics"})
 _PARALLEL_READ_TOOLS = frozenset(
     {
         "search_code_rag",
@@ -740,6 +744,8 @@ def _agent_tool_call_timeout_seconds(call: Any) -> float:
 def _parallel_read_call(call: Any) -> bool:
     """Return whether a reviewed call is side-effect-free and safe in a read wave."""
 
+    if call.name in _VERIFIER_TIMEOUT_ISOLATION_TOOLS:
+        return False
     if call.name in _PARALLEL_READ_TOOLS:
         return True
     if call.name != "external_mcp_call":
@@ -780,16 +786,55 @@ def _execute_tool_waves(
             _agent_tool_call_timeout_seconds(call)
             for call in batch
         )
-        for _item, indexed_result in iter_completed_with_deadlines(
-            indexed_batch,
-            execute_indexed,
-            max_workers=max(1, workers),
-            stage=stage,
-            sort_key=lambda item: item[0],
-            work_unit_timeout_seconds=timeout_seconds,
-        ):
-            index, result = indexed_result
-            ordered[index] = result
+        try:
+            for _item, indexed_result in iter_completed_with_deadlines(
+                indexed_batch,
+                execute_indexed,
+                max_workers=max(1, workers),
+                stage=stage,
+                sort_key=lambda item: item[0],
+                work_unit_timeout_seconds=timeout_seconds,
+            ):
+                index, result = indexed_result
+                ordered[index] = result
+        except ParallelExecutionTimeout as exc:
+            expired = exc.item
+            if (
+                isinstance(expired, tuple)
+                and len(expired) == 2
+                and isinstance(expired[0], int)
+            ):
+                index = expired[0]
+                call = expired[1]
+            else:
+                raise
+            name = str(getattr(call, "name", "") or "").strip()
+            if name not in _VERIFIER_TIMEOUT_ISOLATION_TOOLS:
+                raise
+            ordered[index] = (
+                call,
+                {
+                    "ok": False,
+                    "tool": name,
+                    "failure_code": "VERIFIER_TIMEOUT",
+                    "error": str(exc),
+                    "result": {
+                        "schema_version": "mmm/java-diagnostics-v3",
+                        "status": "UNAVAILABLE",
+                        "available": False,
+                        "complete": False,
+                        "skipped": True,
+                        "diagnostics": [
+                            {
+                                "severity": 1,
+                                "code": "JDT_DIAGNOSTICS_TIMEOUT",
+                                "source": "agent_tool_deadline",
+                                "message": str(exc),
+                            }
+                        ],
+                    },
+                },
+            )
         if any(item is None for item in ordered):
             raise ModelConfigurationError(
                 f"{stage} lost a completed tool result."
@@ -814,8 +859,13 @@ def _execute_tool_waves(
             pending_reads.append(call)
             continue
         flush_reads()
+        call_stage = (
+            "agent_verifier_call"
+            if call.name in _VERIFIER_TIMEOUT_ISOLATION_TOOLS
+            else "agent_tool_call"
+        )
         completed.extend(
-            execute_batch((call,), workers=1, stage="agent_tool_call")
+            execute_batch((call,), workers=1, stage=call_stage)
         )
     flush_reads()
     return tuple(completed)
