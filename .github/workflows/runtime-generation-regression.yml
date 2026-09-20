@@ -17,6 +17,7 @@ on:
       - "minecraft_mod_ai/generation_implementation_grounding.py"
       - "minecraft_mod_ai/compiler_diagnostics.py"
       - "minecraft_mod_ai/execution_feedback_replan_contract.py"
+      - "minecraft_mod_ai/execution_feedback_exception_scope_contract.py"
       - "minecraft_mod_ai/final_artifact.py"
       - "minecraft_mod_ai/colab_run_modes.py"
       - "minecraft_mod_ai/populate_version_artifact_rules.py"
