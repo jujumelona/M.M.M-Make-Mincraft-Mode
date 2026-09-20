@@ -275,6 +275,55 @@ def test_compiler_log_path_binds_failed_build_to_generation_owner(tmp_path):
     assert matches[0]["match"]["observed_path"] is True
 
 
+def test_gametest_runtime_stack_binds_failure_to_generated_owner(tmp_path):
+    log = tmp_path / "gradle-build.log"
+    log.write_text(
+        "Caused by: java.lang.NullPointerException: Item id not set\n"
+        "\tat knot//net.minecraft.world.item.Item.<init>(Item.java:150)\n"
+        "\tat knot//dev.mmm.debugfixture.DebugToken.<clinit>(DebugToken.java:13)\n"
+        "> Task :runGameTest FAILED\n",
+        encoding="utf-8",
+    )
+    diagnostics = feedback._compiler_log_diagnostics(
+        {
+            "build": {
+                "status": "FAIL",
+                "commands": [
+                    {
+                        "name": "incremental_build",
+                        "exit_code": 1,
+                        "timed_out": False,
+                        "log_path": str(log),
+                    }
+                ],
+            }
+        }
+    )
+    runtime = [item for item in diagnostics if item.get("source") == "runtime"]
+    assert len(runtime) == 1
+    assert runtime[0]["path"] == "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+    assert runtime[0]["message"] == "java.lang.NullPointerException: Item id not set"
+
+    ledger = _FakeLedger(
+        [
+            _generation_task(
+                "generate-custom-00000000",
+                "debug_token",
+                "src/main/java/dev/mmm/debugfixture/DebugToken.java",
+                "REQ-DEBUG",
+            )
+        ]
+    )
+    seeds, owners, requirements, matches = feedback._derive_impacted_seeds(
+        ledger,
+        {"checkpoint_id": "gradle-build", "diagnostics": diagnostics},
+    )
+    assert seeds == {"generate-custom-00000000"}
+    assert owners == {"debug_token"}
+    assert requirements == {"REQ-DEBUG"}
+    assert matches[0]["match"]["observed_path"] is True
+
+
 class _FeedbackLoopError(CompleteProductionError):
     pass
 
