@@ -12,6 +12,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from .host_item_registration import item_registration_epoch
 from .host_version_catalog import host_target
 from .minecraft_template_steps import steps_for_artifact
 from .registered_leaf_binding import require_registered_leaf_binding
@@ -84,6 +85,46 @@ def _bind_template_symbol_usage(
             "Do not move a registry, key, identifier, owner, receiver, or method argument "
             "to a different admitted template merely because its Java type is compatible."
         )
+
+
+def _complete_item_registration_semantics(
+    symbols: dict[str, Any],
+    templates: list[dict[str, Any]],
+    *,
+    minecraft_version: str,
+) -> None:
+    """Project keyed Item.Properties.setId from reviewed HOST epoch authority."""
+
+    template_ids = {
+        str(item.get("template_id") or "").strip()
+        for item in templates
+        if isinstance(item, Mapping)
+    }
+    epoch = item_registration_epoch(minecraft_version)
+    if (
+        "fabric/item/register_keyed" not in template_ids
+        or epoch.get("requires_set_id") is not True
+    ):
+        return
+    symbols.setdefault(
+        "item_set_id",
+        {
+            "owner": "net.minecraft.world.item.Item$Properties",
+            "name": "setId",
+            "descriptor": (
+                "(Lnet/minecraft/resources/ResourceKey;)"
+                "Lnet/minecraft/world/item/Item$Properties;"
+            ),
+            "kind": "method",
+            "static": False,
+            "side": "common",
+            "namespace": "minecraft",
+            "metadata": {
+                "source": "host_item_registration_epoch",
+                "epoch": str(epoch.get("id") or ""),
+            },
+        },
+    )
 
 
 def _complete_template_symbol_authority(
@@ -245,6 +286,11 @@ def build_generation_implementation_grounding(
                 }
             )
 
+        _complete_item_registration_semantics(
+            symbols,
+            templates,
+            minecraft_version=target.minecraft_version,
+        )
         _complete_template_symbol_authority(
             context,
             symbols,
