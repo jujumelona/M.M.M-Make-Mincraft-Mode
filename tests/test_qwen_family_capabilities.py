@@ -252,7 +252,10 @@ def test_fully_composed_qwen38_required_and_json_pages_remove_generic_none() -> 
         adapter, structured
     )
 
-    assert required_payload["temperature"] == 0.0
+    assert required_payload["temperature"] == 0.7
+    assert required_payload["top_p"] == 0.8
+    assert required_payload["top_k"] == 20
+    assert required_payload["presence_penalty"] == 1.5
     assert required_payload["tool_choice"] == "required"
     for payload in (required_payload, structured_payload):
         assert payload["chat_template_kwargs"] == {
