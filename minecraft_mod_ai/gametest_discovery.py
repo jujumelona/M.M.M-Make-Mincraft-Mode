@@ -7,16 +7,32 @@ def discovered_gametest_root_java(
     mod_id: str,
     root_class_name: str,
     unit_class_prefix: str,
+    mappings_kind: str = "yarn",
 ) -> str:
-    """Render one fixed-size GameTest entrypoint that discovers bounded units."""
+    """Render one fixed-size GameTest entrypoint for the locked mapping namespace."""
 
     package_path = package_name.replace(".", "/")
+    normalized = str(mappings_kind or "").strip().casefold()
+    mojang = normalized in {"mojang", "official", "official_mojang"}
+
+    if mojang:
+        test_imports = """import net.minecraft.gametest.framework.GameTest;
+import net.minecraft.gametest.framework.GameTestHelper;"""
+        annotation = "@GameTest(template = FabricGameTest.EMPTY_STRUCTURE)"
+        context_type = "GameTestHelper"
+        complete = "context.succeed();"
+    else:
+        test_imports = """import net.minecraft.test.GameTest;
+import net.minecraft.test.TestContext;"""
+        annotation = "@GameTest(templateName = FabricGameTest.EMPTY_STRUCTURE)"
+        context_type = "TestContext"
+        complete = "context.complete();"
+
     return f'''package {package_name};
 
 import net.fabricmc.fabric.api.gametest.v1.FabricGameTest;
 import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.test.GameTest;
-import net.minecraft.test.TestContext;
+{test_imports}
 
 import java.lang.reflect.InvocationTargetException;
 import java.nio.file.Files;
@@ -25,12 +41,12 @@ import java.util.Set;
 import java.util.TreeSet;
 
 public final class {root_class_name} {{
-    @GameTest(templateName = FabricGameTest.EMPTY_STRUCTURE)
-    public void generatedRegistriesAreLive(TestContext context) {{
+    {annotation}
+    public void generatedRegistriesAreLive({context_type} context) {{
         for (String className : generatedUnitClasses()) {{
             invokeUnit(className, context);
         }}
-        context.complete();
+        {complete}
     }}
 
     private static Set<String> generatedUnitClasses() {{
@@ -65,14 +81,14 @@ public final class {root_class_name} {{
         }}
     }}
 
-    private static void invokeUnit(String className, TestContext context) {{
+    private static void invokeUnit(String className, {context_type} context) {{
         try {{
             Class<?> unit = Class.forName(
                 className,
                 true,
                 {root_class_name}.class.getClassLoader()
             );
-            unit.getMethod("run", TestContext.class).invoke(null, context);
+            unit.getMethod("run", {context_type}.class).invoke(null, context);
         }} catch (InvocationTargetException error) {{
             Throwable cause = error.getCause();
             if (cause instanceof RuntimeException runtime) throw runtime;
