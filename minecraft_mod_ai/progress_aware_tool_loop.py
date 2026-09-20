@@ -2644,7 +2644,7 @@ def _generate_turn_with_context_recovery(
             raise
 
 
-_PHASE_HANDOFF_VERIFIER_DIAGNOSTIC_BYTES = 6 * 1024
+_PHASE_HANDOFF_VERIFIER_DIAGNOSTIC_BYTES = 4 * 1024
 _PHASE_HANDOFF_DIAGNOSTIC_TEXT_LIMIT = 640
 _PHASE_HANDOFF_TOTAL_BYTES = 6 * 1024
 _PHASE_HANDOFF_TOOL_RECORD_LIMIT = 6
@@ -2753,13 +2753,18 @@ def _bounded_phase_tool_observation(message: Mapping[str, Any]) -> str:
     records: list[dict[str, Any]] = []
     _phase_handoff_records(parsed, records)
     fingerprint = evidence_fingerprint(parsed)
+    plain_excerpt = (
+        _phase_handoff_scalar(parsed)
+        if isinstance(parsed, str) and parsed.strip()
+        else None
+    )
     payload = {
         "schema_version": "mmm/phase-tool-observation-v1",
-        "tool": str(message.get("name") or ""),
         "tool_result_fingerprint": (
             "sha256:" + fingerprint if fingerprint else None
         ),
         "records": records,
+        "excerpt": plain_excerpt,
         "policy": (
             "Bounded host projection of the completed tool result. Raw tool payload "
             "is intentionally not replayed across phase boundaries."
@@ -2791,12 +2796,12 @@ def _bounded_phase_tool_observation(message: Mapping[str, Any]) -> str:
     return json.dumps(
         {
             "schema_version": "mmm/phase-tool-observation-v1",
-            "tool": str(message.get("name") or ""),
             "tool_result_fingerprint": (
                 "sha256:" + fingerprint if fingerprint else None
             ),
             "records": [],
-            "omitted_record_count": max(1, len(records)),
+            "excerpt": plain_excerpt,
+            "omitted_record_count": 1,
         },
         ensure_ascii=False,
         sort_keys=True,
