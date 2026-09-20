@@ -530,7 +530,7 @@ public final class {main_class} implements ModInitializer {{
 
 
 def _install_host_gametest_contract(root: Path, spec: Any) -> dict[str, str]:
-    """Make the provider scaffold satisfy MMM's mandatory server GameTest gate."""
+    """Install Fabric GameTest in the dedicated Loom gametest source set."""
 
     build_path = root / "build.gradle"
     if not build_path.is_file() or build_path.is_symlink():
@@ -539,18 +539,20 @@ def _install_host_gametest_contract(root: Path, spec: Any) -> dict[str, str]:
             "the host GameTest contract."
         )
 
+    test_mod_id = f"{spec.mod_id}_gametest"
     build_text = build_path.read_text(encoding="utf-8", errors="strict")
     additions: list[str] = []
     if "configureTests" not in build_text:
         additions.append(
-            """// M.M.M host-owned server GameTest contract
-fabricApi {
-    configureTests {
-        createSourceSet = false
+            f"""// M.M.M host-owned server GameTest contract
+fabricApi {{
+    configureTests {{
+        createSourceSet = true
+        modId = "{test_mod_id}"
         enableGameTests = true
         enableClientGameTests = false
-    }
-}
+    }}
+}}
 """
         )
     if "fabric-api.gametest.report-file" not in build_text:
@@ -576,55 +578,88 @@ loom {
     gametest_class = main_class + "GameTests"
     gametest_entrypoint = f"{spec.package_name}.{gametest_class}"
 
-    metadata_path = root / "src/main/resources/fabric.mod.json"
-    if not metadata_path.is_file() or metadata_path.is_symlink():
+    main_metadata_path = root / "src/main/resources/fabric.mod.json"
+    if not main_metadata_path.is_file() or main_metadata_path.is_symlink():
         raise FabricTemplateProviderError(
             "Fabric official template omitted src/main/resources/fabric.mod.json."
         )
     try:
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        main_metadata = json.loads(main_metadata_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise FabricTemplateProviderError(
             "Fabric official template fabric.mod.json is invalid."
         ) from exc
-    if not isinstance(metadata, dict):
+    if not isinstance(main_metadata, dict):
         raise FabricTemplateProviderError(
             "Fabric official template fabric.mod.json must be an object."
         )
-
-    entrypoints = metadata.setdefault("entrypoints", {})
-    if not isinstance(entrypoints, dict):
-        raise FabricTemplateProviderError(
-            "Fabric official template entrypoints must be an object."
-        )
-    gametest_entrypoints = entrypoints.setdefault("fabric-gametest", [])
-    if not isinstance(gametest_entrypoints, list):
-        raise FabricTemplateProviderError(
-            "Fabric official template fabric-gametest entrypoint must be a list."
-        )
-    if gametest_entrypoint not in gametest_entrypoints:
-        gametest_entrypoints.append(gametest_entrypoint)
-        metadata_path.write_text(
-            json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
+    main_entrypoints = main_metadata.get("entrypoints")
+    main_changed = False
+    if isinstance(main_entrypoints, dict):
+        existing = main_entrypoints.get("fabric-gametest")
+        if isinstance(existing, list) and gametest_entrypoint in existing:
+            filtered = [item for item in existing if item != gametest_entrypoint]
+            if filtered:
+                main_entrypoints["fabric-gametest"] = filtered
+            else:
+                main_entrypoints.pop("fabric-gametest", None)
+            main_changed = True
+    if main_changed:
+        main_metadata_path.write_text(
+            json.dumps(main_metadata, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
 
-    source_path = (
+    old_source = (
         root
         / "src/main/java"
         / Path(*str(spec.package_name).split("."))
         / f"{gametest_class}.java"
     )
+    if old_source.is_symlink():
+        raise FabricTemplateProviderError(
+            "Legacy host GameTest source must not be a symlink."
+        )
+    if old_source.is_file():
+        old_source.unlink()
+
+    gametest_metadata_path = root / "src/gametest/resources/fabric.mod.json"
+    gametest_metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    gametest_metadata = {
+        "schemaVersion": 1,
+        "id": test_mod_id,
+        "version": "1.0.0",
+        "name": f"{spec.mod_id} GameTests",
+        "environment": "*",
+        "entrypoints": {"fabric-gametest": [gametest_entrypoint]},
+        "depends": {str(spec.mod_id): "*"},
+    }
+    gametest_metadata_path.write_text(
+        json.dumps(gametest_metadata, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    source_path = (
+        root
+        / "src/gametest/java"
+        / Path(*str(spec.package_name).split("."))
+        / f"{gametest_class}.java"
+    )
+    if source_path.is_symlink():
+        raise FabricTemplateProviderError(
+            "Canonical Fabric GameTest source must not be a symlink."
+        )
     source_path.parent.mkdir(parents=True, exist_ok=True)
     source_path.write_text(
         f"""package {spec.package_name};
 
-import net.fabricmc.fabric.api.gametest.v1.GameTest;
+import net.fabricmc.fabric.api.gametest.v1.FabricGameTest;
 import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 
-public final class {gametest_class} {{
-    @GameTest
+public final class {gametest_class} implements FabricGameTest {{
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE)
     public void generatedRegistriesAreLive(GameTestHelper context) {{
         if (!FabricLoader.getInstance().isModLoaded("{spec.mod_id}")) {{
             throw new AssertionError("generated mod was not loaded by Fabric");
@@ -641,6 +676,8 @@ public final class {gametest_class} {{
         "report": "build/gametest-report.xml",
         "entrypoint": gametest_entrypoint,
         "source": source_path.relative_to(root).as_posix(),
+        "metadata": gametest_metadata_path.relative_to(root).as_posix(),
+        "mod_id": test_mod_id,
     }
 
 
