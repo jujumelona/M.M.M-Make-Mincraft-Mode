@@ -329,9 +329,15 @@ def test_fresh_java_edit_schema_requires_one_complete_create_before_compile() ->
         target_pinned=True,
     )
     narrowed = tool_loop._source_edit_schema_for_context(_tool_schema(), context)
-    operations = narrowed["function"]["parameters"]["properties"]["operation"]["enum"]
+    parameters = narrowed["function"]["parameters"]
+    properties = parameters["properties"]
+    operations = properties["operation"]["enum"]
 
-    assert operations == ["create_file", "create"]
+    assert operations == ["create_file"]
+    assert set(properties) == {"operation", "path", "content"}
+    assert properties["path"]["enum"] == [JAVA_PATH]
+    assert parameters["required"] == ["operation", "path", "content"]
+    assert parameters["additionalProperties"] is False
 
 
 def test_materialized_java_edit_schema_allows_atomic_same_path_rewrite() -> None:
