@@ -397,6 +397,38 @@ def verify_debug_fixture_source(
         api_symbols = {}
         findings.append("platform host facts contain no api_symbols map")
 
+    # Older immutable Debug plans may predate the explicit item_set_id contract.
+    # Fail closed from HOST registration shape as well: keyed item registration
+    # requires the same ResourceKey to be installed into Item.Properties.
+    register_symbol = api_symbols.get("register_item")
+    register_descriptor = (
+        str(register_symbol.get("descriptor") or "")
+        if isinstance(register_symbol, Mapping)
+        else ""
+    )
+    keyed_registration = bool(
+        "Lnet/minecraft/resources/ResourceKey;" in register_descriptor
+        and "resource_key_create" in api_symbols
+    )
+    if keyed_registration and "item_set_id" not in required_keys:
+        required_keys = (*required_keys, "item_set_id")
+    if keyed_registration and "item_set_id" not in required_specs:
+        required_specs = {
+            **dict(required_specs),
+            "item_set_id": {
+                "owner": "net.minecraft.world.item.Item$Properties",
+                "name": "setId",
+                "descriptor": (
+                    "(Lnet/minecraft/resources/ResourceKey;)"
+                    "Lnet/minecraft/world/item/Item$Properties;"
+                ),
+                "kind": "method",
+                "static": False,
+                "side": "common",
+                "namespace": "minecraft",
+            },
+        }
+
     root = Path(project_root).expanduser().resolve()
     target: Path | None = None
     source = ""
