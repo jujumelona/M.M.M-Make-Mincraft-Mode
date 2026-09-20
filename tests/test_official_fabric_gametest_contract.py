@@ -34,8 +34,9 @@ def test_official_scaffold_is_gametest_ready_before_first_build(tmp_path: Path) 
         mod_id="mmm_debug_fixture",
         package_name="dev.mmm.debugfixture",
     )
+    adapter = SimpleNamespace(minecraft_version="1.21.8")
 
-    receipt = provider._install_host_gametest_contract(root, spec)
+    receipt = provider._install_host_gametest_contract(root, spec, adapter)
 
     build = (root / "build.gradle").read_text(encoding="utf-8")
     assert "configureTests" in build
@@ -61,6 +62,8 @@ def test_official_scaffold_is_gametest_ready_before_first_build(tmp_path: Path) 
         ),
         "metadata": "src/gametest/resources/fabric.mod.json",
         "mod_id": "mmm_debug_fixture_gametest",
+        "api_generation": "fabric-gametest-v2",
+        "minecraft_version": "1.21.8",
     }
 
     updated = json.loads(metadata.read_text(encoding="utf-8"))
@@ -75,14 +78,14 @@ def test_official_scaffold_is_gametest_ready_before_first_build(tmp_path: Path) 
     ]
 
     source = (root / receipt["source"]).read_text(encoding="utf-8")
-    assert "net.fabricmc.fabric.api.gametest.v1.FabricGameTest" in source
-    assert "net.minecraft.gametest.framework.GameTest" in source
+    assert "net.fabricmc.fabric.api.gametest.v1.GameTest" in source
+    assert "FabricGameTest" not in source
     assert "net.minecraft.gametest.framework.GameTestHelper" in source
     assert "generatedRegistriesAreLive" in source
     assert 'isModLoaded("mmm_debug_fixture")' in source
     assert "context.succeed();" in source
 
-    provider._install_host_gametest_contract(root, spec)
+    provider._install_host_gametest_contract(root, spec, adapter)
     repeated = (root / "build.gradle").read_text(encoding="utf-8")
     assert repeated.count("configureTests") == 1
     assert repeated.count("fabric-api.gametest.report-file") == 1
