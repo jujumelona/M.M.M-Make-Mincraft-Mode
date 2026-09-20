@@ -238,7 +238,9 @@ def test_core_router_owns_read_dedup_and_verifier_barrier():
 
 
 def test_temporary_skill_does_not_wrap_core_owned_tool_scheduler():
-    sentinel = lambda calls, execute: tuple(execute(call) for call in calls)
+    def sentinel(calls, execute):
+        return tuple(execute(call) for call in calls)
+
     module = SimpleNamespace(
         _CORE_EXACT_READ_WAVE_DEDUP=True,
         _execute_tool_waves=sentinel,
