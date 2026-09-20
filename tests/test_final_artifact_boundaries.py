@@ -264,6 +264,14 @@ public final class DebugToken {
     assert receipt["status"] == "BLOCKED"
     assert receipt["symbol_results"]["item_set_id"] is False
     assert any("item_set_id" in item for item in receipt["findings"])
+    assert receipt["diagnostics"]
+    assert receipt["diagnostics"][0]["path"] == (
+        "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+    )
+    assert any(
+        "item_set_id" in item["message"]
+        for item in receipt["diagnostics"]
+    )
 
 
 def test_debug_fixture_source_acceptance_rejects_unbound_registry_result(
