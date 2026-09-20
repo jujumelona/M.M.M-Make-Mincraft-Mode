@@ -20,71 +20,7 @@ from .model_router import ModelRouter
 from .task_template_catalog import load_template
 
 
-def _asset_execution_projection(proposal: CompleteProposal) -> CompleteProposal:
-    """Normalize an internal asset shard without pretending it is user-approved.
-
-    The work scheduler projects an approved proposal to a bounded asset subset.  A
-    subset has a different payload hash, so retaining APPROVED while clearing the
-    approval receipt is an invalid state.  Rebind that internal projection as a
-    host-owned integrity-checked draft and project the canonical asset plan to the
-    exact same ordered asset IDs.  The outer orchestrator remains the sole owner of
-    user approval.
-    """
-    if proposal.status is not CompleteProposalStatus.APPROVED or proposal.approval_hash:
-        return proposal
-
-    selected_ids = tuple(asset.asset_id for asset in proposal.assets)
-    if not selected_ids or len(set(selected_ids)) != len(selected_ids):
-        raise CompleteProductionError(
-            "Asset execution projection requires a non-empty unique asset subset."
-        )
-    raw_plan = proposal.game_design.get("_asset_generation_plan")
-    if not isinstance(raw_plan, Mapping):
-        raise CompleteProductionError(
-            "Asset execution projection requires the canonical approved asset plan."
-        )
-    raw_rows = raw_plan.get("assets")
-    if not isinstance(raw_rows, Sequence) or isinstance(raw_rows, (str, bytes, bytearray)):
-        raise CompleteProductionError(
-            "Canonical asset plan has no ordered asset rows for execution projection."
-        )
-    rows_by_id: dict[str, Mapping[str, Any]] = {}
-    for row in raw_rows:
-        if not isinstance(row, Mapping):
-            raise CompleteProductionError("Canonical asset plan contains a non-object row.")
-        asset_id = str(row.get("asset_id") or "")
-        if not asset_id or asset_id in rows_by_id:
-            raise CompleteProductionError(
-                "Canonical asset plan contains a missing or duplicate asset ID."
-            )
-        rows_by_id[asset_id] = row
-    missing = [asset_id for asset_id in selected_ids if asset_id not in rows_by_id]
-    if missing:
-        raise CompleteProductionError(
-            f"Asset execution projection is not a subset of the canonical asset plan: {missing[:8]}"
-        )
-
-    filtered_plan = {
-        **dict(raw_plan),
-        "assets": [dict(rows_by_id[asset_id]) for asset_id in selected_ids],
-    }
-    projected = replace(
-        proposal,
-        status=CompleteProposalStatus.AWAITING_APPROVAL,
-        game_design={**proposal.game_design, "_asset_generation_plan": filtered_plan},
-        approval_hash="",
-    ).with_hash()
-    projected.validate()
-    return projected
-
-
-def generate_assets(router: ModelRouter, proposal: CompleteProposal, project_root: Path, run_root: Path) -> dict[str, Any]:
-    """Single canonical resource-asset entrypoint."""
-    from .resource_asset_production import generate_assets as canonical_generate_assets
-
-    execution_proposal = _asset_execution_projection(proposal)
-    return canonical_generate_assets(router, execution_proposal, project_root, run_root)
-
+from .resource_asset_production import generate_assets as generate_assets
 
 generate_assets._mmm_adaptive_image_gpu_session = True  # type: ignore[attr-defined]
 
