@@ -5,7 +5,9 @@ import json
 import os
 import re
 import shutil
+import struct
 import traceback
+import zlib
 import xml.etree.ElementTree as ET
 import zipfile
 from collections.abc import Callable, Iterable
@@ -35,7 +37,7 @@ from .complete_orchestrator_support import (
     _normalize_modules,
     _system_groups,
 )
-from .complete_spec import CompleteProposal, CompleteProposalStatus, ProductionModule
+from .complete_spec import AssetRequest, CompleteProposal, CompleteProposalStatus, ProductionModule
 from .custom_module_generator import (
     CustomModuleGenerator,
     finalize_persisted_generation_checkpoint,
@@ -3007,6 +3009,134 @@ class CompleteProductionOrchestrator:
         return report, project_root
 
     @staticmethod
+    def _debug_fixture_png(width: int, height: int) -> bytes:
+        """Return a deterministic RGBA checker texture for the host-owned Debug fixture."""
+
+        if width <= 0 or height <= 0:
+            raise CompleteProductionError('Debug fixture texture dimensions must be positive.')
+
+        def chunk(kind: bytes, payload: bytes) -> bytes:
+            return (
+                struct.pack('>I', len(payload))
+                + kind
+                + payload
+                + struct.pack('>I', zlib.crc32(kind + payload) & 0xFFFFFFFF)
+            )
+
+        rows: list[bytes] = []
+        for y in range(height):
+            row = bytearray([0])
+            for x in range(width):
+                if ((x // max(1, width // 4)) + (y // max(1, height // 4))) % 2:
+                    rgba = (46, 204, 113, 255)
+                else:
+                    rgba = (52, 73, 94, 255)
+                row.extend(rgba)
+            rows.append(bytes(row))
+        raw = b''.join(rows)
+        return (
+            b'\x89PNG\r\n\x1a\n'
+            + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0))
+            + chunk(b'IDAT', zlib.compress(raw, level=9))
+            + chunk(b'IEND', b'')
+        )
+
+    @staticmethod
+    def _ensure_debug_fixture_resources(
+        approved: CompleteProposal,
+        project_root: Path,
+    ) -> None:
+        """Materialize a visible, version-correct DebugToken resource surface."""
+
+        from .resource_contracts import resolve_asset
+
+        spec = approved.base_proposal.spec
+        request = AssetRequest(
+            asset_id='debug_token_visual',
+            kind='item',
+            visual_description=(
+                'A simple deterministic dark slate and green checker token icon used only '
+                'for the MMM Debug fixture.'
+            ),
+            render_kind='item.generated',
+            subject_id='debug_token',
+            container='mod',
+            requested_width=16,
+            requested_height=16,
+        )
+        request.validate(policy=ScalePolicy.from_environment())
+        context = spec.platform.version_context if spec.platform.host_facts_json else None
+        resolved = resolve_asset(
+            request,
+            namespace=spec.mod_id,
+            minecraft_version=spec.platform.minecraft_version,
+            version_context=context,
+            owner_module=None,
+        )
+
+        root = project_root.expanduser().resolve()
+        for texture in resolved.textures:
+            target = (root / texture.target_path).resolve()
+            try:
+                target.relative_to(root)
+            except ValueError as exc:
+                raise CompleteProductionError(
+                    'Debug fixture texture escaped the project root.'
+                ) from exc
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(
+                CompleteProductionOrchestrator._debug_fixture_png(
+                    int(texture.width),
+                    int(texture.height),
+                )
+            )
+
+        for document in resolved.documents:
+            target = (root / document.target_path).resolve()
+            try:
+                target.relative_to(root)
+            except ValueError as exc:
+                raise CompleteProductionError(
+                    'Debug fixture resource document escaped the project root.'
+                ) from exc
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(
+                json.dumps(document.payload, ensure_ascii=False, indent=2, sort_keys=True)
+                + '\n',
+                encoding='utf-8',
+            )
+
+        translations = {
+            'en_us': 'Debug Token',
+            'ko_kr': '디버그 토큰',
+        }
+        key = f'item.{spec.mod_id}.debug_token'
+        for locale, label in translations.items():
+            target = (
+                root
+                / 'src/main/resources/assets'
+                / spec.mod_id
+                / 'lang'
+                / f'{locale}.json'
+            )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            payload: dict[str, Any] = {}
+            if target.is_file() and not target.is_symlink():
+                try:
+                    existing = json.loads(target.read_text(encoding='utf-8'))
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise CompleteProductionError(
+                        f'Debug fixture language file is invalid: {target}'
+                    ) from exc
+                if isinstance(existing, dict):
+                    payload.update(existing)
+            payload[key] = label
+            target.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
+                encoding='utf-8',
+            )
+
+    @staticmethod
     def _bind_debug_fixture_runtime(
         approved: CompleteProposal,
         project_root: Path,
@@ -3183,6 +3313,7 @@ class CompleteProductionOrchestrator:
                 newline='\n',
             )
 
+        self._ensure_debug_fixture_resources(approved, root)
         return root
 
     def _prepare_project(self, approved: CompleteProposal, *, run_root: Path, existing_input: str | Path | None) -> Path:
