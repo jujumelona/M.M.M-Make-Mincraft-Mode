@@ -32,8 +32,16 @@ def _target_values(kwargs: Mapping[str, Any], *, project_root: str | Path | None
             )
         except (ValueError, TargetContractError) as exc:
             raise ValueError(str(exc)) from exc
-        if coordinates.mappings != str(adapter.yarn_mappings or "").strip():
-            raise ValueError('Custom generation mappings disagree with the executable platform provider.')
+        provider_mappings = str(adapter.yarn_mappings or "").strip()
+        if coordinates.mappings != provider_mappings:
+            raise ValueError(
+                "Custom generation mappings disagree with the executable platform provider: "
+                f"minecraft_version={coordinates.minecraft_version!r} "
+                f"loader={coordinates.loader!r} "
+                f"requested_mappings={coordinates.mappings!r} "
+                f"provider_mappings={provider_mappings!r} "
+                f"provider_adapter={adapter.adapter_id!r}."
+            )
         return (coordinates.minecraft_version, coordinates.loader, coordinates.mappings)
     if project_root is not None:
         try:
