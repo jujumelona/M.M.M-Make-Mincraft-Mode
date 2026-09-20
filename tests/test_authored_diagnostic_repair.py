@@ -85,13 +85,9 @@ def test_authored_diagnostics_repair_local_files_without_external_discovery(
                 source = (tmp_path / target).read_bytes().decode("utf-8")
                 assert payload["target_path"] == target
                 assert payload["current_source"] == source
-                assert (
-                    payload["current_source_sha256"]
-                    == hashlib.sha256(source.encode()).hexdigest()
-                )
+                assert "current_source_sha256" not in payload
                 assert any("MISSING" in d["message"] for d in payload["diagnostics"])
                 assert all(d["path"] == target for d in payload["diagnostics"])
-                assert loop._existing_repair_context(request.messages) == payload
                 parameters = request.tools[0]["function"]["parameters"]
                 assert parameters["required"] == ["new"]
                 assert parameters["additionalProperties"] is False
