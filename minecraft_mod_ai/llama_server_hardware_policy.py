@@ -120,11 +120,16 @@ def _request_max_tokens(adapter: Any, request: Any) -> int:
 
     configured = max(1, int(adapter.config.max_new_tokens))
     metadata = getattr(request, "metadata", {})
-    if (
-        isinstance(metadata, Mapping)
-        and metadata.get("mmm_atomic_output_recovery") is True
-    ):
-        return min(configured, _ATOMIC_OUTPUT_RECOVERY_MAX_TOKENS)
+    if isinstance(metadata, Mapping):
+        raw_ceiling = metadata.get("mmm_output_token_ceiling")
+        try:
+            ceiling = int(raw_ceiling or 0)
+        except (TypeError, ValueError):
+            ceiling = 0
+        if ceiling > 0:
+            return min(configured, ceiling)
+        if metadata.get("mmm_atomic_output_recovery") is True:
+            return min(configured, _ATOMIC_OUTPUT_RECOVERY_MAX_TOKENS)
     return configured
 
 
