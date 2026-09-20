@@ -647,6 +647,7 @@ def complete_proposal_from_parts(
     assets: tuple[AssetRequest, ...] = (),
     acceptance_tests: tuple[str, ...],
     existing_input_sha256: str = "",
+    external_runtime_required: bool = False,
 ) -> CompleteProposal:
     seen_module_ids: set[str] = set()
     sanitized_modules: list[ProductionModule] = []
@@ -738,7 +739,7 @@ def complete_proposal_from_parts(
         modules=modules,
         assets=tuple(sanitized_assets),
         acceptance_tests=acceptance_tests,
-        external_runtime_required=True,
+        external_runtime_required=external_runtime_required,
         existing_input_sha256=existing_input_sha256,
         approval_hash="",
     )
