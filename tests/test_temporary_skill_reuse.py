@@ -1,6 +1,7 @@
 import json
 from types import SimpleNamespace
 
+from minecraft_mod_ai import model_router as model_router_module
 from minecraft_mod_ai import temporary_skill_contract as contract
 
 
@@ -211,3 +212,38 @@ def test_read_wave_dedup_keeps_verifier_isolated_after_policy_change():
     assert [call.id for call, _payload in results] == ["r1", "v1", "r2"]
     assert seen == ["r1", "v1", "r2"]
     assert delegated_batches == [["r1"], ["v1"], ["r2"]]
+
+
+
+def test_core_router_owns_read_dedup_and_verifier_barrier():
+    seen: list[str] = []
+
+    def execute(call):
+        seen.append(call.id)
+        return call, {"ok": True, "tool": call.name, "id": call.id}
+
+    calls = (
+        _Call("r1", "search_code_rag", {"query": "same"}),
+        _Call("r2", "search_code_rag", {"query": "same"}),
+        _Call("v1", "java_diagnostics", {"timeout_seconds": 1}),
+        _Call("r3", "search_code_rag", {"query": "other"}),
+    )
+
+    results = model_router_module._execute_tool_waves(calls, execute)
+
+    assert [call.id for call, _payload in results] == ["r1", "r2", "v1", "r3"]
+    assert seen == ["r1", "v1", "r3"]
+    assert results[0][1] is results[1][1]
+    assert results[2][1]["tool"] == "java_diagnostics"
+
+
+def test_temporary_skill_does_not_wrap_core_owned_tool_scheduler():
+    sentinel = lambda calls, execute: tuple(execute(call) for call in calls)
+    module = SimpleNamespace(
+        _CORE_EXACT_READ_WAVE_DEDUP=True,
+        _execute_tool_waves=sentinel,
+    )
+
+    contract._install_read_wave_dedup(module)
+
+    assert module._execute_tool_waves is sentinel
