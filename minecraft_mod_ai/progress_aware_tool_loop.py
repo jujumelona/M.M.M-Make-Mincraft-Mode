@@ -144,13 +144,6 @@ _SOURCE_CREATE_OPERATIONS = frozenset({
 })
 _SOURCE_ATOMIC_REWRITE_OPERATIONS = frozenset({"create", "create_file", "write", "write_file"})
 _REPAIR_CONTEXT_PREFIX = "MMM_CORE_VERIFIER_REPAIR_"
-_REPAIR_FORBIDDEN_OPERATIONS = frozenset({
-    "create",
-    "create_file",
-    "create_java_type",
-    "delete",
-    "delete_file",
-})
 _MODEL_REJECTION_TOOL_NAME = "__mmm_rejected_tool_call__"
 _HOST_AUTHORITY_ROLES = frozenset({"system", "developer", "tool"})
 _GENERATION_VERIFICATION_RECEIPT: ContextVar[dict[str, Any] | None] = ContextVar(
@@ -1762,26 +1755,6 @@ def _target_evidence_ready(
         if fresh_java_target
         else state.has_fresh_evidence
     )
-
-def _completion_boundary_error(exc: BaseException) -> bool:
-    seen: set[int] = set()
-    current: BaseException | None = exc
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        name = type(current).__name__
-        text = str(current).casefold()
-        if name == "LlamaCompletionBoundaryError":
-            return True
-        if (
-            "completion boundary" in text
-            or "completion token limit" in text
-            or "maximum completion" in text
-            or ("finish_reason" in text and "length" in text)
-        ):
-            return True
-        current = current.__cause__ or current.__context__
-    return False
-
 
 def _record_evidence_locked(state: Any, value: Any, fingerprint: str) -> bool:
     if fingerprint in state.evidence_fingerprints:
