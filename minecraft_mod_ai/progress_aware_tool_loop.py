@@ -2606,6 +2606,81 @@ def _generate_turn_with_context_recovery(
             raise
 
 
+_PHASE_HANDOFF_VERIFIER_DIAGNOSTIC_BYTES = 6 * 1024
+_PHASE_HANDOFF_DIAGNOSTIC_TEXT_LIMIT = 640
+
+
+def _bounded_verifier_recovery_observation(state: HostRunState) -> str:
+    """Serialize only prompt-useful verifier evidence across VERIFY->RECOVER.
+
+    The raw JDT receipt can contain the complete workspace diagnostic graph and is
+    intentionally much larger than one repair turn. Elevating that raw tool payload
+    into a system phase-handoff message makes it mandatory context and defeats the
+    normal tool-message compactor. Keep a bounded host-owned diagnostic projection
+    plus a fingerprint of the complete extracted error set instead.
+    """
+
+    raw_errors = tuple(state.latest_verifier_errors)
+    diagnostics: list[dict[str, Any]] = []
+    budget = _PHASE_HANDOFF_VERIFIER_DIAGNOSTIC_BYTES
+    for raw in raw_errors:
+        if not isinstance(raw, Mapping):
+            continue
+        compact: dict[str, Any] = {}
+        for key in ("path", "file", "line", "severity", "code", "source", "message", "range"):
+            value = raw.get(key)
+            if value in (None, "", [], {}):
+                continue
+            if isinstance(value, str):
+                limit = (
+                    _PHASE_HANDOFF_DIAGNOSTIC_TEXT_LIMIT
+                    if key == "message"
+                    else 320
+                )
+                if len(value) > limit:
+                    value = value[: max(0, limit - 1)] + "…"
+            compact[key] = value
+        if not compact:
+            continue
+        trial = {
+            "verifier": str(state.latest_verifier_tool or ""),
+            "status": "FAIL",
+            "diagnostics": [*diagnostics, compact],
+        }
+        if len(
+            json.dumps(
+                trial,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ) > budget:
+            break
+        diagnostics.append(compact)
+
+    payload = {
+        "schema_version": "mmm/verifier-recovery-handoff-v1",
+        "verifier": str(state.latest_verifier_tool or ""),
+        "status": "FAIL",
+        "diagnostics": diagnostics,
+        "diagnostics_fingerprint": evidence_fingerprint(raw_errors),
+        "diagnostic_count": len(raw_errors),
+        "omitted_diagnostic_count": max(0, len(raw_errors) - len(diagnostics)),
+        "policy": (
+            "Host-extracted bounded verifier diagnostics. The raw verifier receipt is "
+            "not replayed into mandatory model context."
+        ),
+    }
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
 def _sync_phase_tool_transcript(
     messages: list[dict[str, Any]],
     *,
@@ -2618,12 +2693,22 @@ def _sync_phase_tool_transcript(
         return last_prompt_phase
     compacted: list[dict[str, Any]] = []
     observations: list[str] = []
+    verifier_recovery_handoff = bool(
+        last_prompt_phase is LoopPhase.VERIFY
+        and next_phase is LoopPhase.RECOVER
+        and state.validation_status == "FAIL"
+        and state.latest_verifier_fingerprint
+    )
     for raw in messages:
         message = dict(raw)
         role = str(message.get("role") or "")
         if role == "tool":
             content = message.get("content")
-            if isinstance(content, str) and content.strip():
+            if (
+                not verifier_recovery_handoff
+                and isinstance(content, str)
+                and content.strip()
+            ):
                 observations.append(content)
             continue
         if role == "assistant" and message.get("tool_calls"):
@@ -2632,6 +2717,8 @@ def _sync_phase_tool_transcript(
                 compacted.append({"role": "assistant", "content": content})
             continue
         compacted.append(message)
+    if verifier_recovery_handoff:
+        observations = [_bounded_verifier_recovery_observation(state)]
     compacted.append({
         "role": "system",
         "content": (
