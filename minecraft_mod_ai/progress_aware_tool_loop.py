@@ -2809,6 +2809,11 @@ def _generate_with_tools_impl(
         and state.mutation_context.is_new_file
     )
     initial_execution_authority = _host_target_execution_authority(state)
+    active_mutation_authority = CURRENT_MUTATION_AUTHORITY.get()
+    bounded_root_execution_authority = bool(
+        active_mutation_authority is not None
+        and active_mutation_authority.mode is MutationAuthorityMode.BOUNDED_ROOTS
+    )
     from .small_model_task_capsule_contract import current_task_required_gates
     compile_backed_java = bool(
         java_target
@@ -2829,6 +2834,12 @@ def _generate_with_tools_impl(
 
     if require_rag:
         state.phase = LoopPhase.OBSERVE
+    elif implementation_requires_mutation and bounded_root_execution_authority:
+        # Saved authored designs intentionally delegate file selection to the coder
+        # inside a host-owned bounded root set. Requiring file localization first
+        # contradicts that authority, wastes retrieval turns, and can inflate the
+        # mandatory conversation until it no longer fits the active llama slot.
+        state.phase = LoopPhase.ACT
     elif compile_backed_java:
         state.phase = LoopPhase.ACT
     elif implementation_requires_mutation and mutation_ready and not mutation_history_applied(messages):
@@ -2850,6 +2861,7 @@ def _generate_with_tools_impl(
             "router_requires_fresh_evidence": router_requires_fresh_evidence,
             "require_rag": require_rag,
             "host_target_execution_authority": initial_execution_authority,
+            "bounded_root_execution_authority": bounded_root_execution_authority,
             "implementation_requires_mutation": implementation_requires_mutation,
             "mutation_ready": mutation_ready,
             "compile_backed_java": compile_backed_java,
