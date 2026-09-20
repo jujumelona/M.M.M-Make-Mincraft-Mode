@@ -31,6 +31,7 @@ _REPORTED_URL_LOCK = threading.RLock()
 _REPORTED_SERVER_URLS: set[str] = set()
 _DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS = 120.0
 _DEFAULT_TOOL_IDLE_TIMEOUT_SECONDS = 120.0
+_DEFAULT_REQUIRED_TOOL_PREFACE_MAX_CHARS = 1024
 _REQUIRED_TOOL_MARKUP_PREFIXES = ("<tool_call>", "<function=")
 
 
@@ -253,16 +254,23 @@ def _required_tool_semantic_violation(
     message: Mapping[str, Any],
     delta: Mapping[str, Any],
 ) -> bool:
-    """Never abort a required-tool stream merely because reasoning/prose arrives first.
+    """Bound semantic preface before one host-required tool invocation starts."""
 
-    A required tool call is adjudicated only after the server completes the response.
-    Transport liveness is already bounded by the read timeout and absolute execution
-    deadline, so semantic preface text is not a reason to truncate a still-progressing
-    stream before the model has a chance to emit its native tool call.
-    """
-
-    del message, delta
-    return False
+    del delta
+    if _required_tool_markup_prefix_pending(message):
+        return False
+    total = 0
+    for key in ("content", "reasoning_content", "reasoning"):
+        value = message.get(key)
+        if isinstance(value, str):
+            total += len(value)
+    limit = int(
+        _positive_env_float(
+            "MMM_LLAMA_REQUIRED_TOOL_PREFACE_MAX_CHARS",
+            float(_DEFAULT_REQUIRED_TOOL_PREFACE_MAX_CHARS),
+        )
+    )
+    return total > max(1, limit)
 
 
 def _required_tool_stream_state(
