@@ -32,6 +32,12 @@ class JavaCoreService:
         self._revision = None
         self._lock = threading.RLock()
 
+    def abort(self) -> None:
+        """Interrupt an in-flight owner request without waiting on the service lock."""
+
+        rpc = self._rpc
+        if rpc is not None:
+            rpc.abort()
     def diagnostics(self, project_root: str | Path, *, relative_files=None,
                     timeout_seconds: int = 600, full_scan: bool = False) -> dict[str, Any]:
         root = Path(project_root).resolve()
