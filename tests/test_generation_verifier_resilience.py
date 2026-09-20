@@ -161,21 +161,21 @@ def test_jdt_failure_returns_structured_unavailable_without_gradle_fallback(tmp_
     assert not hasattr(runtime, "_mmm_generation_jdt_disabled_reason")
 
 
-def test_jdt_readiness_uses_document_symbols_not_hover(tmp_path):
+def test_jdt_readiness_waits_for_explicit_service_ready_status(tmp_path):
+    import queue
+
     project, _source = _project(tmp_path)
-    notifications = []
-    requests = []
 
     class FakeRpc:
-        def notify(self, method, params):
-            notifications.append(method)
-
-        def request(self, method, params, timeout):
-            requests.append(method)
-            assert method == "textDocument/documentSymbol"
-            uri = params["textDocument"]["uri"]
-            name = Path(uri.removeprefix("file://")).stem
-            return [{"name": name, "kind": 5}]
+        def __init__(self):
+            self.messages = queue.Queue()
+            self.messages.put({
+                "method": "language/status",
+                "params": {
+                    "type": "ServiceReady",
+                    "message": "workspace initialized",
+                },
+            })
 
     java_lsp._await_java_core_ready(
         FakeRpc(),
@@ -183,9 +183,6 @@ def test_jdt_readiness_uses_document_symbols_not_hover(tmp_path):
         timeout_seconds=1.0,
         quiet_seconds=0.0,
     )
-
-    assert notifications == ["textDocument/didOpen", "textDocument/didClose"]
-    assert requests == ["textDocument/documentSymbol"]
 
 def test_progress_loop_elides_forced_verifier_model_turn_without_runtime_rebind():
     from minecraft_mod_ai import progress_aware_tool_loop as loop
