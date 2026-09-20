@@ -7,7 +7,10 @@ from minecraft_mod_ai.authored_plan import AuthoredPlan
 from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
 from minecraft_mod_ai.custom_module_generator import _task_local_module_contract
 from minecraft_mod_ai.planning_pipeline import PlanningPipeline
-from minecraft_mod_ai.small_model_atomic_coder_execution import atomicize_coder_messages
+from minecraft_mod_ai.small_model_atomic_coder_execution import (
+    _MAX_AUTHORED_FRAGMENT_BYTES,
+    atomicize_coder_messages,
+)
 from minecraft_mod_ai.work_graph import build_production_work_plan
 
 
@@ -55,7 +58,64 @@ def test_real_compiler_hands_saved_text_to_coder_without_replanning(monkeypatch,
     messages = [{"role": "user", "content": json.dumps({
         "phase": "implement_authored_design", "module": contract,
     }, ensure_ascii=False)}]
-    assert atomicize_coder_messages(messages) == (tuple(messages),)
+    batches = atomicize_coder_messages(messages)
+    if len(text.encode("utf-8")) <= _MAX_AUTHORED_FRAGMENT_BYTES:
+        assert batches == (tuple(messages),)
+    else:
+        assert len(batches) > 1
+        fragments = []
+        expected_start = 0
+        source_sha256 = None
+        for fragment_index, batch in enumerate(batches, start=1):
+            payload = json.loads(batch[-1]["content"])
+            authored = payload["module"]["authored_plan"]
+            fragment = authored["text"]
+            contract_meta = authored["fragment_contract"]
+            assert len(fragment.encode("utf-8")) <= _MAX_AUTHORED_FRAGMENT_BYTES
+            assert contract_meta["fragment_index"] == fragment_index
+            assert contract_meta["fragment_count"] == len(batches)
+            assert contract_meta["start_byte"] == expected_start
+            expected_start = contract_meta["end_byte"]
+            if source_sha256 is None:
+                source_sha256 = contract_meta["source_text_sha256"]
+            assert contract_meta["source_text_sha256"] == source_sha256
+            assert payload["authored_execution"]["source_text_sha256"] == source_sha256
+            fragments.append(fragment)
+        assert "".join(fragments) == text
+        assert expected_start == len(text.encode("utf-8"))
+
+
+def test_authored_atomic_fragments_refresh_stale_source_context():
+    text = ("행성 경제와 우주선 업그레이드를 구현한다.\n" * 300)
+    request = {
+        "phase": "implement_authored_design",
+        "module": {
+            "module_id": "authored_design",
+            "kind": "custom_java",
+            "authored_plan": {
+                "schema_version": "mmm/authored-plan-v1",
+                "requested_prompt": "우주 모드",
+                "text": text,
+                "existing_input_sha256": "",
+                "media_paths": [],
+            },
+        },
+        "initial_exact_source_context": {"content": "stale-bootstrap"},
+        "rules": ["preserve the approved design"],
+    }
+    messages = [{"role": "user", "content": json.dumps(request, ensure_ascii=False)}]
+    batches = atomicize_coder_messages(messages)
+    assert len(batches) > 1
+    first = json.loads(batches[0][-1]["content"])
+    second = json.loads(batches[1][-1]["content"])
+    assert first["initial_exact_source_context"] == {"content": "stale-bootstrap"}
+    assert second["initial_exact_source_context"]["mode"] == (
+        "retrieve_current_authored_fragment_with_tools"
+    )
+    assert "".join(
+        json.loads(batch[-1]["content"])["module"]["authored_plan"]["text"]
+        for batch in batches
+    ) == text
 
 
 def test_real_orchestrator_accepts_authored_handoff(monkeypatch, tmp_path):
