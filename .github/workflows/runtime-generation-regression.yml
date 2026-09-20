@@ -67,6 +67,7 @@ jobs:
           - tests/test_resource_asset_preflight_contract.py
           - tests/test_production_generation_preflight.py
           - tests/test_repository_grounding.py
+          - tests/test_required_target_compile_gate.py
           - tests/test_scheduler_claim_efficiency.py
           - tests/test_validation_repair_regressions.py
           - tests/test_shared_gpu_scheduler_contract.py
