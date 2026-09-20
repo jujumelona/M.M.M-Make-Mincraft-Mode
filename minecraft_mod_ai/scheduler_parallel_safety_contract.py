@@ -226,7 +226,7 @@ def claim_orchestrator_ready(
             for lane, capacity in capacities.items()
             if running.get(lane, 0) < capacity
         }
-        if _SHARED_LOCAL_GPU_LANE.get():
+        if bool(getattr(ledger, "_mmm_shared_local_gpu_lane", False)):
             if running.get("image_gpu", 0) > 0:
                 free_lanes.discard("llm")
             if running.get("llm", 0) > 0:
@@ -400,10 +400,18 @@ def install(
     work_graph_module: Any,
     orchestrator_module: Any,
 ) -> None:
-    # work_graph_module is retained for call-site compatibility. Lane-aware claiming is
-    # now an explicit DurableWorkLedger delegation, not a runtime method replacement.
+    # Both scheduler delegation and shared-GPU admission are source-owned now.
     del work_graph_module
-    _install_profile_gpu_lane(orchestrator_module)
+    current = orchestrator_module.CompleteProductionOrchestrator._execute_generation_work
+    if getattr(current, "__module__", "") != orchestrator_module.__name__:
+        raise RuntimeError(
+            "Scheduler safety requires source-owned _execute_generation_work."
+        )
+    if hasattr(current, "__wrapped__"):
+        raise RuntimeError(
+            "Scheduler safety cannot install over a wrapped generation owner."
+        )
+    current._mmm_profile_shared_gpu_lane = True  # type: ignore[attr-defined]
 
 
 __all__ = [
