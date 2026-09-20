@@ -325,21 +325,13 @@ def _install_orchestrator_runtime(module: Any) -> None:
     prepare_project._mmm_dynamic_platform_runtime = True
     cls._prepare_project = prepare_project
 
-    original_matches = cls._project_matches_spec
-
-    def project_matches_spec(project_root: Path, spec: Any) -> bool:
-        if not original_matches(project_root, spec):
-            return False
-        try:
-            return (
-                adapter_from_project(project_root).adapter_id
-                == adapter_for_lock_values(spec.platform).adapter_id
-            )
-        except Exception:
-            return False
-
-    project_matches_spec._mmm_dynamic_platform_runtime = True
-    cls._project_matches_spec = staticmethod(project_matches_spec)
+    # _project_matches_spec is source-owned by complete_orchestrator. The adapter
+    # equality check lives there so resume behavior cannot change through install order.
+    if hasattr(cls._project_matches_spec, "__wrapped__"):
+        raise RuntimeError(
+            "CompleteProductionOrchestrator._project_matches_spec must remain source-owned."
+        )
+    cls._project_matches_spec._mmm_dynamic_platform_runtime = True  # type: ignore[attr-defined]
 
 
 def _java_command_for(java_version: str) -> str:
