@@ -521,6 +521,16 @@ def verify_debug_fixture_source(
         and lifecycle_clear
         and not findings
     )
+    diagnostics = [
+        {
+            "path": relative_path,
+            "severity": 1,
+            "source": "debug-source-contract",
+            "code": "DEBUG_SOURCE_CONTRACT",
+            "message": finding,
+        }
+        for finding in findings
+    ]
     return {
         "schema_version": "mmm/debug-source-acceptance-v1",
         "status": "PASS" if passed else "BLOCKED",
@@ -545,6 +555,7 @@ def verify_debug_fixture_source(
             else ""
         ),
         "findings": findings,
+        "diagnostics": diagnostics,
     }
 
 
