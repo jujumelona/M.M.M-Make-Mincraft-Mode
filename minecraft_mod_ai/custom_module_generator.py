@@ -61,6 +61,43 @@ class CustomModuleGenerationError(RuntimeError):
     pass
 
 
+def _bounded_execution_feedback(value: Any) -> dict[str, Any] | None:
+    """Expose only owner-bound actionable validation facts to one retrying coder."""
+
+    if not isinstance(value, Mapping):
+        return None
+    raw_diagnostics = value.get("diagnostics")
+    if not isinstance(raw_diagnostics, Sequence) or isinstance(
+        raw_diagnostics, (str, bytes, bytearray)
+    ):
+        return None
+
+    diagnostics: list[dict[str, Any]] = []
+    for raw in raw_diagnostics:
+        if not isinstance(raw, Mapping):
+            continue
+        item = {
+            "path": str(raw.get("path") or "").strip()[:1000],
+            "code": str(raw.get("code") or "").strip()[:200],
+            "source": str(raw.get("source") or "").strip()[:200],
+            "message": " ".join(str(raw.get("message") or "").split())[:2000],
+        }
+        if not any(item.values()):
+            continue
+        diagnostics.append(item)
+        if len(diagnostics) >= 16:
+            break
+    if not diagnostics:
+        return None
+
+    return {
+        "schema_version": "mmm/coder-execution-feedback-v1",
+        "checkpoint_id": str(value.get("checkpoint_id") or "").strip()[:200],
+        "failure_scope": str(value.get("failure_scope") or "").strip()[:200],
+        "diagnostics": diagnostics,
+    }
+
+
 _APPROVED_REUSE_CONTEXT_SCHEMA = "mmm/approved-reuse-context-v1"
 _APPROVED_REUSE_CONTEXT_BYTES = 12 * 1024
 _CODE_IDENTIFIER = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]{2,}")
@@ -646,6 +683,7 @@ class CustomModuleGenerator:
         minecraft_version: str | None = None,
         loader: str | None = None,
         mappings: str | None = None,
+        execution_feedback: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         module.validate(policy=self.policy)
         root = Path(project_root).expanduser().resolve()
@@ -691,6 +729,18 @@ class CustomModuleGenerator:
         java_version = adapter.java_version
 
         module_contract = _task_local_module_contract(module)
+        retry_feedback = _bounded_execution_feedback(execution_feedback)
+        diagnostic_paths = tuple(
+            dict.fromkeys(
+                str(item.get("path") or "").strip()
+                for item in (
+                    retry_feedback.get("diagnostics", ())
+                    if isinstance(retry_feedback, Mapping)
+                    else ()
+                )
+                if isinstance(item, Mapping) and str(item.get("path") or "").strip()
+            )
+        )
         query = json.dumps(
             module_contract,
             ensure_ascii=False,
@@ -757,6 +807,7 @@ class CustomModuleGenerator:
                     index,
                     query=query,
                     byte_budget=project_context_budget,
+                    diagnostic_paths=diagnostic_paths,
                 )
                 break
             except ValueError as exc:
@@ -856,6 +907,7 @@ class CustomModuleGenerator:
                 "resumed": checkpoint_resumed,
                 "source_state_sha256": _mutable_stage_state_sha256(staged_root),
             },
+            "execution_feedback": retry_feedback,
             "rules": [
                 "Implement the feature directly; do not return a file-plan protocol.",
                 "Use host_grounding.evidence_bindings.implementation_contract first when present; its API symbols and admitted templates are target authority, not examples to rewrite from memory. When a grounding fact supplies required_imports, import those exact fully-qualified owners and never substitute Yarn, intermediary, neighbouring-version, or remembered package names.",
@@ -872,6 +924,11 @@ class CustomModuleGenerator:
             ],
         }
         _apply_authored_request(request, module_contract)
+        if retry_feedback is not None:
+            request["rules"][0:0] = [
+                "This is an owner-bound validation repair re-entry. Fix the supplied execution_feedback diagnostics in the existing owned source before making any unrelated change.",
+                "Do not ignore or delete the failing behavior to silence validation; preserve the approved semantic outcome and satisfy the exact host implementation contract.",
+            ]
         if approved_reuse_context is not None:
             request["approved_reuse_context"] = approved_reuse_context
             request["rules"][2:2] = [
