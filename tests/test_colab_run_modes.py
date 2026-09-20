@@ -16,6 +16,7 @@ from minecraft_mod_ai.colab_run_modes import (
     PLAN_MODE,
     RUN_MODES,
     audit_path,
+    build_result_download_target,
     debug_audit_path,
     resolve_plan_path,
     run_plan_dialog,
@@ -242,3 +243,41 @@ def test_existing_plan_configured_path_must_exist(tmp_path: Path) -> None:
             output_root=tmp_path,
             configured_path=str(missing),
         )
+
+
+def test_build_result_download_target_prefers_verified_release_zip(tmp_path: Path) -> None:
+    release = tmp_path / "release.zip"
+    release.write_bytes(b"release")
+    jar = tmp_path / "mod.jar"
+    jar.write_bytes(b"jar")
+    result = type("Result", (), {
+        "release_zip": str(release),
+        "jar_path": str(jar),
+    })()
+
+    target, kind = build_result_download_target(result)
+
+    assert target == release
+    assert kind == "release_zip"
+
+
+def test_build_result_download_target_falls_back_to_built_jar(tmp_path: Path) -> None:
+    jar = tmp_path / "mod.jar"
+    jar.write_bytes(b"jar")
+    result = type("Result", (), {
+        "release_zip": None,
+        "jar_path": str(jar),
+    })()
+
+    target, kind = build_result_download_target(result)
+
+    assert target == jar
+    assert kind == "build_jar"
+
+
+def test_colab_download_cell_falls_back_to_jar_when_release_is_unresolved() -> None:
+    source = _cell_source(NOTEBOOKS[0], "download")
+
+    assert "build_result_download_target" in source
+    assert "BUILD_RESULT.unresolved_gates" in source
+    assert "빌드 JAR" in source

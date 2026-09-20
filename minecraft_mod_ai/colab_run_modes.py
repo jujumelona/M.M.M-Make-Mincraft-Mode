@@ -63,6 +63,26 @@ def should_build(run_mode: str) -> bool:
     return validate_run_mode(run_mode) not in {PLAN_MODE, AUDIT_MODE}
 
 
+def build_result_download_target(build_result: Any) -> tuple[Path | None, str]:
+    """Return the best real artifact produced by one build.
+
+    A verified release ZIP is preferred. If release verification remains unresolved
+    but a passing build produced a JAR, return that JAR instead of pretending there
+    is no downloadable result.
+    """
+
+    if build_result is None:
+        return None, "none"
+    for attribute, kind in (("release_zip", "release_zip"), ("jar_path", "build_jar")):
+        raw = getattr(build_result, attribute, None)
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        path = Path(raw).expanduser()
+        if path.is_file():
+            return path, kind
+    return None, "none"
+
+
 def audit_path(repo_dir: str | Path) -> Path:
     return Path(repo_dir) / AUDIT_RELATIVE_PATH
 
@@ -493,6 +513,7 @@ __all__ = [
     "RUN_MODES",
     "PlanDialogResult",
     "audit_path",
+    "build_result_download_target",
     "debug_audit_path",
     "needs_existing_mod",
     "needs_prompt",
