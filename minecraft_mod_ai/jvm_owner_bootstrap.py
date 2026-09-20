@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import shutil
 import subprocess
@@ -14,7 +15,23 @@ GRADLE_VERSION = '8.6'
 GRADLE_SHA256 = '9631d53cf3e74bfa726893aee1f8994fee4e060c401335946dba2156f440f24c'
 
 
-def owner_command(workspace: Path) -> list[str]:
+def owner_command(
+    workspace: Path,
+    *,
+    timeout_seconds: int | float = 600,
+) -> list[str]:
+    if isinstance(timeout_seconds, bool):
+        raise OwnerRPCError("JVM owner bootstrap timeout must be a positive number")
+    try:
+        timeout_value = float(timeout_seconds)
+    except (TypeError, ValueError) as exc:
+        raise OwnerRPCError(
+            "JVM owner bootstrap timeout must be a positive number"
+        ) from exc
+    if not math.isfinite(timeout_value) or timeout_value <= 0.0:
+        raise OwnerRPCError("JVM owner bootstrap timeout must be a positive finite number")
+    bootstrap_timeout = max(1, int(math.ceil(timeout_value)))
+
     source = Path(__file__).with_name('jvm_owner')
     files = sorted(path for path in source.rglob('*') if path.is_file()
                    and not set(path.relative_to(source).parts) & {'build', '.gradle'})
@@ -27,18 +44,25 @@ def owner_command(workspace: Path) -> list[str]:
     distribution = target / 'build' / 'install' / 'owner'
     from .runner import GradleRunner, _exclusive_cache_lock
 
-    with _exclusive_cache_lock(cache, timeout_seconds=600):
+    with _exclusive_cache_lock(cache, timeout_seconds=bootstrap_timeout):
         if not (distribution / 'configuration' / 'config.ini').is_file():
             target.mkdir(parents=True, exist_ok=True)
             for path in files:
                 output = target / path.relative_to(source)
                 output.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(path, output)
-            gradle = GradleRunner(cache / 'gradle').ensure_gradle(GRADLE_VERSION, GRADLE_SHA256)
+            gradle = GradleRunner(
+                cache / 'gradle',
+                download_timeout_seconds=min(300, bootstrap_timeout),
+            ).ensure_gradle(
+                GRADLE_VERSION,
+                GRADLE_SHA256,
+                lock_timeout_seconds=bootstrap_timeout,
+            )
             with tempfile.TemporaryFile(mode='w+b') as log:
                 result = subprocess.run([str(gradle), '--no-daemon', '--console=plain', 'installDist'],
                                         cwd=target, stdout=log, stderr=subprocess.STDOUT,
-                                        timeout=600, check=False, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                                        timeout=bootstrap_timeout, check=False, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
                 if result.returncode:
                     log.seek(max(0, log.tell() - 12000))
                     raise OwnerRPCError('Owner build failed: ' + log.read().decode('utf-8', errors='replace'))
