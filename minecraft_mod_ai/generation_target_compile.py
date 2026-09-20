@@ -11,9 +11,21 @@ from .runner import BuildRunnerError, GradleRunner
 
 
 def _gradle_cache_for(project_root: Path) -> Path:
-    """Reuse the nearest run-scoped Gradle cache; otherwise create project-local state."""
+    """Reuse the owning production run cache even before first materialization.
 
-    for ancestor in (project_root, *project_root.parents):
+    Generation runs inside a resumable checkpoint below the run root while the
+    production build later uses the run-scoped .cache/gradle directory. Requiring
+    that cache directory to already exist made the first target compile fall back
+    to a project-local cold cache, so Gradle/dependency state was populated twice.
+    """
+
+    ancestors = (project_root, *project_root.parents)
+    for ancestor in ancestors:
+        checkpoint_root = ancestor / ".minecraft_ai" / ".mmm-custom-checkpoints"
+        if checkpoint_root.is_dir():
+            return ancestor / ".cache" / "gradle"
+
+    for ancestor in ancestors:
         candidate = ancestor / ".cache" / "gradle"
         if candidate.is_dir():
             return candidate
