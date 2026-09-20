@@ -1801,11 +1801,15 @@ def _mutated_source_body(
         return content
     if operation != "replace_exact":
         return body
-    if not isinstance(body, str):
+    new = arguments.get("new")
+    if not isinstance(new, str):
         return body
     old = arguments.get("old")
-    new = arguments.get("new")
-    if not isinstance(old, str) or not isinstance(new, str):
+    if old is None:
+        # replace_exact without old is the model-facing atomic whole-file rewrite.
+        # Keep host state identical to the file content that the scalar protocol writes.
+        return new
+    if not isinstance(body, str) or not isinstance(old, str):
         return body
     if not old or body.count(old) != 1:
         return body
