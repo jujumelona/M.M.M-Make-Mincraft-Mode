@@ -91,6 +91,7 @@ def test_source_owned_progress_loop_uses_same_active_bounded_authority() -> None
             minecraft_version=None,
             loader=None,
             mappings=None,
+            execution_feedback=None,
         ):
             active = _CURRENT_AUTHORITY.get()
             assert active is not None
