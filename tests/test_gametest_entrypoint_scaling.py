@@ -36,7 +36,7 @@ def test_production_gametest_entrypoint_is_constant_while_units_shard() -> None:
     )
 
     root_path = (
-        "src/main/java/ai/minecraft/scale/gametest/"
+        "src/gametest/java/ai/minecraft/scale/gametest/"
         "GeneratedRegistryGameTest.java"
     )
     assert small_entries == large_entries == [
@@ -79,7 +79,7 @@ def test_hardener_removes_obsolete_generated_tests_when_catalog_is_empty(
     )
     stale_directory = (
         project
-        / "src/main/java/ai/minecraft/scale/gametest"
+        / "src/gametest/java/ai/minecraft/scale/gametest"
     )
     stale_directory.mkdir(parents=True)
     stale = stale_directory / "GeneratedRegistryGameTest0000.java"
