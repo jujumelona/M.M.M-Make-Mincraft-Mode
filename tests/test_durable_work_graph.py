@@ -181,14 +181,20 @@ def test_v2_work_plan_shards_every_quality_dimension_before_packaging() -> None:
 
     plan = build_production_work_plan(proposal)
     quality = [node for node in plan.nodes if node.stage == "validate:quality"]
-    package = next(node for node in plan.nodes if node.node_id == "package-release")
+    build_package = next(
+        node for node in plan.nodes if node.node_id == "package-build-artifact"
+    )
+    release_package = next(
+        node for node in plan.nodes if node.node_id == "package-release"
+    )
 
     assert proposal.schema_version == "mmm/complete-proposal-v2"
     dimension_ids = {node.payload["dimension_id"] for node in quality}
     assert {"correctness", "build", "research", "runtime"} <= dimension_ids
-    assert package.dependencies == tuple(
+    assert build_package.dependencies == tuple(
         sorted(node.node_id for node in quality)
     )
+    assert release_package.dependencies == ("package-build-artifact",)
     by_dimension = {node.payload["dimension_id"]: node for node in quality}
     assert by_dimension["correctness"].dependencies == ("validate-jar",)
     assert by_dimension["build"].dependencies == ("validate-jar",)

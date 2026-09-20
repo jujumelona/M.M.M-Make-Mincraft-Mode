@@ -819,6 +819,8 @@ def write_build_artifact_bundle(
 
     return {
         **manifest,
+        "status": "PACKAGED",
+        "build_status": "BUILT",
         "build_bundle_zip": str(target),
         "sha256": sha256_file(target),
         "size_bytes": target.stat().st_size,
