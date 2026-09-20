@@ -1348,13 +1348,16 @@ def _forced_act_messages(
     state: Any,
     require_rag: bool,
     phase_names: Collection[str],
+    evidence_ready: bool | None = None,
 ) -> list[dict[str, Any]]:
     """Project a forced mutation turn onto only execution-relevant context."""
 
     names = frozenset(str(name).strip() for name in phase_names if str(name).strip())
+    if evidence_ready is None:
+        evidence_ready = not require_rag
     forced_mutation = (
         getattr(state, "phase", None) == LoopPhase.ACT
-        and not require_rag
+        and bool(evidence_ready)
         and len(names) == 1
         and bool(names & _MUTATION_ACT_TOOLS)
     )
@@ -2643,6 +2646,194 @@ def _generate_turn_with_context_recovery(
 
 _PHASE_HANDOFF_VERIFIER_DIAGNOSTIC_BYTES = 6 * 1024
 _PHASE_HANDOFF_DIAGNOSTIC_TEXT_LIMIT = 640
+_PHASE_HANDOFF_TOTAL_BYTES = 6 * 1024
+_PHASE_HANDOFF_TOOL_RECORD_LIMIT = 6
+_PHASE_HANDOFF_TOOL_TEXT_LIMIT = 960
+_PHASE_HANDOFF_NESTED_KEYS = (
+    "structured_content",
+    "result",
+    "data",
+    "body",
+    "raw_result",
+    "structured",
+    "observation",
+    "hits",
+    "results",
+    "records",
+    "documents",
+    "chunks",
+    "resources",
+    "sources",
+    "items",
+    "symbols",
+    "operations",
+)
+_PHASE_HANDOFF_RECORD_KEYS = (
+    "schema_version",
+    "status",
+    "result_count",
+    "path",
+    "source_path",
+    "file",
+    "uri",
+    "line",
+    "start_line",
+    "end_line",
+    "symbol",
+    "name",
+    "code",
+    "severity",
+    "message",
+    "text",
+    "snippet",
+    "content",
+    "source",
+    "changed_paths",
+    "operation",
+    "after_sha256",
+)
+
+
+def _phase_handoff_scalar(value: Any, *, limit: int = _PHASE_HANDOFF_TOOL_TEXT_LIMIT) -> Any:
+    if isinstance(value, str):
+        if len(value) <= limit:
+            return value
+        return value[: max(0, limit - 1)] + "…"
+    if isinstance(value, (bool, int, float)) or value is None:
+        return value
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        scalars = []
+        for item in value[:8]:
+            if isinstance(item, (str, bool, int, float)) or item is None:
+                scalars.append(_phase_handoff_scalar(item, limit=320))
+        return scalars
+    return None
+
+
+def _phase_handoff_records(value: Any, records: list[dict[str, Any]]) -> None:
+    if len(records) >= _PHASE_HANDOFF_TOOL_RECORD_LIMIT:
+        return
+    if isinstance(value, Mapping):
+        record: dict[str, Any] = {}
+        for key in _PHASE_HANDOFF_RECORD_KEYS:
+            if key not in value:
+                continue
+            projected = _phase_handoff_scalar(value.get(key))
+            if projected not in (None, "", [], {}):
+                record[key] = projected
+        if record:
+            records.append(record)
+            if len(records) >= _PHASE_HANDOFF_TOOL_RECORD_LIMIT:
+                return
+        for key in _PHASE_HANDOFF_NESTED_KEYS:
+            child = value.get(key)
+            if child is not None:
+                _phase_handoff_records(child, records)
+                if len(records) >= _PHASE_HANDOFF_TOOL_RECORD_LIMIT:
+                    return
+        return
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for child in value:
+            _phase_handoff_records(child, records)
+            if len(records) >= _PHASE_HANDOFF_TOOL_RECORD_LIMIT:
+                return
+
+
+def _bounded_phase_tool_observation(message: Mapping[str, Any]) -> str:
+    content = message.get("content")
+    parsed: Any = content
+    if isinstance(content, str):
+        stripped = content.strip()
+        if stripped.startswith(("{", "[")):
+            try:
+                parsed = json.loads(stripped)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                parsed = content
+
+    records: list[dict[str, Any]] = []
+    _phase_handoff_records(parsed, records)
+    fingerprint = evidence_fingerprint(parsed)
+    payload = {
+        "schema_version": "mmm/phase-tool-observation-v1",
+        "tool": str(message.get("name") or ""),
+        "tool_result_fingerprint": (
+            "sha256:" + fingerprint if fingerprint else None
+        ),
+        "records": records,
+        "policy": (
+            "Bounded host projection of the completed tool result. Raw tool payload "
+            "is intentionally not replayed across phase boundaries."
+        ),
+    }
+    rendered = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    if len(rendered.encode("utf-8")) <= _PHASE_HANDOFF_TOTAL_BYTES:
+        return rendered
+
+    while records:
+        records.pop()
+        payload["records"] = records
+        payload["omitted_record_count"] = 1
+        rendered = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        if len(rendered.encode("utf-8")) <= _PHASE_HANDOFF_TOTAL_BYTES:
+            return rendered
+    return json.dumps(
+        {
+            "schema_version": "mmm/phase-tool-observation-v1",
+            "tool": str(message.get("name") or ""),
+            "tool_result_fingerprint": (
+                "sha256:" + fingerprint if fingerprint else None
+            ),
+            "records": [],
+            "omitted_record_count": max(1, len(records)),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _bounded_phase_handoff_content(
+    *,
+    previous_phase: LoopPhase,
+    next_phase: LoopPhase,
+    observations: Sequence[str],
+) -> str:
+    base = (
+        f"MMM_PHASE_HANDOFF {previous_phase.value}->{next_phase.value}\n"
+        "Prior-phase tool calls are closed and cannot be replayed.\n"
+    )
+    kept: list[str] = []
+    omitted = 0
+    for value in observations:
+        candidate = base + "\n".join(
+            f"Observation {index}:\n{item}"
+            for index, item in enumerate((*kept, value), 1)
+        )
+        if len(candidate.encode("utf-8")) <= _PHASE_HANDOFF_TOTAL_BYTES:
+            kept.append(value)
+        else:
+            omitted += 1
+    suffix = f"\nOmitted observations: {omitted}" if omitted else ""
+    return (
+        base
+        + "\n".join(
+            f"Observation {index}:\n{item}"
+            for index, item in enumerate(kept, 1)
+        )
+        + suffix
+    )
 
 
 def _bounded_verifier_recovery_observation(state: HostRunState) -> str:
@@ -2737,17 +2928,20 @@ def _sync_phase_tool_transcript(
     for raw in messages:
         message = dict(raw)
         role = str(message.get("role") or "")
+        content = message.get("content")
+        if (
+            role == "system"
+            and isinstance(content, str)
+            and content.startswith("MMM_PHASE_HANDOFF ")
+        ):
+            # A phase transition owns exactly one live handoff snapshot. Keeping
+            # historical handoffs makes mandatory context grow monotonically.
+            continue
         if role == "tool":
-            content = message.get("content")
-            if (
-                not verifier_recovery_handoff
-                and isinstance(content, str)
-                and content.strip()
-            ):
-                observations.append(content)
+            if not verifier_recovery_handoff:
+                observations.append(_bounded_phase_tool_observation(message))
             continue
         if role == "assistant" and message.get("tool_calls"):
-            content = message.get("content")
             if isinstance(content, str) and content.strip():
                 compacted.append({"role": "assistant", "content": content})
             continue
@@ -2756,10 +2950,10 @@ def _sync_phase_tool_transcript(
         observations = [_bounded_verifier_recovery_observation(state)]
     compacted.append({
         "role": "system",
-        "content": (
-            f"MMM_PHASE_HANDOFF {last_prompt_phase.value}->{next_phase.value}\n"
-            "Prior-phase tool calls are closed and cannot be replayed.\n"
-            + "\n".join(f"Observation {i}:\n{value}" for i, value in enumerate(observations, 1))
+        "content": _bounded_phase_handoff_content(
+            previous_phase=last_prompt_phase,
+            next_phase=next_phase,
+            observations=observations,
         ),
     })
     messages[:] = compacted
@@ -3305,6 +3499,12 @@ def _generate_with_tools_impl(
             state=state,
             require_rag=require_rag,
             phase_names=phase_names,
+            evidence_ready=_target_evidence_ready(
+                state,
+                require_rag=require_rag,
+                fresh_java_target=fresh_java_target,
+                compile_backed_java=compile_backed_java,
+            ),
         )
         if len(turn_messages) != len(messages):
             emit_root_cause(
