@@ -1337,6 +1337,20 @@ def _runtime_failure_code(tool_name: str, error: str) -> str:
 def _atomic_output_recovery_instruction(request: GenerationRequest) -> str:
     names = frozenset(_tool_name(schema) for schema in request.tools if _tool_name(schema))
     if "apply_source_edit" in names:
+        for schema in request.tools:
+            if _tool_name(schema) != "apply_source_edit":
+                continue
+            function = schema.get("function") if isinstance(schema, Mapping) else None
+            parameters = function.get("parameters") if isinstance(function, Mapping) else None
+            properties = parameters.get("properties") if isinstance(parameters, Mapping) else None
+            if isinstance(properties, Mapping) and set(properties) == {"new"}:
+                return (
+                    "The preceding repair output exceeded the bounded allowance and is discarded. "
+                    "Call apply_source_edit exactly once with no prose. Emit only the complete corrected "
+                    "existing source file in the new argument. Do not emit operation, path, old text, "
+                    "anchors, partial edits, or any additional tool call; the host binds those details."
+                )
+            break
         return (
             "The preceding assistant action exceeded the bounded output allowance and is discarded. "
             "Do not continue, reproduce, or complete that oversized payload. The host will preserve the "
@@ -1416,12 +1430,14 @@ def _forced_act_messages(
         )
         else ()
     )
-    if context is not None and context.evidence_source == "verifier_workspace_source":
+    if context is not None and context.evidence_source in {
+        "verifier_workspace_source", "workspace_existing_target"
+    } and getattr(state, "validation_status", "") == "FAIL":
         directive = (
             f"HOST FORCED ACT: repair the verified defect in {target!r} using the fresh "
-            "workspace source and diagnostics supplied by the host. Make one exact edit "
-            "to this existing file. Preserve the approved behavior and other files. "
-            "Do not restart generation or look for unrelated external projects."
+            "workspace source and diagnostics supplied by the host. Emit the complete corrected "
+            "contents in the single visible new argument only. Operation, path, old text, and SHA "
+            "are host-owned. Preserve approved behavior and do not restart generation or retrieve."
         )
     elif bounded_roots:
         directive = (
