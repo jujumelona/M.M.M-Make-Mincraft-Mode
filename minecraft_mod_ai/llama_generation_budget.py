@@ -213,6 +213,17 @@ def structured_response_token_ceiling(request: Any) -> tuple[int, dict[str, int]
     return max(1024, int(ceiling)), metrics
 
 
+def _request_output_ceiling(request: Any) -> int | None:
+    metadata = getattr(request, "metadata", {})
+    if not isinstance(metadata, Mapping):
+        return None
+    try:
+        value = int(metadata.get("mmm_output_token_ceiling") or 0)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def install(hardware_module: Any) -> None:
     """Install the common output budget at the llama-server payload boundary."""
 
@@ -227,6 +238,12 @@ def install(hardware_module: Any) -> None:
             raw_payload, config=adapter.config,
             structured_output=getattr(request, "response_format", None) == "json",
         )
+        request_ceiling = _request_output_ceiling(request)
+        if request_ceiling is not None:
+            bounded["max_tokens"] = min(
+                max(1, int(bounded.get("max_tokens", 1) or 1)),
+                request_ceiling,
+            )
 
         decision_kind = _planning_decision_json_fallback(request)
         if decision_kind:
