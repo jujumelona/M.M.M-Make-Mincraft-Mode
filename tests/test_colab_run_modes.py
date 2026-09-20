@@ -281,3 +281,11 @@ def test_colab_download_cell_falls_back_to_jar_when_release_is_unresolved() -> N
     assert "build_result_download_target" in source
     assert "BUILD_RESULT.unresolved_gates" in source
     assert "빌드 JAR" in source
+
+
+def test_colab_build_cell_reports_jar_and_unresolved_gates() -> None:
+    source = _cell_source(NOTEBOOKS[0], "build")
+
+    assert 'print("검증 릴리스 ZIP:", BUILD_RESULT.release_zip)' in source
+    assert 'print("빌드 JAR:", BUILD_RESULT.jar_path)' in source
+    assert 'print("미해결 게이트:", list(BUILD_RESULT.unresolved_gates))' in source
