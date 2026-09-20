@@ -134,7 +134,7 @@ def test_json_fill_uses_registry_non_thinking_profile() -> None:
     }
 
 
-def test_forced_tool_does_not_apply_registry_sampling_profile() -> None:
+def test_forced_tool_uses_registry_non_thinking_sampling_profile() -> None:
     payload = _payload(
         role="researcher",
         request=_request(
@@ -146,8 +146,12 @@ def test_forced_tool_does_not_apply_registry_sampling_profile() -> None:
         ),
     )
 
-    assert payload["temperature"] == 0.0
-    assert payload["repetition_penalty"] == 1.05
+    assert payload["temperature"] == 0.11
+    assert payload["top_p"] == 0.61
+    assert payload["top_k"] == 7
+    assert payload["presence_penalty"] == 0.04
+    assert payload["repeat_penalty"] == 0.83
+    assert "repetition_penalty" not in payload
     assert payload["chat_template_kwargs"] == {
         "enable_thinking": False,
         "preserve_thinking": False,
