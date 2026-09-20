@@ -569,7 +569,12 @@ def _constrain_existing_repair_schema(
     *,
     target_path: str,
 ) -> Mapping[str, Any]:
-    """Clone source-edit schema and remove create/delete choices for repair."""
+    """Project verifier repair onto one host-bound atomic whole-file rewrite.
+
+    The model authors only the corrected source body. Operation, path, and optimistic
+    concurrency are host-owned so a small model cannot replay a stale whole-file
+    precondition.
+    """
 
     cloned = deepcopy(dict(schema))
     function = cloned.get("function")
@@ -587,58 +592,57 @@ def _constrain_existing_repair_schema(
         raise ModelConfigurationError(
             "REPAIR_TOOL_SCHEMA_INVALID: apply_source_edit has no properties schema"
         )
-    operation = properties.get("operation")
-    if not isinstance(operation, dict):
+    new_schema = deepcopy(properties.get("new") or {"type": "string"})
+    if not isinstance(new_schema, dict):
         raise ModelConfigurationError(
-            "REPAIR_TOOL_SCHEMA_INVALID: apply_source_edit has no operation schema"
+            "REPAIR_TOOL_SCHEMA_INVALID: apply_source_edit has no new-source schema"
         )
-    values = operation.get("enum")
-    if not isinstance(values, list):
-        raise ModelConfigurationError(
-            "REPAIR_TOOL_SCHEMA_INVALID: apply_source_edit operation is not enumerated"
-        )
-    allowed = [
-        value
-        for value in values
-        if str(value).strip().casefold() not in _REPAIR_FORBIDDEN_OPERATIONS
-    ]
-    if not allowed:
-        raise ModelConfigurationError(
-            "REPAIR_TOOL_SCHEMA_INVALID: no existing-file repair operations remain"
-        )
-    operation["enum"] = allowed
-    operation["description"] = (
-        str(operation.get("description") or "").rstrip()
-        + " Existing-file repair turn: creation and deletion operations are structurally unavailable. "
-        "For a coherent whole-file repair use replace_exact with old omitted and put the complete "
-        "corrected file in new; the host binds that rewrite to the live file SHA."
-    ).strip()
-
-    old_schema = properties.get("old")
-    if isinstance(old_schema, dict):
-        old_schema["description"] = (
-            "Exact text to match for a partial replace_exact repair. Copy a short unique span "
-            "byte-for-byte from current_source. Omit old entirely for a whole-file rewrite."
-        )
-    new_schema = properties.get("new")
-    if isinstance(new_schema, dict):
-        new_schema["description"] = (
-            "Replacement text for replace_exact. When old is omitted, this must be the complete "
-            "corrected file and the host performs an atomic live-SHA-bound whole-file rewrite."
-        )
-
-    path_schema = properties.get("path")
-    if not isinstance(path_schema, dict):
-        raise ModelConfigurationError(
-            "REPAIR_TOOL_SCHEMA_INVALID: apply_source_edit has no path schema"
-        )
-    path_schema["enum"] = [target_path]
-    path_schema["description"] = (
-        str(path_schema.get("description") or "").rstrip()
-        + " This repair turn is pinned to the existing host target."
-    ).strip()
+    new_schema["type"] = "string"
+    new_schema["description"] = (
+        "Complete corrected contents of the host-pinned existing source file. "
+        f"The host binds operation=replace_exact and path={target_path!r}, reads the "
+        "live file at execution time, and applies this content with its live SHA."
+    )
+    parameters["properties"] = {"new": new_schema}
+    parameters["required"] = ["new"]
+    parameters["additionalProperties"] = False
+    function["description"] = (
+        "Repair the verifier-selected existing source file atomically. Emit only the "
+        "complete corrected source in new; operation, path, old text, and SHA are host-owned."
+    )
     return cloned
+def _bind_existing_verifier_repair_call(
+    call: Any,
+    state: Any,
+) -> Any:
+    """Bind a model-authored repair body to the live host-selected target."""
 
+    if str(getattr(call, "name", "") or "").strip() != "apply_source_edit":
+        return call
+    if str(getattr(state, "validation_status", "") or "") != "FAIL":
+        return call
+    context = getattr(state, "mutation_context", None)
+    if context is None or context.is_new_file or not context.is_mutation_ready:
+        return call
+    target = _canonical_mutation_path(context.target_path)
+    if not target:
+        return call
+    raw_arguments = getattr(call, "arguments", None)
+    if not isinstance(raw_arguments, Mapping):
+        return call
+    new_source = raw_arguments.get("new")
+    if not isinstance(new_source, str):
+        return call
+    bound = {
+        "operation": "replace_exact",
+        "path": target,
+        "new": new_source,
+    }
+    return replace(
+        call,
+        arguments=bound,
+        raw_arguments=json.dumps(bound, ensure_ascii=False, separators=(",", ":")),
+    )
 
 def _constrain_existing_repair_tools(
     tools: Sequence[Any],
@@ -2038,10 +2042,9 @@ class HostRunState:
             "do not search unrelated ecosystem candidates, and never write a different path. "
             "The payload includes the exact host-tracked current source and its SHA-256. "
             "Any earlier host_reserved/fresh metadata is pre-materialization history only. "
-            "For this existing file, use an admitted non-create edit such as replace_exact. "
-            "For a coherent whole-file rewrite, OMIT old entirely and put the complete corrected "
-            "source in new; the host reads the live file and binds the rewrite to its current SHA. "
-            "Use old only for a short unique partial span copied byte-for-byte from current_source. "
+            "This repair turn exposes only the complete corrected source body in new. "
+            "Operation, path, old text, and optimistic-concurrency SHA are host-owned and must not "
+            "be emitted by the model. The host binds new to an atomic live-SHA whole-file rewrite. "
             "Use the diagnostics below against the host-pinned target and make one materially "
             "different source edit. The next successful mutation goes directly back to VERIFY.\n"
             + (
@@ -3756,6 +3759,35 @@ def _generate_with_tools_impl(
                 raise _fixed_point_error(state)
             continue
 
+        if (
+            state.phase is LoopPhase.ACT
+            and state.validation_status == "FAIL"
+            and turn.tool_calls
+        ):
+            bound_calls = tuple(
+                _bind_existing_verifier_repair_call(call, state)
+                for call in turn.tool_calls
+            )
+            if bound_calls != tuple(turn.tool_calls):
+                turn = replace(turn, tool_calls=bound_calls)
+                emit_root_cause(
+                    "verifier_repair_call_host_bound",
+                    stage=stage,
+                    operation="apply_source_edit",
+                    gate="repair_mutation_binding",
+                    result="PASS",
+                    reason=(
+                        "model authored corrected source; host bound operation, target path, "
+                        "and live-SHA whole-file rewrite semantics"
+                    ),
+                    details={
+                        "target_path": (
+                            state.mutation_context.target_path
+                            if state.mutation_context is not None
+                            else None
+                        )
+                    },
+                )
         if not turn.tool_calls:
             content = turn.content.strip()
             if not content:
