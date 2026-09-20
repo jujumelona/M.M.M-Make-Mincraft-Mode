@@ -220,14 +220,50 @@ def resolve_platform_fail_closed(
     # from it performs no ecosystem/live discovery, so isolation must not demote this
     # stronger authority to generic provider discovery semantics.
     if provider.host_authoritative:
-        from .host_version_catalog import host_target
-
         requested = (
             existing_version
             if existing_version and not migration_requested
             else explicit_version
         )
-        adapter = host_target(requested)
+        if requested:
+            adapter = provider.resolve(requested)
+            adapter.validate()
+            if (
+                adapter.minecraft_version != requested
+                or adapter.loader != provider.loader
+            ):
+                from .resolved_version_context import VersionContextError
+
+                raise VersionContextError(
+                    "PINNED_VERSION_SUBSTITUTION",
+                    requested=requested,
+                    actual=adapter.minecraft_version,
+                )
+        else:
+            versions = tuple(
+                dict.fromkeys(
+                    value
+                    for item in provider.discover_versions(32)
+                    if (value := str(item).strip())
+                )
+            )
+            if not versions:
+                raise SpecValidationError(
+                    "Host-authoritative platform provider returned no executable target."
+                )
+            adapter = provider.resolve(versions[0])
+            adapter.validate()
+            if (
+                adapter.minecraft_version != versions[0]
+                or adapter.loader != provider.loader
+            ):
+                from .resolved_version_context import VersionContextError
+
+                raise VersionContextError(
+                    "PINNED_VERSION_SUBSTITUTION",
+                    requested=versions[0],
+                    actual=adapter.minecraft_version,
+                )
         resolver._require_supported_kinds(adapter, kinds, explicit=bool(requested))
         return PlatformSelection(
             adapter=adapter,
