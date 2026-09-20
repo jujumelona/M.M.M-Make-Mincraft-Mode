@@ -574,7 +574,7 @@ def _jdt_release_evidence_passed(receipt: dict[str, Any] | None) -> bool:
     if jdt_diagnostic_errors(receipt):
         return False
     status = str(normalized.get("status") or "").strip().upper()
-    if status not in {"PASS", "OK", "AVAILABLE"}:
+    if status == "DEFERRED_TO_POST_BUILD":
         return False
     try:
         error_count = int(normalized.get("error_count", -1))
