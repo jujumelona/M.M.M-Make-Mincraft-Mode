@@ -15,6 +15,10 @@ from typing import Any
 from .filesystem_copy import reflink_or_copy
 from .project_write_lock import project_path_write_locks, project_write_lock
 
+# Stable injection seam for clone/fault-isolation tests. The implementation still
+# has one owner in filesystem_copy; snapshot code intentionally calls this alias.
+_reflink_or_copy = reflink_or_copy
+
 _SHARED_WRITER_FALLBACK_LOCK = threading.RLock()
 _SNAPSHOT_WAVE_LOCK = threading.RLock()
 _SNAPSHOT_WAVES: dict[Path, dict[str, Any]] = {}
@@ -186,7 +190,7 @@ def _clone_snapshot_tree(source_root: Path, *, parent: Path, prefix: str) -> Pat
                 ignored.add(name)
         return ignored
     try:
-        shutil.copytree(source_root, stage, copy_function=reflink_or_copy, ignore=ignore)
+        shutil.copytree(source_root, stage, copy_function=_reflink_or_copy, ignore=ignore)
     except BaseException:
         shutil.rmtree(stage, ignore_errors=True)
         raise
