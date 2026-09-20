@@ -26,6 +26,7 @@ from .agent_intent import implementation_requested
 from .llama_finish_reason_contract import (
     CONTEXT_PRESSURE,
     OUTPUT_EXHAUSTED,
+    completion_boundary_error,
     completion_boundary_kind,
     mark_context_recovery_exhausted,
 )
@@ -2044,13 +2045,16 @@ def _source_edit_schema_for_context(
     parameters = function.get("parameters")
     properties = parameters.get("properties") if isinstance(parameters, dict) else None
     operation = properties.get("operation") if isinstance(properties, dict) else None
+    fresh_java = bool(
+        context.is_new_file and context.target_path.casefold().endswith(".java")
+    )
     if isinstance(operation, dict):
         enum = operation.get("enum")
         if isinstance(enum, list):
-            if context.is_new_file and context.target_path.casefold().endswith(".java"):
+            if fresh_java:
                 operation["enum"] = [
                     value for value in enum
-                    if str(value).strip().casefold() in {"create_file", "create"}
+                    if str(value).strip().casefold() == "create_file"
                 ]
             elif not context.is_new_file:
                 operation["enum"] = [
@@ -2060,6 +2064,34 @@ def _source_edit_schema_for_context(
                         or str(value).strip().casefold() in _SOURCE_ATOMIC_REWRITE_OPERATIONS
                     )
                 ]
+
+    if fresh_java and isinstance(parameters, dict) and isinstance(properties, dict):
+        minimal_properties = {
+            key: deepcopy(properties[key])
+            for key in ("operation", "path", "content")
+            if key in properties
+        }
+        path_schema = minimal_properties.get("path")
+        if isinstance(path_schema, dict):
+            path_schema["enum"] = [context.target_path]
+            path_schema["description"] = (
+                "Exact host-pinned fresh Java target; emit this path exactly."
+            )
+        operation_schema = minimal_properties.get("operation")
+        if isinstance(operation_schema, dict):
+            operation_schema["enum"] = ["create_file"]
+            operation_schema["description"] = (
+                "Create the complete fresh Java file exactly once."
+            )
+        content_schema = minimal_properties.get("content")
+        if isinstance(content_schema, dict):
+            content_schema["description"] = (
+                "Complete minimal compilable Java source for the host-pinned target."
+            )
+        parameters["properties"] = minimal_properties
+        parameters["required"] = ["operation", "path", "content"]
+        parameters["additionalProperties"] = False
+        properties = minimal_properties
     description = str(function.get("description") or "").strip()
     if context.is_new_file and context.target_path.casefold().endswith(".java"):
         suffix = (
@@ -2275,6 +2307,54 @@ def _retry_atomic_after_output_exhaustion(
         )
     except BaseException as retry_exc:
         if completion_boundary_kind(retry_exc) == OUTPUT_EXHAUSTED:
+            boundary = completion_boundary_error(retry_exc)
+            partial = (
+                boundary.partial_message
+                if boundary is not None and isinstance(boundary.partial_message, Mapping)
+                else {}
+            )
+            raw_calls = partial.get("tool_calls") if isinstance(partial, Mapping) else None
+            calls = raw_calls if isinstance(raw_calls, Sequence) and not isinstance(
+                raw_calls, (str, bytes, bytearray)
+            ) else ()
+            argument_chars = 0
+            tool_names: list[str] = []
+            for raw_call in calls:
+                if not isinstance(raw_call, Mapping):
+                    continue
+                function = raw_call.get("function")
+                if not isinstance(function, Mapping):
+                    continue
+                name = str(function.get("name") or "").strip()
+                if name:
+                    tool_names.append(name)
+                arguments = function.get("arguments")
+                if isinstance(arguments, str):
+                    argument_chars += len(arguments)
+                elif arguments is not None:
+                    try:
+                        argument_chars += len(json.dumps(arguments, ensure_ascii=False))
+                    except (TypeError, ValueError):
+                        argument_chars += len(str(arguments))
+            emit_root_cause(
+                "atomic_output_recovery_exhausted",
+                stage="generation",
+                operation="generate_with_tools",
+                gate="completion_boundary",
+                result="FAIL",
+                reason="second bounded atomic decode exhausted before one tool action completed",
+                details={
+                    "partial_bytes": int(getattr(boundary, "partial_bytes", 0) or 0),
+                    "partial_sha256": str(getattr(boundary, "partial_sha256", "") or ""),
+                    "content_chars": len(str(partial.get("content") or "")),
+                    "reasoning_chars": len(
+                        str(partial.get("reasoning_content") or partial.get("reasoning") or "")
+                    ),
+                    "tool_call_count": len(calls),
+                    "tool_names": tool_names,
+                    "tool_argument_chars": argument_chars,
+                },
+            )
             raise ModelConfigurationError(
                 "ATOMIC_ACTION_OUTPUT_STALLED: the model exceeded the output allowance twice "
                 "without completing one bounded semantic action; refusing to reset agent state."
