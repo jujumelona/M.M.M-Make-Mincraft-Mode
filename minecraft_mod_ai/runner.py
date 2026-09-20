@@ -461,13 +461,28 @@ class GradleRunner:
             and gradle_sha256.lower() in text.lower()
         )
 
-    def ensure_gradle(self, gradle_version: str, gradle_sha256: str) -> Path:
+    def ensure_gradle(
+        self,
+        gradle_version: str,
+        gradle_sha256: str,
+        *,
+        lock_timeout_seconds: int | None = None,
+    ) -> Path:
         """Return the executable from one SHA-verified pinned Gradle distribution."""
 
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        default_lock_timeout = max(60, self.download_timeout_seconds + 60)
+        if lock_timeout_seconds is None:
+            effective_lock_timeout = default_lock_timeout
+        else:
+            if type(lock_timeout_seconds) is not int or lock_timeout_seconds < 1:
+                raise BuildRunnerError(
+                    "Gradle distribution lock timeout must be a positive integer."
+                )
+            effective_lock_timeout = min(default_lock_timeout, lock_timeout_seconds)
         with _exclusive_cache_lock(
             self.cache_dir,
-            timeout_seconds=max(60, self.download_timeout_seconds + 60),
+            timeout_seconds=effective_lock_timeout,
         ):
             return self._ensure_gradle_locked(gradle_version, gradle_sha256)
 
