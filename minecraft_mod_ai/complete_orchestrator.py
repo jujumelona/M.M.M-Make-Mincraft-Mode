@@ -74,6 +74,7 @@ from .prepared_project_resume_integrity import (
     prepared_project_cache_valid,
     prepared_project_matches_spec,
 )
+from .platform_catalog import adapter_for_lock_values, adapter_from_project
 from .project_edit import inspect_fabric_project
 from .project_index import ProjectIndex
 from .project_index_execution_reuse_contract import (
@@ -188,6 +189,7 @@ def _semantic_execution_observations(
     receipts: Iterable[dict[str, Any]],
     *,
     downstream_ids: Callable[[str], Iterable[str]],
+    evidence_context: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Attribute receipts by explicit ownership and fail closed on evidence gaps."""
     member_by_id = {module.module_id: module for module in members}
@@ -226,6 +228,15 @@ def _semantic_execution_observations(
                 receipt,
                 dependent_ids=downstream_ids(module_id),
             )
+            if observation is not None and evidence_context is not None:
+                from .evidence_first_pipeline_contract import (
+                    enrich_execution_observation,
+                )
+
+                observation = enrich_execution_observation(
+                    observation,
+                    evidence_context,
+                )
             if observation is not None:
                 observations.append(observation)
                 observed_ids.add(module_id)
@@ -1885,9 +1896,26 @@ class CompleteProductionOrchestrator:
         from concurrent.futures import FIRST_COMPLETED, Future, wait
 
         from . import scheduler_parallel_safety_contract as scheduler_safety
+        from .evidence_first_pipeline_contract import build_execution_context
         from .production_generation_preflight import (
             ProductionGenerationPreflightError,
             validate_production_generation_project,
+        )
+
+        active_registry = getattr(router, "registry", None) if router is not None else None
+        active_profile = (
+            str(getattr(router, "profile", "") or "")
+            if router is not None
+            else str(getattr(self, "profile", "") or "")
+        )
+        ledger._mmm_shared_local_gpu_lane = scheduler_safety._profile_uses_shared_local_gpu(
+            active_profile,
+            active_registry,
+        )
+        evidence_context = build_execution_context(
+            approved,
+            project_root,
+            policy=self.policy,
         )
 
         if bool(getattr(options, "resume", False)):
@@ -2223,6 +2251,7 @@ class CompleteProductionOrchestrator:
                 members,
                 receipts,
                 downstream_ids=downstream_ids,
+                evidence_context=evidence_context,
             )
             return {'schema_version': 'mmm/generation-work-node-v1', 'status': 'SUCCEEDED', 'node_id': node.node_id, 'stage': stage, 'module_ids': [module.module_id for module in members], 'receipts': receipts, 'semantic_observations': semantic_observations}
 
@@ -2954,7 +2983,15 @@ class CompleteProductionOrchestrator:
 
     @staticmethod
     def _project_matches_spec(project_root: Path, spec: Any) -> bool:
-        return prepared_project_matches_spec(project_root, spec)
+        if not prepared_project_matches_spec(project_root, spec):
+            return False
+        try:
+            return (
+                adapter_from_project(project_root).adapter_id
+                == adapter_for_lock_values(spec.platform).adapter_id
+            )
+        except (OSError, TypeError, ValueError):
+            return False
 
     @staticmethod
     def _write_base_proposal(project_root: Path, base: Any) -> None:
