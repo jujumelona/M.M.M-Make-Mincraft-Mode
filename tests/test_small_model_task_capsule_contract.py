@@ -319,6 +319,8 @@ def test_fresh_host_reserved_java_target_separates_write_and_api_evidence_author
 
 
 def test_fresh_java_edit_schema_requires_one_complete_create_before_compile() -> None:
+    capsule = compile_task_capsule(_module())
+    assert capsule is not None
     context = tool_loop.TargetMutationContext(
         target_path=JAVA_PATH,
         target_symbol=SYMBOL,
