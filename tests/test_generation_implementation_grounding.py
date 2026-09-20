@@ -203,6 +203,7 @@ def test_generation_grounding_projects_only_explicit_host_responsibility(monkeyp
     assert set(fact["templates"][0]["symbol_usage"]) == {
         "register_item",
         "builtin_item_registry",
+        "item_set_id",
     }
     assert set(fact["templates"][1]["symbol_usage"]) == {
         "resource_key_create",
@@ -220,6 +221,7 @@ def test_generation_grounding_projects_only_explicit_host_responsibility(monkeyp
         "registries_item",
         "identifier_factory",
         "item_stacks_to",
+        "item_set_id",
     }
     assert set(fact["required_imports"]) == {
         "net.minecraft.core.Registry",
@@ -262,6 +264,7 @@ def test_real_26_2_item_registry_grounding_has_complete_native_import_authority(
     )
     templates = {item["template_id"]: item for item in fact["templates"]}
     assert "builtin_item_registry" in templates["fabric/item/register_keyed"]["symbol_usage"]
+    assert "item_set_id" in templates["fabric/item/register_keyed"]["symbol_usage"]
     assert "registries_item" not in templates["fabric/item/register_keyed"]["symbol_usage"]
     assert "registries_item" in templates["fabric/item/key_identifier"]["symbol_usage"]
     assert "builtin_item_registry" not in templates["fabric/item/key_identifier"]["symbol_usage"]
