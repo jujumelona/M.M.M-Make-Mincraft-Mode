@@ -164,6 +164,32 @@ def test_required_tool_completed_without_tool_is_rejected_after_done() -> None:
     assert rejected.arguments["failure_code"] == "REQUIRED_TOOL_MISSING"
 
 
+def test_required_tool_long_semantic_preface_is_rejected_before_full_decode() -> None:
+    response = _FakeStreamResponse(
+        [
+            _sse({"content": "x" * 1200}),
+            _sse(_native_call()),
+            "data: [DONE]",
+        ]
+    )
+
+    data = _post(response)
+    choice = data["choices"][0]
+
+    assert response.saw_done is False
+    assert response.lines_requested == 1
+    tool = _apply_source_edit_tool()
+    request = GenerationRequest(
+        tools=(tool,),
+        tool_validation_schemas=(tool,),
+        tool_choice={"type": "function", "function": {"name": "apply_source_edit"}},
+        parallel_tool_calls=False,
+    )
+    generation = _native_tool_generation_response(choice["message"], request)
+    assert generation.tool_calls[0].name == "__mmm_rejected_tool_call__"
+    assert generation.tool_calls[0].arguments["failure_code"] == "REQUIRED_TOOL_MISSING"
+
+
 def test_required_tool_fragmented_text_marker_is_not_rejected() -> None:
     response = _FakeStreamResponse(
         [
