@@ -68,7 +68,7 @@ class JavaCoreService:
             normalized.append(resolved.relative_to(root).as_posix())
         return tuple(dict.fromkeys(normalized))
 
-    def _prepare_project(self, root: Path) -> None:
+    def _prepare_project(self, root: Path, timeout_seconds: int | float) -> None:
         from .jvm_owner_bootstrap import owner_command
 
         if self._root != root:
@@ -77,7 +77,12 @@ class JavaCoreService:
             self._inputs = ProjectModelInputs(root)
         if self._rpc is None:
             self._workspace = tempfile.TemporaryDirectory(prefix='mmm-jdt-core-')
-            self._rpc = OwnerRPC(owner_command(Path(self._workspace.name)))
+            self._rpc = OwnerRPC(
+                owner_command(
+                    Path(self._workspace.name),
+                    timeout_seconds=timeout_seconds,
+                )
+            )
 
     def _resolve_and_open(self, root: Path, timeout: int) -> dict[str, Any]:
         assert self._rpc is not None
@@ -222,7 +227,7 @@ class JavaCoreService:
         *,
         requested_files: tuple[str, ...] | None = None,
     ) -> dict[str, Any]:
-        self._prepare_project(root)
+        self._prepare_project(root, timeout)
         assert self._inputs is not None
         owner = mutation_owner(root)
         revision = owner.revision
