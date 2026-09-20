@@ -73,7 +73,11 @@ def build_result_download_target(build_result: Any) -> tuple[Path | None, str]:
 
     if build_result is None:
         return None, "none"
-    for attribute, kind in (("release_zip", "release_zip"), ("jar_path", "build_jar")):
+    for attribute, kind in (
+        ("release_zip", "release_zip"),
+        ("build_bundle_zip", "build_bundle_zip"),
+        ("jar_path", "build_jar"),
+    ):
         raw = getattr(build_result, attribute, None)
         if not isinstance(raw, str) or not raw.strip():
             continue

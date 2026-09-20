@@ -261,11 +261,29 @@ def test_build_result_download_target_prefers_verified_release_zip(tmp_path: Pat
     assert kind == "release_zip"
 
 
+def test_build_result_download_target_prefers_build_bundle_before_raw_jar(tmp_path: Path) -> None:
+    bundle = tmp_path / "build-artifact.zip"
+    bundle.write_bytes(b"bundle")
+    jar = tmp_path / "mod.jar"
+    jar.write_bytes(b"jar")
+    result = type("Result", (), {
+        "release_zip": None,
+        "build_bundle_zip": str(bundle),
+        "jar_path": str(jar),
+    })()
+
+    target, kind = build_result_download_target(result)
+
+    assert target == bundle
+    assert kind == "build_bundle_zip"
+
+
 def test_build_result_download_target_falls_back_to_built_jar(tmp_path: Path) -> None:
     jar = tmp_path / "mod.jar"
     jar.write_bytes(b"jar")
     result = type("Result", (), {
         "release_zip": None,
+        "build_bundle_zip": None,
         "jar_path": str(jar),
     })()
 
@@ -280,12 +298,13 @@ def test_colab_download_cell_falls_back_to_jar_when_release_is_unresolved() -> N
 
     assert "build_result_download_target" in source
     assert "BUILD_RESULT.unresolved_gates" in source
-    assert "빌드 JAR" in source
+    assert "빌드 산출물 ZIP" in source
 
 
 def test_colab_build_cell_reports_jar_and_unresolved_gates() -> None:
     source = _cell_source(NOTEBOOKS[0], "build")
 
     assert 'print("검증 릴리스 ZIP:", BUILD_RESULT.release_zip)' in source
+    assert 'print("빌드 산출물 ZIP:", BUILD_RESULT.build_bundle_zip)' in source
     assert 'print("빌드 JAR:", BUILD_RESULT.jar_path)' in source
     assert 'print("미해결 게이트:", list(BUILD_RESULT.unresolved_gates))' in source
