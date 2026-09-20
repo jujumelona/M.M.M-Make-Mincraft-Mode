@@ -591,16 +591,27 @@ def test_later_authored_fragment_refreshes_workspace_before_act() -> None:
             self.calls.append(name)
             if name == "search_code_rag":
                 return {
-                    "schema_version": "mmm/code-rag-result-v1",
-                    "hits": [
-                        {
-                            "path": "src/main/java/com/example/spacemode/SpaceModeModule.java",
-                            "text": (
-                                "package com.example.spacemode; "
-                                "public final class SpaceModeModule {}"
-                            ),
-                        }
-                    ],
+                    "parsed_text": None,
+                    "resources": [],
+                    "structured_content": {
+                        "schema_version": "mmm/code-rag-result-v1",
+                        "query": str(arguments.get("query") or ""),
+                        "hits": [
+                            {
+                                "path": "src/main/java/com/example/spacemode/SpaceModeModule.java",
+                                "source_path": "src/main/java/com/example/spacemode/SpaceModeModule.java",
+                                "text": (
+                                    "package com.example.spacemode; "
+                                    "public final class SpaceModeModule {}"
+                                ),
+                            }
+                        ],
+                        "receipt": {
+                            "status": "FOUND",
+                            "result_count": 1,
+                        },
+                    },
+                    "text": [],
                 }
             if name == "apply_source_edit":
                 assert arguments["path"] == new_target
