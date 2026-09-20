@@ -30,6 +30,7 @@ def test_gradle_cache_for_unmanaged_project_keeps_existing_nearest_cache(tmp_pat
 
     assert target_compile._gradle_cache_for(project) == existing
 
+
 class _Build:
     def __init__(self, report):
         self.report = report
