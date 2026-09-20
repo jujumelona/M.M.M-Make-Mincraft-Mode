@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -245,20 +246,70 @@ def test_existing_plan_configured_path_must_exist(tmp_path: Path) -> None:
         )
 
 
-def test_build_result_download_target_prefers_verified_release_zip(tmp_path: Path) -> None:
+def test_build_result_download_target_prefers_user_mod_zip(tmp_path: Path) -> None:
     release = tmp_path / "release.zip"
-    release.write_bytes(b"release")
-    jar = tmp_path / "mod.jar"
+    release.write_bytes(b"internal-release")
+    bundle = tmp_path / "final-mod-download"
+    bundle.mkdir()
+    jar = bundle / "mod.jar"
     jar.write_bytes(b"jar")
+    resource_pack = bundle / "generated-resource-pack.zip"
+    resource_pack.write_bytes(b"resource-pack")
+    (bundle / "artifact-receipt.json").write_text("{}", encoding="utf-8")
     result = type("Result", (), {
         "release_zip": str(release),
         "jar_path": str(jar),
+        "distribution_receipt": {
+            "downloadable_bundle": {
+                "status": "PASS",
+                "path": str(bundle),
+                "artifact": jar.name,
+                "additional_artifacts": {
+                    "generated-resource-pack.zip": "sha256:" + "0" * 64,
+                },
+            }
+        },
     })()
 
     target, kind = build_result_download_target(result)
 
-    assert target == release
-    assert kind == "release_zip"
+    assert target is not None
+    assert target.is_file()
+    assert kind == "user_mod_zip"
+    with zipfile.ZipFile(target, "r") as archive:
+        assert sorted(archive.namelist()) == [
+            "generated-resource-pack.zip",
+            "mod.jar",
+        ]
+
+
+def test_build_result_download_target_uses_jar_only_user_zip_without_resource_pack(
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "final-mod-download"
+    bundle.mkdir()
+    jar = bundle / "mod.jar"
+    jar.write_bytes(b"jar")
+    result = type("Result", (), {
+        "release_zip": None,
+        "build_bundle_zip": None,
+        "jar_path": str(jar),
+        "distribution_receipt": {
+            "downloadable_bundle": {
+                "status": "PASS",
+                "path": str(bundle),
+                "artifact": jar.name,
+                "additional_artifacts": {},
+            }
+        },
+    })()
+
+    target, kind = build_result_download_target(result)
+
+    assert target is not None
+    assert kind == "user_mod_zip"
+    with zipfile.ZipFile(target, "r") as archive:
+        assert archive.namelist() == ["mod.jar"]
 
 
 def test_build_result_download_target_prefers_build_bundle_before_raw_jar(tmp_path: Path) -> None:
