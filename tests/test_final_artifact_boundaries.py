@@ -109,7 +109,22 @@ def _debug_source_contract() -> dict[str, object]:
             "registries_item",
             "resource_key_create",
             "identifier_factory",
+            "item_set_id",
         ],
+        "required_host_symbol_specs": {
+            "item_set_id": {
+                "owner": "net.minecraft.world.item.Item$Properties",
+                "name": "setId",
+                "descriptor": (
+                    "(Lnet/minecraft/resources/ResourceKey;)"
+                    "Lnet/minecraft/world/item/Item$Properties;"
+                ),
+                "kind": "method",
+                "static": False,
+                "side": "common",
+                "namespace": "minecraft",
+            }
+        },
         "forbidden_lifecycle_symbols": [
             "ModInitializer",
             "onInitialize",
@@ -125,6 +140,11 @@ def _debug_host_facts() -> str:
                 "register_item": {
                     "owner": "net.minecraft.core.Registry",
                     "name": "register",
+                    "descriptor": (
+                        "(Lnet/minecraft/core/Registry;"
+                        "Lnet/minecraft/resources/ResourceKey;"
+                        "Ljava/lang/Object;)Ljava/lang/Object;"
+                    ),
                     "kind": "method",
                 },
                 "builtin_item_registry": {
@@ -198,6 +218,52 @@ public final class DebugToken {
     assert receipt["binding_assignment_proven"] is True
     assert receipt["lifecycle_clear"] is True
     assert all(receipt["symbol_results"].values())
+
+
+def test_debug_fixture_source_acceptance_rejects_missing_keyed_item_set_id(
+    tmp_path: Path,
+) -> None:
+    source = (
+        tmp_path
+        / "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+    )
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        """
+package dev.mmm.debugfixture;
+
+import net.minecraft.core.Registry;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.item.Item;
+
+public final class DebugToken {
+    public static final ResourceKey<Item> KEY = ResourceKey.create(
+        Registries.ITEM,
+        Identifier.fromNamespaceAndPath("mmm_debug_fixture", "debug_token")
+    );
+    public static final Item DEBUG_TOKEN = Registry.register(
+        BuiltInRegistries.ITEM,
+        KEY,
+        new Item(new Item.Properties())
+    );
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    receipt = verify_debug_fixture_source(
+        tmp_path,
+        source_contract=_debug_source_contract(),
+        host_facts_json=_debug_host_facts(),
+    )
+
+    assert receipt["status"] == "BLOCKED"
+    assert receipt["symbol_results"]["item_set_id"] is False
+    assert any("item_set_id" in item for item in receipt["findings"])
 
 
 def test_debug_fixture_source_acceptance_rejects_unbound_registry_result(
