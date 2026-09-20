@@ -1116,8 +1116,61 @@ def _rag_receipt_state(item: Any) -> tuple[bool, bool]:
     return found, usable
 
 
+def _host_truncated_rag_observation_has_evidence(value: Any) -> bool:
+    """Recognize only the host sanitizer's bounded positive-RAG envelope.
+
+    Large tool results are replaced by a host-owned observation containing a
+    truncated preview plus structurally preserved evidence. Internal progress
+    adjudication must not mistake that bounded transport form for an empty result.
+    This deliberately requires the sanitizer marker, truncation metadata, a positive
+    preserved result_count, and a concrete collection marker in the preview.
+    """
+
+    if not isinstance(value, Mapping):
+        return False
+    observation = value.get("_mmm_observation")
+    if not isinstance(observation, Mapping):
+        return False
+    if observation.get("sanitized") is not True:
+        return False
+    if observation.get("truncated") is not True or value.get("truncated") is not True:
+        return False
+    if str(observation.get("trust") or "") != "untrusted_data_only":
+        return False
+    preview = value.get("preview")
+    if not isinstance(preview, str) or not preview.strip():
+        return False
+    if not any(
+        marker in preview
+        for marker in (
+            '"hits"', '"results"', '"records"', '"documents"',
+            '"chunks"', '"resources"', '"sources"', '"items"',
+        )
+    ):
+        return False
+
+    def positive_result_count(item: Any) -> bool:
+        if isinstance(item, Mapping):
+            raw = item.get("result_count")
+            if raw not in (None, ""):
+                try:
+                    if int(raw) > 0:
+                        return True
+                except (TypeError, ValueError):
+                    pass
+            return any(positive_result_count(child) for child in item.values())
+        if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+            return any(positive_result_count(child) for child in item)
+        return False
+
+    preserved = value.get("preserved_evidence")
+    return positive_result_count(preserved)
+
 def _usable_rag_result(value: Any) -> bool:
     """Accept concrete hits while rejecting metadata-only or contradictory receipts."""
+
+    if _host_truncated_rag_observation_has_evidence(value):
+        return True
 
     semantic_content = _rag_semantic_content(value)
     if isinstance(value, Mapping):
