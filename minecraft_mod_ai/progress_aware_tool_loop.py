@@ -1164,6 +1164,73 @@ def _reconcile_materialized_target_from_workspace(
         return reconciled
 
 
+_HOST_BOUND_EXISTING_REWRITE_MAX_BYTES = 12 * 1024
+
+
+def _host_bound_existing_rewrite_ready(context: TargetMutationContext | None) -> bool:
+    """Whether a recovered authored target can expose only replacement source to the model."""
+
+    if (
+        context is None
+        or context.is_new_file
+        or not context.is_mutation_ready
+        or context.evidence_source != "workspace_existing_target"
+        or not isinstance(context.source_body, str)
+        or not context.source_body
+    ):
+        return False
+    authority = CURRENT_MUTATION_AUTHORITY.get()
+    if authority is None or authority.mode is not MutationAuthorityMode.BOUNDED_ROOTS:
+        return False
+    return (
+        len(context.source_body.encode("utf-8"))
+        <= _HOST_BOUND_EXISTING_REWRITE_MAX_BYTES
+    )
+
+
+def _bind_host_owned_existing_source_call(
+    call: Any,
+    state: Any,
+) -> Any:
+    """Bind exact live source preconditions for a recovered authored existing target.
+
+    The small coder supplies only the desired updated source. Exact path selection,
+    operation type, and the current source precondition are already host-owned facts and
+    must not be copied back through model text.
+    """
+
+    if str(getattr(call, "name", "") or "").strip() != "apply_source_edit":
+        return call
+    if str(getattr(state, "validation_status", "") or "") == "FAIL":
+        # Verifier repair has a stricter bounded-window binder of its own.
+        return call
+    context = getattr(state, "mutation_context", None)
+    if not _host_bound_existing_rewrite_ready(context):
+        return call
+    raw_arguments = getattr(call, "arguments", None)
+    if not isinstance(raw_arguments, Mapping):
+        return call
+    new_source = raw_arguments.get("new")
+    if not isinstance(new_source, str) or not new_source:
+        return call
+    target = _canonical_mutation_path(context.target_path)
+    old_source = context.source_body
+    if not target or not isinstance(old_source, str) or not old_source:
+        return call
+    bound = {
+        "operation": "replace_exact",
+        "path": target,
+        "old": old_source,
+        "new": new_source,
+        "count": 1,
+    }
+    return replace(
+        call,
+        arguments=bound,
+        raw_arguments=json.dumps(bound, ensure_ascii=False, separators=(",", ":")),
+    )
+
+
 def _existing_target_refresh_message(context: TargetMutationContext) -> dict[str, str]:
     source = context.source_body or ""
     return {
@@ -1593,11 +1660,11 @@ def _atomic_output_recovery_instruction(request: GenerationRequest) -> str:
             properties = parameters.get("properties") if isinstance(parameters, Mapping) else None
             if isinstance(properties, Mapping) and set(properties) == {"new"}:
                 return (
-                    "The preceding repair output exceeded the bounded allowance and is discarded. "
-                    "Call apply_source_edit exactly once with no prose. Emit only replacement text for "
-                    "the host-selected bounded verifier repair window in the new argument. Never emit the "
-                    "complete source file. Do not emit operation, path, old text, anchors, or any additional "
-                    "tool call; the host binds those details."
+                    "The preceding host-bound source-edit output exceeded the bounded allowance and "
+                    "is discarded. Call apply_source_edit exactly once with no prose and emit only "
+                    "the requested replacement/updated source text in the visible new argument. "
+                    "Do not emit operation, path, old text, count, anchors, or any additional tool "
+                    "call; the host binds all exact mutation preconditions."
                 )
             break
         return (
@@ -1696,6 +1763,14 @@ def _forced_act_messages(
             f"HOST FORCED ACT: repair the verified defect in {target!r} with exactly one bounded "
             "existing-file edit from the visible schema. Never regenerate the complete file, "
             "never change paths, and do not restart generation or retrieve."
+        )
+    elif _host_bound_existing_rewrite_ready(context):
+        directive = (
+            f"HOST FORCED ACT: {target!r} is an exact existing authored target whose live source "
+            "is already host-owned. Call apply_source_edit exactly once with no prose and emit "
+            "only the complete updated source in the visible new argument. Preserve unrelated "
+            "valid behavior and the existing package/type identity. Do not emit operation, path, "
+            "old text, count, or retrieval calls; the host binds those exact values."
         )
     elif bounded_roots:
         directive = (
@@ -2562,6 +2637,22 @@ def _source_edit_schema_for_context(
             for alias in ("file", "target_path", "target_file"):
                 properties.pop(alias, None)
 
+        if _host_bound_existing_rewrite_ready(context):
+            new_schema = deepcopy(properties.get("new") or {"type": "string"})
+            if isinstance(new_schema, dict):
+                new_schema["type"] = "string"
+                new_schema["maxLength"] = _HOST_BOUND_EXISTING_REWRITE_MAX_BYTES * 2
+                new_schema["description"] = (
+                    "Updated complete source for the exact existing host-pinned file. "
+                    "Preserve unrelated valid behavior and source identity. Emit source text "
+                    "only; the host binds operation=replace_exact, exact path, exact current "
+                    "old source, count, and transactional precondition."
+                )
+            parameters["properties"] = {"new": new_schema}
+            parameters["required"] = ["new"]
+            parameters["additionalProperties"] = False
+            properties = parameters["properties"]
+
     if fresh_java and isinstance(parameters, dict) and isinstance(properties, dict):
         # Operation and destination are already host-owned by TargetMutationContext.
         # Asking the small model to regenerate them creates avoidable tool-markup tokens
@@ -2583,6 +2674,12 @@ def _source_edit_schema_for_context(
         suffix = (
             "Fresh host-pinned Java target: create exactly one complete source file with "
             "create_file; the host compiles it immediately before any repair edit."
+        )
+    elif _host_bound_existing_rewrite_ready(context):
+        suffix = (
+            "Recovered existing authored target: emit only the updated source in new. "
+            "The host owns the exact path, current old source, replace_exact operation, "
+            "count, and transactional precondition."
         )
     elif not context.is_new_file:
         suffix = (
@@ -4405,6 +4502,36 @@ def _generate_with_tools_impl(
                         )
                     },
                 )
+        host_bound_existing_calls = tuple(
+            _bind_host_owned_existing_source_call(call, state)
+            for call in turn.tool_calls
+        )
+        if host_bound_existing_calls != tuple(turn.tool_calls):
+            turn = replace(turn, tool_calls=host_bound_existing_calls)
+            emit_root_cause(
+                "existing_source_call_host_bound",
+                stage=stage,
+                operation="apply_source_edit",
+                gate="mutation_precondition_binding",
+                result="PASS",
+                reason=(
+                    "recovered authored existing target uses host-owned exact live source "
+                    "precondition; small coder supplied only updated source"
+                ),
+                details={
+                    "target_path": (
+                        state.mutation_context.target_path
+                        if state.mutation_context is not None
+                        else None
+                    ),
+                    "source_bytes": (
+                        len((state.mutation_context.source_body or "").encode("utf-8"))
+                        if state.mutation_context is not None
+                        else 0
+                    ),
+                },
+            )
+
         if not turn.tool_calls:
             content = turn.content.strip()
             if not content:
