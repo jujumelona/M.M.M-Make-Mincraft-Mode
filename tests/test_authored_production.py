@@ -27,6 +27,10 @@ def test_saved_design_compiler_preserves_target_through_coder_handoff(version):
     assert _target_values(proposal.modules[0].config) == expected
     assert proposal.game_design["authored_plan"] == plan.to_dict()
     assert proposal.modules[0].config["authored_plan"] == plan.to_dict()
+    assert (
+        proposal.modules[0].config["authored_java_package"]
+        == proposal.base_proposal.spec.package_name
+    )
     assert proposal.modules[0].required_gates == ("project build",)
     assert proposal.game_design["_platform_selection"]["target"] == adapter.public_dict()
 
