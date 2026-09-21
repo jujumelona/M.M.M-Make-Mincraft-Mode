@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from minecraft_mod_ai.model_adapters import ToolCall
+from minecraft_mod_ai.mutation_authority import (
+    CURRENT_MUTATION_AUTHORITY,
+    MutationAuthority,
+)
 from minecraft_mod_ai.mutation_failure_classification import (
     is_post_argument_semantic_failure_code as _is_post_argument_semantic_failure_code,
     is_recoverable_mutation_failure,
@@ -10,6 +15,7 @@ from minecraft_mod_ai.mutation_failure_classification import (
 from minecraft_mod_ai.progress_aware_tool_loop import (
     HostRunState,
     TargetMutationContext,
+    _bind_host_owned_existing_source_call,
     _mutation_target_error,
     _recover_creation_conflict_target,
     _source_edit_schema_for_context,
@@ -150,6 +156,139 @@ def test_existing_rebound_target_schema_removes_create_and_pins_path() -> None:
     assert properties["operation"]["enum"] == ["replace_exact", "insert_after"]
     assert properties["path"]["enum"] == [target_path]
     assert "target_path" not in properties
+
+
+def test_recovered_authored_existing_target_exposes_only_updated_source() -> None:
+    target_path = (
+        "src/main/java/ai/minecraft/generated/authored_demo/StarForgeMod.java"
+    )
+    source = (
+        "package ai.minecraft.generated.authored_demo;\n"
+        "public final class StarForgeMod {\n"
+        "    public static int credits() { return 1; }\n"
+        "}\n"
+    )
+    schema = {
+        "type": "function",
+        "function": {
+            "name": "apply_source_edit",
+            "description": "edit source",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "operation": {
+                        "type": "string",
+                        "enum": ["create_file", "replace_exact", "insert_after"],
+                    },
+                    "path": {"type": "string"},
+                    "old": {"type": "string"},
+                    "new": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+                "required": ["operation", "path"],
+            },
+        },
+    }
+    context = TargetMutationContext(
+        target_path=target_path,
+        source_body=source,
+        is_new_file=False,
+        evidence_source="workspace_existing_target",
+        writable_paths=(target_path,),
+        target_pinned=True,
+    )
+    authority = MutationAuthority.bounded_roots(
+        ("src/main/java/ai/minecraft/generated/authored_demo/",)
+    )
+    token = CURRENT_MUTATION_AUTHORITY.set(authority)
+    try:
+        projected = _source_edit_schema_for_context(schema, context)
+    finally:
+        CURRENT_MUTATION_AUTHORITY.reset(token)
+
+    parameters = projected["function"]["parameters"]
+    assert set(parameters["properties"]) == {"new"}
+    assert parameters["required"] == ["new"]
+    assert parameters["additionalProperties"] is False
+
+
+def test_recovered_authored_existing_target_binds_exact_live_old_source() -> None:
+    target_path = (
+        "src/main/java/ai/minecraft/generated/authored_demo/StarForgeMod.java"
+    )
+    source = (
+        "package ai.minecraft.generated.authored_demo;\n"
+        "public final class StarForgeMod {\n"
+        "    public static int credits() { return 1; }\n"
+        "}\n"
+    )
+    updated = source.replace("return 1", "return 2")
+    state = HostRunState()
+    state.mutation_context = TargetMutationContext(
+        target_path=target_path,
+        source_body=source,
+        is_new_file=False,
+        evidence_source="workspace_existing_target",
+        writable_paths=(target_path,),
+        target_pinned=True,
+    )
+    call = ToolCall(
+        id="edit-1",
+        name="apply_source_edit",
+        arguments={"new": updated},
+        raw_arguments='{"new":"model-only"}',
+    )
+    authority = MutationAuthority.bounded_roots(
+        ("src/main/java/ai/minecraft/generated/authored_demo/",)
+    )
+    token = CURRENT_MUTATION_AUTHORITY.set(authority)
+    try:
+        bound = _bind_host_owned_existing_source_call(call, state)
+        assert bound.arguments == {
+            "operation": "replace_exact",
+            "path": target_path,
+            "old": source,
+            "new": updated,
+            "count": 1,
+        }
+        assert (
+            _mutation_target_error(
+                bound.name,
+                bound.arguments,
+                state.mutation_context,
+            )
+            is None
+        )
+    finally:
+        CURRENT_MUTATION_AUTHORITY.reset(token)
+
+
+def test_authored_java_create_rejects_package_path_mismatch() -> None:
+    authority = MutationAuthority.bounded_roots(
+        ("src/main/java/ai/minecraft/generated/authored_demo/",)
+    )
+    token = CURRENT_MUTATION_AUTHORITY.set(authority)
+    try:
+        error = _mutation_target_error(
+            "apply_source_edit",
+            {
+                "operation": "create_file",
+                "path": (
+                    "src/main/java/ai/minecraft/generated/authored_demo/"
+                    "ship/SpaceShip.java"
+                ),
+                "content": (
+                    "package com.example.voidmode;\n"
+                    "public final class SpaceShip {}\n"
+                ),
+            },
+            None,
+        )
+    finally:
+        CURRENT_MUTATION_AUTHORITY.reset(token)
+
+    assert error is not None
+    assert error.startswith("MUTATION_JAVA_PACKAGE_MISMATCH:")
 
 
 def test_true_mutation_authority_violation_remains_fatal() -> None:
