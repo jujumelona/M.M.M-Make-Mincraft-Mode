@@ -52,6 +52,7 @@ from .small_model_task_capsule_contract import task_capsule_tool_loop
 from .source_mutation_contract import mutation_history_applied, mutation_payload_applied
 from .source_repair_semantics import (
     atomic_repair_scope_error,
+    existing_java_structurally_subsumes_candidate,
     existing_source_repair_semantic_error,
 )
 from .verifier_repair_admission_recovery import (
@@ -2283,6 +2284,13 @@ def _record_applied_mutation(
     return True
 
 
+def _implementation_obligation_has_progress(state: Any) -> bool:
+    return bool(
+        getattr(state, "workspace_changed", False)
+        or getattr(state, "preserved_existing_source", False)
+    )
+
+
 def _repair_source_window(state: Any) -> dict[str, Any] | None:
     """Select one bounded, exact, host-owned source window for verifier repair."""
 
@@ -2378,6 +2386,7 @@ class HostRunState:
     unapplied_mutation_fixed_point: bool = False
     created_paths: set[str] = field(default_factory=set)
     workspace_changed: bool = False
+    preserved_existing_source: bool = False
     validation_status: str = "PENDING"
     latest_verifier_tool: str | None = None
     latest_verifier_errors: tuple[dict[str, Any], ...] = ()
