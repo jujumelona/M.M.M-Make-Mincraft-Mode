@@ -624,23 +624,33 @@ def _benchmark(
     )
 
 
-def _external_server_is_ready() -> bool:
-    explicit = os.environ.get("LLAMA_SERVER_URL", "").strip()
+def _server_url_is_ready(server_url: str, *, attempts: int = 1) -> bool:
+    """Probe one OpenAI-compatible llama-server URL without changing ownership state."""
+
+    explicit = str(server_url or "").strip()
     if not explicit:
         return False
     try:
         import httpx
 
         origin = explicit.removesuffix("/v1").rstrip("/")
-        for endpoint in ("/v1/models", "/healthz", "/health"):
-            try:
-                if httpx.get(f"{origin}{endpoint}", timeout=0.5).status_code == 200:
-                    return True
-            except Exception:
-                continue
+        for attempt in range(max(1, attempts)):
+            for endpoint in ("/health", "/healthz", "/v1/models"):
+                try:
+                    if httpx.get(f"{origin}{endpoint}", timeout=0.5).status_code == 200:
+                        return True
+                except Exception:
+                    continue
+            if attempt + 1 < max(1, attempts):
+                time.sleep(0.25)
         return False
     except Exception:
         return False
+
+
+def _external_server_is_ready() -> bool:
+    explicit = os.environ.get("LLAMA_SERVER_URL", "").strip()
+    return _server_url_is_ready(explicit)
 
 
 def _launch_selected(
@@ -767,6 +777,58 @@ def ensure_tuned_server(config: Any, request: Any) -> str:
             raise
 
 
+def recover_managed_server(
+    config: Any,
+    request: Any,
+    *,
+    failed_url: str,
+) -> str | None:
+    """Recover one MMM-owned llama-server after a transport-level disconnect.
+
+    Completion transport replay already guarantees that no assistant turn reached the
+    caller. Therefore restarting the managed server and regenerating that same turn is
+    side-effect safe. External servers are never terminated or restarted here.
+    """
+
+    global _MANAGED_KEY, _MANAGED_PROCESS, _MANAGED_URL
+
+    failed = str(failed_url or "").strip().rstrip("/")
+    if not failed:
+        return None
+
+    with _AUTOTUNE_LOCK:
+        current_url = str(_MANAGED_URL or "").strip().rstrip("/")
+        process = _MANAGED_PROCESS
+
+        if not current_url or process is None:
+            return None
+
+        # Another concurrent request may already have recovered the managed server.
+        # If the currently owned endpoint is healthy, reuse it even when the URL was
+        # recycled onto the same port.
+        if _server_url_is_ready(current_url, attempts=3):
+            return current_url
+
+        # Only the endpoint owned by MMM may be torn down. A failure reported for an
+        # unrelated/external URL must never mutate managed lifecycle state.
+        if failed != current_url:
+            return None
+
+        managed_key = _MANAGED_KEY
+        _stop_server(process)
+        _MANAGED_PROCESS = None
+        _MANAGED_URL = None
+        _MANAGED_KEY = None
+        if managed_key:
+            _ATTEMPTED_KEYS.discard(managed_key)
+        if os.environ.get("LLAMA_SERVER_URL", "").strip().rstrip("/") == current_url:
+            os.environ.pop("LLAMA_SERVER_URL", None)
+
+    # Start outside the recovery critical section. ensure_tuned_server owns the same
+    # lock and reuses the persisted tuning decision rather than benchmarking again.
+    return ensure_tuned_server(config, request)
+
+
 def managed_server_generation_identity(server_url: str) -> str:
     """Identify the exact live managed process for correctness-safe warm caches."""
 
@@ -818,6 +880,7 @@ __all__ = [
     "ProbeResult",
     "ServerVariant",
     "_base_args",
+    "recover_managed_server",
     "_benchmark",
     "_candidate_variants",
     "_choose_variant",
