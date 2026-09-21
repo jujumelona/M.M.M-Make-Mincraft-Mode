@@ -4129,7 +4129,27 @@ def _generate_with_tools_impl(
             if call.name in _MUTATION_ACT_TOOLS:
                 applied = state.record_mutation(call.name, call.arguments, payload)
                 if applied:
-                    progress = True
+                    repair_candidate_pending_verification = (
+                        state.repair_baseline_error_count is not None
+                    )
+                    if not repair_candidate_pending_verification:
+                        progress = True
+                    else:
+                        emit_root_cause(
+                            "verifier_repair_candidate_applied",
+                            stage=stage,
+                            operation=call.name,
+                            gate="repair_quality_monotonicity",
+                            result="SKIP",
+                            reason=(
+                                "repair mutation is tentative until the verifier proves "
+                                "strict diagnostic improvement"
+                            ),
+                            details={
+                                "target_path": state.repair_previous_path,
+                                "baseline_error_count": state.repair_baseline_error_count,
+                            },
+                        )
                     state.clear_failure()
                     operation = str(call.arguments.get("operation") or "").strip().casefold()
                     if operation in _SOURCE_CREATE_OPERATIONS:
