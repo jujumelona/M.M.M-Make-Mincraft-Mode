@@ -1868,13 +1868,11 @@ def _host_target_execution_authority(state: Any) -> bool:
         target in writable
         and isinstance(context.source_body, str)
         and context.source_body.strip()
-        and context.evidence_source in {
-            "host_exact_source",
-            "workspace_existing_target",
-            "mutation_receipt",
-            "verifier_workspace_source",
-        }
     ):
+        # target_pinned + writable_paths can only originate from host-owned authority
+        # binding. The source's provenance label may change as exact source, workspace
+        # refresh, and verifier repair contexts merge; do not re-run retrieval solely
+        # because that descriptive label changed.
         return True
     return target in state.created_paths
 
