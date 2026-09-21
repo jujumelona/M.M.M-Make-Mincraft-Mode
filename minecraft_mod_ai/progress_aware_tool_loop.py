@@ -2439,18 +2439,38 @@ def _fresh_observe_names(
     *,
     semantic_retrieval_choice: bool,
 ) -> list[str]:
+    """Advance fresh-Java grounding from exact local evidence to broader fallbacks."""
+
     del mutation_context
-    preferred = (
-        "search_code_rag",
-        "java_workspace_symbols",
-        "search_project_rag",
-        "external_mcp_capabilities",
-        "external_mcp_schema",
-        "external_mcp_call",
-        "inspect_modrinth_project",
+
+    # First ask the exact code-RAG route alone. A small model should not have to
+    # choose among broader discovery surfaces before the highest-signal project/API
+    # evidence route has been attempted.
+    if "search_code_rag" in by_name and "search_code_rag" not in attempted:
+        return ["search_code_rag"]
+
+    # If exact code RAG was weak, exhaust local workspace/project evidence before
+    # paying for external discovery. These routes can be offered together when the
+    # caller deliberately allows semantic route choice.
+    internal = _unattempted_tools(
+        by_name,
+        attempted,
+        ("java_workspace_symbols", "search_project_rag"),
     )
-    names = _unattempted_tools(by_name, attempted, preferred)
-    return names if semantic_retrieval_choice else names[:1]
+    if internal:
+        return internal if semantic_retrieval_choice else internal[:1]
+
+    external = _unattempted_tools(
+        by_name,
+        attempted,
+        (
+            "external_mcp_capabilities",
+            "external_mcp_schema",
+            "external_mcp_call",
+            "inspect_modrinth_project",
+        ),
+    )
+    return external if semantic_retrieval_choice else external[:1]
 
 
 def _localized_observe_names(
