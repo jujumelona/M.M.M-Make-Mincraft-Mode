@@ -212,6 +212,73 @@ def test_managed_server_fast_path_skips_external_health_http(monkeypatch) -> Non
         autotune._MANAGED_URL = previous_url
 
 
+def test_unhealthy_managed_server_is_restarted_once(monkeypatch) -> None:
+    class _AliveProcess:
+        @staticmethod
+        def poll():
+            return None
+
+    old_url = "http://127.0.0.1:8910/v1"
+    new_url = "http://127.0.0.1:8911/v1"
+    process = _AliveProcess()
+    stopped: list[object] = []
+    ensured: list[tuple[object, object]] = []
+    config = object()
+    request = object()
+
+    monkeypatch.setattr(autotune, "_MANAGED_PROCESS", process)
+    monkeypatch.setattr(autotune, "_MANAGED_URL", old_url)
+    monkeypatch.setattr(autotune, "_MANAGED_KEY", "fingerprint")
+    monkeypatch.setattr(autotune, "_ATTEMPTED_KEYS", {"fingerprint"})
+    monkeypatch.setenv("LLAMA_SERVER_URL", old_url)
+    monkeypatch.setattr(autotune, "_server_url_is_ready", lambda *_a, **_k: False)
+    monkeypatch.setattr(autotune, "_stop_server", lambda value: stopped.append(value))
+
+    def ensure(seen_config, seen_request):
+        ensured.append((seen_config, seen_request))
+        assert autotune._MANAGED_PROCESS is None
+        assert autotune._MANAGED_URL is None
+        assert autotune._MANAGED_KEY is None
+        assert "fingerprint" not in autotune._ATTEMPTED_KEYS
+        assert "LLAMA_SERVER_URL" not in os.environ
+        return new_url
+
+    monkeypatch.setattr(autotune, "ensure_tuned_server", ensure)
+
+    assert (
+        autotune.recover_managed_server(config, request, failed_url=old_url)
+        == new_url
+    )
+    assert stopped == [process]
+    assert ensured == [(config, request)]
+
+
+def test_healthy_managed_server_is_reused_during_transport_recovery(monkeypatch) -> None:
+    class _AliveProcess:
+        @staticmethod
+        def poll():
+            return None
+
+    url = "http://127.0.0.1:8910/v1"
+    monkeypatch.setattr(autotune, "_MANAGED_PROCESS", _AliveProcess())
+    monkeypatch.setattr(autotune, "_MANAGED_URL", url)
+    monkeypatch.setattr(autotune, "_MANAGED_KEY", "fingerprint")
+    monkeypatch.setattr(
+        autotune,
+        "_server_url_is_ready",
+        lambda value, **_kwargs: value == url,
+    )
+    monkeypatch.setattr(
+        autotune,
+        "_stop_server",
+        lambda _process: (_ for _ in ()).throw(
+            AssertionError("healthy server must not be stopped")
+        ),
+    )
+
+    assert autotune.recover_managed_server(object(), object(), failed_url=url) == url
+
+
 def test_autotune_requires_exact_output_match_before_speed() -> None:
     decision = _choose_variant(
         (
