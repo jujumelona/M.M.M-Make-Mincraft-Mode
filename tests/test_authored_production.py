@@ -11,6 +11,7 @@ from minecraft_mod_ai.authored_production import (
 from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
 from minecraft_mod_ai.custom_module_generator import _task_local_module_contract
 from minecraft_mod_ai.planning_pipeline import PlanningPipeline
+from minecraft_mod_ai.progress_aware_tool_loop import _task_authority_context
 from minecraft_mod_ai.small_model_atomic_coder_execution import atomicize_coder_messages
 from minecraft_mod_ai.small_model_task_capsule_contract import compile_task_capsule
 from minecraft_mod_ai.work_graph import build_production_work_plan
@@ -40,6 +41,17 @@ def test_saved_design_compiler_preserves_target_through_coder_handoff(version):
         assert capsule is not None
         assert capsule.primary_path
         assert capsule.writable_paths == (capsule.primary_path,)
+        assert capsule.creatable_paths == ()
+        context = _task_authority_context({
+            "module": _task_local_module_contract(module),
+            "primary_path": capsule.primary_path,
+            "writable_paths": list(capsule.writable_paths),
+            "reuse_action": capsule.reuse_action,
+        })
+        assert context is not None
+        assert context.target_path == capsule.primary_path
+        assert context.is_new_file is False
+        assert context.creatable_paths == ()
     assert proposal.game_design["_platform_selection"]["target"] == adapter.public_dict()
 
 
