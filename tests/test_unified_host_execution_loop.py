@@ -94,7 +94,7 @@ def test_unchanged_mutation_receipt_is_not_progress() -> None:
     assert state.workspace_changed is False
 
 
-def test_no_progress_cutoff_at_two_streaks() -> None:
+def test_missing_localization_frontier_fails_closed_without_replay() -> None:
     router = MagicMock()
     router._generation_scope.return_value = nullcontext()
     router._agent_require_fresh_evidence = True
@@ -131,7 +131,7 @@ def test_no_progress_cutoff_at_two_streaks() -> None:
         parallel_tool_calls=False,
     )
 
-    with pytest.raises(ModelConfigurationError, match="no-progress boundary"):
+    with pytest.raises(ModelConfigurationError, match="MUTATION_LOCALIZATION_STALLED"):
         generate_with_tools(
             router,
             config=config,
@@ -141,6 +141,9 @@ def test_no_progress_cutoff_at_two_streaks() -> None:
             stage="generation",
             role="coder",
         )
+
+    assert adapter.generate_turn.call_count == 1
+    assert runtime.call.call_count == 1
 
 
 def test_filter_tools_for_phase_is_strictly_fail_closed() -> None:
