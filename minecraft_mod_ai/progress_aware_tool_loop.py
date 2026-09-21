@@ -1138,11 +1138,11 @@ def _creation_authorized(
 
 
 _JAVA_PACKAGE_DECLARATION_RE = re.compile(
-    r"(?m)^\\s*package\\s+([A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*)\\s*;"
+    r"(?m)^\s*package\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*;"
 )
 _JAVA_PUBLIC_TOP_LEVEL_TYPE_RE = re.compile(
-    r"(?m)^\\s*public\\s+(?:(?:abstract|final|sealed|non-sealed|strictfp)\\s+)*"
-    r"(?:class|interface|enum|record)\\s+([A-Za-z_$][\\w$]*)\\b"
+    r"\bpublic\s+(?:(?:abstract|final|sealed|non-sealed|strictfp)\s+)*"
+    r"(?:class|interface|enum|record)\s+([A-Za-z_$][\w$]*)\b"
 )
 
 
