@@ -48,6 +48,11 @@ from .owned_target_contract import (
 from .root_cause_trace import emit_root_cause, trace_scope
 from .small_model_task_capsule_contract import task_capsule_tool_loop
 from .source_mutation_contract import mutation_history_applied, mutation_payload_applied
+from .verifier_repair_window import (
+    MAX_REPAIR_WINDOW_CHARS,
+    exact_rollback_arguments,
+    select_verifier_repair_window,
+)
 from .value_shapes import as_sequence as _sequence
 from .value_shapes import structured_payload as _structured_payload
 
@@ -551,7 +556,7 @@ def _constrain_existing_repair_schema(
             "REPAIR_TOOL_SCHEMA_INVALID: apply_source_edit has no new-source schema"
         )
     new_schema["type"] = "string"
-    new_schema["maxLength"] = _ATOMIC_REPAIR_WINDOW_MAX_CHARS
+    new_schema["maxLength"] = MAX_REPAIR_WINDOW_CHARS
     new_schema["description"] = (
         "Replacement text only for the verifier-selected bounded source window. "
         "Never emit the complete source file. "
@@ -1327,11 +1332,6 @@ def _mutation_target_error(
     if tool_name != "apply_source_edit":
         return None
     operation = str(arguments.get("operation") or "").strip().casefold()
-    if operation == "replace_exact" and "old" not in arguments:
-        return (
-            "MUTATION_ATOMIC_SPAN_REQUIRED: existing source replacement requires "
-            "one exact old span; whole-file model replacement is forbidden"
-        )
     authority = CURRENT_MUTATION_AUTHORITY.get()
     if authority is not None:
         error = authority.mutation_error(
@@ -1340,10 +1340,19 @@ def _mutation_target_error(
         )
         if error is not None:
             return error
-        if authority.mode is MutationAuthorityMode.BOUNDED_ROOTS and not (
+    if operation == "replace_exact" and "old" not in arguments:
+        return (
+            "MUTATION_ATOMIC_SPAN_REQUIRED: existing source replacement requires "
+            "one exact old span; whole-file model replacement is forbidden"
+        )
+    if (
+        authority is not None
+        and authority.mode is MutationAuthorityMode.BOUNDED_ROOTS
+        and not (
             context is not None and context.evidence_source == "verifier_workspace_source"
-        ):
-            return None
+        )
+    ):
+        return None
     if context is None:
         return "MUTATION_TARGET_UNBOUND: no host-pinned mutation target is READY"
     supplied = _source_edit_path(arguments)
@@ -2130,136 +2139,24 @@ def _record_applied_mutation(
     return True
 
 
-_ATOMIC_REPAIR_WINDOW_MAX_CHARS = 4096
-_REPAIR_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_$][\w$]{2,}\b")
-_REPAIR_IDENTIFIER_STOPWORDS = frozenset({
-    "cannot", "resolved", "resolve", "type", "variable", "method", "field",
-    "constructor", "undefined", "unknown", "error", "java", "class", "interface",
-})
-
-
-def _diagnostic_line_index(
-    diagnostic: Mapping[str, Any],
-    line_count: int,
-) -> int | None:
-    """Resolve verifier line evidence to one zero-based source line."""
-
-    raw_range = diagnostic.get("range")
-    if isinstance(raw_range, Mapping):
-        start = raw_range.get("start")
-        if isinstance(start, Mapping):
-            raw = start.get("line")
-            if isinstance(raw, int) and 0 <= raw < line_count:
-                return raw
-
-    raw_line = diagnostic.get("line")
-    if isinstance(raw_line, int):
-        candidates = (raw_line - 1, raw_line)
-        for candidate in candidates:
-            if 0 <= candidate < line_count:
-                return candidate
-    return None
-
-
-def _bounded_unique_line_window(
-    source: str,
-    lines: Sequence[str],
-    line_index: int,
-) -> dict[str, Any] | None:
-    """Return the smallest useful unique line window around one diagnostic."""
-
-    for radius in (0, 1, 2, 3):
-        start = max(0, line_index - radius)
-        end = min(len(lines), line_index + radius + 1)
-        old = "".join(lines[start:end])
-        if (
-            old
-            and old != source
-            and len(old) <= _ATOMIC_REPAIR_WINDOW_MAX_CHARS
-            and source.count(old) == 1
-        ):
-            return {
-                "start_line": start + 1,
-                "end_line": end,
-                "old": old,
-                "old_chars": len(old),
-            }
-    return None
-
-
-def _diagnostic_identifier_window(
-    source: str,
-    diagnostics: Sequence[Mapping[str, Any]],
-) -> dict[str, Any] | None:
-    """Fallback to one unique diagnostic identifier when no line location exists."""
-
-    for diagnostic in diagnostics:
-        message = str(diagnostic.get("message") or "")
-        for token in _REPAIR_IDENTIFIER_RE.findall(message):
-            if token.casefold() in _REPAIR_IDENTIFIER_STOPWORDS:
-                continue
-            matches = list(re.finditer(rf"\b{re.escape(token)}\b", source))
-            if len(matches) != 1:
-                continue
-            match = matches[0]
-            line = source.count("\n", 0, match.start()) + 1
-            return {
-                "start_line": line,
-                "end_line": line,
-                "old": token,
-                "old_chars": len(token),
-            }
-    return None
-
-
 def _repair_source_window(state: Any) -> dict[str, Any] | None:
     """Select one bounded, exact, host-owned source window for verifier repair."""
 
     context = getattr(state, "mutation_context", None)
-    source = (
-        context.source_body
-        if context is not None and isinstance(context.source_body, str)
-        else None
-    )
-    if not source:
+    source = getattr(context, "source_body", None)
+    if not isinstance(source, str) or not source:
         return None
     diagnostics = tuple(
         getattr(state, "repair_target_diagnostics", ())
         or getattr(state, "latest_verifier_errors", ())
         or ()
     )
-    lines = source.splitlines(keepends=True)
-    if not lines:
-        return None
-    for diagnostic in diagnostics:
-        if not isinstance(diagnostic, Mapping):
-            continue
-        line_index = _diagnostic_line_index(diagnostic, len(lines))
-        if line_index is None:
-            continue
-        window = _bounded_unique_line_window(source, lines, line_index)
-        if window is not None:
-            return window
-    identifier_window = _diagnostic_identifier_window(
+    return select_verifier_repair_window(
         source,
-        tuple(item for item in diagnostics if isinstance(item, Mapping)),
+        diagnostics,
+        start_line=getattr(context, "start_line", None),
+        end_line=getattr(context, "end_line", None),
     )
-    if identifier_window is not None:
-        return identifier_window
-
-    # Last host-owned localization fallback: reuse an already-grounded target symbol
-    # range. Support both zero-based LSP and one-based search-index line conventions.
-    if context is not None:
-        for raw_line in (context.start_line, context.end_line):
-            if not isinstance(raw_line, int):
-                continue
-            for line_index in (raw_line, raw_line - 1):
-                if not 0 <= line_index < len(lines):
-                    continue
-                window = _bounded_unique_line_window(source, lines, line_index)
-                if window is not None:
-                    return window
-    return None
 
 
 def _repair_guidance_payload(state: Any) -> dict[str, Any] | None:
@@ -2474,8 +2371,9 @@ class HostRunState:
             "evidence can localize the defect. Any earlier host_reserved/fresh metadata is "
             "pre-materialization history only. Never regenerate the complete source file. "
             "repair_window is mandatory for model-facing verifier repair. Emit only replacement "
-            "text for that exact old window in new; operation, path, old text, count, and "
-            "optimistic-concurrency SHA are host-owned. Whole-file reconstruction is forbidden. "
+            "text for that exact old window in new; the host binds operation=replace_exact, "
+            "path, old text, count, and optimistic-concurrency SHA. Whole-file reconstruction "
+            "is forbidden. "
             "Preserve package/type identity and approved behavior. Make one materially different "
             "edit that reduces severity-1 diagnostics. "
             "An equal or worse verifier "
@@ -3514,26 +3412,19 @@ def _rollback_non_improving_verifier_repair(
     path = _canonical_mutation_path(state.repair_previous_path or "")
     source = state.repair_previous_source
     context = state.mutation_context
-    current_source = (
-        context.source_body
-        if context is not None
-        and _canonical_mutation_path(context.target_path) == path
-        and isinstance(context.source_body, str)
-        else None
+    rollback_arguments = exact_rollback_arguments(
+        path=path,
+        previous_source=source,
+        context_path=getattr(context, "target_path", None),
+        current_source=getattr(context, "source_body", None),
     )
-    if not path or not isinstance(source, str) or not isinstance(current_source, str):
+    if rollback_arguments is None:
         return False
     try:
         result = runtime.call(
             stage,
             "apply_source_edit",
-            {
-                "operation": "replace_exact",
-                "path": path,
-                "old": current_source,
-                "new": source,
-                "count": 1,
-            },
+            rollback_arguments,
         )
     except Exception as exc:
         raise ModelConfigurationError(

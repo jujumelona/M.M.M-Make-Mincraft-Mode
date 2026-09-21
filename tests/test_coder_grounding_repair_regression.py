@@ -86,20 +86,34 @@ def test_coder_grounding_uses_canonical_native_target_java() -> None:
     assert target["mappings"] == ""
 
 
-def test_verifier_repair_guidance_contains_current_source_and_hash() -> None:
-    source = "package dev.mmm;\npublic final class DebugToken {}\n"
+def test_verifier_repair_guidance_contains_bounded_window_and_hash() -> None:
+    source = (
+        "package dev.mmm;\n"
+        "public final class DebugToken { Missing value; }\n"
+    )
+    path = "src/main/java/dev/mmm/DebugToken.java"
+    diagnostic = {
+        "path": path,
+        "severity": 1,
+        "message": "Missing cannot be resolved to a type",
+        "range": {
+            "start": {"line": 1, "character": 32},
+            "end": {"line": 1, "character": 39},
+        },
+    }
     state = HostRunState(
         mutation_context=TargetMutationContext(
-            target_path="src/main/java/dev/mmm/DebugToken.java",
+            target_path=path,
             source_body=source,
             is_new_file=False,
-            writable_paths=("src/main/java/dev/mmm/DebugToken.java",),
+            writable_paths=(path,),
             target_pinned=True,
         )
     )
     state.validation_status = "FAIL"
     state.latest_verifier_tool = "java_diagnostics"
-    state.latest_verifier_errors = ({"message": "cannot find symbol"},)
+    state.latest_verifier_errors = (diagnostic,)
+    state.repair_target_diagnostics = (diagnostic,)
     state.latest_verifier_fingerprint = "verifier-fingerprint"
 
     guidance = state.take_verifier_repair_guidance()
@@ -107,16 +121,16 @@ def test_verifier_repair_guidance_contains_current_source_and_hash() -> None:
     assert guidance is not None
     assert "MMM_CORE_VERIFIER_REPAIR_V5" in guidance
     payload = json.loads(guidance.rsplit("\n", 1)[-1])
-    assert payload["current_source"] == source
+    assert "current_source" not in payload
     assert (
         payload["current_source_sha256"]
         == hashlib.sha256(source.encode("utf-8")).hexdigest()
     )
+    assert payload["repair_window"]["old"] != source
+    assert "Missing" in payload["repair_window"]["old"]
     assert payload["target_is_new_file"] is False
     assert "same-path create_file" not in guidance
     assert "host binds operation=replace_exact" in guidance
-
-
 def test_existing_target_schema_does_not_offer_create_operations() -> None:
     context = TargetMutationContext(
         target_path="src/main/java/dev/mmm/DebugToken.java",

@@ -85,11 +85,14 @@ def test_authored_diagnostics_repair_local_files_without_external_discovery(
                 target = targets[len(repairs)]
                 source = (tmp_path / target).read_bytes().decode("utf-8")
                 assert payload["target_path"] == target
-                assert payload["current_source"] == source
+                assert "current_source" not in payload
                 assert (
                     payload["current_source_sha256"]
                     == hashlib.sha256(source.encode("utf-8")).hexdigest()
                 )
+                window = payload["repair_window"]
+                assert window["old"] == "MISSING"
+                assert window["old"] != source
                 assert any("MISSING" in d["message"] for d in payload["diagnostics"])
                 assert all(d["path"] == target for d in payload["diagnostics"])
                 parameters = request.tools[0]["function"]["parameters"]
@@ -97,7 +100,7 @@ def test_authored_diagnostics_repair_local_files_without_external_discovery(
                 assert parameters["additionalProperties"] is False
                 assert set(parameters["properties"]) == {"new"}
                 assert "host-owned" in guidance
-                corrected = source.replace("MISSING", "1")
+                corrected = window["old"].replace("MISSING", "1")
                 repairs.append(target)
                 # Emulate a legacy/non-validating adapter that still returns the stale
                 # model-owned fields seen in the production failure. The loop must strip
@@ -136,11 +139,12 @@ def test_authored_diagnostics_repair_local_files_without_external_discovery(
                 if arguments["operation"] == "create_file":
                     text = arguments["content"]
                 else:
-                    assert set(arguments) == {"operation", "path", "new"}
+                    assert set(arguments) == {"operation", "path", "old", "new", "count"}
                     assert arguments["operation"] == "replace_exact"
+                    assert arguments["count"] == 1
                     current = path.read_bytes().decode()
-                    assert "MISSING" in current
-                    text = arguments["new"]
+                    assert arguments["old"] in current
+                    text = current.replace(arguments["old"], arguments["new"], 1)
                 path.write_text(text, encoding="utf-8", newline="")
                 return {
                     "schema_version": "mmm/source-patch-receipt-v1",
@@ -278,10 +282,11 @@ def test_atomic_output_recovery_keeps_host_bound_repair_shape() -> None:
     instruction = loop._atomic_output_recovery_instruction(
         GenerationRequest(tools=(schema,))
     )
-    assert "complete corrected" in instruction
+    assert "replacement text" in instruction
+    assert "bounded verifier repair window" in instruction
     assert "new argument" in instruction
     assert "operation, path, old text" in instruction
-    assert "partial edits" in instruction
+    assert "complete source file" in instruction
 
 
 @pytest.mark.parametrize(
@@ -391,7 +396,7 @@ def test_authored_repair_fixed_point_stops_non_improving_rewrite_loop(
                 } == {"apply_source_edit"}
                 model_repairs += 1
                 name = "apply_source_edit"
-                arguments = {"new": source_c}
+                arguments = {"new": "MISSING_C"}
             return GenerationResponse(
                 tool_calls=(
                     ToolCall(
@@ -533,8 +538,9 @@ def test_authored_repair_fixed_point_stops_non_improving_rewrite_loop(
         if (
             name == "apply_source_edit"
             and arguments.get("operation") == "replace_exact"
-            and "old" not in arguments
+            and arguments.get("old") == source_c
             and arguments.get("new") == source_b
+            and arguments.get("count") == 1
         )
     ]
     assert len(rollback_calls) == 2

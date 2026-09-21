@@ -88,12 +88,26 @@ def test_existing_target_rejects_create_and_conflict_remains_recoverable() -> No
 
 def test_existing_verifier_repair_schema_is_host_bound_to_new_source_only() -> None:
     path = "src/main/java/example/DebugToken.java"
+    diagnostic = {
+        "path": path,
+        "severity": 1,
+        "message": "Missing cannot be resolved to a type",
+        "range": {
+            "start": {"line": 1, "character": 32},
+            "end": {"line": 1, "character": 39},
+        },
+    }
     state = progress_aware_tool_loop.HostRunState(
         validation_status="FAIL",
+        latest_verifier_errors=(diagnostic,),
+        repair_target_diagnostics=(diagnostic,),
         mutation_context=progress_aware_tool_loop.TargetMutationContext(
             target_path=path,
             target_symbol="DebugToken",
-            source_body="package example; public class DebugToken {}",
+            source_body=(
+                "package example;\n"
+                "public class DebugToken { Missing value; }\n"
+            ),
             is_new_file=False,
             evidence_source="verifier_workspace_source",
             writable_paths=(path,),
