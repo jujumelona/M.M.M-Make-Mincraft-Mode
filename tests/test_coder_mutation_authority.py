@@ -81,7 +81,7 @@ def test_existing_primary_accepts_semantic_modification() -> None:
 
 
 def test_existing_primary_rejects_creation_before_tool_execution() -> None:
-    context = tool_loop._fresh_owned_symbol_context(_payload("existing"))
+    context = tool_loop._task_authority_context(_payload("existing"))
     assert context is not None
     error = tool_loop._mutation_target_error(
         "apply_source_edit",
@@ -96,7 +96,7 @@ def test_reserved_primary_remains_creatable() -> None:
     capsule = task_capsule.compile_task_capsule(_module("host_reserved"))
     assert capsule is not None
     assert capsule.creatable_paths == (JAVA_PATH,)
-    context = tool_loop._fresh_owned_symbol_context(_payload("host_reserved"))
+    context = tool_loop._task_authority_context(_payload("host_reserved"))
     assert context is not None
     assert (
         tool_loop._mutation_target_error(
@@ -120,7 +120,7 @@ def test_staged_custom_module_validator_rejects_delete_before_live_commit() -> N
 
 
 def test_fresh_reuse_action_does_not_turn_existing_anchor_into_new_file() -> None:
-    context = tool_loop._fresh_owned_symbol_context(_payload("existing"))
+    context = tool_loop._task_authority_context(_payload("existing"))
     assert context is not None
     assert context.target_path == JAVA_PATH
     assert context.target_symbol == SYMBOL
@@ -130,7 +130,7 @@ def test_fresh_reuse_action_does_not_turn_existing_anchor_into_new_file() -> Non
 
 
 def test_host_reserved_anchor_is_still_a_new_file_target() -> None:
-    context = tool_loop._fresh_owned_symbol_context(_payload("host_reserved"))
+    context = tool_loop._task_authority_context(_payload("host_reserved"))
     assert context is not None
     assert context.target_path == JAVA_PATH
     assert context.is_new_file is True
