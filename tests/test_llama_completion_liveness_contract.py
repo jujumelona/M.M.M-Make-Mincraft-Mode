@@ -163,10 +163,12 @@ def test_transient_protocol_disconnect_replays_once_before_model_failure() -> No
         payload={"messages": [], "tools": [{"type": "function"}]},
         timeout=llama_cpp_adapter.httpx.Timeout(120.0),
         httpx_module=llama_cpp_adapter.httpx,
+        request_id="llama-first",
     )
 
     assert result == "recovered"
     assert len(calls) == 2
+    assert calls[0]["headers"]["X-MMM-Request-Id"] == "llama-first"
     assert calls[0]["headers"]["X-MMM-Request-Id"] != calls[1]["headers"]["X-MMM-Request-Id"]
 
 
@@ -186,6 +188,7 @@ def test_second_protocol_disconnect_is_not_retried_forever() -> None:
             payload={"messages": []},
             timeout=llama_cpp_adapter.httpx.Timeout(120.0),
             httpx_module=llama_cpp_adapter.httpx,
+            request_id="llama-first",
         )
 
     assert calls == 2

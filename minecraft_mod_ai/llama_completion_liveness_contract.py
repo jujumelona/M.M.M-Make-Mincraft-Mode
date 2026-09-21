@@ -72,22 +72,22 @@ def _post_completion_with_transport_replay(
     payload: Mapping[str, Any],
     timeout: Any,
     httpx_module: Any,
+    request_id: str,
 ) -> Any:
     """Replay one incomplete transport turn; no completed model response is reused."""
 
     errors = _transient_completion_transport_errors(httpx_module)
 
-    def issue() -> Any:
-        request_id = f"llama-{uuid.uuid4().hex[:16]}"
+    def issue(active_request_id: str) -> Any:
         return client.post(
             endpoint,
             json=payload,
             timeout=timeout,
-            headers={_REQUEST_ID_HEADER: request_id},
+            headers={_REQUEST_ID_HEADER: active_request_id},
         )
 
     try:
-        return issue()
+        return issue(request_id)
     except errors as exc:
         print(
             "llama server: transient completion transport replay",
@@ -96,7 +96,8 @@ def _post_completion_with_transport_replay(
             sep="",
             flush=True,
         )
-        return issue()
+        replay_request_id = f"llama-{uuid.uuid4().hex[:16]}"
+        return issue(replay_request_id)
 
 
 def _managed_server_state() -> str:
@@ -586,6 +587,7 @@ def _install_adapter_completion_transport(stream_module: Any, adapter_module: An
                 payload=payload,
                 timeout=timeout,
                 httpx_module=adapter_module.httpx,
+                request_id=request_id,
             )
         except adapter_module.httpx.TimeoutException as exc:
             raise RuntimeError(
