@@ -1142,8 +1142,17 @@ _JAVA_PACKAGE_DECLARATION_RE = re.compile(
 )
 _JAVA_PUBLIC_TOP_LEVEL_TYPE_RE = re.compile(
     r"\bpublic\s+(?:(?:abstract|final|sealed|non-sealed|strictfp)\s+)*"
-    r"(?:class|interface|enum|record)\s+([A-Za-z_$][\w$]*)\b"
+    r"(?:class|interface|enum|record|@interface)\s+([A-Za-z_$][\w$]*)\b"
 )
+
+
+def _java_declares_type(source: str, type_name: str) -> bool:
+    return bool(
+        re.search(
+            rf"\b(?:class|interface|enum|record|@interface)\s+{re.escape(type_name)}\b",
+            source,
+        )
+    )
 
 
 def _java_whole_file_identity_error(
@@ -1171,18 +1180,20 @@ def _java_whole_file_identity_error(
             )
 
     public_types = tuple(_JAVA_PUBLIC_TOP_LEVEL_TYPE_RE.findall(new_source))
-    if public_types and expected_type not in public_types:
+    if public_types and public_types != (expected_type,):
         return (
             "REPAIR_SEMANTIC_IDENTITY_VIOLATION: whole-file Java repair changed "
-            f"primary type identity for {path!r}: expected public type "
+            f"primary type identity for {path!r}: expected exactly one public type "
             f"{expected_type!r}, got {public_types!r}"
         )
 
-    current_public_types = tuple(_JAVA_PUBLIC_TOP_LEVEL_TYPE_RE.findall(current))
-    if expected_type in current_public_types and expected_type not in public_types:
+    if _java_declares_type(current, expected_type) and not _java_declares_type(
+        new_source,
+        expected_type,
+    ):
         return (
             "REPAIR_SEMANTIC_IDENTITY_VIOLATION: whole-file Java repair removed "
-            f"the existing public type {expected_type!r} from {path!r}"
+            f"the existing primary type {expected_type!r} from {path!r}"
         )
     return None
 
