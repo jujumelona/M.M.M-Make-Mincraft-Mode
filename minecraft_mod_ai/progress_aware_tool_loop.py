@@ -4466,7 +4466,13 @@ def _generate_with_tools_impl(
             operation="generate_with_tools",
             gate="progress_adjudication",
             result="PASS" if progress else "SKIP",
-            reason="progress" if progress else "no_progress",
+            reason=(
+                "progress"
+                if progress
+                else "pending_verification"
+                if tentative_repair_applied
+                else "no_progress"
+            ),
             details=trace.to_dict(),
         )
 
