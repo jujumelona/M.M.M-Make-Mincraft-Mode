@@ -1966,7 +1966,9 @@ def _repair_guidance_payload(state: Any) -> dict[str, Any] | None:
     source = context.source_body if context and isinstance(context.source_body, str) else None
     diagnostic_snapshot = (
         json.loads(_bounded_verifier_recovery_observation(
-            state, errors=state.repair_target_diagnostics,
+            state,
+            errors=state.repair_target_diagnostics,
+            budget_bytes=_REPAIR_GUIDANCE_VERIFIER_DIAGNOSTIC_BYTES,
         ))
         if context and context.evidence_source == "verifier_workspace_source"
         else None
@@ -2793,6 +2795,7 @@ def _generate_turn_with_context_recovery(
 
 
 _PHASE_HANDOFF_VERIFIER_DIAGNOSTIC_BYTES = 4 * 1024
+_REPAIR_GUIDANCE_VERIFIER_DIAGNOSTIC_BYTES = 12 * 1024
 _PHASE_HANDOFF_DIAGNOSTIC_TEXT_LIMIT = 640
 _PHASE_HANDOFF_TOTAL_BYTES = 6 * 1024
 _PHASE_HANDOFF_TOOL_RECORD_LIMIT = 6
@@ -2990,7 +2993,10 @@ def _bounded_phase_handoff_content(
 
 
 def _bounded_verifier_recovery_observation(
-    state: HostRunState, *, errors: Sequence[Mapping[str, Any]] | None = None,
+    state: HostRunState,
+    *,
+    errors: Sequence[Mapping[str, Any]] | None = None,
+    budget_bytes: int | None = None,
 ) -> str:
     """Serialize only prompt-useful verifier evidence across VERIFY->RECOVER.
 
@@ -3003,15 +3009,32 @@ def _bounded_verifier_recovery_observation(
 
     raw_errors = tuple(state.latest_verifier_errors if errors is None else errors)
     diagnostics: list[dict[str, Any]] = []
-    budget = _PHASE_HANDOFF_VERIFIER_DIAGNOSTIC_BYTES
+    budget = (
+        _PHASE_HANDOFF_VERIFIER_DIAGNOSTIC_BYTES
+        if budget_bytes is None
+        else max(1024, int(budget_bytes))
+    )
+    target_path = (
+        _canonical_mutation_path(state.mutation_context.target_path)
+        if errors is not None and state.mutation_context is not None
+        else ""
+    )
+    target_scoped = bool(target_path)
+    seen_compact: set[str] = set()
     for raw in raw_errors:
         if not isinstance(raw, Mapping):
             continue
         compact: dict[str, Any] = {}
+        raw_path = _canonical_mutation_path(raw.get("path"))
         for key in ("path", "file", "uri", "line", "severity", "code", "source", "message", "range"):
             value = raw.get(key)
             if value in (None, "", [], {}):
                 continue
+            if target_scoped:
+                if key in {"file", "uri"}:
+                    continue
+                if key == "path" and raw_path == target_path:
+                    continue
             if isinstance(value, str):
                 limit = (
                     _PHASE_HANDOFF_DIAGNOSTIC_TEXT_LIMIT
@@ -3023,9 +3046,20 @@ def _bounded_verifier_recovery_observation(
             compact[key] = value
         if not compact:
             continue
+        compact_key = json.dumps(
+            compact,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        if compact_key in seen_compact:
+            continue
+        seen_compact.add(compact_key)
         trial = {
             "verifier": str(state.latest_verifier_tool or ""),
             "status": "FAIL",
+            "target_path": target_path or None,
             "diagnostics": [*diagnostics, compact],
         }
         if len(
@@ -3044,6 +3078,7 @@ def _bounded_verifier_recovery_observation(
         "schema_version": "mmm/verifier-recovery-handoff-v1",
         "verifier": str(state.latest_verifier_tool or ""),
         "status": "FAIL",
+        "target_path": target_path or None,
         "diagnostics": diagnostics,
         "diagnostics_fingerprint": evidence_fingerprint(raw_errors),
         "diagnostic_count": len(raw_errors),
