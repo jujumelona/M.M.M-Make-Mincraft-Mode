@@ -932,9 +932,32 @@ def _extract_mutation_context_from_payload(payload: Any) -> TargetMutationContex
         if not path:
             continue
         name = str(symbol.get("name") or "").strip()
+        container_name = str(
+            symbol.get("containerName")
+            or symbol.get("container_name")
+            or symbol.get("container")
+            or ""
+        ).strip()
+        target_symbol = (
+            f"{container_name}#{name}"
+            if container_name and name
+            else name or None
+        )
+        symbol_range = location.get("range")
+        start_line = None
+        end_line = None
+        if isinstance(symbol_range, Mapping):
+            start = symbol_range.get("start")
+            end = symbol_range.get("end")
+            if isinstance(start, Mapping) and isinstance(start.get("line"), int):
+                start_line = int(start["line"])
+            if isinstance(end, Mapping) and isinstance(end.get("line"), int):
+                end_line = int(end["line"])
         return TargetMutationContext(
             target_path=path,
-            target_symbol=name or None,
+            target_symbol=target_symbol,
+            start_line=start_line,
+            end_line=end_line,
             evidence_source="java_workspace_symbols",
         )
 
