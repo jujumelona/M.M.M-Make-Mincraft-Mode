@@ -4113,6 +4113,7 @@ def _generate_with_tools_impl(
 
         executed = _execute_tool_waves(tuple(turn.tool_calls), execute)
         progress = False
+        tentative_repair_applied = False
 
         for call, payload in executed:
             messages.append(dict(bounded_tool_message(
@@ -4135,6 +4136,7 @@ def _generate_with_tools_impl(
                     if not repair_candidate_pending_verification:
                         progress = True
                     else:
+                        tentative_repair_applied = True
                         emit_root_cause(
                             "verifier_repair_candidate_applied",
                             stage=stage,
@@ -4353,6 +4355,11 @@ def _generate_with_tools_impl(
                 compile_backed_java=compile_backed_java,
             ):
                 required_evidence_choice = False
+        elif tentative_repair_applied:
+            # A repair write is neither success nor no-progress until VERIFY measures
+            # it. Preserve prior no-progress fingerprints so repeated verifier states
+            # can converge, but never terminate on an unverified candidate source.
+            pass
         else:
             verifier_progress_key: Any = state.latest_verifier_fingerprint
             if (
