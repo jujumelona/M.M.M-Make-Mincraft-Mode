@@ -19,6 +19,31 @@ def repair_replacement_max_chars(old_text: Any) -> int:
     )
 
 
+def normalize_model_repair_replacement(
+    current_source: Any,
+    old_text: Any,
+    model_new: Any,
+) -> Any:
+    """Down-project a provable whole-source candidate to the selected local span."""
+
+    if not (
+        isinstance(current_source, str)
+        and isinstance(old_text, str)
+        and old_text
+        and isinstance(model_new, str)
+        and current_source.count(old_text) == 1
+    ):
+        return model_new
+    prefix, suffix = current_source.split(old_text, 1)
+    if not model_new.startswith(prefix) or not model_new.endswith(suffix):
+        return model_new
+    suffix_length = len(suffix)
+    end = len(model_new) - suffix_length if suffix_length else len(model_new)
+    if end < len(prefix):
+        return model_new
+    return model_new[len(prefix):end]
+
+
 def selected_repair_diagnostic(
     diagnostics: Sequence[Mapping[str, Any]],
     repair_window: Mapping[str, Any] | None,
