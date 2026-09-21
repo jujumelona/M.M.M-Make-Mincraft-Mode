@@ -61,7 +61,7 @@ def selected_repair_diagnostic(
 _IDENTIFIER_RE = re.compile(r"\b[A-Za-z_$][\w$]{2,}\b")
 _QUALIFIED_NAME_RE = re.compile(r"\b[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+\b")
 _IMPORT_DECL_RE = re.compile(
-    r"(?m)(?P<full>[ \t]*import\s+(?:static\s+)?(?P<name>[\w.$*]+);[ \t]*(?:\r?\n|(?=\S)))"
+    r"(?m)(?P<full>import\s+(?:static\s+)?(?P<name>[\w.$*]+);[ \t]*(?:\r?\n|(?=\S)))"
 )
 _IDENTIFIER_STOPWORDS = frozenset({
     "cannot", "resolved", "resolve", "type", "variable", "method", "field",
