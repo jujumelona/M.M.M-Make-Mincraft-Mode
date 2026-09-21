@@ -59,6 +59,10 @@ def selected_repair_diagnostic(
 
 
 _IDENTIFIER_RE = re.compile(r"\b[A-Za-z_$][\w$]{2,}\b")
+_QUALIFIED_NAME_RE = re.compile(r"\b[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+\b")
+_IMPORT_DECL_RE = re.compile(
+    r"(?m)(?P<full>[ \t]*import\s+(?:static\s+)?(?P<name>[\w.$*]+);[ \t]*(?:\r?\n|(?=\S)))"
+)
 _IDENTIFIER_STOPWORDS = frozenset({
     "cannot", "resolved", "resolve", "type", "variable", "method", "field",
     "constructor", "undefined", "unknown", "error", "java", "class",
@@ -102,6 +106,39 @@ def _unique_line_window(
                 "old": old,
                 "old_chars": len(old),
             }
+    return None
+
+
+def _diagnostic_import_window(
+    source: str,
+    diagnostics: Sequence[Mapping[str, Any]],
+) -> dict[str, Any] | None:
+    imports = tuple(_IMPORT_DECL_RE.finditer(source))
+    if not imports:
+        return None
+    for diagnostic_index, diagnostic in enumerate(diagnostics):
+        message = str(diagnostic.get("message") or "")
+        qualified = tuple(_QUALIFIED_NAME_RE.findall(message))
+        if not qualified:
+            continue
+        for match in imports:
+            imported = match.group("name")
+            if any(
+                imported == candidate
+                or imported.startswith(candidate + ".")
+                or candidate.startswith(imported.rstrip(".*") + ".")
+                for candidate in qualified
+            ):
+                old = match.group("full")
+                if old and old != source and len(old) <= MAX_REPAIR_WINDOW_CHARS:
+                    line = source.count("\n", 0, match.start()) + 1
+                    return {
+                        "start_line": line,
+                        "end_line": line,
+                        "old": old,
+                        "old_chars": len(old),
+                        "diagnostic_index": diagnostic_index,
+                    }
     return None
 
 
@@ -161,6 +198,9 @@ def select_verifier_repair_window(
             window = _unique_line_window(source, lines, line_index)
             if window is not None:
                 return {**window, "diagnostic_index": diagnostic_index}
+    import_window = _diagnostic_import_window(source, usable)
+    if import_window is not None:
+        return import_window
     identifier = _identifier_window(source, usable)
     if identifier is not None:
         return identifier
