@@ -1267,7 +1267,7 @@ def _java_semantic_footprint_error(
     return None
 
 
-def _java_whole_file_identity_error(
+def _java_source_identity_error(
     path: str,
     current_source: str | None,
     new_source: Any,
@@ -1362,27 +1362,32 @@ def _mutation_target_error(
         return "MUTATION_TARGET_UNBOUND: no host-pinned mutation target is READY"
     if (
         operation == "replace_exact"
+        and not context.is_new_file
+        and "old" not in arguments
+    ):
+        return (
+            "MUTATION_ATOMIC_SPAN_REQUIRED: existing source replacement requires "
+            "one exact old span; whole-file model replacement is forbidden"
+        )
+    if (
+        operation == "replace_exact"
         and supplied == pinned
         and not context.is_new_file
     ):
         current_source = context.source_body
         new_text = arguments.get("new")
+        old_text = arguments.get("old")
         candidate_source: str | None = None
-        if "old" not in arguments:
-            if isinstance(new_text, str):
-                candidate_source = new_text
-        else:
-            old_text = arguments.get("old")
-            if (
-                isinstance(current_source, str)
-                and isinstance(old_text, str)
-                and old_text
-                and isinstance(new_text, str)
-                and current_source.count(old_text) == 1
-            ):
-                candidate_source = current_source.replace(old_text, new_text, 1)
+        if (
+            isinstance(current_source, str)
+            and isinstance(old_text, str)
+            and old_text
+            and isinstance(new_text, str)
+            and current_source.count(old_text) == 1
+        ):
+            candidate_source = current_source.replace(old_text, new_text, 1)
         if candidate_source is not None:
-            identity_error = _java_whole_file_identity_error(
+            identity_error = _java_source_identity_error(
                 pinned,
                 current_source,
                 candidate_source,
@@ -2172,6 +2177,7 @@ def _bounded_unique_line_window(
         old = "".join(lines[start:end])
         if (
             old
+            and old != source
             and len(old) <= _ATOMIC_REPAIR_WINDOW_MAX_CHARS
             and source.count(old) == 1
         ):

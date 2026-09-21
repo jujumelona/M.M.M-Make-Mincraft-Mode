@@ -255,6 +255,61 @@ def test_existing_verifier_repair_schema_forbids_whole_file_protocol():
     assert "Never emit the complete source file" in description
 
 
+def test_repair_window_never_degenerates_to_entire_single_line_file():
+    source = "class DebugToken { RegistryWrapper value; }"
+    state = HostRunState(
+        validation_status="FAIL",
+        mutation_context=TargetMutationContext(
+            target_path=PATH,
+            target_symbol="DebugToken",
+            source_body=source,
+            is_new_file=False,
+            evidence_source="verifier_workspace_source",
+            writable_paths=(PATH,),
+            target_pinned=True,
+        ),
+    )
+    diagnostic = {
+        "path": PATH,
+        "severity": 1,
+        "code": "UndefinedType",
+        "message": "RegistryWrapper cannot be resolved to a type",
+        "range": {
+            "start": {"line": 0, "character": 19},
+            "end": {"line": 0, "character": 34},
+        },
+    }
+    state.latest_verifier_errors = (diagnostic,)
+    state.repair_target_diagnostics = (diagnostic,)
+    window = _repair_source_window(state)
+    assert window is not None
+    assert window["old"] == "RegistryWrapper"
+    assert window["old"] != source
+
+
+def test_existing_model_replace_requires_exact_old_span():
+    context = TargetMutationContext(
+        target_path=PATH,
+        target_symbol="DebugToken",
+        source_body="class DebugToken { int value = MISSING; }",
+        is_new_file=False,
+        evidence_source="workspace_existing_target",
+        writable_paths=(PATH,),
+        target_pinned=True,
+    )
+    error = _mutation_target_error(
+        "apply_source_edit",
+        {
+            "operation": "replace_exact",
+            "path": PATH,
+            "new": "class DebugToken { int value = 1; }",
+        },
+        context,
+    )
+    assert error is not None
+    assert error.startswith("MUTATION_ATOMIC_SPAN_REQUIRED")
+
+
 def test_atomic_replace_semantic_guard_checks_resulting_java_file():
     source = (
         "package dev.mmm.debugfixture;\n"
