@@ -4004,7 +4004,7 @@ def _generate_with_tools_impl(
         )
         if (
             implementation_requires_mutation
-            and state.workspace_changed
+            and _implementation_obligation_has_progress(state)
             and state.validation_status == "PROJECT_BUILD_DEFERRED"
             and bounded_root_execution_authority
             and baseline_ready
@@ -4029,7 +4029,7 @@ def _generate_with_tools_impl(
 
         if (
             implementation_requires_mutation
-            and state.workspace_changed
+            and _implementation_obligation_has_progress(state)
             and state.validation_status == "DEFERRED"
             and baseline_ready
         ):
@@ -4057,7 +4057,12 @@ def _generate_with_tools_impl(
             )
             return _host_coder_summary(verification="DEFERRED_TO_TARGET_COMPILE")
 
-        if implementation_requires_mutation and state.workspace_changed and state.validation_status == "PASS" and baseline_ready:
+        if (
+            implementation_requires_mutation
+            and _implementation_obligation_has_progress(state)
+            and state.validation_status == "PASS"
+            and baseline_ready
+        ):
             state.termination_reason = "VERIFICATION_PASSED"
             _record_terminal_generation_verification(
                 state,
@@ -4702,7 +4707,7 @@ def _generate_with_tools_impl(
                     },
                 ])
                 continue
-            if implementation_requires_mutation and not state.workspace_changed:
+            if implementation_requires_mutation and not _implementation_obligation_has_progress(state):
                 if is_mutation_ready(messages, state) and baseline_ready:
                     state.phase = LoopPhase.ACT
                     messages.append({"role": "assistant", "content": content})
@@ -5079,7 +5084,7 @@ def _generate_with_tools_impl(
                     if (
                         bounded_root_execution_authority
                         and implementation_requires_mutation
-                        and state.workspace_changed
+                        and _implementation_obligation_has_progress(state)
                     ):
                         # Authored-design generation intentionally has no exact task target.
                         # A JDT infrastructure failure (for example Loom dependency download)
