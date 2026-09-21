@@ -66,13 +66,14 @@ def test_fresh_java_after_weak_code_rag_stays_on_internal_workspace_routes():
     ]
 
 
-def test_host_pinned_creatable_fresh_java_is_execution_ready_without_rag():
+def test_host_pinned_creatable_fresh_java_still_requires_api_evidence():
     state = loop.HostRunState(mutation_context=_fresh_context())
     assert state.has_fresh_evidence is False
     assert state.has_authoritative_java_evidence is False
+    assert loop._host_target_execution_authority(state) is True
     assert loop._target_evidence_ready(
         state, require_rag=True, fresh_java_target=True
-    ) is True
+    ) is False
 
 
 def test_unowned_fresh_java_still_requires_authoritative_java_evidence():
@@ -117,7 +118,7 @@ def test_concrete_code_rag_unlocks_fresh_java():
     ) is True
 
 
-def test_created_host_target_keeps_execution_authority_through_verification():
+def test_created_host_target_keeps_write_authority_without_faking_api_grounding():
     state = loop.HostRunState(mutation_context=_fresh_context())
     path = state.mutation_context.target_path
     applied = state.record_mutation(
@@ -145,9 +146,10 @@ def test_created_host_target_keeps_execution_authority_through_verification():
     assert state.mutation_context is not None
     assert state.mutation_context.is_new_file is False
     assert path in state.created_paths
+    assert loop._host_target_execution_authority(state) is True
     assert loop._target_evidence_ready(
         state, require_rag=True, fresh_java_target=True
-    ) is True
+    ) is False
 
 
 def test_target_neutral_project_rag_cannot_unlock_fresh_java():
