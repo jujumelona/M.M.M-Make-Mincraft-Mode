@@ -1225,6 +1225,16 @@ def _bind_host_owned_existing_source_call(
     old_source = context.source_body
     if not target or not isinstance(old_source, str) or not old_source:
         return call
+    model_old = raw_arguments.get("old")
+    if isinstance(model_old, str) and model_old and model_old != old_source:
+        if old_source.count(model_old) != 1:
+            return call
+        # Non-validating/legacy adapters can still echo an exact old/new span even
+        # after the visible schema has been reduced to {"new"}. Merge that span
+        # into the host-owned live source before constructing the transactional
+        # whole-source replacement. This keeps package/type identity intact without
+        # trusting the model for path or precondition authority.
+        new_source = old_source.replace(model_old, new_source, 1)
     bound = {
         "operation": "replace_exact",
         "path": target,
