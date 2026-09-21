@@ -143,7 +143,6 @@ _SOURCE_CREATE_OPERATIONS = frozenset({
     "create", "create_file", "create_java_type", "create_class", "create_type",
     "write", "write_file",
 })
-_SOURCE_ATOMIC_REWRITE_OPERATIONS = frozenset({"create", "create_file", "write", "write_file"})
 _REPAIR_CONTEXT_PREFIX = "MMM_CORE_VERIFIER_REPAIR_"
 _MODEL_REJECTION_TOOL_NAME = "__mmm_rejected_tool_call__"
 _HOST_AUTHORITY_ROLES = frozenset({"system", "developer", "tool"})
@@ -1133,9 +1132,15 @@ def _creation_authorized(
     pinned: str,
     context: TargetMutationContext,
 ) -> bool:
-    if supplied in set(context.creatable_paths):
-        return True
-    return supplied == pinned and context.is_new_file
+    return bool(
+        context.is_new_file
+        and supplied == pinned
+        and supplied in {
+            _canonical_mutation_path(path)
+            for path in context.creatable_paths
+            if _canonical_mutation_path(path)
+        }
+    )
 
 
 _JAVA_PACKAGE_DECLARATION_RE = re.compile(
@@ -1339,15 +1344,6 @@ def _mutation_target_error(
     if operation not in _SOURCE_CREATE_OPERATIONS:
         return None
     if _creation_authorized(supplied, pinned, context):
-        return None
-    if (
-        supplied == pinned
-        and not context.is_new_file
-        and operation in _SOURCE_ATOMIC_REWRITE_OPERATIONS
-    ):
-        # The scalar source-edit core lowers same-path create_file/create on an
-        # existing exact target into an expected-SHA replace. It is a rewrite,
-        # not authority to create another path.
         return None
     return (
         "MUTATION_TARGET_CREATION_CONFLICT: create operation is not authorized "
@@ -2081,6 +2077,11 @@ def _repair_guidance_payload(state: Any) -> dict[str, Any] | None:
         "target_is_new_file": context.is_new_file if context else None,
         "writable_paths": list(context.writable_paths) if context else [],
         "current_source": source,
+        "current_source_sha256": (
+            hashlib.sha256(source.encode("utf-8")).hexdigest()
+            if isinstance(source, str)
+            else None
+        ),
     }
 
 
@@ -2386,10 +2387,7 @@ def _source_edit_schema_for_context(
             elif not context.is_new_file:
                 operation["enum"] = [
                     value for value in enum
-                    if (
-                        str(value).strip().casefold() not in _SOURCE_CREATE_OPERATIONS
-                        or str(value).strip().casefold() in _SOURCE_ATOMIC_REWRITE_OPERATIONS
-                    )
+                    if str(value).strip().casefold() not in _SOURCE_CREATE_OPERATIONS
                 ]
 
     if fresh_java and isinstance(parameters, dict) and isinstance(properties, dict):
@@ -2416,10 +2414,9 @@ def _source_edit_schema_for_context(
         )
     elif not context.is_new_file:
         suffix = (
-            "Existing host-pinned target: create_file/create on this exact same path means "
-            "an atomic whole-file rewrite and is host-lowered to a SHA-bound replace; "
-            "create_java_type or any different path remains forbidden. Exact bounded edits "
-            "remain available when a smaller repair is sufficient."
+            "Existing host-pinned target: creation operations are unavailable. Use "
+            "replace_exact or another admitted bounded existing-file edit; a verifier "
+            "repair whole-file rewrite is host-bound to replace_exact."
         )
     else:
         suffix = ""
