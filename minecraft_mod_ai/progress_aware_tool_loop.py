@@ -1770,6 +1770,7 @@ _JAVA_API_EVIDENCE_RE = re.compile(
 )
 _ATOMIC_OUTPUT_RECOVERY_MARKER = "MMM_ATOMIC_OUTPUT_RECOVERY_V1"
 _ATOMIC_SOURCE_EDIT_OUTPUT_TOKENS = 4096
+_VERIFIER_REPAIR_OUTPUT_TOKENS = 2048
 
 
 def _fresh_java_context(context: TargetMutationContext | None) -> bool:
@@ -4164,11 +4165,28 @@ def _generate_with_tools_impl(
             },
         )
 
+        turn_metadata = (
+            dict(request.metadata) if isinstance(request.metadata, Mapping) else {}
+        )
+        if state.phase is LoopPhase.ACT and state.validation_status == "FAIL":
+            try:
+                existing_ceiling = int(
+                    turn_metadata.get("mmm_output_token_ceiling")
+                    or _VERIFIER_REPAIR_OUTPUT_TOKENS
+                )
+            except (TypeError, ValueError):
+                existing_ceiling = _VERIFIER_REPAIR_OUTPUT_TOKENS
+            turn_metadata["mmm_output_token_ceiling"] = min(
+                max(1, existing_ceiling),
+                _VERIFIER_REPAIR_OUTPUT_TOKENS,
+            )
+
         turn_request = replace(
             request,
             tools=phase_tools,
             tool_choice=tool_choice,
             parallel_tool_calls=parallel,
+            metadata=turn_metadata,
         )
         verifier_relative_files = (
             (state.mutation_context.target_path,)
