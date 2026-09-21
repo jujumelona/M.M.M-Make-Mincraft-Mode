@@ -1179,6 +1179,15 @@ def _java_whole_file_identity_error(
                 f"package identity for {path!r}: expected {current_package!r}, got "
                 f"{new_package or '<missing>'!r}"
             )
+    elif (
+        _java_declares_type(current, expected_type)
+        and new_package_match is not None
+    ):
+        return (
+            "REPAIR_SEMANTIC_IDENTITY_VIOLATION: whole-file Java repair changed "
+            f"package identity for {path!r}: expected the default package, got "
+            f"{new_package_match.group(1)!r}"
+        )
 
     public_types = tuple(_JAVA_PUBLIC_TOP_LEVEL_TYPE_RE.findall(new_source))
     if public_types and expected_type not in public_types:
