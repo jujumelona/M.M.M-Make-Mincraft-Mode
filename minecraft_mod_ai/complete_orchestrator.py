@@ -3315,13 +3315,22 @@ class CompleteProductionOrchestrator:
         return root
 
     def _prepare_project(self, approved: CompleteProposal, *, run_root: Path, existing_input: str | Path | None) -> Path:
+        def bind_host_runtime(project_root: Path) -> Path:
+            from .authored_production import materialize_authored_execution_scaffold
+
+            materialized = materialize_authored_execution_scaffold(
+                approved,
+                project_root,
+            )
+            return self._bind_debug_fixture_runtime(approved, materialized)
+
         if existing_input is not None:
             _report, project_root = self._inspect_existing_project_input(
                 approved,
                 run_root=run_root,
                 existing_input=existing_input,
             )
-            return self._bind_debug_fixture_runtime(approved, project_root)
+            return bind_host_runtime(project_root)
         base = approved.base_proposal
         from .platform_catalog import adapter_for_lock_values
         from .platform_live_execution_contract import (
@@ -3338,14 +3347,14 @@ class CompleteProductionOrchestrator:
                 adapter=adapter,
                 error_type=CompleteProductionError,
             )
-            return self._bind_debug_fixture_runtime(approved, project_root)
+            return bind_host_runtime(project_root)
 
         base.approve(base.calculate_hash())
         project_root = run_root / 'base/workspaces' / base.spec.mod_id
         if project_root.exists():
             if self._project_matches_spec(project_root, base.spec):
                 self._write_base_proposal(project_root, base)
-                return self._bind_debug_fixture_runtime(approved, project_root)
+                return bind_host_runtime(project_root)
             self._preserve_partial_project(project_root)
         staging = project_root.with_name(f'.{project_root.name}.staging')
         if staging.exists():
@@ -3355,10 +3364,10 @@ class CompleteProductionOrchestrator:
         if project_root.exists():
             if self._project_matches_spec(project_root, base.spec):
                 self._preserve_partial_project(staging)
-                return self._bind_debug_fixture_runtime(approved, project_root)
+                return bind_host_runtime(project_root)
             self._preserve_partial_project(project_root)
         staging.replace(project_root)
-        return self._bind_debug_fixture_runtime(approved, project_root)
+        return bind_host_runtime(project_root)
 
     def _locate_imported_project(self, report: Any, *, run_root: Path) -> Path:
         extracted = Path(str(report.extracted_to)).resolve()
