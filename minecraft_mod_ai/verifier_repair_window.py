@@ -181,6 +181,25 @@ def _context_window(
     return None
 
 
+def _fallback_repair_window(
+    source: str,
+    lines: Sequence[str],
+    diagnostics: Sequence[Mapping[str, Any]],
+    start_line: int | None,
+    end_line: int | None,
+) -> dict[str, Any] | None:
+    window = _diagnostic_import_window(source, diagnostics)
+    if window is not None:
+        return window
+    window = _identifier_window(source, diagnostics)
+    if window is not None:
+        return window
+    window = _context_window(source, lines, start_line, end_line)
+    if window is not None and diagnostics:
+        return {**window, "diagnostic_index": 0}
+    return window
+
+
 def select_verifier_repair_window(
     source: str,
     diagnostics: Sequence[Mapping[str, Any]],
@@ -198,16 +217,13 @@ def select_verifier_repair_window(
             window = _unique_line_window(source, lines, line_index)
             if window is not None:
                 return {**window, "diagnostic_index": diagnostic_index}
-    import_window = _diagnostic_import_window(source, usable)
-    if import_window is not None:
-        return import_window
-    identifier = _identifier_window(source, usable)
-    if identifier is not None:
-        return identifier
-    context = _context_window(source, lines, start_line, end_line)
-    if context is not None and usable:
-        return {**context, "diagnostic_index": 0}
-    return context
+    return _fallback_repair_window(
+        source,
+        lines,
+        usable,
+        start_line,
+        end_line,
+    )
 
 
 def exact_rollback_arguments(
