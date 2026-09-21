@@ -10,6 +10,10 @@ from minecraft_mod_ai.authored_production import (
 )
 from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
 from minecraft_mod_ai.custom_module_generator import _task_local_module_contract
+from minecraft_mod_ai.direct_task_mutation_authority_contract import (
+    compile_direct_task_mutation_authority,
+)
+from minecraft_mod_ai.mutation_authority import MutationAuthorityMode
 from minecraft_mod_ai.planning_pipeline import PlanningPipeline
 from minecraft_mod_ai.progress_aware_tool_loop import _task_authority_context
 from minecraft_mod_ai.small_model_atomic_coder_execution import atomicize_coder_messages
@@ -42,6 +46,11 @@ def test_saved_design_compiler_preserves_target_through_coder_handoff(version):
         assert capsule.primary_path
         assert capsule.writable_paths == (capsule.primary_path,)
         assert capsule.creatable_paths == ()
+        authority = compile_direct_task_mutation_authority(module)
+        assert authority is not None
+        assert authority.mutation_authority.mode is MutationAuthorityMode.EXACT
+        assert authority.writable_paths == (capsule.primary_path,)
+        assert authority.creatable_paths == ()
         context = _task_authority_context({
             "module": _task_local_module_contract(module),
             "primary_path": capsule.primary_path,
