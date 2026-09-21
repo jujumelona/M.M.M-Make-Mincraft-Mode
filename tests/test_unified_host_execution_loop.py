@@ -209,7 +209,7 @@ def test_out_of_phase_tool_call_is_rejected_fail_closed() -> None:
         messages=(
             {"role": "system", "content": "grounded context"},
             {"role": "developer", "content": '{"phase": "implement_module", "primary_path": "src/A.java", "writable_paths": ["src/A.java"], "initial_exact_source_context": {"files": {"src/A.java": "public class A { void apply() {} }"}}}'},
-            {"role": "user", "content": "Fix the approved A.java implementation."},
+            {"role": "user", "content": '{"phase":"implement_module","task":"Fix the approved A.java implementation."}'},
         ),
         tools=(_tool_schema("search_code_rag"), _tool_schema("apply_source_patch")),
         tool_choice=None,
@@ -401,8 +401,8 @@ def test_mutation_failure_transitions_to_observe_for_recovery() -> None:
 
     request = GenerationRequest(
         messages=(
-            {"role": "developer", "content": '{"phase": "implement_module", "initial_exact_source_context": {"files": {"src/A.java": "public class A { void apply() {} }"}}}'},
-            {"role": "user", "content": "Repair the approved A.java implementation."},
+            {"role": "developer", "content": '{"phase": "implement_module", "primary_path": "src/A.java", "writable_paths": ["src/A.java"], "initial_exact_source_context": {"files": {"src/A.java": "public class A { void apply() {} }"}}}'},
+            {"role": "user", "content": '{"phase":"implement_module","task":"Repair the approved A.java implementation."}'},
         ),
         tools=(_tool_schema("search_code_rag"), _tool_schema("apply_source_patch")),
         tool_choice=None,
@@ -482,7 +482,7 @@ def test_wrong_source_edit_path_fails_closed_for_outer_replan_without_rag() -> N
                     '"writable_paths":["src/Right.java"],"reuse_action":"fresh"}'
                 ),
             },
-            {"role": "user", "content": "Create the approved Right.java target."},
+            {"role": "user", "content": '{"phase":"implement_module","task":"Create the approved Right.java target."}'},
         ),
         tools=(
             _tool_schema("search_code_rag"),
@@ -560,7 +560,7 @@ def test_distinct_contract_failures_escalate_target_drift_after_phase_correction
                     '{"files":{"src/Right.java":"public class Right {}"}}}'
                 ),
             },
-            {"role": "user", "content": "Repair the approved Right.java target."},
+            {"role": "user", "content": '{"phase":"implement_module","task":"Repair the approved Right.java target."}'},
         ),
         tools=(
             _tool_schema("search_code_rag"),
