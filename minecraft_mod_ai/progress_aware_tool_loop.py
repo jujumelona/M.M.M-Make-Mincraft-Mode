@@ -1306,8 +1306,6 @@ def _mutation_target_error(
             return None
     if context is None:
         return "MUTATION_TARGET_UNBOUND: no host-pinned mutation target is READY"
-    if not context.is_mutation_ready:
-        return "MUTATION_TARGET_UNBOUND: no host-pinned mutation target is READY"
     supplied = _source_edit_path(arguments)
     pinned = _canonical_mutation_path(context.target_path)
     allowed = set(context.writable_paths) or ({pinned} if pinned else set())
@@ -1321,6 +1319,13 @@ def _mutation_target_error(
             f"does not authorize {supplied!r}"
         )
     operation = str(arguments.get("operation") or "").strip().casefold()
+    if operation in _SOURCE_CREATE_OPERATIONS and not context.is_new_file:
+        return (
+            "MUTATION_TARGET_CREATION_CONFLICT: create operation is not authorized "
+            f"for existing target {supplied!r}"
+        )
+    if not context.is_mutation_ready:
+        return "MUTATION_TARGET_UNBOUND: no host-pinned mutation target is READY"
     if (
         operation == "replace_exact"
         and supplied == pinned
@@ -1922,8 +1927,14 @@ def _record_evidence_locked(state: Any, value: Any, fingerprint: str) -> bool:
     if _fresh_java_context(state.mutation_context) and _authoritative_java_evidence(value):
         state.authoritative_java_evidence_fingerprints.add(fingerprint)
     context = _extract_mutation_context_from_payload(value)
-    if context is not None and state.mutation_context is not None:
-        state.mutation_context = state.mutation_context.merge(context)
+    if context is not None:
+        if state.mutation_context is None:
+            # Retrieval may perform the first localization step. Bind that observed
+            # target as evidence only; it carries no write authority unless a separate
+            # host-owned context later contributes writable/creatable paths.
+            state.mutation_context = context
+        else:
+            state.mutation_context = state.mutation_context.merge(context)
     return True
 
 
