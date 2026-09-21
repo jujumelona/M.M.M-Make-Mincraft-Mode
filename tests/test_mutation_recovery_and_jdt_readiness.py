@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from minecraft_mod_ai.mutation_failure_classification import (
     is_post_argument_semantic_failure_code as _is_post_argument_semantic_failure_code,
     is_recoverable_mutation_failure,
     latest_post_argument_semantic_failure as _latest_post_argument_semantic_failure,
 )
 from minecraft_mod_ai.progress_aware_tool_loop import (
+    HostRunState,
     TargetMutationContext,
     _mutation_target_error,
+    _recover_creation_conflict_target,
+    _source_edit_schema_for_context,
 )
 from minecraft_mod_ai.validation_diagnostic_contract import diagnostic_errors
 
@@ -70,6 +75,81 @@ def test_creation_conflict_remains_available_to_corrective_tool_loop() -> None:
     )
 
     assert _latest_post_argument_semantic_failure(failure) is None
+
+
+def test_creation_conflict_rebinds_live_file_for_small_coder(tmp_path) -> None:
+    target_path = "src/main/java/com/example/starforge/StarForgeMod.java"
+    target = tmp_path / target_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    source = (
+        "package com.example.starforge;\n"
+        "public final class StarForgeMod {\n"
+        "    public static int credits() { return 1; }\n"
+        "}\n"
+    )
+    target.write_text(source, encoding="utf-8")
+
+    state = HostRunState()
+    state.unchanged_mutation_fingerprints.add("failed-create")
+    state.unapplied_mutation_fixed_point = True
+    state.semantic_fixed_point = True
+
+    recovered = _recover_creation_conflict_target(
+        state,
+        SimpleNamespace(workspace_root=str(tmp_path)),
+        {"operation": "create_file", "path": target_path},
+    )
+
+    assert recovered is not None
+    assert recovered.target_path == target_path
+    assert recovered.is_new_file is False
+    assert recovered.target_pinned is True
+    assert recovered.is_mutation_ready is True
+    assert recovered.source_body == source
+    assert state.mutation_context == recovered
+    assert state.unapplied_mutation_fixed_point is False
+    assert state.semantic_fixed_point is False
+    assert state.unchanged_mutation_fingerprints == set()
+
+
+def test_existing_rebound_target_schema_removes_create_and_pins_path() -> None:
+    target_path = "src/main/java/com/example/starforge/StarForgeMod.java"
+    schema = {
+        "type": "function",
+        "function": {
+            "name": "apply_source_edit",
+            "description": "edit source",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "operation": {
+                        "type": "string",
+                        "enum": ["create_file", "replace_exact", "insert_after"],
+                    },
+                    "path": {"type": "string"},
+                    "target_path": {"type": "string"},
+                    "old": {"type": "string"},
+                    "new": {"type": "string"},
+                },
+                "required": ["operation", "path"],
+            },
+        },
+    }
+    context = TargetMutationContext(
+        target_path=target_path,
+        source_body="public final class StarForgeMod {}",
+        is_new_file=False,
+        evidence_source="workspace_existing_target",
+        writable_paths=(target_path,),
+        target_pinned=True,
+    )
+
+    projected = _source_edit_schema_for_context(schema, context)
+    properties = projected["function"]["parameters"]["properties"]
+
+    assert properties["operation"]["enum"] == ["replace_exact", "insert_after"]
+    assert properties["path"]["enum"] == [target_path]
+    assert "target_path" not in properties
 
 
 def test_true_mutation_authority_violation_remains_fatal() -> None:
