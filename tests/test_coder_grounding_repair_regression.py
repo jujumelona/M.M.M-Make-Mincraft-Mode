@@ -106,10 +106,15 @@ def test_verifier_repair_guidance_contains_current_source_and_hash() -> None:
 
     assert guidance is not None
     assert "MMM_CORE_VERIFIER_REPAIR_V5" in guidance
-    assert source in guidance
-    assert hashlib.sha256(source.encode("utf-8")).hexdigest() in guidance
-    assert '"target_is_new_file": false' in guidance
-    assert "same-path create_file" in guidance
+    payload = json.loads(guidance.rsplit("\n", 1)[-1])
+    assert payload["current_source"] == source
+    assert (
+        payload["current_source_sha256"]
+        == hashlib.sha256(source.encode("utf-8")).hexdigest()
+    )
+    assert payload["target_is_new_file"] is False
+    assert "same-path create_file" not in guidance
+    assert "host binds operation=replace_exact" in guidance
 
 
 def test_existing_target_schema_does_not_offer_create_operations() -> None:
