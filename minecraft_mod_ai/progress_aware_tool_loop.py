@@ -1408,6 +1408,36 @@ def _java_semantic_footprint_error(
     return None
 
 
+def _java_path_package_error(path: str, source: Any) -> str | None:
+    """Require a Java source package to match its repository source-set path."""
+
+    if not path.casefold().endswith(".java") or not isinstance(source, str):
+        return None
+    normalized = _canonical_mutation_path(path)
+    relative = ""
+    for prefix in (
+        "src/main/java/",
+        "src/client/java/",
+        "src/test/java/",
+        "src/gametest/",
+    ):
+        if normalized.startswith(prefix):
+            relative = normalized.removeprefix(prefix)
+            break
+    if not relative or "/" not in relative:
+        return None
+    expected_package = relative.rsplit("/", 1)[0].replace("/", ".")
+    match = _JAVA_PACKAGE_DECLARATION_RE.search(source)
+    actual_package = match.group(1) if match is not None else ""
+    if actual_package == expected_package:
+        return None
+    return (
+        "MUTATION_JAVA_PACKAGE_MISMATCH: Java source package must match its host-authorized "
+        f"path; expected {expected_package!r} for {normalized!r}, got "
+        f"{actual_package or '<missing>'!r}"
+    )
+
+
 def _java_source_identity_error(
     path: str,
     current_source: str | None,
@@ -1479,12 +1509,29 @@ def _mutation_target_error(
         if authority.mode is MutationAuthorityMode.BOUNDED_ROOTS and not (
             context is not None and context.evidence_source == "verifier_workspace_source"
         ):
-            if operation == "replace_exact" and "old" not in arguments:
-                return (
-                    "MUTATION_ATOMIC_SPAN_REQUIRED: existing source replacement requires "
-                    "one exact old span; whole-file model replacement is forbidden"
-                )
-            return None
+            supplied = _source_edit_path(arguments)
+            if operation in _SOURCE_CREATE_OPERATIONS and supplied.casefold().endswith(".java"):
+                create_source = arguments.get("content")
+                if not isinstance(create_source, str):
+                    create_source = arguments.get("text")
+                package_error = _java_path_package_error(supplied, create_source)
+                if package_error is not None:
+                    return package_error
+            # Before an authored destination exists, bounded-root authority deliberately
+            # permits the coder to select one file below the host-owned roots. Once a
+            # concrete existing target is rebound and pinned, do not bypass the exact
+            # existing-source semantic guard: the host now owns path + live source.
+            if (
+                context is None
+                or context.is_new_file
+                or not context_is_host_pinned(context)
+            ):
+                if operation == "replace_exact" and "old" not in arguments:
+                    return (
+                        "MUTATION_ATOMIC_SPAN_REQUIRED: existing source replacement requires "
+                        "one exact old span; whole-file model replacement is forbidden"
+                    )
+                return None
     if context is None:
         return "MUTATION_TARGET_UNBOUND: no host-pinned mutation target is READY"
     supplied = _source_edit_path(arguments)
