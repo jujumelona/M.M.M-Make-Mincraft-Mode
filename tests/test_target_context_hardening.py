@@ -334,6 +334,9 @@ def test_mutation_target_guard_allows_reserved_new_target_creation() -> None:
         target_symbol=TARGET_SYMBOL,
         is_new_file=True,
         evidence_source="evidence_fresh_owned_anchor",
+        writable_paths=(TARGET_PATH,),
+        creatable_paths=(TARGET_PATH,),
+        target_pinned=True,
     )
     assert tool_loop._mutation_target_error(
         "apply_source_edit",
