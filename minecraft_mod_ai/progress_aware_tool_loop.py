@@ -1324,6 +1324,42 @@ def _java_source_identity_error(
     return None
 
 
+def _existing_source_repair_semantic_error(
+    *,
+    operation: str,
+    supplied: str,
+    pinned: str,
+    context: TargetMutationContext,
+    arguments: Mapping[str, Any],
+) -> str | None:
+    if operation != "replace_exact" or supplied != pinned or context.is_new_file:
+        return None
+    current_source = context.source_body
+    old_text = arguments.get("old")
+    new_text = arguments.get("new")
+    if not (
+        isinstance(current_source, str)
+        and isinstance(old_text, str)
+        and old_text
+        and isinstance(new_text, str)
+        and current_source.count(old_text) == 1
+    ):
+        return None
+    candidate_source = current_source.replace(old_text, new_text, 1)
+    identity_error = _java_source_identity_error(
+        pinned,
+        current_source,
+        candidate_source,
+    )
+    if identity_error is not None:
+        return identity_error
+    return _java_semantic_footprint_error(
+        pinned,
+        current_source,
+        candidate_source,
+    )
+
+
 def _mutation_target_error(
     tool_name: str,
     arguments: Mapping[str, Any],
@@ -1375,38 +1411,15 @@ def _mutation_target_error(
             "MUTATION_ATOMIC_SPAN_REQUIRED: existing source replacement requires "
             "one exact old span; whole-file model replacement is forbidden"
         )
-    if (
-        operation == "replace_exact"
-        and supplied == pinned
-        and not context.is_new_file
-    ):
-        current_source = context.source_body
-        new_text = arguments.get("new")
-        old_text = arguments.get("old")
-        candidate_source: str | None = None
-        if (
-            isinstance(current_source, str)
-            and isinstance(old_text, str)
-            and old_text
-            and isinstance(new_text, str)
-            and current_source.count(old_text) == 1
-        ):
-            candidate_source = current_source.replace(old_text, new_text, 1)
-        if candidate_source is not None:
-            identity_error = _java_source_identity_error(
-                pinned,
-                current_source,
-                candidate_source,
-            )
-            if identity_error is not None:
-                return identity_error
-            footprint_error = _java_semantic_footprint_error(
-                pinned,
-                current_source,
-                candidate_source,
-            )
-            if footprint_error is not None:
-                return footprint_error
+    semantic_error = _existing_source_repair_semantic_error(
+        operation=operation,
+        supplied=supplied,
+        pinned=pinned,
+        context=context,
+        arguments=arguments,
+    )
+    if semantic_error is not None:
+        return semantic_error
     if operation not in _SOURCE_CREATE_OPERATIONS:
         return None
     if _creation_authorized(supplied, pinned, context):
