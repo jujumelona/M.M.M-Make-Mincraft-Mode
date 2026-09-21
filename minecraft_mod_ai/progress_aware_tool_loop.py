@@ -2129,7 +2129,7 @@ def _record_applied_mutation(
 
 
 _ATOMIC_REPAIR_WINDOW_MAX_CHARS = 4096
-_REPAIR_IDENTIFIER_RE = re.compile(r"\\b[A-Za-z_$][\\w$]{2,}\\b")
+_REPAIR_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_$][\w$]{2,}\b")
 _REPAIR_IDENTIFIER_STOPWORDS = frozenset({
     "cannot", "resolved", "resolve", "type", "variable", "method", "field",
     "constructor", "undefined", "unknown", "error", "java", "class", "interface",
@@ -2195,7 +2195,7 @@ def _diagnostic_identifier_window(
         for token in _REPAIR_IDENTIFIER_RE.findall(message):
             if token.casefold() in _REPAIR_IDENTIFIER_STOPWORDS:
                 continue
-            matches = list(re.finditer(rf"\\b{re.escape(token)}\\b", source))
+            matches = list(re.finditer(rf"\b{re.escape(token)}\b", source))
             if len(matches) != 1:
                 continue
             match = matches[0]
