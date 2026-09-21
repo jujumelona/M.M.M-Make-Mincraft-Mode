@@ -253,6 +253,61 @@ def test_recovered_authored_existing_target_exposes_only_updated_source() -> Non
     assert parameters["additionalProperties"] is False
 
 
+def test_exact_task_existing_target_exposes_only_model_owned_new_source() -> None:
+    target_path = (
+        "src/main/java/ai/minecraft/generated/authored_demo/AuthoredFeature001.java"
+    )
+    source = (
+        "package ai.minecraft.generated.authored_demo;\n"
+        "public final class AuthoredFeature001 {\n"
+        "    public static void initialize() {}\n"
+        "}\n"
+    )
+    schema = {
+        "type": "function",
+        "function": {
+            "name": "apply_source_edit",
+            "description": "edit source",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "operation": {
+                        "type": "string",
+                        "enum": ["create_file", "replace_exact", "insert_after"],
+                    },
+                    "path": {"type": "string"},
+                    "old": {"type": "string"},
+                    "new": {"type": "string"},
+                    "count": {"type": "integer"},
+                    "content": {"type": "string"},
+                },
+                "required": ["operation", "path"],
+            },
+        },
+    }
+    context = TargetMutationContext(
+        target_path=target_path,
+        source_body=source,
+        is_new_file=False,
+        evidence_source="workspace_existing_target",
+        writable_paths=(target_path,),
+        creatable_paths=(),
+        target_pinned=True,
+    )
+    authority = MutationAuthority.exact((target_path,), task_id="authored_feature_001")
+    token = CURRENT_MUTATION_AUTHORITY.set(authority)
+    try:
+        projected = _source_edit_schema_for_context(schema, context)
+    finally:
+        CURRENT_MUTATION_AUTHORITY.reset(token)
+
+    parameters = projected["function"]["parameters"]
+    assert set(parameters["properties"]) == {"new"}
+    assert parameters["required"] == ["new"]
+    assert parameters["additionalProperties"] is False
+    assert "create_file" not in json.dumps(projected, ensure_ascii=False)
+
+
 def test_recovered_authored_existing_target_binds_exact_live_old_source() -> None:
     target_path = (
         "src/main/java/ai/minecraft/generated/authored_demo/StarForgeMod.java"
