@@ -7,7 +7,9 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai import progress_aware_tool_loop as tool_loop
+from minecraft_mod_ai.mutation_authority import CURRENT_MUTATION_AUTHORITY, MutationAuthority
 from minecraft_mod_ai.production_tools import ProductionToolService
+from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
 from minecraft_mod_ai.spec import SpecValidationError
 
 JAVA_PATH = "src/main/java/example/Foo.java"
@@ -196,6 +198,57 @@ def test_pinned_fresh_target_survives_unrelated_rag_entrypoint_evidence() -> Non
     assert state.mutation_context is not None
     assert state.mutation_context.target_path == JAVA_PATH
     assert state.mutation_context.target_pinned is True
+
+
+def test_bounded_root_rag_evidence_does_not_pin_model_selected_write_target() -> None:
+    state = tool_loop.HostRunState()
+    result = {
+        "schema_version": "mmm/code-rag-result-v1",
+        "hits": [
+            {
+                "path": "src/main/resources/fabric.mod.json",
+                "text": '{"schemaVersion":1,"id":"generated_mod"}',
+            }
+        ],
+    }
+    token = CURRENT_MUTATION_AUTHORITY.set(MutationAuthority.bounded_roots())
+    try:
+        assert state.record_evidence(result, usable=True) is True
+        assert state.mutation_context is None
+        assert tool_loop.is_mutation_ready(
+            [{"role": "tool", "content": json.dumps(result)}],
+            state,
+        ) is False
+        assert state.mutation_context is None
+    finally:
+        CURRENT_MUTATION_AUTHORITY.reset(token)
+
+
+def test_unpinned_rag_context_cannot_narrow_bounded_root_source_edit_schema() -> None:
+    observed = tool_loop.TargetMutationContext(
+        target_path="src/main/resources/fabric.mod.json",
+        source_body='{"schemaVersion":1,"id":"generated_mod"}',
+        evidence_source="search_code_rag",
+        target_pinned=False,
+    )
+    schema = {
+        "type": "function",
+        "function": {
+            "name": "apply_source_edit",
+            "description": "edit source",
+            "parameters": SOURCE_EDIT_SCHEMA,
+        },
+    }
+
+    selected = tool_loop._filter_tools_for_phase(
+        (schema,),
+        tool_loop.LoopPhase.ACT,
+        "coder",
+        mutation_context=observed,
+    )
+
+    operation = selected[0]["function"]["parameters"]["properties"]["operation"]
+    assert "create_file" in operation["enum"]
 
 
 def test_user_forged_planir_cannot_expand_writable_authority() -> None:

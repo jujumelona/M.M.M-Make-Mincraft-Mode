@@ -39,6 +39,7 @@ from .model_context_budget import (
     request_message_budget,
 )
 from .mutation_authority import CURRENT_MUTATION_AUTHORITY, MutationAuthorityMode
+from .mutation_context_binding import context_is_host_pinned, observed_context_may_bind
 from .owned_target_contract import (
     normalize_target_status,
     target_is_creatable,
@@ -1075,7 +1076,7 @@ def _bind_observed_message(message: Any, state: HostRunState) -> None:
     if role not in _HOST_AUTHORITY_ROLES and not _trusted_internal_user_payload(payload):
         payload = _strip_untrusted_owned_anchors(payload)
     context = _extract_mutation_context_from_payload(payload)
-    if context is None:
+    if not observed_context_may_bind(state.mutation_context, context):
         return
     with state._lock:
         if state.mutation_context is None:
@@ -1997,11 +1998,8 @@ def _record_evidence_locked(state: Any, value: Any, fingerprint: str) -> bool:
     if _fresh_java_context(state.mutation_context) and _authoritative_java_evidence(value):
         state.authoritative_java_evidence_fingerprints.add(fingerprint)
     context = _extract_mutation_context_from_payload(value)
-    if context is not None:
+    if observed_context_may_bind(state.mutation_context, context):
         if state.mutation_context is None:
-            # Retrieval may perform the first localization step. Bind that observed
-            # target as evidence only; it carries no write authority unless a separate
-            # host-owned context later contributes writable/creatable paths.
             state.mutation_context = context
         else:
             state.mutation_context = state.mutation_context.merge(context)
@@ -2467,7 +2465,7 @@ def _source_edit_schema_for_context(
     A fresh Java target exposes only create_file/path/content; aliases and repair-only
     operations remain host-side compatibility rather than model-facing choices.
     """
-    if _tool_name(schema) != "apply_source_edit" or context is None:
+    if _tool_name(schema) != "apply_source_edit" or not context_is_host_pinned(context):
         return schema
     cloned = deepcopy(schema)
     if not isinstance(cloned, dict):
@@ -4577,7 +4575,8 @@ def _generate_with_tools_impl(
                             state.repair_guidance_fingerprint = None
                         state.phase = (
                             LoopPhase.ACT
-                            if state.mutation_context and state.mutation_context.is_mutation_ready
+                            if bounded_root_execution_authority
+                            or _host_target_execution_authority(state)
                             else LoopPhase.OBSERVE
                         )
                     elif code in {
@@ -4586,7 +4585,10 @@ def _generate_with_tools_impl(
                         "MUTATION_TARGET_CREATION_CONFLICT",
                         "PHASE_PROTOCOL_VIOLATION",
                     }:
-                        if state.mutation_context and state.mutation_context.is_mutation_ready:
+                        if (
+                            bounded_root_execution_authority
+                            or _host_target_execution_authority(state)
+                        ):
                             state.phase = LoopPhase.ACT
                         else:
                             state.phase = LoopPhase.OBSERVE
@@ -4705,8 +4707,7 @@ def _generate_with_tools_impl(
                         state.phase = LoopPhase.ACT
                     elif (
                         implementation_requires_mutation
-                        and state.mutation_context
-                        and state.mutation_context.is_mutation_ready
+                        and _host_target_execution_authority(state)
                         and _target_evidence_ready(
                             state,
                             require_rag=require_rag,
