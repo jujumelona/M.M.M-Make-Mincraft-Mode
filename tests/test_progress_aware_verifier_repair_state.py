@@ -441,6 +441,25 @@ def test_whole_file_java_repair_preserves_package_and_public_type_identity():
         "REPAIR_SEMANTIC_IDENTITY_VIOLATION"
     )
 
+    default_package_context = TargetMutationContext(
+        target_path="src/main/java/DebugToken.java",
+        target_symbol="DebugToken",
+        source_body="class DebugToken {}",
+        is_new_file=False,
+        evidence_source="verifier_workspace_source",
+    )
+    added_package = _mutation_target_error(
+        "apply_source_edit",
+        {
+            "operation": "replace_exact",
+            "path": "src/main/java/DebugToken.java",
+            "new": "package invented.pkg; class DebugToken {}",
+        },
+        default_package_context,
+    )
+    assert added_package is not None
+    assert added_package.startswith("REPAIR_SEMANTIC_IDENTITY_VIOLATION")
+
 
 
 def test_repair_guidance_densifies_target_diagnostics_without_uri_repetition():
