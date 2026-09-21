@@ -1201,7 +1201,11 @@ def _java_semantic_footprint_error(
 ) -> str | None:
     """Prevent verifier repair from compiling by deleting approved source behavior."""
 
-    if not isinstance(current_source, str) or not isinstance(new_source, str):
+    if (
+        not path.casefold().endswith(".java")
+        or not isinstance(current_source, str)
+        or not isinstance(new_source, str)
+    ):
         return None
     current_bytes = len(current_source.encode("utf-8"))
     new_bytes = len(new_source.encode("utf-8"))
