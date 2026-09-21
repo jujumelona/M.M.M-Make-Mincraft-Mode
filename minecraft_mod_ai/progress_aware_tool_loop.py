@@ -2168,7 +2168,7 @@ def _bounded_unique_line_window(
 ) -> dict[str, Any] | None:
     """Return the smallest useful unique line window around one diagnostic."""
 
-    for radius in (1, 2, 3, 0):
+    for radius in (0, 1, 2, 3):
         start = max(0, line_index - radius)
         end = min(len(lines), line_index + radius + 1)
         old = "".join(lines[start:end])
