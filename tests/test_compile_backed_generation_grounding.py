@@ -59,9 +59,12 @@ def test_target_compile_still_requires_fresh_java_evidence_before_mutation(
                 )
             )
 
+    runtime_calls: list[str] = []
+
     class Runtime:
         def call(self, stage, name, _arguments):
             assert stage == "generation"
+            runtime_calls.append(name)
             if name == "search_code_rag":
                 return {
                     "schema_version": "mmm/code-rag-result-v1",
@@ -87,6 +90,13 @@ def test_target_compile_still_requires_fresh_java_evidence_before_mutation(
                             "after_sha256": "sha256:" + "1" * 64,
                         }
                     ],
+                }
+            if name == "target_compile":
+                return {
+                    "schema_version": "mmm/generation-target-compile-v1",
+                    "status": "PASS",
+                    "target_path": target,
+                    "diagnostics": [],
                 }
             raise AssertionError(name)
 
@@ -153,5 +163,6 @@ def test_target_compile_still_requires_fresh_java_evidence_before_mutation(
     )
 
     payload = json.loads(result)
-    assert "target_compile" in payload["summary"]
+    assert "passed generation-time host verification" in payload["summary"]
     assert adapter.calls == 2
+    assert runtime_calls == ["search_code_rag", "apply_source_edit", "target_compile"]
