@@ -460,6 +460,99 @@ def test_whole_file_java_repair_preserves_package_and_public_type_identity():
     assert added_package is not None
     assert added_package.startswith("REPAIR_SEMANTIC_IDENTITY_VIOLATION")
 
+    package_private_nested_public = TargetMutationContext(
+        target_path=PATH,
+        target_symbol="DebugToken",
+        source_body=(
+            "package dev.mmm.debugfixture; "
+            "class DebugToken { public static class Builder {} }"
+        ),
+        is_new_file=False,
+        evidence_source="verifier_workspace_source",
+    )
+    nested_public_valid = _mutation_target_error(
+        "apply_source_edit",
+        {
+            "operation": "replace_exact",
+            "path": PATH,
+            "new": (
+                "package dev.mmm.debugfixture; "
+                "class DebugToken { public static class Builder { int x; } }"
+            ),
+        },
+        package_private_nested_public,
+    )
+    assert nested_public_valid is None
+
+
+def test_whole_file_java_repair_preserves_behavioral_footprint():
+    current = (
+        "package dev.mmm.debugfixture; "
+        "public class DebugToken { "
+        "public static final String ID = \"debug\"; "
+        "private int computeValue(int base) { return base + MISSING; } "
+        "public int upgrade(int level) { return computeValue(level); } "
+        "}"
+    )
+    context = TargetMutationContext(
+        target_path=PATH,
+        target_symbol="DebugToken",
+        source_body=current,
+        is_new_file=False,
+        evidence_source="verifier_workspace_source",
+    )
+
+    removed_method = _mutation_target_error(
+        "apply_source_edit",
+        {
+            "operation": "replace_exact",
+            "path": PATH,
+            "new": (
+                "package dev.mmm.debugfixture; "
+                "public class DebugToken { "
+                "public static final String ID = \"debug\"; "
+                "public int upgrade(int level) { return level; } "
+                "}"
+            ),
+        },
+        context,
+    )
+    assert removed_method is not None
+    assert removed_method.startswith("REPAIR_SEMANTIC_FOOTPRINT_VIOLATION")
+    assert "method:computeValue" in removed_method
+
+    long_body = current + (" " * 1200)
+    long_context = TargetMutationContext(
+        target_path=PATH,
+        target_symbol="DebugToken",
+        source_body=long_body,
+        is_new_file=False,
+        evidence_source="verifier_workspace_source",
+    )
+    collapsed = _mutation_target_error(
+        "apply_source_edit",
+        {
+            "operation": "replace_exact",
+            "path": PATH,
+            "new": current.replace("MISSING", "1"),
+        },
+        long_context,
+    )
+    assert collapsed is not None
+    assert collapsed.startswith("REPAIR_SEMANTIC_FOOTPRINT_VIOLATION")
+    assert "collapsed" in collapsed
+
+    repaired = _mutation_target_error(
+        "apply_source_edit",
+        {
+            "operation": "replace_exact",
+            "path": PATH,
+            "new": current.replace("MISSING", "1"),
+        },
+        context,
+    )
+    assert repaired is None
+
 
 
 def test_repair_guidance_densifies_target_diagnostics_without_uri_repetition():
