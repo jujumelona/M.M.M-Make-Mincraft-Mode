@@ -3962,6 +3962,52 @@ def _generate_with_tools_impl(
             and state.validation_status == "FAIL"
             and turn.tool_calls
         ):
+            repair_call_names = tuple(call.name for call in turn.tool_calls)
+            if (
+                len(turn.tool_calls) != 1
+                or repair_call_names != ("apply_source_edit",)
+            ):
+                repeated = state.record_no_progress_result(
+                    {
+                        "phase": "ACT",
+                        "validation": "FAIL",
+                        "repair_protocol_violation": repair_call_names,
+                        "target_path": (
+                            state.mutation_context.target_path
+                            if state.mutation_context is not None
+                            else None
+                        ),
+                    }
+                )
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "REPAIR_PROTOCOL_VIOLATION: emit exactly one "
+                            "apply_source_edit call for the host-pinned verifier repair. "
+                            "Do not batch, parallelize, or emit any additional tool call."
+                        ),
+                    }
+                )
+                emit_root_cause(
+                    "verifier_repair_protocol_rejected",
+                    stage=stage,
+                    operation="generate_with_tools",
+                    gate="repair_mutation_schema",
+                    result="RETRY",
+                    reason="repair turn must contain exactly one apply_source_edit call",
+                    details={
+                        "tool_calls": list(repair_call_names),
+                        "target_path": (
+                            state.mutation_context.target_path
+                            if state.mutation_context is not None
+                            else None
+                        ),
+                    },
+                )
+                if repeated:
+                    raise _fixed_point_error(state)
+                continue
             bound_calls = tuple(
                 _bind_existing_verifier_repair_call(call, state)
                 for call in turn.tool_calls
