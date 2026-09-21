@@ -4,8 +4,8 @@ from __future__ import annotations
 
 This module deliberately owns target localization, source mutation, verifier repair,
 retrieval progress, and convergence in one place. Repair convergence is verifier-measured,
-not inferred from mutation occurrence. Runtime bootstrap must not monkey-patch these
-boundaries from separate contract modules.
+never inferred from mutation occurrence alone. Runtime bootstrap must not monkey-patch
+these boundaries from separate contract modules.
 """
 
 import hashlib
