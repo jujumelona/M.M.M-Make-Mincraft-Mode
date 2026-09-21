@@ -39,7 +39,7 @@ from .model_context_budget import (
     request_message_budget,
 )
 from .mutation_authority import CURRENT_MUTATION_AUTHORITY, MutationAuthorityMode
-from .mutation_context_binding import context_is_host_pinned, materialized_create_context, observed_context_may_bind
+from .mutation_context_binding import context_is_host_pinned, context_is_localized, materialized_create_context, observed_context_may_bind
 from .owned_target_contract import (
     normalize_target_status,
     target_is_creatable,
@@ -1076,10 +1076,7 @@ def _bind_observed_message(message: Any, state: HostRunState) -> None:
     if role not in _HOST_AUTHORITY_ROLES and not _trusted_internal_user_payload(payload):
         payload = _strip_untrusted_owned_anchors(payload)
     context = _extract_mutation_context_from_payload(payload)
-    if not observed_context_may_bind(
-        context,
-        binding_enabled=state.retrieval_target_binding_enabled,
-    ):
+    if not observed_context_may_bind(context, binding_enabled=state.retrieval_target_binding_enabled):
         return
     with state._lock:
         if state.mutation_context is None:
@@ -2001,10 +1998,7 @@ def _record_evidence_locked(state: Any, value: Any, fingerprint: str) -> bool:
     if _fresh_java_context(state.mutation_context) and _authoritative_java_evidence(value):
         state.authoritative_java_evidence_fingerprints.add(fingerprint)
     context = _extract_mutation_context_from_payload(value)
-    if observed_context_may_bind(
-        context,
-        binding_enabled=state.retrieval_target_binding_enabled,
-    ):
+    if observed_context_may_bind(context, binding_enabled=state.retrieval_target_binding_enabled):
         if state.mutation_context is None:
             state.mutation_context = context
         else:
@@ -4710,8 +4704,7 @@ def _generate_with_tools_impl(
                         state.phase = LoopPhase.ACT
                     elif (
                         implementation_requires_mutation
-                        and state.mutation_context
-                        and state.mutation_context.is_mutation_ready
+                        and context_is_localized(state.mutation_context)
                         and _target_evidence_ready(
                             state,
                             require_rag=require_rag,

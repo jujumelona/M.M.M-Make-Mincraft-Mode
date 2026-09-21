@@ -18,6 +18,10 @@ def context_is_host_pinned(context: Any) -> bool:
     return bool(context is not None and getattr(context, "target_pinned", False))
 
 
+def context_is_localized(context: Any) -> bool:
+    return bool(context is not None and getattr(context, "is_mutation_ready", False))
+
+
 def materialized_create_context(
     path: str,
     operation: str,
