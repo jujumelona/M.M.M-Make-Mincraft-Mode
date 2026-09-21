@@ -48,6 +48,7 @@ from .owned_target_contract import (
 from .root_cause_trace import emit_root_cause, trace_scope
 from .small_model_task_capsule_contract import task_capsule_tool_loop
 from .source_mutation_contract import mutation_history_applied, mutation_payload_applied
+from .source_repair_semantics import existing_source_repair_semantic_error
 from .verifier_repair_window import (
     MAX_REPAIR_WINDOW_CHARS,
     exact_rollback_arguments,
@@ -1324,42 +1325,6 @@ def _java_source_identity_error(
     return None
 
 
-def _existing_source_repair_semantic_error(
-    *,
-    operation: str,
-    supplied: str,
-    pinned: str,
-    context: TargetMutationContext,
-    arguments: Mapping[str, Any],
-) -> str | None:
-    if operation != "replace_exact" or supplied != pinned or context.is_new_file:
-        return None
-    current_source = context.source_body
-    old_text = arguments.get("old")
-    new_text = arguments.get("new")
-    if not (
-        isinstance(current_source, str)
-        and isinstance(old_text, str)
-        and old_text
-        and isinstance(new_text, str)
-        and current_source.count(old_text) == 1
-    ):
-        return None
-    candidate_source = current_source.replace(old_text, new_text, 1)
-    identity_error = _java_source_identity_error(
-        pinned,
-        current_source,
-        candidate_source,
-    )
-    if identity_error is not None:
-        return identity_error
-    return _java_semantic_footprint_error(
-        pinned,
-        current_source,
-        candidate_source,
-    )
-
-
 def _mutation_target_error(
     tool_name: str,
     arguments: Mapping[str, Any],
@@ -1411,12 +1376,16 @@ def _mutation_target_error(
             "MUTATION_ATOMIC_SPAN_REQUIRED: existing source replacement requires "
             "one exact old span; whole-file model replacement is forbidden"
         )
-    semantic_error = _existing_source_repair_semantic_error(
+    semantic_error = existing_source_repair_semantic_error(
         operation=operation,
         supplied=supplied,
         pinned=pinned,
-        context=context,
-        arguments=arguments,
+        is_new_file=context.is_new_file,
+        current_source=context.source_body,
+        old_text=arguments.get("old"),
+        new_text=arguments.get("new"),
+        identity_check=_java_source_identity_error,
+        footprint_check=_java_semantic_footprint_error,
     )
     if semantic_error is not None:
         return semantic_error
