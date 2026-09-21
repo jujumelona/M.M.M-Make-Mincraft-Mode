@@ -248,6 +248,10 @@ def _install_repair_search_and_memory(repair_module: Any) -> None:
                 candidate_context['agentic_candidate'] = {'index': candidate_index, 'count': width, 'strategy': _STRATEGIES[candidate_index % len(_STRATEGIES)], 'rule': 'Produce an independent minimal repair; do not mention candidate search.'}
                 try:
                     operations = current_request(self, evidence, candidate_context)
+                except (KeyboardInterrupt, SystemExit, GeneratorExit):
+                    # Process/thread cancellation is control flow, not a repair candidate
+                    # failure. Never multiply it by the candidate-search width.
+                    raise
                 except Exception as exc:
                     errors.append(exc)
                     continue
