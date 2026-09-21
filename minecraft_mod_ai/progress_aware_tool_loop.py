@@ -1189,21 +1189,21 @@ def _java_whole_file_identity_error(
             f"{new_package_match.group(1)!r}"
         )
 
-    public_types = tuple(_JAVA_PUBLIC_TOP_LEVEL_TYPE_RE.findall(new_source))
-    if public_types and expected_type not in public_types:
-        return (
-            "REPAIR_SEMANTIC_IDENTITY_VIOLATION: whole-file Java repair changed "
-            f"primary type identity for {path!r}: expected public type "
-            f"{expected_type!r}, got {public_types!r}"
-        )
-
     if _java_declares_type(current, expected_type) and not _java_declares_type(
         new_source,
         expected_type,
     ):
+        replacement_public_types = tuple(
+            _JAVA_PUBLIC_TOP_LEVEL_TYPE_RE.findall(new_source)
+        )
         return (
             "REPAIR_SEMANTIC_IDENTITY_VIOLATION: whole-file Java repair removed "
             f"the existing primary type {expected_type!r} from {path!r}"
+            + (
+                f"; replacement public types={replacement_public_types!r}"
+                if replacement_public_types
+                else ""
+            )
         )
     return None
 
@@ -1983,7 +1983,7 @@ def _repair_guidance_payload(state: Any) -> dict[str, Any] | None:
             errors=state.repair_target_diagnostics,
             budget_bytes=_REPAIR_GUIDANCE_VERIFIER_DIAGNOSTIC_BYTES,
         ))
-        if context and context.evidence_source == "verifier_workspace_source"
+        if context and state.repair_target_diagnostics
         else None
     )
     return {
@@ -3195,15 +3195,21 @@ def _rollback_non_improving_verifier_repair(
     source = state.repair_previous_source
     if not path or not isinstance(source, str):
         return False
-    result = runtime.call(
-        stage,
-        "apply_source_edit",
-        {
-            "operation": "replace_exact",
-            "path": path,
-            "new": source,
-        },
-    )
+    try:
+        result = runtime.call(
+            stage,
+            "apply_source_edit",
+            {
+                "operation": "replace_exact",
+                "path": path,
+                "new": source,
+            },
+        )
+    except Exception as exc:
+        raise ModelConfigurationError(
+            "VERIFICATION_REPAIR_ROLLBACK_FAILED: host rollback tool failed for "
+            f"{path!r}: {type(exc).__name__}: {exc}"
+        ) from exc
     applied = mutation_payload_applied(
         "apply_source_edit",
         {"ok": True, "result": result},
