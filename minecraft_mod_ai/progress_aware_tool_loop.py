@@ -3534,22 +3534,10 @@ def _generate_with_tools_impl(
             return _host_coder_summary(verification="PASS")
 
         if state.semantic_fixed_point:
-            if state.unapplied_mutation_fixed_point:
-                raise _fixed_point_error(state)
-            if state.last_verifier_quality == "NON_IMPROVING":
-                raise _fixed_point_error(state)
-            actionable_mutation = bool(
-                implementation_requires_mutation
-                and baseline_ready
-                and is_mutation_ready(messages, state)
-                and state.workspace_changed
-                and state.validation_status == "FAIL"
-            )
-            if actionable_mutation:
-                state.clear_no_progress_result()
-                state.phase = LoopPhase.ACT
-            else:
-                raise _fixed_point_error(state)
+            # A repeated semantic state is already the convergence proof. Do not
+            # erase it merely because a writable repair target still exists: that
+            # was the bug that let ACT -> VERIFY -> FAIL cycle indefinitely.
+            raise _fixed_point_error(state)
 
         if (
             state.phase == LoopPhase.VERIFY
@@ -4246,7 +4234,30 @@ def _generate_with_tools_impl(
                         state.validation_status = "UNAVAILABLE"
                     state.phase = LoopPhase.VERIFY
                     continue
-                if state.record_verification(call.name, payload, status):
+                verification_progress = state.record_verification(
+                    call.name,
+                    payload,
+                    status,
+                )
+                emit_root_cause(
+                    "verification_quality_adjudicated",
+                    stage=stage,
+                    operation=call.name,
+                    gate="repair_quality_monotonicity",
+                    result="PASS" if verification_progress else "SKIP",
+                    reason=state.last_verifier_quality or "UNKNOWN",
+                    details={
+                        "quality": state.last_verifier_quality,
+                        "baseline_error_count": state.repair_baseline_error_count,
+                        "current_error_count": len(state.latest_verifier_errors),
+                        "target_path": (
+                            state.mutation_context.target_path
+                            if state.mutation_context is not None
+                            else None
+                        ),
+                    },
+                )
+                if verification_progress:
                     progress = True
                 if status == "FAIL" and implementation_requires_mutation:
                     state.record_failure(call.name, "verification reported source defects")
