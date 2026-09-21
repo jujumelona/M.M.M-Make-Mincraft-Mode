@@ -121,17 +121,15 @@ def test_fresh_authored_execution_is_exact_path_dependency_queue():
         for module in modules
     ) == text
 
-    prior = ""
     paths = set()
-    for index, module in enumerate(modules[:-1], start=1):
+    for index, module in enumerate(modules, start=1):
         assert module.module_id == f"authored_feature_{index:03d}"
-        assert module.depends_on == ((prior,) if prior else ())
+        assert module.depends_on == ()
         capsule = compile_task_capsule(module)
         assert capsule is not None
         assert len(capsule.writable_paths) == 1
         assert capsule.primary_path not in paths
         paths.add(capsule.primary_path)
-        prior = module.module_id
 
     assert manifest["entrypoint"]["owner"] == "host_scaffold"
     assert manifest["entrypoint"]["path"] not in paths
@@ -140,6 +138,41 @@ def test_fresh_authored_execution_is_exact_path_dependency_queue():
         for index in range(1, manifest["unit_count"] + 1)
     ]
 
+
+
+def test_authored_execution_uses_markdown_sections_not_arbitrary_byte_packing():
+    text = (
+        "# Economy\nCredits, trade and prices.\n"
+        "# Ship Building\nParts, upgrades and crew.\n"
+        "# Planets\nMining, aliens and colonies.\n"
+    )
+    plan = AuthoredPlan("space mod", text)
+    modules, manifest = _compile_new_authored_modules(
+        plan,
+        mod_id="authored_test",
+        package_name="ai.minecraft.generated.authored_test",
+        target={
+            "minecraft_version": "1.21.11",
+            "loader": "fabric",
+            "mappings": "1.21.11+build.1",
+        },
+    )
+
+    assert manifest["unit_count"] == 3
+    assert [item["section"] for item in manifest["units"]] == [
+        "Economy",
+        "Ship Building",
+        "Planets",
+    ]
+    assert [
+        module.config["evidence_task"]["engineering_worksheet"]["authored_unit"]["section"]
+        for module in modules
+    ] == ["Economy", "Ship Building", "Planets"]
+    assert all(module.depends_on == () for module in modules)
+    assert "".join(
+        module.config["evidence_task"]["engineering_worksheet"]["authored_unit"]["text"]
+        for module in modules
+    ) == text
 
 
 def test_authored_scaffold_materializes_existing_exact_targets_and_host_entrypoint(tmp_path):
