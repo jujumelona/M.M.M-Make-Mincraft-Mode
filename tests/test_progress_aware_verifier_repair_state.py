@@ -3,6 +3,8 @@ from __future__ import annotations
 from minecraft_mod_ai.progress_aware_tool_loop import (
     HostRunState,
     TargetMutationContext,
+    _REPAIR_GUIDANCE_VERIFIER_DIAGNOSTIC_BYTES,
+    _bounded_verifier_recovery_observation,
     _mutation_target_error,
     _rollback_non_improving_verifier_repair,
 )
@@ -438,3 +440,52 @@ def test_whole_file_java_repair_preserves_package_and_public_type_identity():
     assert missing_package_private_primary.startswith(
         "REPAIR_SEMANTIC_IDENTITY_VIOLATION"
     )
+
+
+
+def test_repair_guidance_densifies_target_diagnostics_without_uri_repetition():
+    state = HostRunState(
+        mutation_context=TargetMutationContext(
+            target_path=PATH,
+            target_symbol="DebugToken",
+            source_body="package dev.mmm.debugfixture; public class DebugToken {}",
+            is_new_file=False,
+            evidence_source="verifier_workspace_source",
+        )
+    )
+    diagnostics = tuple(
+        {
+            "path": PATH,
+            "uri": "file:///very/long/workspace/root/" + PATH,
+            "severity": 1,
+            "line": index + 1,
+            "code": "UndefinedType",
+            "message": f"MissingType{index} " + ("x" * 260),
+        }
+        for index in range(20)
+    )
+    state.latest_verifier_tool = "java_diagnostics"
+    state.latest_verifier_errors = diagnostics
+
+    import json
+
+    phase_payload = json.loads(
+        _bounded_verifier_recovery_observation(
+            state,
+            errors=diagnostics,
+        )
+    )
+    repair_payload = json.loads(
+        _bounded_verifier_recovery_observation(
+            state,
+            errors=diagnostics,
+            budget_bytes=_REPAIR_GUIDANCE_VERIFIER_DIAGNOSTIC_BYTES,
+        )
+    )
+
+    assert len(phase_payload["diagnostics"]) < len(diagnostics)
+    assert len(repair_payload["diagnostics"]) > len(phase_payload["diagnostics"])
+    assert repair_payload["target_path"] == PATH
+    assert all(item["path"] == PATH for item in repair_payload["diagnostics"])
+    assert all("uri" not in item for item in repair_payload["diagnostics"])
+    assert repair_payload["diagnostic_count"] == len(diagnostics)
