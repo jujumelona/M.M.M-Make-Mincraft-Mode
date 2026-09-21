@@ -134,13 +134,14 @@ def _exact_authored_task(
     provides: tuple[str, ...],
     worksheet: Mapping[str, Any],
     required_gates: tuple[str, ...],
+    target_status: str = "existing",
 ) -> dict[str, Any]:
     anchor = {
         "kind": "symbol",
         "locator": f"{path}#{symbol}",
-        # create_or_modify is intentional: feature files are fresh while the final
-        # canonical Fabric entrypoint is host-created before custom generation.
-        "status": "host_reserved",
+        # Fresh authored projects materialize this exact skeleton before coder decode.
+        # The coder therefore modifies an existing host-owned file and never chooses a path.
+        "status": target_status,
         "ownership": "host_exact_authored_lowering",
         "module_id": task_id,
         "source_set": "main",
@@ -268,58 +269,6 @@ def _compile_new_authored_modules(
     main_symbol = _main_class_name(mod_id)
     main_path = f"src/main/java/{package_path}/{main_symbol}.java"
     feature_symbols = [str(item["symbol"]) for item in manifest_units]
-    calls = "\n".join(f"        {symbol}.initialize();" for symbol in feature_symbols)
-    entry_task_id = "authored_entrypoint"
-    entry_depends = (previous_module,) if previous_module else ()
-    entry_consumes = (previous_provide,) if previous_provide else ()
-    entry_task = _exact_authored_task(
-        task_id=entry_task_id,
-        path=main_path,
-        symbol=main_symbol,
-        target=target,
-        obligation=(
-            f"Modify the existing host-created canonical Fabric entrypoint {main_symbol} "
-            f"at {main_path}. Preserve its ModInitializer identity and existing valid host "
-            "baseline. Its onInitialize() method must invoke every host-scheduled authored "
-            "feature exactly once in this exact order and must not duplicate feature logic "
-            "or create any new entrypoint/file:\n" + calls
-        ),
-        semantic_outcome=(
-            "The single canonical Fabric entrypoint activates every exact authored feature "
-            "unit in deterministic approved order."
-        ),
-        depends_on=entry_depends,
-        consumes=entry_consumes,
-        provides=("authored_runtime_bound",),
-        worksheet={
-            "objective": "Bind exact authored feature units into the one host-owned Fabric entrypoint.",
-            "entrypoint_contract": {
-                "path": main_path,
-                "symbol": main_symbol,
-                "mod_id": mod_id,
-                "feature_symbols": feature_symbols,
-                "required_calls": [f"{symbol}.initialize()" for symbol in feature_symbols],
-                "forbidden": [
-                    "new ModInitializer classes",
-                    "new ClientModInitializer classes",
-                    "renaming the host entrypoint",
-                    "duplicating feature implementations inside the entrypoint",
-                ],
-            },
-        },
-        required_gates=("project build",),
-    )
-    modules.append(ProductionModule(
-        module_id=entry_task_id,
-        kind="custom_java",
-        config={
-            "implementation": "custom",
-            "evidence_task": entry_task,
-            **dict(target),
-        },
-        depends_on=entry_depends,
-        required_gates=("project build",),
-    ))
 
     source_sha = "sha256:" + hashlib.sha256(plan.text.encode("utf-8")).hexdigest()
     manifest = {
@@ -330,14 +279,151 @@ def _compile_new_authored_modules(
         "policy": "host_exact_task_queue_no_coder_file_planning",
         "units": manifest_units,
         "entrypoint": {
-            "module_id": entry_task_id,
+            "owner": "host_scaffold",
             "path": main_path,
             "symbol": main_symbol,
-            "depends_on": list(entry_depends),
+            "feature_symbols": feature_symbols,
+            "required_calls": [
+                f"{symbol}.initialize()" for symbol in feature_symbols
+            ],
         },
     }
     manifest["manifest_sha256"] = _sha256_json(manifest)
     return tuple(modules), manifest
+
+
+def materialize_authored_execution_scaffold(
+    proposal: CompleteProposal,
+    project_root: Any,
+) -> Any:
+    """Materialize all fresh-authored architecture before the small coder is called.
+
+    The host owns file names, package/type identity and the single Fabric entrypoint
+    integration. The coder receives only already-existing exact feature files.
+    """
+
+    from pathlib import Path
+    import re
+
+    root = Path(project_root).expanduser().resolve()
+    design = proposal.game_design if isinstance(proposal.game_design, Mapping) else {}
+    manifest = design.get("_authored_execution_manifest")
+    if not isinstance(manifest, Mapping):
+        return root
+    if manifest.get("schema_version") != _AUTHORED_EXECUTION_SCHEMA:
+        raise ValueError("AUTHORED_SCAFFOLD_SCHEMA_MISMATCH")
+    if manifest.get("policy") != "host_exact_task_queue_no_coder_file_planning":
+        raise ValueError("AUTHORED_SCAFFOLD_POLICY_MISMATCH")
+
+    expected_manifest = dict(manifest)
+    supplied_digest = str(expected_manifest.pop("manifest_sha256", "") or "")
+    if supplied_digest != _sha256_json(expected_manifest):
+        raise ValueError("AUTHORED_SCAFFOLD_MANIFEST_HASH_MISMATCH")
+
+    package_name = proposal.base_proposal.spec.package_name
+    package_path = package_name.replace(".", "/")
+    units = manifest.get("units")
+    if not isinstance(units, list) or not units:
+        raise ValueError("AUTHORED_SCAFFOLD_UNITS_MISSING")
+
+    feature_symbols: list[str] = []
+    for index, raw_unit in enumerate(units, start=1):
+        if not isinstance(raw_unit, Mapping):
+            raise ValueError("AUTHORED_SCAFFOLD_UNIT_INVALID")
+        symbol = str(raw_unit.get("symbol") or "").strip()
+        path = str(raw_unit.get("path") or "").replace("\\", "/").strip()
+        expected_symbol = f"AuthoredFeature{index:03d}"
+        expected_path = f"src/main/java/{package_path}/{expected_symbol}.java"
+        if symbol != expected_symbol or path != expected_path:
+            raise ValueError("AUTHORED_SCAFFOLD_UNIT_IDENTITY_DRIFT")
+        if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", symbol) is None:
+            raise ValueError("AUTHORED_SCAFFOLD_SYMBOL_INVALID")
+        target = (root / path).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("AUTHORED_SCAFFOLD_PATH_ESCAPE") from exc
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            if not target.is_file() or target.is_symlink():
+                raise ValueError("AUTHORED_SCAFFOLD_TARGET_NOT_REGULAR")
+            source = target.read_text(encoding="utf-8")
+            if (
+                f"package {package_name};" not in source
+                or re.search(
+                    rf"\bclass\s+{re.escape(symbol)}\b",
+                    source,
+                )
+                is None
+            ):
+                raise ValueError("AUTHORED_SCAFFOLD_EXISTING_IDENTITY_MISMATCH")
+        else:
+            target.write_text(
+                (
+                    f"package {package_name};\n\n"
+                    f"/** Host-owned authored feature slot {index}/{len(units)}. */\n"
+                    f"public final class {symbol} {{\n"
+                    f"    private {symbol}() {{}}\n\n"
+                    "    public static void initialize() {\n"
+                    f"        // MMM_AUTHORED_FEATURE_BODY_{index:03d}\n"
+                    "    }\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+                newline="\n",
+            )
+        feature_symbols.append(symbol)
+
+    entry = manifest.get("entrypoint")
+    if not isinstance(entry, Mapping):
+        raise ValueError("AUTHORED_SCAFFOLD_ENTRYPOINT_MISSING")
+    main_symbol = _main_class_name(proposal.base_proposal.spec.mod_id)
+    main_path = f"src/main/java/{package_path}/{main_symbol}.java"
+    if str(entry.get("symbol") or "") != main_symbol or str(
+        entry.get("path") or ""
+    ).replace("\\", "/") != main_path:
+        raise ValueError("AUTHORED_SCAFFOLD_ENTRYPOINT_IDENTITY_DRIFT")
+    if list(entry.get("feature_symbols") or ()) != feature_symbols:
+        raise ValueError("AUTHORED_SCAFFOLD_ENTRYPOINT_FEATURE_DRIFT")
+
+    main_source = (root / main_path).resolve()
+    try:
+        main_source.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("AUTHORED_SCAFFOLD_ENTRYPOINT_ESCAPE") from exc
+    if not main_source.is_file() or main_source.is_symlink():
+        raise ValueError("AUTHORED_SCAFFOLD_ENTRYPOINT_SOURCE_MISSING")
+
+    main_text = main_source.read_text(encoding="utf-8")
+    marker = "// MMM_AUTHORED_HOST_ENTRYPOINT_BINDING"
+    calls = [f"{symbol}.initialize();" for symbol in feature_symbols]
+    required_calls = list(entry.get("required_calls") or ())
+    if required_calls != calls:
+        raise ValueError("AUTHORED_SCAFFOLD_ENTRYPOINT_CALL_DRIFT")
+    if marker in main_text:
+        if any(main_text.count(call) != 1 for call in calls):
+            raise ValueError("AUTHORED_SCAFFOLD_ENTRYPOINT_BINDING_CORRUPT")
+        return root
+
+    if any(call in main_text for call in calls):
+        raise ValueError("AUTHORED_SCAFFOLD_ENTRYPOINT_UNMARKED_BINDING")
+
+    match = re.search(
+        r"public\s+void\s+onInitialize\s*\(\s*\)\s*\{",
+        main_text,
+    )
+    if match is None:
+        raise ValueError("AUTHORED_SCAFFOLD_ENTRYPOINT_METHOD_MISSING")
+    injection = (
+        match.group(0)
+        + "\n        "
+        + marker
+        + "\n"
+        + "\n".join(f"        {call}" for call in calls)
+    )
+    main_text = main_text[: match.start()] + injection + main_text[match.end() :]
+    main_source.write_text(main_text, encoding="utf-8", newline="\n")
+    return root
 
 
 def _bound_target(design: Mapping[str, Any]) -> dict[str, str]:
