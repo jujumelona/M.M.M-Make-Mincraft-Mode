@@ -14,6 +14,7 @@ is intentionally a pure compiler/data contract and performs no runtime method re
 import contextvars
 import hashlib
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -28,6 +29,7 @@ from .mutation_authority import (
 _SCHEMA = "mmm/direct-task-mutation-authority-v1"
 _AUTHORED_SCHEMA = "mmm/authored-design-mutation-authority-v1"
 _ALLOWED_PREFIXES = AUTHORED_DESIGN_ROOTS
+_JAVA_PACKAGE_RE = re.compile(r"^[A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*$")
 _CURRENT_AUTHORITY: contextvars.ContextVar["DirectTaskMutationAuthority | None"] = (
     contextvars.ContextVar("mmm_direct_task_mutation_authority", default=None)
 )
@@ -258,6 +260,28 @@ def _authority_digest(payload: Mapping[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
+def _authored_mutation_roots(module: Any) -> tuple[str, ...]:
+    """Return the smallest safe roots the host can know before coder decode."""
+
+    package_name = str(
+        _module_config(module).get("authored_java_package") or ""
+    ).strip()
+    if not package_name:
+        return AUTHORED_DESIGN_ROOTS
+    if _JAVA_PACKAGE_RE.fullmatch(package_name) is None:
+        raise DirectTaskMutationAuthorityError(
+            "AUTHORED_AUTHORITY_PACKAGE_INVALID: authored_java_package must be a valid "
+            "host-generated Java package."
+        )
+    package_path = package_name.replace(".", "/")
+    return (
+        f"src/main/java/{package_path}/",
+        "src/main/resources/",
+        f"src/test/java/{package_path}/",
+        f"src/gametest/{package_path}/",
+    )
+
+
 def _compile_authored_authority(module: Any) -> DirectTaskMutationAuthority:
     module_id = str(getattr(module, "module_id", "") or "").strip()
     module_kind = str(getattr(module, "kind", "") or "").strip()
@@ -266,7 +290,7 @@ def _compile_authored_authority(module: Any) -> DirectTaskMutationAuthority:
             "AUTHORED_AUTHORITY_TASK_MISSING: authored design requires a host module id."
         )
     mutation_authority = MutationAuthority.bounded_roots(
-        AUTHORED_DESIGN_ROOTS,
+        _authored_mutation_roots(module),
         task_id=module_id,
     )
     payload = {
