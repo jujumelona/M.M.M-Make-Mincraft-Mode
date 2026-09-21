@@ -54,6 +54,39 @@ _QWEN_PAYLOAD_PARAMETER_OPEN = "<parameter=payload>"
 _QWEN_ARGUMENTS_PARAMETER_OPEN = "<parameter=arguments>"
 
 
+def _transient_transport_failure(exc: BaseException) -> bool:
+    """Return whether a completion failed before a usable assistant turn existed."""
+
+    transient = tuple(
+        error
+        for error in (
+            getattr(httpx, "RemoteProtocolError", None),
+            getattr(httpx, "ReadError", None),
+            getattr(httpx, "ConnectError", None),
+        )
+        if isinstance(error, type) and issubclass(error, BaseException)
+    )
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if transient and isinstance(current, transient):
+            return True
+        next_exc = current.__cause__ or current.__context__
+        current = next_exc if isinstance(next_exc, BaseException) else None
+    return False
+
+
+def _generate_one_turn(
+    adapter: "LlamaCppAdapter",
+    server_url: str,
+    request: GenerationRequest,
+) -> GenerationResponse:
+    if request.tools:
+        return _native_tool_completion(adapter, server_url, request)
+    return _plain_completion(adapter, server_url, request)
+
+
 class LlamaCppAdapter(ModelAdapter):
     """OpenAI-compatible client for the managed native llama-server."""
 
@@ -107,16 +140,47 @@ class LlamaCppAdapter(ModelAdapter):
         return turn.content
 
     def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
-        """Generate exactly one assistant turn from exactly one completion request."""
+        """Generate one assistant turn, recovering one dead MMM-owned server if needed."""
 
         server_url = self._server_url(request)
         try:
-            if request.tools:
-                return _native_tool_completion(self, server_url, request)
-            return _plain_completion(self, server_url, request)
+            return _generate_one_turn(self, server_url, request)
         except ModelBackendError:
             raise
         except Exception as exc:
+            if _transient_transport_failure(exc):
+                try:
+                    from .. import llama_server_autotune
+
+                    recovered_url = llama_server_autotune.recover_managed_server(
+                        self.config,
+                        request,
+                        failed_url=server_url,
+                    )
+                except Exception as recovery_exc:
+                    raise ModelBackendError(
+                        role=self.config.role,
+                        model_id=self.config.model_id,
+                        cause=RuntimeError(
+                            "native llama-server transport failed and managed-server "
+                            f"recovery also failed: {recovery_exc}"
+                        ),
+                    ) from recovery_exc
+                if recovered_url:
+                    try:
+                        # The first response never crossed the adapter boundary, so no
+                        # model-selected mutation or other workspace side effect exists
+                        # to duplicate. Regenerate this exact turn once on the recovered
+                        # endpoint; no further managed restart occurs in this method.
+                        return _generate_one_turn(self, recovered_url, request)
+                    except ModelBackendError:
+                        raise
+                    except Exception as retry_exc:
+                        raise ModelBackendError(
+                            role=self.config.role,
+                            model_id=self.config.model_id,
+                            cause=retry_exc,
+                        ) from retry_exc
             raise ModelBackendError(
                 role=self.config.role,
                 model_id=self.config.model_id,
