@@ -307,10 +307,9 @@ def _compile_new_authored_modules(
             "owner": "host_scaffold",
             "path": main_path,
             "symbol": main_symbol,
+            # feature_symbols is the single host-owned integration source of truth.
+            # Entry-point calls are derived from it during scaffold materialization.
             "feature_symbols": feature_symbols,
-            "required_calls": [
-                f"{symbol}.initialize()" for symbol in feature_symbols
-            ],
         },
     }
     manifest["manifest_sha256"] = _sha256_json(manifest)
@@ -422,9 +421,6 @@ def materialize_authored_execution_scaffold(
     main_text = main_source.read_text(encoding="utf-8")
     marker = "// MMM_AUTHORED_HOST_ENTRYPOINT_BINDING"
     calls = [f"{symbol}.initialize();" for symbol in feature_symbols]
-    required_calls = list(entry.get("required_calls") or ())
-    if required_calls != calls:
-        raise ValueError("AUTHORED_SCAFFOLD_ENTRYPOINT_CALL_DRIFT")
     if marker in main_text:
         if any(main_text.count(call) != 1 for call in calls):
             raise ValueError("AUTHORED_SCAFFOLD_ENTRYPOINT_BINDING_CORRUPT")
