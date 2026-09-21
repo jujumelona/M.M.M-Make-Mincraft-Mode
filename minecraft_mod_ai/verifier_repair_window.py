@@ -7,6 +7,31 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 MAX_REPAIR_WINDOW_CHARS = 4096
+MIN_REPAIR_REPLACEMENT_CHARS = 256
+
+
+def repair_replacement_max_chars(old_text: Any) -> int:
+    if not isinstance(old_text, str) or not old_text:
+        return MIN_REPAIR_REPLACEMENT_CHARS
+    return min(
+        MAX_REPAIR_WINDOW_CHARS,
+        max(MIN_REPAIR_REPLACEMENT_CHARS, (len(old_text) * 2) + 128),
+    )
+
+
+def selected_repair_diagnostic(
+    diagnostics: Sequence[Mapping[str, Any]],
+    repair_window: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    usable = tuple(item for item in diagnostics if isinstance(item, Mapping))
+    if not usable:
+        return None
+    raw_index = repair_window.get("diagnostic_index") if repair_window else 0
+    index = raw_index if isinstance(raw_index, int) else 0
+    if not 0 <= index < len(usable):
+        index = 0
+    return usable[index]
+
 
 _IDENTIFIER_RE = re.compile(r"\b[A-Za-z_$][\w$]{2,}\b")
 _IDENTIFIER_STOPWORDS = frozenset({
@@ -59,7 +84,7 @@ def _identifier_window(
     source: str,
     diagnostics: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any] | None:
-    for diagnostic in diagnostics:
+    for diagnostic_index, diagnostic in enumerate(diagnostics):
         message = str(diagnostic.get("message") or "")
         for token in _IDENTIFIER_RE.findall(message):
             if token.casefold() in _IDENTIFIER_STOPWORDS:
@@ -72,6 +97,7 @@ def _identifier_window(
                     "end_line": line,
                     "old": token,
                     "old_chars": len(token),
+                    "diagnostic_index": diagnostic_index,
                 }
     return None
 
@@ -104,16 +130,19 @@ def select_verifier_repair_window(
     if not lines:
         return None
     usable = tuple(item for item in diagnostics if isinstance(item, Mapping))
-    for diagnostic in usable:
+    for diagnostic_index, diagnostic in enumerate(usable):
         line_index = _diagnostic_line_index(diagnostic, len(lines))
         if line_index is not None:
             window = _unique_line_window(source, lines, line_index)
             if window is not None:
-                return window
+                return {**window, "diagnostic_index": diagnostic_index}
     identifier = _identifier_window(source, usable)
     if identifier is not None:
         return identifier
-    return _context_window(source, lines, start_line, end_line)
+    context = _context_window(source, lines, start_line, end_line)
+    if context is not None and usable:
+        return {**context, "diagnostic_index": 0}
+    return context
 
 
 def exact_rollback_arguments(

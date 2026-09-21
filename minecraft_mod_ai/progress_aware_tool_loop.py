@@ -49,11 +49,15 @@ from .owned_target_contract import (
 from .root_cause_trace import emit_root_cause, trace_scope
 from .small_model_task_capsule_contract import task_capsule_tool_loop
 from .source_mutation_contract import mutation_history_applied, mutation_payload_applied
-from .source_repair_semantics import existing_source_repair_semantic_error
+from .source_repair_semantics import (
+    atomic_repair_scope_error,
+    existing_source_repair_semantic_error,
+)
 from .verifier_repair_window import (
-    MAX_REPAIR_WINDOW_CHARS,
     exact_rollback_arguments,
+    repair_replacement_max_chars,
     select_verifier_repair_window,
+    selected_repair_diagnostic,
 )
 from .value_shapes import as_sequence as _sequence
 from .value_shapes import structured_payload as _structured_payload
@@ -528,6 +532,7 @@ def _constrain_existing_repair_schema(
     schema: Mapping[str, Any],
     *,
     target_path: str,
+    repair_window: Mapping[str, Any] | None = None,
 ) -> Mapping[str, Any]:
     """Project verifier repair onto one host-bound bounded source-window replacement.
 
@@ -557,11 +562,13 @@ def _constrain_existing_repair_schema(
         raise ModelConfigurationError(
             "REPAIR_TOOL_SCHEMA_INVALID: apply_source_edit has no new-source schema"
         )
+    old_text = repair_window.get("old") if repair_window else None
+    max_chars = repair_replacement_max_chars(old_text)
     new_schema["type"] = "string"
-    new_schema["maxLength"] = MAX_REPAIR_WINDOW_CHARS
+    new_schema["maxLength"] = max_chars
     new_schema["description"] = (
         "Replacement text only for the verifier-selected bounded source window. "
-        "Never emit the complete source file. "
+        f"Emit at most {max_chars} characters and never emit the complete source file. "
         f"The host binds operation=replace_exact and path={target_path!r}, supplies the "
         "exact old window, and executes against the live file."
     )
@@ -631,7 +638,8 @@ def _constrain_verifier_repair_tools(
     target_path = _canonical_mutation_path(context.target_path)
     if not target_path:
         return tuple(tools)
-    if _repair_source_window(state) is None:
+    repair_window = _repair_source_window(state)
+    if repair_window is None:
         raise ModelConfigurationError(
             "VERIFIER_REPAIR_LOCALIZATION_UNAVAILABLE: verifier repair requires one "
             "bounded exact host-selected source span; whole-file reconstruction is forbidden"
@@ -647,7 +655,11 @@ def _constrain_verifier_repair_tools(
                 "REPAIR_TOOL_SCHEMA_INVALID: apply_source_edit schema is not a mapping"
             )
         projected.append(
-            _constrain_existing_repair_schema(schema, target_path=target_path)
+            _constrain_existing_repair_schema(
+                schema,
+                target_path=target_path,
+                repair_window=repair_window,
+            )
         )
     return tuple(projected)
 
@@ -1377,6 +1389,18 @@ def _mutation_target_error(
             "MUTATION_ATOMIC_SPAN_REQUIRED: existing source replacement requires "
             "one exact old span; whole-file model replacement is forbidden"
         )
+    if (
+        operation == "replace_exact"
+        and context.evidence_source == "verifier_workspace_source"
+    ):
+        old_text = arguments.get("old")
+        atomic_error = atomic_repair_scope_error(
+            old_text=old_text,
+            new_text=arguments.get("new"),
+            max_chars=repair_replacement_max_chars(old_text),
+        )
+        if atomic_error is not None:
+            return atomic_error
     semantic_error = existing_source_repair_semantic_error(
         operation=operation,
         supplied=supplied,
@@ -2152,13 +2176,19 @@ def _repair_guidance_payload(state: Any) -> dict[str, Any] | None:
     context = state.mutation_context
     source = context.source_body if context and isinstance(context.source_body, str) else None
     repair_window = _repair_source_window(state)
+    target_diagnostics = tuple(state.repair_target_diagnostics)
+    selected_diagnostic = selected_repair_diagnostic(
+        target_diagnostics,
+        repair_window,
+    )
+    selected_errors = (selected_diagnostic,) if selected_diagnostic is not None else ()
     diagnostic_snapshot = (
         json.loads(_bounded_verifier_recovery_observation(
             state,
-            errors=state.repair_target_diagnostics,
+            errors=selected_errors,
             budget_bytes=_REPAIR_GUIDANCE_VERIFIER_DIAGNOSTIC_BYTES,
         ))
-        if context and state.repair_target_diagnostics
+        if context and selected_errors
         else None
     )
     return {
@@ -2169,8 +2199,12 @@ def _repair_guidance_payload(state: Any) -> dict[str, Any] | None:
         ),
         **({
             "omitted_diagnostic_count": diagnostic_snapshot["omitted_diagnostic_count"],
+            "omitted_target_diagnostic_count": max(
+                0,
+                len(target_diagnostics) - len(selected_errors),
+            ),
             "other_file_diagnostic_count": (
-                len(state.latest_verifier_errors) - len(state.repair_target_diagnostics)
+                len(state.latest_verifier_errors) - len(target_diagnostics)
             ),
         } if diagnostic_snapshot else {}),
         "target_path": context.target_path if context else None,
@@ -4585,6 +4619,8 @@ def _generate_with_tools_impl(
                         "MUTATION_TARGET_DRIFT",
                         "MUTATION_TARGET_UNBOUND",
                         "MUTATION_TARGET_CREATION_CONFLICT",
+                        "REPAIR_ATOMIC_REPLACEMENT_TOO_LARGE",
+                        "REPAIR_ATOMIC_SCOPE_VIOLATION",
                         "PHASE_PROTOCOL_VIOLATION",
                     }:
                         if state.mutation_context and state.mutation_context.is_mutation_ready:

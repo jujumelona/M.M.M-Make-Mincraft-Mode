@@ -245,14 +245,137 @@ def test_existing_verifier_repair_schema_forbids_whole_file_protocol():
             },
         },
     }
-    projected = _constrain_existing_repair_schema(schema, target_path=PATH)
+    repair_window = {"old": "import demo.Missing;\n"}
+    projected = _constrain_existing_repair_schema(
+        schema,
+        target_path=PATH,
+        repair_window=repair_window,
+    )
     parameters = projected["function"]["parameters"]
     assert set(parameters["properties"]) == {"new"}
     assert parameters["required"] == ["new"]
-    assert parameters["properties"]["new"]["maxLength"] == 4096
+    assert parameters["properties"]["new"]["maxLength"] == 256
     description = parameters["properties"]["new"]["description"]
     assert "bounded source window" in description
     assert "Never emit the complete source file" in description
+
+
+def test_production_regression_import_span_rejects_file_sized_replacement():
+    source = (
+        "package com.mineverse.shipbuilding.api;\n"
+        "import net.minecraft.command.argument.ResourceLocationArgumentType;\n"
+        "public class ShipBuildingConfig {}\n"
+    )
+    context = TargetMutationContext(
+        target_path=PATH,
+        source_body=source,
+        is_new_file=False,
+        evidence_source="verifier_workspace_source",
+        writable_paths=(PATH,),
+        target_pinned=True,
+    )
+    old = "import net.minecraft.command.argument.ResourceLocationArgumentType;\n"
+    oversized = (
+        "package com.mineverse.shipbuilding.api;\n"
+        "import net.minecraft.item.Item;\n"
+        "public class ShipBuildingConfig {\n"
+        + ("    int value;\n" * 30)
+        + "}\n"
+    )
+    error = _mutation_target_error(
+        "apply_source_edit",
+        {
+            "operation": "replace_exact",
+            "path": PATH,
+            "old": old,
+            "new": oversized,
+            "count": 1,
+        },
+        context,
+    )
+    assert error is not None
+    assert error.startswith("REPAIR_ATOMIC_REPLACEMENT_TOO_LARGE")
+
+
+def test_import_repair_span_rejects_non_import_replacement_even_when_short():
+    source = (
+        "package demo;\n"
+        "import demo.Missing;\n"
+        "public class DebugToken {}\n"
+    )
+    context = TargetMutationContext(
+        target_path=PATH,
+        source_body=source,
+        is_new_file=False,
+        evidence_source="verifier_workspace_source",
+        writable_paths=(PATH,),
+        target_pinned=True,
+    )
+    error = _mutation_target_error(
+        "apply_source_edit",
+        {
+            "operation": "replace_exact",
+            "path": PATH,
+            "old": "import demo.Missing;\n",
+            "new": "package demo;\n",
+            "count": 1,
+        },
+        context,
+    )
+    assert error is not None
+    assert error.startswith("REPAIR_ATOMIC_SCOPE_VIOLATION")
+
+
+def test_repair_guidance_exposes_one_diagnostic_for_one_window():
+    source = (
+        "package demo;\n"
+        "import demo.MissingA;\n"
+        "import demo.MissingB;\n"
+        "public class DebugToken {}\n"
+    )
+    first = {
+        "path": PATH,
+        "severity": 1,
+        "code": "ImportNotFound",
+        "message": "The import demo.MissingA cannot be resolved",
+        "range": {
+            "start": {"line": 1, "character": 0},
+            "end": {"line": 1, "character": 21},
+        },
+    }
+    second = {
+        "path": PATH,
+        "severity": 1,
+        "code": "ImportNotFound",
+        "message": "The import demo.MissingB cannot be resolved",
+        "range": {
+            "start": {"line": 2, "character": 0},
+            "end": {"line": 2, "character": 21},
+        },
+    }
+    state = HostRunState(
+        validation_status="FAIL",
+        latest_verifier_tool="java_diagnostics",
+        latest_verifier_errors=(first, second),
+        repair_target_diagnostics=(first, second),
+        latest_verifier_fingerprint="fp",
+        mutation_context=TargetMutationContext(
+            target_path=PATH,
+            source_body=source,
+            is_new_file=False,
+            evidence_source="verifier_workspace_source",
+            writable_paths=(PATH,),
+            target_pinned=True,
+        ),
+    )
+    guidance = state.take_verifier_repair_guidance()
+    assert guidance is not None
+    import json
+
+    payload = json.loads(guidance.rsplit("\n", 1)[-1])
+    assert len(payload["diagnostics"]) == 1
+    assert "MissingA" in payload["diagnostics"][0]["message"]
+    assert payload["omitted_target_diagnostic_count"] == 1
 
 
 def test_repair_window_never_degenerates_to_entire_single_line_file():
