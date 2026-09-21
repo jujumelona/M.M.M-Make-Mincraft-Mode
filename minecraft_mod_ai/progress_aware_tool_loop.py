@@ -4286,6 +4286,22 @@ def _generate_with_tools_impl(
                 )
             return content
 
+        for call in turn.tool_calls:
+            if call.name not in _MUTATION_ACT_TOOLS:
+                continue
+            semantic_target_error = _mutation_target_error(
+                call.name,
+                call.arguments,
+                state.mutation_context,
+            )
+            if (
+                semantic_target_error
+                and semantic_target_error.startswith("MUTATION_TARGET_DRIFT:")
+            ):
+                raise ModelConfigurationError(
+                    "POST_ARGUMENT_SEMANTIC_FAILURE: " + semantic_target_error
+                )
+
         if forced_evidence_tool is not None and (
             len(turn.tool_calls) != 1 or turn.tool_calls[0].name != forced_evidence_tool
         ):
