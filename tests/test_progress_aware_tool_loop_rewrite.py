@@ -252,7 +252,10 @@ def test_fresh_java_requires_reviewed_evidence_before_source_mutation() -> None:
             names = {item["function"]["name"] for item in request.tools}
             if self.calls == 1:
                 assert names == {"search_code_rag"}
-                assert request.tool_choice == "required"
+                assert request.tool_choice == {
+                    "type": "function",
+                    "function": {"name": "search_code_rag"},
+                }
                 arguments = {"query": "Fabric item registration example"}
                 return GenerationResponse(
                     tool_calls=(
