@@ -2638,7 +2638,15 @@ def _source_edit_schema_for_context(
     A fresh Java target exposes only create_file/path/content; aliases and repair-only
     operations remain host-side compatibility rather than model-facing choices.
     """
-    if _tool_name(schema) != "apply_source_edit" or not context_is_host_pinned(context):
+    if _tool_name(schema) != "apply_source_edit":
+        return schema
+    active_authority = CURRENT_MUTATION_AUTHORITY.get()
+    bounded_unpinned = bool(
+        not context_is_host_pinned(context)
+        and active_authority is not None
+        and active_authority.mode is MutationAuthorityMode.BOUNDED_ROOTS
+    )
+    if not context_is_host_pinned(context) and not bounded_unpinned:
         return schema
     cloned = deepcopy(schema)
     if not isinstance(cloned, dict):
@@ -2648,6 +2656,33 @@ def _source_edit_schema_for_context(
         return cloned
     parameters = function.get("parameters")
     properties = parameters.get("properties") if isinstance(parameters, dict) else None
+    if bounded_unpinned and isinstance(parameters, dict) and isinstance(properties, dict):
+        roots = tuple(active_authority.roots)
+        path_schema = deepcopy(properties.get("path") or {"type": "string"})
+        if isinstance(path_schema, dict):
+            path_schema["type"] = "string"
+            path_schema["pattern"] = (
+                "^(?:"
+                + "|".join(re.escape(root) for root in roots)
+                + ").+"
+            )
+            path_schema["description"] = (
+                "Choose exactly one project-relative destination below one of these "
+                f"host-owned roots: {list(roots)!r}. Paths outside them are invalid."
+            )
+            properties["path"] = path_schema
+        for alias in ("file", "target_path", "target_file"):
+            properties.pop(alias, None)
+        parameters["required"] = list(
+            dict.fromkeys([*(parameters.get("required") or ()), "operation", "path"])
+        )
+        parameters["additionalProperties"] = False
+        function["description"] = (
+            str(function.get("description") or "").strip()
+            + " Authored bounded-root destination: path must match the host-supplied root pattern."
+        ).strip()
+        return cloned
+
     operation = properties.get("operation") if isinstance(properties, dict) else None
     fresh_java = bool(
         context.is_new_file and context.target_path.casefold().endswith(".java")
