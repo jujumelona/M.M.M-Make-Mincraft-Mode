@@ -25,6 +25,7 @@ from .mutation_authority import (
     MutationAuthority,
     MutationAuthorityMode,
 )
+from .owned_target_contract import target_is_writable
 
 _SCHEMA = "mmm/direct-task-mutation-authority-v1"
 _AUTHORED_SCHEMA = "mmm/authored-design-mutation-authority-v1"
@@ -346,21 +347,38 @@ def compile_direct_task_mutation_authority(
         if canonical is not None and canonical not in anchors:
             anchors.append(canonical)
 
-    host_reserved = tuple(
+    writable_anchors = tuple(
         anchor
         for anchor in anchors
-        if str(anchor.get("status") or "").strip().casefold() == "host_reserved"
+        if target_is_writable(anchor.get("status"))
     )
-    if not host_reserved:
+    if not writable_anchors:
         return None
+    unsupported = tuple(
+        anchor
+        for anchor in anchors
+        if not target_is_writable(anchor.get("status"))
+    )
+    if unsupported:
+        rendered = [
+            f"{anchor.get('locator')}:{anchor.get('status') or '<empty>'}"
+            for anchor in unsupported
+        ]
+        raise DirectTaskMutationAuthorityError(
+            "PLANIR_AUTHORITY_TARGET_STATUS_INVALID: exact custom_java authority contains "
+            f"unsupported writable-target status: {rendered!r}."
+        )
 
     bindings = _matching_fresh_bindings(task, task_id)
     if bindings == ():
-        return None
+        raise DirectTaskMutationAuthorityError(
+            "PLANIR_AUTHORITY_REUSE_UNSUPPORTED: exact custom_java authority requires the "
+            "canonical fresh production binding."
+        )
     if bindings is None:
         raise DirectTaskMutationAuthorityError(
-            "PLANIR_AUTHORITY_BINDING_MISSING: fresh host-reserved custom_java task has no "
-            "matching production_binding."
+            "PLANIR_AUTHORITY_BINDING_MISSING: exact custom_java task has no matching "
+            "production_binding."
         )
 
     candidates = _binding_symbol_candidates(bindings)
@@ -375,12 +393,13 @@ def compile_direct_task_mutation_authority(
             "PLANIR_AUTHORITY_PRIMARY_NOT_JAVA: custom_java primary mutation target must be .java."
         )
 
-    writable_paths = tuple(dict.fromkeys(_anchor_path(anchor) for anchor in anchors))
-    creatable_paths = tuple(dict.fromkeys(_anchor_path(anchor) for anchor in host_reserved))
-    if primary_path not in writable_paths or primary_path not in creatable_paths:
+    writable_paths = tuple(
+        dict.fromkeys(_anchor_path(anchor) for anchor in writable_anchors)
+    )
+    if primary_path not in writable_paths:
         raise DirectTaskMutationAuthorityError(
-            "PLANIR_AUTHORITY_PRIMARY_NOT_OWNED: production-binding primary must be a "
-            "host_reserved task owned_anchor."
+            "PLANIR_AUTHORITY_PRIMARY_NOT_OWNED: production-binding primary must be an "
+            "exact writable task owned_anchor."
         )
 
     mutation_authority = MutationAuthority.exact(writable_paths, task_id=task_id)
