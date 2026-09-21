@@ -2142,9 +2142,12 @@ class HostRunState:
             "Any earlier host_reserved/fresh metadata is pre-materialization history only. "
             "This repair turn exposes only the complete corrected source body in new. "
             "Operation, path, old text, and optimistic-concurrency SHA are host-owned and must not "
-            "be emitted by the model. The host binds new to an atomic live-SHA whole-file rewrite. "
+            "be emitted by the model. The host binds operation=replace_exact and new to an atomic "
+            "live-SHA whole-file rewrite. Preserve the file package and primary Java type identity. "
             "Use the diagnostics below against the host-pinned target and make one materially "
-            "different source edit. The next successful mutation goes directly back to VERIFY.\n"
+            "different source edit that reduces severity-1 diagnostics. An equal or worse verifier "
+            "result is rolled back and counts as no progress. The next successful mutation goes "
+            "directly back to VERIFY.\n"
             + json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
         )
 
