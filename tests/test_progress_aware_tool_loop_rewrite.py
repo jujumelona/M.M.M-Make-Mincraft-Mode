@@ -36,7 +36,6 @@ def test_fresh_host_reserved_target_is_ready_without_searching_its_own_filename(
     )
     assert [item["function"]["name"] for item in selected] == [
         "search_code_rag",
-        "search_project_rag",
     ]
 
 
@@ -252,7 +251,7 @@ def test_fresh_java_requires_reviewed_evidence_before_source_mutation() -> None:
             self.calls += 1
             names = {item["function"]["name"] for item in request.tools}
             if self.calls == 1:
-                assert names == {"search_code_rag", "search_project_rag"}
+                assert names == {"search_code_rag"}
                 assert request.tool_choice == "required"
                 arguments = {"query": "Fabric item registration example"}
                 return GenerationResponse(
