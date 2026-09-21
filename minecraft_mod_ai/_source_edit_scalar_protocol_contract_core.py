@@ -4,9 +4,8 @@ from __future__ import annotations
 
 One model action describes one executable source edit. A fresh, exact host-owned Java
 target is created once as a complete file so the target compiler can validate one coherent
-implementation. After materialization, a create_file/create request for that same exact
-existing path is an atomic whole-file rewrite and is lowered to an expected-SHA replace;
-structural create operations and different-path creation remain forbidden by host authority.
+implementation. Existing targets require exact bounded edits; model-facing create_file
+never overwrites an existing path and replace_exact always requires an exact old span.
 The host materializes every action into transactional patches.
 """
 
@@ -619,14 +618,9 @@ def materialize_model_source_edit(
             )
         content = _required_text(runtime_module, payload, "content", allow_empty=True)
         if target.exists():
-            raw_bytes, text, expected_sha256 = _read_utf8(runtime_module, target, normalized)
-            del raw_bytes, text
-            return {
-                "project_root": project_root_argument,
-                "operations": [
-                    {"operation": "replace", "path": normalized, "expected_sha256": expected_sha256, "content": content}
-                ],
-            }
+            raise runtime_module.AgentToolRuntimeError(
+                f"create_file target already exists: {normalized}; use one bounded exact edit"
+            )
         return {
             "project_root": project_root_argument,
             "operations": [
@@ -709,20 +703,6 @@ def materialize_model_source_edit(
         raise runtime_module.AgentToolRuntimeError(
             f"Fields {sorted(forbidden)} are invalid for {operation}"
         )
-
-    if operation == "replace_exact" and "old" not in payload and "old_text" not in payload:
-        new_text = str(payload.get("new") or payload.get("new_text") or payload.get("text") or "")
-        return {
-            "project_root": project_root_argument,
-            "operations": [
-                {
-                    "operation": "replace",
-                    "path": normalized,
-                    "expected_sha256": expected_sha256,
-                    "content": new_text,
-                }
-            ],
-        }
 
     replacement = _replacement_for_edit(
         runtime_module,

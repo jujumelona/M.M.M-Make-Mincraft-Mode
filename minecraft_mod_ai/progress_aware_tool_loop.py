@@ -1326,6 +1326,12 @@ def _mutation_target_error(
 ) -> str | None:
     if tool_name != "apply_source_edit":
         return None
+    operation = str(arguments.get("operation") or "").strip().casefold()
+    if operation == "replace_exact" and "old" not in arguments:
+        return (
+            "MUTATION_ATOMIC_SPAN_REQUIRED: existing source replacement requires "
+            "one exact old span; whole-file model replacement is forbidden"
+        )
     authority = CURRENT_MUTATION_AUTHORITY.get()
     if authority is not None:
         error = authority.mutation_error(
@@ -1352,7 +1358,6 @@ def _mutation_target_error(
             f"MUTATION_TARGET_DRIFT: writable exact-set {sorted(allowed)!r} "
             f"does not authorize {supplied!r}"
         )
-    operation = str(arguments.get("operation") or "").strip().casefold()
     if operation in _SOURCE_CREATE_OPERATIONS and not context.is_new_file:
         return (
             "MUTATION_TARGET_CREATION_CONFLICT: create operation is not authorized "
@@ -1360,15 +1365,6 @@ def _mutation_target_error(
         )
     if not context.is_mutation_ready:
         return "MUTATION_TARGET_UNBOUND: no host-pinned mutation target is READY"
-    if (
-        operation == "replace_exact"
-        and not context.is_new_file
-        and "old" not in arguments
-    ):
-        return (
-            "MUTATION_ATOMIC_SPAN_REQUIRED: existing source replacement requires "
-            "one exact old span; whole-file model replacement is forbidden"
-        )
     if (
         operation == "replace_exact"
         and supplied == pinned

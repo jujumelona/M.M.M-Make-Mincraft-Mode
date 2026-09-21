@@ -95,33 +95,50 @@ def test_create_file_accepts_genuinely_new_java_source(tmp_path: Path) -> None:
     }
 
 
-def test_create_file_on_existing_exact_target_lowers_to_sha_bound_replace(tmp_path: Path) -> None:
+def test_create_file_rejects_existing_exact_target(tmp_path: Path) -> None:
     target = tmp_path / "src/main/java/dev/mmm/debugfixture/DebugToken.java"
     target.parent.mkdir(parents=True)
     target.write_text(
         "package dev.mmm.debugfixture; public final class DebugToken {}\n",
         encoding="utf-8",
     )
-    replacement = (
-        "package dev.mmm.debugfixture;\n\n"
-        "public final class DebugToken { private DebugToken() {} }\n"
-    )
 
-    result = materialize_model_source_edit(
-        _Runtime,
-        tmp_path,
-        {
-            "operation": "create_file",
-            "path": "src/main/java/dev/mmm/debugfixture/DebugToken.java",
-            "content": replacement,
-        },
-    )
+    with pytest.raises(
+        _Runtime.AgentToolRuntimeError,
+        match="create_file target already exists",
+    ):
+        materialize_model_source_edit(
+            _Runtime,
+            tmp_path,
+            {
+                "operation": "create_file",
+                "path": "src/main/java/dev/mmm/debugfixture/DebugToken.java",
+                "content": (
+                    "package dev.mmm.debugfixture;\n"
+                    "public final class DebugToken { private DebugToken() {} }\n"
+                ),
+            },
+        )
 
-    operation = result["operations"][0]
-    assert operation["operation"] == "replace"
-    assert operation["path"] == "src/main/java/dev/mmm/debugfixture/DebugToken.java"
-    assert operation["expected_sha256"].startswith("sha256:")
-    assert operation["content"] == replacement
+
+def test_replace_exact_requires_exact_old_span(tmp_path: Path) -> None:
+    target = tmp_path / "src/main/resources/example.txt"
+    target.parent.mkdir(parents=True)
+    target.write_text("before\n", encoding="utf-8")
+
+    with pytest.raises(
+        _Runtime.AgentToolRuntimeError,
+        match="Field 'old' must be a non-empty string",
+    ):
+        materialize_model_source_edit(
+            _Runtime,
+            tmp_path,
+            {
+                "operation": "replace_exact",
+                "path": "src/main/resources/example.txt",
+                "new": "after\n",
+            },
+        )
 
 
 def test_create_file_rejects_conflicting_content_aliases(tmp_path: Path) -> None:
