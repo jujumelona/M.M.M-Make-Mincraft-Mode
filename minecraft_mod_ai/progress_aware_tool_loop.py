@@ -1170,7 +1170,7 @@ _HOST_BOUND_EXISTING_REWRITE_MAX_BYTES = 12 * 1024
 
 
 def _host_bound_existing_rewrite_ready(context: TargetMutationContext | None) -> bool:
-    """Whether a recovered authored target can expose only replacement source to the model."""
+    """Whether the host can hide exact existing-file preconditions from the model."""
 
     if (
         context is None
@@ -1182,7 +1182,13 @@ def _host_bound_existing_rewrite_ready(context: TargetMutationContext | None) ->
     ):
         return False
     authority = CURRENT_MUTATION_AUTHORITY.get()
-    if authority is None or authority.mode is not MutationAuthorityMode.BOUNDED_ROOTS:
+    if authority is None:
+        return False
+    target = _canonical_mutation_path(context.target_path)
+    if authority.mode is MutationAuthorityMode.EXACT:
+        if target not in authority.paths:
+            return False
+    elif authority.mode is not MutationAuthorityMode.BOUNDED_ROOTS:
         return False
     return (
         len(context.source_body.encode("utf-8"))
@@ -1194,7 +1200,7 @@ def _bind_host_owned_existing_source_call(
     call: Any,
     state: Any,
 ) -> Any:
-    """Bind exact live source preconditions for a recovered authored existing target.
+    """Bind exact live source preconditions for any host-owned existing target.
 
     The small coder supplies only the desired updated source. Exact path selection,
     operation type, and the current source precondition are already host-owned facts and
@@ -2769,7 +2775,7 @@ def _source_edit_schema_for_context(
         )
     elif _host_bound_existing_rewrite_ready(context):
         suffix = (
-            "Recovered existing authored target: emit only the updated source in new. "
+            "Host-owned existing target: emit only the updated source in new. "
             "The host owns the exact path, current old source, replace_exact operation, "
             "count, and transactional precondition."
         )
