@@ -363,9 +363,11 @@ def test_materialized_java_edit_schema_allows_atomic_same_path_rewrite() -> None
         for value in narrowed["function"]["parameters"]["properties"]["operation"]["enum"]
     }
 
-    assert {"create_file", "create", "replace_exact"} <= operations
+    assert "replace_exact" in operations
+    assert "create_file" not in operations
+    assert "create" not in operations
     assert "create_java_type" not in operations
-    assert "SHA-bound replace" in narrowed["function"]["description"]
+    assert "creation operations are unavailable" in narrowed["function"]["description"]
 
 
 def test_fresh_java_optional_observe_frontier_exposes_all_reviewed_grounding_routes() -> None:
@@ -398,9 +400,6 @@ def test_fresh_java_optional_observe_frontier_exposes_all_reviewed_grounding_rou
         semantic_retrieval_choice=True,
     ) == [
         "search_code_rag",
-        "java_workspace_symbols",
-        "external_mcp_call",
-        "inspect_modrinth_project",
     ]
 
 
