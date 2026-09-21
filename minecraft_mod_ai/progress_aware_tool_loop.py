@@ -53,6 +53,10 @@ from .source_repair_semantics import (
     atomic_repair_scope_error,
     existing_source_repair_semantic_error,
 )
+from .verifier_repair_admission_recovery import (
+    model_tool_rejection_feedback as _model_tool_rejection_feedback,
+    recover_schema_rejected_verifier_repair_calls,
+)
 from .verifier_repair_window import (
     exact_rollback_arguments,
     normalize_model_repair_replacement,
@@ -156,7 +160,6 @@ _SOURCE_CREATE_OPERATIONS = frozenset({
     "write", "write_file",
 })
 _REPAIR_CONTEXT_PREFIX = "MMM_CORE_VERIFIER_REPAIR_"
-_MODEL_REJECTION_TOOL_NAME = "__mmm_rejected_tool_call__"
 _HOST_AUTHORITY_ROLES = frozenset({"system", "developer", "tool"})
 _GENERATION_VERIFICATION_RECEIPT: ContextVar[dict[str, Any] | None] = ContextVar(
     "mmm_generation_verification_receipt",
@@ -1672,46 +1675,6 @@ def _forced_act_messages(
         )
     projected.append({"role": "system", "content": directive})
     return projected
-
-
-def _model_tool_rejection_feedback(
-    calls: Sequence[Any],
-) -> tuple[str, list[Mapping[str, Any]]] | None:
-    """Convert adapter admission rejections into retryable model feedback."""
-    rejections: list[Mapping[str, Any]] = []
-    for call in calls:
-        if str(getattr(call, "name", "") or "").strip() != _MODEL_REJECTION_TOOL_NAME:
-            continue
-        arguments = getattr(call, "arguments", None)
-        if isinstance(arguments, Mapping):
-            rejections.append(dict(arguments))
-        else:
-            rejections.append({
-                "failure_code": "MODEL_TOOL_CALL_REJECTED",
-                "error": "invalid rejection payload",
-            })
-    if not rejections:
-        return None
-
-    details: list[str] = []
-    for payload in rejections:
-        code = str(payload.get("failure_code") or "MODEL_TOOL_CALL_REJECTED").strip()
-        name = str(
-            payload.get("original_tool")
-            or payload.get("rejected_name")
-            or ""
-        ).strip()
-        error = str(payload.get("error") or "").strip()
-        line = code + (f" for {name!r}" if name else "")
-        if error:
-            line += f": {error}"
-        details.append(line)
-    return (
-        "The previous model tool call was rejected during host admission and was not executed. "
-        "Correct the tool name/arguments to match the currently exposed schema and try the required "
-        "phase action again. Rejections: " + " | ".join(details),
-        rejections,
-    )
 
 
 def _model_rejection_progress_key(
@@ -4180,6 +4143,23 @@ def _generate_with_tools_impl(
             verifier_relative_files=verifier_relative_files,
         )
 
+        recovered_repair_calls = recover_schema_rejected_verifier_repair_calls(
+            turn.tool_calls,
+            phase=state.phase.value,
+            validation_status=str(state.validation_status or ""),
+            context=state.mutation_context,
+            repair_window=_repair_source_window(state),
+        )
+        if recovered_repair_calls is not None:
+            turn = replace(turn, tool_calls=recovered_repair_calls)
+            emit_root_cause(
+                "verifier_repair_rejection_downprojected",
+                stage=stage,
+                operation="apply_source_edit",
+                gate="tool_admission",
+                result="PASS",
+                reason="schema-rejected whole-source repair was safely down-projected to the host-selected span",
+            )
         rejection = _model_tool_rejection_feedback(turn.tool_calls)
         if rejection is not None:
             feedback, rejection_payloads = rejection

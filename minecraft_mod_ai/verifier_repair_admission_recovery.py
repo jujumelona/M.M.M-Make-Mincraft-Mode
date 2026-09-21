@@ -1,0 +1,126 @@
+from __future__ import annotations
+
+"""Recover verifier-repair candidates rejected before host atomic binding."""
+
+import json
+from collections.abc import Mapping, Sequence
+from dataclasses import replace
+from typing import Any
+
+from .source_repair_semantics import atomic_repair_scope_error
+from .verifier_repair_window import (
+    normalize_model_repair_replacement,
+    repair_replacement_max_chars,
+)
+
+_MODEL_REJECTION_TOOL_NAME = "__mmm_rejected_tool_call__"
+
+
+def model_tool_rejection_feedback(
+    calls: Sequence[Any],
+) -> tuple[str, list[Mapping[str, Any]]] | None:
+    rejections: list[Mapping[str, Any]] = []
+    for call in calls:
+        if str(getattr(call, "name", "") or "").strip() != _MODEL_REJECTION_TOOL_NAME:
+            continue
+        arguments = getattr(call, "arguments", None)
+        if isinstance(arguments, Mapping):
+            rejections.append(dict(arguments))
+        else:
+            rejections.append({
+                "failure_code": "MODEL_TOOL_CALL_REJECTED",
+                "error": "invalid rejection payload",
+            })
+    if not rejections:
+        return None
+
+    details: list[str] = []
+    for payload in rejections:
+        code = str(payload.get("failure_code") or "MODEL_TOOL_CALL_REJECTED").strip()
+        name = str(
+            payload.get("original_tool")
+            or payload.get("rejected_name")
+            or ""
+        ).strip()
+        error = str(payload.get("error") or "").strip()
+        line = code + (f" for {name!r}" if name else "")
+        if error:
+            line += f": {error}"
+        details.append(line)
+    return (
+        "The previous model tool call was rejected during host admission and was not executed. "
+        "Correct the tool name/arguments to match the currently exposed schema and try the required "
+        "phase action again. Rejections: " + " | ".join(details),
+        rejections,
+    )
+
+
+def recover_schema_rejected_verifier_repair_calls(
+    calls: Sequence[Any],
+    *,
+    phase: str,
+    validation_status: str,
+    context: Any,
+    repair_window: Mapping[str, Any] | None,
+) -> tuple[Any, ...] | None:
+    """Salvage only provably atomic deltas from a schema-rejected repair call."""
+
+    if (
+        phase != "ACT"
+        or validation_status != "FAIL"
+        or len(calls) != 1
+        or context is None
+        or getattr(context, "is_new_file", False)
+        or str(getattr(context, "evidence_source", "") or "") != "verifier_workspace_source"
+        or not repair_window
+    ):
+        return None
+    call = calls[0]
+    if str(getattr(call, "name", "") or "") != _MODEL_REJECTION_TOOL_NAME:
+        return None
+    payload = getattr(call, "arguments", None)
+    if not isinstance(payload, Mapping):
+        return None
+    if (
+        str(payload.get("failure_code") or "") != "TOOL_SCHEMA_INVALID"
+        or str(payload.get("original_tool") or "") != "apply_source_edit"
+    ):
+        return None
+    raw_arguments = payload.get("raw_arguments")
+    if not isinstance(raw_arguments, str) or not raw_arguments:
+        return None
+    try:
+        candidate = json.loads(raw_arguments)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(candidate, Mapping) or set(candidate) != {"new"}:
+        return None
+
+    old_text = repair_window.get("old")
+    model_new = candidate.get("new")
+    current_source = getattr(context, "source_body", None)
+    if not isinstance(old_text, str) or not old_text or not isinstance(model_new, str):
+        return None
+    local_new = normalize_model_repair_replacement(current_source, old_text, model_new)
+    if local_new == model_new:
+        return None
+    if atomic_repair_scope_error(
+        old_text=old_text,
+        new_text=local_new,
+        max_chars=repair_replacement_max_chars(old_text),
+    ) is not None:
+        return None
+
+    arguments = {"new": local_new}
+    return (
+        replace(
+            call,
+            name="apply_source_edit",
+            arguments=arguments,
+            raw_arguments=json.dumps(
+                arguments,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        ),
+    )

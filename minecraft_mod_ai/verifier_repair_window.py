@@ -19,12 +19,34 @@ def repair_replacement_max_chars(old_text: Any) -> int:
     )
 
 
+def _whole_source_import_replacement(old_text: str, model_new: str) -> str | None:
+    old_match = re.fullmatch(
+        r"\\s*import\\s+(?:static\\s+)?(?P<name>[\\w.$*]+);\\s*",
+        old_text,
+    )
+    if old_match is None or "package " not in model_new:
+        return None
+    if re.search(r"\\b(?:class|interface|record|enum)\\s+[A-Za-z_$]", model_new) is None:
+        return None
+    simple_name = old_match.group("name").rstrip(".*").rsplit(".", 1)[-1]
+    matching = [
+        match.group("full")
+        for match in _IMPORT_DECL_RE.finditer(model_new)
+        if match.group("name").rstrip(".*").rsplit(".", 1)[-1] == simple_name
+    ]
+    if len(matching) == 1:
+        return matching[0]
+    if not matching:
+        return ""
+    return None
+
+
 def normalize_model_repair_replacement(
     current_source: Any,
     old_text: Any,
     model_new: Any,
 ) -> Any:
-    """Down-project a provable whole-source candidate to the selected local span."""
+    """Down-project a whole-source candidate to the selected local span when provable."""
 
     if not (
         isinstance(current_source, str)
@@ -35,13 +57,13 @@ def normalize_model_repair_replacement(
     ):
         return model_new
     prefix, suffix = current_source.split(old_text, 1)
-    if not model_new.startswith(prefix) or not model_new.endswith(suffix):
-        return model_new
-    suffix_length = len(suffix)
-    end = len(model_new) - suffix_length if suffix_length else len(model_new)
-    if end < len(prefix):
-        return model_new
-    return model_new[len(prefix):end]
+    if model_new.startswith(prefix) and model_new.endswith(suffix):
+        suffix_length = len(suffix)
+        end = len(model_new) - suffix_length if suffix_length else len(model_new)
+        if end >= len(prefix):
+            return model_new[len(prefix):end]
+    import_replacement = _whole_source_import_replacement(old_text, model_new)
+    return model_new if import_replacement is None else import_replacement
 
 
 def selected_repair_diagnostic(
