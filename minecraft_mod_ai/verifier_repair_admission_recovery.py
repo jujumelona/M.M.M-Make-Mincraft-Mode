@@ -55,6 +55,82 @@ def model_tool_rejection_feedback(
     )
 
 
+def recover_schema_rejected_host_bound_existing_calls(
+    calls: Sequence[Any],
+    *,
+    phase: str,
+    validation_status: str,
+    context: Any,
+) -> tuple[Any, ...] | None:
+    """Strip redundant host-owned fields from one rejected existing-source call.
+
+    Existing authored targets expose only the model-owned new source. Small models
+    may still echo path/operation/old/count from prior tool turns. Those fields are safe
+    to discard only when they agree with the already-pinned host target.
+    """
+
+    if (
+        phase != "ACT"
+        or validation_status == "FAIL"
+        or len(calls) != 1
+        or context is None
+        or getattr(context, "is_new_file", False)
+        or str(getattr(context, "evidence_source", "") or "") != "workspace_existing_target"
+    ):
+        return None
+    target = str(getattr(context, "target_path", "") or "").replace("\\", "/").strip()
+    if not target:
+        return None
+    call = calls[0]
+    if str(getattr(call, "name", "") or "").strip() != _MODEL_REJECTION_TOOL_NAME:
+        return None
+    payload = getattr(call, "arguments", None)
+    if not isinstance(payload, Mapping):
+        return None
+    if (
+        str(payload.get("failure_code") or "") != "TOOL_SCHEMA_INVALID"
+        or str(payload.get("original_tool") or "") != "apply_source_edit"
+    ):
+        return None
+    raw_arguments = payload.get("raw_arguments")
+    if not isinstance(raw_arguments, str) or not raw_arguments:
+        return None
+    try:
+        candidate = json.loads(raw_arguments)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(candidate, Mapping):
+        return None
+    allowed = {"new", "path", "operation", "old", "count"}
+    if set(candidate) - allowed:
+        return None
+    model_new = candidate.get("new")
+    if not isinstance(model_new, str) or not model_new:
+        return None
+    supplied_path = str(candidate.get("path") or "").replace("\\", "/").strip()
+    while supplied_path.startswith("./"):
+        supplied_path = supplied_path[2:]
+    if supplied_path and supplied_path != target:
+        return None
+    operation = str(candidate.get("operation") or "").strip().casefold()
+    if operation and operation not in {"replace", "replace_exact"}:
+        return None
+
+    arguments = {"new": model_new}
+    return (
+        replace(
+            call,
+            name="apply_source_edit",
+            arguments=arguments,
+            raw_arguments=json.dumps(
+                arguments,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        ),
+    )
+
+
 def recover_schema_rejected_verifier_repair_calls(
     calls: Sequence[Any],
     *,
