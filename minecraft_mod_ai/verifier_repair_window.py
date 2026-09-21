@@ -21,12 +21,12 @@ def repair_replacement_max_chars(old_text: Any) -> int:
 
 def _whole_source_import_replacement(old_text: str, model_new: str) -> str | None:
     old_match = re.fullmatch(
-        r"\\s*import\\s+(?:static\\s+)?(?P<name>[\\w.$*]+);\\s*",
+        r"\s*import\s+(?:static\s+)?(?P<name>[\w.$*]+);\s*",
         old_text,
     )
     if old_match is None or "package " not in model_new:
         return None
-    if re.search(r"\\b(?:class|interface|record|enum)\\s+[A-Za-z_$]", model_new) is None:
+    if re.search(r"\b(?:class|interface|record|enum)\s+[A-Za-z_$]", model_new) is None:
         return None
     simple_name = old_match.group("name").rstrip(".*").rsplit(".", 1)[-1]
     matching = [
