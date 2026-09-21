@@ -39,7 +39,7 @@ from .model_context_budget import (
     request_message_budget,
 )
 from .mutation_authority import CURRENT_MUTATION_AUTHORITY, MutationAuthorityMode
-from .mutation_context_binding import context_is_host_pinned, observed_context_may_bind
+from .mutation_context_binding import context_is_host_pinned, materialized_create_context, observed_context_may_bind
 from .owned_target_contract import (
     normalize_target_status,
     target_is_creatable,
@@ -2060,6 +2060,7 @@ def _update_mutation_context_after_edit(
 ) -> None:
     context = state.mutation_context
     if context is None:
+        state.mutation_context = materialized_create_context(path, operation, arguments, _SOURCE_CREATE_OPERATIONS, TargetMutationContext)
         return
     if path != _canonical_mutation_path(context.target_path):
         return

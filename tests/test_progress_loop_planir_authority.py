@@ -219,6 +219,38 @@ def test_authored_refresh_rag_evidence_does_not_pin_model_selected_write_target(
     assert state.mutation_context is None
 
 
+def test_successful_model_selected_create_becomes_verifier_target() -> None:
+    state = tool_loop.HostRunState()
+    path = "src/main/java/demo/SpaceModeMod.java"
+    source = "package demo; public class SpaceModeMod {}"
+    payload = {
+        "ok": True,
+        "result": {
+            "schema_version": "mmm/source-patch-receipt-v1",
+            "status": "APPLIED",
+            "operations": [
+                {
+                    "path": path,
+                    "before_sha256": None,
+                    "after_sha256": "sha256:" + "b" * 64,
+                }
+            ],
+        },
+    }
+
+    assert state.record_mutation(
+        "apply_source_edit",
+        {"operation": "create_file", "path": path, "content": source},
+        payload,
+    ) is True
+    assert state.mutation_context is not None
+    assert state.mutation_context.target_path == path
+    assert state.mutation_context.source_body == source
+    assert state.mutation_context.is_new_file is False
+    assert state.mutation_context.target_pinned is True
+    assert state.mutation_context.writable_paths == (path,)
+
+
 def test_unpinned_rag_context_cannot_narrow_bounded_root_source_edit_schema() -> None:
     observed = tool_loop.TargetMutationContext(
         target_path="src/main/resources/fabric.mod.json",
