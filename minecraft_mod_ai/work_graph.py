@@ -689,6 +689,36 @@ def _module_stage(
         return 'custom'
     return 'custom'
 
+def _is_host_exact_authored_module(module: ProductionModule) -> bool:
+    """Return whether one fresh-authored task already has host-owned exact file identity.
+
+    These tasks must be durable one-module work nodes. Batching them reintroduces a
+    shard-wide execution deadline and shard-wide rollback, defeating the exact-task
+    architecture's per-task checkpoint semantics.
+    """
+
+    config = module.config if isinstance(module.config, dict) else {}
+    task = config.get("evidence_task")
+    if not isinstance(task, dict):
+        return False
+    anchors = task.get("owned_anchors")
+    if not isinstance(anchors, list) or not anchors:
+        return False
+    writable = [
+        anchor
+        for anchor in anchors
+        if isinstance(anchor, dict)
+        and str(anchor.get("ownership") or "").strip()
+        == "host_exact_authored_lowering"
+    ]
+    if not writable:
+        return False
+    return all(
+        str(anchor.get("status") or "").strip().casefold() == "existing"
+        for anchor in writable
+    )
+
+
 def _active_llm_slots() -> int:
     raw = os.environ.get('MMM_LLAMA_ACTIVE_PARALLEL', '1').strip()
     try:
@@ -765,6 +795,27 @@ def _module_shards(
 
         shard_size = shard_size_for(stage)
         dependency_groups = {module_group[dependency] for dependency in module.depends_on}
+
+        if stage == "custom" and _is_host_exact_authored_module(module):
+            # One semantic authored task owns one exact pre-materialized target and one
+            # independent target_compile gate. Give it a distinct durable node so:
+            #   * the model execution deadline applies to this task only,
+            #   * successful tasks commit before later tasks start,
+            #   * resume never replays earlier successful authored tasks,
+            #   * one slow task cannot roll back a whole authored shard.
+            chosen = len(groups)
+            groups.append(
+                {
+                    "stage": stage,
+                    "members": [module],
+                    "external_groups": set(dependency_groups),
+                    "first_order": len(module_group),
+                    "sealed": True,
+                }
+            )
+            module_group[module.module_id] = chosen
+            continue
+
         candidates: set[int] = set()
 
         exact_key = (stage, frozenset(dependency_groups))
@@ -774,7 +825,11 @@ def _module_shards(
 
         for index in dependency_groups:
             group = groups[index]
-            if group['stage'] != stage or len(group['members']) >= shard_size:
+            if (
+                group.get("sealed")
+                or group['stage'] != stage
+                or len(group['members']) >= shard_size
+            ):
                 continue
             if (dependency_groups - {index}).issubset(group['external_groups']):
                 candidates.add(index)
@@ -789,6 +844,7 @@ def _module_shards(
                     'members': [],
                     'external_groups': external_groups,
                     'first_order': len(module_group),
+                    'sealed': False,
                 }
             )
             open_by_key[(stage, frozenset(external_groups))] = chosen
