@@ -158,6 +158,40 @@ def test_existing_rebound_target_schema_removes_create_and_pins_path() -> None:
     assert "target_path" not in properties
 
 
+def test_unpinned_authored_schema_constrains_destination_to_host_roots() -> None:
+    schema = {
+        "type": "function",
+        "function": {
+            "name": "apply_source_edit",
+            "description": "edit source",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "operation": {"type": "string"},
+                    "path": {"type": "string"},
+                    "target_path": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+                "required": ["operation", "path"],
+            },
+        },
+    }
+    root = "src/main/java/ai/minecraft/generated/authored_demo/"
+    authority = MutationAuthority.bounded_roots((root, "src/main/resources/"))
+    token = CURRENT_MUTATION_AUTHORITY.set(authority)
+    try:
+        projected = _source_edit_schema_for_context(schema, None)
+    finally:
+        CURRENT_MUTATION_AUTHORITY.reset(token)
+
+    parameters = projected["function"]["parameters"]
+    properties = parameters["properties"]
+    assert "target_path" not in properties
+    assert properties["path"]["pattern"].startswith("^(?:")
+    assert root in properties["path"]["description"]
+    assert parameters["additionalProperties"] is False
+
+
 def test_recovered_authored_existing_target_exposes_only_updated_source() -> None:
     target_path = (
         "src/main/java/ai/minecraft/generated/authored_demo/StarForgeMod.java"
