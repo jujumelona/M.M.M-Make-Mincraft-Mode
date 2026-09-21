@@ -107,6 +107,20 @@ def recover_schema_rejected_host_bound_existing_calls(
     model_new = candidate.get("new")
     if not isinstance(model_new, str) or not model_new:
         return None
+    current_source = getattr(context, "source_body", None)
+    model_old = candidate.get("old")
+    if isinstance(model_old, str) and model_old:
+        if not isinstance(current_source, str) or current_source.count(model_old) != 1:
+            return None
+        # Legacy/small adapters often keep emitting an exact old/new span after the
+        # host has projected the schema down to {"new"}. Preserve that semantic
+        # intent deterministically: apply the span to the host-owned live source,
+        # then pass the resulting complete source through the normal new-only binder.
+        if model_old != current_source:
+            model_new = current_source.replace(model_old, model_new, 1)
+    supplied_count = candidate.get("count")
+    if supplied_count not in (None, 1, "1"):
+        return None
     supplied_path = str(candidate.get("path") or "").replace("\\", "/").strip()
     while supplied_path.startswith("./"):
         supplied_path = supplied_path[2:]
