@@ -43,10 +43,12 @@ def test_atomic_recovery_instruction_forces_one_structural_edit() -> None:
 
     assert "exactly one" in instruction
     assert "one small semantic edit" in instruction
-    assert "create_java_type" in instruction
-    assert "add_java_import" in instruction
-    assert "insert_java_member" in instruction
-    assert "never create a complete Java file" in instruction
+    assert "apply_source_edit" in instruction
+    assert "create_file" in instruction
+    assert "existing target" in instruction
+    assert "create_java_type" not in instruction
+    assert "add_java_import" not in instruction
+    assert "insert_java_member" not in instruction
 
 
 def test_atomic_stall_preserves_typed_output_boundary() -> None:
