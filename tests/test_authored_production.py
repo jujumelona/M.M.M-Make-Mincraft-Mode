@@ -16,6 +16,7 @@ from minecraft_mod_ai.direct_task_mutation_authority_contract import (
 from minecraft_mod_ai.mutation_authority import MutationAuthorityMode
 from minecraft_mod_ai.planning_pipeline import PlanningPipeline
 from minecraft_mod_ai.progress_aware_tool_loop import _task_authority_context
+from minecraft_mod_ai.scale_policy import ScalePolicy
 from minecraft_mod_ai.small_model_atomic_coder_execution import atomicize_coder_messages
 from minecraft_mod_ai.small_model_task_capsule_contract import compile_task_capsule
 from minecraft_mod_ai.work_graph import build_production_work_plan
@@ -194,6 +195,34 @@ def test_authored_execution_uses_markdown_sections_not_arbitrary_byte_packing():
         module.config["evidence_task"]["engineering_worksheet"]["authored_unit"]["text"]
         for module in modules
     ) == text
+
+
+def test_fresh_authored_work_graph_checkpoints_each_exact_task_independently(monkeypatch):
+    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
+    text = (
+        "# Economy\nCredits and trade.\n"
+        "# Ships\nParts and upgrades.\n"
+        "# Planets\nMining and colonies.\n"
+        "# Combat\nWeapons and aliens.\n"
+    )
+    proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(
+        AuthoredPlan("space mod", text)
+    )
+
+    graph = build_production_work_plan(
+        proposal,
+        policy=ScalePolicy(java_shard_size=48),
+    )
+    custom = [node for node in graph.nodes if node.stage == "generate:custom"]
+
+    assert len(custom) == len(proposal.modules) == 4
+    assert all(node.resource_class == "llm" for node in custom)
+    assert all(len(node.payload["members"]) == 1 for node in custom)
+    assert [
+        node.payload["members"][0]["module_id"]
+        for node in custom
+    ] == [f"authored_feature_{index:03d}" for index in range(1, 5)]
+    assert all(node.dependencies == ("prepare-project",) for node in custom)
 
 
 def test_authored_scaffold_materializes_existing_exact_targets_and_host_entrypoint(tmp_path):
