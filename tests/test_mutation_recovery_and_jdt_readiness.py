@@ -16,9 +16,16 @@ from minecraft_mod_ai.progress_aware_tool_loop import (
     HostRunState,
     TargetMutationContext,
     _bind_host_owned_existing_source_call,
+    _implementation_obligation_has_progress,
     _mutation_target_error,
     _recover_creation_conflict_target,
     _source_edit_schema_for_context,
+)
+from minecraft_mod_ai.source_repair_semantics import (
+    existing_java_structurally_subsumes_candidate,
+)
+from minecraft_mod_ai.verifier_repair_admission_recovery import (
+    recover_schema_rejected_host_bound_existing_calls,
 )
 from minecraft_mod_ai.validation_diagnostic_contract import diagnostic_errors
 
@@ -295,6 +302,101 @@ def test_recovered_authored_existing_target_binds_exact_live_old_source() -> Non
         )
     finally:
         CURRENT_MUTATION_AUTHORITY.reset(token)
+
+
+def test_rejected_existing_source_call_drops_redundant_host_fields() -> None:
+    target_path = (
+        "src/main/java/ai/minecraft/generated/authored_demo/StarForgeMod.java"
+    )
+    source = (
+        "package ai.minecraft.generated.authored_demo;\n"
+        "public final class StarForgeMod {\n"
+        "    public static int credits() { return 1; }\n"
+        "}\n"
+    )
+    context = TargetMutationContext(
+        target_path=target_path,
+        source_body=source,
+        is_new_file=False,
+        evidence_source="workspace_existing_target",
+        writable_paths=(target_path,),
+        target_pinned=True,
+    )
+    rejected = ToolCall(
+        id="rejected-1",
+        name="__mmm_rejected_tool_call__",
+        arguments={
+            "failure_code": "TOOL_SCHEMA_INVALID",
+            "original_tool": "apply_source_edit",
+            "raw_arguments": (
+                '{"new":'
+                + __import__("json").dumps(source.replace("return 1", "return 2"))
+                + ',"path":'
+                + __import__("json").dumps(target_path)
+                + '}'
+            ),
+        },
+    )
+
+    recovered = recover_schema_rejected_host_bound_existing_calls(
+        (rejected,),
+        phase="ACT",
+        validation_status="PENDING",
+        context=context,
+    )
+
+    assert recovered is not None
+    assert recovered[0].name == "apply_source_edit"
+    assert recovered[0].arguments == {
+        "new": source.replace("return 1", "return 2")
+    }
+
+
+def test_existing_java_structural_superset_preserves_richer_source() -> None:
+    path = "src/main/java/ai/minecraft/generated/authored_demo/StellarForgeMod.java"
+    current = (
+        "package ai.minecraft.generated.authored_demo;\n"
+        "import net.fabricmc.api.ModInitializer;\n"
+        "import net.minecraft.registry.RegistryKeys;\n"
+        "import org.slf4j.Logger;\n"
+        "public class StellarForgeMod implements ModInitializer {\n"
+        '    public static final String MOD_ID = "stellarforge";\n'
+        "    public static final Logger LOGGER = null;\n"
+        "    public void onInitialize() {}\n"
+        "}\n"
+    )
+    reductive = (
+        "package ai.minecraft.generated.authored_demo;\n"
+        "import net.fabricmc.api.ModInitializer;\n"
+        "import org.slf4j.Logger;\n"
+        "public class StellarForgeMod implements ModInitializer {\n"
+        "    private static final Logger LOGGER = null;\n"
+        "    public void onInitialize() {}\n"
+        "}\n"
+    )
+    additive = reductive.replace(
+        "    public void onInitialize() {}\n",
+        "    public void onInitialize() {}\n"
+        "    public void launchShip() {}\n",
+    )
+
+    assert existing_java_structurally_subsumes_candidate(
+        path,
+        current,
+        reductive,
+    )
+    assert not existing_java_structurally_subsumes_candidate(
+        path,
+        current,
+        additive,
+    )
+
+
+def test_preserved_existing_source_counts_as_verified_fragment_progress() -> None:
+    state = HostRunState()
+    assert not _implementation_obligation_has_progress(state)
+    state.preserved_existing_source = True
+    assert _implementation_obligation_has_progress(state)
 
 
 def test_authored_java_create_rejects_package_path_mismatch() -> None:
