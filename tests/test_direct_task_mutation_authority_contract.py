@@ -125,6 +125,41 @@ def test_direct_authority_preempts_unrelated_manifest_observation() -> None:
     assert "MUTATION_TARGET_DRIFT" in manifest_error
 
 
+def test_existing_exact_task_gets_direct_authority_without_create_permission() -> None:
+    module = _module()
+    task = dict(module.config["evidence_task"])
+    anchors = []
+    for anchor in task["owned_anchors"]:
+        item = dict(anchor)
+        if item.get("kind") in {"symbol", "test"}:
+            item["status"] = "existing"
+        anchors.append(item)
+    task["owned_anchors"] = anchors
+    binding = dict(task["production_bindings"][0])
+    binding["owned_anchors"] = [
+        dict(anchors[0]),
+    ]
+    task["production_bindings"] = [binding]
+    module.config = {"evidence_task": task}
+
+    authority = compile_direct_task_mutation_authority(module)
+
+    assert authority is not None
+    assert authority.primary_path == JAVA_PATH
+    assert authority.writable_paths == (JAVA_PATH, TEST_PATH)
+    assert authority.creatable_paths == ()
+    assert authority.mutation_authority.mutation_error(
+        JAVA_PATH,
+        operation="replace_exact",
+    ) is None
+    create_error = authority.mutation_authority.mutation_error(
+        "src/main/java/example/Other.java",
+        operation="create_file",
+    )
+    assert create_error is not None
+    assert create_error.startswith("MUTATION_TARGET_DRIFT:")
+
+
 def test_fresh_host_reserved_task_cannot_silently_fall_back_without_binding() -> None:
     with pytest.raises(DirectTaskMutationAuthorityError, match="BINDING_MISSING"):
         compile_direct_task_mutation_authority(_module(include_binding=False))
