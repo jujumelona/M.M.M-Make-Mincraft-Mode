@@ -4,13 +4,12 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai.authored_plan import AuthoredPlan
+from minecraft_mod_ai.authored_production import _compile_new_authored_modules
 from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
 from minecraft_mod_ai.custom_module_generator import _task_local_module_contract
 from minecraft_mod_ai.planning_pipeline import PlanningPipeline
-from minecraft_mod_ai.small_model_atomic_coder_execution import (
-    _MAX_AUTHORED_FRAGMENT_BYTES,
-    atomicize_coder_messages,
-)
+from minecraft_mod_ai.small_model_atomic_coder_execution import atomicize_coder_messages
+from minecraft_mod_ai.small_model_task_capsule_contract import compile_task_capsule
 from minecraft_mod_ai.work_graph import build_production_work_plan
 
 
@@ -26,12 +25,19 @@ def test_saved_design_compiler_preserves_target_through_coder_handoff(version):
     assert _target_values(proposal.game_design) == expected
     assert _target_values(proposal.modules[0].config) == expected
     assert proposal.game_design["authored_plan"] == plan.to_dict()
-    assert proposal.modules[0].config["authored_plan"] == plan.to_dict()
-    assert (
-        proposal.modules[0].config["authored_java_package"]
-        == proposal.base_proposal.spec.package_name
-    )
-    assert proposal.modules[0].required_gates == ("project build",)
+    manifest = proposal.game_design["_authored_execution_manifest"]
+    assert manifest["policy"] == "host_exact_task_queue_no_coder_file_planning"
+    assert len(proposal.modules) == manifest["unit_count"] + 1
+    assert proposal.modules[-1].module_id == "authored_entrypoint"
+    assert proposal.modules[-1].required_gates == ("project build",)
+    assert all("authored_plan" not in module.config for module in proposal.modules)
+    assert all("evidence_task" in module.config for module in proposal.modules)
+    assert all(_target_values(module.config) == expected for module in proposal.modules)
+    for module in proposal.modules:
+        capsule = compile_task_capsule(module)
+        assert capsule is not None
+        assert capsule.primary_path
+        assert capsule.writable_paths == (capsule.primary_path,)
     assert proposal.game_design["_platform_selection"]["target"] == adapter.public_dict()
 
 
@@ -50,77 +56,89 @@ def test_real_compiler_hands_saved_text_to_coder_without_replanning(monkeypatch,
     router = SimpleNamespace(generate_text=forbidden, generate_tool_decision=forbidden)
     plan = AuthoredPlan("Make a space trading mod for Fabric 1.21.11", text)
     proposal = CompleteGameDesignPlanner(router).compile_for_production(plan)
+
     assert proposal.requested_prompt == plan.requested_prompt
     assert proposal.game_design["authored_plan"] == plan.to_dict()
     assert proposal.base_proposal.spec.contents == ()
     assert proposal.base_proposal.spec.boss is None
+
+    manifest = proposal.game_design["_authored_execution_manifest"]
+    assert manifest["unit_count"] >= 1
+    feature_modules = proposal.modules[:-1]
+    assert len(feature_modules) == manifest["unit_count"]
+    reconstructed = "".join(
+        module.config["evidence_task"]["engineering_worksheet"]["authored_unit"]["text"]
+        for module in feature_modules
+    )
+    assert reconstructed == text
+
     graph = build_production_work_plan(proposal)
     generation = [node for node in graph.nodes if node.stage == "generate:custom"]
-    assert len(generation) == 1
-    module = proposal.modules[0]
-    contract = _task_local_module_contract(module)
-    assert contract["authored_plan"] == plan.to_dict()
-    messages = [{"role": "user", "content": json.dumps({
-        "phase": "implement_authored_design", "module": contract,
-    }, ensure_ascii=False)}]
-    batches = atomicize_coder_messages(messages)
-    if len(text.encode("utf-8")) <= _MAX_AUTHORED_FRAGMENT_BYTES:
-        assert batches == (tuple(messages),)
-    else:
-        assert len(batches) > 1
-        fragments = []
-        expected_start = 0
-        source_sha256 = None
-        for fragment_index, batch in enumerate(batches, start=1):
-            payload = json.loads(batch[-1]["content"])
-            authored = payload["module"]["authored_plan"]
-            fragment = authored["text"]
-            contract_meta = authored["fragment_contract"]
-            assert len(fragment.encode("utf-8")) <= _MAX_AUTHORED_FRAGMENT_BYTES
-            assert contract_meta["fragment_index"] == fragment_index
-            assert contract_meta["fragment_count"] == len(batches)
-            assert contract_meta["start_byte"] == expected_start
-            expected_start = contract_meta["end_byte"]
-            if source_sha256 is None:
-                source_sha256 = contract_meta["source_text_sha256"]
-            assert contract_meta["source_text_sha256"] == source_sha256
-            assert payload["authored_execution"]["source_text_sha256"] == source_sha256
-            fragments.append(fragment)
-        assert "".join(fragments) == text
-        assert expected_start == len(text.encode("utf-8"))
+    assert generation
+
+    paths = []
+    for module in proposal.modules:
+        contract = _task_local_module_contract(module)
+        assert "evidence_task" in contract
+        messages = [{"role": "user", "content": json.dumps({
+            "phase": "implement_module",
+            "module": contract,
+        }, ensure_ascii=False)}]
+        batches = atomicize_coder_messages(messages)
+        assert len(batches) == 1
+        payload = json.loads(batches[0][-1]["content"])
+        atomic = payload["module"]["evidence_task"]["coder_execution_contract"]
+        assert atomic["schema_version"] == "mmm/atomic-coder-step"
+        refs = atomic["step"]["target_refs"]
+        assert len(refs) == 1
+        paths.append(refs[0].split("#", 1)[0])
+
+    assert len(paths) == len(set(paths))
+    assert paths[-1] == manifest["entrypoint"]["path"]
 
 
-def test_authored_atomic_fragments_refresh_stale_source_context():
+def test_fresh_authored_execution_is_exact_path_dependency_queue():
     text = ("행성 경제와 우주선 업그레이드를 구현한다.\n" * 300)
-    request = {
-        "phase": "implement_authored_design",
-        "module": {
-            "module_id": "authored_design",
-            "kind": "custom_java",
-            "authored_plan": {
-                "schema_version": "mmm/authored-plan-v1",
-                "requested_prompt": "우주 모드",
-                "text": text,
-                "existing_input_sha256": "",
-                "media_paths": [],
-            },
+    plan = AuthoredPlan("우주 모드", text)
+    package = "ai.minecraft.generated.authored_test"
+    modules, manifest = _compile_new_authored_modules(
+        plan,
+        mod_id="authored_test",
+        package_name=package,
+        target={
+            "minecraft_version": "1.21.11",
+            "loader": "fabric",
+            "mappings": "1.21.11+build.1",
         },
-        "initial_exact_source_context": {"content": "stale-bootstrap"},
-        "rules": ["preserve the approved design"],
-    }
-    messages = [{"role": "user", "content": json.dumps(request, ensure_ascii=False)}]
-    batches = atomicize_coder_messages(messages)
-    assert len(batches) > 1
-    first = json.loads(batches[0][-1]["content"])
-    second = json.loads(batches[1][-1]["content"])
-    assert first["initial_exact_source_context"] == {"content": "stale-bootstrap"}
-    assert second["initial_exact_source_context"]["mode"] == (
-        "retrieve_current_authored_fragment_with_tools"
     )
+
+    assert len(modules) == manifest["unit_count"] + 1
+    assert manifest["unit_count"] > 1
     assert "".join(
-        json.loads(batch[-1]["content"])["module"]["authored_plan"]["text"]
-        for batch in batches
+        module.config["evidence_task"]["engineering_worksheet"]["authored_unit"]["text"]
+        for module in modules[:-1]
     ) == text
+
+    prior = ""
+    paths = set()
+    for index, module in enumerate(modules[:-1], start=1):
+        assert module.module_id == f"authored_feature_{index:03d}"
+        assert module.depends_on == ((prior,) if prior else ())
+        capsule = compile_task_capsule(module)
+        assert capsule is not None
+        assert len(capsule.writable_paths) == 1
+        assert capsule.primary_path not in paths
+        paths.add(capsule.primary_path)
+        prior = module.module_id
+
+    entry = modules[-1]
+    assert entry.module_id == "authored_entrypoint"
+    assert entry.depends_on == (prior,)
+    entry_capsule = compile_task_capsule(entry)
+    assert entry_capsule is not None
+    assert entry_capsule.primary_path == manifest["entrypoint"]["path"]
+    assert entry_capsule.primary_symbol == manifest["entrypoint"]["symbol"]
+    assert entry_capsule.primary_path not in paths
 
 
 def test_real_orchestrator_accepts_authored_handoff(monkeypatch, tmp_path):
@@ -138,7 +156,9 @@ def test_real_orchestrator_accepts_authored_handoff(monkeypatch, tmp_path):
         pass
 
     def prepare(approved, **kwargs):
-        assert approved.modules[0].config["authored_plan"] == plan.to_dict()
+        assert approved.game_design["authored_plan"] == plan.to_dict()
+        assert "_authored_execution_manifest" in approved.game_design
+        assert all("evidence_task" in module.config for module in approved.modules)
         raise ReachedProjectCreation
 
     monkeypatch.setattr(orchestrator, "_prepare_project", prepare)
