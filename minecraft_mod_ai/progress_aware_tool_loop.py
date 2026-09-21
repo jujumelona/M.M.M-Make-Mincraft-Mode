@@ -1137,6 +1137,56 @@ def _creation_authorized(
     return supplied == pinned and context.is_new_file
 
 
+_JAVA_PACKAGE_DECLARATION_RE = re.compile(
+    r"(?m)^\\s*package\\s+([A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*)\\s*;"
+)
+_JAVA_PUBLIC_TOP_LEVEL_TYPE_RE = re.compile(
+    r"(?m)^\\s*public\\s+(?:(?:abstract|final|sealed|non-sealed|strictfp)\\s+)*"
+    r"(?:class|interface|enum|record)\\s+([A-Za-z_$][\\w$]*)\\b"
+)
+
+
+def _java_whole_file_identity_error(
+    path: str,
+    current_source: str | None,
+    new_source: Any,
+) -> str | None:
+    """Reject whole-file Java repairs that change the host-selected source identity."""
+
+    if not path.casefold().endswith(".java") or not isinstance(new_source, str):
+        return None
+    expected_type = Path(path).stem
+    current = current_source if isinstance(current_source, str) else ""
+
+    current_package_match = _JAVA_PACKAGE_DECLARATION_RE.search(current)
+    new_package_match = _JAVA_PACKAGE_DECLARATION_RE.search(new_source)
+    if current_package_match is not None:
+        current_package = current_package_match.group(1)
+        new_package = new_package_match.group(1) if new_package_match is not None else ""
+        if new_package != current_package:
+            return (
+                "REPAIR_SEMANTIC_IDENTITY_VIOLATION: whole-file Java repair changed "
+                f"package identity for {path!r}: expected {current_package!r}, got "
+                f"{new_package or '<missing>'!r}"
+            )
+
+    public_types = tuple(_JAVA_PUBLIC_TOP_LEVEL_TYPE_RE.findall(new_source))
+    if public_types and expected_type not in public_types:
+        return (
+            "REPAIR_SEMANTIC_IDENTITY_VIOLATION: whole-file Java repair changed "
+            f"primary type identity for {path!r}: expected public type "
+            f"{expected_type!r}, got {public_types!r}"
+        )
+
+    current_public_types = tuple(_JAVA_PUBLIC_TOP_LEVEL_TYPE_RE.findall(current))
+    if expected_type in current_public_types and expected_type not in public_types:
+        return (
+            "REPAIR_SEMANTIC_IDENTITY_VIOLATION: whole-file Java repair removed "
+            f"the existing public type {expected_type!r} from {path!r}"
+        )
+    return None
+
+
 def _mutation_target_error(
     tool_name: str,
     arguments: Mapping[str, Any],
@@ -1173,6 +1223,19 @@ def _mutation_target_error(
             f"does not authorize {supplied!r}"
         )
     operation = str(arguments.get("operation") or "").strip().casefold()
+    if (
+        operation == "replace_exact"
+        and supplied == pinned
+        and not context.is_new_file
+        and "old" not in arguments
+    ):
+        identity_error = _java_whole_file_identity_error(
+            pinned,
+            context.source_body,
+            arguments.get("new"),
+        )
+        if identity_error is not None:
+            return identity_error
     if operation not in _SOURCE_CREATE_OPERATIONS:
         return None
     if _creation_authorized(supplied, pinned, context):
@@ -1836,6 +1899,30 @@ def _record_applied_mutation(
     arguments: Mapping[str, Any],
     signature: str,
 ) -> bool:
+    context = state.mutation_context
+    operation = _mutation_operation(arguments)
+    path = _source_edit_path(arguments)
+    if (
+        state.validation_status == "FAIL"
+        and context is not None
+        and path
+        and path == _canonical_mutation_path(context.target_path)
+        and operation == "replace_exact"
+        and "old" not in arguments
+    ):
+        state.repair_baseline_error_count = len(state.latest_verifier_errors)
+        state.repair_baseline_errors = tuple(state.latest_verifier_errors)
+        state.repair_baseline_fingerprint = state.latest_verifier_fingerprint
+        state.repair_previous_source = context.source_body
+        state.repair_previous_path = path
+        state.last_verifier_quality = None
+    else:
+        state.repair_baseline_error_count = None
+        state.repair_baseline_errors = ()
+        state.repair_baseline_fingerprint = None
+        state.repair_previous_source = None
+        state.repair_previous_path = None
+        state.last_verifier_quality = None
     if signature:
         state.mutation_fingerprints.add(signature)
     state.unchanged_mutation_fingerprints.clear()
@@ -1849,8 +1936,6 @@ def _record_applied_mutation(
     state.repair_target_diagnostics = ()
     state.latest_verifier_fingerprint = None
     state.repair_guidance_fingerprint = None
-    operation = _mutation_operation(arguments)
-    path = _source_edit_path(arguments)
     if path and operation in _SOURCE_CREATE_OPERATIONS:
         state.created_paths.add(path)
     _update_mutation_context_after_edit(state, path, operation, arguments)
@@ -1917,6 +2002,12 @@ class HostRunState:
     repair_target_diagnostics: tuple[dict[str, Any], ...] = ()
     latest_verifier_fingerprint: str | None = None
     repair_guidance_fingerprint: str | None = None
+    repair_baseline_error_count: int | None = None
+    repair_baseline_errors: tuple[dict[str, Any], ...] = ()
+    repair_baseline_fingerprint: str | None = None
+    repair_previous_source: str | None = None
+    repair_previous_path: str | None = None
+    last_verifier_quality: str | None = None
     last_failure_reason: str | None = None
     termination_reason: str | None = None
     trajectory: list[ExecutionStepTrace] = field(default_factory=list)
@@ -2000,14 +2091,43 @@ class HostRunState:
                     errors.append(compact)
         fp = evidence_fingerprint({"tool": tool_name, "status": status, "errors": errors})
         with self._lock:
-            changed = status != self.validation_status or fp != self.latest_verifier_fingerprint
+            prior_status = self.validation_status
+            prior_fp = self.latest_verifier_fingerprint
+            baseline_count = self.repair_baseline_error_count
+            new_error_count = len(errors)
+            if status == "PASS":
+                quality = "IMPROVED"
+                progress = True
+            elif status == "FAIL" and baseline_count is not None:
+                if new_error_count < baseline_count:
+                    quality = "IMPROVED"
+                    progress = True
+                elif new_error_count > baseline_count:
+                    quality = "NON_IMPROVING"
+                    progress = False
+                else:
+                    quality = (
+                        "UNCHANGED"
+                        if fp == self.repair_baseline_fingerprint
+                        else "NON_IMPROVING"
+                    )
+                    progress = False
+            else:
+                quality = "OBSERVED"
+                progress = status != prior_status or fp != prior_fp
             self.validation_status = status
             self.latest_verifier_tool = tool_name
             self.latest_verifier_errors = tuple(errors)
             self.latest_verifier_fingerprint = fp
+            self.last_verifier_quality = quality
             if status != "FAIL":
                 self.repair_guidance_fingerprint = None
-            return changed
+                self.repair_baseline_error_count = None
+                self.repair_baseline_errors = ()
+                self.repair_baseline_fingerprint = None
+                self.repair_previous_source = None
+                self.repair_previous_path = None
+            return progress
 
     def take_verifier_repair_guidance(self) -> str | None:
         with self._lock:
@@ -2998,6 +3118,70 @@ def _verifier_tool(
     return None
 
 
+def _rollback_non_improving_verifier_repair(
+    state: HostRunState,
+    runtime: Any,
+    *,
+    stage: str,
+) -> bool:
+    """Restore the last verifier-proven source when a repair fails to improve it."""
+
+    if state.last_verifier_quality not in {"NON_IMPROVING", "UNCHANGED"}:
+        return False
+    path = _canonical_mutation_path(state.repair_previous_path or "")
+    source = state.repair_previous_source
+    if not path or not isinstance(source, str):
+        return False
+    result = runtime.call(
+        stage,
+        "apply_source_edit",
+        {
+            "operation": "replace_exact",
+            "path": path,
+            "new": source,
+        },
+    )
+    applied = mutation_payload_applied(
+        "apply_source_edit",
+        {"ok": True, "result": result},
+    )
+    if not applied:
+        raise ModelConfigurationError(
+            "VERIFICATION_REPAIR_ROLLBACK_FAILED: host could not restore the "
+            f"last verifier-proven source for {path!r}"
+        )
+    with state._lock:
+        context = state.mutation_context
+        if context is not None and _canonical_mutation_path(context.target_path) == path:
+            state.mutation_context = replace(
+                context,
+                source_body=source,
+                evidence_source="verifier_workspace_source",
+                is_new_file=False,
+            )
+        state.validation_status = "FAIL"
+        state.latest_verifier_errors = tuple(state.repair_baseline_errors)
+        state.latest_verifier_fingerprint = state.repair_baseline_fingerprint
+        state.repair_guidance_fingerprint = None
+        state.last_verifier_quality = "NON_IMPROVING"
+    emit_root_cause(
+        "verifier_repair_rolled_back",
+        stage=stage,
+        operation="apply_source_edit",
+        gate="repair_quality_monotonicity",
+        result="PASS",
+        reason=(
+            "repair did not reduce verifier severity-1 diagnostics; restored "
+            "the previous verifier-proven source"
+        ),
+        details={
+            "target_path": path,
+            "baseline_error_count": state.repair_baseline_error_count,
+        },
+    )
+    return True
+
+
 def _fixed_point_error(state: HostRunState) -> ModelConfigurationError:
     trajectory = format_trajectory_summary(state.trajectory)
     if state.validation_status == "FAIL":
@@ -3351,6 +3535,8 @@ def _generate_with_tools_impl(
 
         if state.semantic_fixed_point:
             if state.unapplied_mutation_fixed_point:
+                raise _fixed_point_error(state)
+            if state.last_verifier_quality == "NON_IMPROVING":
                 raise _fixed_point_error(state)
             actionable_mutation = bool(
                 implementation_requires_mutation
@@ -4064,6 +4250,12 @@ def _generate_with_tools_impl(
                     progress = True
                 if status == "FAIL" and implementation_requires_mutation:
                     state.record_failure(call.name, "verification reported source defects")
+                    if state.last_verifier_quality in {"NON_IMPROVING", "UNCHANGED"}:
+                        _rollback_non_improving_verifier_repair(
+                            state,
+                            runtime,
+                            stage=stage,
+                        )
                     state.phase = LoopPhase.RECOVER
                 continue
 
@@ -4128,6 +4320,23 @@ def _generate_with_tools_impl(
             ):
                 required_evidence_choice = False
         else:
+            verifier_progress_key: Any = state.latest_verifier_fingerprint
+            if (
+                phase_before is LoopPhase.VERIFY
+                and state.last_verifier_quality == "NON_IMPROVING"
+            ):
+                verifier_progress_key = {
+                    "quality": "NON_IMPROVING",
+                    "baseline_error_count": state.repair_baseline_error_count,
+                    "target_path": (
+                        state.repair_previous_path
+                        or (
+                            state.mutation_context.target_path
+                            if state.mutation_context is not None
+                            else None
+                        )
+                    ),
+                }
             state.record_no_progress_result({
                 "phase_before": phase_before.value,
                 "phase_after": phase_after,
@@ -4135,7 +4344,7 @@ def _generate_with_tools_impl(
                 "localization_after": loc_after,
                 "target": ctx_after,
                 "validation": state.validation_status,
-                "verifier": state.latest_verifier_fingerprint,
+                "verifier": verifier_progress_key,
                 "calls": fixed_point_calls,
                 "results": result_info,
             })
