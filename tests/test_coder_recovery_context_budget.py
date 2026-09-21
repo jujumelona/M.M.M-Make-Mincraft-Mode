@@ -31,7 +31,15 @@ def _schema(name: str) -> dict:
 def test_authored_recovery_fits_after_failed_and_empty_evidence_routes() -> None:
     """Exercise the loop through VERIFY->RECOVER and repeated recovery turns."""
     target = "src/main/java/demo/SpaceModeMod.java"
-    source = "package demo; public class SpaceModeMod {}"
+    source = (
+        "package demo;\n"
+        "import demo.MissingApi;\n"
+        "public class SpaceModeMod {}\n"
+    )
+    repaired_source = (
+        "package demo;\n"
+        "public class SpaceModeMod {}\n"
+    )
     diagnostic = "The import demo.MissingApi cannot be resolved"
     module = SimpleNamespace(
         module_id="space-mode",
@@ -128,7 +136,7 @@ def test_authored_recovery_fits_after_failed_and_empty_evidence_routes() -> None
                         "operation": "replace_exact",
                         "path": target,
                         "old": source,
-                        "new": source + "\n",
+                        "new": repaired_source,
                     },
                 ),
             }[step]
