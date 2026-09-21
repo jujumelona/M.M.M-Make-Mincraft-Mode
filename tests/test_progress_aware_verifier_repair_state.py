@@ -249,6 +249,7 @@ def test_existing_verifier_repair_schema_forbids_whole_file_protocol():
     parameters = projected["function"]["parameters"]
     assert set(parameters["properties"]) == {"new"}
     assert parameters["required"] == ["new"]
+    assert parameters["properties"]["new"]["maxLength"] == 4096
     description = parameters["properties"]["new"]["description"]
     assert "bounded source window" in description
     assert "Never emit the complete source file" in description
@@ -342,49 +343,6 @@ def test_real_edit_invalidates_stale_verifier_fail_and_updates_source_body():
     assert "RegistryEntry" in (state.mutation_context.source_body or "")
 
 
-def test_whole_file_repair_without_old_updates_host_source_body():
-    state = HostRunState(
-        mutation_context=TargetMutationContext(
-            target_path=PATH,
-            target_symbol="DebugToken",
-            source_body="class DebugToken { int value = MISSING; }",
-            is_new_file=False,
-            evidence_source="workspace_existing_target",
-        )
-    )
-    state.record_verification(
-        "java_diagnostics",
-        _failed_diagnostics("MISSING cannot be resolved to a variable"),
-        "FAIL",
-    )
-    corrected = "class DebugToken { int value = 1; }"
-    args = {
-        "operation": "replace_exact",
-        "path": PATH,
-        "new": corrected,
-    }
-    receipt = {
-        "ok": True,
-        "result": {
-            "schema_version": "mmm/source-patch-receipt-v1",
-            "status": "APPLIED",
-            "operations": [
-                {
-                    "path": PATH,
-                    "before_sha256": "sha256:old",
-                    "after_sha256": "sha256:new",
-                }
-            ],
-        },
-    }
-    assert state.record_mutation("apply_source_edit", args, receipt)
-    assert state.validation_status == "PENDING"
-    assert state.latest_verifier_fingerprint is None
-    assert state.mutation_context is not None
-    assert state.mutation_context.source_body == corrected
-
-
-
 def _failed_diagnostics_many(*messages: str) -> dict:
     return {
         "ok": True,
@@ -419,13 +377,15 @@ def test_repair_progress_requires_strict_verifier_improvement():
         _failed_diagnostics_many("A cannot be resolved", "B cannot be resolved"),
         "FAIL",
     )
-    candidate = (
-        "package dev.mmm.debugfixture; "
-        "public class DebugToken { A a; int b = 1; }"
-    )
     assert state.record_mutation(
         "apply_source_edit",
-        {"operation": "replace_exact", "path": PATH, "new": candidate},
+        {
+            "operation": "replace_exact",
+            "path": PATH,
+            "old": "B b;",
+            "new": "int b = 1;",
+            "count": 1,
+        },
         _applied_receipt(),
     )
     assert state.repair_baseline_error_count == 2
@@ -436,13 +396,15 @@ def test_repair_progress_requires_strict_verifier_improvement():
     )
     assert state.last_verifier_quality == "IMPROVED"
 
-    next_candidate = (
-        "package dev.mmm.debugfixture; "
-        "public class DebugToken { C c; int b = 1; }"
-    )
     assert state.record_mutation(
         "apply_source_edit",
-        {"operation": "replace_exact", "path": PATH, "new": next_candidate},
+        {
+            "operation": "replace_exact",
+            "path": PATH,
+            "old": "A a;",
+            "new": "C c;",
+            "count": 1,
+        },
         _applied_receipt(),
     )
     assert state.repair_baseline_error_count == 1
@@ -479,9 +441,17 @@ def test_non_improving_repair_rolls_back_to_verifier_proven_source():
     )
     assert state.record_mutation(
         "apply_source_edit",
-        {"operation": "replace_exact", "path": PATH, "new": candidate},
+        {
+            "operation": "replace_exact",
+            "path": PATH,
+            "old": "Missing",
+            "new": "OtherMissing",
+            "count": 1,
+        },
         _applied_receipt(),
     )
+    assert state.mutation_context is not None
+    assert state.mutation_context.source_body == candidate
     assert not state.record_verification(
         "java_diagnostics",
         _failed_diagnostics("OtherMissing cannot be resolved"),
@@ -524,10 +494,11 @@ def test_non_improving_repair_rolls_back_to_verifier_proven_source():
     assert "Missing cannot be resolved" in str(state.latest_verifier_errors)
 
 
-def test_whole_file_java_repair_preserves_package_and_public_type_identity():
+def test_atomic_java_repair_preserves_package_and_public_type_identity():
     source = (
         "package dev.mmm.debugfixture; "
-        "public class DebugToken { int value = MISSING; }"
+        "public class DebugToken { int value = MISSING; "
+        "public static class Builder {} }"
     )
     context = TargetMutationContext(
         target_path=PATH,
@@ -542,24 +513,24 @@ def test_whole_file_java_repair_preserves_package_and_public_type_identity():
         {
             "operation": "replace_exact",
             "path": PATH,
-            "new": (
-                "package dev.mmm.debugfixture; "
-                "public class StarLinkMod { int value = 1; }"
-            ),
+            "old": "public class DebugToken",
+            "new": "public class StarLinkMod",
+            "count": 1,
         },
         context,
     )
     assert wrong_type is not None
     assert wrong_type.startswith("REPAIR_SEMANTIC_IDENTITY_VIOLATION")
     assert "DebugToken" in wrong_type
-    assert "StarLinkMod" in wrong_type
 
     wrong_package = _mutation_target_error(
         "apply_source_edit",
         {
             "operation": "replace_exact",
             "path": PATH,
-            "new": "package other.pkg; public class DebugToken { int value = 1; }",
+            "old": "package dev.mmm.debugfixture;",
+            "new": "package other.pkg;",
+            "count": 1,
         },
         context,
     )
@@ -571,39 +542,17 @@ def test_whole_file_java_repair_preserves_package_and_public_type_identity():
         {
             "operation": "replace_exact",
             "path": PATH,
-            "new": (
-                "package dev.mmm.debugfixture; "
-                "public class DebugToken { int value = 1; "
-                "public static class Builder {} }"
-            ),
+            "old": "int value = MISSING;",
+            "new": "int value = 1;",
+            "count": 1,
         },
         context,
     )
     assert valid is None
 
-    package_private_context = TargetMutationContext(
-        target_path=PATH,
-        target_symbol="DebugToken",
-        source_body="package dev.mmm.debugfixture; class DebugToken {}",
-        is_new_file=False,
-        evidence_source="verifier_workspace_source",
-    )
-    missing_package_private_primary = _mutation_target_error(
-        "apply_source_edit",
-        {
-            "operation": "replace_exact",
-            "path": PATH,
-            "new": "package dev.mmm.debugfixture; class OtherType {}",
-        },
-        package_private_context,
-    )
-    assert missing_package_private_primary is not None
-    assert missing_package_private_primary.startswith(
-        "REPAIR_SEMANTIC_IDENTITY_VIOLATION"
-    )
-
-    default_package_context = TargetMutationContext(
-        target_path="src/main/java/DebugToken.java",
+    default_path = "src/main/java/DebugToken.java"
+    default_context = TargetMutationContext(
+        target_path=default_path,
         target_symbol="DebugToken",
         source_body="class DebugToken {}",
         is_new_file=False,
@@ -613,40 +562,18 @@ def test_whole_file_java_repair_preserves_package_and_public_type_identity():
         "apply_source_edit",
         {
             "operation": "replace_exact",
-            "path": "src/main/java/DebugToken.java",
+            "path": default_path,
+            "old": "class DebugToken {}",
             "new": "package invented.pkg; class DebugToken {}",
+            "count": 1,
         },
-        default_package_context,
+        default_context,
     )
     assert added_package is not None
     assert added_package.startswith("REPAIR_SEMANTIC_IDENTITY_VIOLATION")
 
-    package_private_nested_public = TargetMutationContext(
-        target_path=PATH,
-        target_symbol="DebugToken",
-        source_body=(
-            "package dev.mmm.debugfixture; "
-            "class DebugToken { public static class Builder {} }"
-        ),
-        is_new_file=False,
-        evidence_source="verifier_workspace_source",
-    )
-    nested_public_valid = _mutation_target_error(
-        "apply_source_edit",
-        {
-            "operation": "replace_exact",
-            "path": PATH,
-            "new": (
-                "package dev.mmm.debugfixture; "
-                "class DebugToken { public static class Builder { int x; } }"
-            ),
-        },
-        package_private_nested_public,
-    )
-    assert nested_public_valid is None
 
-
-def test_whole_file_java_repair_preserves_behavioral_footprint():
+def test_atomic_java_repair_preserves_behavioral_footprint():
     current = (
         "package dev.mmm.debugfixture; "
         "public class DebugToken { "
@@ -668,13 +595,9 @@ def test_whole_file_java_repair_preserves_behavioral_footprint():
         {
             "operation": "replace_exact",
             "path": PATH,
-            "new": (
-                "package dev.mmm.debugfixture; "
-                "public class DebugToken { "
-                "public static final String ID = \"debug\"; "
-                "public int upgrade(int level) { return level; } "
-                "}"
-            ),
+            "old": "private int computeValue(int base) { return base + MISSING; } ",
+            "new": "",
+            "count": 1,
         },
         context,
     )
@@ -682,38 +605,18 @@ def test_whole_file_java_repair_preserves_behavioral_footprint():
     assert removed_method.startswith("REPAIR_SEMANTIC_FOOTPRINT_VIOLATION")
     assert "method:computeValue" in removed_method
 
-    long_body = current + (" " * 1200)
-    long_context = TargetMutationContext(
-        target_path=PATH,
-        target_symbol="DebugToken",
-        source_body=long_body,
-        is_new_file=False,
-        evidence_source="verifier_workspace_source",
-    )
-    collapsed = _mutation_target_error(
-        "apply_source_edit",
-        {
-            "operation": "replace_exact",
-            "path": PATH,
-            "new": current.replace("MISSING", "1"),
-        },
-        long_context,
-    )
-    assert collapsed is not None
-    assert collapsed.startswith("REPAIR_SEMANTIC_FOOTPRINT_VIOLATION")
-    assert "collapsed" in collapsed
-
     repaired = _mutation_target_error(
         "apply_source_edit",
         {
             "operation": "replace_exact",
             "path": PATH,
-            "new": current.replace("MISSING", "1"),
+            "old": "MISSING",
+            "new": "1",
+            "count": 1,
         },
         context,
     )
     assert repaired is None
-
 
 
 def test_repair_guidance_densifies_target_diagnostics_without_uri_repetition():

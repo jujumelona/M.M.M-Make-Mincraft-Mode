@@ -551,6 +551,7 @@ def _constrain_existing_repair_schema(
             "REPAIR_TOOL_SCHEMA_INVALID: apply_source_edit has no new-source schema"
         )
     new_schema["type"] = "string"
+    new_schema["maxLength"] = _ATOMIC_REPAIR_WINDOW_MAX_CHARS
     new_schema["description"] = (
         "Replacement text only for the verifier-selected bounded source window. "
         "Never emit the complete source file. "
@@ -624,10 +625,10 @@ def _constrain_verifier_repair_tools(
     if not target_path:
         return tuple(tools)
     if _repair_source_window(state) is None:
-        # No exact host-owned span: keep the ordinary existing-file edit schema so the
-        # small model can choose one bounded replace/insert action instead of recreating
-        # the complete file.
-        return tuple(tools)
+        raise ModelConfigurationError(
+            "VERIFIER_REPAIR_LOCALIZATION_UNAVAILABLE: verifier repair requires one "
+            "bounded exact host-selected source span; whole-file reconstruction is forbidden"
+        )
 
     projected: list[Any] = []
     for schema in tools:
@@ -1250,7 +1251,7 @@ def _java_semantic_footprint_error(
     new_bytes = len(new_source.encode("utf-8"))
     if current_bytes >= 800 and new_bytes * 100 < current_bytes * 55:
         return (
-            "REPAIR_SEMANTIC_FOOTPRINT_VIOLATION: whole-file Java repair "
+            "REPAIR_SEMANTIC_FOOTPRINT_VIOLATION: Java repair candidate "
             f"collapsed {path!r} from {current_bytes} to {new_bytes} bytes; "
             "repair must preserve the existing implementation footprint"
         )
@@ -1260,7 +1261,7 @@ def _java_semantic_footprint_error(
     missing = sorted(current_anchors - new_anchors)
     if missing:
         return (
-            "REPAIR_SEMANTIC_FOOTPRINT_VIOLATION: whole-file Java repair "
+            "REPAIR_SEMANTIC_FOOTPRINT_VIOLATION: Java repair candidate "
             f"removed existing member anchors from {path!r}: {missing[:12]!r}"
         )
     return None
@@ -1271,7 +1272,7 @@ def _java_whole_file_identity_error(
     current_source: str | None,
     new_source: Any,
 ) -> str | None:
-    """Reject whole-file Java repairs that change the host-selected source identity."""
+    """Reject Java repair candidates that change the host-selected source identity."""
 
     if not path.casefold().endswith(".java") or not isinstance(new_source, str):
         return None
@@ -1285,7 +1286,7 @@ def _java_whole_file_identity_error(
         new_package = new_package_match.group(1) if new_package_match is not None else ""
         if new_package != current_package:
             return (
-                "REPAIR_SEMANTIC_IDENTITY_VIOLATION: whole-file Java repair changed "
+                "REPAIR_SEMANTIC_IDENTITY_VIOLATION: Java repair candidate changed "
                 f"package identity for {path!r}: expected {current_package!r}, got "
                 f"{new_package or '<missing>'!r}"
             )
@@ -1294,7 +1295,7 @@ def _java_whole_file_identity_error(
         and new_package_match is not None
     ):
         return (
-            "REPAIR_SEMANTIC_IDENTITY_VIOLATION: whole-file Java repair changed "
+            "REPAIR_SEMANTIC_IDENTITY_VIOLATION: Java repair candidate changed "
             f"package identity for {path!r}: expected the default package, got "
             f"{new_package_match.group(1)!r}"
         )
@@ -1307,7 +1308,7 @@ def _java_whole_file_identity_error(
             _JAVA_PUBLIC_TOP_LEVEL_TYPE_RE.findall(new_source)
         )
         return (
-            "REPAIR_SEMANTIC_IDENTITY_VIOLATION: whole-file Java repair removed "
+            "REPAIR_SEMANTIC_IDENTITY_VIOLATION: Java repair candidate removed "
             f"the existing primary type {expected_type!r} from {path!r}"
             + (
                 f"; replacement public types={replacement_public_types!r}"
@@ -1533,8 +1534,8 @@ def _atomic_output_recovery_instruction(request: GenerationRequest) -> str:
             "call apply_source_edit exactly once with no prose and make one small semantic edit. "
             "For a fresh host-pinned Java target, use operation=create_file and provide one complete Java "
             "file that is minimal and compilable at the already-authorized path. For an existing target, "
-            "use one bounded replace/insert operation, or create_file only as an atomic whole-file rewrite "
-            "of that exact same path. Do not invent Java mutation tools that are not visible in this turn."
+            "use exactly one bounded replace/insert operation; never reconstruct the complete file. "
+            "Do not invent Java mutation tools that are not visible in this turn."
         )
     if names & _MUTATION_ACT_TOOLS:
         return (
@@ -2043,8 +2044,8 @@ def _mutated_source_body(
         return body
     old = arguments.get("old")
     if old is None:
-        # replace_exact without old is the model-facing atomic whole-file rewrite.
-        # Keep host state identical to the file content that the scalar protocol writes.
+        # Compatibility for host/internal full replacements outside model-facing
+        # verifier repair. Verifier repair itself always supplies an exact old span.
         return new
     if not isinstance(body, str) or not isinstance(old, str):
         return body
@@ -2090,7 +2091,6 @@ def _record_applied_mutation(
         and path
         and path == _canonical_mutation_path(context.target_path)
         and operation == "replace_exact"
-        and "old" not in arguments
     ):
         state.repair_baseline_error_count = len(state.latest_verifier_errors)
         state.repair_baseline_errors = tuple(state.latest_verifier_errors)
@@ -2237,10 +2237,26 @@ def _repair_source_window(state: Any) -> dict[str, Any] | None:
         window = _bounded_unique_line_window(source, lines, line_index)
         if window is not None:
             return window
-    return _diagnostic_identifier_window(
+    identifier_window = _diagnostic_identifier_window(
         source,
         tuple(item for item in diagnostics if isinstance(item, Mapping)),
     )
+    if identifier_window is not None:
+        return identifier_window
+
+    # Last host-owned localization fallback: reuse an already-grounded target symbol
+    # range. Support both zero-based LSP and one-based search-index line conventions.
+    if context is not None:
+        for raw_line in (context.start_line, context.end_line):
+            if not isinstance(raw_line, int):
+                continue
+            for line_index in (raw_line, raw_line - 1):
+                if not 0 <= line_index < len(lines):
+                    continue
+                window = _bounded_unique_line_window(source, lines, line_index)
+                if window is not None:
+                    return window
+    return None
 
 
 def _repair_guidance_payload(state: Any) -> dict[str, Any] | None:
@@ -2279,11 +2295,7 @@ def _repair_guidance_payload(state: Any) -> dict[str, Any] | None:
         "target_is_new_file": context.is_new_file if context else None,
         "writable_paths": list(context.writable_paths) if context else [],
         "repair_window": repair_window,
-        "repair_window_policy": (
-            "host_selected_bounded_exact_span"
-            if repair_window is not None
-            else "model_must_choose_one_bounded_existing_file_edit"
-        ),
+        "repair_window_policy": "host_selected_bounded_exact_span_required",
         "current_source_chars": len(source) if isinstance(source, str) else 0,
         "current_source_sha256": (
             hashlib.sha256(source.encode("utf-8")).hexdigest()
@@ -2458,11 +2470,11 @@ class HostRunState:
             "The payload includes a host-selected bounded repair_window when verifier location "
             "evidence can localize the defect. Any earlier host_reserved/fresh metadata is "
             "pre-materialization history only. Never regenerate the complete source file. "
-            "When repair_window is present, emit only replacement text for that exact old window "
-            "in new; operation, path, old text, count, and optimistic-concurrency SHA are host-owned. "
-            "If no repair_window is available, use one bounded existing-file edit from the visible "
-            "schema rather than a whole-file rewrite. Preserve package/type identity and approved "
-            "behavior. Make one materially different edit that reduces severity-1 diagnostics. "
+            "repair_window is mandatory for model-facing verifier repair. Emit only replacement "
+            "text for that exact old window in new; operation, path, old text, count, and "
+            "optimistic-concurrency SHA are host-owned. Whole-file reconstruction is forbidden. "
+            "Preserve package/type identity and approved behavior. Make one materially different "
+            "edit that reduces severity-1 diagnostics. "
             "An equal or worse verifier "
             "result is rolled back and counts as no progress. The next successful mutation goes "
             "directly back to VERIFY.\n"
@@ -2624,8 +2636,8 @@ def _source_edit_schema_for_context(
     elif not context.is_new_file:
         suffix = (
             "Existing host-pinned target: creation operations are unavailable. Use "
-            "replace_exact or another admitted bounded existing-file edit; a verifier "
-            "repair whole-file rewrite is host-bound to replace_exact."
+            "one bounded existing-file edit only; verifier repair never reconstructs "
+            "the complete source file."
         )
     else:
         suffix = ""
@@ -3999,7 +4011,7 @@ def _generate_with_tools_impl(
                 operation="apply_source_edit",
                 gate="repair_mutation_schema",
                 result="PASS",
-                reason="live HostRunState projected verifier repair to a host-bound whole-file rewrite",
+                reason="live HostRunState projected verifier repair to one host-bound bounded source window",
                 details={"selected_tools": [
                     _tool_name(schema) for schema in phase_tools if _tool_name(schema)
                 ]},
@@ -4370,8 +4382,8 @@ def _generate_with_tools_impl(
                     gate="repair_mutation_binding",
                     result="PASS",
                     reason=(
-                        "model authored corrected source; host bound operation, target path, "
-                        "and live-SHA whole-file rewrite semantics"
+                        "model authored one bounded replacement; host bound exact old span, "
+                        "target path, count, and live-SHA edit semantics"
                     ),
                     details={
                         "target_path": (
