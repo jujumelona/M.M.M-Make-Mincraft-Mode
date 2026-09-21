@@ -56,6 +56,7 @@ from .source_repair_semantics import (
 )
 from .verifier_repair_admission_recovery import (
     model_tool_rejection_feedback as _model_tool_rejection_feedback,
+    recover_schema_rejected_host_bound_existing_calls,
     recover_schema_rejected_verifier_repair_calls,
 )
 from .verifier_repair_frontier import reject_noop_repair, target_scoped_verifier_files
@@ -4422,6 +4423,32 @@ def _generate_with_tools_impl(
                 gate="tool_admission",
                 result="PASS",
                 reason="schema-rejected whole-source repair was safely down-projected to the host-selected span",
+            )
+        recovered_existing_calls = recover_schema_rejected_host_bound_existing_calls(
+            turn.tool_calls,
+            phase=state.phase.value,
+            validation_status=str(state.validation_status or ""),
+            context=state.mutation_context,
+        )
+        if recovered_existing_calls is not None:
+            turn = replace(turn, tool_calls=recovered_existing_calls)
+            emit_root_cause(
+                "existing_source_rejection_host_normalized",
+                stage=stage,
+                operation="apply_source_edit",
+                gate="tool_admission",
+                result="PASS",
+                reason=(
+                    "small coder supplied valid updated source plus redundant host-owned "
+                    "mutation fields; host removed those fields before exact binding"
+                ),
+                details={
+                    "target_path": (
+                        state.mutation_context.target_path
+                        if state.mutation_context is not None
+                        else None
+                    ),
+                },
             )
         turn = reject_noop_repair(
             turn, state=state, binder=_bind_existing_verifier_repair_call
