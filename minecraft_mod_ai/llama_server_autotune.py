@@ -806,7 +806,7 @@ def recover_managed_server(
         # Another concurrent request may already have recovered the managed server.
         # If the currently owned endpoint is healthy, reuse it even when the URL was
         # recycled onto the same port.
-        if _server_url_is_ready(current_url, attempts=3):
+        if process.poll() is None and _server_url_is_ready(current_url, attempts=3):
             return current_url
 
         # Only the endpoint owned by MMM may be torn down. A failure reported for an
