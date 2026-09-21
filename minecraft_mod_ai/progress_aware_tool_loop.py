@@ -55,6 +55,7 @@ from .source_repair_semantics import (
 )
 from .verifier_repair_window import (
     exact_rollback_arguments,
+    normalize_model_repair_replacement,
     repair_replacement_max_chars,
     select_verifier_repair_window,
     selected_repair_diagnostic,
@@ -606,6 +607,11 @@ def _bind_existing_verifier_repair_call(
     old_source = repair_window.get("old")
     if not isinstance(new_source, str) or not isinstance(old_source, str) or not old_source:
         return call
+    new_source = normalize_model_repair_replacement(
+        getattr(context, "source_body", None),
+        old_source,
+        new_source,
+    )
     bound = {
         "operation": "replace_exact",
         "path": target,
