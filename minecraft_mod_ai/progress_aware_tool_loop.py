@@ -3064,9 +3064,10 @@ def _bounded_verifier_recovery_observation(
         trial = {
             "verifier": str(state.latest_verifier_tool or ""),
             "status": "FAIL",
-            "target_path": target_path or None,
             "diagnostics": [*diagnostics, compact],
         }
+        if target_scoped:
+            trial["target_path"] = target_path
         if len(
             json.dumps(
                 trial,
@@ -3083,7 +3084,6 @@ def _bounded_verifier_recovery_observation(
         "schema_version": "mmm/verifier-recovery-handoff-v1",
         "verifier": str(state.latest_verifier_tool or ""),
         "status": "FAIL",
-        "target_path": target_path or None,
         "diagnostics": diagnostics,
         "diagnostics_fingerprint": evidence_fingerprint(raw_errors),
         "diagnostic_count": len(raw_errors),
@@ -3093,6 +3093,8 @@ def _bounded_verifier_recovery_observation(
             "not replayed into mandatory model context."
         ),
     }
+    if target_scoped:
+        payload["target_path"] = target_path
     return json.dumps(
         payload,
         ensure_ascii=False,
