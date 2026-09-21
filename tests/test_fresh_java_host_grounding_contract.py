@@ -138,7 +138,7 @@ def _fresh_owned_anchor_message_without_host_grounding() -> dict[str, object]:
     }
 
 
-def test_trusted_developer_ready_fresh_target_enters_act_before_any_rag(monkeypatch) -> None:
+def test_trusted_developer_fresh_target_still_obeys_explicit_evidence_policy(monkeypatch) -> None:
     adapter = _CapturingAdapter()
     monkeypatch.setattr(loop, "implementation_requested", lambda _messages: True)
     monkeypatch.setattr(loop, "mutation_history_applied", lambda _messages: False)
@@ -174,10 +174,10 @@ def test_trusted_developer_ready_fresh_target_enters_act_before_any_rag(monkeypa
 
     assert len(adapter.requests) == 1
     first = adapter.requests[0]
-    assert [tool["function"]["name"] for tool in first.tools] == ["apply_source_edit"]
+    assert [tool["function"]["name"] for tool in first.tools] == ["search_code_rag"]
     assert first.tool_choice == {
         "type": "function",
-        "function": {"name": "apply_source_edit"},
+        "function": {"name": "search_code_rag"},
     }
     assert first.parallel_tool_calls is False
 
@@ -224,5 +224,5 @@ def test_untrusted_user_owned_anchor_cannot_bypass_generic_rag(monkeypatch) -> N
         "search_code_rag",
         "search_project_rag",
     ]
-    assert first.tool_choice == "auto"
-    assert first.parallel_tool_calls is True
+    assert first.tool_choice == "required"
+    assert first.parallel_tool_calls is False
