@@ -1182,6 +1182,51 @@ def _existing_target_refresh_message(context: TargetMutationContext) -> dict[str
     }
 
 
+def _recover_creation_conflict_target(
+    state: HostRunState,
+    runtime: Any,
+    arguments: Mapping[str, Any],
+) -> TargetMutationContext | None:
+    """Turn a failed create into an exact existing-file edit target.
+
+    Bounded authored-design generation deliberately lets the coder propose a path inside
+    host-owned roots. If that path was materialized by an earlier atomic fragment, asking
+    a small model to rediscover the file through RAG is both redundant and fragile. The
+    failed mutation already supplies the exact authorized path, so the host reads that
+    file directly and pins the next ACT turn to its current source.
+    """
+
+    path = _source_edit_path(arguments)
+    root = getattr(runtime, "workspace_root", None)
+    if not path or root in (None, ""):
+        return None
+
+    with state._lock:
+        current = state.mutation_context
+        if current is not None and current.target_pinned:
+            current_path = _canonical_mutation_path(current.target_path)
+            if current_path and current_path != path:
+                return None
+
+    refreshed = _recover_stale(
+        state,
+        root,
+        path,
+        None,
+        TargetMutationContext,
+    )
+    if refreshed is None:
+        return None
+
+    # The action space changed from "create a new file" to "edit this exact live file".
+    # A failed-create fingerprint must not poison convergence for the corrective edit.
+    with state._lock:
+        state.unchanged_mutation_fingerprints.clear()
+        state.unapplied_mutation_fixed_point = False
+        state.semantic_fixed_point = False
+    return refreshed
+
+
 def _source_edit_path(arguments: Mapping[str, Any]) -> str:
     for key in _SOURCE_EDIT_PATH_KEYS:
         value = arguments.get(key)
@@ -2498,6 +2543,24 @@ def _source_edit_schema_for_context(
                     value for value in enum
                     if str(value).strip().casefold() not in _SOURCE_CREATE_OPERATIONS
                 ]
+
+    if (
+        not context.is_new_file
+        and isinstance(parameters, dict)
+        and isinstance(properties, dict)
+    ):
+        target_path = _canonical_mutation_path(context.target_path)
+        if target_path:
+            path_schema = deepcopy(properties.get("path") or {"type": "string"})
+            if isinstance(path_schema, dict):
+                path_schema["type"] = "string"
+                path_schema["enum"] = [target_path]
+                path_schema["description"] = (
+                    "Exact existing host-pinned target. Do not choose or invent another path."
+                )
+                properties["path"] = path_schema
+            for alias in ("file", "target_path", "target_file"):
+                properties.pop(alias, None)
 
     if fresh_java and isinstance(parameters, dict) and isinstance(properties, dict):
         # Operation and destination are already host-owned by TargetMutationContext.
@@ -3942,6 +4005,34 @@ def _generate_with_tools_impl(
                     "IMPLEMENTATION_EVIDENCE_STALLED: the mutation target is host-localized, "
                     "but no untried authoritative Java/API evidence route remains."
                 )
+            if (
+                bounded_root_execution_authority
+                and implementation_requires_mutation
+                and state.phase is LoopPhase.OBSERVE
+                and state.validation_status != "FAIL"
+            ):
+                # Authored bounded-root generation has host write authority without an
+                # exact preselected file. Retrieval may improve implementation evidence,
+                # but exhausting localization routes must not make a small coder fail:
+                # ACT is the deliberate bounded-root destination-selection frontier.
+                state.phase = LoopPhase.ACT
+                state.clear_no_progress_result()
+                emit_root_cause(
+                    "bounded_root_localization_exhausted_resume_act",
+                    stage=stage,
+                    operation="generate_with_tools",
+                    gate="mutation_localization",
+                    result="PASS",
+                    reason=(
+                        "bounded-root authored generation exhausted localization evidence; "
+                        "resume the host-authorized ACT frontier instead of terminating"
+                    ),
+                    details={
+                        "attempted_sources": sorted(state.attempted_sources),
+                        "validation_status": state.validation_status,
+                    },
+                )
+                continue
             raise ModelConfigurationError(
                 "MUTATION_LOCALIZATION_STALLED: no untried relevant source-evidence route remains."
             )
@@ -4599,9 +4690,44 @@ def _generate_with_tools_impl(
                             else LoopPhase.OBSERVE
                         )
                     elif code in {
+                        "MUTATION_TARGET_CREATION_CONFLICT",
+                        "MUTATION_TARGET_ALREADY_EXISTS",
+                    }:
+                        refreshed = _recover_creation_conflict_target(
+                            state,
+                            runtime,
+                            call.arguments,
+                        )
+                        if refreshed is not None:
+                            state.repair_guidance_fingerprint = None
+                            state.clear_failure()
+                            messages.append(_existing_target_refresh_message(refreshed))
+                            state.phase = LoopPhase.ACT
+                            progress = True
+                            emit_root_cause(
+                                "mutation_creation_conflict_rebound",
+                                stage=stage,
+                                operation=call.name,
+                                gate="mutation_target_lifecycle",
+                                result="PASS",
+                                reason=(
+                                    "failed create target already exists; host rebound the exact "
+                                    "live source as an existing-file edit target"
+                                ),
+                                details={
+                                    "target_path": refreshed.target_path,
+                                    "source_bytes": len(
+                                        (refreshed.source_body or "").encode("utf-8")
+                                    ),
+                                },
+                            )
+                        elif state.mutation_context and state.mutation_context.is_mutation_ready:
+                            state.phase = LoopPhase.ACT
+                        else:
+                            state.phase = LoopPhase.OBSERVE
+                    elif code in {
                         "MUTATION_TARGET_DRIFT",
                         "MUTATION_TARGET_UNBOUND",
-                        "MUTATION_TARGET_CREATION_CONFLICT",
                         "REPAIR_ATOMIC_REPLACEMENT_TOO_LARGE",
                         "REPAIR_ATOMIC_SCOPE_VIOLATION",
                         "PHASE_PROTOCOL_VIOLATION",
