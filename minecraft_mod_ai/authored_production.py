@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -68,8 +69,35 @@ def _split_utf8_piece(text: str, *, max_bytes: int) -> tuple[str, ...]:
     return tuple(pieces)
 
 
+def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
+    """Preserve authored Markdown section boundaries as implementation boundaries."""
+
+    if not text:
+        return ("",)
+    lines = text.splitlines(keepends=True)
+    blocks: list[str] = []
+    current: list[str] = []
+    heading = re.compile(r"^ {0,3}#{1,6}[ \t]+\S")
+    for line in lines:
+        if heading.match(line) and current:
+            blocks.append("".join(current))
+            current = []
+        current.append(line)
+    if current:
+        blocks.append("".join(current))
+    if "".join(blocks) != text:
+        raise ValueError("Authored semantic block parsing changed approved design text.")
+    return tuple(blocks)
+
+
 def _authored_execution_units(text: str) -> tuple[dict[str, Any], ...]:
-    """Lower saved prose to bounded ordered obligations without asking the coder to plan files."""
+    """Lower saved prose to bounded Markdown-section obligations.
+
+    A section is never packed together with a later heading merely to hit a byte target.
+    Oversized individual sections are split only inside that section at UTF-8-safe natural
+    boundaries. This keeps the coder's task aligned with the authored design structure
+    instead of arbitrary byte windows.
+    """
 
     encoded = text.encode("utf-8")
     if not encoded:
@@ -78,6 +106,7 @@ def _authored_execution_units(text: str) -> tuple[dict[str, Any], ...]:
             "start_byte": 0,
             "end_byte": 0,
             "text": "",
+            "section": "",
             "text_sha256": "sha256:" + hashlib.sha256(b"").hexdigest(),
         },)
 
@@ -85,23 +114,19 @@ def _authored_execution_units(text: str) -> tuple[dict[str, Any], ...]:
         _AUTHORED_UNIT_TARGET_BYTES,
         (len(encoded) + _AUTHORED_UNIT_MAX_COUNT - 1) // _AUTHORED_UNIT_MAX_COUNT,
     )
-    blocks = text.splitlines(keepends=True) or [text]
-    chunks: list[str] = []
-    current = ""
-    for block in blocks:
+    chunks: list[tuple[str, str]] = []
+    for block in _semantic_authored_blocks(text):
+        first_line = block.splitlines()[0].strip() if block.splitlines() else ""
+        section = first_line.lstrip("#").strip() if first_line.startswith("#") else ""
         for piece in _split_utf8_piece(block, max_bytes=target):
-            if current and len((current + piece).encode("utf-8")) > target:
-                chunks.append(current)
-                current = ""
-            current += piece
-    if current:
-        chunks.append(current)
-    if "".join(chunks) != text:
+            chunks.append((piece, section))
+
+    if "".join(chunk for chunk, _section in chunks) != text:
         raise ValueError("Authored execution lowering changed the approved design text.")
 
     units: list[dict[str, Any]] = []
     start = 0
-    for index, chunk in enumerate(chunks, start=1):
+    for index, (chunk, section) in enumerate(chunks, start=1):
         raw = chunk.encode("utf-8")
         end = start + len(raw)
         units.append({
@@ -109,6 +134,7 @@ def _authored_execution_units(text: str) -> tuple[dict[str, Any], ...]:
             "start_byte": start,
             "end_byte": end,
             "text": chunk,
+            "section": section,
             "text_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
         })
         start = end
@@ -186,18 +212,16 @@ def _compile_new_authored_modules(
     package_path = package_name.replace(".", "/")
     modules: list[ProductionModule] = []
     manifest_units: list[dict[str, Any]] = []
-    previous_module = ""
-    previous_provide = ""
-
     for unit in units:
         index = int(unit["index"])
         task_id = f"authored_feature_{index:03d}"
         symbol = f"AuthoredFeature{index:03d}"
         path = f"src/main/java/{package_path}/{symbol}.java"
         provide = f"{task_id}_ready"
-        depends_on = (previous_module,) if previous_module else ()
-        consumes = (previous_provide,) if previous_provide else ()
+        depends_on: tuple[str, ...] = ()
+        consumes: tuple[str, ...] = ()
         exact_text = str(unit["text"])
+        section = str(unit.get("section") or "").strip()
         obligation = (
             f"Implement approved authored design unit {index}/{len(units)} only in "
             f"{symbol}. The exact class must be public final {symbol} in package "
@@ -221,9 +245,10 @@ def _compile_new_authored_modules(
             consumes=consumes,
             provides=(provide,),
             worksheet={
-                "objective": "Implement exactly one host-scheduled authored design unit.",
+                "objective": "Implement exactly one host-scheduled authored design section.",
                 "authored_unit": {
                     "index": index,
+                    "section": section,
                     "count": len(units),
                     "source_text_sha256": unit["text_sha256"],
                     "start_byte": unit["start_byte"],
@@ -238,6 +263,7 @@ def _compile_new_authored_modules(
                         f"Exact top-level type: public final class {symbol}",
                         "Required host integration surface: public static void initialize()",
                         "Forbidden: ModInitializer, ClientModInitializer, alternate entrypoints, sibling-file writes.",
+                        "Do not require private implementation APIs from sibling feature classes; cross-feature activation is host-owned.",
                     ],
                 },
             },
@@ -262,9 +288,8 @@ def _compile_new_authored_modules(
             "end_byte": unit["end_byte"],
             "text_sha256": unit["text_sha256"],
             "provides": provide,
+            "section": section,
         })
-        previous_module = task_id
-        previous_provide = provide
 
     main_symbol = _main_class_name(mod_id)
     main_path = f"src/main/java/{package_path}/{main_symbol}.java"
