@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
