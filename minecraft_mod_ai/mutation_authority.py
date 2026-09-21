@@ -103,7 +103,10 @@ class MutationAuthority:
             raise MutationAuthorityError(
                 "MUTATION_AUTHORITY_EMPTY: bounded authority requires at least one safe root."
             )
-        if not set(canonical).issubset(_DEFAULT_BOUNDED_ROOTS):
+        if any(
+            not any(root.startswith(allowed) for allowed in _DEFAULT_BOUNDED_ROOTS)
+            for root in canonical
+        ):
             raise MutationAuthorityError(
                 "MUTATION_AUTHORITY_ROOT_FORBIDDEN: bounded roots must stay inside generated "
                 "Java/resource/test/gametest source sets."
