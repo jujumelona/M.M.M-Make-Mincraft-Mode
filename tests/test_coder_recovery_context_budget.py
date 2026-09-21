@@ -231,3 +231,168 @@ def test_authored_recovery_fits_after_failed_and_empty_evidence_routes() -> None
         "java_diagnostics",
     ]
     assert request.messages[1]["content"] == routing
+
+
+
+def test_authored_stale_precondition_rebinds_live_workspace_target(tmp_path) -> None:
+    target = "src/main/java/xyz/mods/spacemode/core/SyncManager.java"
+    live_source = (
+        "package xyz.mods.spacemode.core;\n"
+        "public class SyncManager { int value = 1; }\n"
+    )
+    target_file = tmp_path / target
+    target_file.parent.mkdir(parents=True)
+    target_file.write_text(live_source, encoding="utf-8")
+
+    module = SimpleNamespace(
+        module_id="space-mode",
+        kind="custom_java",
+        config={"authored_plan": {"schema_version": "mmm/authored-plan-v1"}},
+    )
+    authority = compile_direct_task_mutation_authority(module)
+    assert authority is not None
+    payload = {
+        "phase": "implement_authored_design",
+        "task": "Update the current sync fragment.",
+        "module": module.config,
+        "initial_exact_source_context": {
+            "mode": "retrieve_current_authored_fragment_with_tools",
+        },
+        "authored_execution": {
+            "schema_version": "mmm/authored-plan-fragment-v1",
+            "fragment_index": 2,
+            "fragment_count": 3,
+            "source_text_sha256": "sha256:" + "a" * 64,
+        },
+    }
+    tools = tuple(
+        _schema(name)
+        for name in (
+            "search_code_rag",
+            "apply_source_edit",
+            "java_diagnostics",
+            "search_project_rag",
+        )
+    )
+    observed = []
+    runtime_calls = []
+
+    class Adapter:
+        def generate_turn(self, request):
+            observed.append(request)
+            step = len(observed)
+            if step == 1:
+                name = "search_code_rag"
+                arguments = {"query": "SyncManager.java current workspace source"}
+            elif step == 2:
+                name = "apply_source_edit"
+                arguments = {
+                    "operation": "replace_exact",
+                    "path": target,
+                    "old": "stale source body",
+                    "new": "still stale",
+                }
+            else:
+                rendered = json.dumps(request.messages)
+                assert "MMM_EXISTING_TARGET_REFRESH_V1" in rendered
+                assert "int value = 1;" in rendered
+                name = "apply_source_edit"
+                arguments = {
+                    "operation": "replace_exact",
+                    "path": target,
+                    "old": "int value = 1;",
+                    "new": "int value = 2;",
+                }
+            return GenerationResponse(
+                tool_calls=(
+                    ToolCall(
+                        id=f"call-{step}",
+                        name=name,
+                        arguments=arguments,
+                        raw_arguments=json.dumps(arguments),
+                    ),
+                )
+            )
+
+    class Runtime:
+        workspace_root = tmp_path
+
+        def call(self, stage, name, arguments):
+            assert stage == "generation"
+            runtime_calls.append(name)
+            if name == "search_code_rag":
+                return {
+                    "hits": [
+                        {
+                            "path": target,
+                            "source_path": target,
+                            "text": "stale source body",
+                        }
+                    ],
+                    "receipt": {"status": "FOUND", "result_count": 1},
+                }
+            if name == "apply_source_edit":
+                if arguments.get("old") == "stale source body":
+                    raise RuntimeError(
+                        f"Exact source-edit precondition failed for {target}: "
+                        "expected 1 matches, found 0"
+                    )
+                current = target_file.read_text(encoding="utf-8")
+                old = arguments["old"]
+                assert current.count(old) == 1
+                updated = current.replace(old, arguments["new"], 1)
+                target_file.write_text(updated, encoding="utf-8")
+                return {
+                    "schema_version": "mmm/source-patch-receipt-v1",
+                    "status": "APPLIED",
+                    "operations": [{"path": target, "after_sha256": "sha256:new"}],
+                }
+            if name == "java_diagnostics":
+                assert arguments.get("relative_files") == [target]
+                return {
+                    "schema_version": "mmm/java-diagnostics-v3",
+                    "complete": True,
+                    "skipped": False,
+                    "session_id": "session",
+                    "model_id": "model",
+                    "verification_scope": "target",
+                    "error_count": 0,
+                    "warning_count": 0,
+                    "diagnostics": {},
+                }
+            raise AssertionError(name)
+
+    request = GenerationRequest(
+        messages=({"role": "user", "content": json.dumps(payload)},),
+        tools=tools,
+    )
+    token = CURRENT_MUTATION_AUTHORITY.set(authority.mutation_authority)
+    envelope_token = _CURRENT_AUTHORITY.set(authority)
+    try:
+        result = loop.generate_with_tools(
+            SimpleNamespace(_agent_require_fresh_evidence=False),
+            config=SimpleNamespace(
+                adapter="test",
+                max_context=32768,
+                max_input_tokens=0,
+                max_new_tokens=512,
+            ),
+            adapter=Adapter(),
+            request=request,
+            runtime=Runtime(),
+            stage="generation",
+            role="coder",
+        )
+    finally:
+        _CURRENT_AUTHORITY.reset(envelope_token)
+        CURRENT_MUTATION_AUTHORITY.reset(token)
+
+    assert "passed" in json.loads(result)["summary"]
+    assert "int value = 2;" in target_file.read_text(encoding="utf-8")
+    assert runtime_calls == [
+        "search_code_rag",
+        "apply_source_edit",
+        "apply_source_edit",
+        "java_diagnostics",
+    ]
+    assert "search_project_rag" not in runtime_calls
