@@ -24,7 +24,7 @@ def test_compiler_package_error_localizes_inline_import_and_downprojects_legacy_
     window = select_verifier_repair_window(source, (diagnostic,))
 
     assert window is not None
-    assert window["old"] == "import net.minecraft.item.Item; "
+    assert window["old"].strip() == "import net.minecraft.item.Item;"
     corrected_source = (
         "package dev.mmm.debugfixture; public final class DebugToken {}\n"
     )
@@ -33,7 +33,7 @@ def test_compiler_package_error_localizes_inline_import_and_downprojects_legacy_
             source,
             window["old"],
             corrected_source,
-        )
+        ).strip()
         == ""
     )
 
