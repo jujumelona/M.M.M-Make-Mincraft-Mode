@@ -4,7 +4,10 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai.authored_plan import AuthoredPlan
-from minecraft_mod_ai.authored_production import _compile_new_authored_modules
+from minecraft_mod_ai.authored_production import (
+    _compile_new_authored_modules,
+    materialize_authored_execution_scaffold,
+)
 from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
 from minecraft_mod_ai.custom_module_generator import _task_local_module_contract
 from minecraft_mod_ai.planning_pipeline import PlanningPipeline
@@ -27,9 +30,8 @@ def test_saved_design_compiler_preserves_target_through_coder_handoff(version):
     assert proposal.game_design["authored_plan"] == plan.to_dict()
     manifest = proposal.game_design["_authored_execution_manifest"]
     assert manifest["policy"] == "host_exact_task_queue_no_coder_file_planning"
-    assert len(proposal.modules) == manifest["unit_count"] + 1
-    assert proposal.modules[-1].module_id == "authored_entrypoint"
-    assert proposal.modules[-1].required_gates == ("project build",)
+    assert len(proposal.modules) == manifest["unit_count"]
+    assert manifest["entrypoint"]["owner"] == "host_scaffold"
     assert all("authored_plan" not in module.config for module in proposal.modules)
     assert all("evidence_task" in module.config for module in proposal.modules)
     assert all(_target_values(module.config) == expected for module in proposal.modules)
@@ -64,7 +66,7 @@ def test_real_compiler_hands_saved_text_to_coder_without_replanning(monkeypatch,
 
     manifest = proposal.game_design["_authored_execution_manifest"]
     assert manifest["unit_count"] >= 1
-    feature_modules = proposal.modules[:-1]
+    feature_modules = proposal.modules
     assert len(feature_modules) == manifest["unit_count"]
     reconstructed = "".join(
         module.config["evidence_task"]["engineering_worksheet"]["authored_unit"]["text"]
@@ -94,7 +96,7 @@ def test_real_compiler_hands_saved_text_to_coder_without_replanning(monkeypatch,
         paths.append(refs[0].split("#", 1)[0])
 
     assert len(paths) == len(set(paths))
-    assert paths[-1] == manifest["entrypoint"]["path"]
+    assert manifest["entrypoint"]["path"] not in paths
 
 
 def test_fresh_authored_execution_is_exact_path_dependency_queue():
@@ -112,11 +114,11 @@ def test_fresh_authored_execution_is_exact_path_dependency_queue():
         },
     )
 
-    assert len(modules) == manifest["unit_count"] + 1
+    assert len(modules) == manifest["unit_count"]
     assert manifest["unit_count"] > 1
     assert "".join(
         module.config["evidence_task"]["engineering_worksheet"]["authored_unit"]["text"]
-        for module in modules[:-1]
+        for module in modules
     ) == text
 
     prior = ""
@@ -131,14 +133,82 @@ def test_fresh_authored_execution_is_exact_path_dependency_queue():
         paths.add(capsule.primary_path)
         prior = module.module_id
 
-    entry = modules[-1]
-    assert entry.module_id == "authored_entrypoint"
-    assert entry.depends_on == (prior,)
-    entry_capsule = compile_task_capsule(entry)
-    assert entry_capsule is not None
-    assert entry_capsule.primary_path == manifest["entrypoint"]["path"]
-    assert entry_capsule.primary_symbol == manifest["entrypoint"]["symbol"]
-    assert entry_capsule.primary_path not in paths
+    assert manifest["entrypoint"]["owner"] == "host_scaffold"
+    assert manifest["entrypoint"]["path"] not in paths
+    assert manifest["entrypoint"]["feature_symbols"] == [
+        f"AuthoredFeature{index:03d}"
+        for index in range(1, manifest["unit_count"] + 1)
+    ]
+
+
+
+def test_authored_scaffold_materializes_existing_exact_targets_and_host_entrypoint(tmp_path):
+    plan = AuthoredPlan("Space mod for Fabric 1.21.11", "경제\n우주선\n행성")
+    modules, manifest = _compile_new_authored_modules(
+        plan,
+        mod_id="authored_test",
+        package_name="ai.minecraft.generated.authored_test",
+        target={
+            "minecraft_version": "1.21.11",
+            "loader": "fabric",
+            "mappings": "1.21.11+build.1",
+        },
+    )
+    base = SimpleNamespace(
+        spec=SimpleNamespace(
+            mod_id="authored_test",
+            package_name="ai.minecraft.generated.authored_test",
+        )
+    )
+    proposal = SimpleNamespace(
+        game_design={"_authored_execution_manifest": manifest},
+        base_proposal=base,
+    )
+    main = (
+        tmp_path
+        / "src/main/java/ai/minecraft/generated/authored_test/AuthoredTestMod.java"
+    )
+    main.parent.mkdir(parents=True)
+    main.write_text(
+        "package ai.minecraft.generated.authored_test;\n"
+        "import net.fabricmc.api.ModInitializer;\n"
+        "public final class AuthoredTestMod implements ModInitializer {\n"
+        "    @Override\n"
+        "    public void onInitialize() {\n"
+        "        // host baseline\n"
+        "    }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    assert materialize_authored_execution_scaffold(proposal, tmp_path) == tmp_path.resolve()
+    first_main = main.read_text(encoding="utf-8")
+    assert first_main.count("// MMM_AUTHORED_HOST_ENTRYPOINT_BINDING") == 1
+
+    for index, module in enumerate(modules, start=1):
+        capsule = compile_task_capsule(module)
+        assert capsule is not None
+        assert capsule.creatable_paths == ()
+        target = tmp_path / capsule.primary_path
+        assert target.is_file()
+        source = target.read_text(encoding="utf-8")
+        assert f"public final class AuthoredFeature{index:03d}" in source
+        assert "public static void initialize()" in source
+        call = f"AuthoredFeature{index:03d}.initialize();"
+        assert first_main.count(call) == 1
+
+    # Preparation is idempotent and must not overwrite coder-filled feature sources.
+    first_capsule = compile_task_capsule(modules[0])
+    assert first_capsule is not None
+    first_target = tmp_path / first_capsule.primary_path
+    filled = first_target.read_text(encoding="utf-8").replace(
+        "// MMM_AUTHORED_FEATURE_BODY_001",
+        'System.out.println("filled");',
+    )
+    first_target.write_text(filled, encoding="utf-8")
+    materialize_authored_execution_scaffold(proposal, tmp_path)
+    assert first_target.read_text(encoding="utf-8") == filled
+    assert main.read_text(encoding="utf-8") == first_main
 
 
 def test_real_orchestrator_accepts_authored_handoff(monkeypatch, tmp_path):
