@@ -4,6 +4,7 @@ from minecraft_mod_ai.progress_aware_tool_loop import (
     HostRunState,
     TargetMutationContext,
     _mutation_target_error,
+    _rollback_non_improving_verifier_repair,
 )
 
 PATH = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
@@ -120,8 +121,8 @@ def test_repair_guidance_tracks_verifier_fingerprint_not_message_history():
     assert "RegistryWrapper cannot be resolved to a type" in first
     assert "replace_exact" in first
     assert "current_source" in first
-    assert "OMIT old entirely" in first
-    assert "live file" in first
+    assert "complete corrected source body" in first
+    assert "host-owned" in first
     assert "create_file/create" not in first
     assert state.take_verifier_repair_guidance() is None
 
@@ -218,3 +219,200 @@ def test_whole_file_repair_without_old_updates_host_source_body():
     assert state.latest_verifier_fingerprint is None
     assert state.mutation_context is not None
     assert state.mutation_context.source_body == corrected
+
+
+
+def _failed_diagnostics_many(*messages: str) -> dict:
+    return {
+        "ok": True,
+        "result": {
+            "status": "FAIL",
+            "diagnostics": {
+                f"file:///{PATH}": [
+                    {
+                        "severity": 1,
+                        "code": "UndefinedType",
+                        "message": message,
+                    }
+                    for message in messages
+                ]
+            },
+        },
+    }
+
+
+def test_repair_progress_requires_strict_verifier_improvement():
+    state = HostRunState(
+        mutation_context=TargetMutationContext(
+            target_path=PATH,
+            target_symbol="DebugToken",
+            source_body="package dev.mmm.debugfixture; public class DebugToken { A a; B b; }",
+            is_new_file=False,
+            evidence_source="verifier_workspace_source",
+        )
+    )
+    assert state.record_verification(
+        "java_diagnostics",
+        _failed_diagnostics_many("A cannot be resolved", "B cannot be resolved"),
+        "FAIL",
+    )
+    candidate = (
+        "package dev.mmm.debugfixture; "
+        "public class DebugToken { A a; int b = 1; }"
+    )
+    assert state.record_mutation(
+        "apply_source_edit",
+        {"operation": "replace_exact", "path": PATH, "new": candidate},
+        _applied_receipt(),
+    )
+    assert state.repair_baseline_error_count == 2
+    assert state.record_verification(
+        "java_diagnostics",
+        _failed_diagnostics("A cannot be resolved"),
+        "FAIL",
+    )
+    assert state.last_verifier_quality == "IMPROVED"
+
+    next_candidate = (
+        "package dev.mmm.debugfixture; "
+        "public class DebugToken { C c; int b = 1; }"
+    )
+    assert state.record_mutation(
+        "apply_source_edit",
+        {"operation": "replace_exact", "path": PATH, "new": next_candidate},
+        _applied_receipt(),
+    )
+    assert state.repair_baseline_error_count == 1
+    assert not state.record_verification(
+        "java_diagnostics",
+        _failed_diagnostics("C cannot be resolved"),
+        "FAIL",
+    )
+    assert state.last_verifier_quality == "NON_IMPROVING"
+
+
+def test_non_improving_repair_rolls_back_to_verifier_proven_source():
+    original = (
+        "package dev.mmm.debugfixture; "
+        "public class DebugToken { Missing value; }"
+    )
+    candidate = (
+        "package dev.mmm.debugfixture; "
+        "public class DebugToken { OtherMissing value; }"
+    )
+    state = HostRunState(
+        mutation_context=TargetMutationContext(
+            target_path=PATH,
+            target_symbol="DebugToken",
+            source_body=original,
+            is_new_file=False,
+            evidence_source="verifier_workspace_source",
+        )
+    )
+    state.record_verification(
+        "java_diagnostics",
+        _failed_diagnostics("Missing cannot be resolved"),
+        "FAIL",
+    )
+    assert state.record_mutation(
+        "apply_source_edit",
+        {"operation": "replace_exact", "path": PATH, "new": candidate},
+        _applied_receipt(),
+    )
+    assert not state.record_verification(
+        "java_diagnostics",
+        _failed_diagnostics("OtherMissing cannot be resolved"),
+        "FAIL",
+    )
+
+    calls = []
+
+    class Runtime:
+        def call(self, stage, name, arguments):
+            calls.append((stage, name, dict(arguments)))
+            return {
+                "schema_version": "mmm/source-patch-receipt-v1",
+                "status": "APPLIED",
+                "operations": [
+                    {
+                        "path": PATH,
+                        "before_sha256": "sha256:candidate",
+                        "after_sha256": "sha256:original",
+                    }
+                ],
+            }
+
+    assert _rollback_non_improving_verifier_repair(
+        state,
+        Runtime(),
+        stage="generation",
+    )
+    assert calls == [
+        (
+            "generation",
+            "apply_source_edit",
+            {"operation": "replace_exact", "path": PATH, "new": original},
+        )
+    ]
+    assert state.mutation_context is not None
+    assert state.mutation_context.source_body == original
+    assert state.validation_status == "FAIL"
+    assert state.last_verifier_quality == "NON_IMPROVING"
+    assert "Missing cannot be resolved" in str(state.latest_verifier_errors)
+
+
+def test_whole_file_java_repair_preserves_package_and_public_type_identity():
+    source = (
+        "package dev.mmm.debugfixture; "
+        "public class DebugToken { int value = MISSING; }"
+    )
+    context = TargetMutationContext(
+        target_path=PATH,
+        target_symbol="DebugToken",
+        source_body=source,
+        is_new_file=False,
+        evidence_source="verifier_workspace_source",
+    )
+
+    wrong_type = _mutation_target_error(
+        "apply_source_edit",
+        {
+            "operation": "replace_exact",
+            "path": PATH,
+            "new": (
+                "package dev.mmm.debugfixture; "
+                "public class StarLinkMod { int value = 1; }"
+            ),
+        },
+        context,
+    )
+    assert wrong_type is not None
+    assert wrong_type.startswith("REPAIR_SEMANTIC_IDENTITY_VIOLATION")
+    assert "DebugToken" in wrong_type
+    assert "StarLinkMod" in wrong_type
+
+    wrong_package = _mutation_target_error(
+        "apply_source_edit",
+        {
+            "operation": "replace_exact",
+            "path": PATH,
+            "new": "package other.pkg; public class DebugToken { int value = 1; }",
+        },
+        context,
+    )
+    assert wrong_package is not None
+    assert wrong_package.startswith("REPAIR_SEMANTIC_IDENTITY_VIOLATION")
+
+    valid = _mutation_target_error(
+        "apply_source_edit",
+        {
+            "operation": "replace_exact",
+            "path": PATH,
+            "new": (
+                "package dev.mmm.debugfixture; "
+                "public class DebugToken { int value = 1; }"
+            ),
+        },
+        context,
+    )
+    assert valid is None
