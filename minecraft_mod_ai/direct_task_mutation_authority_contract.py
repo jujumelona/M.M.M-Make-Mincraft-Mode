@@ -91,8 +91,10 @@ def _authority_host_payload(authority: DirectTaskMutationAuthority) -> dict[str,
             },
             "instruction": (
                 "Host-authored design authority is already fixed. You may create or edit "
-                "files only below the declared roots. Build configuration, host state and "
-                "deletes are forbidden. Retrieval/localization does not widen this authority."
+                "files only below the declared roots. Java/test/gametest roots may already "
+                "encode the host-selected package; never invent a sibling package outside "
+                "those roots. Build configuration, host state and deletes are forbidden. "
+                "Retrieval/localization does not widen this authority."
             ),
         }
     primary_anchor = next(
