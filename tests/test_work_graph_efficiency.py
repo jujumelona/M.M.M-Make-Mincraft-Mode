@@ -67,6 +67,10 @@ def _host_exact_authored_module(index: int) -> ProductionModule:
     )
 
 
+def test_work_graph_exports_authored_exact_checkpoint_contract() -> None:
+    assert work_graph._module_shards._mmm_authored_exact_task_checkpoints is True
+
+
 def test_host_exact_authored_tasks_are_one_durable_llm_node_each(monkeypatch) -> None:
     monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
     modules = tuple(_host_exact_authored_module(index) for index in range(1, 24))
