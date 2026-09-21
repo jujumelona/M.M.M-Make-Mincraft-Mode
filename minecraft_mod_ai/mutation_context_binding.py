@@ -3,8 +3,7 @@ from __future__ import annotations
 """Separate retrieval evidence from host-selected mutation targeting."""
 
 import hashlib
-import json
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -46,27 +45,6 @@ def materialized_create_context(
 
 
 
-def authored_design_execution_requested(
-    messages: Sequence[Mapping[str, Any]],
-) -> bool:
-    """Return whether the current coder turn belongs to saved authored design execution."""
-
-    for message in reversed(messages):
-        if str(message.get("role") or "").strip().casefold() != "user":
-            continue
-        content = message.get("content")
-        if not isinstance(content, str):
-            continue
-        try:
-            payload = json.loads(content)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            continue
-        if not isinstance(payload, Mapping):
-            continue
-        return str(payload.get("phase") or "").strip() == "implement_authored_design"
-    return False
-
-
 def _workspace_existing_context(
     workspace_root: Any,
     path: str,
@@ -104,7 +82,6 @@ def _workspace_existing_context(
 
 def recover_stale_existing_context(
     state: Any,
-    *,
     workspace_root: Any,
     path: str,
     existing: Any,

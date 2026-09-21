@@ -39,14 +39,8 @@ from .model_context_budget import (
     request_message_budget,
 )
 from .mutation_authority import CURRENT_MUTATION_AUTHORITY, MutationAuthorityMode
-from .mutation_context_binding import (
-    authored_design_execution_requested,
-    context_is_host_pinned,
-    context_is_localized,
-    materialized_create_context,
-    observed_context_may_bind,
-    recover_stale_existing_context,
-)
+from .mutation_context_binding import context_is_host_pinned, context_is_localized, materialized_create_context, observed_context_may_bind
+from .mutation_context_binding import recover_stale_existing_context as _recover_stale
 from .owned_target_contract import (
     normalize_target_status,
     target_is_creatable,
@@ -74,7 +68,6 @@ from .verifier_repair_window import (
 )
 from .value_shapes import as_sequence as _sequence
 from .value_shapes import structured_payload as _structured_payload
-
 
 class LoopPhase(str, Enum):
     OBSERVE = "OBSERVE"
@@ -3654,10 +3647,7 @@ def _generate_with_tools_impl(
         bounded_root_execution_authority
         and _authored_workspace_refresh_requested(request.messages)
     )
-    state.retrieval_target_binding_enabled = not (
-        bounded_root_execution_authority
-        and authored_design_execution_requested(request.messages)
-    )
+    state.retrieval_target_binding_enabled = not authored_workspace_refresh
     from .small_model_task_capsule_contract import current_task_required_gates
     compile_backed_java = bool(
         java_target
@@ -4596,20 +4586,11 @@ def _generate_with_tools_impl(
                     error = str(payload.get("error") or "MUTATION_UNCHANGED: no source-byte change")
                     state.record_failure(call.name, error)
                     if code == "MUTATION_STALE_PRECONDITION":
-                        refreshed = recover_stale_existing_context(
-                            state,
-                            workspace_root=getattr(runtime, "workspace_root", None),
-                            path=_source_edit_path(call.arguments),
-                            existing=_reconcile_materialized_target_from_workspace(
-                                state, runtime
-                            ),
-                            context_factory=TargetMutationContext,
+                        refreshed = _recover_stale(
+                            state, getattr(runtime, "workspace_root", None), _source_edit_path(call.arguments),
+                            _reconcile_materialized_target_from_workspace(state, runtime), TargetMutationContext,
                         )
                         if refreshed is not None:
-                            # The verifier obligation is still valid, but the model's exact-match
-                            # precondition was stale. Re-issue one repair contract against the live
-                            # workspace snapshot instead of replaying the stale edit or duplicating
-                            # the full source in a second refresh message.
                             state.repair_guidance_fingerprint = None
                             messages.append(_existing_target_refresh_message(refreshed))
                         state.phase = (
