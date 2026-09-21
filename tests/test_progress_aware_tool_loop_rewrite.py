@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 
 from minecraft_mod_ai import progress_aware_tool_loop as loop
@@ -145,24 +146,18 @@ def test_repeated_unchanged_source_edit_hits_semantic_fixed_point() -> None:
     assert state.semantic_fixed_point is True
 
 
-def test_native_core_blocks_legacy_runtime_monkey_patch_installers() -> None:
-    from minecraft_mod_ai.mutation_authority_final_guard import install as install_final_guard
-    from minecraft_mod_ai.planir_mutation_authority_contract import install as install_planir
-    from minecraft_mod_ai.repair_mutation_recovery_contract import install as install_repair
+def test_native_core_has_no_legacy_runtime_monkey_patch_installers() -> None:
+    for module_name in (
+        "minecraft_mod_ai.mutation_authority_final_guard",
+        "minecraft_mod_ai.planir_mutation_authority_contract",
+        "minecraft_mod_ai.repair_mutation_recovery_contract",
+    ):
+        assert importlib.util.find_spec(module_name) is None
 
-    original_generate = loop.generate_with_tools
-    original_context = loop.TargetMutationContext
-    original_ready = loop.is_mutation_ready
-    original_turn = loop._generate_turn_with_context_recovery
-
-    install_planir(loop)
-    install_repair(loop)
-    install_final_guard(loop)
-
-    assert loop.generate_with_tools is original_generate
-    assert loop.TargetMutationContext is original_context
-    assert loop.is_mutation_ready is original_ready
-    assert loop._generate_turn_with_context_recovery is original_turn
+    assert loop._mmm_planir_mutation_authority_v1 is True
+    assert loop._mmm_repair_mutation_recovery_v1 is True
+    assert loop._mmm_mutation_authority_final_guard_v1 is True
+    assert loop._mmm_post_argument_semantic_boundary_v1 is True
 
 
 def test_failed_external_mcp_route_is_consumed_for_recovery_frontier() -> None:
