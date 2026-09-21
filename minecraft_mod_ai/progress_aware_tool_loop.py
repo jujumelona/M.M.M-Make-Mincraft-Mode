@@ -67,7 +67,6 @@ from .verifier_repair_window import (
     exact_rollback_arguments,
     normalize_model_repair_replacement,
     repair_replacement_max_chars,
-    select_verifier_repair_window,
     selected_repair_diagnostic,
 )
 from .value_shapes import as_sequence as _sequence
