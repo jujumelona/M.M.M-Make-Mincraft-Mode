@@ -29,7 +29,7 @@ from .mutation_authority import (
 _SCHEMA = "mmm/direct-task-mutation-authority-v1"
 _AUTHORED_SCHEMA = "mmm/authored-design-mutation-authority-v1"
 _ALLOWED_PREFIXES = AUTHORED_DESIGN_ROOTS
-_JAVA_PACKAGE_RE = re.compile(r"^[A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*$")
+_JAVA_PACKAGE_RE = re.compile(r"^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$")
 _CURRENT_AUTHORITY: contextvars.ContextVar["DirectTaskMutationAuthority | None"] = (
     contextvars.ContextVar("mmm_direct_task_mutation_authority", default=None)
 )
