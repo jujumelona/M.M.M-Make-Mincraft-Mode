@@ -274,12 +274,19 @@ def _run_compile_backed_generation_flow(
     *,
     compile_results,
     expect_repairs: int = 0,
+    expect_fixed_point: bool = False,
 ):
     import json
+    import pytest
 
     from minecraft_mod_ai import progress_aware_tool_loop as loop
     from minecraft_mod_ai import small_model_task_capsule_contract as capsules
-    from minecraft_mod_ai.model_adapters import GenerationRequest, GenerationResponse, ToolCall
+    from minecraft_mod_ai.model_adapters import (
+        GenerationRequest,
+        GenerationResponse,
+        ModelConfigurationError,
+        ToolCall,
+    )
 
     target = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
     monkeypatch.setattr(
@@ -398,19 +405,34 @@ def _run_compile_backed_generation_flow(
 
     adapter = MutationAdapter()
     runtime = Runtime()
-    result = loop.generate_with_tools(
-        SimpleNamespace(_agent_require_fresh_evidence=False),
-        config=SimpleNamespace(
+    kwargs = {
+        "config": SimpleNamespace(
             adapter="test",
             max_context=32768,
             max_input_tokens=0,
             max_new_tokens=512,
         ),
-        adapter=adapter,
-        request=request,
-        runtime=runtime,
-        stage="generation",
-        role="coder",
+        "adapter": adapter,
+        "request": request,
+        "runtime": runtime,
+        "stage": "generation",
+        "role": "coder",
+    }
+    if expect_fixed_point:
+        with pytest.raises(
+            ModelConfigurationError,
+            match="VERIFICATION_REPAIR_FIXED_POINT",
+        ) as caught:
+            loop.generate_with_tools(
+                SimpleNamespace(_agent_require_fresh_evidence=False),
+                **kwargs,
+            )
+        assert adapter.calls == expect_repairs + 1
+        return caught.value, runtime.compile_calls
+
+    result = loop.generate_with_tools(
+        SimpleNamespace(_agent_require_fresh_evidence=False),
+        **kwargs,
     )
     assert adapter.calls == expect_repairs + 1
     return json.loads(result), runtime.compile_calls
@@ -468,6 +490,39 @@ def test_compile_failure_is_repaired_by_same_coder_before_generation_completes(m
 
     assert "passed generation-time host verification" in payload["summary"]
     assert compile_calls == 2
+
+
+def test_non_improving_compile_repairs_roll_back_and_reach_fixed_point(monkeypatch):
+    target = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+    repeated_failure = {
+        "schema_version": "mmm/generation-target-compile-v1",
+        "status": "FAIL",
+        "target_path": target,
+        "diagnostics": [
+            {
+                "path": target,
+                "severity": 1,
+                "source": "javac",
+                "code": "javac:error:2",
+                "message": "package net.minecraft.item does not exist",
+            }
+        ],
+        "reason": "target compiler reported task-owned source defects",
+    }
+
+    error, compile_calls = _run_compile_backed_generation_flow(
+        monkeypatch,
+        compile_results=[
+            dict(repeated_failure),
+            dict(repeated_failure),
+            dict(repeated_failure),
+        ],
+        expect_repairs=2,
+        expect_fixed_point=True,
+    )
+
+    assert "VERIFICATION_REPAIR_FIXED_POINT" in str(error)
+    assert compile_calls == 3
 
 
 def test_compile_pass_terminates_without_repair_or_jdt_turn(monkeypatch):
