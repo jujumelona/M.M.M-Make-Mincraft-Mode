@@ -260,19 +260,12 @@ def test_fresh_authored_exact_existing_task_first_turn_is_new_only_act(tmp_path)
                         }
                     ],
                 }
-            if name == "java_diagnostics":
-                assert arguments["relative_files"] == [target]
+            if name == "target_compile":
+                assert arguments == {"target_path": target}
                 return {
-                    "schema_version": "mmm/java-diagnostics-v3",
                     "status": "PASS",
-                    "available": True,
-                    "complete": True,
-                    "session_id": "session",
-                    "model_id": "model",
-                    "files_opened": 1,
-                    "error_count": 0,
-                    "warning_count": 0,
-                    "diagnostics": {},
+                    "reason": "exact authored task compiles",
+                    "diagnostics": [],
                 }
             raise AssertionError(name)
 
@@ -365,7 +358,7 @@ def test_fresh_authored_exact_existing_task_first_turn_is_new_only_act(tmp_path)
 
     assert json.loads(result)["summary"]
     assert adapter.calls == 1
-    assert runtime.calls == ["apply_source_edit", "java_diagnostics"]
+    assert runtime.calls == ["apply_source_edit", "target_compile"]
     assert target_file.read_text(encoding="utf-8") == updated
 
 
