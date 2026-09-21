@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 from minecraft_mod_ai import progress_aware_tool_loop as tool_loop
-from minecraft_mod_ai.mutation_authority import CURRENT_MUTATION_AUTHORITY, MutationAuthority
 from minecraft_mod_ai.production_tools import ProductionToolService
 from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
 from minecraft_mod_ai.spec import SpecValidationError
@@ -199,8 +198,8 @@ def test_pinned_fresh_target_survives_unrelated_rag_entrypoint_evidence() -> Non
     assert state.mutation_context.target_pinned is True
 
 
-def test_bounded_root_rag_evidence_does_not_pin_model_selected_write_target() -> None:
-    state = tool_loop.HostRunState()
+def test_authored_refresh_rag_evidence_does_not_pin_model_selected_write_target() -> None:
+    state = tool_loop.HostRunState(retrieval_target_binding_enabled=False)
     result = {
         "schema_version": "mmm/code-rag-result-v1",
         "hits": [
@@ -210,17 +209,14 @@ def test_bounded_root_rag_evidence_does_not_pin_model_selected_write_target() ->
             }
         ],
     }
-    token = CURRENT_MUTATION_AUTHORITY.set(MutationAuthority.bounded_roots())
-    try:
-        assert state.record_evidence(result, usable=True) is True
-        assert state.mutation_context is None
-        assert tool_loop.is_mutation_ready(
-            [{"role": "tool", "content": json.dumps(result)}],
-            state,
-        ) is False
-        assert state.mutation_context is None
-    finally:
-        CURRENT_MUTATION_AUTHORITY.reset(token)
+
+    assert state.record_evidence(result, usable=True) is True
+    assert state.mutation_context is None
+    assert tool_loop.is_mutation_ready(
+        [{"role": "tool", "content": json.dumps(result)}],
+        state,
+    ) is False
+    assert state.mutation_context is None
 
 
 def test_unpinned_rag_context_cannot_narrow_bounded_root_source_edit_schema() -> None:

@@ -1076,7 +1076,10 @@ def _bind_observed_message(message: Any, state: HostRunState) -> None:
     if role not in _HOST_AUTHORITY_ROLES and not _trusted_internal_user_payload(payload):
         payload = _strip_untrusted_owned_anchors(payload)
     context = _extract_mutation_context_from_payload(payload)
-    if not observed_context_may_bind(state.mutation_context, context):
+    if not observed_context_may_bind(
+        context,
+        binding_enabled=state.retrieval_target_binding_enabled,
+    ):
         return
     with state._lock:
         if state.mutation_context is None:
@@ -1998,7 +2001,10 @@ def _record_evidence_locked(state: Any, value: Any, fingerprint: str) -> bool:
     if _fresh_java_context(state.mutation_context) and _authoritative_java_evidence(value):
         state.authoritative_java_evidence_fingerprints.add(fingerprint)
     context = _extract_mutation_context_from_payload(value)
-    if observed_context_may_bind(state.mutation_context, context):
+    if observed_context_may_bind(
+        context,
+        binding_enabled=state.retrieval_target_binding_enabled,
+    ):
         if state.mutation_context is None:
             state.mutation_context = context
         else:
@@ -2197,6 +2203,7 @@ class HostRunState:
     attempted_sources: set[str] = field(default_factory=set)
     evidence_fingerprints: set[str] = field(default_factory=set)
     authoritative_java_evidence_fingerprints: set[str] = field(default_factory=set)
+    retrieval_target_binding_enabled: bool = True
     mutation_context: TargetMutationContext | None = None
     applied_mutations: list[str] = field(default_factory=list)
     mutation_fingerprints: set[str] = field(default_factory=set)
@@ -3641,6 +3648,7 @@ def _generate_with_tools_impl(
         bounded_root_execution_authority
         and _authored_workspace_refresh_requested(request.messages)
     )
+    state.retrieval_target_binding_enabled = not authored_workspace_refresh
     from .small_model_task_capsule_contract import current_task_required_gates
     compile_backed_java = bool(
         java_target
@@ -4575,8 +4583,7 @@ def _generate_with_tools_impl(
                             state.repair_guidance_fingerprint = None
                         state.phase = (
                             LoopPhase.ACT
-                            if bounded_root_execution_authority
-                            or _host_target_execution_authority(state)
+                            if state.mutation_context and state.mutation_context.is_mutation_ready
                             else LoopPhase.OBSERVE
                         )
                     elif code in {
@@ -4585,10 +4592,7 @@ def _generate_with_tools_impl(
                         "MUTATION_TARGET_CREATION_CONFLICT",
                         "PHASE_PROTOCOL_VIOLATION",
                     }:
-                        if (
-                            bounded_root_execution_authority
-                            or _host_target_execution_authority(state)
-                        ):
+                        if state.mutation_context and state.mutation_context.is_mutation_ready:
                             state.phase = LoopPhase.ACT
                         else:
                             state.phase = LoopPhase.OBSERVE
@@ -4700,14 +4704,13 @@ def _generate_with_tools_impl(
                         and bounded_root_execution_authority
                         and evidence_progress
                     ):
-                        # Later authored fragments retain model-owned file selection inside
-                        # bounded roots, but they must first observe the live staged code
-                        # produced by earlier fragments. Fresh workspace evidence satisfies
-                        # that refresh without falsely pinning the fragment to one file.
+                        # This refresh is evidence only; ACT retains bounded-root file choice.
+                        state.retrieval_target_binding_enabled = True
                         state.phase = LoopPhase.ACT
                     elif (
                         implementation_requires_mutation
-                        and _host_target_execution_authority(state)
+                        and state.mutation_context
+                        and state.mutation_context.is_mutation_ready
                         and _target_evidence_ready(
                             state,
                             require_rag=require_rag,

@@ -1,25 +1,16 @@
 from __future__ import annotations
 
-"""Keep retrieval evidence separate from host-owned mutation targeting."""
+"""Separate retrieval evidence from host-selected mutation targeting."""
 
 from typing import Any
 
-from .mutation_authority import CURRENT_MUTATION_AUTHORITY, MutationAuthorityMode
-
 
 def observed_context_may_bind(
-    current_context: Any,
     observed_context: Any,
+    *,
+    binding_enabled: bool,
 ) -> bool:
-    if observed_context is None:
-        return False
-    authority = CURRENT_MUTATION_AUTHORITY.get()
-    if authority is None or authority.mode is not MutationAuthorityMode.BOUNDED_ROOTS:
-        return True
-    return bool(
-        getattr(observed_context, "target_pinned", False)
-        or getattr(current_context, "target_pinned", False)
-    )
+    return bool(binding_enabled and observed_context is not None)
 
 
 def context_is_host_pinned(context: Any) -> bool:
