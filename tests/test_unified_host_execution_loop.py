@@ -514,7 +514,7 @@ def test_wrong_source_edit_path_fails_closed_for_outer_replan_without_rag() -> N
     assert exposed == [["apply_source_edit"]]
 
 def test_distinct_contract_failures_escalate_target_drift_after_phase_correction() -> None:
-    """A phase violation may be corrected in-loop; executed target drift must escalate."""
+    """A phase violation may be corrected in-loop; target drift escalates before execution."""
     router = MagicMock()
     router._generation_scope.return_value = nullcontext()
     router._agent_require_fresh_evidence = False
@@ -776,7 +776,9 @@ def test_java_workspace_symbols_records_evidence_and_progresses_localization() -
         role="coder",
     )
 
-    assert result == "Successfully updated drop logic."
+    payload = json.loads(result)
+    assert "Applied the approved source mutation" in payload["summary"]
+    assert "passed generation-time host verification" in payload["summary"]
 
 
 def test_execution_step_trace_records_immutable_trajectory_and_summary() -> None:
