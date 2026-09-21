@@ -207,7 +207,8 @@ def test_out_of_phase_tool_call_is_rejected_fail_closed() -> None:
     request = GenerationRequest(
         messages=(
             {"role": "system", "content": "grounded context"},
-            {"role": "user", "content": '{"phase": "implement_module", "initial_exact_source_context": {"files": {"src/A.java": "public class A { void apply() {} }"}}}'},
+            {"role": "developer", "content": '{"phase": "implement_module", "initial_exact_source_context": {"files": {"src/A.java": "public class A { void apply() {} }"}}}'},
+            {"role": "user", "content": "Fix the approved A.java implementation."},
         ),
         tools=(_tool_schema("search_code_rag"), _tool_schema("apply_source_patch")),
         tool_choice=None,
@@ -216,7 +217,7 @@ def test_out_of_phase_tool_call_is_rejected_fail_closed() -> None:
 
     # The tool loop should reject search_code_rag because ACT phase only allows apply_source_patch
     # Since search_code_rag was rejected and no progress was made across 2 streaks, it raises no-progress boundary
-    with pytest.raises(ModelConfigurationError, match="no-progress boundary"):
+    with pytest.raises(ModelConfigurationError, match="AGENT_SEMANTIC_FIXED_POINT"):
         generate_with_tools(
             router,
             config=config,
@@ -399,7 +400,8 @@ def test_mutation_failure_transitions_to_observe_for_recovery() -> None:
 
     request = GenerationRequest(
         messages=(
-            {"role": "user", "content": '{"phase": "implement_module", "initial_exact_source_context": {"files": {"src/A.java": "public class A { void apply() {} }"}}}'},
+            {"role": "developer", "content": '{"phase": "implement_module", "initial_exact_source_context": {"files": {"src/A.java": "public class A { void apply() {} }"}}}'},
+            {"role": "user", "content": "Repair the approved A.java implementation."},
         ),
         tools=(_tool_schema("search_code_rag"), _tool_schema("apply_source_patch")),
         tool_choice=None,
@@ -407,9 +409,9 @@ def test_mutation_failure_transitions_to_observe_for_recovery() -> None:
     )
 
     # Initial turn: concrete context -> ACT phase (tools=[apply_source_patch])
-    # Patch fails -> transitions to OBSERVE phase (tools=[search_code_rag])
-    # Turn 2: OBSERVE phase -> search_code_rag returns concrete snippet -> fresh evidence -> ACT phase
-    # Turn 3: ACT phase -> patch fails again -> no progress limit reached
+    # Patch failure remains on the pinned ACT obligation. Replaying the same
+    # failed mutation reaches a typed semantic fixed point rather than expanding
+    # authority through a new retrieval cycle.
     with pytest.raises(ModelConfigurationError, match="no-progress boundary"):
         generate_with_tools(
             router,
@@ -421,10 +423,9 @@ def test_mutation_failure_transitions_to_observe_for_recovery() -> None:
             role="coder",
         )
 
-    # Verify that after the first failed mutation, tools were opened to OBSERVE (search_code_rag)
     assert len(seen_phases) >= 2
     assert "apply_source_patch" in seen_phases[0]
-    assert "search_code_rag" in seen_phases[1]
+    assert "apply_source_patch" in seen_phases[1]
 
 
 def test_wrong_source_edit_path_fails_closed_for_outer_replan_without_rag() -> None:
@@ -474,12 +475,13 @@ def test_wrong_source_edit_path_fails_closed_for_outer_replan_without_rag() -> N
     request = GenerationRequest(
         messages=(
             {
-                "role": "user",
+                "role": "developer",
                 "content": (
                     '{"phase":"implement_module","operation":"create_file",'
                     '"path":"src/Right.java"}'
                 ),
             },
+            {"role": "user", "content": "Create the approved Right.java target."},
         ),
         tools=(
             _tool_schema("search_code_rag"),
@@ -550,12 +552,13 @@ def test_distinct_contract_failures_escalate_target_drift_after_phase_correction
     request = GenerationRequest(
         messages=(
             {
-                "role": "user",
+                "role": "developer",
                 "content": (
                     '{"phase":"implement_module","initial_exact_source_context":'
                     '{"files":{"src/Right.java":"public class Right {}"}}}'
                 ),
             },
+            {"role": "user", "content": "Repair the approved Right.java target."},
         ),
         tools=(
             _tool_schema("search_code_rag"),
