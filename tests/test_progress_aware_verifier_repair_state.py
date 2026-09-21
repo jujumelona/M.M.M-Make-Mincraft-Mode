@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from minecraft_mod_ai.progress_aware_tool_loop import (
     HostRunState,
     TargetMutationContext,
     _REPAIR_GUIDANCE_VERIFIER_DIAGNOSTIC_BYTES,
+    _bind_existing_verifier_repair_call,
     _bounded_verifier_recovery_observation,
+    _constrain_existing_repair_schema,
     _mutation_target_error,
+    _repair_source_window,
     _rollback_non_improving_verifier_repair,
 )
 
@@ -29,19 +34,23 @@ def _applied_receipt() -> dict:
     }
 
 
-def _failed_diagnostics(message: str) -> dict:
+def _failed_diagnostics(message: str, *, line: int | None = None) -> dict:
+    diagnostic = {
+        "severity": 1,
+        "code": "UndefinedType",
+        "message": message,
+    }
+    if line is not None:
+        diagnostic["range"] = {
+            "start": {"line": line, "character": 0},
+            "end": {"line": line, "character": 1},
+        }
     return {
         "ok": True,
         "result": {
             "status": "FAIL",
             "diagnostics": {
-                f"file:///{PATH}": [
-                    {
-                        "severity": 1,
-                        "code": "UndefinedType",
-                        "message": message,
-                    }
-                ]
+                f"file:///{PATH}": [diagnostic]
             },
         },
     }
@@ -107,18 +116,27 @@ def test_verifier_fail_and_diagnostics_are_owned_by_host_state():
 
 
 def test_repair_guidance_tracks_verifier_fingerprint_not_message_history():
+    source = (
+        "package dev.mmm.debugfixture;\n"
+        "public class DebugToken {\n"
+        "    RegistryWrapper value;\n"
+        "}\n"
+    )
     state = HostRunState(
         mutation_context=TargetMutationContext(
             target_path=PATH,
             target_symbol="DebugToken",
-            source_body="class DebugToken {}",
+            source_body=source,
             is_new_file=False,
             evidence_source="mutation_receipt",
         )
     )
     state.record_verification(
         "java_diagnostics",
-        _failed_diagnostics("RegistryWrapper cannot be resolved to a type"),
+        _failed_diagnostics(
+            "RegistryWrapper cannot be resolved to a type",
+            line=2,
+        ),
         "FAIL",
     )
     first = state.take_verifier_repair_guidance()
@@ -126,8 +144,10 @@ def test_repair_guidance_tracks_verifier_fingerprint_not_message_history():
     assert PATH in first
     assert "RegistryWrapper cannot be resolved to a type" in first
     assert "replace_exact" in first
-    assert "current_source" in first
-    assert "complete corrected source body" in first
+    assert "repair_window" in first
+    assert "bounded repair_window" in first
+    assert '"current_source":' not in first
+    assert "complete corrected source body" not in first
     assert "host-owned" in first
     assert "create_file/create" not in first
     assert state.take_verifier_repair_guidance() is None
@@ -141,6 +161,143 @@ def test_repair_guidance_tracks_verifier_fingerprint_not_message_history():
     assert second is not None
     assert second != first
     assert "Item.Settings cannot be resolved to a type" in second
+
+
+@dataclass(frozen=True)
+class _RepairCall:
+    name: str
+    arguments: dict
+    raw_arguments: str = ""
+
+
+def test_verifier_repair_window_is_local_and_host_binds_old_text():
+    source = (
+        "package dev.mmm.debugfixture;\n"
+        "public class DebugToken {\n"
+        "    private int stable = 7;\n"
+        "    RegistryWrapper value;\n"
+        "    public int stableMethod() { return stable; }\n"
+        "}\n"
+    )
+    state = HostRunState(
+        validation_status="FAIL",
+        mutation_context=TargetMutationContext(
+            target_path=PATH,
+            target_symbol="DebugToken",
+            source_body=source,
+            is_new_file=False,
+            evidence_source="verifier_workspace_source",
+            writable_paths=(PATH,),
+            target_pinned=True,
+        ),
+    )
+    diagnostic = {
+        "path": PATH,
+        "severity": 1,
+        "code": "UndefinedType",
+        "message": "RegistryWrapper cannot be resolved to a type",
+        "range": {
+            "start": {"line": 3, "character": 4},
+            "end": {"line": 3, "character": 19},
+        },
+    }
+    state.latest_verifier_errors = (diagnostic,)
+    state.repair_target_diagnostics = (diagnostic,)
+
+    window = _repair_source_window(state)
+    assert window is not None
+    assert "RegistryWrapper value;" in window["old"]
+    assert window["old"] != source
+    assert len(window["old"]) < len(source)
+
+    bound = _bind_existing_verifier_repair_call(
+        _RepairCall(
+            name="apply_source_edit",
+            arguments={
+                "new": window["old"].replace("RegistryWrapper", "RegistryEntry")
+            },
+        ),
+        state,
+    )
+    assert bound.arguments["operation"] == "replace_exact"
+    assert bound.arguments["path"] == PATH
+    assert bound.arguments["old"] == window["old"]
+    assert bound.arguments["count"] == 1
+    assert "RegistryEntry value;" in bound.arguments["new"]
+
+
+def test_existing_verifier_repair_schema_forbids_whole_file_protocol():
+    schema = {
+        "type": "function",
+        "function": {
+            "name": "apply_source_edit",
+            "description": "Apply one edit",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "operation": {"type": "string"},
+                    "path": {"type": "string"},
+                    "old": {"type": "string"},
+                    "new": {"type": "string"},
+                },
+                "required": ["operation", "path"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    projected = _constrain_existing_repair_schema(schema, target_path=PATH)
+    parameters = projected["function"]["parameters"]
+    assert set(parameters["properties"]) == {"new"}
+    assert parameters["required"] == ["new"]
+    description = parameters["properties"]["new"]["description"]
+    assert "bounded source window" in description
+    assert "Never emit the complete source file" in description
+
+
+def test_atomic_replace_semantic_guard_checks_resulting_java_file():
+    source = (
+        "package dev.mmm.debugfixture;\n"
+        "public class DebugToken {\n"
+        "    private int computeValue() { return MISSING; }\n"
+        "    public int keepMe() { return computeValue(); }\n"
+        "}\n"
+    )
+    context = TargetMutationContext(
+        target_path=PATH,
+        target_symbol="DebugToken",
+        source_body=source,
+        is_new_file=False,
+        evidence_source="verifier_workspace_source",
+        writable_paths=(PATH,),
+        target_pinned=True,
+    )
+    old = "    private int computeValue() { return MISSING; }\n"
+    safe = _mutation_target_error(
+        "apply_source_edit",
+        {
+            "operation": "replace_exact",
+            "path": PATH,
+            "old": old,
+            "new": "    private int computeValue() { return 1; }\n",
+            "count": 1,
+        },
+        context,
+    )
+    assert safe is None
+
+    destructive = _mutation_target_error(
+        "apply_source_edit",
+        {
+            "operation": "replace_exact",
+            "path": PATH,
+            "old": old,
+            "new": "",
+            "count": 1,
+        },
+        context,
+    )
+    assert destructive is not None
+    assert destructive.startswith("REPAIR_SEMANTIC_FOOTPRINT_VIOLATION")
 
 
 def test_real_edit_invalidates_stale_verifier_fail_and_updates_source_body():

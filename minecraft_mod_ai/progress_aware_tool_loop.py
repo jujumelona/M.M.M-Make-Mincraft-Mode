@@ -522,11 +522,11 @@ def _constrain_existing_repair_schema(
     *,
     target_path: str,
 ) -> Mapping[str, Any]:
-    """Project verifier repair onto one host-bound atomic whole-file rewrite.
+    """Project verifier repair onto one host-bound bounded source-window replacement.
 
-    The model authors only the corrected source body. Operation, path, and optimistic
-    concurrency are host-owned so a small model cannot replay a stale whole-file
-    precondition.
+    The host selects the exact old source window from verifier location evidence.
+    The small model authors only replacement text for that window; operation, path,
+    old text, and optimistic concurrency remain host-owned.
     """
 
     cloned = deepcopy(dict(schema))
@@ -552,16 +552,17 @@ def _constrain_existing_repair_schema(
         )
     new_schema["type"] = "string"
     new_schema["description"] = (
-        "Complete corrected contents of the host-pinned existing source file. "
-        f"The host binds operation=replace_exact and path={target_path!r}, reads the "
-        "live file at execution time, and applies this content with its live SHA."
+        "Replacement text only for the verifier-selected bounded source window. "
+        "Never emit the complete source file. "
+        f"The host binds operation=replace_exact and path={target_path!r}, supplies the "
+        "exact old window, and executes against the live file."
     )
     parameters["properties"] = {"new": new_schema}
     parameters["required"] = ["new"]
     parameters["additionalProperties"] = False
     function["description"] = (
-        "Repair the verifier-selected existing source file atomically. Emit only the "
-        "complete corrected source in new; operation, path, old text, and SHA are host-owned."
+        "Repair exactly one verifier-selected source window. Emit only replacement "
+        "text in new; operation, path, old text, count, and SHA are host-owned."
     )
     return cloned
 
@@ -570,7 +571,7 @@ def _bind_existing_verifier_repair_call(
     call: Any,
     state: Any,
 ) -> Any:
-    """Bind a model-authored repair body to the live host-selected target."""
+    """Bind model replacement text to the live host-selected verifier repair window."""
 
     if str(getattr(call, "name", "") or "").strip() != "apply_source_edit":
         return call
@@ -580,18 +581,22 @@ def _bind_existing_verifier_repair_call(
     if context is None or context.is_new_file or not context.is_mutation_ready:
         return call
     target = _canonical_mutation_path(context.target_path)
-    if not target:
+    repair_window = _repair_source_window(state)
+    if not target or repair_window is None:
         return call
     raw_arguments = getattr(call, "arguments", None)
     if not isinstance(raw_arguments, Mapping):
         return call
     new_source = raw_arguments.get("new")
-    if not isinstance(new_source, str):
+    old_source = repair_window.get("old")
+    if not isinstance(new_source, str) or not isinstance(old_source, str) or not old_source:
         return call
     bound = {
         "operation": "replace_exact",
         "path": target,
+        "old": old_source,
         "new": new_source,
+        "count": 1,
     }
     return replace(
         call,
@@ -617,6 +622,11 @@ def _constrain_verifier_repair_tools(
         return tuple(tools)
     target_path = _canonical_mutation_path(context.target_path)
     if not target_path:
+        return tuple(tools)
+    if _repair_source_window(state) is None:
+        # No exact host-owned span: keep the ordinary existing-file edit schema so the
+        # small model can choose one bounded replace/insert action instead of recreating
+        # the complete file.
         return tuple(tools)
 
     projected: list[Any] = []
@@ -1353,22 +1363,38 @@ def _mutation_target_error(
         operation == "replace_exact"
         and supplied == pinned
         and not context.is_new_file
-        and "old" not in arguments
     ):
-        identity_error = _java_whole_file_identity_error(
-            pinned,
-            context.source_body,
-            arguments.get("new"),
-        )
-        if identity_error is not None:
-            return identity_error
-        footprint_error = _java_semantic_footprint_error(
-            pinned,
-            context.source_body,
-            arguments.get("new"),
-        )
-        if footprint_error is not None:
-            return footprint_error
+        current_source = context.source_body
+        new_text = arguments.get("new")
+        candidate_source: str | None = None
+        if "old" not in arguments:
+            if isinstance(new_text, str):
+                candidate_source = new_text
+        else:
+            old_text = arguments.get("old")
+            if (
+                isinstance(current_source, str)
+                and isinstance(old_text, str)
+                and old_text
+                and isinstance(new_text, str)
+                and current_source.count(old_text) == 1
+            ):
+                candidate_source = current_source.replace(old_text, new_text, 1)
+        if candidate_source is not None:
+            identity_error = _java_whole_file_identity_error(
+                pinned,
+                current_source,
+                candidate_source,
+            )
+            if identity_error is not None:
+                return identity_error
+            footprint_error = _java_semantic_footprint_error(
+                pinned,
+                current_source,
+                candidate_source,
+            )
+            if footprint_error is not None:
+                return footprint_error
     if operation not in _SOURCE_CREATE_OPERATIONS:
         return None
     if _creation_authorized(supplied, pinned, context):
@@ -1494,9 +1520,10 @@ def _atomic_output_recovery_instruction(request: GenerationRequest) -> str:
             if isinstance(properties, Mapping) and set(properties) == {"new"}:
                 return (
                     "The preceding repair output exceeded the bounded allowance and is discarded. "
-                    "Call apply_source_edit exactly once with no prose. Emit only the complete corrected "
-                    "existing source file in the new argument. Do not emit operation, path, old text, "
-                    "anchors, partial edits, or any additional tool call; the host binds those details."
+                    "Call apply_source_edit exactly once with no prose. Emit only replacement text for "
+                    "the host-selected bounded verifier repair window in the new argument. Never emit the "
+                    "complete source file. Do not emit operation, path, old text, anchors, or any additional "
+                    "tool call; the host binds those details."
                 )
             break
         return (
@@ -1569,6 +1596,7 @@ def _forced_act_messages(
         and getattr(context, "is_new_file", False)
         and target.casefold().endswith(".java")
     )
+    repair_window = _repair_source_window(state)
     active_authority = CURRENT_MUTATION_AUTHORITY.get()
     bounded_roots = (
         tuple(active_authority.roots)
@@ -1578,14 +1606,22 @@ def _forced_act_messages(
         )
         else ()
     )
-    if context is not None and context.evidence_source in {
-        "verifier_workspace_source", "workspace_existing_target"
-    } and getattr(state, "validation_status", "") == "FAIL":
+    if (
+        context is not None
+        and getattr(state, "validation_status", "") == "FAIL"
+        and repair_window is not None
+    ):
         directive = (
-            f"HOST FORCED ACT: repair the verified defect in {target!r} using the fresh "
-            "workspace source and diagnostics supplied by the host. Emit the complete corrected "
-            "contents in the single visible new argument only. Operation, path, old text, and SHA "
-            "are host-owned. Preserve approved behavior and do not restart generation or retrieve."
+            f"HOST FORCED ACT: repair exactly one verifier-selected bounded source window in "
+            f"{target!r}. The host already owns the exact old text, path, count, and live SHA. "
+            "Emit only replacement text in the single visible new argument. Never regenerate the "
+            "complete file. Preserve approved behavior and do not restart generation or retrieve."
+        )
+    elif context is not None and getattr(state, "validation_status", "") == "FAIL":
+        directive = (
+            f"HOST FORCED ACT: repair the verified defect in {target!r} with exactly one bounded "
+            "existing-file edit from the visible schema. Never regenerate the complete file, "
+            "never change paths, and do not restart generation or retrieve."
         )
     elif bounded_roots:
         directive = (
@@ -2092,6 +2128,121 @@ def _record_applied_mutation(
     return True
 
 
+_ATOMIC_REPAIR_WINDOW_MAX_CHARS = 4096
+_REPAIR_IDENTIFIER_RE = re.compile(r"\\b[A-Za-z_$][\\w$]{2,}\\b")
+_REPAIR_IDENTIFIER_STOPWORDS = frozenset({
+    "cannot", "resolved", "resolve", "type", "variable", "method", "field",
+    "constructor", "undefined", "unknown", "error", "java", "class", "interface",
+})
+
+
+def _diagnostic_line_index(
+    diagnostic: Mapping[str, Any],
+    line_count: int,
+) -> int | None:
+    """Resolve verifier line evidence to one zero-based source line."""
+
+    raw_range = diagnostic.get("range")
+    if isinstance(raw_range, Mapping):
+        start = raw_range.get("start")
+        if isinstance(start, Mapping):
+            raw = start.get("line")
+            if isinstance(raw, int) and 0 <= raw < line_count:
+                return raw
+
+    raw_line = diagnostic.get("line")
+    if isinstance(raw_line, int):
+        candidates = (raw_line - 1, raw_line)
+        for candidate in candidates:
+            if 0 <= candidate < line_count:
+                return candidate
+    return None
+
+
+def _bounded_unique_line_window(
+    source: str,
+    lines: Sequence[str],
+    line_index: int,
+) -> dict[str, Any] | None:
+    """Return the smallest useful unique line window around one diagnostic."""
+
+    for radius in (1, 2, 3, 0):
+        start = max(0, line_index - radius)
+        end = min(len(lines), line_index + radius + 1)
+        old = "".join(lines[start:end])
+        if (
+            old
+            and len(old) <= _ATOMIC_REPAIR_WINDOW_MAX_CHARS
+            and source.count(old) == 1
+        ):
+            return {
+                "start_line": start + 1,
+                "end_line": end,
+                "old": old,
+                "old_chars": len(old),
+            }
+    return None
+
+
+def _diagnostic_identifier_window(
+    source: str,
+    diagnostics: Sequence[Mapping[str, Any]],
+) -> dict[str, Any] | None:
+    """Fallback to one unique diagnostic identifier when no line location exists."""
+
+    for diagnostic in diagnostics:
+        message = str(diagnostic.get("message") or "")
+        for token in _REPAIR_IDENTIFIER_RE.findall(message):
+            if token.casefold() in _REPAIR_IDENTIFIER_STOPWORDS:
+                continue
+            matches = list(re.finditer(rf"\\b{re.escape(token)}\\b", source))
+            if len(matches) != 1:
+                continue
+            match = matches[0]
+            line = source.count("\n", 0, match.start()) + 1
+            return {
+                "start_line": line,
+                "end_line": line,
+                "old": token,
+                "old_chars": len(token),
+            }
+    return None
+
+
+def _repair_source_window(state: Any) -> dict[str, Any] | None:
+    """Select one bounded, exact, host-owned source window for verifier repair."""
+
+    context = getattr(state, "mutation_context", None)
+    source = (
+        context.source_body
+        if context is not None and isinstance(context.source_body, str)
+        else None
+    )
+    if not source:
+        return None
+    diagnostics = tuple(
+        getattr(state, "repair_target_diagnostics", ())
+        or getattr(state, "latest_verifier_errors", ())
+        or ()
+    )
+    lines = source.splitlines(keepends=True)
+    if not lines:
+        return None
+    for diagnostic in diagnostics:
+        if not isinstance(diagnostic, Mapping):
+            continue
+        line_index = _diagnostic_line_index(diagnostic, len(lines))
+        if line_index is None:
+            continue
+        window = _bounded_unique_line_window(source, lines, line_index)
+        if window is not None:
+            return window
+    return _diagnostic_identifier_window(
+        source,
+        tuple(item for item in diagnostics if isinstance(item, Mapping)),
+    )
+
+
 def _repair_guidance_payload(state: Any) -> dict[str, Any] | None:
     if state.validation_status != "FAIL":
         return None
@@ -2102,6 +2253,7 @@ def _repair_guidance_payload(state: Any) -> dict[str, Any] | None:
     state.repair_guidance_fingerprint = state.latest_verifier_fingerprint
     context = state.mutation_context
     source = context.source_body if context and isinstance(context.source_body, str) else None
+    repair_window = _repair_source_window(state)
     diagnostic_snapshot = (
         json.loads(_bounded_verifier_recovery_observation(
             state,
@@ -2126,7 +2278,13 @@ def _repair_guidance_payload(state: Any) -> dict[str, Any] | None:
         "target_path": context.target_path if context else None,
         "target_is_new_file": context.is_new_file if context else None,
         "writable_paths": list(context.writable_paths) if context else [],
-        "current_source": source,
+        "repair_window": repair_window,
+        "repair_window_policy": (
+            "host_selected_bounded_exact_span"
+            if repair_window is not None
+            else "model_must_choose_one_bounded_existing_file_edit"
+        ),
+        "current_source_chars": len(source) if isinstance(source, str) else 0,
         "current_source_sha256": (
             hashlib.sha256(source.encode("utf-8")).hexdigest()
             if isinstance(source, str)
@@ -2297,14 +2455,15 @@ class HostRunState:
             "MMM_CORE_VERIFIER_REPAIR_V5\n"
             "The verifier failure is the active repair obligation. Do not restart generation, "
             "do not search unrelated ecosystem candidates, and never write a different path. "
-            "The payload includes the exact host-tracked current source. "
-            "Any earlier host_reserved/fresh metadata is pre-materialization history only. "
-            "This repair turn exposes only the complete corrected source body in new. "
-            "Operation, path, old text, and optimistic-concurrency SHA are host-owned and must not "
-            "be emitted by the model. The host binds operation=replace_exact and new to an atomic "
-            "live-SHA whole-file rewrite. Preserve the file package and primary Java type identity. "
-            "Use the diagnostics below against the host-pinned target and make one materially "
-            "different source edit that reduces severity-1 diagnostics. An equal or worse verifier "
+            "The payload includes a host-selected bounded repair_window when verifier location "
+            "evidence can localize the defect. Any earlier host_reserved/fresh metadata is "
+            "pre-materialization history only. Never regenerate the complete source file. "
+            "When repair_window is present, emit only replacement text for that exact old window "
+            "in new; operation, path, old text, count, and optimistic-concurrency SHA are host-owned. "
+            "If no repair_window is available, use one bounded existing-file edit from the visible "
+            "schema rather than a whole-file rewrite. Preserve package/type identity and approved "
+            "behavior. Make one materially different edit that reduces severity-1 diagnostics. "
+            "An equal or worse verifier "
             "result is rolled back and counts as no progress. The next successful mutation goes "
             "directly back to VERIFY.\n"
             + json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
