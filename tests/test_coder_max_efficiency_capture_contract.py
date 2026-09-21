@@ -14,6 +14,23 @@ class _Router:
     pass
 
 
+def _verified_generation(relative: str) -> dict:
+    return {
+        "status": "SOURCE_GENERATED",
+        "generation_verification": {
+            "schema_version": "mmm/generation-verification-v1",
+            "authority": "generation_tool_loop",
+            "status": "PASS",
+            "validation_status": "PASS",
+            "termination_reason": "VERIFICATION_PASSED",
+            "verifier_tool": "java_diagnostics",
+            "target_path": relative,
+            "compile_backed_java": False,
+            "downstream_required_gate": "",
+        },
+    }
+
+
 def test_width_two_candidate_wrapper_captures_and_commits_winner(
     monkeypatch,
     tmp_path: Path,
@@ -81,6 +98,7 @@ def test_width_two_candidate_wrapper_captures_and_commits_winner(
             "touched_paths": [relative],
             "operation_count": 1,
             "runtime_tests": [],
+            **_verified_generation(relative),
         }
 
     result = _parallel_generate(
@@ -161,6 +179,7 @@ def test_legacy_width_two_search_acknowledges_only_after_live_commit(
                     "status": "AWAITING_LIVE_COMMIT",
                     "cleanup_token": "a" * 64,
                 },
+                **_verified_generation(relative),
             }
 
         def acknowledge_generation_checkpoint(self, result) -> bool:
@@ -262,6 +281,7 @@ def test_parallel_generation_preserves_task_authority_and_capsule_contextvars(
                 "touched_paths": [relative],
                 "operation_count": 1,
                 "runtime_tests": [],
+                **_verified_generation(relative),
             }
 
         _parallel_generate(
