@@ -1717,9 +1717,11 @@ def _atomic_output_recovery_instruction(request: GenerationRequest) -> str:
                 return (
                     "The preceding host-bound source-edit output exceeded the bounded allowance and "
                     "is discarded. Call apply_source_edit exactly once with no prose and emit only "
-                    "the requested replacement/updated source text in the visible new argument. "
-                    "Do not emit operation, path, old text, count, anchors, or any additional tool "
-                    "call; the host binds all exact mutation preconditions."
+                    "replacement text or the requested complete updated source in the visible new "
+                    "argument, according to the active schema. For a bounded verifier repair window, "
+                    "replacement text is the window only; never emit the complete source file for "
+                    "that repair. Do not emit operation, path, old text, count, anchors, or any "
+                    "additional tool call; the host binds all exact mutation preconditions."
                 )
             break
         return (
