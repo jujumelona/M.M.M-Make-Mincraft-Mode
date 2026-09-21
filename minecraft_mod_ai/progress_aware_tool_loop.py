@@ -1858,6 +1858,24 @@ def _host_target_execution_authority(state: Any) -> bool:
             if _canonical_mutation_path(path)
         }
         return target in creatable
+
+    writable = {
+        _canonical_mutation_path(path)
+        for path in context.writable_paths
+        if _canonical_mutation_path(path)
+    }
+    if (
+        target in writable
+        and isinstance(context.source_body, str)
+        and context.source_body.strip()
+        and context.evidence_source in {
+            "host_exact_source",
+            "workspace_existing_target",
+            "mutation_receipt",
+            "verifier_workspace_source",
+        }
+    ):
+        return True
     return target in state.created_paths
 
 
