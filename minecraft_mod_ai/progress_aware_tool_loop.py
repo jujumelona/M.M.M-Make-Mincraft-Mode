@@ -568,7 +568,7 @@ def _constrain_existing_repair_schema(
     new_schema["maxLength"] = max_chars
     new_schema["description"] = (
         "Replacement text only for the verifier-selected bounded source window. "
-        f"Emit at most {max_chars} characters and never emit the complete source file. "
+        f"Emit at most {max_chars} characters. Never emit the complete source file. "
         f"The host binds operation=replace_exact and path={target_path!r}, supplies the "
         "exact old window, and executes against the live file."
     )
@@ -1389,18 +1389,6 @@ def _mutation_target_error(
             "MUTATION_ATOMIC_SPAN_REQUIRED: existing source replacement requires "
             "one exact old span; whole-file model replacement is forbidden"
         )
-    if (
-        operation == "replace_exact"
-        and context.evidence_source == "verifier_workspace_source"
-    ):
-        old_text = arguments.get("old")
-        atomic_error = atomic_repair_scope_error(
-            old_text=old_text,
-            new_text=arguments.get("new"),
-            max_chars=repair_replacement_max_chars(old_text),
-        )
-        if atomic_error is not None:
-            return atomic_error
     semantic_error = existing_source_repair_semantic_error(
         operation=operation,
         supplied=supplied,
@@ -1414,6 +1402,18 @@ def _mutation_target_error(
     )
     if semantic_error is not None:
         return semantic_error
+    if (
+        operation == "replace_exact"
+        and context.evidence_source == "verifier_workspace_source"
+    ):
+        old_text = arguments.get("old")
+        atomic_error = atomic_repair_scope_error(
+            old_text=old_text,
+            new_text=arguments.get("new"),
+            max_chars=repair_replacement_max_chars(old_text),
+        )
+        if atomic_error is not None:
+            return atomic_error
     if operation not in _SOURCE_CREATE_OPERATIONS:
         return None
     if _creation_authorized(supplied, pinned, context):
