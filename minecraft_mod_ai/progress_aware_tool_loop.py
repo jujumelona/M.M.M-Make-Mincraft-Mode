@@ -4016,7 +4016,6 @@ def _generate_with_tools_impl(
                 # but exhausting localization routes must not make a small coder fail:
                 # ACT is the deliberate bounded-root destination-selection frontier.
                 state.phase = LoopPhase.ACT
-                state.clear_no_progress_result()
                 emit_root_cause(
                     "bounded_root_localization_exhausted_resume_act",
                     stage=stage,
