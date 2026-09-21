@@ -35,6 +35,72 @@ def test_module_shards_use_dependency_ready_waves() -> None:
     ]
 
 
+def _host_exact_authored_module(index: int) -> ProductionModule:
+    task_id = f"authored_feature_{index:03d}"
+    symbol = f"AuthoredFeature{index:03d}"
+    path = f"src/main/java/ai/minecraft/generated/authored_demo/{symbol}.java"
+    anchor = {
+        "kind": "symbol",
+        "locator": f"{path}#{symbol}",
+        "status": "existing",
+        "ownership": "host_exact_authored_lowering",
+        "module_id": task_id,
+        "source_set": "main",
+    }
+    return ProductionModule(
+        module_id=task_id,
+        kind="custom_java",
+        config={
+            "evidence_task": {
+                "task_id": task_id,
+                "owned_anchors": [anchor],
+                "production_bindings": [
+                    {
+                        "task_ref": task_id,
+                        "reuse_action": "fresh",
+                        "owned_anchors": [anchor],
+                    }
+                ],
+            }
+        },
+        required_gates=("target_compile",),
+    )
+
+
+def test_host_exact_authored_tasks_are_one_durable_llm_node_each(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
+    modules = tuple(_host_exact_authored_module(index) for index in range(1, 24))
+    policy = SimpleNamespace(entity_shard_size=24, java_shard_size=48)
+
+    shards = list(work_graph._module_shards(modules, policy=policy))
+
+    assert len(shards) == 23
+    assert all(stage == "custom" for stage, _members in shards)
+    assert all(len(members) == 1 for _stage, members in shards)
+    assert [
+        members[0].module_id
+        for _stage, members in shards
+    ] == [f"authored_feature_{index:03d}" for index in range(1, 24)]
+
+
+def test_exact_authored_node_does_not_absorb_later_dependent_custom_module() -> None:
+    authored = _host_exact_authored_module(1)
+    dependent = ProductionModule(
+        module_id="dependent_custom",
+        kind="custom_java",
+        depends_on=(authored.module_id,),
+    )
+    policy = SimpleNamespace(entity_shard_size=24, java_shard_size=48)
+
+    shards = list(work_graph._module_shards((authored, dependent), policy=policy))
+
+    assert len(shards) == 2
+    assert [members[0].module_id for _stage, members in shards] == [
+        authored.module_id,
+        dependent.module_id,
+    ]
+
+
 def test_custom_llm_modules_are_bounded_without_one_node_per_module(monkeypatch) -> None:
     monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "1")
     modules = tuple(
