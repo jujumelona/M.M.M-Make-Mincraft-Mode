@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping
 from typing import Any
 
@@ -16,6 +18,326 @@ from .spec import ModSpec, Proposal, ProposalStatus
 from .target_contract import TargetContractError, target_coordinates_from_mapping
 
 _TARGET_KEYS = ("minecraft_version", "loader", "mappings")
+_AUTHORED_EXECUTION_SCHEMA = "mmm/authored-execution-manifest-v2"
+_AUTHORED_UNIT_TARGET_BYTES = 2 * 1024
+_AUTHORED_UNIT_MAX_COUNT = 24
+
+
+def _sha256_json(value: Any) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _main_class_name(mod_id: str) -> str:
+    """Match the canonical Fabric template provider's host-owned entrypoint name."""
+
+    return "".join(part.capitalize() for part in str(mod_id).split("_")) + "Mod"
+
+
+def _split_utf8_piece(text: str, *, max_bytes: int) -> tuple[str, ...]:
+    """Split one large authored block at UTF-8-safe natural boundaries."""
+
+    if len(text.encode("utf-8")) <= max_bytes:
+        return (text,)
+    pieces: list[str] = []
+    remaining = text
+    preferred = frozenset("\n\r\t .,!?:;。！？、，；：")
+    while remaining:
+        used = 0
+        hard_end = 0
+        preferred_end = 0
+        for index, char in enumerate(remaining):
+            size = len(char.encode("utf-8"))
+            if used + size > max_bytes:
+                break
+            used += size
+            hard_end = index + 1
+            if char in preferred:
+                preferred_end = index + 1
+        if hard_end <= 0:
+            raise ValueError("Authored design contains a character larger than the unit budget.")
+        end = preferred_end if preferred_end >= max(1, hard_end // 2) else hard_end
+        pieces.append(remaining[:end])
+        remaining = remaining[end:]
+    return tuple(pieces)
+
+
+def _authored_execution_units(text: str) -> tuple[dict[str, Any], ...]:
+    """Lower saved prose to bounded ordered obligations without asking the coder to plan files."""
+
+    encoded = text.encode("utf-8")
+    if not encoded:
+        return ({
+            "index": 1,
+            "start_byte": 0,
+            "end_byte": 0,
+            "text": "",
+            "text_sha256": "sha256:" + hashlib.sha256(b"").hexdigest(),
+        },)
+
+    target = max(
+        _AUTHORED_UNIT_TARGET_BYTES,
+        (len(encoded) + _AUTHORED_UNIT_MAX_COUNT - 1) // _AUTHORED_UNIT_MAX_COUNT,
+    )
+    blocks = text.splitlines(keepends=True) or [text]
+    chunks: list[str] = []
+    current = ""
+    for block in blocks:
+        for piece in _split_utf8_piece(block, max_bytes=target):
+            if current and len((current + piece).encode("utf-8")) > target:
+                chunks.append(current)
+                current = ""
+            current += piece
+    if current:
+        chunks.append(current)
+    if "".join(chunks) != text:
+        raise ValueError("Authored execution lowering changed the approved design text.")
+
+    units: list[dict[str, Any]] = []
+    start = 0
+    for index, chunk in enumerate(chunks, start=1):
+        raw = chunk.encode("utf-8")
+        end = start + len(raw)
+        units.append({
+            "index": index,
+            "start_byte": start,
+            "end_byte": end,
+            "text": chunk,
+            "text_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
+        })
+        start = end
+    return tuple(units)
+
+
+def _task_sha(task: Mapping[str, Any]) -> str:
+    payload = dict(task)
+    payload.pop("task_sha256", None)
+    return _sha256_json(payload)
+
+
+def _exact_authored_task(
+    *,
+    task_id: str,
+    path: str,
+    symbol: str,
+    target: Mapping[str, Any],
+    obligation: str,
+    semantic_outcome: str,
+    depends_on: tuple[str, ...],
+    consumes: tuple[str, ...],
+    provides: tuple[str, ...],
+    worksheet: Mapping[str, Any],
+    required_gates: tuple[str, ...],
+) -> dict[str, Any]:
+    anchor = {
+        "kind": "symbol",
+        "locator": f"{path}#{symbol}",
+        # create_or_modify is intentional: feature files are fresh while the final
+        # canonical Fabric entrypoint is host-created before custom generation.
+        "status": "host_reserved",
+        "ownership": "host_exact_authored_lowering",
+        "module_id": task_id,
+        "source_set": "main",
+    }
+    task: dict[str, Any] = {
+        "task_id": task_id,
+        "task_sha256": "",
+        "execution_role": "coder",
+        "semantic_outcome": semantic_outcome,
+        "implementation_obligations": [obligation],
+        "engineering_worksheet": dict(worksheet),
+        "target_cell": dict(target),
+        "owned_anchors": [anchor],
+        "production_bindings": [{
+            "task_ref": task_id,
+            "reuse_action": "fresh",
+            "owned_anchors": [dict(anchor)],
+        }],
+        "depends_on": list(depends_on),
+        "consumes": list(consumes),
+        "provides": list(provides),
+        "required_gates": list(required_gates),
+        "acceptance": [
+            "Only the exact host-owned target is mutated.",
+            "The generated Java passes host verification for the selected platform.",
+        ],
+    }
+    task["task_sha256"] = _task_sha(task)
+    return task
+
+
+def _compile_new_authored_modules(
+    plan: AuthoredPlan,
+    *,
+    mod_id: str,
+    package_name: str,
+    target: Mapping[str, Any],
+) -> tuple[tuple[ProductionModule, ...], dict[str, Any]]:
+    """Compile a saved design into exact-path tasks small coders can execute independently."""
+
+    units = _authored_execution_units(plan.text)
+    package_path = package_name.replace(".", "/")
+    modules: list[ProductionModule] = []
+    manifest_units: list[dict[str, Any]] = []
+    previous_module = ""
+    previous_provide = ""
+
+    for unit in units:
+        index = int(unit["index"])
+        task_id = f"authored_feature_{index:03d}"
+        symbol = f"AuthoredFeature{index:03d}"
+        path = f"src/main/java/{package_path}/{symbol}.java"
+        provide = f"{task_id}_ready"
+        depends_on = (previous_module,) if previous_module else ()
+        consumes = (previous_provide,) if previous_provide else ()
+        exact_text = str(unit["text"])
+        obligation = (
+            f"Implement approved authored design unit {index}/{len(units)} only in "
+            f"{symbol}. The exact class must be public final {symbol} in package "
+            f"{package_name} and expose public static void initialize(). Do not implement "
+            "ModInitializer or ClientModInitializer, do not create another entrypoint, and "
+            "do not create or edit sibling files. Additional helpers/state needed for this "
+            "unit must stay inside this exact class. Preserve this approved unit verbatim as "
+            "the semantic source of truth:\n\n" + exact_text
+        )
+        task = _exact_authored_task(
+            task_id=task_id,
+            path=path,
+            symbol=symbol,
+            target=target,
+            obligation=obligation,
+            semantic_outcome=(
+                f"Approved authored design unit {index}/{len(units)} is implemented behind "
+                f"{symbol}.initialize() without inventing project architecture."
+            ),
+            depends_on=depends_on,
+            consumes=consumes,
+            provides=(provide,),
+            worksheet={
+                "objective": "Implement exactly one host-scheduled authored design unit.",
+                "authored_unit": {
+                    "index": index,
+                    "count": len(units),
+                    "source_text_sha256": unit["text_sha256"],
+                    "start_byte": unit["start_byte"],
+                    "end_byte": unit["end_byte"],
+                    "text": exact_text,
+                },
+                "java_contract": {
+                    "status": "applicable",
+                    "requirements": [
+                        f"Exact target: {path}#{symbol}",
+                        f"Exact package: {package_name}",
+                        f"Exact top-level type: public final class {symbol}",
+                        "Required host integration surface: public static void initialize()",
+                        "Forbidden: ModInitializer, ClientModInitializer, alternate entrypoints, sibling-file writes.",
+                    ],
+                },
+            },
+            required_gates=("target_compile",),
+        )
+        modules.append(ProductionModule(
+            module_id=task_id,
+            kind="custom_java",
+            config={
+                "implementation": "custom",
+                "evidence_task": task,
+                **dict(target),
+            },
+            depends_on=depends_on,
+            required_gates=("target_compile",),
+        ))
+        manifest_units.append({
+            "module_id": task_id,
+            "path": path,
+            "symbol": symbol,
+            "start_byte": unit["start_byte"],
+            "end_byte": unit["end_byte"],
+            "text_sha256": unit["text_sha256"],
+            "provides": provide,
+        })
+        previous_module = task_id
+        previous_provide = provide
+
+    main_symbol = _main_class_name(mod_id)
+    main_path = f"src/main/java/{package_path}/{main_symbol}.java"
+    feature_symbols = [str(item["symbol"]) for item in manifest_units]
+    calls = "\n".join(f"        {symbol}.initialize();" for symbol in feature_symbols)
+    entry_task_id = "authored_entrypoint"
+    entry_depends = (previous_module,) if previous_module else ()
+    entry_consumes = (previous_provide,) if previous_provide else ()
+    entry_task = _exact_authored_task(
+        task_id=entry_task_id,
+        path=main_path,
+        symbol=main_symbol,
+        target=target,
+        obligation=(
+            f"Modify the existing host-created canonical Fabric entrypoint {main_symbol} "
+            f"at {main_path}. Preserve its ModInitializer identity and existing valid host "
+            "baseline. Its onInitialize() method must invoke every host-scheduled authored "
+            "feature exactly once in this exact order and must not duplicate feature logic "
+            "or create any new entrypoint/file:\n" + calls
+        ),
+        semantic_outcome=(
+            "The single canonical Fabric entrypoint activates every exact authored feature "
+            "unit in deterministic approved order."
+        ),
+        depends_on=entry_depends,
+        consumes=entry_consumes,
+        provides=("authored_runtime_bound",),
+        worksheet={
+            "objective": "Bind exact authored feature units into the one host-owned Fabric entrypoint.",
+            "entrypoint_contract": {
+                "path": main_path,
+                "symbol": main_symbol,
+                "mod_id": mod_id,
+                "feature_symbols": feature_symbols,
+                "required_calls": [f"{symbol}.initialize()" for symbol in feature_symbols],
+                "forbidden": [
+                    "new ModInitializer classes",
+                    "new ClientModInitializer classes",
+                    "renaming the host entrypoint",
+                    "duplicating feature implementations inside the entrypoint",
+                ],
+            },
+        },
+        required_gates=("project build",),
+    )
+    modules.append(ProductionModule(
+        module_id=entry_task_id,
+        kind="custom_java",
+        config={
+            "implementation": "custom",
+            "evidence_task": entry_task,
+            **dict(target),
+        },
+        depends_on=entry_depends,
+        required_gates=("project build",),
+    ))
+
+    source_sha = "sha256:" + hashlib.sha256(plan.text.encode("utf-8")).hexdigest()
+    manifest = {
+        "schema_version": _AUTHORED_EXECUTION_SCHEMA,
+        "source_text_sha256": source_sha,
+        "source_bytes": len(plan.text.encode("utf-8")),
+        "unit_count": len(manifest_units),
+        "policy": "host_exact_task_queue_no_coder_file_planning",
+        "units": manifest_units,
+        "entrypoint": {
+            "module_id": entry_task_id,
+            "path": main_path,
+            "symbol": main_symbol,
+            "depends_on": list(entry_depends),
+        },
+    }
+    manifest["manifest_sha256"] = _sha256_json(manifest)
+    return tuple(modules), manifest
 
 
 def _bound_target(design: Mapping[str, Any]) -> dict[str, str]:
@@ -99,27 +421,37 @@ def compile_authored_design(
     # production-side host contract, so make the bound target explicit at that boundary.
     target = _bound_target(design)
     design = {**design, **target}
-    module_config: dict[str, Any] = {
-        "implementation": "custom",
-        "authored_plan": plan.to_dict(),
-        **target,
-    }
-    if not (existing_input_sha256 or plan.existing_input_sha256):
-        # New authored projects already have a host-generated stable package. Carry it
-        # into mutation authority so a small coder cannot invent unrelated Java roots
-        # across independent authored fragments.
-        module_config["authored_java_package"] = base.spec.package_name
+    effective_existing = existing_input_sha256 or plan.existing_input_sha256
+    if not effective_existing:
+        # Fresh authored projects have a host-owned canonical Fabric package/entrypoint.
+        # Lower the saved prose into an exact-path dependency queue now, before coder
+        # decode, so the small model never owns file planning or entrypoint architecture.
+        modules, manifest = _compile_new_authored_modules(
+            plan,
+            mod_id=base.spec.mod_id,
+            package_name=base.spec.package_name,
+            target=target,
+        )
+        design = {**design, "_authored_execution_manifest": manifest}
+    else:
+        # Existing projects require live workspace localization before exact paths can be
+        # compiled. Retain the legacy bounded route only for that distinct input shape.
+        modules = (ProductionModule(
+            module_id="authored_design",
+            kind="custom_java",
+            config={
+                "implementation": "custom",
+                "authored_plan": plan.to_dict(),
+                **target,
+            },
+            required_gates=("project build",),
+        ),)
 
     return complete_proposal_from_parts(
         requested_prompt=plan.requested_prompt,
         base_proposal=base,
         game_design=design,
-        modules=(ProductionModule(
-            module_id="authored_design",
-            kind="custom_java",
-            config=module_config,
-            required_gates=("project build",),
-        ),),
+        modules=modules,
         acceptance_tests=acceptance,
-        existing_input_sha256=existing_input_sha256 or plan.existing_input_sha256,
+        existing_input_sha256=effective_existing,
     )
