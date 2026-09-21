@@ -1156,6 +1156,73 @@ def _java_declares_type(source: str, type_name: str) -> bool:
     )
 
 
+_JAVA_COMMENT_RE = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)
+_JAVA_VISIBLE_METHOD_RE = re.compile(
+    r"\b(?:public|protected|private)\s+"
+    r"(?:(?:static|final|abstract|synchronized|native|default|strictfp)\s+)*"
+    r"(?:<[^>{};]+>\s+)?"
+    r"(?:[A-Za-z_$][\w$]*(?:\s*<[^;{}()]+>)?(?:\[\])?\s+)+"
+    r"([A-Za-z_$][\w$]*)\s*\("
+)
+_JAVA_VISIBLE_FIELD_RE = re.compile(
+    r"\b(?:public|protected|private)\s+"
+    r"(?:(?:static|final|transient|volatile)\s+)*"
+    r"(?:[A-Za-z_$][\w$]*(?:\s*<[^;{}()]+>)?(?:\[\])?\s+)+"
+    r"([A-Za-z_$][\w$]*)\s*(?:=|;|,)"
+)
+_JAVA_STATIC_FINAL_FIELD_RE = re.compile(
+    r"\bstatic\s+final\s+"
+    r"(?:[A-Za-z_$][\w$]*(?:\s*<[^;{}()]+>)?(?:\[\])?\s+)+"
+    r"([A-Za-z_$][\w$]*)\s*(?:=|;|,)"
+)
+
+
+def _java_semantic_member_anchors(source: str) -> frozenset[str]:
+    clean = _JAVA_COMMENT_RE.sub(" ", source)
+    methods = {
+        f"method:{name}"
+        for name in _JAVA_VISIBLE_METHOD_RE.findall(clean)
+    }
+    fields = {
+        f"field:{name}"
+        for name in _JAVA_VISIBLE_FIELD_RE.findall(clean)
+    }
+    fields.update(
+        f"field:{name}"
+        for name in _JAVA_STATIC_FINAL_FIELD_RE.findall(clean)
+    )
+    return frozenset((*methods, *fields))
+
+
+def _java_semantic_footprint_error(
+    path: str,
+    current_source: str | None,
+    new_source: Any,
+) -> str | None:
+    """Prevent verifier repair from compiling by deleting approved source behavior."""
+
+    if not isinstance(current_source, str) or not isinstance(new_source, str):
+        return None
+    current_bytes = len(current_source.encode("utf-8"))
+    new_bytes = len(new_source.encode("utf-8"))
+    if current_bytes >= 800 and new_bytes * 100 < current_bytes * 55:
+        return (
+            "REPAIR_SEMANTIC_FOOTPRINT_VIOLATION: whole-file Java repair "
+            f"collapsed {path!r} from {current_bytes} to {new_bytes} bytes; "
+            "repair must preserve the existing implementation footprint"
+        )
+
+    current_anchors = _java_semantic_member_anchors(current_source)
+    new_anchors = _java_semantic_member_anchors(new_source)
+    missing = sorted(current_anchors - new_anchors)
+    if missing:
+        return (
+            "REPAIR_SEMANTIC_FOOTPRINT_VIOLATION: whole-file Java repair "
+            f"removed existing member anchors from {path!r}: {missing[:12]!r}"
+        )
+    return None
+
+
 def _java_whole_file_identity_error(
     path: str,
     current_source: str | None,
@@ -1257,6 +1324,13 @@ def _mutation_target_error(
         )
         if identity_error is not None:
             return identity_error
+        footprint_error = _java_semantic_footprint_error(
+            pinned,
+            context.source_body,
+            arguments.get("new"),
+        )
+        if footprint_error is not None:
+            return footprint_error
     if operation not in _SOURCE_CREATE_OPERATIONS:
         return None
     if _creation_authorized(supplied, pinned, context):
