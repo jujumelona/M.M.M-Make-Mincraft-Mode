@@ -65,7 +65,11 @@ def test_applied_create_converts_target_to_atomic_rewrite_authority():
     assert state.mutation_context is not None
     assert state.mutation_context.is_new_file is False
     assert PATH in state.created_paths
-    assert _mutation_target_error("apply_source_edit", args, state.mutation_context) is None
+    create_error = _mutation_target_error(
+        "apply_source_edit", args, state.mutation_context
+    )
+    assert create_error is not None
+    assert create_error.startswith("MUTATION_TARGET_CREATION_CONFLICT")
 
     structural_create = {
         "operation": "create_java_type",
