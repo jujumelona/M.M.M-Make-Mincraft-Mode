@@ -1340,19 +1340,15 @@ def _mutation_target_error(
         )
         if error is not None:
             return error
-    if operation == "replace_exact" and "old" not in arguments:
-        return (
-            "MUTATION_ATOMIC_SPAN_REQUIRED: existing source replacement requires "
-            "one exact old span; whole-file model replacement is forbidden"
-        )
-    if (
-        authority is not None
-        and authority.mode is MutationAuthorityMode.BOUNDED_ROOTS
-        and not (
+        if authority.mode is MutationAuthorityMode.BOUNDED_ROOTS and not (
             context is not None and context.evidence_source == "verifier_workspace_source"
-        )
-    ):
-        return None
+        ):
+            if operation == "replace_exact" and "old" not in arguments:
+                return (
+                    "MUTATION_ATOMIC_SPAN_REQUIRED: existing source replacement requires "
+                    "one exact old span; whole-file model replacement is forbidden"
+                )
+            return None
     if context is None:
         return "MUTATION_TARGET_UNBOUND: no host-pinned mutation target is READY"
     supplied = _source_edit_path(arguments)
@@ -1374,6 +1370,11 @@ def _mutation_target_error(
         )
     if not context.is_mutation_ready:
         return "MUTATION_TARGET_UNBOUND: no host-pinned mutation target is READY"
+    if operation == "replace_exact" and "old" not in arguments:
+        return (
+            "MUTATION_ATOMIC_SPAN_REQUIRED: existing source replacement requires "
+            "one exact old span; whole-file model replacement is forbidden"
+        )
     if (
         operation == "replace_exact"
         and supplied == pinned
@@ -2372,8 +2373,8 @@ class HostRunState:
             "pre-materialization history only. Never regenerate the complete source file. "
             "repair_window is mandatory for model-facing verifier repair. Emit only replacement "
             "text for that exact old window in new; the host binds operation=replace_exact, "
-            "path, old text, count, and optimistic-concurrency SHA. Whole-file reconstruction "
-            "is forbidden. "
+            "path, old text, count, and optimistic-concurrency SHA. These binding fields are "
+            "host-owned. Whole-file reconstruction is forbidden. "
             "Preserve package/type identity and approved behavior. Make one materially different "
             "edit that reduces severity-1 diagnostics. "
             "An equal or worse verifier "
