@@ -99,6 +99,16 @@ def compile_authored_design(
     # production-side host contract, so make the bound target explicit at that boundary.
     target = _bound_target(design)
     design = {**design, **target}
+    module_config: dict[str, Any] = {
+        "implementation": "custom",
+        "authored_plan": plan.to_dict(),
+        **target,
+    }
+    if not (existing_input_sha256 or plan.existing_input_sha256):
+        # New authored projects already have a host-generated stable package. Carry it
+        # into mutation authority so a small coder cannot invent unrelated Java roots
+        # across independent authored fragments.
+        module_config["authored_java_package"] = base.spec.package_name
 
     return complete_proposal_from_parts(
         requested_prompt=plan.requested_prompt,
@@ -107,11 +117,7 @@ def compile_authored_design(
         modules=(ProductionModule(
             module_id="authored_design",
             kind="custom_java",
-            config={
-                "implementation": "custom",
-                "authored_plan": plan.to_dict(),
-                **target,
-            },
+            config=module_config,
             required_gates=("project build",),
         ),),
         acceptance_tests=acceptance,
