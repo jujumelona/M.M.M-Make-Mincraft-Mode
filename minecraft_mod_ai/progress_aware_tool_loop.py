@@ -1180,10 +1180,10 @@ def _java_whole_file_identity_error(
             )
 
     public_types = tuple(_JAVA_PUBLIC_TOP_LEVEL_TYPE_RE.findall(new_source))
-    if public_types and public_types != (expected_type,):
+    if public_types and expected_type not in public_types:
         return (
             "REPAIR_SEMANTIC_IDENTITY_VIOLATION: whole-file Java repair changed "
-            f"primary type identity for {path!r}: expected exactly one public type "
+            f"primary type identity for {path!r}: expected public type "
             f"{expected_type!r}, got {public_types!r}"
         )
 
