@@ -4801,11 +4801,33 @@ def _generate_with_tools_impl(
                 call.name, call.arguments, state.mutation_context
             )
             if target_error:
+                failure_code = target_error.partition(":")[0]
+                if (
+                    failure_code == "REPAIR_SEMANTIC_FOOTPRINT_VIOLATION"
+                    and state.mutation_context is not None
+                    and existing_java_structurally_subsumes_candidate(
+                        _canonical_mutation_path(state.mutation_context.target_path),
+                        state.mutation_context.source_body,
+                        call.arguments.get("new"),
+                    )
+                ):
+                    return call, {
+                        "ok": True,
+                        "tool": call.name,
+                        **metadata,
+                        "semantic_noop": True,
+                        "result": {
+                            "status": "PRESERVED_EXISTING_SUPERSET",
+                            "target_path": _canonical_mutation_path(
+                                state.mutation_context.target_path
+                            ),
+                        },
+                    }
                 return call, {
                     "ok": False,
                     "tool": call.name,
                     **metadata,
-                    "failure_code": target_error.partition(":")[0],
+                    "failure_code": failure_code,
                     "error": target_error,
                 }
 
@@ -4862,6 +4884,45 @@ def _generate_with_tools_impl(
             )))
 
             if call.name in _MUTATION_ACT_TOOLS:
+                if bool(payload.get("semantic_noop")):
+                    state.preserved_existing_source = True
+                    state.unchanged_mutation_fingerprints.clear()
+                    state.unapplied_mutation_fixed_point = False
+                    state.semantic_fixed_point = False
+                    state.clear_failure()
+                    state.clear_no_progress_result()
+                    progress = True
+                    if compile_backed_java:
+                        state.validation_status = "COMPILE_REQUIRED"
+                        state.phase = LoopPhase.VERIFY
+                    else:
+                        state.phase = (
+                            LoopPhase.VERIFY
+                            if all_names & _VERIFY_TOOLS
+                            else LoopPhase.OBSERVE
+                        )
+                        if not all_names & _VERIFY_TOOLS:
+                            state.validation_status = "PASS"
+                    emit_root_cause(
+                        "authored_existing_source_preserved",
+                        stage=stage,
+                        operation=call.name,
+                        gate="cumulative_authored_semantics",
+                        result="PASS",
+                        reason=(
+                            "candidate would only reduce an already-materialized Java "
+                            "structure; existing cumulative source was preserved for verification"
+                        ),
+                        details={
+                            "target_path": (
+                                state.mutation_context.target_path
+                                if state.mutation_context is not None
+                                else None
+                            ),
+                            "workspace_changed": state.workspace_changed,
+                        },
+                    )
+                    continue
                 applied = state.record_mutation(call.name, call.arguments, payload)
                 if applied:
                     repair_candidate_pending_verification = (
