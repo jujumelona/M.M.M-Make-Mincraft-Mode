@@ -86,20 +86,32 @@ def test_existing_target_rejects_create_and_conflict_remains_recoverable() -> No
     assert is_recoverable_mutation_failure(code)
 
 
-def test_existing_repair_schema_removes_create_delete_and_pins_path() -> None:
+def test_existing_verifier_repair_schema_is_host_bound_to_new_source_only() -> None:
     path = "src/main/java/example/DebugToken.java"
-    tools = progress_aware_tool_loop._constrain_existing_repair_tools(
-        (_apply_source_edit_schema(),),
-        _repair_messages(path),
+    state = progress_aware_tool_loop.HostRunState(
+        validation_status="FAIL",
+        mutation_context=progress_aware_tool_loop.TargetMutationContext(
+            target_path=path,
+            target_symbol="DebugToken",
+            source_body="package example; public class DebugToken {}",
+            is_new_file=False,
+            evidence_source="verifier_workspace_source",
+            writable_paths=(path,),
+            target_pinned=True,
+        ),
     )
-    operation = tools[0]["function"]["parameters"]["properties"]["operation"]
-    for forbidden in ("create", "create_file", "create_java_type", "delete", "delete_file"):
-        assert forbidden not in operation["enum"]
-    assert "replace_exact" in operation["enum"]
-    assert tools[0]["function"]["parameters"]["properties"]["path"]["enum"] == [path]
+    tools = progress_aware_tool_loop._constrain_verifier_repair_tools(
+        (_apply_source_edit_schema(),),
+        state,
+    )
+    parameters = tools[0]["function"]["parameters"]
+    assert parameters["required"] == ["new"]
+    assert parameters["additionalProperties"] is False
+    assert set(parameters["properties"]) == {"new"}
 
-    # The global schema is the broad validation surface and must not be mutated.
+    # Operation/path authority stays host-owned; the global validation schema remains broad.
     canonical = SOURCE_EDIT_SCHEMA["properties"]["operation"]["enum"]
+    assert "replace_exact" in canonical
     assert "create_file" in canonical
     assert "delete_file" in canonical
 
