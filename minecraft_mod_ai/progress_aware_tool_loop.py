@@ -57,6 +57,12 @@ from .verifier_repair_admission_recovery import (
     model_tool_rejection_feedback as _model_tool_rejection_feedback,
     recover_schema_rejected_verifier_repair_calls,
 )
+from .verifier_repair_frontier import (
+    bound_repair_call_is_noop,
+    repair_rejection_payloads_are_same_route,
+    select_repair_window_from_frontier,
+    target_scoped_verifier_files,
+)
 from .verifier_repair_window import (
     exact_rollback_arguments,
     normalize_model_repair_replacement,
@@ -603,6 +609,9 @@ def _bind_existing_verifier_repair_call(
     repair_window = _repair_source_window(state)
     if not target or repair_window is None:
         return call
+    state.activate_repair_diagnostic(
+        repair_window.get("diagnostic_frontier_index")
+    )
     raw_arguments = getattr(call, "arguments", None)
     if not isinstance(raw_arguments, Mapping):
         return call
@@ -648,6 +657,10 @@ def _constrain_verifier_repair_tools(
     if not target_path:
         return tuple(tools)
     repair_window = _repair_source_window(state)
+    if repair_window is not None:
+        state.activate_repair_diagnostic(
+            repair_window.get("diagnostic_frontier_index")
+        )
     if repair_window is None:
         raise ModelConfigurationError(
             "VERIFIER_REPAIR_LOCALIZATION_UNAVAILABLE: verifier repair requires one "
@@ -1696,6 +1709,26 @@ def _model_rejection_progress_key(
         "verifier": state.latest_verifier_fingerprint,
     }
     forced = str(forced_evidence_tool or "").strip()
+    if (
+        not forced
+        and state.validation_status == "FAIL"
+        and repair_rejection_payloads_are_same_route(rejection_payloads)
+    ):
+        base["repair_rejection_codes"] = sorted({
+            str(payload.get("failure_code") or "MODEL_TOOL_CALL_REJECTED").strip()
+            for payload in rejection_payloads
+        })
+        base["repair_diagnostic_index"] = (
+            state.repair_active_diagnostic_index
+            if state.repair_active_diagnostic_index is not None
+            else state.repair_diagnostic_cursor
+        )
+        base["target_path"] = (
+            state.mutation_context.target_path
+            if state.mutation_context is not None
+            else None
+        )
+        return base
     if not forced:
         base["model_tool_rejections"] = list(rejection_payloads)
         return base
@@ -2126,9 +2159,10 @@ def _repair_source_window(state: Any) -> dict[str, Any] | None:
         or getattr(state, "latest_verifier_errors", ())
         or ()
     )
-    return select_verifier_repair_window(
+    return select_repair_window_from_frontier(
         source,
         diagnostics,
+        cursor=getattr(state, "repair_diagnostic_cursor", 0),
         start_line=getattr(context, "start_line", None),
         end_line=getattr(context, "end_line", None),
     )
@@ -2215,6 +2249,8 @@ class HostRunState:
     repair_target_diagnostics: tuple[dict[str, Any], ...] = ()
     latest_verifier_fingerprint: str | None = None
     repair_guidance_fingerprint: str | None = None
+    repair_diagnostic_cursor: int = 0
+    repair_active_diagnostic_index: int | None = None
     repair_baseline_error_count: int | None = None
     repair_baseline_errors: tuple[dict[str, Any], ...] = ()
     repair_baseline_target_diagnostics: tuple[dict[str, Any], ...] = ()
@@ -2334,6 +2370,9 @@ class HostRunState:
             self.latest_verifier_errors = tuple(errors)
             self.latest_verifier_fingerprint = fp
             self.last_verifier_quality = quality
+            if status != "FAIL" or quality in {"OBSERVED", "IMPROVED"}:
+                self.repair_diagnostic_cursor = 0
+                self.repair_active_diagnostic_index = None
             if status != "FAIL":
                 self.repair_guidance_fingerprint = None
                 self.repair_baseline_error_count = None
@@ -2368,6 +2407,35 @@ class HostRunState:
             + json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
         )
 
+
+    def activate_repair_diagnostic(self, index: Any) -> None:
+        if not isinstance(index, int) or index < 0:
+            return
+        with self._lock:
+            self.repair_active_diagnostic_index = index
+
+    def advance_repair_diagnostic(self) -> bool:
+        with self._lock:
+            diagnostics = (
+                self.repair_target_diagnostics
+                or self.latest_verifier_errors
+                or ()
+            )
+            current = (
+                self.repair_active_diagnostic_index
+                if self.repair_active_diagnostic_index is not None
+                else self.repair_diagnostic_cursor
+            )
+            next_index = max(0, int(current)) + 1
+            self.repair_active_diagnostic_index = None
+            self.repair_guidance_fingerprint = None
+            if next_index >= len(diagnostics):
+                return False
+            self.repair_diagnostic_cursor = next_index
+            self.seen_no_progress_digests.clear()
+            self.no_progress_streak = 0
+            self.semantic_fixed_point = False
+            return True
 
     def record_failure(self, tool_name: str, error: Any) -> None:
         with self._lock:
@@ -3710,6 +3778,11 @@ def _generate_with_tools_impl(
                 state.latest_verifier_errors,
                 getattr(runtime, "workspace_root", None),
                 active_mutation_authority,
+                preferred_path=(
+                    state.mutation_context.target_path
+                    if state.mutation_context is not None
+                    else None
+                ),
             )
             if snapshot is not None:
                 state.repair_target_diagnostics = tuple(snapshot["diagnostics"])
@@ -4066,15 +4139,9 @@ def _generate_with_tools_impl(
             parallel_tool_calls=parallel,
             metadata=turn_metadata,
         )
-        verifier_relative_files = (
-            (state.mutation_context.target_path,)
-            if (
-                forced_verifier == "java_diagnostics"
-                and not bounded_root_execution_authority
-                and state.mutation_context is not None
-                and state.mutation_context.target_path.casefold().endswith(".java")
-            )
-            else ()
+        verifier_relative_files = target_scoped_verifier_files(
+            forced_verifier,
+            state.mutation_context,
         )
         # Derive every phase from the original routing snapshot. A projection
         # must never narrow the persistent snapshot needed by a later phase.
@@ -4212,6 +4279,32 @@ def _generate_with_tools_impl(
             )
             if require_rag and not baseline_ready:
                 required_evidence_choice = True
+            if (
+                repeated
+                and state.validation_status == "FAIL"
+                and repair_rejection_payloads_are_same_route(rejection_payloads)
+                and state.advance_repair_diagnostic()
+            ):
+                emit_root_cause(
+                    "verifier_repair_diagnostic_route_exhausted",
+                    stage=stage,
+                    operation="apply_source_edit",
+                    gate="semantic_fixed_point",
+                    result="SKIP",
+                    reason=(
+                        "repeated model admission failure exhausted one verifier "
+                        "diagnostic route; advancing to the next severity-1 diagnostic"
+                    ),
+                    details={
+                        "target_path": (
+                            state.mutation_context.target_path
+                            if state.mutation_context is not None
+                            else None
+                        ),
+                        "next_diagnostic_index": state.repair_diagnostic_cursor,
+                    },
+                )
+                continue
             if repeated:
                 rejected_routes = _consume_rejected_evidence_fixed_point(
                     state,
@@ -4318,6 +4411,65 @@ def _generate_with_tools_impl(
                         )
                     },
                 )
+            if (
+                len(turn.tool_calls) == 1
+                and bound_repair_call_is_noop(turn.tool_calls[0])
+            ):
+                repeated = state.record_no_progress_result({
+                    "phase": "ACT",
+                    "validation": "FAIL",
+                    "verifier": state.latest_verifier_fingerprint,
+                    "target_path": (
+                        state.mutation_context.target_path
+                        if state.mutation_context is not None
+                        else None
+                    ),
+                    "repair_diagnostic_index": state.repair_active_diagnostic_index,
+                    "repair_noop": True,
+                })
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "VERIFIER_REPAIR_NOOP: the proposed replacement is byte-identical "
+                        "to the selected old span and was not executed. Emit a materially "
+                        "different replacement for this diagnostic."
+                    ),
+                })
+                emit_root_cause(
+                    "verifier_repair_noop_rejected",
+                    stage=stage,
+                    operation="apply_source_edit",
+                    gate="repair_quality_monotonicity",
+                    result="RETRY",
+                    reason="byte-identical verifier repair was rejected before runtime mutation",
+                    details={
+                        "diagnostic_index": state.repair_active_diagnostic_index,
+                        "target_path": (
+                            state.mutation_context.target_path
+                            if state.mutation_context is not None
+                            else None
+                        ),
+                    },
+                )
+                if repeated and state.advance_repair_diagnostic():
+                    emit_root_cause(
+                        "verifier_repair_diagnostic_route_exhausted",
+                        stage=stage,
+                        operation="apply_source_edit",
+                        gate="semantic_fixed_point",
+                        result="SKIP",
+                        reason=(
+                            "repeated no-op repair exhausted one verifier diagnostic "
+                            "route; advancing to the next severity-1 diagnostic"
+                        ),
+                        details={
+                            "next_diagnostic_index": state.repair_diagnostic_cursor,
+                        },
+                    )
+                    continue
+                if repeated:
+                    raise _fixed_point_error(state)
+                continue
         if not turn.tool_calls:
             content = turn.content.strip()
             if not content:
@@ -4696,6 +4848,29 @@ def _generate_with_tools_impl(
                             runtime,
                             stage=stage,
                         )
+                        if state.advance_repair_diagnostic():
+                            state.phase = LoopPhase.ACT
+                            progress = True
+                            emit_root_cause(
+                                "verifier_repair_diagnostic_route_exhausted",
+                                stage=stage,
+                                operation="apply_source_edit",
+                                gate="semantic_fixed_point",
+                                result="SKIP",
+                                reason=(
+                                    "non-improving repair was rolled back; advancing "
+                                    "to the next severity-1 diagnostic"
+                                ),
+                                details={
+                                    "next_diagnostic_index": state.repair_diagnostic_cursor,
+                                    "target_path": (
+                                        state.mutation_context.target_path
+                                        if state.mutation_context is not None
+                                        else None
+                                    ),
+                                },
+                            )
+                            continue
                     state.phase = LoopPhase.RECOVER
                 continue
 

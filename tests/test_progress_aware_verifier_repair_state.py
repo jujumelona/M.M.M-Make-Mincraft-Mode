@@ -849,3 +849,70 @@ def test_repair_guidance_densifies_target_diagnostics_without_uri_repetition():
     assert all(item["path"] == PATH for item in repair_payload["diagnostics"])
     assert all("uri" not in item for item in repair_payload["diagnostics"])
     assert repair_payload["diagnostic_count"] == len(diagnostics)
+
+
+
+def test_repair_diagnostic_frontier_advances_after_nonproductive_route():
+    source = (
+        "package demo;\n"
+        "import demo.MissingA;\n"
+        "import demo.MissingB;\n"
+        "public class DebugToken {}\n"
+    )
+    first = {
+        "path": PATH,
+        "severity": 1,
+        "message": "The import demo.MissingA cannot be resolved",
+        "range": {
+            "start": {"line": 1, "character": 0},
+            "end": {"line": 1, "character": 21},
+        },
+    }
+    second = {
+        "path": PATH,
+        "severity": 1,
+        "message": "The import demo.MissingB cannot be resolved",
+        "range": {
+            "start": {"line": 2, "character": 0},
+            "end": {"line": 2, "character": 21},
+        },
+    }
+    state = HostRunState(
+        validation_status="FAIL",
+        latest_verifier_errors=(first, second),
+        repair_target_diagnostics=(first, second),
+        latest_verifier_fingerprint="fp",
+        mutation_context=TargetMutationContext(
+            target_path=PATH,
+            source_body=source,
+            is_new_file=False,
+            evidence_source="verifier_workspace_source",
+            writable_paths=(PATH,),
+            target_pinned=True,
+        ),
+    )
+    first_window = _repair_source_window(state)
+    assert first_window is not None
+    assert first_window["old"] == "import demo.MissingA;\n"
+    state.activate_repair_diagnostic(first_window["diagnostic_frontier_index"])
+    assert state.advance_repair_diagnostic() is True
+    second_window = _repair_source_window(state)
+    assert second_window is not None
+    assert second_window["old"] == "import demo.MissingB;\n"
+    assert second_window["diagnostic_frontier_index"] == 1
+
+
+def test_target_scoped_verifier_files_include_bounded_root_materialized_target():
+    from minecraft_mod_ai.verifier_repair_frontier import (
+        target_scoped_verifier_files,
+    )
+
+    context = TargetMutationContext(
+        target_path=PATH,
+        source_body="class DebugToken {}\n",
+        is_new_file=False,
+        evidence_source="mutation_receipt",
+        writable_paths=(PATH,),
+        target_pinned=True,
+    )
+    assert target_scoped_verifier_files("java_diagnostics", context) == (PATH,)

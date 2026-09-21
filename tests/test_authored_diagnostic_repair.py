@@ -157,39 +157,23 @@ def test_authored_diagnostics_repair_local_files_without_external_discovery(
                     ],
                 }
             if name == "java_diagnostics":
-                assert not arguments.get("relative_files"), (
-                    "bounded-root repair must recheck all project errors"
+                assert arguments.get("relative_files") == [
+                    "src/main/java/demo/Next.java"
+                ], (
+                    "authored bounded-root generation must verify only the current "
+                    "materialized Java target; sibling fragment errors belong to the "
+                    "outer project build gate"
                 )
-                diagnostics = {
-                    (tmp_path / target).as_uri(): [
-                        {
-                            "severity": 1,
-                            "line": 1,
-                            "code": "UNRESOLVED_VARIABLE",
-                            "message": "MISSING cannot be resolved to a variable",
-                        }
-                    ]
-                    for target in targets
-                    if "MISSING" in (tmp_path / target).read_text()
-                }
-                if diagnostics and unrepairable_errors_first:
-                    diagnostics = {
-                        (tmp_path / "build/generated/Unavailable.java").as_uri(): [
-                            {"severity": 1, "message": "CASCADED_ERROR " + "x" * 800}
-                            for _ in range(12)
-                        ],
-                        **diagnostics,
-                    }
                 return {
                     "schema_version": "mmm/java-diagnostics-v3",
                     "complete": True,
                     "skipped": False,
                     "session_id": "session",
                     "model_id": "model",
-                    "verification_scope": "full",
-                    "error_count": len(diagnostics),
+                    "verification_scope": "target",
+                    "error_count": 0,
                     "warning_count": 0,
-                    "diagnostics": diagnostics,
+                    "diagnostics": {},
                 }
             raise AssertionError(f"unrelated recovery tool called: {name}")
 
@@ -251,17 +235,13 @@ def test_authored_diagnostics_repair_local_files_without_external_discovery(
         _CURRENT_AUTHORITY.reset(envelope_token)
         CURRENT_MUTATION_AUTHORITY.reset(token)
     assert "passed" in json.loads(result)["summary"]
-    assert repairs == targets
+    assert repairs == []
     assert calls == [
         "search_code_rag",
         "apply_source_edit",
         "java_diagnostics",
-        "apply_source_edit",
-        "java_diagnostics",
-        "apply_source_edit",
-        "java_diagnostics",
     ]
-    assert all("MISSING" not in (tmp_path / target).read_text() for target in targets)
+    assert all("MISSING" in (tmp_path / target).read_text() for target in targets)
     assert legacy_repair_arguments
     assert all("old" in item for item in legacy_repair_arguments)
 
@@ -544,3 +524,32 @@ def test_authored_repair_fixed_point_stops_non_improving_rewrite_loop(
         )
     ]
     assert len(rollback_calls) == 2
+
+
+
+def test_diagnostic_snapshot_preferred_path_never_switches_to_sibling(tmp_path: Path) -> None:
+    from minecraft_mod_ai.generation_diagnostic_repair import (
+        read_authorized_diagnostic_source,
+    )
+    from minecraft_mod_ai.mutation_authority import MutationAuthority
+
+    first = tmp_path / "src/main/java/demo/First.java"
+    second = tmp_path / "src/main/java/demo/Second.java"
+    first.parent.mkdir(parents=True, exist_ok=True)
+    first.write_text("class First { Missing a; }\n", encoding="utf-8")
+    second.write_text("class Second { Missing b; }\n", encoding="utf-8")
+    snapshot = read_authorized_diagnostic_source(
+        [
+            {"uri": second.as_uri(), "severity": 1, "message": "Second broken"},
+            {"uri": first.as_uri(), "severity": 1, "message": "First broken"},
+        ],
+        tmp_path,
+        MutationAuthority.bounded_roots(),
+        preferred_path="src/main/java/demo/First.java",
+    )
+    assert snapshot is not None
+    assert snapshot["path"] == "src/main/java/demo/First.java"
+    assert all(
+        item["path"] == "src/main/java/demo/First.java"
+        for item in snapshot["diagnostics"]
+    )
