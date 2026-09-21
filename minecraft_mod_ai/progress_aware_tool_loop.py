@@ -3512,7 +3512,15 @@ def _rollback_non_improving_verifier_repair(
         return False
     path = _canonical_mutation_path(state.repair_previous_path or "")
     source = state.repair_previous_source
-    if not path or not isinstance(source, str):
+    context = state.mutation_context
+    current_source = (
+        context.source_body
+        if context is not None
+        and _canonical_mutation_path(context.target_path) == path
+        and isinstance(context.source_body, str)
+        else None
+    )
+    if not path or not isinstance(source, str) or not isinstance(current_source, str):
         return False
     try:
         result = runtime.call(
@@ -3521,7 +3529,9 @@ def _rollback_non_improving_verifier_repair(
             {
                 "operation": "replace_exact",
                 "path": path,
+                "old": current_source,
                 "new": source,
+                "count": 1,
             },
         )
     except Exception as exc:

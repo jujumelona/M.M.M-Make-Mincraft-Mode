@@ -539,7 +539,13 @@ def test_non_improving_repair_rolls_back_to_verifier_proven_source():
         (
             "generation",
             "apply_source_edit",
-            {"operation": "replace_exact", "path": PATH, "new": original},
+            {
+                "operation": "replace_exact",
+                "path": PATH,
+                "old": candidate,
+                "new": original,
+                "count": 1,
+            },
         )
     ]
     assert state.mutation_context is not None
