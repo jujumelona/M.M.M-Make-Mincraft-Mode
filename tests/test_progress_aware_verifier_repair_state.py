@@ -410,9 +410,31 @@ def test_whole_file_java_repair_preserves_package_and_public_type_identity():
             "path": PATH,
             "new": (
                 "package dev.mmm.debugfixture; "
-                "public class DebugToken { int value = 1; }"
+                "public class DebugToken { int value = 1; "
+                "public static class Builder {} }"
             ),
         },
         context,
     )
     assert valid is None
+
+    package_private_context = TargetMutationContext(
+        target_path=PATH,
+        target_symbol="DebugToken",
+        source_body="package dev.mmm.debugfixture; class DebugToken {}",
+        is_new_file=False,
+        evidence_source="verifier_workspace_source",
+    )
+    missing_package_private_primary = _mutation_target_error(
+        "apply_source_edit",
+        {
+            "operation": "replace_exact",
+            "path": PATH,
+            "new": "package dev.mmm.debugfixture; class OtherType {}",
+        },
+        package_private_context,
+    )
+    assert missing_package_private_primary is not None
+    assert missing_package_private_primary.startswith(
+        "REPAIR_SEMANTIC_IDENTITY_VIOLATION"
+    )
