@@ -3025,16 +3025,12 @@ def _bounded_verifier_recovery_observation(
         if not isinstance(raw, Mapping):
             continue
         compact: dict[str, Any] = {}
-        raw_path = _canonical_mutation_path(raw.get("path"))
         for key in ("path", "file", "uri", "line", "severity", "code", "source", "message", "range"):
             value = raw.get(key)
             if value in (None, "", [], {}):
                 continue
-            if target_scoped:
-                if key in {"file", "uri"}:
-                    continue
-                if key == "path" and raw_path == target_path:
-                    continue
+            if target_scoped and key in {"file", "uri"}:
+                continue
             if isinstance(value, str):
                 limit = (
                     _PHASE_HANDOFF_DIAGNOSTIC_TEXT_LIMIT
