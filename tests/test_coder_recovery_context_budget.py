@@ -223,7 +223,8 @@ def test_authored_recovery_fits_after_failed_and_empty_evidence_routes() -> None
         "search_code_rag",
         "apply_source_edit",
         "java_diagnostics",
-        "read_reuse_source",
+        # read_reuse_source is no longer in the pinned-source recovery frontier;
+        # the model's attempted call is rejected before runtime execution.
         "search_project_rag",
         "java_workspace_symbols",
         "apply_source_edit",
