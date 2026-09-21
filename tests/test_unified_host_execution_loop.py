@@ -207,7 +207,7 @@ def test_out_of_phase_tool_call_is_rejected_fail_closed() -> None:
     request = GenerationRequest(
         messages=(
             {"role": "system", "content": "grounded context"},
-            {"role": "developer", "content": '{"phase": "implement_module", "initial_exact_source_context": {"files": {"src/A.java": "public class A { void apply() {} }"}}}'},
+            {"role": "developer", "content": '{"phase": "implement_module", "primary_path": "src/A.java", "writable_paths": ["src/A.java"], "initial_exact_source_context": {"files": {"src/A.java": "public class A { void apply() {} }"}}}'},
             {"role": "user", "content": "Fix the approved A.java implementation."},
         ),
         tools=(_tool_schema("search_code_rag"), _tool_schema("apply_source_patch")),
@@ -266,8 +266,8 @@ def test_mutation_ready_requires_concrete_source_or_fresh_evidence() -> None:
     concrete_state = HostRunState()
     concrete_messages = [
         {
-            "role": "user",
-            "content": '{"phase": "implement_module", "initial_exact_source_context": {"files": {"src/Main.java": "package com.example; public class Main {}"}}}',
+            "role": "developer",
+            "content": '{"phase": "implement_module", "primary_path": "src/Main.java", "writable_paths": ["src/Main.java"], "initial_exact_source_context": {"files": {"src/Main.java": "package com.example; public class Main {}"}}}',
         }
     ]
     assert is_mutation_ready(concrete_messages, concrete_state) is True
@@ -276,8 +276,8 @@ def test_mutation_ready_requires_concrete_source_or_fresh_evidence() -> None:
     new_file_state = HostRunState()
     new_file_messages = [
         {
-            "role": "user",
-            "content": '{"phase": "implement_module", "operation": "create_file", "path": "src/NewBlock.java"}',
+            "role": "developer",
+            "content": '{"phase": "implement_module", "primary_path": "src/NewBlock.java", "writable_paths": ["src/NewBlock.java"], "reuse_action": "fresh"}',
         }
     ]
     assert is_mutation_ready(new_file_messages, new_file_state) is True
@@ -412,7 +412,7 @@ def test_mutation_failure_transitions_to_observe_for_recovery() -> None:
     # Patch failure remains on the pinned ACT obligation. Replaying the same
     # failed mutation reaches a typed semantic fixed point rather than expanding
     # authority through a new retrieval cycle.
-    with pytest.raises(ModelConfigurationError, match="no-progress boundary"):
+    with pytest.raises(ModelConfigurationError, match="AGENT_SEMANTIC_FIXED_POINT"):
         generate_with_tools(
             router,
             config=config,
@@ -477,8 +477,8 @@ def test_wrong_source_edit_path_fails_closed_for_outer_replan_without_rag() -> N
             {
                 "role": "developer",
                 "content": (
-                    '{"phase":"implement_module","operation":"create_file",'
-                    '"path":"src/Right.java"}'
+                    '{"phase":"implement_module","primary_path":"src/Right.java",'
+                    '"writable_paths":["src/Right.java"],"reuse_action":"fresh"}'
                 ),
             },
             {"role": "user", "content": "Create the approved Right.java target."},
@@ -554,7 +554,8 @@ def test_distinct_contract_failures_escalate_target_drift_after_phase_correction
             {
                 "role": "developer",
                 "content": (
-                    '{"phase":"implement_module","initial_exact_source_context":'
+                    '{"phase":"implement_module","primary_path":"src/Right.java",'
+                    '"writable_paths":["src/Right.java"],"initial_exact_source_context":'
                     '{"files":{"src/Right.java":"public class Right {}"}}}'
                 ),
             },
@@ -694,9 +695,9 @@ def test_java_workspace_symbols_records_evidence_and_progresses_localization() -
             tool_calls=(
                 ToolCall(
                     id="call_body",
-                    name="search_code_rag",
-                    arguments={"query": "ModBlock getDroppedStacks"},
-                    raw_arguments='{"query":"ModBlock getDroppedStacks"}',
+                    name="search_project_rag",
+                    arguments={"query": "ModBlock getDroppedStacks body"},
+                    raw_arguments='{"query":"ModBlock getDroppedStacks body"}',
                 ),
             )
         ),
@@ -719,7 +720,7 @@ def test_java_workspace_symbols_records_evidence_and_progresses_localization() -
     adapter.generate_turn.side_effect = turns
 
     def mock_runtime_call(stage: str, name: str, args: dict) -> dict:
-        if name == "search_code_rag" and "ModBlock getDroppedStacks" in str(args):
+        if name == "search_project_rag":
             return {
                 "hits": [
                     {
@@ -758,6 +759,7 @@ def test_java_workspace_symbols_records_evidence_and_progresses_localization() -
         tools=(
             _tool_schema("search_code_rag"),
             _tool_schema("java_workspace_symbols"),
+            _tool_schema("search_project_rag"),
             _tool_schema("apply_source_patch"),
         ),
         tool_choice=None,
