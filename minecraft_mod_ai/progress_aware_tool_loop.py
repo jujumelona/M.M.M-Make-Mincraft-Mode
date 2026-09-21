@@ -1933,6 +1933,9 @@ def _record_applied_mutation(
     ):
         state.repair_baseline_error_count = len(state.latest_verifier_errors)
         state.repair_baseline_errors = tuple(state.latest_verifier_errors)
+        state.repair_baseline_target_diagnostics = tuple(
+            state.repair_target_diagnostics
+        )
         state.repair_baseline_fingerprint = state.latest_verifier_fingerprint
         state.repair_previous_source = context.source_body
         state.repair_previous_path = path
@@ -1940,6 +1943,7 @@ def _record_applied_mutation(
     else:
         state.repair_baseline_error_count = None
         state.repair_baseline_errors = ()
+        state.repair_baseline_target_diagnostics = ()
         state.repair_baseline_fingerprint = None
         state.repair_previous_source = None
         state.repair_previous_path = None
@@ -2027,6 +2031,7 @@ class HostRunState:
     repair_guidance_fingerprint: str | None = None
     repair_baseline_error_count: int | None = None
     repair_baseline_errors: tuple[dict[str, Any], ...] = ()
+    repair_baseline_target_diagnostics: tuple[dict[str, Any], ...] = ()
     repair_baseline_fingerprint: str | None = None
     repair_previous_source: str | None = None
     repair_previous_path: str | None = None
@@ -2147,6 +2152,7 @@ class HostRunState:
                 self.repair_guidance_fingerprint = None
                 self.repair_baseline_error_count = None
                 self.repair_baseline_errors = ()
+                self.repair_baseline_target_diagnostics = ()
                 self.repair_baseline_fingerprint = None
                 self.repair_previous_source = None
                 self.repair_previous_path = None
@@ -3218,6 +3224,9 @@ def _rollback_non_improving_verifier_repair(
             )
         state.validation_status = "FAIL"
         state.latest_verifier_errors = tuple(state.repair_baseline_errors)
+        state.repair_target_diagnostics = tuple(
+            state.repair_baseline_target_diagnostics
+        )
         state.latest_verifier_fingerprint = state.repair_baseline_fingerprint
         state.repair_guidance_fingerprint = None
         state.last_verifier_quality = "NON_IMPROVING"
@@ -3609,12 +3618,41 @@ def _generate_with_tools_impl(
                 stage=stage,
             )
             if compile_status == "PASS":
+                state.clear_no_progress_result()
                 continue
             if compile_status == "FAIL":
                 state.record_failure(
                     "target_compile",
                     "target compiler reported task-owned source defects",
                 )
+                current_compile_errors = tuple(state.latest_verifier_errors)
+                if state.last_verifier_quality in {"NON_IMPROVING", "UNCHANGED"}:
+                    _rollback_non_improving_verifier_repair(
+                        state,
+                        runtime,
+                        stage=stage,
+                    )
+                    repeated = state.record_no_progress_result(
+                        {
+                            "phase_before": "VERIFY",
+                            "phase_after": "ACT",
+                            "validation": "FAIL",
+                            "target": _mutation_context_dict(state.mutation_context),
+                            "verifier": {
+                                "tool": "target_compile",
+                                "quality": "NON_IMPROVING",
+                                "baseline_error_count": state.repair_baseline_error_count,
+                                "target_path": state.repair_previous_path,
+                            },
+                            "result": "FAIL",
+                        }
+                    )
+                    state.phase = LoopPhase.ACT
+                    if repeated:
+                        raise _fixed_point_error(state)
+                    continue
+                state.repair_target_diagnostics = current_compile_errors
+                state.clear_no_progress_result()
                 state.phase = LoopPhase.ACT
                 continue
             state.validation_status = "DEFERRED"
