@@ -55,6 +55,50 @@ def _bounded_error(exc: BaseException, *, limit: int = 600) -> str:
     return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
 
 
+def _transient_completion_transport_errors(httpx_module: Any) -> tuple[type[BaseException], ...]:
+    names = ("RemoteProtocolError", "ReadError", "ConnectError")
+    return tuple(
+        error
+        for name in names
+        if isinstance((error := getattr(httpx_module, name, None)), type)
+        and issubclass(error, BaseException)
+    )
+
+
+def _post_completion_with_transport_replay(
+    client: Any,
+    endpoint: str,
+    *,
+    payload: Mapping[str, Any],
+    timeout: Any,
+    httpx_module: Any,
+) -> Any:
+    """Replay one incomplete transport turn; no completed model response is reused."""
+
+    errors = _transient_completion_transport_errors(httpx_module)
+
+    def issue() -> Any:
+        request_id = f"llama-{uuid.uuid4().hex[:16]}"
+        return client.post(
+            endpoint,
+            json=payload,
+            timeout=timeout,
+            headers={_REQUEST_ID_HEADER: request_id},
+        )
+
+    try:
+        return issue()
+    except errors as exc:
+        print(
+            "llama server: transient completion transport replay",
+            f" error={_bounded_error(exc)}",
+            f" {_managed_server_state()}",
+            sep="",
+            flush=True,
+        )
+        return issue()
+
+
 def _managed_server_state() -> str:
     """Return bounded managed-process diagnostics without making a network request."""
 
@@ -536,11 +580,12 @@ def _install_adapter_completion_transport(stream_module: Any, adapter_module: An
         try:
             if adapter_module.httpx.post is not adapter_module._DEFAULT_HTTPX_POST:
                 return adapter_module.httpx.post(endpoint, json=payload, timeout=timeout)
-            return stream_module._client(server_url).post(
+            return _post_completion_with_transport_replay(
+                stream_module._client(server_url),
                 endpoint,
-                json=payload,
+                payload=payload,
                 timeout=timeout,
-                headers={_REQUEST_ID_HEADER: request_id},
+                httpx_module=adapter_module.httpx,
             )
         except adapter_module.httpx.TimeoutException as exc:
             raise RuntimeError(

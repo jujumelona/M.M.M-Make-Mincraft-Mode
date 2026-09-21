@@ -142,3 +142,50 @@ def test_semantic_progress_refreshes_execution_deadline(monkeypatch) -> None:
 
     assert list(wrapped.iter_lines())[-1] == "data: [DONE]"
     assert refreshed == [120.0, 120.0]
+
+
+
+def test_transient_protocol_disconnect_replays_once_before_model_failure() -> None:
+    calls: list[dict] = []
+
+    class Client:
+        def post(self, _url: str, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise llama_cpp_adapter.httpx.RemoteProtocolError(
+                    "peer closed connection without complete body"
+                )
+            return "recovered"
+
+    result = contract._post_completion_with_transport_replay(
+        Client(),
+        "http://127.0.0.1:8080/v1/chat/completions",
+        payload={"messages": [], "tools": [{"type": "function"}]},
+        timeout=llama_cpp_adapter.httpx.Timeout(120.0),
+        httpx_module=llama_cpp_adapter.httpx,
+    )
+
+    assert result == "recovered"
+    assert len(calls) == 2
+    assert calls[0]["headers"]["X-MMM-Request-Id"] != calls[1]["headers"]["X-MMM-Request-Id"]
+
+
+def test_second_protocol_disconnect_is_not_retried_forever() -> None:
+    calls = 0
+
+    class Client:
+        def post(self, _url: str, **_kwargs):
+            nonlocal calls
+            calls += 1
+            raise llama_cpp_adapter.httpx.RemoteProtocolError("disconnect")
+
+    with pytest.raises(llama_cpp_adapter.httpx.RemoteProtocolError, match="disconnect"):
+        contract._post_completion_with_transport_replay(
+            Client(),
+            "http://127.0.0.1:8080/v1/chat/completions",
+            payload={"messages": []},
+            timeout=llama_cpp_adapter.httpx.Timeout(120.0),
+            httpx_module=llama_cpp_adapter.httpx,
+        )
+
+    assert calls == 2
