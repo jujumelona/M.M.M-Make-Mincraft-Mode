@@ -40,8 +40,6 @@ def read_authorized_diagnostic_source(
     errors: Sequence[Mapping[str, Any]],
     workspace_root: Any,
     authority: MutationAuthority | None,
-    *,
-    preferred_path: str | None = None,
 ) -> dict[str, Any] | None:
     """Bind a verifier's file location to fresh source within existing authority.
 
@@ -56,16 +54,11 @@ def read_authorized_diagnostic_source(
     ):
         return None
     root = Path(str(workspace_root)).resolve()
-    preferred = str(preferred_path or "").replace("\\", "/").strip()
-    while preferred.startswith("./"):
-        preferred = preferred[2:]
     for error in errors:
         for candidate in _diagnostic_paths(error, root):
             try:
                 relative = candidate.relative_to(root).as_posix()
                 if candidate.suffix.casefold() not in {".java", ".kt"}:
-                    continue
-                if preferred and relative != preferred:
                     continue
                 if not authority.authorizes(relative, operation="replace_exact"):
                     continue
