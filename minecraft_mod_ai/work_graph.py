@@ -892,6 +892,7 @@ def _module_shards(
 
 _module_shards._mmm_dependency_wave_shards = True  # type: ignore[attr-defined]
 _module_shards._mmm_entity_pipeline_granularity = True  # type: ignore[attr-defined]
+_module_shards._mmm_authored_exact_task_checkpoints = True  # type: ignore[attr-defined]
 
 def _topological_modules(modules: Sequence[ProductionModule]) -> tuple[ProductionModule, ...]:
     import heapq
