@@ -1149,7 +1149,8 @@ _JAVA_PUBLIC_TOP_LEVEL_TYPE_RE = re.compile(
 def _java_declares_type(source: str, type_name: str) -> bool:
     return bool(
         re.search(
-            rf"\b(?:class|interface|enum|record|@interface)\s+{re.escape(type_name)}\b",
+            rf"(?:\b(?:class|interface|enum|record)\s+|@interface\s+)"
+            rf"{re.escape(type_name)}\b",
             source,
         )
     )
