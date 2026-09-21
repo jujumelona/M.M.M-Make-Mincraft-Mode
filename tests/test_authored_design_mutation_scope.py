@@ -15,17 +15,20 @@ from minecraft_mod_ai.mutation_authority import (
 )
 
 
-def _authored_module():
+def _authored_module(*, java_package: str = ""):
+    config = {
+        "authored_plan": {
+            "schema_version": "mmm/authored-plan-v1",
+            "requested_prompt": "build a complete space mod",
+            "text": "preserve the complete authored design",
+        }
+    }
+    if java_package:
+        config["authored_java_package"] = java_package
     return SimpleNamespace(
         module_id="task-1",
         kind="custom_java",
-        config={
-            "authored_plan": {
-                "schema_version": "mmm/authored-plan-v1",
-                "requested_prompt": "build a complete space mod",
-                "text": "preserve the complete authored design",
-            }
-        },
+        config=config,
     )
 
 
@@ -61,6 +64,31 @@ def test_authored_scope_is_compiled_from_trusted_host_module_not_messages():
     assert authority.task_id == "task-1"
     assert authority.mutation_authority.mode is MutationAuthorityMode.BOUNDED_ROOTS
     assert authority.mutation_authority.roots == AUTHORED_DESIGN_ROOTS
+
+
+def test_new_authored_project_narrows_java_roots_to_host_package():
+    package = "ai.minecraft.generated.authored_space"
+    authority = compile_direct_task_mutation_authority(
+        _authored_module(java_package=package)
+    )
+
+    assert authority is not None
+    assert authority.mutation_authority.roots == (
+        "src/main/java/ai/minecraft/generated/authored_space/",
+        "src/main/resources/",
+        "src/test/java/ai/minecraft/generated/authored_space/",
+        "src/gametest/ai/minecraft/generated/authored_space/",
+    )
+    assert authority.mutation_authority.mutation_error(
+        "src/main/java/ai/minecraft/generated/authored_space/ShipSystem.java",
+        operation="create_file",
+    ) is None
+    error = authority.mutation_authority.mutation_error(
+        "src/main/java/com/example/starforge/StarForgeMod.java",
+        operation="create_file",
+    )
+    assert error is not None
+    assert error.startswith("PATH_OUTSIDE_WRITABLE_SET")
 
 
 @pytest.mark.parametrize(
