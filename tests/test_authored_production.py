@@ -328,3 +328,19 @@ def test_real_orchestrator_accepts_authored_handoff(monkeypatch, tmp_path):
                 run_visual_review=False,
             ),
         )
+
+
+def test_materialize_authored_scaffold_is_noop_without_game_design(tmp_path) -> None:
+    from types import SimpleNamespace
+
+    proposal = SimpleNamespace(
+        base_proposal=SimpleNamespace(
+            spec=SimpleNamespace(package_name="demo.mod")
+        )
+    )
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+
+    result = materialize_authored_execution_scaffold(proposal, project_root)
+
+    assert result == project_root.resolve()

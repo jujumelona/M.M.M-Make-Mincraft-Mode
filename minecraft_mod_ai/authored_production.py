@@ -330,7 +330,8 @@ def materialize_authored_execution_scaffold(
     import re
 
     root = Path(project_root).expanduser().resolve()
-    design = proposal.game_design if isinstance(proposal.game_design, Mapping) else {}
+    game_design = getattr(proposal, "game_design", None)
+    design = game_design if isinstance(game_design, Mapping) else {}
     manifest = design.get("_authored_execution_manifest")
     if not isinstance(manifest, Mapping):
         return root
