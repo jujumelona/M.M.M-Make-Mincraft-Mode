@@ -224,12 +224,25 @@ def _install_platform_contracts() -> None:
 
 
 def _install_planner_contracts() -> None:
-    from . import agentic_optimization_contract, resource_asset_production
+    from . import (
+        agentic_optimization_contract,
+        complete_orchestrator,
+        complete_orchestrator_services,
+        resource_asset_production,
+    )
     from .agentic_search_efficiency_contract import install as install_agentic_search_efficiency
     from .asset_resume_efficiency_contract import install as install_asset_resume_efficiency
 
     install_agentic_search_efficiency(agentic_optimization_contract)
     install_asset_resume_efficiency(resource_asset_production)
+
+    # generate_assets has one canonical owner. The resume contract decorates that
+    # owner during bootstrap, so every already-imported production alias must point
+    # at the resulting canonical callable rather than retaining a stale pre-wrapper
+    # function object.
+    canonical_generate_assets = resource_asset_production.generate_assets
+    complete_orchestrator_services.generate_assets = canonical_generate_assets
+    complete_orchestrator.generate_assets = canonical_generate_assets
 
 
 def _install_architecture_contracts() -> None:

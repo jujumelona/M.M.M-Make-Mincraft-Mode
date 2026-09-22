@@ -1216,11 +1216,11 @@ def validate_jar(
                                 )
                             )
 
+            # GameTest lives in Loom's dedicated gametest source set/mod and is
+            # verified by the build/GameTest evidence contract. Production JAR metadata
+            # must contain only runtime entrypoints.
             required_entrypoints = {
                 "main": f"{spec.package_name}.{_class_name(spec.mod_id)}Mod",
-                "fabric-gametest": (
-                    f"{spec.package_name}.{_class_name(spec.mod_id)}ModGameTests"
-                ),
             }
             if spec.boss is not None:
                 required_entrypoints["client"] = (

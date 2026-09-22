@@ -867,6 +867,11 @@ def _atomic_write_bytes(target: Path, data: bytes) -> None:
 def _asset_execution_projection(proposal: CompleteProposal) -> CompleteProposal:
     """Project one approved asset shard to its matching canonical plan rows."""
 
+    # Test/imported callers may provide a proposal-shaped object only for deterministic
+    # preflight. Projection is a CompleteProposal-specific optimization and must never
+    # pre-empt the actual resource validation contract for those callers.
+    if not isinstance(proposal, CompleteProposal):
+        return proposal
     if proposal.status is not CompleteProposalStatus.APPROVED or proposal.approval_hash:
         return proposal
 
