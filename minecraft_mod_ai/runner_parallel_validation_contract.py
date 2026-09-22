@@ -200,66 +200,91 @@ def _task_from_listing(log_path: str | Path) -> str | None:
     return None
 
 
-def _derived_host_gametest_contract(
+def _validate_host_gametest_contract(
     root: Path,
     payload: dict[str, Any],
-    metadata: dict[str, Any],
+    main_metadata: dict[str, Any],
+    contract: dict[str, Any],
 ) -> dict[str, str] | None:
-    """Reconstruct the deterministic host GameTest identity from live project state."""
+    """Validate the provider-recorded dedicated GameTest contract against live files."""
 
     if str(payload.get("loader") or "").strip().casefold() != "fabric":
         return None
-    mod_id = str(metadata.get("id") or "").strip()
-    entrypoints = metadata.get("entrypoints")
-    gametest_entrypoints = (
-        entrypoints.get("fabric-gametest")
-        if isinstance(entrypoints, dict)
-        else None
-    )
-    if not mod_id or not isinstance(gametest_entrypoints, list):
+    main_mod_id = str(main_metadata.get("id") or "").strip()
+    if not main_mod_id:
         return None
 
-    class_name = "".join(part.capitalize() for part in mod_id.split("_")) + "ModGameTests"
-    candidates = [
-        value
-        for value in gametest_entrypoints
-        if isinstance(value, str)
-        and value.rsplit(".", 1)[-1] == class_name
-    ]
-    if len(candidates) != 1:
+    required = {
+        key: str(contract.get(key) or "").strip()
+        for key in ("task", "report", "entrypoint", "source", "metadata", "mod_id")
+    }
+    if (
+        required["task"] != "runGameTest"
+        or required["report"] != "build/gametest-report.xml"
+        or required["mod_id"] != f"{main_mod_id}_gametest"
+        or required["metadata"] != "src/gametest/resources/fabric.mod.json"
+        or not required["entrypoint"]
+        or "." not in required["entrypoint"]
+    ):
         return None
-    entrypoint = candidates[0]
-    if "." not in entrypoint:
-        return None
-    package_name, _ = entrypoint.rsplit(".", 1)
-    source_value = (
-        "src/main/java/"
+
+    package_name, class_name = required["entrypoint"].rsplit(".", 1)
+    expected_source = (
+        "src/gametest/java/"
         + package_name.replace(".", "/")
         + f"/{class_name}.java"
     )
-    source = _safe_regular_file(root, root / source_value)
+    if required["source"] != expected_source:
+        return None
+
+    source = _safe_regular_file(root, root / required["source"])
+    metadata_file = _safe_regular_file(root, root / required["metadata"])
     build = _safe_regular_file(root, root / "build.gradle")
-    if source is None or build is None:
+    if source is None or metadata_file is None or build is None:
         return None
 
     try:
         source_text = source.read_text(encoding="utf-8", errors="strict")
         build_text = build.read_text(encoding="utf-8", errors="strict")
-    except (OSError, UnicodeError):
+        gametest_metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(gametest_metadata, dict):
+        return None
+
+    entrypoints = gametest_metadata.get("entrypoints")
+    gametest_entrypoints = (
+        entrypoints.get("fabric-gametest")
+        if isinstance(entrypoints, dict)
+        else None
+    )
+    depends = gametest_metadata.get("depends")
+    if (
+        gametest_metadata.get("id") != required["mod_id"]
+        or not isinstance(gametest_entrypoints, list)
+        or gametest_entrypoints != [required["entrypoint"]]
+        or not isinstance(depends, dict)
+        or depends.get(main_mod_id) != "*"
+    ):
         return None
 
     required_source_fragments = (
-        "import net.fabricmc.fabric.api.gametest.v1.GameTest;",
         "import net.fabricmc.loader.api.FabricLoader;",
         "import net.minecraft.gametest.framework.GameTestHelper;",
         f"public final class {class_name}",
-        f'FabricLoader.getInstance().isModLoaded("{mod_id}")',
+        f'FabricLoader.getInstance().isModLoaded("{main_mod_id}")',
         "context.succeed();",
     )
     if any(fragment not in source_text for fragment in required_source_fragments):
         return None
+    if (
+        "import net.fabricmc.fabric.api.gametest.v1.GameTest;" not in source_text
+        and "import net.minecraft.gametest.framework.GameTest;" not in source_text
+    ):
+        return None
     if re.search(
-        r"@GameTest\s+public\s+void\s+generatedRegistriesAreLive\s*"
+        r"@GameTest(?:\s*\([^\n]*\))?\s+public\s+void\s+"
+        r"generatedRegistriesAreLive\s*"
         r"\(\s*GameTestHelper\s+context\s*\)",
         source_text,
     ) is None:
@@ -267,24 +292,82 @@ def _derived_host_gametest_contract(
 
     required_build_fragments = (
         "configureTests",
-        "createSourceSet = false",
+        "createSourceSet = true",
+        f'modId = "{required["mod_id"]}"',
         "enableGameTests = true",
         "enableClientGameTests = false",
+        "// M.M.M host-owned GameTest source-set classpath bridge",
+        "compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath",
+        "runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath",
         "fabric-api.gametest.report-file",
     )
     if any(fragment not in build_text for fragment in required_build_fragments):
         return None
 
     return {
-        "task": "runGameTest",
-        "entrypoint": entrypoint,
-        "source": source_value,
+        "task": required["task"],
+        "report": required["report"],
+        "entrypoint": required["entrypoint"],
+        "source": required["source"],
+        "metadata": required["metadata"],
+        "mod_id": required["mod_id"],
         "testcase": f"{class_name}.generatedRegistriesAreLive",
     }
 
 
+def _derived_host_gametest_contract(
+    root: Path,
+    payload: dict[str, Any],
+    metadata: dict[str, Any],
+) -> dict[str, str] | None:
+    """Reconstruct only the current dedicated-source-set contract as a fallback."""
+
+    main_mod_id = str(metadata.get("id") or "").strip()
+    gametest_metadata_path = _safe_regular_file(
+        root, root / "src/gametest/resources/fabric.mod.json"
+    )
+    if not main_mod_id or gametest_metadata_path is None:
+        return None
+    try:
+        gametest_metadata = json.loads(
+            gametest_metadata_path.read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(gametest_metadata, dict):
+        return None
+    entrypoints = gametest_metadata.get("entrypoints")
+    values = (
+        entrypoints.get("fabric-gametest")
+        if isinstance(entrypoints, dict)
+        else None
+    )
+    if (
+        not isinstance(values, list)
+        or len(values) != 1
+        or not isinstance(values[0], str)
+        or "." not in values[0]
+    ):
+        return None
+    entrypoint = values[0]
+    package_name, class_name = entrypoint.rsplit(".", 1)
+    candidate = {
+        "task": "runGameTest",
+        "report": "build/gametest-report.xml",
+        "entrypoint": entrypoint,
+        "source": (
+            "src/gametest/java/"
+            + package_name.replace(".", "/")
+            + f"/{class_name}.java"
+        ),
+        "metadata": "src/gametest/resources/fabric.mod.json",
+        "mod_id": str(gametest_metadata.get("id") or "").strip(),
+    }
+    return _validate_host_gametest_contract(root, payload, metadata, candidate)
+
+
 def _host_gametest_contract(root: Path) -> dict[str, str] | None:
-    """Resolve and verify the host-installed GameTest contract fail-closed."""
+    """Resolve the provider-owned GameTest receipt and verify it against live project state."""
 
     lock = _safe_regular_file(root, root / ".minecraft_ai/platform-lock.json")
     metadata_path = _safe_regular_file(
@@ -300,10 +383,6 @@ def _host_gametest_contract(root: Path) -> dict[str, str] | None:
     if not isinstance(payload, dict) or not isinstance(metadata, dict):
         return None
 
-    derived = _derived_host_gametest_contract(root, payload, metadata)
-    if derived is None:
-        return None
-
     bootstrap = payload.get("bootstrap")
     recorded = (
         bootstrap.get("gametest_contract")
@@ -311,10 +390,8 @@ def _host_gametest_contract(root: Path) -> dict[str, str] | None:
         else None
     )
     if isinstance(recorded, dict):
-        for key in ("task", "entrypoint", "source"):
-            if recorded.get(key) != derived[key]:
-                return None
-    return derived
+        return _validate_host_gametest_contract(root, payload, metadata, recorded)
+    return _derived_host_gametest_contract(root, payload, metadata)
 
 
 def _gametest_pass_summary(log_path: str | Path) -> int | None:

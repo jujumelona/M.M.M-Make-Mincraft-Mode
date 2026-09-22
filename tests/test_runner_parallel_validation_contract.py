@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 from minecraft_mod_ai.runner_parallel_validation_contract import (
     _executed_gametest_task,
+    _host_gametest_contract,
     _structured_gametest_report,
     _task_from_listing,
     install,
@@ -266,10 +267,13 @@ def _install_host_gametest_fixture(
     *,
     include_bootstrap: bool = True,
 ) -> None:
-    source = (
-        project
-        / "src/main/java/dev/mmm/debugfixture/MmmDebugFixtureModGameTests.java"
+    entrypoint = "dev.mmm.debugfixture.MmmDebugFixtureModGameTests"
+    source_rel = (
+        "src/gametest/java/dev/mmm/debugfixture/"
+        "MmmDebugFixtureModGameTests.java"
     )
+    metadata_rel = "src/gametest/resources/fabric.mod.json"
+    source = project / source_rel
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text(
         "package dev.mmm.debugfixture;\n\n"
@@ -292,9 +296,18 @@ def _install_host_gametest_fixture(
 
 fabricApi {
     configureTests {
-        createSourceSet = false
+        createSourceSet = true
+        modId = "mmm_debug_fixture_gametest"
         enableGameTests = true
         enableClientGameTests = false
+    }
+}
+
+// M.M.M host-owned GameTest source-set classpath bridge
+sourceSets {
+    gametest {
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath
     }
 }
 
@@ -308,17 +321,22 @@ loom {
 """,
         encoding="utf-8",
     )
-    metadata = project / "src/main/resources/fabric.mod.json"
-    metadata.parent.mkdir(parents=True, exist_ok=True)
-    metadata.write_text(
+    main_metadata = project / "src/main/resources/fabric.mod.json"
+    main_metadata.parent.mkdir(parents=True, exist_ok=True)
+    main_metadata.write_text(
+        json.dumps({"id": "mmm_debug_fixture", "entrypoints": {}}),
+        encoding="utf-8",
+    )
+    gametest_metadata = project / metadata_rel
+    gametest_metadata.parent.mkdir(parents=True, exist_ok=True)
+    gametest_metadata.write_text(
         json.dumps(
             {
-                "id": "mmm_debug_fixture",
-                "entrypoints": {
-                    "fabric-gametest": [
-                        "dev.mmm.debugfixture.MmmDebugFixtureModGameTests"
-                    ]
-                },
+                "schemaVersion": 1,
+                "id": "mmm_debug_fixture_gametest",
+                "version": "1.0.0",
+                "entrypoints": {"fabric-gametest": [entrypoint]},
+                "depends": {"mmm_debug_fixture": "*"},
             }
         ),
         encoding="utf-8",
@@ -339,13 +357,12 @@ loom {
             "gametest_contract": {
                 "task": "runGameTest",
                 "report": "build/gametest-report.xml",
-                "entrypoint": (
-                    "dev.mmm.debugfixture.MmmDebugFixtureModGameTests"
-                ),
-                "source": (
-                    "src/main/java/dev/mmm/debugfixture/"
-                    "MmmDebugFixtureModGameTests.java"
-                ),
+                "entrypoint": entrypoint,
+                "source": source_rel,
+                "metadata": metadata_rel,
+                "mod_id": "mmm_debug_fixture_gametest",
+                "api_generation": "fabric-gametest-v2",
+                "minecraft_version": "26.2",
             }
         }
     lock = project / ".minecraft_ai/platform-lock.json"
@@ -360,6 +377,57 @@ def _reset() -> None:
     _FakeGradleRunner.max_active_builds = 0
     _FakeGradleRunner.build_calls = 0
     _FakeGradleRunner.run_calls = []
+
+
+def test_dedicated_source_set_contract_resolves_from_provider_receipt(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path, "dedicated-contract", "8.10.2", "a" * 64)
+    _install_host_gametest_fixture(project)
+
+    contract = _host_gametest_contract(project)
+
+    assert contract is not None
+    assert contract["task"] == "runGameTest"
+    assert contract["report"] == "build/gametest-report.xml"
+    assert contract["source"].startswith("src/gametest/java/")
+    assert contract["metadata"] == "src/gametest/resources/fabric.mod.json"
+    assert contract["mod_id"] == "mmm_debug_fixture_gametest"
+
+
+def test_explicit_gametest_success_without_native_xml_gets_host_attestation(
+    tmp_path: Path,
+) -> None:
+    _reset()
+    runner_module = _runner_module()
+    install(runner_module=runner_module, validation_module=_validation_module())
+    runner = _FakeGradleRunner(tmp_path / "cache")
+    project = _project(tmp_path, "explicit-log-attestation", "8.10.2", "b" * 64)
+    _install_host_gametest_fixture(project)
+
+    original_run = runner._run
+
+    def run_with_terminal_summary(**kwargs):
+        result = original_run(**kwargs)
+        if kwargs["name"] == "gametest":
+            report = kwargs["cwd"] / "build/gametest-report.xml"
+            report.unlink(missing_ok=True)
+            Path(result.log_path).write_text(
+                "> Task :runGameTest\n"
+                "========= 2 GAME TESTS COMPLETE IN 3.480 s ======================\n"
+                "All 2 required tests passed :)\n"
+                "BUILD SUCCESSFUL\n",
+                encoding="utf-8",
+            )
+        return result
+
+    runner._run = run_with_terminal_summary
+    report = runner.build(project, run_gametest=True)
+
+    assert report.passed
+    assert report.gametest_mode == "explicit_task"
+    assert report.gametest_report is not None
+    assert Path(report.gametest_report).name == "mmm-gametest-attestation.xml"
 
 
 def test_target_distribution_api_uses_explicit_version_and_sha(tmp_path: Path) -> None:
@@ -582,7 +650,7 @@ def test_log_only_gametest_rejects_tampered_host_source_without_bootstrap(
     _install_host_gametest_fixture(project, include_bootstrap=False)
     source = (
         project
-        / "src/main/java/dev/mmm/debugfixture/MmmDebugFixtureModGameTests.java"
+        / "src/gametest/java/dev/mmm/debugfixture/MmmDebugFixtureModGameTests.java"
     )
     source.write_text(
         source.read_text(encoding="utf-8").replace(
