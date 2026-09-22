@@ -78,7 +78,6 @@ def _authored_coverage_inputs() -> dict[str, object]:
                 "module_id": "authored_feature_001",
                 "path": "src/main/java/example/AuthoredFeature001.java",
                 "symbol": "AuthoredFeature001",
-                "index": 1,
                 "start_byte": 0,
                 "end_byte": len(raw),
                 "text_sha256": unit_sha256,

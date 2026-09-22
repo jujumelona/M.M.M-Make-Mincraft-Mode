@@ -807,11 +807,8 @@ def build_authored_design_coverage_receipt(
         if not isinstance(raw_unit, Mapping):
             findings.append(f"authored execution unit {ordinal} is not an object")
             continue
-        index = raw_unit.get("index")
         start = raw_unit.get("start_byte")
         end = raw_unit.get("end_byte")
-        if type(index) is not int or index != ordinal:
-            findings.append(f"authored execution unit {ordinal} has a non-canonical index")
         if type(start) is not int or type(end) is not int:
             findings.append(f"authored execution unit {ordinal} has invalid byte bounds")
             continue
