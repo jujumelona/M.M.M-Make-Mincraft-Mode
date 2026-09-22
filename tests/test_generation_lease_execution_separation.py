@@ -8,6 +8,9 @@ def test_generation_ownership_lease_does_not_cap_node_execution_lifetime() -> No
     assert 'node_deadlines' not in source
     assert 'Pipeline generation lease deadline exceeded' not in source
     assert 'args = (process_node, node)' in source
+    assert 'run_with_model_execution_deadline, deadline, process_node, node' not in source
+    assert 'generation_lease_heartbeat' in source
+    assert 'renew_orchestrator_claims' in source
     assert 'timeout=heartbeat_seconds' in source
 
 

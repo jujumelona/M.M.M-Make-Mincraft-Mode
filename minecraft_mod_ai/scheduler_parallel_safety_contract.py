@@ -181,6 +181,64 @@ def _install_profile_gpu_lane(orchestrator_module: Any) -> None:
     orchestrator_cls._execute_generation_work = execute_generation_work
 
 
+def renew_orchestrator_claims(
+    ledger: Any,
+    *,
+    lease_seconds: int = 900,
+) -> int:
+    """Renew live generation claims owned by this orchestrator instance.
+
+    This heartbeat is intentionally independent from ready-queue polling. A long
+    model/tool/compiler call may keep the scheduler thread busy, but it must not let
+    ownership fencing expire underneath a still-running local worker.
+    """
+
+    from .work_graph import WorkGraphError, WorkState
+
+    if lease_seconds < 1:
+        raise WorkGraphError("lease_seconds must be positive.")
+    owner = _orchestrator_owner(ledger)
+    now = time.time()
+    connection = ledger._connect()
+    with connection:
+        connection.execute("BEGIN IMMEDIATE")
+        expired = connection.execute(
+            """
+            SELECT node_id
+            FROM tasks
+            WHERE state = ? AND lease_owner = ?
+              AND lease_until IS NOT NULL AND lease_until < ?
+              AND stage LIKE 'generate:%'
+            ORDER BY node_id
+            LIMIT 1
+            """,
+            (WorkState.RUNNING.value, owner, now),
+        ).fetchone()
+        if expired is not None:
+            connection.rollback()
+            raise WorkGraphError(
+                "Current orchestrator lease expired while its local worker may still "
+                f"be active: {expired[0]}"
+            )
+        cursor = connection.execute(
+            """
+            UPDATE tasks
+            SET lease_until = ?, updated_at = ?
+            WHERE state = ? AND lease_owner = ?
+              AND lease_until IS NOT NULL AND lease_until >= ?
+              AND stage LIKE 'generate:%'
+            """,
+            (
+                now + lease_seconds,
+                now,
+                WorkState.RUNNING.value,
+                owner,
+                now,
+            ),
+        )
+    return int(cursor.rowcount)
+
+
 def claim_orchestrator_ready(
     ledger: Any,
     *,
@@ -342,6 +400,24 @@ def claim_orchestrator_ready(
         now = time.time()
         renew_before = now + max(1.0, lease_seconds * 0.5)
         connection.execute("BEGIN IMMEDIATE")
+        expired_owned = connection.execute(
+            """
+            SELECT node_id
+            FROM tasks
+            WHERE state = ? AND lease_owner = ?
+              AND lease_until IS NOT NULL AND lease_until < ?
+              AND stage LIKE 'generate:%'
+            ORDER BY node_id
+            LIMIT 1
+            """,
+            (WorkState.RUNNING.value, owner, now),
+        ).fetchone()
+        if expired_owned is not None:
+            connection.rollback()
+            raise WorkGraphError(
+                "Current orchestrator lease expired while its local worker may still "
+                f"be active: {expired_owned[0]}"
+            )
         connection.execute(
             """
             UPDATE tasks
@@ -365,12 +441,14 @@ def claim_orchestrator_ready(
             SET state = ?, lease_owner = NULL, lease_until = NULL,
                 error = 'expired worker lease', updated_at = ?
             WHERE state = ? AND lease_until IS NOT NULL AND lease_until < ?
+              AND (lease_owner IS NULL OR lease_owner != ?)
             """,
             (
                 WorkState.PENDING.value,
                 now,
                 WorkState.RUNNING.value,
                 now,
+                owner,
             ),
         )
 
@@ -429,6 +507,7 @@ __all__ = [
     "_profile_uses_shared_local_gpu",
     "_receipt_touched_paths",
     "claim_orchestrator_ready",
+    "renew_orchestrator_claims",
     "install",
     "recommended_cpu_io_workers",
 ]

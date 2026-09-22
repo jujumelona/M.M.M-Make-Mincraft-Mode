@@ -3,6 +3,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 import minecraft_mod_ai.complete_orchestrator as orchestrator_module
 import minecraft_mod_ai.scheduler_parallel_safety_contract as scheduler_contract
 import minecraft_mod_ai.work_graph as work_graph_module
@@ -208,8 +210,8 @@ def test_orchestrator_polling_heartbeats_live_leases_but_reclaims_expired(
 
     with sqlite3.connect(ledger.path) as connection:
         connection.execute(
-            "UPDATE tasks SET lease_until = ? WHERE node_id = ?",
-            (time.time() - 1.0, "a-image"),
+            "UPDATE tasks SET lease_owner = ?, lease_until = ? WHERE node_id = ?",
+            ("orphaned-prior-orchestrator", time.time() - 1.0, "a-image"),
         )
         connection.commit()
 
@@ -221,6 +223,82 @@ def test_orchestrator_polling_heartbeats_live_leases_but_reclaims_expired(
     assert reclaimed is not None
     assert reclaimed["node_id"] == "a-image"
     assert reclaimed["attempt"] == 2
+
+
+def test_current_orchestrator_expired_claim_is_not_reclaimed_under_live_worker(
+    tmp_path: Path,
+) -> None:
+    plan = _plan(_node("a-llm", "generate:custom", "llm"))
+    ledger = DurableWorkLedger(
+        tmp_path / "current-owner-expiry.sqlite",
+        proposal_hash=plan.proposal_hash,
+    )
+    ledger.sync_plan(plan)
+    stages = ("generate:custom",)
+
+    claimed = ledger.claim_ready(
+        "mmm-orchestrator",
+        stages=stages,
+        lease_seconds=60,
+    )
+    assert claimed is not None
+    owner = str(claimed["lease_owner"])
+
+    with sqlite3.connect(ledger.path) as connection:
+        connection.execute(
+            "UPDATE tasks SET lease_until = ? WHERE node_id = ?",
+            (time.time() - 1.0, "a-llm"),
+        )
+        connection.commit()
+
+    with pytest.raises(
+        work_graph_module.WorkGraphError,
+        match="Current orchestrator lease expired",
+    ):
+        ledger.claim_ready(
+            "mmm-orchestrator",
+            stages=stages,
+            lease_seconds=60,
+        )
+
+    current = ledger.task("a-llm")
+    assert current["state"] == "running"
+    assert current["attempt"] == 1
+    assert current["lease_owner"] == owner
+
+
+def test_independent_orchestrator_heartbeat_renews_live_generation_claim(
+    tmp_path: Path,
+) -> None:
+    plan = _plan(_node("a-llm", "generate:custom", "llm"))
+    ledger = DurableWorkLedger(
+        tmp_path / "heartbeat.sqlite",
+        proposal_hash=plan.proposal_hash,
+    )
+    ledger.sync_plan(plan)
+    claimed = ledger.claim_ready(
+        "mmm-orchestrator",
+        stages=("generate:custom",),
+        lease_seconds=60,
+    )
+    assert claimed is not None
+
+    with sqlite3.connect(ledger.path) as connection:
+        connection.execute(
+            "UPDATE tasks SET lease_until = ? WHERE node_id = ?",
+            (time.time() + 5.0, "a-llm"),
+        )
+        connection.commit()
+    before = float(ledger.task("a-llm")["lease_until"])
+
+    renewed = scheduler_contract.renew_orchestrator_claims(
+        ledger,
+        lease_seconds=60,
+    )
+
+    after = float(ledger.task("a-llm")["lease_until"])
+    assert renewed == 1
+    assert after > before + 40.0
 
 
 class _FakeLedger:

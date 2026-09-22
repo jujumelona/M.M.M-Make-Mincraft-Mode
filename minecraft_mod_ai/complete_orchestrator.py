@@ -2612,8 +2612,9 @@ class CompleteProductionOrchestrator:
 
         def dispatch_node(node: WorkNode) -> Future[Any]:
             resource_class = node.resource_class or str(node.payload.get('resource_class', 'cpu_io'))
-            deadline = time.monotonic() + lease_seconds
-            args = (run_with_model_execution_deadline, deadline, process_node, node)
+            # Ownership leases are renewable scheduler fencing, not execution timeouts.
+            # Model/tool/compiler layers own their own bounded waits and liveness checks.
+            args = (process_node, node)
             if resource_class == 'llm':
                 return llm_pool.submit(*args)
             if resource_class == 'image_gpu':
@@ -2621,9 +2622,37 @@ class CompleteProductionOrchestrator:
             if resource_class == 'commit':
                 return commit_pool.submit(*args)
             return cpu_pool.submit(*args)
+
+        lease_heartbeat_stop = threading.Event()
+        lease_heartbeat_errors: list[BaseException] = []
+
+        def generation_lease_heartbeat() -> None:
+            while not lease_heartbeat_stop.wait(heartbeat_seconds):
+                try:
+                    scheduler_safety.renew_orchestrator_claims(
+                        ledger,
+                        lease_seconds=lease_seconds,
+                    )
+                except BaseException as exc:  # noqa: BLE001 - surfaced by scheduler loop
+                    lease_heartbeat_errors.append(exc)
+                    lease_heartbeat_stop.set()
+                    return
+
+        lease_heartbeat_thread = threading.Thread(
+            target=generation_lease_heartbeat,
+            name='generation_lease_heartbeat',
+            daemon=True,
+        )
+        lease_heartbeat_thread.start()
         try:
             while True:
                 ledger.raise_if_cancelled()
+                if lease_heartbeat_errors:
+                    heartbeat_error = lease_heartbeat_errors[0]
+                    raise CompleteProductionError(
+                        "Generation lease heartbeat failed: "
+                        f"{type(heartbeat_error).__name__}: {heartbeat_error}"
+                    ) from heartbeat_error
                 done_ids = [node_id for node_id, future in node_futures.items() if future.done()]
                 for node_id in done_ids:
                     future = node_futures.pop(node_id)
@@ -2705,6 +2734,8 @@ class CompleteProductionOrchestrator:
             image_pool.shutdown(wait=True, cancel_futures=True)
             commit_pool.shutdown(wait=True, cancel_futures=True)
             review_pool.shutdown(wait=True, cancel_futures=True)
+            lease_heartbeat_stop.set()
+            lease_heartbeat_thread.join(timeout=heartbeat_seconds + 5.0)
         module_receipts.sort(key=_generation_receipt_sort_key)
         asset_shards.sort(key=_generation_receipt_sort_key)
         unresolved.sort()
