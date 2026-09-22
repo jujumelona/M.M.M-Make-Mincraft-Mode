@@ -395,6 +395,23 @@ def test_dedicated_source_set_contract_resolves_from_provider_receipt(
     assert contract["mod_id"] == "mmm_debug_fixture_gametest"
 
 
+def test_stale_main_source_set_shape_cannot_certify_current_provider_receipt(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path, "stale-shape", "8.10.2", "c" * 64)
+    _install_host_gametest_fixture(project)
+    build = project / "build.gradle"
+    build.write_text(
+        build.read_text(encoding="utf-8").replace(
+            "createSourceSet = true",
+            "createSourceSet = false",
+        ),
+        encoding="utf-8",
+    )
+
+    assert _host_gametest_contract(project) is None
+
+
 def test_explicit_gametest_success_without_native_xml_gets_host_attestation(
     tmp_path: Path,
 ) -> None:
