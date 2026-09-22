@@ -732,6 +732,7 @@ def build_authored_design_coverage_receipt(
     requested_prompt: str,
     authored_plan: Mapping[str, Any] | None,
     authored_manifest: Mapping[str, Any] | None,
+    module_ids: Sequence[str],
     artifact_sha256: str,
     source_validation: Mapping[str, Any] | None,
     build_report: Mapping[str, Any] | None,
@@ -792,6 +793,11 @@ def build_authored_design_coverage_receipt(
     if not units:
         findings.append("authored execution manifest contains no authored units")
 
+    expected_module_ids = [str(value).strip() for value in module_ids]
+    if not expected_module_ids or any(not value for value in expected_module_ids):
+        findings.append("approved authored module IDs are missing or invalid")
+
+    manifest_module_ids: list[str] = []
     requirement_rows: list[dict[str, str]] = []
     if plan_prompt:
         requirement_rows.append(
@@ -830,6 +836,7 @@ def build_authored_design_coverage_receipt(
         module_id = str(raw_unit.get("module_id") or "").strip()
         if not module_id:
             findings.append(f"authored execution unit {ordinal} has no module binding")
+        manifest_module_ids.append(module_id)
         if not statement:
             findings.append(f"authored execution unit {ordinal} has no authored statement")
         else:
@@ -849,6 +856,8 @@ def build_authored_design_coverage_receipt(
 
     if cursor != len(text_bytes):
         findings.append("authored execution units do not cover every byte of the approved design")
+    if manifest_module_ids != expected_module_ids:
+        findings.append("authored execution manifest modules do not match the approved proposal modules")
 
     unresolved = sorted(
         {str(item) for item in unresolved_gates if str(item).strip()}

@@ -1766,6 +1766,7 @@ class CompleteProductionOrchestrator:
                 requested_prompt=approved.requested_prompt,
                 authored_plan=approved.game_design.get('authored_plan'),
                 authored_manifest=approved.game_design.get('_authored_execution_manifest'),
+                module_ids=tuple(module.module_id for module in approved.modules),
                 artifact_sha256=str(artifact_receipt['sha256']),
                 source_validation=source_report,
                 build_report=build,

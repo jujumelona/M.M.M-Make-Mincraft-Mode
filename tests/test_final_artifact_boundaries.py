@@ -112,6 +112,7 @@ def _authored_coverage_inputs() -> dict[str, object]:
             "media_paths": [],
         },
         "authored_manifest": manifest,
+        "module_ids": ("authored_feature_001",),
         "artifact_sha256": "sha256:" + "2" * 64,
         "source_validation": {
             "status": "PASS",
@@ -149,6 +150,18 @@ def test_saved_authored_coverage_binds_exact_design_and_verification() -> None:
         inputs["authored_plan"]["text"].strip(),
     ]
     assert all(row["status"] == "PASS" for row in receipt["requirements"])
+
+
+def test_saved_authored_coverage_fails_closed_when_manifest_module_is_not_approved() -> None:
+    inputs = _authored_coverage_inputs()
+
+    receipt = build_authored_design_coverage_receipt(
+        **{**inputs, "module_ids": ("different_module",)}
+    )
+
+    assert receipt["status"] == "BLOCKED"
+    assert receipt["verification"]["authored_design_binding"] is False
+    assert any("proposal modules" in finding for finding in receipt["findings"])
 
 
 def test_saved_authored_coverage_fails_closed_when_manifest_text_is_tampered() -> None:
