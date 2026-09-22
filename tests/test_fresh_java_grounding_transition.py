@@ -61,7 +61,7 @@ def test_fresh_java_after_weak_code_rag_stays_on_internal_workspace_routes():
         semantic_retrieval_choice=True,
     )
     assert [schema["function"]["name"] for schema in selected] == [
-        "java_workspace_symbols",
+        "search_project_rag",
     ]
 
 

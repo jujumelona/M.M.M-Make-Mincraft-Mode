@@ -43,6 +43,44 @@ _SYMBOL_LINE_RE = re.compile(
 )
 
 
+def initial_evidence_required(
+    *,
+    role: str,
+    host_grounded: bool,
+    router_requires_fresh_evidence: bool,
+    implementation_requires_mutation: bool,
+    host_target_execution_authority: bool,
+    compile_backed_java: bool,
+    authored_workspace_refresh: bool = False,
+) -> bool:
+    """Decide whether mutation needs speculative pre-implementation retrieval.
+
+    A pinned Java target with a mandatory target compiler already has a stronger
+    executable feedback loop than speculative API search. In that case the host
+    lets the coder perform the bounded edit first and routes only concrete compiler
+    diagnostics into repair evidence. Retrieval remains mandatory when there is no
+    executable target authority, when the host explicitly needs a workspace refresh,
+    or when no compile-backed feedback loop exists and policy requires fresh evidence.
+    """
+
+    if authored_workspace_refresh:
+        return True
+    if role not in {"coder", "coder_safe"} or host_grounded:
+        return False
+    if (
+        implementation_requires_mutation
+        and host_target_execution_authority
+        and compile_backed_java
+    ):
+        return False
+    if router_requires_fresh_evidence:
+        return True
+    return bool(
+        implementation_requires_mutation
+        and not host_target_execution_authority
+    )
+
+
 def semantic_fresh_java(
     reuse_action: str | None,
     target_path: str | None,
@@ -85,12 +123,10 @@ def initial_evidence_frontier(
     if semantic_fresh_java_target:
         preferred = (
             "search_code_rag",
-            "java_workspace_symbols",
             "search_project_rag",
             "external_mcp_capabilities",
             "external_mcp_schema",
             "external_mcp_call",
-            "inspect_modrinth_project",
         )
     elif localization_stage == "NEED_FILE":
         preferred = ("search_code_rag", "search_project_rag")
@@ -187,12 +223,10 @@ def recovery_evidence_frontier(
     elif kind == "official_api":
         preferred = (
             "search_project_rag",
+            "search_code_rag",
             "external_mcp_capabilities",
             "external_mcp_schema",
             "external_mcp_call",
-            "inspect_modrinth_project",
-            "search_code_rag",
-            "java_workspace_symbols",
         )
     else:
         preferred = ("search_code_rag", "java_workspace_symbols", "search_project_rag")
@@ -422,6 +456,7 @@ __all__ = [
     "authoritative_java_evidence",
     "evidence_obligation_satisfied",
     "initial_evidence_frontier",
+    "initial_evidence_required",
     "normalize_forced_evidence_rejection_calls",
     "recovery_evidence_frontier",
     "repair_evidence_route_for_errors",

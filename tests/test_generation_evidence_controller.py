@@ -153,3 +153,49 @@ def test_evidence_obligation_admission_is_controller_owned() -> None:
         has_fresh_evidence=True,
         has_authoritative_java_evidence=False,
     )
+
+
+def test_compile_backed_pinned_fresh_java_skips_speculative_presearch() -> None:
+    assert not controller.initial_evidence_required(
+        role="coder",
+        host_grounded=False,
+        router_requires_fresh_evidence=True,
+        implementation_requires_mutation=True,
+        host_target_execution_authority=True,
+        compile_backed_java=True,
+    )
+
+
+def test_unverified_fresh_java_still_requires_initial_evidence() -> None:
+    assert controller.initial_evidence_required(
+        role="coder",
+        host_grounded=False,
+        router_requires_fresh_evidence=True,
+        implementation_requires_mutation=True,
+        host_target_execution_authority=True,
+        compile_backed_java=False,
+    )
+
+
+def test_official_api_recovery_does_not_route_through_modrinth_or_jdt() -> None:
+    available = {
+        "search_project_rag",
+        "search_code_rag",
+        "java_workspace_symbols",
+        "inspect_modrinth_project",
+        "external_mcp_capabilities",
+        "external_mcp_schema",
+        "external_mcp_call",
+    }
+    selected = controller.recovery_evidence_frontier(
+        available=available,
+        attempted=set(),
+        route="official_api",
+    )
+    assert selected == ("search_project_rag",)
+    selected = controller.recovery_evidence_frontier(
+        available=available,
+        attempted={"search_project_rag"},
+        route="official_api",
+    )
+    assert selected == ("search_code_rag",)

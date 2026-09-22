@@ -28,6 +28,7 @@ from .generation_evidence_controller import (
     authoritative_java_evidence as _authoritative_java_evidence,
     evidence_obligation_satisfied,
     initial_evidence_frontier,
+    initial_evidence_required,
     normalize_forced_evidence_rejection_calls,
     recovery_evidence_frontier,
     repair_evidence_route_for_errors,
@@ -2040,29 +2041,6 @@ def _authored_workspace_refresh_requested(
     return False
 
 
-def _requires_rag_evidence(
-    *,
-    role: str,
-    host_grounded: bool,
-    router_requires_fresh_evidence: bool,
-    implementation_requires_mutation: bool,
-    initial_execution_authority: bool,
-) -> bool:
-    """Separate write-location authority from implementation-evidence authority.
-
-    An exact host-reserved target proves where the coder may write. It does not prove
-    which Minecraft/Fabric API is valid for the approved version. Explicit fresh-evidence
-    policy therefore remains authoritative even for an executable target, while host
-    target authority still suppresses retrieval that would exist only to localize the file.
-    """
-
-    if role not in {"coder", "coder_safe"} or host_grounded:
-        return False
-    if router_requires_fresh_evidence:
-        return True
-    return bool(implementation_requires_mutation and not initial_execution_authority)
-
-
 def _target_evidence_ready(
     state: HostRunState,
     *,
@@ -2070,12 +2048,11 @@ def _target_evidence_ready(
     fresh_java_target: bool,
     compile_backed_java: bool = False,
 ) -> bool:
-    """Decide whether implementation may proceed.
+    """Decide whether the current evidence obligation is satisfied.
 
-    target_compile is the canonical verifier, not permission to guess an exact
-    Minecraft/Fabric API. When the active coding policy requires fresh evidence, the
-    small coder must ground the implementation before mutating even though compile is
-    guaranteed downstream.
+    For compile-backed pinned Java, initial evidence policy is already false and this
+    gate is therefore open. If repair later establishes a concrete evidence obligation,
+    this same gate still requires the controller-approved evidence class.
     """
 
     del compile_backed_java
@@ -3777,15 +3754,14 @@ def _generate_with_tools_impl(
         and "target_compile" in current_task_required_gates()
     )
     router_requires_fresh_evidence = bool(router._agent_require_fresh_evidence)
-    require_rag = bool(
-        authored_workspace_refresh
-        or _requires_rag_evidence(
-            role=role,
-            host_grounded=host_grounded,
-            router_requires_fresh_evidence=router_requires_fresh_evidence,
-            implementation_requires_mutation=implementation_requires_mutation,
-            initial_execution_authority=initial_execution_authority,
-        )
+    require_rag = initial_evidence_required(
+        role=role,
+        host_grounded=host_grounded,
+        router_requires_fresh_evidence=router_requires_fresh_evidence,
+        implementation_requires_mutation=implementation_requires_mutation,
+        host_target_execution_authority=initial_execution_authority,
+        compile_backed_java=compile_backed_java,
+        authored_workspace_refresh=authored_workspace_refresh,
     )
     required_evidence_choice = bool(require_rag)
 

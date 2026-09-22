@@ -269,3 +269,14 @@ def test_materialized_fresh_scaffold_cannot_downgrade_evidence_requirement() -> 
         require_rag=True,
         fresh_java_target=True,
     ) is False
+
+
+def test_compile_backed_host_authority_bypasses_initial_rag_policy() -> None:
+    assert loop.initial_evidence_required(
+        role="coder",
+        host_grounded=False,
+        router_requires_fresh_evidence=True,
+        implementation_requires_mutation=True,
+        host_target_execution_authority=True,
+        compile_backed_java=True,
+    ) is False
