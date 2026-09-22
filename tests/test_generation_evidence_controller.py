@@ -57,7 +57,7 @@ def test_fresh_frontier_is_host_owned_and_single_route() -> None:
         localization_stage="READY",
         semantic_fresh_java_target=True,
     )
-    assert selected == ("java_workspace_symbols",)
+    assert selected == ("search_project_rag",)
 
 
 def test_repair_router_classifies_platform_api_failure() -> None:

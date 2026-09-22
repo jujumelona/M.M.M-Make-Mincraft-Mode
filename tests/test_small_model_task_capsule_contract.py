@@ -288,33 +288,37 @@ def test_fresh_host_reserved_java_target_separates_write_and_api_evidence_author
         compile_backed_java=True,
     ) is False
 
-    assert tool_loop._requires_rag_evidence(
+    assert tool_loop.initial_evidence_required(
         role="coder",
         host_grounded=False,
         router_requires_fresh_evidence=False,
         implementation_requires_mutation=True,
-        initial_execution_authority=True,
+        host_target_execution_authority=True,
+        compile_backed_java=True,
     ) is False
-    assert tool_loop._requires_rag_evidence(
+    assert tool_loop.initial_evidence_required(
         role="coder",
         host_grounded=False,
         router_requires_fresh_evidence=True,
         implementation_requires_mutation=True,
-        initial_execution_authority=True,
-    ) is True
-    assert tool_loop._requires_rag_evidence(
+        host_target_execution_authority=True,
+        compile_backed_java=True,
+    ) is False
+    assert tool_loop.initial_evidence_required(
         role="coder",
         host_grounded=False,
         router_requires_fresh_evidence=False,
         implementation_requires_mutation=True,
-        initial_execution_authority=False,
+        host_target_execution_authority=False,
+        compile_backed_java=True,
     ) is True
-    assert tool_loop._requires_rag_evidence(
+    assert tool_loop.initial_evidence_required(
         role="coder",
         host_grounded=False,
         router_requires_fresh_evidence=True,
         implementation_requires_mutation=False,
-        initial_execution_authority=False,
+        host_target_execution_authority=False,
+        compile_backed_java=False,
     ) is True
 
 
