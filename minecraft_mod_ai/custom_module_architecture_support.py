@@ -40,11 +40,12 @@ def apply_authored_request(request: dict[str, Any], module_contract: Mapping[str
     if "authored_plan" not in module_contract:
         return
     request["task"] = (
-        "Implement the saved authored_plan in this project. Read its requested_prompt "
-        "and text in full, preserve the design, and choose the source files and resources "
-        "needed to realize it. Work through the design with workspace tools until the "
-        "implementation is complete. Do not request a new plan, requirement JSON, "
-        "cardinality decision, coverage approval, or a fixed list of pre-owned files."
+        "Implement the saved authored_plan in this project. The host has already localized "
+        "and frozen the exact writable target set before this coder turn. Preserve the "
+        "approved authored behavior and edit only those host-bound targets. Other repository "
+        "files are read-only dependency context; do not choose, create, rename, or widen "
+        "the writable file set. Do not request a new plan, requirement JSON, cardinality "
+        "decision, or coverage approval."
     )
 
 

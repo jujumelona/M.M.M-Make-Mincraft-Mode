@@ -896,6 +896,19 @@ def task_capsule_generation_scope(func: Any) -> Any:
     @wraps(func)
     def generate(self: Any, *args: Any, **kwargs: Any):
         module = kwargs.get("module")
+        from .authored_existing_localization import (
+            localize_existing_authored_module,
+            needs_authored_existing_localization,
+        )
+        if needs_authored_existing_localization(module):
+            project_root = args[0] if args else kwargs.get("project_root")
+            if project_root is None:
+                raise TaskCapsuleContractError(
+                    "AUTHORED_LOCALIZATION_PROJECT_REQUIRED: generation has no project root."
+                )
+            module = localize_existing_authored_module(self.router, project_root, module)
+            kwargs = dict(kwargs)
+            kwargs["module"] = module
         capsule: TaskCapsule | None = None
         try:
             capsule = compile_task_capsule(module)
@@ -1036,6 +1049,9 @@ def task_local_module_contract_owner(func: Any) -> Any:
 
     @wraps(func)
     def task_local_module_contract(module: Any) -> dict[str, Any]:
+        config = getattr(module, "config", None)
+        if isinstance(config, Mapping) and isinstance(config.get("authored_plan"), Mapping):
+            return func(module)
         if _evidence_task(module) is None:
             return func(module)
         return compact_task_local_module_contract(module)

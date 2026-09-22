@@ -330,6 +330,25 @@ def test_real_orchestrator_accepts_authored_handoff(monkeypatch, tmp_path):
         )
 
 
+def test_existing_authored_plan_requires_localize_freeze_before_coder():
+    plan = AuthoredPlan(
+        "Modify the existing space mod",
+        "# Economy\nPreserve trading and add ship upgrades.\n",
+        existing_input_sha256="a" * 64,
+    )
+    proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(plan)
+    assert len(proposal.modules) == 1
+    module = proposal.modules[0]
+    assert module.module_id == "authored_design"
+    assert module.config["authored_localization_required"] is True
+    assert "evidence_task" not in module.config
+    assert module.required_gates == ("target_compile", "project build")
+    manifest = proposal.game_design["_authored_execution_manifest"]
+    assert manifest["policy"] == "host_localize_freeze_exact_targets_before_coder"
+    assert manifest["units"][0]["module_id"] == "authored_design"
+    assert manifest["units"][0]["end_byte"] == len(plan.text.encode("utf-8"))
+
+
 def test_materialize_authored_scaffold_is_noop_without_game_design(tmp_path) -> None:
     from types import SimpleNamespace
 

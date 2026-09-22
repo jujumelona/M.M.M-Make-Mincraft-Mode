@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-"""Fail-closed write-scope enforcement for evidence-owned and authored-design tasks.
+"""Fail-closed exact write-scope enforcement for small-model generation.
 
-Planning owns exact target files for evidence-backed production tasks. Saved authored
-designs instead receive a host-owned bounded-root authority. This existing generation
-wrapper owns the request-scoped authority lifetime so downstream tool and staged-patch
-guards consume one canonical value without adding another runtime monkeypatch layer.
+Every editor turn must enter with an exact host-owned target set. Existing-project saved
+designs are localized by a separate read-only role before this boundary; an unlocalized
+authored module is rejected rather than receiving repository-root mutation authority.
 """
 
 import threading

@@ -769,8 +769,12 @@ def build_authored_design_coverage_receipt(
 
     if manifest.get("schema_version") != "mmm/authored-execution-manifest-v2":
         findings.append("authored execution manifest is missing or has an unsupported schema")
-    if manifest.get("policy") != "host_exact_task_queue_no_coder_file_planning":
-        findings.append("authored execution manifest policy is not the host exact-task policy")
+    authored_policy = str(manifest.get("policy") or "")
+    if authored_policy not in {
+        "host_exact_task_queue_no_coder_file_planning",
+        "host_localize_freeze_exact_targets_before_coder",
+    }:
+        findings.append("authored execution manifest policy is not a host-owned task policy")
     if manifest.get("source_text_sha256") != source_text_sha256:
         findings.append("authored execution manifest does not bind the approved design text")
     if manifest.get("source_bytes") != len(text_bytes):

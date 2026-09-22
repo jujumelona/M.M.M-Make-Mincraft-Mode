@@ -135,8 +135,11 @@ def _authority_host_payload(authority: DirectTaskMutationAuthority) -> dict[str,
 def _special_authority(module: Any) -> tuple[bool, DirectTaskMutationAuthority | None]:
     if module is None:
         return True, None
-    if _is_authored_design(module):
-        return True, _compile_authored_authority(module)
+    if _is_authored_design(module) and _module_evidence_task(module) is None:
+        raise DirectTaskMutationAuthorityError(
+            "AUTHORED_LOCALIZATION_REQUIRED: saved authored work must be localized "
+            "and frozen to an exact evidence_task before mutation authority is compiled."
+        )
     return False, None
 
 

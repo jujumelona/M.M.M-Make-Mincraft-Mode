@@ -316,6 +316,33 @@ def _compile_new_authored_modules(
     return tuple(modules), manifest
 
 
+def _compile_existing_authored_manifest(plan: AuthoredPlan) -> dict[str, Any]:
+    raw = plan.text.encode("utf-8")
+    source_sha = "sha256:" + hashlib.sha256(raw).hexdigest()
+    manifest: dict[str, Any] = {
+        "schema_version": _AUTHORED_EXECUTION_SCHEMA,
+        "source_text_sha256": source_sha,
+        "source_bytes": len(raw),
+        "unit_count": 1,
+        "policy": "host_localize_freeze_exact_targets_before_coder",
+        "units": [{
+            "module_id": "authored_design",
+            "start_byte": 0,
+            "end_byte": len(raw),
+            "text_sha256": source_sha,
+            "section": "existing_project_authored_design",
+        }],
+        "entrypoint": {
+            "owner": "existing_project",
+            "path": "",
+            "symbol": "",
+            "feature_symbols": [],
+        },
+    }
+    manifest["manifest_sha256"] = _sha256_json(manifest)
+    return manifest
+
+
 def materialize_authored_execution_scaffold(
     proposal: CompleteProposal,
     project_root: Any,
@@ -542,17 +569,18 @@ def compile_authored_design(
         )
         design = {**design, "_authored_execution_manifest": manifest}
     else:
-        # Existing projects require live workspace localization before exact paths can be
-        # compiled. Retain the legacy bounded route only for that distinct input shape.
+        manifest = _compile_existing_authored_manifest(plan)
+        design = {**design, "_authored_execution_manifest": manifest}
         modules = (ProductionModule(
             module_id="authored_design",
             kind="custom_java",
             config={
                 "implementation": "custom",
                 "authored_plan": plan.to_dict(),
+                "authored_localization_required": True,
                 **target,
             },
-            required_gates=("project build",),
+            required_gates=("target_compile", "project build"),
         ),)
 
     return complete_proposal_from_parts(
