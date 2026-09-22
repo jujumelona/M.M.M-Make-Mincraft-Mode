@@ -76,7 +76,10 @@ def _post_completion_with_transport_replay(
 ) -> Any:
     """Replay one incomplete transport turn; no completed model response is reused."""
 
-    errors = _transient_completion_transport_errors(httpx_module)
+    errors = (
+        *_transient_completion_transport_errors(httpx_module),
+        LlamaSemanticProgressTimeout,
+    )
 
     def issue(active_request_id: str) -> Any:
         return client.post(
