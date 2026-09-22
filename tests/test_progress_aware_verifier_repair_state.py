@@ -13,6 +13,7 @@ from minecraft_mod_ai.progress_aware_tool_loop import (
     _repair_source_window,
     _rollback_non_improving_verifier_repair,
 )
+from minecraft_mod_ai import generation_compile_recovery
 
 PATH = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
 
@@ -912,3 +913,92 @@ def test_byte_identical_verifier_repair_is_rejected_before_runtime():
     assert call.name == "__mmm_rejected_tool_call__"
     assert call.arguments["failure_code"] == "REPAIR_ATOMIC_NOOP"
     assert "byte-identical" in call.arguments["error"]
+
+
+def test_failed_java_candidate_does_not_define_trusted_semantic_footprint():
+    baseline = (
+        "package dev.mmm.debugfixture;\n"
+        "public class DebugToken {\n"
+        "    public static void initialize() { /* host scaffold */ }\n"
+        "}\n"
+    )
+    failed = (
+        "package dev.mmm.debugfixture;\n"
+        "import net.minecraft.registry.Registry;\n"
+        "public class DebugToken {\n"
+        "    private static Block FEATURE_BLOCK = null;\n"
+        "    public static void initialize() { Registry.register(null, null, FEATURE_BLOCK); }\n"
+        "}\n"
+    )
+    state = HostRunState(
+        trusted_materialized_baseline=(PATH, baseline, False),
+        mutation_context=TargetMutationContext(
+            target_path=PATH,
+            target_symbol="DebugToken",
+            source_body=failed,
+            is_new_file=False,
+            evidence_source="verifier_workspace_source",
+            writable_paths=(PATH,),
+            target_pinned=True,
+        ),
+    )
+    error = _mutation_target_error(
+        "apply_source_edit",
+        {
+            "operation": "replace_exact",
+            "path": PATH,
+            "old": "    private static Block FEATURE_BLOCK = null;\n",
+            "new": "",
+            "count": 1,
+        },
+        state.mutation_context,
+        state=state,
+    )
+    assert error is None
+
+
+def test_official_api_first_attempt_rebases_once_to_trusted_scaffold():
+    baseline = (
+        "package dev.mmm.debugfixture; "
+        "public class DebugToken { public static void initialize() {} }"
+    )
+    failed = (
+        "package dev.mmm.debugfixture; import net.minecraft.registry.Registry; "
+        "public class DebugToken { static Registry value; "
+        "public static void initialize() {} }"
+    )
+    state = HostRunState(
+        validation_status="FAIL",
+        repair_evidence_route="official_api",
+        workspace_changed=True,
+        latest_verifier_errors=(
+            {"message": "package net.minecraft.registry does not exist"},
+        ),
+        trusted_materialized_baseline=(PATH, baseline, False),
+        mutation_context=TargetMutationContext(
+            target_path=PATH,
+            source_body=failed,
+            is_new_file=False,
+            evidence_source="mutation_receipt",
+            writable_paths=(PATH,),
+            target_pinned=True,
+        ),
+    )
+    calls = []
+
+    class Runtime:
+        def call(self, stage, name, arguments):
+            calls.append((stage, name, dict(arguments)))
+            return {"status": "APPLIED", "operations": [{"path": PATH}]}
+
+    assert generation_compile_recovery.rebase_invalid_api_candidate(
+        state, Runtime(), stage="generation", fresh_java_target=True
+    )
+    assert calls[0][2]["old"] == failed
+    assert calls[0][2]["new"] == baseline
+    assert state.validation_status == "PENDING"
+    assert state.workspace_changed is False
+    assert state.mutation_context.source_body == baseline
+    assert not generation_compile_recovery.rebase_invalid_api_candidate(
+        state, Runtime(), stage="generation", fresh_java_target=True
+    )

@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-"""Host-owned coder execution state machine.
-
-Owns target lifecycle, mutation, verification, progress, and convergence. Evidence
-obligation/routing is delegated to :mod:`generation_evidence_controller`; the loop
-executes one host-selected route and advances only from observed state changes.
-"""
+"""Host-owned coder state machine; evidence policy lives in generation_evidence_controller."""
 
 import hashlib
 import json
@@ -23,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .agent_intent import implementation_requested
+from . import generation_compile_recovery as _compile_recovery
 from .generation_evidence_controller import (
     authoritative_java_evidence as _authoritative_java_evidence,
     evidence_obligation_satisfied,
@@ -1163,6 +1159,7 @@ def _reconcile_materialized_target_from_workspace(
             or _canonical_mutation_path(current.target_path) != target
         ):
             return None
+        _compile_recovery.capture_baseline(state, target, source)
         reconciled = replace(
             current,
             source_body=source,
@@ -1522,6 +1519,8 @@ def _mutation_target_error(
     tool_name: str,
     arguments: Mapping[str, Any],
     context: TargetMutationContext | None,
+    *,
+    state: Any = None,
 ) -> str | None:
     if tool_name != "apply_source_edit":
         return None
@@ -1596,6 +1595,7 @@ def _mutation_target_error(
         new_text=arguments.get("new"),
         identity_check=_java_source_identity_error,
         footprint_check=_java_semantic_footprint_error,
+        semantic_baseline_source=_compile_recovery.trusted_baseline(state, context),
     )
     if semantic_error is not None:
         return semantic_error
@@ -2321,6 +2321,7 @@ class HostRunState:
     repair_previous_path: str | None = None
     last_verifier_quality: str | None = None
     repair_evidence_route: str | None = None
+    trusted_materialized_baseline: tuple[str, str, bool] | None = None
     last_failure_reason: str | None = None
     termination_reason: str | None = None
     trajectory: list[ExecutionStepTrace] = field(default_factory=list)
@@ -3964,6 +3965,14 @@ def _generate_with_tools_impl(
                 state.repair_evidence_route = str(
                     repair_route.get("route") or "project_local"
                 )
+                if _compile_recovery.rebase_invalid_api_candidate(
+                    state,
+                    runtime,
+                    stage=stage,
+                    fresh_java_target=fresh_java_target,
+                ):
+                    state.phase = LoopPhase.RECOVER
+                    continue
                 if state.last_verifier_quality in {"NON_IMPROVING", "UNCHANGED"}:
                     _rollback_non_improving_verifier_repair(
                         state,
@@ -4596,6 +4605,7 @@ def _generate_with_tools_impl(
                 call.name,
                 call.arguments,
                 state.mutation_context,
+                state=state,
             )
             if (
                 semantic_target_error
@@ -4675,7 +4685,7 @@ def _generate_with_tools_impl(
                 }
 
             target_error = _mutation_target_error(
-                call.name, call.arguments, state.mutation_context
+                call.name, call.arguments, state.mutation_context, state=state
             )
             if target_error:
                 failure_code = target_error.partition(":")[0]

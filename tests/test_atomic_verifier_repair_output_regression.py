@@ -158,3 +158,39 @@ def test_schema_rejected_unrelated_non_import_rewrite_remains_rejected():
         context=context,
         repair_window={"old": old_text},
     ) is None
+
+
+def test_schema_rejected_repair_survives_recovery_evidence_source_rebinding():
+    old = "    private static Block FEATURE_BLOCK = null;\n"
+    source = (
+        "package demo;\n"
+        "public class Demo {\n"
+        + old
+        + "    public static void initialize() {}\n"
+        "}\n"
+    )
+    corrected = source.replace(old, "")
+    rejected = ToolCall(
+        id="call-rejected-rag",
+        name="__mmm_rejected_tool_call__",
+        arguments={
+            "failure_code": "TOOL_SCHEMA_INVALID",
+            "original_tool": "apply_source_edit",
+            "raw_arguments": json.dumps({"new": corrected}),
+            "error": "new is longer than the projected repair schema",
+        },
+    )
+    context = SimpleNamespace(
+        source_body=source,
+        is_new_file=False,
+        evidence_source="search_code_rag",
+    )
+    recovered = recover_schema_rejected_verifier_repair_calls(
+        (rejected,),
+        phase="ACT",
+        validation_status="FAIL",
+        context=context,
+        repair_window={"old": old},
+    )
+    assert recovered is not None
+    assert recovered[0].arguments == {"new": ""}

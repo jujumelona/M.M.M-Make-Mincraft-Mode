@@ -21,6 +21,7 @@ def existing_source_repair_semantic_error(
     new_text: Any,
     identity_check: SemanticCheck,
     footprint_check: SemanticCheck,
+    semantic_baseline_source: Any = None,
 ) -> str | None:
     if operation != "replace_exact" or supplied != pinned or is_new_file:
         return None
@@ -33,10 +34,15 @@ def existing_source_repair_semantic_error(
     ):
         return None
     candidate_source = current_source.replace(old_text, new_text, 1)
-    identity_error = identity_check(pinned, current_source, candidate_source)
+    semantic_baseline = (
+        semantic_baseline_source
+        if isinstance(semantic_baseline_source, str) and semantic_baseline_source
+        else current_source
+    )
+    identity_error = identity_check(pinned, semantic_baseline, candidate_source)
     if identity_error is not None:
         return identity_error
-    return footprint_check(pinned, current_source, candidate_source)
+    return footprint_check(pinned, semantic_baseline, candidate_source)
 
 
 _IMPORT_LINE_RE = re.compile(r"^\s*import\s+(?:static\s+)?[\w.*]+;\s*$")

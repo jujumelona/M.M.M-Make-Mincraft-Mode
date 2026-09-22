@@ -161,7 +161,7 @@ def recover_schema_rejected_verifier_repair_calls(
         or len(calls) != 1
         or context is None
         or getattr(context, "is_new_file", False)
-        or str(getattr(context, "evidence_source", "") or "") != "verifier_workspace_source"
+        or not isinstance(getattr(context, "source_body", None), str)
         or not repair_window
     ):
         return None
