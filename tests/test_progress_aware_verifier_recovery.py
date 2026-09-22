@@ -228,62 +228,70 @@ def test_phase_handoff_replaces_previous_snapshot_instead_of_accumulating() -> N
     assert "Now.java" in handoffs[0]["content"]
 
 
-def test_api_namespace_compile_errors_require_recovery_evidence() -> None:
-    assert loop._diagnostics_require_api_evidence((
-        {
-            "message": (
-                "package net.minecraft.registry does not exist\n"
-                "import net.minecraft.registry.Registry;"
-            )
-        },
-    ))
-    assert not loop._diagnostics_require_api_evidence((
-        {"message": "cannot find symbol\nsymbol: variable localCounter"},
-    ))
 
-
-def test_rejected_alternate_evidence_query_maps_to_single_forced_route() -> None:
-    search_code = {
-        "type": "function",
-        "function": {
-            "name": "search_code_rag",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"},
-                    "limit": {"type": "integer"},
-                    "index_path": {"type": "string"},
-                },
-                "required": ["query"],
-            },
-        },
-    }
-    recovered = loop._forced_evidence_recovery_arguments(
-        (search_code,),
-        "search_code_rag",
+def test_verifier_api_failure_uses_shared_repair_evidence_router() -> None:
+    route = loop.repair_evidence_route_for_errors(
         (
             {
-                "failure_code": "TOOL_NOT_VISIBLE",
-                "original_tool": "search_project_rag",
-                "raw_arguments": (
-                    '{"query":"AuthoredFeature011 current implementation",'
-                    '"minecraft_version":26.2,"limit":8}'
+                "message": (
+                    "package net.minecraft.registry does not exist\n"
+                    "import net.minecraft.registry.Registry;"
+                )
+            },
+        )
+    )
+    assert route["route"] == "official_api"
+    assert route["small_model_policy"]["retrieval_owner"] == "host"
+
+
+def test_local_symbol_failure_stays_project_local_with_exact_source_context() -> None:
+    source = "package demo; public final class Foo { void run() { localCounter++; } }"
+    route = loop.repair_evidence_route_for_errors(
+        (
+            {
+                "path": "src/main/java/demo/Foo.java",
+                "message": (
+                    "cannot find symbol\n"
+                    "symbol: variable localCounter\n"
+                    "location: class Foo"
                 ),
             },
         ),
+        local_source=source,
+        target_path="src/main/java/demo/Foo.java",
     )
-    assert recovered == {
-        "query": "AuthoredFeature011 current implementation",
-        "limit": 8,
-    }
+    assert route["route"] == "project_local"
 
 
-def test_compile_backed_api_failure_routes_recover_before_edit() -> None:
-    source = inspect.getsource(loop._generate_with_tools_impl)
-    marker = 'current_compile_errors = tuple(state.latest_verifier_errors)'
-    assert marker in source
-    branch = source.split(marker, 1)[1].split(
-        'state.validation_status = "DEFERRED"', 1
-    )[0]
-    assert "_diagnostics_require_api_evidence" in branch
-    assert "LoopPhase.RECOVER" in branch
+def test_recover_frontier_is_host_selected_one_route_at_a_time() -> None:
+    state = loop.HostRunState(
+        phase=loop.LoopPhase.RECOVER,
+        repair_evidence_route="official_api",
+        mutation_context=loop.TargetMutationContext(
+            target_path="src/main/java/dev/mmm/Foo.java",
+            source_body="package dev.mmm; public final class Foo {}",
+            writable_paths=("src/main/java/dev/mmm/Foo.java",),
+            target_pinned=True,
+        ),
+    )
+    selected = loop._filter_tools_for_phase(
+        (
+            _schema("search_code_rag"),
+            _schema("search_project_rag"),
+            _schema("java_workspace_symbols"),
+            _schema("external_mcp_capabilities"),
+        ),
+        loop.LoopPhase.RECOVER,
+        "coder",
+        mutation_context=state.mutation_context,
+        attempted_sources=state.attempted_sources,
+        repair_evidence_route=state.repair_evidence_route,
+    )
+    assert [item["function"]["name"] for item in selected] == ["search_project_rag"]
+
+
+def test_progress_loop_does_not_duplicate_evidence_or_repair_policy() -> None:
+    source = inspect.getsource(loop)
+    assert "_API_EVIDENCE_DIAGNOSTIC_MARKERS" not in source
+    assert "repair_requires_api_evidence" not in source
+    assert "_consume_rejected_evidence_fixed_point" not in source

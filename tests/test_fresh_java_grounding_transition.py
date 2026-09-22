@@ -62,7 +62,6 @@ def test_fresh_java_after_weak_code_rag_stays_on_internal_workspace_routes():
     )
     assert [schema["function"]["name"] for schema in selected] == [
         "java_workspace_symbols",
-        "search_project_rag",
     ]
 
 
@@ -160,3 +159,30 @@ def test_target_neutral_project_rag_cannot_unlock_fresh_java():
     }
     assert state.record_evidence(evidence, usable=True) is True
     assert state.has_authoritative_java_evidence is False
+
+
+def test_materialized_scaffold_with_fresh_semantics_uses_fresh_frontier() -> None:
+    context = loop.TargetMutationContext(
+        target_path="src/main/java/dev/mmm/debugfixture/DebugToken.java",
+        target_symbol="DebugToken",
+        source_body="package dev.mmm.debugfixture; public final class DebugToken {}",
+        is_new_file=False,
+        evidence_source="workspace_existing_target",
+        writable_paths=("src/main/java/dev/mmm/debugfixture/DebugToken.java",),
+        target_pinned=True,
+    )
+    selected = loop._filter_tools_for_phase(
+        (
+            _tool("search_project_rag"),
+            _tool("java_workspace_symbols"),
+            _tool("search_code_rag"),
+        ),
+        loop.LoopPhase.OBSERVE,
+        "coder",
+        mutation_context=context,
+        attempted_sources=frozenset(),
+        localization_active=True,
+        semantic_retrieval_choice=True,
+        semantic_fresh_java_target=True,
+    )
+    assert [schema["function"]["name"] for schema in selected] == ["search_code_rag"]
