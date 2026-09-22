@@ -2,12 +2,9 @@ from __future__ import annotations
 
 """Host-owned coder execution state machine.
 
-This module owns target lifecycle, source mutation, verifier execution, tool-result
-progress, and convergence. Evidence obligation/routing policy is intentionally delegated
-to :mod:`generation_evidence_controller`, while verifier failure classification is
-delegated through that controller to the canonical repair-evidence router. This keeps
-policy decisions out of the transition loop: the loop executes one host-selected route,
-records what actually happened, and advances only from observed state changes.
+Owns target lifecycle, mutation, verification, progress, and convergence. Evidence
+obligation/routing is delegated to :mod:`generation_evidence_controller`; the loop
+executes one host-selected route and advances only from observed state changes.
 """
 
 import hashlib
