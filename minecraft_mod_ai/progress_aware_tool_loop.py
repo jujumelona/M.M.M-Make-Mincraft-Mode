@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-"""Single host-owned coder execution state machine.
+"""Host-owned coder execution state machine.
 
-This module deliberately owns target localization, source mutation, verifier repair,
-retrieval progress, and convergence in one place. Repair convergence is verifier-measured end-to-end, monotonic, post-verify, and fail-closed,
-never inferred from mutation occurrence alone. Runtime bootstrap must not monkey-patch
-these boundaries from separate contract modules.
+This module owns target lifecycle, source mutation, verifier execution, tool-result
+progress, and convergence. Evidence obligation/routing policy is intentionally delegated
+to :mod:`generation_evidence_controller`, while verifier failure classification is
+delegated through that controller to the canonical repair-evidence router. This keeps
+policy decisions out of the transition loop: the loop executes one host-selected route,
+records what actually happened, and advances only from observed state changes.
 """
 
 import hashlib
