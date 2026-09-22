@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from jsonschema import Draft202012Validator
 
+from minecraft_mod_ai import generation_evidence_controller as evidence_controller
 from minecraft_mod_ai import progress_aware_tool_loop as tool_loop
+from minecraft_mod_ai.model_adapters import ToolCall
 from minecraft_mod_ai.agent_tool_runtime import AgentToolRuntime
 from minecraft_mod_ai.external_agent_bridge import ExternalAgentBridge
 
@@ -84,74 +86,71 @@ def test_generation_external_mcp_call_uses_project_platform_lock(
     }
 
 
-def test_repeated_rejected_evidence_route_advances_frontier() -> None:
-    state = tool_loop.HostRunState(phase=tool_loop.LoopPhase.OBSERVE)
-    state.semantic_fixed_point = True
-    state.no_progress_streak = 1
-    state.seen_no_progress_digests.add("same-state")
 
-    routes = tool_loop._consume_rejected_evidence_fixed_point(
-        state,
-        (
-            {
-                "failure_code": "TOOL_SCHEMA_INVALID",
-                "original_tool": "external_mcp_capabilities",
+def _internal_schema(name: str) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer"},
+                },
+                "required": ["query"],
             },
-        ),
-        {"external_mcp_capabilities"},
+        },
+    }
+
+
+def test_reviewed_alternate_retriever_is_host_normalized_without_consuming_route() -> None:
+    state = tool_loop.HostRunState(phase=tool_loop.LoopPhase.OBSERVE)
+    rejected = ToolCall(
+        id="rejected-1",
+        name="__mmm_rejected_tool_call__",
+        arguments={
+            "failure_code": "TOOL_NOT_VISIBLE",
+            "original_tool": "search_project_rag",
+            "raw_arguments": '{"query":"block registration 26.2","limit":8}',
+        },
+        raw_arguments="{}",
     )
 
-    assert routes == ("external_mcp_capabilities",)
-    assert "external_mcp_capabilities" in state.attempted_sources
-    assert state.semantic_fixed_point is False
-    assert state.no_progress_streak == 0
+    normalized = evidence_controller.normalize_forced_evidence_rejection_calls(
+        (rejected,),
+        phase_tools=(_internal_schema("search_code_rag"),),
+        forced_evidence_tool="search_code_rag",
+    )
+
+    assert normalized is not None
+    assert normalized[0].name == "search_code_rag"
+    assert normalized[0].arguments == {
+        "query": "block registration 26.2",
+        "limit": 8,
+    }
+    assert state.attempted_sources == set()
 
 
-def test_repeated_nonvisible_tool_consumes_forced_reviewed_route() -> None:
+def test_nonreviewed_invisible_tool_cannot_consume_forced_evidence_route() -> None:
     state = tool_loop.HostRunState(phase=tool_loop.LoopPhase.OBSERVE)
-    state.semantic_fixed_point = True
-    state.no_progress_streak = 1
-    state.seen_no_progress_digests.add("same-rejection")
+    rejected = ToolCall(
+        id="rejected-2",
+        name="__mmm_rejected_tool_call__",
+        arguments={
+            "failure_code": "TOOL_NOT_VISIBLE",
+            "original_tool": "java_file_read",
+            "raw_arguments": '{"query":"Foo"}',
+        },
+        raw_arguments="{}",
+    )
 
-    routes = tool_loop._consume_rejected_evidence_fixed_point(
-        state,
-        (
-            {
-                "failure_code": "TOOL_NOT_VISIBLE",
-                "original_tool": "java_file_read",
-                "error": "model emitted non-visible tool 'java_file_read'",
-            },
-        ),
-        {"search_project_rag"},
+    normalized = evidence_controller.normalize_forced_evidence_rejection_calls(
+        (rejected,),
+        phase_tools=(_internal_schema("search_project_rag"),),
         forced_evidence_tool="search_project_rag",
     )
 
-    assert routes == ("search_project_rag",)
-    assert "search_project_rag" in state.attempted_sources
-    assert "java_file_read" not in state.attempted_sources
-    assert state.semantic_fixed_point is False
-    assert state.no_progress_streak == 0
-
-
-def test_rejected_forced_external_route_consumes_only_selected_capability() -> None:
-    state = tool_loop.HostRunState(phase=tool_loop.LoopPhase.OBSERVE)
-    state.semantic_fixed_point = True
-    state.no_progress_streak = 1
-    state.seen_no_progress_digests.add("same-external-rejection")
-
-    routes = tool_loop._consume_rejected_evidence_fixed_point(
-        state,
-        (
-            {
-                "failure_code": "TOOL_SCHEMA_INVALID",
-                "original_tool": "external_mcp_schema",
-            },
-        ),
-        {"external_mcp_schema"},
-        forced_evidence_tool="external_mcp_schema",
-        forced_evidence_arguments={"capability": "source_search"},
-    )
-
-    assert routes == ("external_mcp_schema",)
-    assert "external_mcp_schema:source_search" in state.attempted_sources
-    assert "external_mcp_schema:official_mod_docs" not in state.attempted_sources
+    assert normalized is None
+    assert state.attempted_sources == set()
+    assert not hasattr(tool_loop, "_consume_rejected_evidence_fixed_point")
