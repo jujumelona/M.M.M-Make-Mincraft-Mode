@@ -589,6 +589,75 @@ class GradleRunner:
         env: dict[str, str],
         log_path: Path,
     ) -> CommandResult:
+        """Run Gradle after one run-scoped shared-user-home bootstrap succeeds.
+
+        Independent generated projects intentionally share GRADLE_USER_HOME so later
+        target compiles can reuse Loom/Minecraft dependencies. Gradle does not protect
+        Loom's first-time client/server JAR downloads from independent processes using
+        that same user home, so concurrent cold starts can observe each other's partial
+        files. Serialize only the first successful Gradle invocation for this run cache;
+        after the ready marker is atomically published, normal project parallelism is
+        restored.
+        """
+
+        marker = self.cache_dir / ".minecraft-mod-ai-gradle-user-home-bootstrap-v1.ready"
+        if marker.is_file():
+            return self._run_unlocked(
+                name=name,
+                executable=executable,
+                arguments=arguments,
+                cwd=cwd,
+                env=env,
+                log_path=log_path,
+            )
+
+        with _exclusive_cache_lock(
+            self.cache_dir,
+            timeout_seconds=max(
+                360,
+                min(self.command_timeout_seconds + 60, 1260),
+            ),
+        ):
+            # A concurrent project may have completed the cold-cache bootstrap while
+            # this process was waiting. Do not serialize its real compile afterwards.
+            if marker.is_file():
+                return self._run_unlocked(
+                    name=name,
+                    executable=executable,
+                    arguments=arguments,
+                    cwd=cwd,
+                    env=env,
+                    log_path=log_path,
+                )
+            result = self._run_unlocked(
+                name=name,
+                executable=executable,
+                arguments=arguments,
+                cwd=cwd,
+                env=env,
+                log_path=log_path,
+            )
+            if result.exit_code == 0 and not result.timed_out:
+                temporary = marker.with_name(
+                    f"{marker.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+                )
+                try:
+                    temporary.write_text("v1\n", encoding="ascii")
+                    temporary.replace(marker)
+                finally:
+                    temporary.unlink(missing_ok=True)
+            return result
+
+    def _run_unlocked(
+        self,
+        *,
+        name: str,
+        executable: Path,
+        arguments: tuple[str, ...],
+        cwd: Path,
+        env: dict[str, str],
+        log_path: Path,
+    ) -> CommandResult:
         from .agent_tool_runtime import _sanitize_observation
         from .root_cause_trace import emit_root_cause
 
