@@ -88,6 +88,56 @@ def _build_matches_contract(build_text: str, *, test_mod_id: str) -> bool:
     return not any(fragment not in build_text for fragment in required)
 
 
+def _contract_identity(
+    main_mod_id: str,
+    values: dict[str, str],
+) -> tuple[str, str] | None:
+    if not main_mod_id:
+        return None
+    fixed = {
+        "task": "runGameTest",
+        "report": "build/gametest-report.xml",
+        "metadata": "src/gametest/resources/fabric.mod.json",
+        "mod_id": f"{main_mod_id}_gametest",
+    }
+    if any(values[key] != expected for key, expected in fixed.items()):
+        return None
+    entrypoint = values["entrypoint"]
+    if "." not in entrypoint:
+        return None
+    package_name, class_name = entrypoint.rsplit(".", 1)
+    expected_source = (
+        "src/gametest/java/"
+        + package_name.replace(".", "/")
+        + f"/{class_name}.java"
+    )
+    return (package_name, class_name) if values["source"] == expected_source else None
+
+
+def _live_contract_snapshot(
+    root: Path,
+    values: dict[str, str],
+    *,
+    safe_regular_file: SafeRegularFile,
+) -> tuple[str, str, dict[str, Any]] | None:
+    source = safe_regular_file(root, root / values["source"])
+    metadata_file = safe_regular_file(root, root / values["metadata"])
+    build = safe_regular_file(root, root / "build.gradle")
+    if source is None or metadata_file is None or build is None:
+        return None
+    try:
+        source_text = source.read_text(encoding="utf-8", errors="strict")
+        build_text = build.read_text(encoding="utf-8", errors="strict")
+        metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    return (
+        (source_text, build_text, metadata)
+        if isinstance(metadata, dict)
+        else None
+    )
+
+
 def validate_host_gametest_contract(
     root: Path,
     payload: dict[str, Any],
@@ -102,38 +152,19 @@ def validate_host_gametest_contract(
         return None
     main_mod_id = str(main_metadata.get("id") or "").strip()
     values = _contract_fields(contract)
-    if (
-        not main_mod_id
-        or values["task"] != "runGameTest"
-        or values["report"] != "build/gametest-report.xml"
-        or values["mod_id"] != f"{main_mod_id}_gametest"
-        or values["metadata"] != "src/gametest/resources/fabric.mod.json"
-        or "." not in values["entrypoint"]
-    ):
+    identity = _contract_identity(main_mod_id, values)
+    if identity is None:
         return None
+    _package_name, class_name = identity
 
-    package_name, class_name = values["entrypoint"].rsplit(".", 1)
-    expected_source = (
-        "src/gametest/java/"
-        + package_name.replace(".", "/")
-        + f"/{class_name}.java"
+    snapshot = _live_contract_snapshot(
+        root,
+        values,
+        safe_regular_file=safe_regular_file,
     )
-    if values["source"] != expected_source:
+    if snapshot is None:
         return None
-
-    source = safe_regular_file(root, root / values["source"])
-    metadata_file = safe_regular_file(root, root / values["metadata"])
-    build = safe_regular_file(root, root / "build.gradle")
-    if source is None or metadata_file is None or build is None:
-        return None
-    try:
-        source_text = source.read_text(encoding="utf-8", errors="strict")
-        build_text = build.read_text(encoding="utf-8", errors="strict")
-        test_metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return None
-    if not isinstance(test_metadata, dict):
-        return None
+    source_text, build_text, test_metadata = snapshot
     if not _metadata_matches_contract(
         test_metadata,
         main_mod_id=main_mod_id,
@@ -148,12 +179,10 @@ def validate_host_gametest_contract(
         return None
     if not _build_matches_contract(build_text, test_mod_id=values["mod_id"]):
         return None
-
     return {
         **values,
         "testcase": f"{class_name}.generatedRegistriesAreLive",
     }
-
 
 def derived_host_gametest_contract(
     root: Path,
