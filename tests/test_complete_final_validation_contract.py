@@ -64,8 +64,10 @@ def test_debug_fixture_prepare_binds_generated_token_into_host_runtime(
     )
     root = tmp_path / "project"
     package = root / "src/main/java/dev/mmm/debugfixture"
+    gametest_package = root / "src/gametest/java/dev/mmm/debugfixture"
     metadata = root / ".minecraft_ai"
     package.mkdir(parents=True)
+    gametest_package.mkdir(parents=True)
     metadata.mkdir(parents=True)
 
     main_source = package / "MmmDebugFixtureMod.java"
@@ -81,7 +83,7 @@ public final class MmmDebugFixtureMod {
         + "\n",
         encoding="utf-8",
     )
-    gametest_source = package / "MmmDebugFixtureModGameTests.java"
+    gametest_source = gametest_package / "MmmDebugFixtureModGameTests.java"
     gametest_source.write_text(
         """
 package dev.mmm.debugfixture;
@@ -105,7 +107,7 @@ public final class MmmDebugFixtureModGameTests {
                 },
                 "gametest_contract": {
                     "source": (
-                        "src/main/java/dev/mmm/debugfixture/"
+                        "src/gametest/java/dev/mmm/debugfixture/"
                         "MmmDebugFixtureModGameTests.java"
                     )
                 },
@@ -166,6 +168,76 @@ public final class MmmDebugFixtureModGameTests {
         )
         == 1
     )
+
+
+
+def test_debug_fixture_prepare_uses_dedicated_gametest_fallback_without_receipt(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        CompleteProductionOrchestrator,
+        "_ensure_debug_fixture_resources",
+        staticmethod(lambda _approved, _root: None),
+    )
+    root = tmp_path / "project"
+    main_package = root / "src/main/java/dev/mmm/debugfixture"
+    gametest_package = root / "src/gametest/java/dev/mmm/debugfixture"
+    main_package.mkdir(parents=True)
+    gametest_package.mkdir(parents=True)
+
+    main_source = main_package / "MmmDebugFixtureMod.java"
+    main_source.write_text(
+        "package dev.mmm.debugfixture;\n"
+        "public final class MmmDebugFixtureMod {\n"
+        "    public void onInitialize() {}\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    gametest_source = gametest_package / "MmmDebugFixtureModGameTests.java"
+    gametest_source.write_text(
+        "package dev.mmm.debugfixture;\n"
+        "public final class MmmDebugFixtureModGameTests {\n"
+        "    public void generatedRegistriesAreLive(Object context) {\n"
+        "        context.succeed();\n"
+        "    }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    module = SimpleNamespace(
+        module_id="debug_token",
+        config={
+            "observable_source_contract": {
+                "schema_version": "mmm/debug-source-contract-v1",
+                "binding_field": "DEBUG_TOKEN",
+            }
+        },
+    )
+    proposal = SimpleNamespace(
+        schema_version="mmm/complete-proposal-v1",
+        game_design={
+            "mode": "debug_fixture",
+            "fixture": {"module_id": "debug_token"},
+        },
+        modules=(module,),
+        base_proposal=SimpleNamespace(
+            spec=SimpleNamespace(
+                package_name="dev.mmm.debugfixture",
+                mod_id="mmm_debug_fixture",
+            )
+        ),
+    )
+
+    CompleteProductionOrchestrator._bind_debug_fixture_runtime(proposal, root)
+
+    assert "MMM_DEBUG_FIXTURE_RUNTIME_BINDING" in main_source.read_text(
+        encoding="utf-8"
+    )
+    assert "MMM_DEBUG_FIXTURE_REGISTRY_ASSERTION" in gametest_source.read_text(
+        encoding="utf-8"
+    )
+
 
 
 def test_final_source_validation_failure_cannot_be_marked_pass() -> None:

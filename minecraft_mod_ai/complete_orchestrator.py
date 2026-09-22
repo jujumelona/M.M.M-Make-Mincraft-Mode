@@ -3220,7 +3220,7 @@ class CompleteProductionOrchestrator:
         ) + 'Mod'
         main_relative = f'src/main/java/{package_path}/{main_class}.java'
         gametest_relative = (
-            f'src/main/java/{package_path}/{main_class}GameTests.java'
+            f'src/gametest/java/{package_path}/{main_class}GameTests.java'
         )
 
         bootstrap_receipt = root / '.minecraft_ai/fabric-template-receipt.json'
