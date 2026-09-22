@@ -26,6 +26,7 @@ from typing import Any
 from .agent_intent import implementation_requested
 from .generation_evidence_controller import (
     authoritative_java_evidence as _authoritative_java_evidence,
+    evidence_obligation_satisfied,
     initial_evidence_frontier,
     normalize_forced_evidence_rejection_calls,
     recovery_evidence_frontier,
@@ -2078,16 +2079,14 @@ def _target_evidence_ready(
     """
 
     del compile_backed_java
-    if not require_rag:
-        return True
-    strong_java_required = bool(
-        fresh_java_target
-        or getattr(state, "semantic_fresh_java", False) is True
-    )
-    return (
-        state.has_authoritative_java_evidence
-        if strong_java_required
-        else state.has_fresh_evidence
+    return evidence_obligation_satisfied(
+        require_evidence=require_rag,
+        semantic_fresh_java_target=bool(
+            fresh_java_target
+            or getattr(state, "semantic_fresh_java", False) is True
+        ),
+        has_fresh_evidence=state.has_fresh_evidence,
+        has_authoritative_java_evidence=state.has_authoritative_java_evidence,
     )
 
 def _record_evidence_locked(state: Any, value: Any, fingerprint: str) -> bool:

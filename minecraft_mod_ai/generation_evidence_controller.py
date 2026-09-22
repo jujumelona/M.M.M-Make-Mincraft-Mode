@@ -103,6 +103,22 @@ def initial_evidence_frontier(
     return _first_unexecuted(available, attempted, preferred)
 
 
+def evidence_obligation_satisfied(
+    *,
+    require_evidence: bool,
+    semantic_fresh_java_target: bool,
+    has_fresh_evidence: bool,
+    has_authoritative_java_evidence: bool,
+) -> bool:
+    """Admit mutation only when the host-owned evidence obligation is satisfied."""
+
+    if not require_evidence:
+        return True
+    if semantic_fresh_java_target:
+        return bool(has_authoritative_java_evidence)
+    return bool(has_fresh_evidence)
+
+
 def verifier_diagnostic_bundle(
     errors: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
@@ -404,6 +420,7 @@ def normalize_forced_evidence_rejection_calls(
 
 __all__ = [
     "authoritative_java_evidence",
+    "evidence_obligation_satisfied",
     "initial_evidence_frontier",
     "normalize_forced_evidence_rejection_calls",
     "recovery_evidence_frontier",

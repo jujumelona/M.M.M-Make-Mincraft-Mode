@@ -126,3 +126,30 @@ def test_current_target_placeholder_cannot_self_authorize_fresh_java() -> None:
         ],
     }
     assert not controller.authoritative_java_evidence(value, target_path=target)
+
+
+def test_evidence_obligation_admission_is_controller_owned() -> None:
+    assert controller.evidence_obligation_satisfied(
+        require_evidence=False,
+        semantic_fresh_java_target=True,
+        has_fresh_evidence=False,
+        has_authoritative_java_evidence=False,
+    )
+    assert not controller.evidence_obligation_satisfied(
+        require_evidence=True,
+        semantic_fresh_java_target=True,
+        has_fresh_evidence=True,
+        has_authoritative_java_evidence=False,
+    )
+    assert controller.evidence_obligation_satisfied(
+        require_evidence=True,
+        semantic_fresh_java_target=True,
+        has_fresh_evidence=True,
+        has_authoritative_java_evidence=True,
+    )
+    assert controller.evidence_obligation_satisfied(
+        require_evidence=True,
+        semantic_fresh_java_target=False,
+        has_fresh_evidence=True,
+        has_authoritative_java_evidence=False,
+    )
