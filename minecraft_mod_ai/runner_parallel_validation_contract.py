@@ -13,6 +13,12 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from .gametest_execution_evidence_contract import (
+    gametest_pass_summary as _gametest_pass_summary_impl,
+    host_gametest_contract as _host_gametest_contract_impl,
+    report_contains_contract_testcase as _report_contains_contract_testcase_impl,
+    structured_gametest_report as _structured_gametest_report_impl,
+)
 from .runner_target_java_contract import target_java_build_environment
 
 _PROJECT_BUILD_LOCKS_GUARD = threading.Lock()
@@ -200,228 +206,12 @@ def _task_from_listing(log_path: str | Path) -> str | None:
     return None
 
 
-def _validate_host_gametest_contract(
-    root: Path,
-    payload: dict[str, Any],
-    main_metadata: dict[str, Any],
-    contract: dict[str, Any],
-) -> dict[str, str] | None:
-    """Validate the provider-recorded dedicated GameTest contract against live files."""
-
-    if str(payload.get("loader") or "").strip().casefold() != "fabric":
-        return None
-    main_mod_id = str(main_metadata.get("id") or "").strip()
-    if not main_mod_id:
-        return None
-
-    required = {
-        key: str(contract.get(key) or "").strip()
-        for key in ("task", "report", "entrypoint", "source", "metadata", "mod_id")
-    }
-    if (
-        required["task"] != "runGameTest"
-        or required["report"] != "build/gametest-report.xml"
-        or required["mod_id"] != f"{main_mod_id}_gametest"
-        or required["metadata"] != "src/gametest/resources/fabric.mod.json"
-        or not required["entrypoint"]
-        or "." not in required["entrypoint"]
-    ):
-        return None
-
-    package_name, class_name = required["entrypoint"].rsplit(".", 1)
-    expected_source = (
-        "src/gametest/java/"
-        + package_name.replace(".", "/")
-        + f"/{class_name}.java"
-    )
-    if required["source"] != expected_source:
-        return None
-
-    source = _safe_regular_file(root, root / required["source"])
-    metadata_file = _safe_regular_file(root, root / required["metadata"])
-    build = _safe_regular_file(root, root / "build.gradle")
-    if source is None or metadata_file is None or build is None:
-        return None
-
-    try:
-        source_text = source.read_text(encoding="utf-8", errors="strict")
-        build_text = build.read_text(encoding="utf-8", errors="strict")
-        gametest_metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return None
-    if not isinstance(gametest_metadata, dict):
-        return None
-
-    entrypoints = gametest_metadata.get("entrypoints")
-    gametest_entrypoints = (
-        entrypoints.get("fabric-gametest")
-        if isinstance(entrypoints, dict)
-        else None
-    )
-    depends = gametest_metadata.get("depends")
-    if (
-        gametest_metadata.get("id") != required["mod_id"]
-        or not isinstance(gametest_entrypoints, list)
-        or gametest_entrypoints != [required["entrypoint"]]
-        or not isinstance(depends, dict)
-        or depends.get(main_mod_id) != "*"
-    ):
-        return None
-
-    required_source_fragments = (
-        "import net.fabricmc.loader.api.FabricLoader;",
-        "import net.minecraft.gametest.framework.GameTestHelper;",
-        f"public final class {class_name}",
-        f'FabricLoader.getInstance().isModLoaded("{main_mod_id}")',
-        "context.succeed();",
-    )
-    if any(fragment not in source_text for fragment in required_source_fragments):
-        return None
-    if (
-        "import net.fabricmc.fabric.api.gametest.v1.GameTest;" not in source_text
-        and "import net.minecraft.gametest.framework.GameTest;" not in source_text
-    ):
-        return None
-    if re.search(
-        r"@GameTest(?:\s*\([^\n]*\))?\s+public\s+void\s+"
-        r"generatedRegistriesAreLive\s*"
-        r"\(\s*GameTestHelper\s+context\s*\)",
-        source_text,
-    ) is None:
-        return None
-
-    required_build_fragments = (
-        "configureTests",
-        "createSourceSet = true",
-        f'modId = "{required["mod_id"]}"',
-        "enableGameTests = true",
-        "enableClientGameTests = false",
-        "// M.M.M host-owned GameTest source-set classpath bridge",
-        "compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath",
-        "runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath",
-        "fabric-api.gametest.report-file",
-    )
-    if any(fragment not in build_text for fragment in required_build_fragments):
-        return None
-
-    return {
-        "task": required["task"],
-        "report": required["report"],
-        "entrypoint": required["entrypoint"],
-        "source": required["source"],
-        "metadata": required["metadata"],
-        "mod_id": required["mod_id"],
-        "testcase": f"{class_name}.generatedRegistriesAreLive",
-    }
-
-
-def _derived_host_gametest_contract(
-    root: Path,
-    payload: dict[str, Any],
-    metadata: dict[str, Any],
-) -> dict[str, str] | None:
-    """Reconstruct only the current dedicated-source-set contract as a fallback."""
-
-    main_mod_id = str(metadata.get("id") or "").strip()
-    gametest_metadata_path = _safe_regular_file(
-        root, root / "src/gametest/resources/fabric.mod.json"
-    )
-    if not main_mod_id or gametest_metadata_path is None:
-        return None
-    try:
-        gametest_metadata = json.loads(
-            gametest_metadata_path.read_text(encoding="utf-8")
-        )
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return None
-    if not isinstance(gametest_metadata, dict):
-        return None
-    entrypoints = gametest_metadata.get("entrypoints")
-    values = (
-        entrypoints.get("fabric-gametest")
-        if isinstance(entrypoints, dict)
-        else None
-    )
-    if (
-        not isinstance(values, list)
-        or len(values) != 1
-        or not isinstance(values[0], str)
-        or "." not in values[0]
-    ):
-        return None
-    entrypoint = values[0]
-    package_name, class_name = entrypoint.rsplit(".", 1)
-    candidate = {
-        "task": "runGameTest",
-        "report": "build/gametest-report.xml",
-        "entrypoint": entrypoint,
-        "source": (
-            "src/gametest/java/"
-            + package_name.replace(".", "/")
-            + f"/{class_name}.java"
-        ),
-        "metadata": "src/gametest/resources/fabric.mod.json",
-        "mod_id": str(gametest_metadata.get("id") or "").strip(),
-    }
-    return _validate_host_gametest_contract(root, payload, metadata, candidate)
-
-
 def _host_gametest_contract(root: Path) -> dict[str, str] | None:
-    """Resolve the provider-owned GameTest receipt and verify it against live project state."""
-
-    lock = _safe_regular_file(root, root / ".minecraft_ai/platform-lock.json")
-    metadata_path = _safe_regular_file(
-        root, root / "src/main/resources/fabric.mod.json"
-    )
-    if lock is None or metadata_path is None:
-        return None
-    try:
-        payload = json.loads(lock.read_text(encoding="utf-8"))
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return None
-    if not isinstance(payload, dict) or not isinstance(metadata, dict):
-        return None
-
-    bootstrap = payload.get("bootstrap")
-    recorded = (
-        bootstrap.get("gametest_contract")
-        if isinstance(bootstrap, dict)
-        else None
-    )
-    if isinstance(recorded, dict):
-        return _validate_host_gametest_contract(root, payload, metadata, recorded)
-    return _derived_host_gametest_contract(root, payload, metadata)
+    return _host_gametest_contract_impl(root, safe_regular_file=_safe_regular_file)
 
 
 def _gametest_pass_summary(log_path: str | Path) -> int | None:
-    """Read Fabric's terminal required-test summary conservatively."""
-
-    path = Path(log_path)
-    if not path.is_file() or path.is_symlink():
-        return None
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-    completed = re.findall(
-        r"(?mi)=+\s*(\d+)\s+GAME TESTS COMPLETE\b",
-        text,
-    )
-    passed = re.findall(
-        r"(?mi)\bAll\s+(\d+)\s+required tests passed\s*:\)",
-        text,
-    )
-    if not completed or not passed:
-        return None
-    try:
-        completed_count = int(completed[-1])
-        passed_count = int(passed[-1])
-    except ValueError:
-        return None
-    if completed_count <= 0 or completed_count != passed_count:
-        return None
-    return completed_count
+    return _gametest_pass_summary_impl(log_path)
 
 
 def _report_contains_contract_testcase(
@@ -429,25 +219,12 @@ def _report_contains_contract_testcase(
     path_value: str | Path | None,
     contract: dict[str, str],
 ) -> bool:
-    """Require native XML to identify the exact host-owned mandatory testcase."""
-
-    path = _safe_regular_file(root, path_value)
-    expected = str(contract.get("testcase") or "").strip().casefold()
-    if path is None or not expected:
-        return False
-    try:
-        for _event, element in ET.iterparse(path, events=("end",)):
-            tag = element.tag.rsplit("}", 1)[-1]
-            if (
-                tag == "testcase"
-                and str(element.attrib.get("name") or "").strip().casefold()
-                == expected
-            ):
-                return True
-            element.clear()
-    except (ET.ParseError, OSError):
-        return False
-    return False
+    return _report_contains_contract_testcase_impl(
+        root,
+        path_value,
+        contract,
+        safe_regular_file=_safe_regular_file,
+    )
 
 
 def _structured_gametest_report(
@@ -455,86 +232,13 @@ def _structured_gametest_report(
     log_path: str | Path,
     native_report: str | Path,
 ) -> Path | None:
-    """Return exact host XML or reconstruct a host-bound receipt from Fabric output.
-
-    A native passing XML is reusable only when it names the mandatory host testcase.
-    Other passing native layouts are canonicalized only when the verified host
-    contract and Fabric's terminal required-test pass summary both agree.
-    """
-
-    contract = _host_gametest_contract(root)
-    safe_native = _safe_regular_file(root, native_report)
-    if (
-        contract is not None
-        and safe_native is not None
-        and _passing_gametest_xml(root, safe_native)
-        and _report_contains_contract_testcase(root, safe_native, contract)
-    ):
-        return safe_native
-
-    passed_count = _gametest_pass_summary(log_path)
-    if contract is None or passed_count is None:
-        return None
-
-    log_file = _safe_regular_file(root, log_path)
-    if log_file is None:
-        return None
-    target = root / "build" / "mmm-gametest-attestation.xml"
-    if target.is_symlink():
-        return None
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_name(
-        f".{target.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+    return _structured_gametest_report_impl(
+        root,
+        log_path,
+        native_report,
+        safe_regular_file=_safe_regular_file,
+        passing_gametest_xml=_passing_gametest_xml,
     )
-    suite = ET.Element(
-        "testsuite",
-        {
-            "name": "mmm-host-required-gametest",
-            "tests": "1",
-            "failures": "0",
-            "errors": "0",
-            "skipped": "0",
-        },
-    )
-    properties = ET.SubElement(suite, "properties")
-    ET.SubElement(
-        properties,
-        "property",
-        {
-            "name": "mmm.runtime.required_tests_passed",
-            "value": str(passed_count),
-        },
-    )
-    ET.SubElement(
-        properties,
-        "property",
-        {
-            "name": "mmm.gradle_log_sha256",
-            "value": "sha256:" + hashlib.sha256(log_file.read_bytes()).hexdigest(),
-        },
-    )
-    ET.SubElement(
-        suite,
-        "testcase",
-        {
-            "name": contract["testcase"],
-            "classname": contract["entrypoint"],
-        },
-    )
-    try:
-        ET.ElementTree(suite).write(
-            temporary,
-            encoding="utf-8",
-            xml_declaration=True,
-        )
-        os.replace(temporary, target)
-    except OSError:
-        temporary.unlink(missing_ok=True)
-        return None
-    safe_target = _safe_regular_file(root, target)
-    if safe_target is None or not _passing_gametest_xml(root, safe_target):
-        return None
-    return safe_target
 
 
 def _build_cache_profile(self: Any) -> tuple[Any, ...]:
