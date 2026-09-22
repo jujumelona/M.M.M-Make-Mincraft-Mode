@@ -23,8 +23,8 @@ def test_recover_exposes_grounding_tools_not_mutation_tools() -> None:
     )
     selected = loop._filter_tools_for_phase(tools, loop.LoopPhase.RECOVER, "coder")
     names = {item["function"]["name"] for item in selected}
+    assert names == {"search_code_rag"}
     assert "apply_source_edit" not in names
-    assert {"search_code_rag", "inspect_modrinth_project", "external_mcp_call"} <= names
 
 
 def test_recover_marks_version_api_routes_as_evidence() -> None:

@@ -222,7 +222,9 @@ def test_untrusted_user_owned_anchor_cannot_bypass_generic_rag(monkeypatch) -> N
     first = adapter.requests[0]
     assert [tool["function"]["name"] for tool in first.tools] == [
         "search_code_rag",
-        "search_project_rag",
     ]
-    assert first.tool_choice == "required"
+    assert first.tool_choice == {
+        "type": "function",
+        "function": {"name": "search_code_rag"},
+    }
     assert first.parallel_tool_calls is False

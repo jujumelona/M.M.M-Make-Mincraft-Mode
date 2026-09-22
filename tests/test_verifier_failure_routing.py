@@ -65,7 +65,6 @@ def test_recover_is_evidence_only_and_cannot_mutate_source() -> None:
         semantic_retrieval_choice=False,
     )
     names = {loop._tool_name(schema) for schema in selected}
-    assert "search_code_rag" in names
-    assert "java_workspace_symbols" in names
+    assert names == {"search_code_rag"}
     assert "apply_source_edit" not in names
     assert "java_diagnostics" not in names

@@ -231,9 +231,9 @@ def test_authored_recovery_fits_after_failed_and_empty_evidence_routes() -> None
         "search_code_rag",
         "apply_source_edit",
         "java_diagnostics",
-        # read_reuse_source is no longer in the pinned-source recovery frontier;
-        # the model's attempted call is rejected before runtime execution.
-        "search_project_rag",
+        # RECOVER is host-owned and exposes one route at a time. The model's stale
+        # read_reuse_source/search_project_rag choices are admission-normalized or
+        # rejected; only the selected workspace-symbol route executes.
         "java_workspace_symbols",
         "apply_source_edit",
         "java_diagnostics",
