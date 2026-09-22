@@ -1,36 +1,32 @@
 from __future__ import annotations
 
-"""Compile host-owned mutation authority before generation.
+"""Compile exact host-owned mutation authority before generation.
 
-Ordinary fresh PlanIR tasks keep exact-path authority. Saved authored designs are a
-separate host request shape: the host intentionally delegates file selection inside the
-four generated source/resource roots. That distinction is made from the trusted
-``ProductionModule`` object before model decode, never by reparsing model-facing text.
-
-Runtime activation is owned by the existing small-model write-scope wrapper. This module
-is intentionally a pure compiler/data contract and performs no runtime method rebinding.
+Repository localization and file selection must finish before this contract is compiled.
+An editor receives only exact owned paths; a raw saved-authored request is rejected rather
+than being upgraded to directory/root authority.
 """
 
 import contextvars
 import hashlib
 import json
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
 
-from .mutation_authority import (
-    AUTHORED_DESIGN_ROOTS,
-    MutationAuthority,
-    MutationAuthorityMode,
-)
+from .mutation_authority import MutationAuthority
 from .owned_target_contract import target_is_writable
 
 _SCHEMA = "mmm/direct-task-mutation-authority-v1"
-_AUTHORED_SCHEMA = "mmm/authored-design-mutation-authority-v1"
-_ALLOWED_PREFIXES = AUTHORED_DESIGN_ROOTS
-_JAVA_PACKAGE_RE = re.compile(r"^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$")
+_ALLOWED_PREFIXES = (
+    "src/main/java/",
+    "src/client/java/",
+    "src/main/resources/",
+    "src/client/resources/",
+    "src/test/java/",
+    "src/gametest/",
+)
 _CURRENT_AUTHORITY: contextvars.ContextVar["DirectTaskMutationAuthority | None"] = (
     contextvars.ContextVar("mmm_direct_task_mutation_authority", default=None)
 )
@@ -53,25 +49,17 @@ class DirectTaskMutationAuthority:
 
     @property
     def writable_paths(self) -> tuple[str, ...]:
-        if self.mutation_authority.mode is MutationAuthorityMode.BOUNDED_ROOTS:
-            return self.mutation_authority.roots
         return self.mutation_authority.paths
 
     @property
     def creatable_paths(self) -> tuple[str, ...]:
         return _authority_creatable_paths(self)
 
-    @property
-    def is_bounded_authored_design(self) -> bool:
-        return self.mutation_authority.mode is MutationAuthorityMode.BOUNDED_ROOTS
-
     def to_host_payload(self) -> dict[str, Any]:
         return _authority_host_payload(self)
 
 
 def _authority_creatable_paths(authority: DirectTaskMutationAuthority) -> tuple[str, ...]:
-    if authority.mutation_authority.mode is MutationAuthorityMode.BOUNDED_ROOTS:
-        return authority.mutation_authority.roots
     return tuple(
         _anchor_path(anchor)
         for anchor in authority.writable_anchors
@@ -80,24 +68,6 @@ def _authority_creatable_paths(authority: DirectTaskMutationAuthority) -> tuple[
 
 
 def _authority_host_payload(authority: DirectTaskMutationAuthority) -> dict[str, Any]:
-    if authority.is_bounded_authored_design:
-        return {
-            "schema_version": _AUTHORED_SCHEMA,
-            "task_id": authority.task_id,
-            "authority_sha256": authority.authority_sha256,
-            "mutation_authority": {
-                "mode": authority.mutation_authority.mode.value,
-                "roots": list(authority.mutation_authority.roots),
-                "delete_allowed": False,
-            },
-            "instruction": (
-                "Host-authored design authority is already fixed. You may create or edit "
-                "files only below the declared roots. Java/test/gametest roots may already "
-                "encode the host-selected package; never invent a sibling package outside "
-                "those roots. Build configuration, host state and deletes are forbidden. "
-                "Retrieval/localization does not widen this authority."
-            ),
-        }
     primary_anchor = next(
         anchor
         for anchor in authority.writable_anchors
@@ -264,56 +234,6 @@ def _authority_digest(payload: Mapping[str, Any]) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
-
-
-def _authored_mutation_roots(module: Any) -> tuple[str, ...]:
-    """Return the smallest safe roots the host can know before coder decode."""
-
-    package_name = str(
-        _module_config(module).get("authored_java_package") or ""
-    ).strip()
-    if not package_name:
-        return AUTHORED_DESIGN_ROOTS
-    if _JAVA_PACKAGE_RE.fullmatch(package_name) is None:
-        raise DirectTaskMutationAuthorityError(
-            "AUTHORED_AUTHORITY_PACKAGE_INVALID: authored_java_package must be a valid "
-            "host-generated Java package."
-        )
-    package_path = package_name.replace(".", "/")
-    return (
-        f"src/main/java/{package_path}/",
-        "src/main/resources/",
-        f"src/test/java/{package_path}/",
-        f"src/gametest/{package_path}/",
-    )
-
-
-def _compile_authored_authority(module: Any) -> DirectTaskMutationAuthority:
-    module_id = str(getattr(module, "module_id", "") or "").strip()
-    module_kind = str(getattr(module, "kind", "") or "").strip()
-    if not module_id:
-        raise DirectTaskMutationAuthorityError(
-            "AUTHORED_AUTHORITY_TASK_MISSING: authored design requires a host module id."
-        )
-    mutation_authority = MutationAuthority.bounded_roots(
-        _authored_mutation_roots(module),
-        task_id=module_id,
-    )
-    payload = {
-        "task_id": module_id,
-        "module_kind": module_kind,
-        "mode": mutation_authority.mode.value,
-        "roots": mutation_authority.roots,
-    }
-    return DirectTaskMutationAuthority(
-        task_id=module_id,
-        module_kind=module_kind,
-        primary_path="",
-        primary_symbol="",
-        writable_anchors=(),
-        authority_sha256=_authority_digest(payload),
-        mutation_authority=mutation_authority,
-    )
 
 
 def compile_direct_task_mutation_authority(
