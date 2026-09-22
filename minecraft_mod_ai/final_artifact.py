@@ -725,6 +725,207 @@ def build_debug_fixture_coverage_receipt(
     return core
 
 
+
+def build_authored_design_coverage_receipt(
+    *,
+    proposal_hash: str,
+    requested_prompt: str,
+    authored_plan: Mapping[str, Any] | None,
+    authored_manifest: Mapping[str, Any] | None,
+    artifact_sha256: str,
+    source_validation: Mapping[str, Any] | None,
+    build_report: Mapping[str, Any] | None,
+    jar_validation: Mapping[str, Any] | None,
+    gametest_passed: bool,
+    unresolved_gates: tuple[str, ...] | list[str],
+) -> dict[str, Any]:
+    """Bind a planner-bypassed saved design to exact host-lowered execution evidence.
+
+    Saved authored production deliberately bypasses requirement extraction and the normal
+    production contract. Release coverage therefore comes from the immutable authored
+    text plus the exact-task manifest that partitions every UTF-8 byte of that text.
+    """
+
+    findings: list[str] = []
+    plan = authored_plan if isinstance(authored_plan, Mapping) else {}
+    manifest = authored_manifest if isinstance(authored_manifest, Mapping) else {}
+
+    if plan.get("schema_version") != "mmm/authored-plan-v1":
+        findings.append("authored plan is missing or has an unsupported schema")
+    plan_prompt = str(plan.get("requested_prompt") or "").strip()
+    expected_prompt = str(requested_prompt or "").strip()
+    if not plan_prompt:
+        findings.append("authored plan requested prompt is empty")
+    elif plan_prompt != expected_prompt:
+        findings.append("authored plan requested prompt does not match the approved proposal")
+
+    raw_text = plan.get("text")
+    text = raw_text if isinstance(raw_text, str) else ""
+    if not text.strip():
+        findings.append("authored plan text is empty")
+    text_bytes = text.encode("utf-8")
+    source_text_sha256 = "sha256:" + hashlib.sha256(text_bytes).hexdigest()
+
+    if manifest.get("schema_version") != "mmm/authored-execution-manifest-v2":
+        findings.append("authored execution manifest is missing or has an unsupported schema")
+    if manifest.get("policy") != "host_exact_task_queue_no_coder_file_planning":
+        findings.append("authored execution manifest policy is not the host exact-task policy")
+    if manifest.get("source_text_sha256") != source_text_sha256:
+        findings.append("authored execution manifest does not bind the approved design text")
+    if manifest.get("source_bytes") != len(text_bytes):
+        findings.append("authored execution manifest source byte count does not match")
+
+    supplied_manifest_sha256 = str(manifest.get("manifest_sha256") or "")
+    manifest_payload = dict(manifest)
+    manifest_payload.pop("manifest_sha256", None)
+    expected_manifest_sha256 = _canonical_sha256(manifest_payload)
+    if supplied_manifest_sha256 != expected_manifest_sha256:
+        findings.append("authored execution manifest hash does not match its payload")
+
+    raw_units = manifest.get("units")
+    units = raw_units if isinstance(raw_units, list) else []
+    unit_count = manifest.get("unit_count")
+    if type(unit_count) is not int or unit_count <= 0:
+        findings.append("authored execution manifest unit_count is invalid")
+    elif unit_count != len(units):
+        findings.append("authored execution manifest unit_count does not match units")
+    if not units:
+        findings.append("authored execution manifest contains no authored units")
+
+    requirement_rows: list[dict[str, str]] = []
+    if plan_prompt:
+        requirement_rows.append(
+            {
+                "requirement_ref": "authored-request:00000000",
+                "statement": plan_prompt,
+                "coverage_group_ref": "saved-authored-design:request",
+            }
+        )
+
+    cursor = 0
+    for ordinal, raw_unit in enumerate(units, start=1):
+        if not isinstance(raw_unit, Mapping):
+            findings.append(f"authored execution unit {ordinal} is not an object")
+            continue
+        index = raw_unit.get("index")
+        start = raw_unit.get("start_byte")
+        end = raw_unit.get("end_byte")
+        if type(index) is not int or index != ordinal:
+            findings.append(f"authored execution unit {ordinal} has a non-canonical index")
+        if type(start) is not int or type(end) is not int:
+            findings.append(f"authored execution unit {ordinal} has invalid byte bounds")
+            continue
+        if start != cursor or end <= start or end > len(text_bytes):
+            findings.append(f"authored execution unit {ordinal} does not form a contiguous text partition")
+            if 0 <= end <= len(text_bytes):
+                cursor = end
+            continue
+
+        piece = text_bytes[start:end]
+        try:
+            statement = piece.decode("utf-8").strip()
+        except UnicodeDecodeError:
+            statement = ""
+            findings.append(f"authored execution unit {ordinal} splits invalid UTF-8")
+        unit_sha256 = "sha256:" + hashlib.sha256(piece).hexdigest()
+        if str(raw_unit.get("text_sha256") or "") != unit_sha256:
+            findings.append(f"authored execution unit {ordinal} text hash does not match")
+        module_id = str(raw_unit.get("module_id") or "").strip()
+        if not module_id:
+            findings.append(f"authored execution unit {ordinal} has no module binding")
+        if not statement:
+            findings.append(f"authored execution unit {ordinal} has no authored statement")
+        else:
+            requirement_rows.append(
+                {
+                    "requirement_ref": (
+                        f"authored-unit:{ordinal:08d}:"
+                        + unit_sha256.removeprefix("sha256:")
+                    ),
+                    "statement": statement,
+                    "coverage_group_ref": (
+                        f"authored-module:{module_id}" if module_id else "authored-module:missing"
+                    ),
+                }
+            )
+        cursor = end
+
+    if cursor != len(text_bytes):
+        findings.append("authored execution units do not cover every byte of the approved design")
+
+    unresolved = sorted(
+        {str(item) for item in unresolved_gates if str(item).strip()}
+    )
+    source_passed = bool(
+        isinstance(source_validation, Mapping)
+        and source_validation.get("status") == "PASS"
+        and isinstance(source_validation.get("checks_run"), int)
+        and source_validation.get("checks_run", 0) > 0
+        and isinstance(source_validation.get("findings"), list)
+        and not any(
+            isinstance(item, Mapping)
+            and str(item.get("severity") or "").casefold() in {"error", "fatal"}
+            for item in source_validation.get("findings", [])
+        )
+    )
+    build_passed = bool(
+        isinstance(build_report, Mapping)
+        and build_report.get("status") == "PASS"
+    )
+    jar_passed = bool(
+        isinstance(jar_validation, Mapping)
+        and jar_validation.get("status") == "PASS"
+        and isinstance(jar_validation.get("checks_run"), int)
+        and jar_validation.get("checks_run", 0) > 0
+        and isinstance(jar_validation.get("findings"), list)
+        and not any(
+            isinstance(item, Mapping)
+            and str(item.get("severity") or "").casefold() in {"error", "fatal"}
+            for item in jar_validation.get("findings", [])
+        )
+    )
+    binding_passed = not findings
+    passed = bool(
+        requirement_rows
+        and binding_passed
+        and source_passed
+        and build_passed
+        and jar_passed
+        and gametest_passed is True
+        and not unresolved
+    )
+    rows = [
+        {**item, "status": "PASS" if passed else "BLOCKED"}
+        for item in requirement_rows
+    ]
+    core: dict[str, Any] = {
+        "schema_version": "mmm/requirement-coverage-receipt-v1",
+        "status": "PASS" if passed else "BLOCKED",
+        "coverage_mode": "saved_authored_design",
+        "proposal_hash": str(proposal_hash),
+        "production_contract_sha256": "",
+        "artifact_sha256": normalize_sha256(artifact_sha256),
+        "unresolved_gates": unresolved,
+        "requirements": rows,
+        "authored_design_binding": {
+            "schema_version": "mmm/authored-design-binding-v1",
+            "source_text_sha256": source_text_sha256,
+            "manifest_sha256": supplied_manifest_sha256,
+            "unit_count": len(units),
+            "source_bytes": len(text_bytes),
+        },
+        "verification": {
+            "authored_design_binding": binding_passed,
+            "source_validation": source_passed,
+            "build": build_passed,
+            "jar_validation": jar_passed,
+            "gametest": gametest_passed is True,
+        },
+        "findings": findings,
+    }
+    core["coverage_sha256"] = _canonical_sha256(core)
+    return core
+
 def build_requirement_coverage_receipt(
     *,
     contract: Mapping[str, Any] | None,
@@ -1373,6 +1574,7 @@ __all__ = [
     "FinalArtifactError",
     "FinalModArtifactReceipt",
     "append_github_outputs",
+    "build_authored_design_coverage_receipt",
     "build_requirement_coverage_receipt",
     "bundle_from_pipeline_result",
     "empty_reuse_manifest",

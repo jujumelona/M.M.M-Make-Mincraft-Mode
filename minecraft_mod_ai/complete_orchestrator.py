@@ -52,6 +52,7 @@ from .execution_feedback_replan_contract import (
 from .extended_content_generator import generate_extended_content
 from .final_artifact import (
     FinalArtifactError,
+    build_authored_design_coverage_receipt,
     build_debug_fixture_coverage_receipt,
     build_requirement_coverage_receipt,
     load_or_empty_reuse_manifest,
@@ -1753,6 +1754,23 @@ class CompleteProductionOrchestrator:
                 jar_validation=jar_validation,
                 gametest_passed=self._gametest_receipt_passed(build, spec),
                 observable_acceptance=debug_source_acceptance,
+                unresolved_gates=normalized_unresolved,
+            )
+        elif (
+            approved.schema_version == 'mmm/complete-proposal-v1'
+            and isinstance(approved.game_design.get('_authored_execution_manifest'), dict)
+            and isinstance(approved.game_design.get('authored_plan'), dict)
+        ):
+            coverage_receipt = build_authored_design_coverage_receipt(
+                proposal_hash=approved.calculate_hash(),
+                requested_prompt=approved.requested_prompt,
+                authored_plan=approved.game_design.get('authored_plan'),
+                authored_manifest=approved.game_design.get('_authored_execution_manifest'),
+                artifact_sha256=str(artifact_receipt['sha256']),
+                source_validation=source_report,
+                build_report=build,
+                jar_validation=jar_validation,
+                gametest_passed=self._gametest_receipt_passed(build, spec),
                 unresolved_gates=normalized_unresolved,
             )
         else:

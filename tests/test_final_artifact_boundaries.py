@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 import zipfile
@@ -14,6 +15,7 @@ from minecraft_mod_ai.final_artifact import (
     _read_jar_metadata,
     _write_json_receipt,
     append_github_outputs,
+    build_authored_design_coverage_receipt,
     build_debug_fixture_coverage_receipt,
     sha256_file,
     verify_debug_fixture_source,
@@ -59,6 +61,110 @@ def _debug_coverage_inputs() -> dict[str, object]:
         },
     }
 
+
+
+def _authored_coverage_inputs() -> dict[str, object]:
+    text = "# Economy\nCredits, trading, ship upgrades, and colonies.\n"
+    raw = text.encode("utf-8")
+    unit_sha256 = "sha256:" + hashlib.sha256(raw).hexdigest()
+    manifest = {
+        "schema_version": "mmm/authored-execution-manifest-v2",
+        "source_text_sha256": unit_sha256,
+        "source_bytes": len(raw),
+        "unit_count": 1,
+        "policy": "host_exact_task_queue_no_coder_file_planning",
+        "units": [
+            {
+                "module_id": "authored_feature_001",
+                "path": "src/main/java/example/AuthoredFeature001.java",
+                "symbol": "AuthoredFeature001",
+                "index": 1,
+                "start_byte": 0,
+                "end_byte": len(raw),
+                "text_sha256": unit_sha256,
+                "provides": "authored_feature_001_ready",
+                "section": "Economy",
+            }
+        ],
+        "entrypoint": {
+            "owner": "host_scaffold",
+            "path": "src/main/java/example/ExampleMod.java",
+            "symbol": "ExampleMod",
+            "feature_symbols": ["AuthoredFeature001"],
+        },
+    }
+    manifest["manifest_sha256"] = "sha256:" + hashlib.sha256(
+        json.dumps(
+            manifest,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    prompt = "Build the saved space economy design."
+    return {
+        "proposal_hash": "sha256:" + "1" * 64,
+        "requested_prompt": prompt,
+        "authored_plan": {
+            "schema_version": "mmm/authored-plan-v1",
+            "requested_prompt": prompt,
+            "text": text,
+            "existing_input_sha256": "",
+            "media_paths": [],
+        },
+        "authored_manifest": manifest,
+        "artifact_sha256": "sha256:" + "2" * 64,
+        "source_validation": {
+            "status": "PASS",
+            "checks_run": 12,
+            "findings": [],
+        },
+        "build_report": {"status": "PASS"},
+        "jar_validation": {
+            "status": "PASS",
+            "checks_run": 9,
+            "findings": [],
+        },
+        "gametest_passed": True,
+        "unresolved_gates": (),
+    }
+
+
+def test_saved_authored_coverage_binds_exact_design_and_verification() -> None:
+    inputs = _authored_coverage_inputs()
+
+    receipt = build_authored_design_coverage_receipt(**inputs)
+
+    assert receipt["status"] == "PASS"
+    assert receipt["coverage_mode"] == "saved_authored_design"
+    assert receipt["verification"] == {
+        "authored_design_binding": True,
+        "source_validation": True,
+        "build": True,
+        "jar_validation": True,
+        "gametest": True,
+    }
+    assert receipt["authored_design_binding"]["unit_count"] == 1
+    assert [row["statement"] for row in receipt["requirements"]] == [
+        inputs["requested_prompt"],
+        inputs["authored_plan"]["text"].strip(),
+    ]
+    assert all(row["status"] == "PASS" for row in receipt["requirements"])
+
+
+def test_saved_authored_coverage_fails_closed_when_manifest_text_is_tampered() -> None:
+    inputs = _authored_coverage_inputs()
+    tampered = json.loads(json.dumps(inputs["authored_manifest"]))
+    tampered["units"][0]["text_sha256"] = "sha256:" + "f" * 64
+
+    receipt = build_authored_design_coverage_receipt(
+        **{**inputs, "authored_manifest": tampered}
+    )
+
+    assert receipt["status"] == "BLOCKED"
+    assert receipt["verification"]["authored_design_binding"] is False
+    assert any("text hash does not match" in finding for finding in receipt["findings"])
+    assert all(row["status"] == "BLOCKED" for row in receipt["requirements"])
 
 def test_debug_fixture_coverage_requires_all_real_verification_gates() -> None:
     inputs = _debug_coverage_inputs()
