@@ -1965,7 +1965,7 @@ def _state_requires_authoritative_java_evidence(state: Any) -> bool:
     )
 
 
-def _host_target_execution_authoritydef _host_target_execution_authority(state: Any) -> bool:
+def _host_target_execution_authority(state: Any) -> bool:
     """Return whether the host has exact authority to mutate the pinned target.
 
     Fresh host-reserved targets are executable when the exact pinned path is also in
@@ -2781,7 +2781,7 @@ def _localized_observe_names(
     )
 
 
-def _filter_tools_for_phase(def _filter_tools_for_phase(
+def _filter_tools_for_phase(
     exposed_tools: Sequence[Mapping[str, Any]],
     phase: LoopPhase,
     role: str,
@@ -2810,8 +2810,6 @@ def _filter_tools_for_phase(def _filter_tools_for_phase(
                 route=repair_evidence_route,
             )
         )
-    else:
-        active = mutation_context is not None if localization_active is None else localization_active
     else:
         active = mutation_context is not None if localization_active is None else localization_active
         if not active:
@@ -3636,7 +3634,7 @@ def _fixed_point_error(state: HostRunState) -> ModelConfigurationError:
     )
 
 
-def _host_coder_summary(def _host_coder_summary(*, verification: str) -> str:
+def _host_coder_summary(*, verification: str) -> str:
     """Return the fixed coder-summary contract from host-owned terminal state.
 
     Once mutation/verification state is terminal, asking the model for one more
