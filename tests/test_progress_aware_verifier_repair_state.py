@@ -989,7 +989,17 @@ def test_official_api_first_attempt_rebases_once_to_trusted_scaffold():
     class Runtime:
         def call(self, stage, name, arguments):
             calls.append((stage, name, dict(arguments)))
-            return {"status": "APPLIED", "operations": [{"path": PATH}]}
+            return {
+                "schema_version": "mmm/source-patch-receipt-v1",
+                "status": "APPLIED",
+                "operations": [
+                    {
+                        "path": PATH,
+                        "before_sha256": "sha256:failed",
+                        "after_sha256": "sha256:baseline",
+                    }
+                ],
+            }
 
     assert generation_compile_recovery.rebase_invalid_api_candidate(
         state, Runtime(), stage="generation", fresh_java_target=True
