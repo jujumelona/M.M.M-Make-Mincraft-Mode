@@ -195,6 +195,22 @@ def current_task_required_gates() -> tuple[str, ...]:
     return capsule.required_gates if capsule is not None else ()
 
 
+def current_task_reuse_action() -> str:
+    """Return the active task's semantic implementation mode.
+
+    This remains authoritative even when the host pre-materializes a scaffold at the
+    task path. Filesystem existence must not silently turn a fresh implementation into
+    an existing-source rewrite.
+    """
+
+    capsule = _CURRENT_CAPSULE.get()
+    return (
+        str(capsule.reuse_action or "").strip().casefold()
+        if capsule is not None
+        else ""
+    )
+
+
 def _canonical_path(locator: Any) -> tuple[str, str]:
     raw = str(locator or "").replace("\\", "/").strip()
     if not raw:
@@ -1050,6 +1066,7 @@ __all__ = [
     "compact_task_local_module_contract",
     "compile_task_capsule",
     "current_task_required_gates",
+    "current_task_reuse_action",
     "narrow_source_edit_schema",
     "narrow_task_tool_schema",
     "task_capsule_generation_scope",

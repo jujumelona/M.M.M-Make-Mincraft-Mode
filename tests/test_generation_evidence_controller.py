@@ -1,0 +1,128 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from minecraft_mod_ai import generation_evidence_controller as controller
+
+
+@dataclass(frozen=True)
+class _Call:
+    id: str
+    name: str
+    arguments: dict
+    raw_arguments: str
+
+
+def _schema(name: str) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer"},
+                },
+                "required": ["query"],
+            },
+        },
+    }
+
+
+def test_fresh_semantics_do_not_depend_on_scaffold_existence() -> None:
+    assert controller.semantic_fresh_java(
+        "fresh",
+        "src/main/java/dev/mmm/Foo.java",
+        materialized_new_file=False,
+    )
+    assert not controller.semantic_fresh_java(
+        "reuse",
+        "src/main/java/dev/mmm/Foo.java",
+        materialized_new_file=True,
+    )
+
+
+def test_fresh_frontier_is_host_owned_and_single_route() -> None:
+    selected = controller.initial_evidence_frontier(
+        available={"search_project_rag", "search_code_rag", "java_workspace_symbols"},
+        attempted=set(),
+        localization_stage="READY",
+        semantic_fresh_java_target=True,
+    )
+    assert selected == ("search_code_rag",)
+    selected = controller.initial_evidence_frontier(
+        available={"search_project_rag", "search_code_rag", "java_workspace_symbols"},
+        attempted={"search_code_rag"},
+        localization_stage="READY",
+        semantic_fresh_java_target=True,
+    )
+    assert selected == ("java_workspace_symbols",)
+
+
+def test_repair_router_classifies_platform_api_failure() -> None:
+    route = controller.repair_evidence_route_for_errors(
+        (
+            {
+                "path": "src/main/java/dev/mmm/Foo.java",
+                "message": (
+                    "package net.minecraft.registry does not exist\n"
+                    "import net.minecraft.registry.Registry;"
+                ),
+            },
+        )
+    )
+    assert route["route"] == "official_api"
+    assert controller.repair_route_requires_retrieval(route["route"])
+
+
+def test_rejected_alternate_retriever_is_rebound_not_consumed() -> None:
+    rejected = _Call(
+        id="r1",
+        name="__mmm_rejected_tool_call__",
+        arguments={
+            "failure_code": "TOOL_NOT_VISIBLE",
+            "original_tool": "search_project_rag",
+            "raw_arguments": '{"query":"block registration 26.2","limit":8}',
+        },
+        raw_arguments="{}",
+    )
+    normalized = controller.normalize_forced_evidence_rejection_calls(
+        (rejected,),
+        phase_tools=(_schema("search_code_rag"),),
+        forced_evidence_tool="search_code_rag",
+    )
+    assert normalized is not None
+    assert normalized[0].name == "search_code_rag"
+    assert normalized[0].arguments == {
+        "query": "block registration 26.2",
+        "limit": 8,
+    }
+
+
+def test_low_quality_code_rag_is_not_authoritative_java_evidence() -> None:
+    value = {
+        "schema_version": "mmm/code-rag-result-v1",
+        "retrieval_quality_warning": "coverage_or_relevance_below_target",
+        "hits": [
+            {
+                "source_path": "src/main/java/dev/mmm/Other.java",
+                "text": "import net.minecraft.world.item.Item; class Other {}",
+            }
+        ],
+    }
+    assert not controller.authoritative_java_evidence(value)
+
+
+def test_current_target_placeholder_cannot_self_authorize_fresh_java() -> None:
+    target = "src/main/java/dev/mmm/Foo.java"
+    value = {
+        "schema_version": "mmm/code-rag-result-v1",
+        "hits": [
+            {
+                "source_path": target,
+                "text": "package dev.mmm; public final class Foo {}",
+            }
+        ],
+    }
+    assert not controller.authoritative_java_evidence(value, target_path=target)
