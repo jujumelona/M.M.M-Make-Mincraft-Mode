@@ -320,6 +320,8 @@ def _not_required_repair_evidence(route: Mapping[str, Any]) -> dict[str, Any]:
 
 def _install_repair_retrieval(repair_module: Any, diagnostic_payload_fn: Any) -> None:
     cls = repair_module.RepairEngine
+    if getattr(repair_module, "__name__", "") == "minecraft_mod_ai.repair_engine":
+        return
     current = cls._context
     if getattr(current, _MARKER, False):
         return

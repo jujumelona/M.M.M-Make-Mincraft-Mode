@@ -652,6 +652,10 @@ def _prior_evidence_for_diagnostic(
 
 def _install_repair_context_reuse(repair_module: Any) -> None:
     cls = repair_module.RepairEngine
+    if getattr(repair_module, "__name__", "") == "minecraft_mod_ai.repair_engine":
+        # The live RepairEngine composes this evidence directly in its source-owned
+        # _context implementation; runtime rebinding would violate ownership.
+        return
 
     current_signature = cls._signature
     if not getattr(current_signature, _MARKER, False):

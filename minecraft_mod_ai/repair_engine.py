@@ -4,6 +4,7 @@ from .fixed_template_generation import generate_fixed_template_text
 
 from .model_response_templates import response_schema, response_template_prompt
 
+import copy
 import hashlib
 import json
 import os
@@ -419,6 +420,131 @@ class RepairEngine:
             byte_budget=byte_budget,
         )
         context["build_logs"] = build_logs
+
+        # RepairEngine owns its context surface directly. Enrich the source-owned
+        # context here instead of allowing late bootstrap wrappers to replace
+        # _signature/_context and make reviewed source differ from executed behavior.
+        from . import repair_approved_reuse_context as approved_reuse
+        from . import research_coder_repair_reuse as reuse_hardener
+        from . import research_evidence_handoff_contract as evidence_handoff
+
+        normalized_root = root.expanduser().resolve()
+        diagnostic = reuse_hardener._diagnostic_signature_payload(evidence)
+        stored = reuse_hardener._load_receipts(normalized_root)
+        reused, parent_bundles = reuse_hardener._prior_evidence_for_diagnostic(
+            stored,
+            diagnostic,
+        )
+        receipt_payload = {
+            "schema_version": "mmm/narrow-repair-evidence-receipt-v1",
+            "diagnostic": diagnostic,
+            "parent_research_bundles": parent_bundles,
+            "reused_evidence_ids": [item.get("evidence_id") for item in reused],
+            "manifest": context.get("manifest"),
+        }
+        diagnostic_receipt = reuse_hardener._signature_key(receipt_payload)
+        previous = getattr(self, "_mmm_last_diagnostic_receipt", "")
+        receipt_sha256 = "sha256:" + hashlib.sha256(
+            diagnostic_receipt.encode("utf-8")
+        ).hexdigest()
+        context.update(
+            {
+                "diagnostic_signature": diagnostic,
+                "prior_research_evidence": reused,
+                "repair_evidence_receipt": {
+                    **receipt_payload,
+                    "receipt_sha256": receipt_sha256,
+                    "previous_diagnostic_receipt_sha256": previous,
+                    "novel_diagnostic": True,
+                },
+            }
+        )
+        self._mmm_last_diagnostic_receipt = receipt_sha256
+
+        route = evidence_handoff.classify_repair_evidence_route(
+            diagnostic,
+            context,
+        )
+        fresh_cache_key = (
+            f"{normalized_root}:"
+            f"{evidence_handoff._sha({'diagnostic': diagnostic, 'route': route})}"
+        )
+        fresh_cache = getattr(self, "_mmm_fresh_repair_research_cache", None)
+        if not isinstance(fresh_cache, dict):
+            fresh_cache = {}
+            self._mmm_fresh_repair_research_cache = fresh_cache
+        fresh = fresh_cache.get(fresh_cache_key)
+        if not isinstance(fresh, dict):
+            if bool(route.get("fresh_official_required")):
+                fresh = evidence_handoff._fresh_official_repair_evidence(
+                    normalized_root,
+                    diagnostic,
+                    route,
+                )
+            else:
+                fresh = evidence_handoff._not_required_repair_evidence(route)
+            fresh_cache[fresh_cache_key] = copy.deepcopy(fresh)
+            while len(fresh_cache) > 16:
+                fresh_cache.pop(next(iter(fresh_cache)))
+        context["repair_evidence_route"] = copy.deepcopy(dict(route))
+        context["fresh_repair_research"] = copy.deepcopy(dict(fresh))
+
+        approved_cache_key = (
+            f"{normalized_root}:{approved_reuse._sha(diagnostic)}"
+        )
+        approved_cache = getattr(self, "_mmm_approved_repair_reuse_cache", None)
+        if not isinstance(approved_cache, dict):
+            approved_cache = {}
+            self._mmm_approved_repair_reuse_cache = approved_cache
+        approved_context = approved_cache.get(approved_cache_key)
+        if approved_cache_key not in approved_cache:
+            try:
+                approved_context = approved_reuse.build_approved_repair_reuse_context(
+                    normalized_root,
+                    diagnostic,
+                )
+            except approved_reuse.RepairReuseContextError as exc:
+                approved_context = {
+                    "schema_version": "mmm/approved-repair-reuse-context-v1",
+                    "status": "REJECTED",
+                    "snippets": [],
+                    "error": str(exc)[:1024],
+                    "policy": {
+                        "source_reuse_authority": "none",
+                        "reference_rag_never_authorizes_source_reuse": True,
+                        "repair_must_not_guess_or_reuse_unverified_source": True,
+                    },
+                }
+            approved_cache[approved_cache_key] = copy.deepcopy(approved_context)
+            while len(approved_cache) > 16:
+                approved_cache.pop(next(iter(approved_cache)))
+        if approved_context is not None:
+            context["approved_reuse_context"] = copy.deepcopy(approved_context)
+
+        retrieval_policy = dict(context.get("retrieval_policy") or {})
+        retrieval_policy.update(
+            {
+                "reuse_plan_coder_evidence_first": True,
+                "same_diagnostic_memoized": True,
+                "diagnostic_paths_and_symbols_first": True,
+                "full_project_reresearch": False,
+                "host_owned_route_selection": True,
+                "diagnostic_specific_retrieval": True,
+                "project_rag_primary": True,
+                "fresh_targeted_official_retrieval": bool(
+                    route.get("fresh_official_required")
+                ),
+                "research_before_repair_guess": True,
+                "small_model_must_not_select_retriever": True,
+                "verified_donor_required_for_source_reuse": True,
+                "reference_evidence_cannot_authorize_source_reuse": True,
+                "approved_repair_donor_available": bool(
+                    isinstance(approved_context, dict)
+                    and approved_context.get("status") == "APPROVED"
+                ),
+            }
+        )
+        context["retrieval_policy"] = retrieval_policy
         return context
 
     def _request_patch(

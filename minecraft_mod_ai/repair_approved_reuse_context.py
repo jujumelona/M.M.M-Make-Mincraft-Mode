@@ -263,6 +263,8 @@ def install(repair_module: Any) -> None:
     """Compose verified donor context after the canonical repair evidence wrapper."""
 
     cls = repair_module.RepairEngine
+    if getattr(repair_module, "__name__", "") == "minecraft_mod_ai.repair_engine":
+        return
     current = cls._context
     if getattr(current, _MARKER, False):
         return

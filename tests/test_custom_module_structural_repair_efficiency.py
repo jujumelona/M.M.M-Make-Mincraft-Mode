@@ -155,7 +155,9 @@ def test_custom_module_uses_coding_agent_tool_loop_not_file_plan(tmp_path: Path)
     assert (root / "src/main/java/example/Generated.java").is_file()
     assert result["touched_paths"] == ["src/main/java/example/Generated.java"]
     request = _implement_request(router.messages[0])
-    assert request["task"].startswith("Implement the approved Minecraft/Fabric mod feature")
+    assert request["task"].startswith(
+        "Implement only the atomic host-owned state transition"
+    )
     assert router.calls[0]["tool_stage"] == "generation"
     assert router.calls[0]["enable_tools"] is True
     assert any("workspace/RAG/MCP" in rule for rule in request["rules"])
