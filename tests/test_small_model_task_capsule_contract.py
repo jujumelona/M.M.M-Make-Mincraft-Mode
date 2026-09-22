@@ -472,3 +472,24 @@ def test_compact_coder_contract_drops_planner_provenance_blob() -> None:
     original_bytes = len(json.dumps(original_task).encode("utf-8"))
     compact_bytes = len(json.dumps(compact_task).encode("utf-8"))
     assert compact_bytes < original_bytes // 8
+
+
+def test_active_capsule_exposes_reuse_action_as_semantic_mode() -> None:
+    import minecraft_mod_ai.small_model_task_capsule_contract as contract
+
+    capsule = contract.TaskCapsule(
+        task_id="fresh-task",
+        module_kind="custom_java",
+        primary_path="src/main/java/dev/mmm/Fresh.java",
+        primary_symbol="Fresh",
+        anchors=(),
+        reuse_action="fresh",
+        required_gates=("target_compile",),
+        task_sha256="sha256:task",
+        capsule_sha256="sha256:capsule",
+    )
+    token = contract._CURRENT_CAPSULE.set(capsule)
+    try:
+        assert contract.current_task_reuse_action() == "fresh"
+    finally:
+        contract._CURRENT_CAPSULE.reset(token)

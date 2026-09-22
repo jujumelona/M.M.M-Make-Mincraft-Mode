@@ -218,3 +218,54 @@ def test_completion_boundary_recovery_does_not_loop(monkeypatch) -> None:
             tool_choice=request.tool_choice,
             parallel_tool_calls=False,
         )
+
+
+def test_degraded_code_rag_does_not_authorize_semantically_fresh_java() -> None:
+    state = loop.HostRunState(
+        mutation_context=_fresh_context(),
+        semantic_fresh_java=True,
+    )
+    degraded = {
+        "schema_version": "mmm/code-rag-result-v1",
+        "retrieval_quality_warning": "coverage_or_relevance_below_target",
+        "hits": [
+            {
+                "source_path": "src/main/java/dev/mmm/Other.java",
+                "text": "import net.minecraft.world.item.Item; class Other {}",
+            }
+        ],
+        "receipt": {"result_count": 1},
+    }
+    assert state.record_evidence(degraded, usable=True) is True
+    assert state.has_fresh_evidence is True
+    assert state.has_authoritative_java_evidence is False
+
+
+def test_materialized_fresh_scaffold_cannot_downgrade_evidence_requirement() -> None:
+    target = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+    state = loop.HostRunState(
+        mutation_context=loop.TargetMutationContext(
+            target_path=target,
+            target_symbol="DebugToken",
+            source_body="package dev.mmm.debugfixture; public final class DebugToken {}",
+            is_new_file=False,
+            evidence_source="workspace_existing_target",
+            writable_paths=(target,),
+            target_pinned=True,
+        ),
+        semantic_fresh_java=True,
+    )
+    state.record_evidence(
+        {
+            "schema_version": "mmm/project-convention-v1",
+            "content": "existing scaffold observed",
+        },
+        usable=True,
+    )
+    assert state.has_fresh_evidence is True
+    assert state.has_authoritative_java_evidence is False
+    assert loop._target_evidence_ready(
+        state,
+        require_rag=True,
+        fresh_java_target=True,
+    ) is False
