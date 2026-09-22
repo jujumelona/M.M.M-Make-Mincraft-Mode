@@ -51,6 +51,10 @@ _BASE_EXACT_SUFFIXES = (
     "src/main/resources/fabric.mod.json",
     "src/main/resources/pack.mcmeta",
 )
+_BASE_OWNED_PREFIXES = (
+    "src/gametest/java/",
+    "src/gametest/resources/",
+)
 _VERIFIER_INFRASTRUCTURE_CODES = frozenset(
     {"JDT_DIAGNOSTICS_UNAVAILABLE", "VERIFIER_UNAVAILABLE"}
 )
@@ -105,8 +109,12 @@ def _host_base_owned_path(value: Any) -> bool:
         folded = suffix.casefold()
         if path == folded or path.endswith("/" + folded):
             return True
-    marker = "/src/main/resources/assets/"
     candidate = "/" + path.lstrip("/")
+    for prefix in _BASE_OWNED_PREFIXES:
+        marker = "/" + prefix.casefold()
+        if marker in candidate:
+            return True
+    marker = "/src/main/resources/assets/"
     if marker not in candidate:
         return False
     tail = candidate.split(marker, 1)[1]

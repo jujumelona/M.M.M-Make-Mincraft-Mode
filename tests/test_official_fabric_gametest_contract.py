@@ -44,6 +44,15 @@ def test_official_scaffold_is_gametest_ready_before_first_build(tmp_path: Path) 
     assert 'modId = "mmm_debug_fixture_gametest"' in build
     assert "enableGameTests = true" in build
     assert "enableClientGameTests = false" in build
+    assert "// M.M.M host-owned GameTest source-set classpath bridge" in build
+    assert (
+        "compileClasspath += sourceSets.main.output + "
+        "sourceSets.main.compileClasspath"
+    ) in build
+    assert (
+        "runtimeClasspath += sourceSets.main.output + "
+        "sourceSets.main.runtimeClasspath"
+    ) in build
     assert "fabric-api.gametest.report-file" in build
     assert (
         'property "fabric-api.gametest.report-file", '
@@ -88,6 +97,7 @@ def test_official_scaffold_is_gametest_ready_before_first_build(tmp_path: Path) 
     provider._install_host_gametest_contract(root, spec, adapter)
     repeated = (root / "build.gradle").read_text(encoding="utf-8")
     assert repeated.count("configureTests") == 1
+    assert repeated.count("// M.M.M host-owned GameTest source-set classpath bridge") == 1
     assert repeated.count("fabric-api.gametest.report-file") == 1
     repeated_metadata = json.loads(
         (root / receipt["metadata"]).read_text(encoding="utf-8")

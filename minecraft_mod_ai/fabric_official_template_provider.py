@@ -561,6 +561,18 @@ fabricApi {{
 }}
 """
         )
+    classpath_marker = "// M.M.M host-owned GameTest source-set classpath bridge"
+    if classpath_marker not in build_text:
+        additions.append(
+            """// M.M.M host-owned GameTest source-set classpath bridge
+sourceSets {
+    gametest {
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath
+    }
+}
+"""
+        )
     if "fabric-api.gametest.report-file" not in build_text:
         additions.append(
             """// M.M.M structured GameTest evidence

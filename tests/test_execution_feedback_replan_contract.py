@@ -120,6 +120,44 @@ def test_unowned_base_project_diagnostics_route_to_prepare_project():
     assert prepare_match["match"]["host_base_project"] is True
 
 
+def test_unowned_host_gametest_diagnostic_routes_to_prepare_project():
+    ledger = _FakeLedger(
+        [
+            _generation_task(
+                "generate-custom-00000000",
+                "debug_token",
+                "src/main/java/dev/mmm/debugfixture/DebugToken.java",
+                "REQ-DEBUG",
+            )
+        ]
+    )
+    gametest_path = (
+        "/workspace/mod/src/gametest/java/dev/mmm/debugfixture/"
+        "MmmDebugFixtureModGameTests.java"
+    )
+
+    seeds, owners, requirements, matches = feedback._derive_impacted_seeds(
+        ledger,
+        {
+            "checkpoint_id": "gradle-build",
+            "diagnostics": [
+                {
+                    "path": gametest_path,
+                    "code": "javac:error:5",
+                    "message": "package net.minecraft.gametest.framework does not exist",
+                }
+            ],
+        },
+    )
+
+    assert seeds == {"prepare-project"}
+    assert owners == {"prepare-project"}
+    assert requirements == set()
+    assert [item["node_id"] for item in matches] == ["prepare-project"]
+    assert matches[0]["diagnostic_paths"] == [gametest_path]
+    assert matches[0]["match"]["host_base_project"] is True
+
+
 def test_generation_owner_wins_before_base_project_fallback():
     ledger = _FakeLedger(
         [
