@@ -1942,6 +1942,26 @@ _JAVA_API_EVIDENCE_RE = re.compile(
     r"|\b(?:package|import)\s+[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+"
     r"|\b(?:class|interface|record|enum)\s+[A-Za-z_$][\w$]*)"
 )
+_API_EVIDENCE_DIAGNOSTIC_MARKERS = (
+    "package net.minecraft",
+    "package net.fabricmc",
+    "package com.mojang",
+    "package org.quiltmc",
+    "net.minecraft.",
+    "net.fabricmc.",
+    "com.mojang.",
+    "org.quiltmc.",
+)
+
+
+def _diagnostics_require_api_evidence(errors: Sequence[Mapping[str, Any]]) -> bool:
+    """Return whether compiler/verifier diagnostics point at platform API mismatch."""
+
+    for item in errors:
+        message = str(item.get("message") or "").casefold()
+        if any(marker in message for marker in _API_EVIDENCE_DIAGNOSTIC_MARKERS):
+            return True
+    return False
 _ATOMIC_OUTPUT_RECOVERY_MARKER = "MMM_ATOMIC_OUTPUT_RECOVERY_V1"
 _ATOMIC_SOURCE_EDIT_OUTPUT_TOKENS = 4096
 _VERIFIER_REPAIR_OUTPUT_TOKENS = 2048
@@ -2291,6 +2311,7 @@ def _record_applied_mutation(
     state.applied_mutations.append(tool_name)
     state.workspace_changed = True
     state.validation_status = "PENDING"
+    state.repair_requires_api_evidence = False
     state.latest_verifier_tool = None
     state.latest_verifier_errors = ()
     state.repair_target_diagnostics = ()
@@ -2418,6 +2439,7 @@ class HostRunState:
     repair_previous_source: str | None = None
     repair_previous_path: str | None = None
     last_verifier_quality: str | None = None
+    repair_requires_api_evidence: bool = False
     last_failure_reason: str | None = None
     termination_reason: str | None = None
     trajectory: list[ExecutionStepTrace] = field(default_factory=list)
@@ -3745,6 +3767,74 @@ def _fixed_point_error(state: HostRunState) -> ModelConfigurationError:
     )
 
 
+def _forced_evidence_recovery_arguments(
+    phase_tools: Sequence[Mapping[str, Any]],
+    forced_evidence_tool: str | None,
+    rejection_payloads: Sequence[Mapping[str, Any]],
+) -> dict[str, Any] | None:
+    """Translate a rejected alternate evidence call onto the one host-forced route."""
+
+    forced = str(forced_evidence_tool or "").strip()
+    if not forced:
+        return None
+    schema = next(
+        (
+            item
+            for item in phase_tools
+            if isinstance(item, Mapping) and _tool_name(item) == forced
+        ),
+        None,
+    )
+    if not isinstance(schema, Mapping):
+        return None
+    function = schema.get("function")
+    parameters = function.get("parameters") if isinstance(function, Mapping) else None
+    properties = parameters.get("properties") if isinstance(parameters, Mapping) else None
+    required = parameters.get("required") if isinstance(parameters, Mapping) else ()
+    if not isinstance(properties, Mapping):
+        return None
+    required_names = {
+        str(name)
+        for name in required
+        if isinstance(name, str) and name
+    }
+    reviewed_evidence_names = (
+        _LOCALIZATION_EVIDENCE_TOOLS
+        | _READ_OBSERVE_TOOLS
+        | _RECOVERY_EVIDENCE_TOOLS
+    )
+    for payload in rejection_payloads:
+        original = str(payload.get("original_tool") or "").strip()
+        if (
+            not original
+            or original == forced
+            or original not in reviewed_evidence_names
+        ):
+            continue
+        raw = payload.get("raw_arguments")
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(parsed, Mapping):
+            continue
+        candidate = {
+            str(key): value
+            for key, value in parsed.items()
+            if str(key) in properties
+        }
+        if any(
+            name not in candidate
+            or candidate[name] in (None, "", [], {}, ())
+            for name in required_names
+        ):
+            continue
+        return candidate
+    return None
+
+
 def _consume_rejected_evidence_fixed_point(
     state: HostRunState,
     rejection_payloads: Sequence[Mapping[str, Any]],
@@ -3992,11 +4082,16 @@ def _generate_with_tools_impl(
                     writable_paths=(snapshot["path"],),
                     target_pinned=True,
                 )
-                # This is fresh local evidence, not permission inferred from a
-                # search hit. It satisfies recovery without consuming external
-                # discovery routes for an already-known workspace defect.
+                # This is fresh local evidence and exact repair authority. When the
+                # verifier says the platform API itself is wrong, however, local source
+                # is not sufficient implementation evidence: remain in RECOVER so the
+                # reviewed mappings/source/MCP frontier can resolve the exact API first.
                 state.record_evidence(snapshot, usable=True)
-                state.phase = LoopPhase.ACT
+                state.phase = (
+                    LoopPhase.RECOVER
+                    if state.repair_requires_api_evidence
+                    else LoopPhase.ACT
+                )
                 emit_root_cause(
                     "verifier_workspace_repair_bound",
                     stage=stage,
@@ -4008,6 +4103,7 @@ def _generate_with_tools_impl(
                         "source_sha256": snapshot["sha256"],
                         "source_bytes": len(snapshot["source"].encode("utf-8")),
                         "diagnostics_fingerprint": state.latest_verifier_fingerprint,
+                        "requires_api_evidence": state.repair_requires_api_evidence,
                     },
                 )
         last_prompt_phase = _sync_phase_tool_transcript(
@@ -4116,6 +4212,9 @@ def _generate_with_tools_impl(
                     "target compiler reported task-owned source defects",
                 )
                 current_compile_errors = tuple(state.latest_verifier_errors)
+                state.repair_requires_api_evidence = _diagnostics_require_api_evidence(
+                    current_compile_errors
+                )
                 if state.last_verifier_quality in {"NON_IMPROVING", "UNCHANGED"}:
                     _rollback_non_improving_verifier_repair(
                         state,
@@ -4125,7 +4224,11 @@ def _generate_with_tools_impl(
                     repeated = state.record_no_progress_result(
                         {
                             "phase_before": "VERIFY",
-                            "phase_after": "ACT",
+                            "phase_after": (
+                                "RECOVER"
+                                if state.repair_requires_api_evidence
+                                else "ACT"
+                            ),
                             "validation": "FAIL",
                             "target": _mutation_context_dict(state.mutation_context),
                             "verifier": {
@@ -4137,13 +4240,21 @@ def _generate_with_tools_impl(
                             "result": "FAIL",
                         }
                     )
-                    state.phase = LoopPhase.ACT
+                    state.phase = (
+                        LoopPhase.RECOVER
+                        if state.repair_requires_api_evidence
+                        else LoopPhase.ACT
+                    )
                     if repeated:
                         raise _fixed_point_error(state)
                     continue
                 state.repair_target_diagnostics = current_compile_errors
                 state.clear_no_progress_result()
-                state.phase = LoopPhase.ACT
+                state.phase = (
+                    LoopPhase.RECOVER
+                    if state.repair_requires_api_evidence
+                    else LoopPhase.ACT
+                )
                 continue
             state.validation_status = "DEFERRED"
             state.phase = LoopPhase.VERIFY
@@ -4538,6 +4649,125 @@ def _generate_with_tools_impl(
             if require_rag and not baseline_ready:
                 required_evidence_choice = True
             if repeated:
+                recovered_arguments = _forced_evidence_recovery_arguments(
+                    phase_tools,
+                    forced_evidence_tool,
+                    rejection_payloads,
+                )
+                if recovered_arguments is not None and forced_evidence_tool is not None:
+                    recovery_call_id = (
+                        f"host-forced-evidence-{state.step_index}-"
+                        f"{forced_evidence_tool}"
+                    )
+                    try:
+                        recovered_result = runtime.call(
+                            stage,
+                            forced_evidence_tool,
+                            recovered_arguments,
+                        )
+                        recovered_payload = {
+                            "ok": True,
+                            "tool": forced_evidence_tool,
+                            "result": recovered_result,
+                        }
+                        state.record_query(
+                            forced_evidence_tool,
+                            recovered_arguments,
+                        )
+                        if forced_evidence_tool in _RAG_EVIDENCE_TOOLS:
+                            recovered_usable = _usable_rag_result(recovered_result)
+                        elif forced_evidence_tool == "external_mcp_call":
+                            recovered_usable = _usable_external_rag_result(
+                                recovered_arguments,
+                                recovered_result,
+                            )
+                        else:
+                            recovered_usable = bool(recovered_result)
+                        recovered_recorded = state.record_evidence(
+                            recovered_result,
+                            usable=recovered_usable,
+                        )
+                        messages.append({
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [{
+                                "id": recovery_call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": forced_evidence_tool,
+                                    "arguments": json.dumps(
+                                        recovered_arguments,
+                                        ensure_ascii=False,
+                                        separators=(",", ":"),
+                                    ),
+                                },
+                            }],
+                        })
+                        messages.append(dict(bounded_tool_message(
+                            {
+                                "role": "tool",
+                                "tool_call_id": recovery_call_id,
+                                "name": forced_evidence_tool,
+                                "content": json.dumps(
+                                    recovered_payload,
+                                    ensure_ascii=False,
+                                    sort_keys=True,
+                                    default=str,
+                                ),
+                            },
+                            config=config,
+                            tools=request.tools,
+                        )))
+                        state.clear_no_progress_result()
+                        if (
+                            recovered_recorded
+                            and recovered_usable
+                            and implementation_requires_mutation
+                            and context_is_localized(state.mutation_context)
+                            and _target_evidence_ready(
+                                state,
+                                require_rag=require_rag,
+                                fresh_java_target=fresh_java_target,
+                                compile_backed_java=compile_backed_java,
+                            )
+                        ):
+                            state.phase = LoopPhase.ACT
+                        emit_root_cause(
+                            "forced_evidence_call_recovered",
+                            stage=stage,
+                            operation=forced_evidence_tool,
+                            gate="tool_admission",
+                            result="PASS" if recovered_usable else "SKIP",
+                            reason=(
+                                "replayed rejected alternate evidence query through "
+                                "the single host-forced reviewed evidence route"
+                            ),
+                            details={
+                                "arguments": recovered_arguments,
+                                "usable": recovered_usable,
+                                "recorded": recovered_recorded,
+                            },
+                        )
+                        continue
+                    except Exception as exc:  # noqa: BLE001 - typed evidence failure
+                        state.record_query(
+                            forced_evidence_tool,
+                            recovered_arguments,
+                        )
+                        state.record_failure(
+                            forced_evidence_tool,
+                            f"{type(exc).__name__}: {exc}",
+                        )
+                        emit_root_cause(
+                            "forced_evidence_call_recovery_failure",
+                            stage=stage,
+                            operation=forced_evidence_tool,
+                            gate="tool_admission",
+                            result="FAIL",
+                            reason=f"{type(exc).__name__}: {exc}",
+                            exc=exc,
+                        )
+                        continue
                 rejected_routes = _consume_rejected_evidence_fixed_point(
                     state,
                     rejection_payloads,
@@ -5141,6 +5371,9 @@ def _generate_with_tools_impl(
                     progress = True
                 if status == "FAIL" and implementation_requires_mutation:
                     state.record_failure(call.name, "verification reported source defects")
+                    state.repair_requires_api_evidence = _diagnostics_require_api_evidence(
+                        state.latest_verifier_errors
+                    )
                     if state.last_verifier_quality in {"NON_IMPROVING", "UNCHANGED"}:
                         _rollback_non_improving_verifier_repair(
                             state,

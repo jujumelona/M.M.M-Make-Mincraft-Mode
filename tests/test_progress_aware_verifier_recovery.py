@@ -226,3 +226,64 @@ def test_phase_handoff_replaces_previous_snapshot_instead_of_accumulating() -> N
     assert len(handoffs) == 1
     assert "old snapshot" not in handoffs[0]["content"]
     assert "Now.java" in handoffs[0]["content"]
+
+
+def test_api_namespace_compile_errors_require_recovery_evidence() -> None:
+    assert loop._diagnostics_require_api_evidence((
+        {
+            "message": (
+                "package net.minecraft.registry does not exist\n"
+                "import net.minecraft.registry.Registry;"
+            )
+        },
+    ))
+    assert not loop._diagnostics_require_api_evidence((
+        {"message": "cannot find symbol\nsymbol: variable localCounter"},
+    ))
+
+
+def test_rejected_alternate_evidence_query_maps_to_single_forced_route() -> None:
+    search_code = {
+        "type": "function",
+        "function": {
+            "name": "search_code_rag",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer"},
+                    "index_path": {"type": "string"},
+                },
+                "required": ["query"],
+            },
+        },
+    }
+    recovered = loop._forced_evidence_recovery_arguments(
+        (search_code,),
+        "search_code_rag",
+        (
+            {
+                "failure_code": "TOOL_NOT_VISIBLE",
+                "original_tool": "search_project_rag",
+                "raw_arguments": (
+                    '{"query":"AuthoredFeature011 current implementation",'
+                    '"minecraft_version":26.2,"limit":8}'
+                ),
+            },
+        ),
+    )
+    assert recovered == {
+        "query": "AuthoredFeature011 current implementation",
+        "limit": 8,
+    }
+
+
+def test_compile_backed_api_failure_routes_recover_before_edit() -> None:
+    source = inspect.getsource(loop._generate_with_tools_impl)
+    marker = 'current_compile_errors = tuple(state.latest_verifier_errors)'
+    assert marker in source
+    branch = source.split(marker, 1)[1].split(
+        'state.validation_status = "DEFERRED"', 1
+    )[0]
+    assert "_diagnostics_require_api_evidence" in branch
+    assert "LoopPhase.RECOVER" in branch
