@@ -172,6 +172,53 @@ def test_transient_protocol_disconnect_replays_once_before_model_failure() -> No
     assert calls[0]["headers"]["X-MMM-Request-Id"] != calls[1]["headers"]["X-MMM-Request-Id"]
 
 
+def test_semantic_progress_timeout_replays_once_before_model_failure() -> None:
+    calls: list[dict] = []
+
+    class Client:
+        def post(self, _url: str, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise contract.LlamaSemanticProgressTimeout("semantic stall")
+            return "recovered"
+
+    result = contract._post_completion_with_transport_replay(
+        Client(),
+        "http://127.0.0.1:8080/v1/chat/completions",
+        payload={"messages": [], "tools": [{"type": "function"}]},
+        timeout=llama_cpp_adapter.httpx.Timeout(120.0),
+        httpx_module=llama_cpp_adapter.httpx,
+        request_id="llama-first",
+    )
+
+    assert result == "recovered"
+    assert len(calls) == 2
+    assert calls[0]["headers"]["X-MMM-Request-Id"] == "llama-first"
+    assert calls[0]["headers"]["X-MMM-Request-Id"] != calls[1]["headers"]["X-MMM-Request-Id"]
+
+
+def test_second_semantic_progress_timeout_is_not_retried_forever() -> None:
+    calls = 0
+
+    class Client:
+        def post(self, _url: str, **_kwargs):
+            nonlocal calls
+            calls += 1
+            raise contract.LlamaSemanticProgressTimeout("semantic stall")
+
+    with pytest.raises(contract.LlamaSemanticProgressTimeout, match="semantic stall"):
+        contract._post_completion_with_transport_replay(
+            Client(),
+            "http://127.0.0.1:8080/v1/chat/completions",
+            payload={"messages": []},
+            timeout=llama_cpp_adapter.httpx.Timeout(120.0),
+            httpx_module=llama_cpp_adapter.httpx,
+            request_id="llama-first",
+        )
+
+    assert calls == 2
+
+
 def test_second_protocol_disconnect_is_not_retried_forever() -> None:
     calls = 0
 
