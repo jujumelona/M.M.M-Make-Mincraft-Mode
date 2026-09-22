@@ -175,6 +175,64 @@ def _compile_call(compiled, design: dict, inputs: dict, **overrides):
     )
 
 
+def test_integrated_build_gametest_counts_as_correctness_evidence(
+    tmp_path: Path,
+) -> None:
+    design = _research_design()
+    compiled = _compile(design)
+    inputs = _baseline_inputs(tmp_path)
+    build = inputs["build_report"]
+    build["commands"] = [
+        {
+            "name": "clean_build",
+            "exit_code": 0,
+            "timed_out": False,
+        },
+        {
+            "name": "incremental_build",
+            "command": ("gradle", "--daemon", "build", "--stacktrace"),
+            "exit_code": 0,
+            "timed_out": False,
+        },
+    ]
+    build["gametest_mode"] = "integrated_build"
+    build["gametest_task"] = "runGameTest"
+
+    evidence = _compile_call(compiled, design, inputs)
+
+    assert "correctness" in evidence
+    refs = evidence["correctness"]["evidence_refs"]
+    assert any(ref.startswith("fabric-gametest:") for ref in refs)
+
+
+def test_integrated_build_without_real_build_task_is_not_gametest_evidence(
+    tmp_path: Path,
+) -> None:
+    design = _research_design()
+    compiled = _compile(design)
+    inputs = _baseline_inputs(tmp_path)
+    build = inputs["build_report"]
+    build["commands"] = [
+        {
+            "name": "clean_build",
+            "exit_code": 0,
+            "timed_out": False,
+        },
+        {
+            "name": "incremental_build",
+            "command": ("gradle", "--daemon", "compileJava", "--stacktrace"),
+            "exit_code": 0,
+            "timed_out": False,
+        },
+    ]
+    build["gametest_mode"] = "integrated_build"
+    build["gametest_task"] = "runGameTest"
+
+    evidence = _compile_call(compiled, design, inputs)
+
+    assert "correctness" not in evidence
+
+
 def test_baseline_receipts_are_objective_stable_and_evaluator_compatible(
     tmp_path: Path,
 ) -> None:

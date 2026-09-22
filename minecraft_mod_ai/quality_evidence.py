@@ -110,20 +110,59 @@ def _clean_build_evidence(value: Mapping[str, Any] | None) -> EvidenceResult | N
     facts = {'status': 'PASS', 'gradle_version': str(value.get('gradle_version', '')), 'clean_build_count': len(clean), 'commands': [{'name': str(item.get('name', '')), 'exit_code': item.get('exit_code'), 'timed_out': item.get('timed_out', False)} for item in commands]}
     return ([_evidence_ref('gradle-clean-build', facts)], [value])
 
+def _integrated_build_command_passed(command: Mapping[str, Any]) -> bool:
+    if not _command_passed(command):
+        return False
+    name = str(command.get('name') or '')
+    if name in {'build', 'clean_build'}:
+        return True
+    if name != 'incremental_build':
+        return False
+    argv = command.get('command')
+    return (
+        _is_sequence(argv)
+        and any(str(argument) == 'build' for argument in argv)
+    )
+
+
+def _gametest_execution_evidence(
+    value: Mapping[str, Any],
+) -> tuple[str, list[Mapping[str, Any]]] | None:
+    commands = _commands(value)
+    mode = str(value.get('gametest_mode') or '').strip()
+    if mode == 'integrated_build':
+        task = str(value.get('gametest_task') or '').strip()
+        if task not in {'runGameTest', 'runGameTestServer'}:
+            return None
+        runs = [item for item in commands if _integrated_build_command_passed(item)]
+        return (mode, runs) if runs else None
+    runs = [
+        item
+        for item in commands
+        if item.get('name') == 'gametest' and _command_passed(item)
+    ]
+    return ('explicit_task', runs) if runs else None
+
+
 def _gametest_evidence(value: Mapping[str, Any] | None) -> EvidenceResult | None:
     if not _objective_pass(value):
         return None
-    commands = _commands(value)
-    runs = [item for item in commands if item.get('name') == 'gametest']
-    if not runs or not all(_command_passed(item) for item in runs):
+    execution = _gametest_execution_evidence(value)
+    if execution is None:
         return None
+    mode, runs = execution
     raw_path = value.get('gametest_report')
     if not isinstance(raw_path, str) or not raw_path.strip():
         return None
     report = _passing_gametest_xml(Path(raw_path))
     if report is None:
         return None
-    facts = {'command_count': len(runs), **report}
+    facts = {
+        'mode': mode,
+        'task': str(value.get('gametest_task') or ''),
+        'command_count': len(runs),
+        **report,
+    }
     return ([_evidence_ref('fabric-gametest', facts)], [value])
 
 def _jar_evidence(build: Mapping[str, Any] | None, validation: Mapping[str, Any] | None) -> EvidenceResult | None:
