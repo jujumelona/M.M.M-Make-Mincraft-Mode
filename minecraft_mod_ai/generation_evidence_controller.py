@@ -125,8 +125,26 @@ def verifier_diagnostic_bundle(
 
 def repair_evidence_route_for_errors(
     errors: Sequence[Mapping[str, Any]],
+    *,
+    local_source: str | None = None,
+    target_path: str | None = None,
 ) -> dict[str, Any]:
-    return classify_repair_evidence_route(verifier_diagnostic_bundle(errors), {})
+    base_context: dict[str, Any] = {}
+    if isinstance(local_source, str) and local_source.strip():
+        base_context = {
+            "rag": {
+                "hits": [
+                    {
+                        "path": str(target_path or ""),
+                        "text": local_source,
+                    }
+                ]
+            }
+        }
+    return classify_repair_evidence_route(
+        verifier_diagnostic_bundle(errors),
+        base_context,
+    )
 
 
 def repair_route_requires_retrieval(route: str | None) -> bool:

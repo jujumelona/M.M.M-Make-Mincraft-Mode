@@ -24,6 +24,15 @@ from pathlib import Path
 from typing import Any
 
 from .agent_intent import implementation_requested
+from .generation_evidence_controller import (
+    authoritative_java_evidence as _authoritative_java_evidence,
+    initial_evidence_frontier,
+    normalize_forced_evidence_rejection_calls,
+    recovery_evidence_frontier,
+    repair_evidence_route_for_errors,
+    repair_route_requires_retrieval,
+    semantic_fresh_java as _semantic_fresh_java,
+)
 from .llama_finish_reason_contract import (
     CONTEXT_PRESSURE,
     OUTPUT_EXHAUSTED,
@@ -1937,141 +1946,26 @@ def format_trajectory_summary(trajectory: Sequence[ExecutionStepTrace]) -> str:
     return "\n".join(lines)
 
 
-_JAVA_API_EVIDENCE_RE = re.compile(
-    r"(?:\b(?:net\.minecraft|net\.fabricmc|com\.mojang|org\.quiltmc)\.[A-Za-z0-9_.$]+"
-    r"|\b(?:package|import)\s+[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+"
-    r"|\b(?:class|interface|record|enum)\s+[A-Za-z_$][\w$]*)"
-)
-_API_EVIDENCE_DIAGNOSTIC_MARKERS = (
-    "package net.minecraft",
-    "package net.fabricmc",
-    "package com.mojang",
-    "package org.quiltmc",
-    "net.minecraft.",
-    "net.fabricmc.",
-    "com.mojang.",
-    "org.quiltmc.",
-)
-
-
-def _diagnostics_require_api_evidence(errors: Sequence[Mapping[str, Any]]) -> bool:
-    """Return whether compiler/verifier diagnostics point at platform API mismatch."""
-
-    for item in errors:
-        message = str(item.get("message") or "").casefold()
-        if any(marker in message for marker in _API_EVIDENCE_DIAGNOSTIC_MARKERS):
-            return True
-    return False
 _ATOMIC_OUTPUT_RECOVERY_MARKER = "MMM_ATOMIC_OUTPUT_RECOVERY_V1"
 _ATOMIC_SOURCE_EDIT_OUTPUT_TOKENS = 4096
 _VERIFIER_REPAIR_OUTPUT_TOKENS = 2048
 
 
-def _fresh_java_context(context: TargetMutationContext | None) -> bool:
-    if context is None or not context.is_new_file:
-        return False
-    return _canonical_mutation_path(context.target_path).casefold().endswith(".java")
+def _state_requires_authoritative_java_evidence(state: Any) -> bool:
+    explicit = getattr(state, "semantic_fresh_java", None)
+    if explicit is not None:
+        return bool(explicit)
+    context = getattr(state, "mutation_context", None)
+    return bool(
+        context is not None
+        and getattr(context, "is_new_file", False)
+        and _canonical_mutation_path(getattr(context, "target_path", ""))
+        .casefold()
+        .endswith(".java")
+    )
 
 
-def _mapping_schema(value: Any, schema: str) -> bool:
-    if not isinstance(value, Mapping):
-        return False
-    if str(value.get("schema_version") or "").strip() == schema:
-        return True
-    for key in ("structured_content", "result", "data"):
-        child = value.get(key)
-        if isinstance(child, Mapping) and _mapping_schema(child, schema):
-            return True
-    return False
-
-
-def _append_java_text_field(texts: list[str], raw: Any) -> None:
-    if isinstance(raw, str):
-        if raw.strip():
-            texts.append(raw)
-        return
-    if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
-        texts.extend(str(item) for item in raw if isinstance(item, str) and item.strip())
-
-
-def _collect_java_mapping_texts(value: Mapping[str, Any], texts: list[str]) -> None:
-    for key in ("parsed_text", "text", "content", "snippet", "code", "source", "source_text", "body"):
-        _append_java_text_field(texts, value.get(key))
-    for key in ("hits", "results", "records", "documents", "chunks", "resources", "symbols", "evidence"):
-        raw = value.get(key)
-        if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
-            for item in raw:
-                texts.extend(_java_evidence_texts(item))
-    for key in ("structured_content", "result", "data"):
-        child = value.get(key)
-        if child is not None:
-            texts.extend(_java_evidence_texts(child))
-
-
-def _java_evidence_texts(value: Any) -> tuple[str, ...]:
-    texts: list[str] = []
-    if isinstance(value, Mapping):
-        _collect_java_mapping_texts(value, texts)
-    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        for item in value:
-            texts.extend(_java_evidence_texts(item))
-    return tuple(texts)
-
-
-def _has_symbol_records(item: Any) -> bool:
-    if isinstance(item, Mapping):
-        symbols = item.get("symbols")
-        if (
-            isinstance(symbols, Sequence)
-            and not isinstance(symbols, (str, bytes, bytearray))
-            and any(isinstance(symbol, Mapping) and bool(symbol) for symbol in symbols)
-        ):
-            return True
-        return any(_has_symbol_records(child) for child in item.values())
-    if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
-        return any(_has_symbol_records(child) for child in item)
-    return False
-
-
-def _has_mapping_records(item: Any) -> bool:
-    if isinstance(item, Mapping):
-        mappings = item.get("mappings")
-        if isinstance(mappings, Mapping) and bool(mappings):
-            return True
-        if (
-            isinstance(mappings, Sequence)
-            and not isinstance(mappings, (str, bytes, bytearray))
-            and any(isinstance(entry, Mapping) and bool(entry) for entry in mappings)
-        ):
-            return True
-        return any(_has_mapping_records(child) for child in item.values())
-    if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
-        return any(_has_mapping_records(child) for child in item)
-    return False
-
-
-def _contains_java_api_evidence(value: Any) -> bool:
-    return any(_JAVA_API_EVIDENCE_RE.search(text) for text in _java_evidence_texts(value))
-
-
-def _authoritative_java_evidence(value: Any) -> bool:
-    """Return whether evidence is strong enough to authorize a fresh Java mutation."""
-    if not isinstance(value, Mapping):
-        return False
-    if not value:
-        return False
-    if _mapping_schema(value, "mmm/rag-result-v2"):
-        return False
-    if _mapping_schema(value, "mmm/java-symbols-v1"):
-        return _has_symbol_records(value)
-    if _mapping_schema(value, "mmm/code-rag-result-v1"):
-        return _contains_java_api_evidence(value)
-    if _contains_java_api_evidence(value):
-        return True
-    return _has_mapping_records(value)
-
-
-def _host_target_execution_authority(state: Any) -> bool:
+def _host_target_execution_authoritydef _host_target_execution_authority(state: Any) -> bool:
     """Return whether the host has exact authority to mutate the pinned target.
 
     Fresh host-reserved targets are executable when the exact pinned path is also in
@@ -2186,9 +2080,13 @@ def _target_evidence_ready(
     del compile_backed_java
     if not require_rag:
         return True
+    strong_java_required = bool(
+        fresh_java_target
+        or getattr(state, "semantic_fresh_java", False) is True
+    )
     return (
         state.has_authoritative_java_evidence
-        if fresh_java_target
+        if strong_java_required
         else state.has_fresh_evidence
     )
 
@@ -2196,7 +2094,14 @@ def _record_evidence_locked(state: Any, value: Any, fingerprint: str) -> bool:
     if fingerprint in state.evidence_fingerprints:
         return False
     state.evidence_fingerprints.add(fingerprint)
-    if _fresh_java_context(state.mutation_context) and _authoritative_java_evidence(value):
+    context = state.mutation_context
+    if (
+        _state_requires_authoritative_java_evidence(state)
+        and _authoritative_java_evidence(
+            value,
+            target_path=context.target_path if context is not None else None,
+        )
+    ):
         state.authoritative_java_evidence_fingerprints.add(fingerprint)
     context = _extract_mutation_context_from_payload(value)
     if observed_context_may_bind(context, binding_enabled=state.retrieval_target_binding_enabled):
@@ -2311,7 +2216,7 @@ def _record_applied_mutation(
     state.applied_mutations.append(tool_name)
     state.workspace_changed = True
     state.validation_status = "PENDING"
-    state.repair_requires_api_evidence = False
+    state.repair_evidence_route = None
     state.latest_verifier_tool = None
     state.latest_verifier_errors = ()
     state.repair_target_diagnostics = ()
@@ -2417,6 +2322,7 @@ class HostRunState:
     attempted_sources: set[str] = field(default_factory=set)
     evidence_fingerprints: set[str] = field(default_factory=set)
     authoritative_java_evidence_fingerprints: set[str] = field(default_factory=set)
+    semantic_fresh_java: bool | None = None
     retrieval_target_binding_enabled: bool = True
     mutation_context: TargetMutationContext | None = None
     applied_mutations: list[str] = field(default_factory=list)
@@ -2439,7 +2345,7 @@ class HostRunState:
     repair_previous_source: str | None = None
     repair_previous_path: str | None = None
     last_verifier_quality: str | None = None
-    repair_requires_api_evidence: bool = False
+    repair_evidence_route: str | None = None
     last_failure_reason: str | None = None
     termination_reason: str | None = None
     trajectory: list[ExecutionStepTrace] = field(default_factory=list)
@@ -2560,6 +2466,7 @@ class HostRunState:
                 self.repair_baseline_fingerprint = None
                 self.repair_previous_source = None
                 self.repair_previous_path = None
+                self.repair_evidence_route = None
             return progress
 
     def take_verifier_repair_guidance(self) -> str | None:
@@ -2825,14 +2732,6 @@ def _source_edit_schema_for_context(
     return cloned
 
 
-def _unattempted_tools(
-    by_name: Mapping[str, Mapping[str, Any]],
-    attempted: set[str],
-    preferred: Sequence[str],
-) -> list[str]:
-    return [name for name in preferred if name in by_name and name not in attempted]
-
-
 def _fresh_observe_names(
     by_name: Mapping[str, Mapping[str, Any]],
     attempted: set[str],
@@ -2840,38 +2739,15 @@ def _fresh_observe_names(
     *,
     semantic_retrieval_choice: bool,
 ) -> list[str]:
-    """Advance fresh-Java grounding from exact local evidence to broader fallbacks."""
-
-    del mutation_context
-
-    # First ask the exact code-RAG route alone. A small model should not have to
-    # choose among broader discovery surfaces before the highest-signal project/API
-    # evidence route has been attempted.
-    if "search_code_rag" in by_name and "search_code_rag" not in attempted:
-        return ["search_code_rag"]
-
-    # If exact code RAG was weak, exhaust local workspace/project evidence before
-    # paying for external discovery. These routes can be offered together when the
-    # caller deliberately allows semantic route choice.
-    internal = _unattempted_tools(
-        by_name,
-        attempted,
-        ("java_workspace_symbols", "search_project_rag"),
+    del semantic_retrieval_choice
+    return list(
+        initial_evidence_frontier(
+            available=tuple(by_name),
+            attempted=attempted,
+            localization_stage=mutation_context.localization_stage.value,
+            semantic_fresh_java_target=True,
+        )
     )
-    if internal:
-        return internal if semantic_retrieval_choice else internal[:1]
-
-    external = _unattempted_tools(
-        by_name,
-        attempted,
-        (
-            "external_mcp_capabilities",
-            "external_mcp_schema",
-            "external_mcp_call",
-            "inspect_modrinth_project",
-        ),
-    )
-    return external if semantic_retrieval_choice else external[:1]
 
 
 def _localized_observe_names(
@@ -2880,26 +2756,32 @@ def _localized_observe_names(
     mutation_context: TargetMutationContext | None,
     *,
     semantic_retrieval_choice: bool,
+    semantic_fresh_java_target: bool = False,
 ) -> list[str]:
-    if mutation_context and mutation_context.is_new_file and mutation_context.is_mutation_ready:
-        return _fresh_observe_names(
-            by_name, attempted, mutation_context,
-            semantic_retrieval_choice=semantic_retrieval_choice,
+    del semantic_retrieval_choice
+    stage = (
+        mutation_context.localization_stage.value
+        if mutation_context is not None
+        else LocalizationStage.NEED_FILE.value
+    )
+    return list(
+        initial_evidence_frontier(
+            available=tuple(by_name),
+            attempted=attempted,
+            localization_stage=stage,
+            semantic_fresh_java_target=bool(
+                semantic_fresh_java_target
+                or (
+                    mutation_context is not None
+                    and mutation_context.is_new_file
+                    and mutation_context.is_mutation_ready
+                )
+            ),
         )
-    stage = mutation_context.localization_stage if mutation_context else LocalizationStage.NEED_FILE
-    if stage == LocalizationStage.NEED_FILE:
-        preferred = ("search_code_rag", "search_project_rag")
-    elif stage == LocalizationStage.NEED_SYMBOL:
-        preferred = ("java_workspace_symbols", "search_code_rag", "search_project_rag")
-    elif stage == LocalizationStage.NEED_BODY:
-        preferred = ("search_code_rag", "java_workspace_symbols", "search_project_rag")
-    else:
-        preferred = ("search_project_rag", "search_code_rag")
-    names = _unattempted_tools(by_name, attempted, preferred)
-    return names if semantic_retrieval_choice else names[:1]
+    )
 
 
-def _filter_tools_for_phase(
+def _filter_tools_for_phase(def _filter_tools_for_phase(
     exposed_tools: Sequence[Mapping[str, Any]],
     phase: LoopPhase,
     role: str,
@@ -2908,6 +2790,8 @@ def _filter_tools_for_phase(
     attempted_sources: Sequence[str] | set[str] | frozenset[str] = frozenset(),
     localization_active: bool | None = None,
     semantic_retrieval_choice: bool = False,
+    semantic_fresh_java_target: bool = False,
+    repair_evidence_route: str | None = None,
 ) -> tuple[Mapping[str, Any], ...]:
     del role
     by_name = {_tool_name(schema): schema for schema in exposed_tools if _tool_name(schema)}
@@ -2919,33 +2803,15 @@ def _filter_tools_for_phase(
     elif phase == LoopPhase.VERIFY:
         names = [name for name in by_name if name in _VERIFY_TOOLS]
     elif phase == LoopPhase.RECOVER:
-        pinned_source = bool(
-            mutation_context
-            and mutation_context.is_mutation_ready
-            and isinstance(mutation_context.source_body, str)
-        )
-        recovery_frontier = (
-            (
-                "search_code_rag",
-                "java_workspace_symbols",
-                "search_project_rag",
-                "external_mcp_capabilities",
-                "external_mcp_schema",
-                "external_mcp_call",
-            )
-            if pinned_source
-            else (
-                "search_code_rag",
-                "java_workspace_symbols",
-                "search_project_rag",
-                "external_mcp_capabilities",
-                "external_mcp_schema",
-                "external_mcp_call",
-                "inspect_modrinth_project",
-                "read_reuse_source",
+        names = list(
+            recovery_evidence_frontier(
+                available=tuple(by_name),
+                attempted=attempted,
+                route=repair_evidence_route,
             )
         )
-        names = [name for name in recovery_frontier if name in by_name and name not in attempted]
+    else:
+        active = mutation_context is not None if localization_active is None else localization_active
     else:
         active = mutation_context is not None if localization_active is None else localization_active
         if not active:
@@ -2954,8 +2820,11 @@ def _filter_tools_for_phase(
                 names.remove("java_workspace_symbols")
         else:
             names = _localized_observe_names(
-                by_name, attempted, mutation_context,
+                by_name,
+                attempted,
+                mutation_context,
                 semantic_retrieval_choice=semantic_retrieval_choice,
+                semantic_fresh_java_target=semantic_fresh_java_target,
             )
     return tuple(
         _source_edit_schema_for_context(by_name[name], mutation_context)
@@ -3767,122 +3636,7 @@ def _fixed_point_error(state: HostRunState) -> ModelConfigurationError:
     )
 
 
-def _forced_evidence_recovery_arguments(
-    phase_tools: Sequence[Mapping[str, Any]],
-    forced_evidence_tool: str | None,
-    rejection_payloads: Sequence[Mapping[str, Any]],
-) -> dict[str, Any] | None:
-    """Translate a rejected alternate evidence call onto the one host-forced route."""
-
-    forced = str(forced_evidence_tool or "").strip()
-    if not forced:
-        return None
-    schema = next(
-        (
-            item
-            for item in phase_tools
-            if isinstance(item, Mapping) and _tool_name(item) == forced
-        ),
-        None,
-    )
-    if not isinstance(schema, Mapping):
-        return None
-    function = schema.get("function")
-    parameters = function.get("parameters") if isinstance(function, Mapping) else None
-    properties = parameters.get("properties") if isinstance(parameters, Mapping) else None
-    required = parameters.get("required") if isinstance(parameters, Mapping) else ()
-    if not isinstance(properties, Mapping):
-        return None
-    required_names = {
-        str(name)
-        for name in required
-        if isinstance(name, str) and name
-    }
-    reviewed_evidence_names = (
-        _LOCALIZATION_EVIDENCE_TOOLS
-        | _READ_OBSERVE_TOOLS
-        | _RECOVERY_EVIDENCE_TOOLS
-    )
-    for payload in rejection_payloads:
-        original = str(payload.get("original_tool") or "").strip()
-        if (
-            not original
-            or original == forced
-            or original not in reviewed_evidence_names
-        ):
-            continue
-        raw = payload.get("raw_arguments")
-        if not isinstance(raw, str) or not raw.strip():
-            continue
-        try:
-            parsed = json.loads(raw)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            continue
-        if not isinstance(parsed, Mapping):
-            continue
-        candidate = {
-            str(key): value
-            for key, value in parsed.items()
-            if str(key) in properties
-        }
-        if any(
-            name not in candidate
-            or candidate[name] in (None, "", [], {}, ())
-            for name in required_names
-        ):
-            continue
-        return candidate
-    return None
-
-
-def _consume_rejected_evidence_fixed_point(
-    state: HostRunState,
-    rejection_payloads: Sequence[Mapping[str, Any]],
-    phase_names: Collection[str],
-    *,
-    forced_evidence_tool: str | None = None,
-    forced_evidence_arguments: Mapping[str, Any] | None = None,
-) -> tuple[str, ...]:
-    """Consume the reviewed evidence route that cannot produce an admissible call.
-
-    Adapter rejection payloads name the model-emitted tool. When the host has forced
-    exactly one reviewed evidence route, a non-visible model tool is evidence that the
-    forced route failed to yield an admissible call, not that the invented tool became
-    part of the reviewed frontier. After the same rejection state repeats, consume the
-    forced route so the frontier can advance without granting authority to the invented
-    tool name.
-    """
-
-    if state.phase not in {LoopPhase.OBSERVE, LoopPhase.RECOVER}:
-        return ()
-    allowed = {
-        str(name).strip()
-        for name in phase_names
-        if str(name).strip()
-    }
-    routes = {
-        name
-        for payload in rejection_payloads
-        if (name := str(payload.get("original_tool") or "").strip())
-        and name in allowed
-    }
-    forced = str(forced_evidence_tool or "").strip()
-    if not routes and forced and forced in allowed and len(allowed) == 1:
-        routes.add(forced)
-    consumed = tuple(sorted(routes))
-    if not consumed:
-        return ()
-    forced_arguments = dict(forced_evidence_arguments or {})
-    for route in consumed:
-        state.record_source_attempt(
-            route,
-            forced_arguments if route == forced else {},
-        )
-    state.clear_no_progress_result()
-    return consumed
-
-
-def _host_coder_summary(*, verification: str) -> str:
+def _host_coder_summary(def _host_coder_summary(*, verification: str) -> str:
     """Return the fixed coder-summary contract from host-owned terminal state.
 
     Once mutation/verification state is terminal, asking the model for one more
@@ -3992,11 +3746,21 @@ def _generate_with_tools_impl(
         and state.mutation_context
         and _canonical_mutation_path(state.mutation_context.target_path).casefold().endswith(".java")
     )
+    from .small_model_task_capsule_contract import (
+        current_task_required_gates,
+        current_task_reuse_action,
+    )
+    reuse_action = current_task_reuse_action()
     fresh_java_target = bool(
         java_target
         and state.mutation_context
-        and state.mutation_context.is_new_file
+        and _semantic_fresh_java(
+            reuse_action,
+            state.mutation_context.target_path,
+            materialized_new_file=state.mutation_context.is_new_file,
+        )
     )
+    state.semantic_fresh_java = fresh_java_target
     initial_execution_authority = _host_target_execution_authority(state)
     active_mutation_authority = CURRENT_MUTATION_AUTHORITY.get()
     bounded_root_execution_authority = bool(
@@ -4008,7 +3772,6 @@ def _generate_with_tools_impl(
         and _authored_workspace_refresh_requested(request.messages)
     )
     state.retrieval_target_binding_enabled = not authored_workspace_refresh
-    from .small_model_task_capsule_contract import current_task_required_gates
     compile_backed_java = bool(
         java_target
         and state.mutation_context
@@ -4089,7 +3852,7 @@ def _generate_with_tools_impl(
                 state.record_evidence(snapshot, usable=True)
                 state.phase = (
                     LoopPhase.RECOVER
-                    if state.repair_requires_api_evidence
+                    if repair_route_requires_retrieval(state.repair_evidence_route)
                     else LoopPhase.ACT
                 )
                 emit_root_cause(
@@ -4103,7 +3866,7 @@ def _generate_with_tools_impl(
                         "source_sha256": snapshot["sha256"],
                         "source_bytes": len(snapshot["source"].encode("utf-8")),
                         "diagnostics_fingerprint": state.latest_verifier_fingerprint,
-                        "requires_api_evidence": state.repair_requires_api_evidence,
+                        "repair_evidence_route": state.repair_evidence_route,
                     },
                 )
         last_prompt_phase = _sync_phase_tool_transcript(
@@ -4212,8 +3975,22 @@ def _generate_with_tools_impl(
                     "target compiler reported task-owned source defects",
                 )
                 current_compile_errors = tuple(state.latest_verifier_errors)
-                state.repair_requires_api_evidence = _diagnostics_require_api_evidence(
-                    current_compile_errors
+                current_context = state.mutation_context
+                repair_route = repair_evidence_route_for_errors(
+                    current_compile_errors,
+                    local_source=(
+                        current_context.source_body
+                        if current_context is not None
+                        else None
+                    ),
+                    target_path=(
+                        current_context.target_path
+                        if current_context is not None
+                        else None
+                    ),
+                )
+                state.repair_evidence_route = str(
+                    repair_route.get("route") or "project_local"
                 )
                 if state.last_verifier_quality in {"NON_IMPROVING", "UNCHANGED"}:
                     _rollback_non_improving_verifier_repair(
@@ -4226,7 +4003,7 @@ def _generate_with_tools_impl(
                             "phase_before": "VERIFY",
                             "phase_after": (
                                 "RECOVER"
-                                if state.repair_requires_api_evidence
+                                if repair_route_requires_retrieval(state.repair_evidence_route)
                                 else "ACT"
                             ),
                             "validation": "FAIL",
@@ -4242,7 +4019,7 @@ def _generate_with_tools_impl(
                     )
                     state.phase = (
                         LoopPhase.RECOVER
-                        if state.repair_requires_api_evidence
+                        if repair_route_requires_retrieval(state.repair_evidence_route)
                         else LoopPhase.ACT
                     )
                     if repeated:
@@ -4252,7 +4029,7 @@ def _generate_with_tools_impl(
                 state.clear_no_progress_result()
                 state.phase = (
                     LoopPhase.RECOVER
-                    if state.repair_requires_api_evidence
+                    if repair_route_requires_retrieval(state.repair_evidence_route)
                     else LoopPhase.ACT
                 )
                 continue
@@ -4276,6 +4053,8 @@ def _generate_with_tools_impl(
             attempted_sources=state.attempted_sources,
             localization_active=implementation_requires_mutation,
             semantic_retrieval_choice=bool(require_rag and not baseline_ready),
+            semantic_fresh_java_target=fresh_java_target,
+            repair_evidence_route=state.repair_evidence_route,
         )
         constrained_repair_tools = _constrain_verifier_repair_tools(
             phase_tools,
@@ -4593,6 +4372,25 @@ def _generate_with_tools_impl(
                     ),
                 },
             )
+        normalized_evidence_calls = normalize_forced_evidence_rejection_calls(
+            turn.tool_calls,
+            phase_tools=phase_tools,
+            forced_evidence_tool=forced_evidence_tool,
+        )
+        if normalized_evidence_calls is not None:
+            turn = replace(turn, tool_calls=normalized_evidence_calls)
+            emit_root_cause(
+                "forced_evidence_tool_host_normalized",
+                stage=stage,
+                operation=forced_evidence_tool or "evidence",
+                gate="tool_admission",
+                result="PASS",
+                reason=(
+                    "model selected another reviewed retriever; host preserved the "
+                    "search intent and rebound it to the single host-owned evidence route"
+                ),
+                details={"step_index": state.step_index},
+            )
         turn = reject_noop_repair(
             turn, state=state, binder=_bind_existing_verifier_repair_call
         )
@@ -4648,152 +4446,6 @@ def _generate_with_tools_impl(
             )
             if require_rag and not baseline_ready:
                 required_evidence_choice = True
-            if repeated:
-                recovered_arguments = _forced_evidence_recovery_arguments(
-                    phase_tools,
-                    forced_evidence_tool,
-                    rejection_payloads,
-                )
-                if recovered_arguments is not None and forced_evidence_tool is not None:
-                    recovery_call_id = (
-                        f"host-forced-evidence-{state.step_index}-"
-                        f"{forced_evidence_tool}"
-                    )
-                    try:
-                        recovered_result = runtime.call(
-                            stage,
-                            forced_evidence_tool,
-                            recovered_arguments,
-                        )
-                        recovered_payload = {
-                            "ok": True,
-                            "tool": forced_evidence_tool,
-                            "result": recovered_result,
-                        }
-                        state.record_query(
-                            forced_evidence_tool,
-                            recovered_arguments,
-                        )
-                        if forced_evidence_tool in _RAG_EVIDENCE_TOOLS:
-                            recovered_usable = _usable_rag_result(recovered_result)
-                        elif forced_evidence_tool == "external_mcp_call":
-                            recovered_usable = _usable_external_rag_result(
-                                recovered_arguments,
-                                recovered_result,
-                            )
-                        else:
-                            recovered_usable = bool(recovered_result)
-                        recovered_recorded = state.record_evidence(
-                            recovered_result,
-                            usable=recovered_usable,
-                        )
-                        messages.append({
-                            "role": "assistant",
-                            "content": None,
-                            "tool_calls": [{
-                                "id": recovery_call_id,
-                                "type": "function",
-                                "function": {
-                                    "name": forced_evidence_tool,
-                                    "arguments": json.dumps(
-                                        recovered_arguments,
-                                        ensure_ascii=False,
-                                        separators=(",", ":"),
-                                    ),
-                                },
-                            }],
-                        })
-                        messages.append(dict(bounded_tool_message(
-                            {
-                                "role": "tool",
-                                "tool_call_id": recovery_call_id,
-                                "name": forced_evidence_tool,
-                                "content": json.dumps(
-                                    recovered_payload,
-                                    ensure_ascii=False,
-                                    sort_keys=True,
-                                    default=str,
-                                ),
-                            },
-                            config=config,
-                            tools=request.tools,
-                        )))
-                        state.clear_no_progress_result()
-                        if (
-                            recovered_recorded
-                            and recovered_usable
-                            and implementation_requires_mutation
-                            and context_is_localized(state.mutation_context)
-                            and _target_evidence_ready(
-                                state,
-                                require_rag=require_rag,
-                                fresh_java_target=fresh_java_target,
-                                compile_backed_java=compile_backed_java,
-                            )
-                        ):
-                            state.phase = LoopPhase.ACT
-                        emit_root_cause(
-                            "forced_evidence_call_recovered",
-                            stage=stage,
-                            operation=forced_evidence_tool,
-                            gate="tool_admission",
-                            result="PASS" if recovered_usable else "SKIP",
-                            reason=(
-                                "replayed rejected alternate evidence query through "
-                                "the single host-forced reviewed evidence route"
-                            ),
-                            details={
-                                "arguments": recovered_arguments,
-                                "usable": recovered_usable,
-                                "recorded": recovered_recorded,
-                            },
-                        )
-                        continue
-                    except Exception as exc:  # noqa: BLE001 - typed evidence failure
-                        state.record_query(
-                            forced_evidence_tool,
-                            recovered_arguments,
-                        )
-                        state.record_failure(
-                            forced_evidence_tool,
-                            f"{type(exc).__name__}: {exc}",
-                        )
-                        emit_root_cause(
-                            "forced_evidence_call_recovery_failure",
-                            stage=stage,
-                            operation=forced_evidence_tool,
-                            gate="tool_admission",
-                            result="FAIL",
-                            reason=f"{type(exc).__name__}: {exc}",
-                            exc=exc,
-                        )
-                        continue
-                rejected_routes = _consume_rejected_evidence_fixed_point(
-                    state,
-                    rejection_payloads,
-                    phase_names,
-                    forced_evidence_tool=forced_evidence_tool,
-                    forced_evidence_arguments=forced_evidence_arguments,
-                )
-                if rejected_routes:
-                    # A repeated schema/protocol rejection means this evidence route
-                    # has reached a semantic fixed point. Consume only that route and
-                    # continue through the remaining evidence frontier instead of
-                    # aborting the whole generation task.
-                    emit_root_cause(
-                        "rejected_evidence_route_exhausted",
-                        stage=stage,
-                        operation="generate_with_tools",
-                        gate="semantic_fixed_point",
-                        result="SKIP",
-                        reason="repeated rejected evidence call; advancing to next reviewed route",
-                        details={
-                            "step_index": state.step_index,
-                            "phase": state.phase.value,
-                            "routes": list(rejected_routes),
-                        },
-                    )
-                    continue
             if repeated:
                 raise _fixed_point_error(state)
             continue
@@ -5371,8 +5023,22 @@ def _generate_with_tools_impl(
                     progress = True
                 if status == "FAIL" and implementation_requires_mutation:
                     state.record_failure(call.name, "verification reported source defects")
-                    state.repair_requires_api_evidence = _diagnostics_require_api_evidence(
-                        state.latest_verifier_errors
+                    current_context = state.mutation_context
+                    repair_route = repair_evidence_route_for_errors(
+                        state.latest_verifier_errors,
+                        local_source=(
+                            current_context.source_body
+                            if current_context is not None
+                            else None
+                        ),
+                        target_path=(
+                            current_context.target_path
+                            if current_context is not None
+                            else None
+                        ),
+                    )
+                    state.repair_evidence_route = str(
+                        repair_route.get("route") or "project_local"
                     )
                     if state.last_verifier_quality in {"NON_IMPROVING", "UNCHANGED"}:
                         _rollback_non_improving_verifier_repair(
