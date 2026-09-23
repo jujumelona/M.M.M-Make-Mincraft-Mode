@@ -1193,6 +1193,60 @@ class CustomModuleGenerator:
             _transfer_checkpoint_lease(checkpoint_lease)
         return token
 
+    def ensure_generation_live_commit(
+        self,
+        result: Any,
+        *,
+        project_root: str | Path,
+    ) -> bool:
+        """Guarantee the staged checkpoint delta is materialized in the canonical project."""
+
+        if not isinstance(result, dict):
+            return False
+        root = Path(project_root).expanduser().resolve()
+        if _committed_patch_receipt_matches(result, project_root=root):
+            return True
+        checkpoint = result.get("generation_checkpoint")
+        if not isinstance(checkpoint, dict):
+            return False
+        token = checkpoint.get("cleanup_token")
+        identity = checkpoint.get("identity_sha256")
+        if (
+            checkpoint.get("schema_version") != _CHECKPOINT_SCHEMA
+            or checkpoint.get("status") != "AWAITING_LIVE_COMMIT"
+            or not isinstance(token, str)
+            or not isinstance(identity, str)
+        ):
+            return False
+        with self._checkpoint_cleanup_lock:
+            owned = self._checkpoint_cleanup_tokens.get(token)
+        if owned is None or owned[0] != identity:
+            return False
+        checkpoint_root = owned[1]
+        base_root = _checkpoint_base(checkpoint_root)
+        staged_root = checkpoint_root / "project"
+        if (
+            not base_root.is_dir()
+            or base_root.is_symlink()
+            or not staged_root.is_dir()
+            or staged_root.is_symlink()
+        ):
+            return False
+        try:
+            operations = _checkpoint_patch_operations(base_root, staged_root)
+            if not operations:
+                return False
+            from .project_write_lock import project_write_lock
+
+            with project_write_lock(root):
+                if not _committed_patch_receipt_matches(result, project_root=root):
+                    result["patch_receipt"] = TransactionalSourcePatcher(root).apply(
+                        operations
+                    )
+        except (OSError, SourcePatchError, ValueError):
+            return False
+        return _committed_patch_receipt_matches(result, project_root=root)
+
     def finalize_committed_generation_checkpoint(
         self,
         result: Any,
@@ -1201,6 +1255,9 @@ class CustomModuleGenerator:
     ) -> bool:
         """Clean one checkpoint only after the durable work-node commit succeeded."""
 
+        root = Path(project_root).expanduser().resolve()
+        if not _committed_patch_receipt_matches(result, project_root=root):
+            return False
         checkpoint = result.get("generation_checkpoint") if isinstance(result, dict) else None
         if not isinstance(checkpoint, dict):
             return True
