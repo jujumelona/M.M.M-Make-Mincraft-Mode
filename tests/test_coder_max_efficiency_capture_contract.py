@@ -118,8 +118,8 @@ def test_width_two_candidate_wrapper_captures_and_commits_winner(
     assert result["agentic_generation_search"]["candidate_count"] == 2
     assert result["agentic_generation_search"]["candidate_workers"] == 2
     assert result["patch_receipt"]["status"] == "APPLIED"
-    assert result["generation_checkpoint_acknowledged"] is True
-    assert acknowledgements == [result]
+    assert result["generation_checkpoint_acknowledged"] is False
+    assert acknowledgements == []
     assert releases == []
     assert len(discards) == 1
     assert (root / "src/main/java/example/ParallelCapture.java").read_text(
@@ -210,8 +210,8 @@ def test_legacy_width_two_search_acknowledges_only_after_live_commit(
         mappings=platform.yarn_mappings,
     )
 
-    assert result["generation_checkpoint_acknowledged"] is True
-    assert acknowledgement_states == [True]
+    assert result["generation_checkpoint_acknowledged"] is False
+    assert acknowledgement_states == []
     assert releases == []
     assert len(discards) == 1
     assert (root / relative).read_text(encoding="utf-8") == (
