@@ -9,11 +9,17 @@ from minecraft_mod_ai.authored_existing_localization import (
 from minecraft_mod_ai.authored_plan import AuthoredPlan
 from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.direct_task_mutation_authority_contract import (
+    _CURRENT_AUTHORITY,
     compile_direct_task_mutation_authority,
 )
 from minecraft_mod_ai.mutation_authority import MutationAuthorityMode
 from minecraft_mod_ai.platform_catalog import adapter_for_target
-from minecraft_mod_ai.small_model_task_capsule_contract import compile_task_capsule
+from minecraft_mod_ai.small_model_task_capsule_contract import (
+    _CURRENT_CAPSULE,
+    compile_task_capsule,
+    task_capsule_generation_scope,
+)
+from minecraft_mod_ai.small_model_write_scope_enforcement import generation_authority_scoped
 
 
 class _Router:
@@ -85,6 +91,49 @@ def test_localizer_freezes_exact_authority(tmp_path):
         "src/main/java/other/NotOwned.java", operation="create_file"
     )
     assert error and error.startswith("MUTATION_TARGET_DRIFT")
+
+
+def test_generation_boundary_localizes_before_exact_authority(tmp_path):
+    _project(tmp_path)
+    router = _Router()
+
+    class Generator:
+        def __init__(self):
+            self.router = router
+
+        @task_capsule_generation_scope
+        @generation_authority_scoped
+        def generate(
+            self,
+            project_root,
+            *,
+            module,
+            research_modules=(),
+            minecraft_version=None,
+            loader=None,
+            mappings=None,
+            execution_feedback=None,
+        ):
+            del project_root, research_modules, minecraft_version, loader, mappings
+            del execution_feedback
+            authority = _CURRENT_AUTHORITY.get()
+            capsule = _CURRENT_CAPSULE.get()
+            assert authority is not None
+            assert capsule is not None
+            assert authority.mutation_authority.mode is MutationAuthorityMode.EXACT
+            assert authority.writable_paths == capsule.writable_paths
+            assert "evidence_task" in module.config
+            assert module.config["_authored_localization"]["primary_path"] == capsule.primary_path
+            return capsule.primary_path
+
+    primary = Generator().generate(tmp_path, module=_module())
+    assert primary.endswith(".java")
+    assert router.calls == [
+        "derive_authored_repository_search_terms",
+        "freeze_existing_authored_targets",
+    ]
+    assert _CURRENT_AUTHORITY.get() is None
+    assert _CURRENT_CAPSULE.get() is None
 
 
 def test_localization_receipt_prevents_reselection(tmp_path):
