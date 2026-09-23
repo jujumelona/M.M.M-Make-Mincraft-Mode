@@ -215,3 +215,77 @@ def test_work_node_runs_abort_callback_when_action_raises_before_receipt() -> No
 
     assert ledger.state == "failed"
     assert events == [("abort", {})]
+
+def test_in_memory_finalize_refuses_cleanup_when_live_patch_drifted(tmp_path) -> None:
+    from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
+
+    project = tmp_path / "project"
+    target = project / "src/main/java/demo/Feature.java"
+    target.parent.mkdir(parents=True)
+    target.write_text("expected generated source\n", encoding="utf-8")
+    identity = "sha256:" + "e" * 64
+    result = _checkpoint_result(project, identity)
+    target.write_text("stale scaffold\n", encoding="utf-8")
+
+    generator = object.__new__(CustomModuleGenerator)
+    generator._checkpoint_cleanup_lock = __import__("threading").RLock()
+    generator._checkpoint_cleanup_tokens = {}
+
+    assert not generator.finalize_committed_generation_checkpoint(
+        result,
+        project_root=project,
+    )
+    assert result["generation_checkpoint"]["status"] == "AWAITING_LIVE_COMMIT"
+
+
+def test_ensure_live_commit_replays_owned_checkpoint_delta(tmp_path) -> None:
+    import threading
+    from minecraft_mod_ai.custom_module_generator import (
+        CustomModuleGenerator,
+        _GenerationCheckpointLease,
+        _initialize_generation_checkpoint,
+    )
+
+    project = tmp_path / "project"
+    target = project / "src/main/java/demo/Feature.java"
+    target.parent.mkdir(parents=True)
+    target.write_text("stale scaffold\n", encoding="utf-8")
+    checkpoint_base = tmp_path / "checkpoints"
+    checkpoint_base.mkdir()
+    identity = "sha256:" + "1" * 64
+    checkpoint = checkpoint_base / identity.removeprefix("sha256:")
+    staged = _initialize_generation_checkpoint(
+        project,
+        checkpoint,
+        identity_sha256=identity,
+    )
+    staged_target = staged / "src/main/java/demo/Feature.java"
+    staged_target.write_text("real generated behavior\n", encoding="utf-8")
+
+    token = "a" * 64
+    result = _checkpoint_result(project, identity)
+    result["generation_checkpoint"]["cleanup_token"] = token
+    expected = _sha256(b"real generated behavior\n")
+    result["patch_receipt"]["operations"][0]["after_sha256"] = expected
+
+    generator = object.__new__(CustomModuleGenerator)
+    generator._checkpoint_cleanup_lock = threading.RLock()
+    generator._checkpoint_cleanup_tokens = {
+        token: (identity, checkpoint, _GenerationCheckpointLease(checkpoint))
+    }
+    try:
+        assert generator.ensure_generation_live_commit(
+            result,
+            project_root=project,
+        )
+        assert target.read_text(encoding="utf-8") == "real generated behavior\n"
+        assert result["patch_receipt"]["operations"][0]["after_sha256"] == expected
+        assert generator.finalize_committed_generation_checkpoint(
+            result,
+            project_root=project,
+        )
+    finally:
+        owned = generator._checkpoint_cleanup_tokens.pop(token, None)
+        if owned is not None:
+            owned[2].close()
+
