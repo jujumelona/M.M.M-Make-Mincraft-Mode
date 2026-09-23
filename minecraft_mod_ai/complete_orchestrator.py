@@ -2383,7 +2383,10 @@ class CompleteProductionOrchestrator:
                 )
                 _register_checkpoint_owner(result, node_custom_generator)
                 uncommitted_custom_results.append(result)
-                if not node_custom_generator.ensure_generation_live_commit(
+                ensure_live_commit = getattr(
+                    node_custom_generator, "ensure_generation_live_commit", None
+                )
+                if callable(ensure_live_commit) and not ensure_live_commit(
                     result,
                     project_root=project_root,
                 ):
