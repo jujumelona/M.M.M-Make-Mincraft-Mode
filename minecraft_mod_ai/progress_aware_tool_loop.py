@@ -20,17 +20,7 @@ from typing import Any
 from .agent_intent import implementation_requested
 from . import generation_compile_recovery as _compile_recovery
 from .external_mcp_recovery_contract import constrain_recovery_tools, record_discovery
-from .generation_evidence_controller import (
-    authoritative_java_evidence as _authoritative_java_evidence,
-    evidence_obligation_satisfied,
-    initial_evidence_frontier,
-    initial_evidence_required,
-    normalize_forced_evidence_rejection_calls,
-    recovery_evidence_frontier,
-    repair_evidence_route_for_errors,
-    repair_route_requires_retrieval,
-    semantic_fresh_java as _semantic_fresh_java,
-)
+from .generation_evidence_controller import authoritative_java_evidence as _authoritative_java_evidence, evidence_obligation_satisfied, initial_evidence_frontier, initial_evidence_required, normalize_forced_evidence_rejection_calls, recovery_evidence_frontier, repair_evidence_route_for_errors, repair_route_requires_retrieval, semantic_fresh_java as _semantic_fresh_java
 from .llama_finish_reason_contract import (
     CONTEXT_PRESSURE,
     OUTPUT_EXHAUSTED,
@@ -4059,11 +4049,7 @@ def _generate_with_tools_impl(
                     _tool_name(schema) for schema in phase_tools if _tool_name(schema)
                 ]},
             )
-        phase_tools = constrain_recovery_tools(
-            phase_tools,
-            state=state,
-            repair_route=state.repair_evidence_route,
-        )
+        phase_tools = constrain_recovery_tools(phase_tools, state=state, repair_route=state.repair_evidence_route)
         if (
             authored_workspace_refresh
             and state.phase is LoopPhase.OBSERVE
@@ -4772,12 +4758,7 @@ def _generate_with_tools_impl(
         tentative_repair_applied = False
 
         for call, payload in executed:
-            record_discovery(
-                state,
-                call,
-                payload,
-                external_rag_capability=_external_rag_capability,
-            )
+            record_discovery(state, call, payload, external_rag_capability=_external_rag_capability)
             messages.append(dict(bounded_tool_message(
                 {
                     "role": "tool",
