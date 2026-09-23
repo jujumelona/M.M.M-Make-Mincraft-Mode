@@ -9,6 +9,8 @@ the consumer has already observed ``data: [DONE]``.
 """
 
 import json
+import math
+import os
 import time
 import uuid
 from collections.abc import Callable, Mapping
@@ -28,6 +30,19 @@ _REQUEST_ID_HEADER = "X-MMM-Request-Id"
 
 class LlamaSemanticProgressTimeout(TimeoutError):
     """A live SSE connection produced no prompt/decode/tool progress in time."""
+
+
+def _positive_env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive finite number") from exc
+    if not math.isfinite(value) or value <= 0.0:
+        raise ValueError(f"{name} must be a positive finite number")
+    return value
 
 
 def _coerce_nonnegative_int(value: Any) -> int | None:
@@ -149,6 +164,51 @@ def _ping_interval_seconds(stream_module: Any, payload: Mapping[str, Any]) -> in
     else:
         idle = float(stream_module._stream_idle_timeout_seconds())
     return max(1, min(30, int(idle / 3.0) or 1))
+
+
+def _completion_token_budget(payload: Mapping[str, Any]) -> int | None:
+    for key in ("max_tokens", "max_completion_tokens", "n_predict"):
+        value = _coerce_nonnegative_int(payload.get(key))
+        if value is not None and value > 0:
+            return value
+    return None
+
+
+def _semantic_idle_timeout_seconds(
+    stream_module: Any,
+    payload: Mapping[str, Any],
+) -> float:
+    """Bound semantic silence separately from transport silence.
+
+    llama.cpp return_progress reports prompt processing, not decode-token
+    progress. Structured tool output can therefore be generated for a long time
+    without an observable chat delta while SSE pings still prove the transport is
+    alive. Scale only that semantic-silence window to the requested output budget;
+    the HTTP/SSE read timeout remains the shorter transport liveness guard.
+    """
+
+    if not payload.get("tools"):
+        return float(stream_module._stream_idle_timeout_seconds())
+
+    base = float(stream_module._tool_idle_timeout_seconds())
+    max_tokens = _completion_token_budget(payload)
+    if max_tokens is None:
+        return base
+
+    decode_tps_floor = _positive_env_float(
+        "MMM_LLAMA_TOOL_SEMANTIC_TPS_FLOOR",
+        10.0,
+    )
+    grace = _positive_env_float(
+        "MMM_LLAMA_TOOL_SEMANTIC_GRACE_SECONDS",
+        30.0,
+    )
+    maximum = _positive_env_float(
+        "MMM_LLAMA_TOOL_SEMANTIC_MAX_IDLE_SECONDS",
+        480.0,
+    )
+    scaled = (float(max_tokens) / decode_tps_floor) + grace
+    return min(maximum, max(base, scaled))
 
 
 def _progress_aware_payload(
@@ -459,10 +519,9 @@ class _SemanticProgressClient:
             or payload.get("return_progress") is not True
         ):
             return stream
-        idle_seconds = (
-            float(self._stream_module._tool_idle_timeout_seconds())
-            if payload.get("tools")
-            else float(self._stream_module._stream_idle_timeout_seconds())
+        idle_seconds = _semantic_idle_timeout_seconds(
+            self._stream_module,
+            payload,
         )
         request_id = _request_id_from_headers(kwargs.get("headers"))
         started_at = time.monotonic()
@@ -639,6 +698,7 @@ __all__ = [
     "_SemanticProgressWatchdog",
     "_managed_server_state",
     "_progress_aware_payload",
+    "_semantic_idle_timeout_seconds",
     "_semantic_progress_from_sse_line",
     "install",
 ]
