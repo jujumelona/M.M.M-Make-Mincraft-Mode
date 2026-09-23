@@ -1507,8 +1507,7 @@ def _java_source_identity_error(
 
 
 def _contextless_authority_error(authority: Any, arguments: Mapping[str, Any], operation: str) -> str | None:
-    if authority is None:
-        return "MUTATION_TARGET_UNBOUND: no host-pinned mutation target is READY"
+    if authority is None: return "MUTATION_TARGET_UNBOUND: no host-pinned mutation target is READY"
     error = authority.mutation_error(_source_edit_path(arguments), operation=arguments.get("operation"))
     if error is not None:
         return error
@@ -1529,14 +1528,14 @@ def _contextless_authority_error(authority: Any, arguments: Mapping[str, Any], o
 def _repair_phase_for_route(route: str | None) -> LoopPhase:
     return LoopPhase.RECOVER if repair_route_requires_retrieval(route) else LoopPhase.ACT
 
+def _resume_local_repair(state: Any) -> LoopPhase:
+    return _repair_phase_for_route(state.repair_evidence_route) if state.phase is LoopPhase.RECOVER and state.validation_status == "FAIL" else state.phase
 
 def _mutation_target_error(tool_name: str, arguments: Mapping[str, Any], context: TargetMutationContext | None, *, state: Any = None) -> str | None:
-    if tool_name != "apply_source_edit":
-        return None
+    if tool_name != "apply_source_edit": return None
     operation = str(arguments.get("operation") or "").strip().casefold()
     authority = CURRENT_MUTATION_AUTHORITY.get()
-    if context is None:
-        return _contextless_authority_error(authority, arguments, operation)
+    if context is None: return _contextless_authority_error(authority, arguments, operation)
     if authority is not None:
         error = authority.mutation_error(_source_edit_path(arguments), operation=arguments.get("operation"))
         if error is not None:
@@ -3842,6 +3841,7 @@ def _generate_with_tools_impl(
         last_prompt_phase = _sync_phase_tool_transcript(
             messages, state=state, last_prompt_phase=last_prompt_phase, stage=stage
         )
+        state.phase = _resume_local_repair(state)
 
         baseline_ready = _target_evidence_ready(
             state,
@@ -5026,7 +5026,7 @@ def _generate_with_tools_impl(
                             runtime,
                             stage=stage,
                         )
-                    state.phase = _repair_phase_for_route(state.repair_evidence_route)
+                    state.phase = LoopPhase.RECOVER
                 continue
 
             if is_evidence_tool(call):
