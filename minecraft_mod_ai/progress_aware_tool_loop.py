@@ -634,6 +634,13 @@ def _constrain_verifier_repair_tools(
 
     if str(getattr(state, "validation_status", "") or "") != "FAIL":
         return tuple(tools)
+    if _authored_implementation_recovery(state):
+        return tuple(
+            _source_edit_schema_for_context(
+                schema, state.mutation_context, implementation_recovery=True
+            )
+            for schema in tools
+        )
     context = getattr(state, "mutation_context", None)
     if context is None or context.is_new_file or not context.is_mutation_ready:
         return tuple(tools)
@@ -1160,14 +1167,19 @@ def _reconcile_materialized_target_from_workspace(
 _HOST_BOUND_EXISTING_REWRITE_MAX_BYTES = 12 * 1024
 
 
-def _host_bound_existing_rewrite_ready(context: TargetMutationContext | None) -> bool:
+def _host_bound_existing_rewrite_ready(
+    context: TargetMutationContext | None, *, implementation_recovery: bool = False
+) -> bool:
     """Whether the host can hide exact existing-file preconditions from the model."""
 
     if (
         context is None
         or context.is_new_file
         or not context.is_mutation_ready
-        or context.evidence_source != "workspace_existing_target"
+        or context.evidence_source not in (
+            {"workspace_existing_target", "mutation_receipt", "verifier_workspace_source"}
+            if implementation_recovery else {"workspace_existing_target"}
+        )
         or not isinstance(context.source_body, str)
         or not context.source_body
     ):
@@ -1187,6 +1199,34 @@ def _host_bound_existing_rewrite_ready(context: TargetMutationContext | None) ->
     )
 
 
+def _authored_implementation_recovery(state: Any) -> bool:
+    """An unimplemented fresh host slot needs its implementation, not a line repair.
+
+    Only trusted target-compile findings for the exact scaffold can select this
+    mode. Compiler/API/side-only failures retain ordinary bounded repair.
+    """
+    context = getattr(state, "mutation_context", None)
+    baseline = _compile_recovery.trusted_baseline(state, context)
+    if (
+        getattr(state, "validation_status", None) != "FAIL"
+        or getattr(state, "latest_verifier_tool", None) != "target_compile"
+        or not getattr(state, "semantic_fresh_java", False)
+        or not baseline
+        or "MMM_AUTHORED_FEATURE_BODY_" not in baseline
+        or not _host_bound_existing_rewrite_ready(context, implementation_recovery=True)
+    ):
+        return False
+    diagnostics = getattr(state, "latest_verifier_errors", ())
+    return bool(diagnostics) and all(
+        isinstance(item, Mapping)
+        and item.get("source") == "host-authored-contract"
+        and item.get("code") in {"host:authored-placeholder", "host:authored-empty"}
+        and _canonical_mutation_path(item.get("path", ""))
+        == _canonical_mutation_path(context.target_path)
+        for item in diagnostics
+    )
+
+
 def _bind_host_owned_existing_source_call(
     call: Any,
     state: Any,
@@ -1200,11 +1240,12 @@ def _bind_host_owned_existing_source_call(
 
     if str(getattr(call, "name", "") or "").strip() != "apply_source_edit":
         return call
-    if str(getattr(state, "validation_status", "") or "") == "FAIL":
+    implementation_recovery = _authored_implementation_recovery(state)
+    if str(getattr(state, "validation_status", "") or "") == "FAIL" and not implementation_recovery:
         # Verifier repair has a stricter bounded-window binder of its own.
         return call
     context = getattr(state, "mutation_context", None)
-    if not _host_bound_existing_rewrite_ready(context):
+    if not _host_bound_existing_rewrite_ready(context, implementation_recovery=implementation_recovery):
         return call
     raw_arguments = getattr(call, "arguments", None)
     if not isinstance(raw_arguments, Mapping):
@@ -1598,6 +1639,7 @@ def _mutation_target_error(tool_name: str, arguments: Mapping[str, Any], context
     if (
         operation == "replace_exact"
         and context.evidence_source == "verifier_workspace_source"
+        and not _authored_implementation_recovery(state)
     ):
         old_text = arguments.get("old")
         atomic_error = atomic_repair_scope_error(
@@ -1820,7 +1862,16 @@ def _forced_act_messages(
         )
         else ()
     )
-    if (
+    if _authored_implementation_recovery(state):
+        directive = (
+            f"HOST FORCED ACT: {target!r} is still an unimplemented authored feature. "
+            "Implement the approved task requirements in this exact file. Emit the complete "
+            "updated source in new, including required imports, state and helpers. Merely "
+            "removing or renaming the placeholder is not implementation. Preserve package/type "
+            "identity and approved behavior. The host binds the exact path and live old source; "
+            "the next mutation must pass target_compile before completion."
+        )
+    elif (
         context is not None
         and getattr(state, "validation_status", "") == "FAIL"
         and repair_window is not None
@@ -2214,6 +2265,8 @@ def _implementation_obligation_has_progress(state: Any) -> bool:
 def _repair_source_window(state: Any) -> dict[str, Any] | None:
     """Select one bounded, exact, host-owned source window for verifier repair."""
 
+    if _authored_implementation_recovery(state):
+        return None
     context = getattr(state, "mutation_context", None)
     source = getattr(context, "source_body", None)
     if not isinstance(source, str) or not source:
@@ -2277,7 +2330,11 @@ def _repair_guidance_payload(state: Any) -> dict[str, Any] | None:
         "target_is_new_file": context.is_new_file if context else None,
         "writable_paths": list(context.writable_paths) if context else [],
         "repair_window": repair_window,
-        "repair_window_policy": "host_selected_bounded_exact_span_required",
+        "repair_window_policy": (
+            "host_owned_authored_implementation_required"
+            if _authored_implementation_recovery(state)
+            else "host_selected_bounded_exact_span_required"
+        ),
         "current_source_chars": len(source) if isinstance(source, str) else 0,
         "current_source_sha256": (
             hashlib.sha256(source.encode("utf-8")).hexdigest()
@@ -2451,6 +2508,18 @@ class HostRunState:
             payload = _repair_guidance_payload(self)
         if payload is None:
             return None
+        if payload["repair_window_policy"] == "host_owned_authored_implementation_required":
+            return (
+                "MMM_CORE_VERIFIER_REPAIR_V5\n"
+                "The exact fresh authored feature is still unimplemented. Complete its approved "
+                "task requirements in the same file, with needed imports, state, and helpers. "
+                "Emit the complete updated source in new. The host binds the exact path, live "
+                "old source and count. Preserve source identity and approved behavior. Do not "
+                "merely rename/remove the placeholder or emit another scaffold. Validation is "
+                "still FAIL; the next mutation goes to VERIFY. Equal or worse results are rolled "
+                "back and count as no progress.\n"
+                + json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+            )
         return (
             "MMM_CORE_VERIFIER_REPAIR_V5\n"
             "The verifier failure is the active repair obligation. Do not restart generation, "
@@ -2566,6 +2635,8 @@ class RetrievalProgress:
 def _source_edit_schema_for_context(
     schema: Mapping[str, Any],
     context: TargetMutationContext | None,
+    *,
+    implementation_recovery: bool = False,
 ) -> Mapping[str, Any]:
     """Project source-edit choices onto the exact live target mutation state.
 
@@ -2653,7 +2724,7 @@ def _source_edit_schema_for_context(
             for alias in ("file", "target_path", "target_file"):
                 properties.pop(alias, None)
 
-        if _host_bound_existing_rewrite_ready(context):
+        if _host_bound_existing_rewrite_ready(context, implementation_recovery=implementation_recovery):
             new_schema = deepcopy(properties.get("new") or {"type": "string"})
             if isinstance(new_schema, dict):
                 new_schema["type"] = "string"
@@ -2691,7 +2762,7 @@ def _source_edit_schema_for_context(
             "Fresh host-pinned Java target: create exactly one complete source file with "
             "create_file; the host compiles it immediately before any repair edit."
         )
-    elif _host_bound_existing_rewrite_ready(context):
+    elif _host_bound_existing_rewrite_ready(context, implementation_recovery=implementation_recovery):
         suffix = (
             "Host-owned existing target: emit only the updated source in new. "
             "The host owns the exact path, current old source, replace_exact operation, "
@@ -4042,7 +4113,11 @@ def _generate_with_tools_impl(
                 operation="apply_source_edit",
                 gate="repair_mutation_schema",
                 result="PASS",
-                reason="live HostRunState projected verifier repair to one host-bound bounded source window",
+                reason=(
+                    "live HostRunState projected completion of the exact unimplemented authored source"
+                    if _authored_implementation_recovery(state)
+                    else "live HostRunState projected verifier repair to one host-bound bounded source window"
+                ),
                 details={"selected_tools": [
                     _tool_name(schema) for schema in phase_tools if _tool_name(schema)
                 ]},
@@ -4217,7 +4292,10 @@ def _generate_with_tools_impl(
         turn_metadata = (
             dict(request.metadata) if isinstance(request.metadata, Mapping) else {}
         )
-        if state.phase is LoopPhase.ACT and state.validation_status == "FAIL":
+        if (
+            state.phase is LoopPhase.ACT and state.validation_status == "FAIL"
+            and not _authored_implementation_recovery(state)
+        ):
             try:
                 existing_ceiling = int(
                     turn_metadata.get("mmm_output_token_ceiling")
