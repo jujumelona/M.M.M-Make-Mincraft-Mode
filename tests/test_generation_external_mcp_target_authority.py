@@ -7,6 +7,10 @@ from minecraft_mod_ai import progress_aware_tool_loop as tool_loop
 from minecraft_mod_ai.model_adapters import ToolCall
 from minecraft_mod_ai.agent_tool_runtime import AgentToolRuntime
 from minecraft_mod_ai.external_agent_bridge import ExternalAgentBridge
+from minecraft_mod_ai.external_mcp_recovery_contract import (
+    constrain_recovery_tools,
+    record_discovery,
+)
 
 
 def _schema(name: str) -> dict:
@@ -154,3 +158,91 @@ def test_nonreviewed_invisible_tool_cannot_consume_forced_evidence_route() -> No
     assert normalized is None
     assert state.attempted_sources == set()
     assert not hasattr(tool_loop, "_consume_rejected_evidence_fixed_point")
+
+def _external_schema(name: str) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "capability": {"type": "string"},
+                    "arguments": {"type": "object"},
+                },
+                "required": ["capability"],
+            },
+        },
+    }
+
+
+def test_recovery_mcp_schema_is_narrowed_to_reviewed_discovered_capability() -> None:
+    state = tool_loop.HostRunState(phase=tool_loop.LoopPhase.RECOVER)
+    call = ToolCall(
+        id="caps",
+        name="external_mcp_capabilities",
+        arguments={},
+        raw_arguments="{}",
+    )
+    record_discovery(
+        state,
+        call,
+        {
+            "ok": True,
+            "result": {
+                "capabilities": {
+                    "source_search": [{}],
+                    "read_file": [{}],
+                    "official_mod_docs": [{}],
+                }
+            },
+        },
+        external_rag_capability=lambda value: (
+            str(value.get("capability"))
+            if value.get("capability") in {"source_search", "official_mod_docs"}
+            else ""
+        ),
+    )
+
+    narrowed = constrain_recovery_tools(
+        (_external_schema("external_mcp_schema"),),
+        state=state,
+        repair_route="official_api",
+    )
+
+    capability = narrowed[0]["function"]["parameters"]["properties"]["capability"]
+    assert capability["enum"] == ["source_search"]
+
+
+def test_recovery_mcp_call_requires_successful_schema_binding() -> None:
+    state = tool_loop.HostRunState(phase=tool_loop.LoopPhase.RECOVER)
+    setattr(state, "_external_mcp_capabilities_seen", True)
+    setattr(state, "_external_mcp_recovery_capabilities", ("source_search",))
+
+    assert constrain_recovery_tools(
+        (_external_schema("external_mcp_call"),),
+        state=state,
+        repair_route="official_api",
+    ) == ()
+
+    schema_call = ToolCall(
+        id="schema",
+        name="external_mcp_schema",
+        arguments={"capability": "source_search"},
+        raw_arguments='{"capability":"source_search"}',
+    )
+    record_discovery(
+        state,
+        schema_call,
+        {"ok": True, "result": {"status": "PASS"}},
+        external_rag_capability=lambda value: str(value.get("capability") or ""),
+    )
+    narrowed = constrain_recovery_tools(
+        (_external_schema("external_mcp_call"),),
+        state=state,
+        repair_route="official_api",
+    )
+    assert narrowed[0]["function"]["parameters"]["properties"]["capability"]["enum"] == [
+        "source_search"
+    ]
+
