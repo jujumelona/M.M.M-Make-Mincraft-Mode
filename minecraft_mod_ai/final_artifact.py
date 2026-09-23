@@ -1203,13 +1203,11 @@ def write_downloadable_bundle(
     additional_artifacts: Mapping[str, Mapping[str, Any]] | None = None,
     proposal_hash: str = "",
 ) -> dict[str, Any]:
-    expected_proposal_hash = str(proposal_hash or "").strip()
-    coverage_proposal_hash = str(requirement_coverage.get("proposal_hash") or "").strip()
-    if expected_proposal_hash and coverage_proposal_hash != expected_proposal_hash:
-        raise FinalArtifactError(
-            "Requirement coverage is not bound to the requested pipeline proposal."
-        )
-    bound_proposal_hash = expected_proposal_hash or coverage_proposal_hash
+    bound_proposal_hash = _consistent_value(
+        "proposal hash",
+        proposal_hash,
+        requirement_coverage.get("proposal_hash"),
+    )
 
     if artifact_receipt.get("status") != "PASS":
         raise FinalArtifactError("Only a passing final artifact receipt may be bundled.")
