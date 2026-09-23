@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import zipfile
 from collections.abc import Callable, Mapping
@@ -74,6 +75,17 @@ def _user_download_zip(build_result: Any) -> Path | None:
     if not isinstance(bundle, Mapping) or bundle.get("status") != "PASS":
         return None
 
+    result_proposal_hash = str(
+        getattr(build_result, "complete_proposal_hash", "") or ""
+    ).strip()
+    bundle_proposal_hash = str(bundle.get("proposal_hash") or "").strip()
+    if (
+        not result_proposal_hash
+        or not bundle_proposal_hash
+        or bundle_proposal_hash != result_proposal_hash
+    ):
+        return None
+
     raw_root = bundle.get("path")
     artifact_name = str(bundle.get("artifact") or "").strip()
     if not isinstance(raw_root, str) or not raw_root.strip():
@@ -93,6 +105,18 @@ def _user_download_zip(build_result: Any) -> Path | None:
     ):
         names.append("generated-resource-pack.zip")
 
+    receipt_members = bundle.get("members")
+    if not isinstance(receipt_members, list):
+        return None
+    expected_hashes = {
+        str(item.get("path") or ""): str(item.get("sha256") or "")
+        for item in receipt_members
+        if isinstance(item, Mapping)
+    }
+    artifact_sha256 = str(bundle.get("artifact_sha256") or "").strip()
+    if expected_hashes.get(artifact_name) != artifact_sha256:
+        return None
+
     members: list[Path] = []
     for name in names:
         candidate = (root / name).resolve()
@@ -101,6 +125,20 @@ def _user_download_zip(build_result: Any) -> Path | None:
         except ValueError:
             return None
         if not candidate.is_file() or candidate.is_symlink():
+            return None
+        expected_sha256 = expected_hashes.get(name)
+        if not expected_sha256:
+            return None
+        digest = "sha256:" + hashlib.sha256(candidate.read_bytes()).hexdigest()
+        if digest != expected_sha256:
+            return None
+        if (
+            name != artifact_name
+            and (
+                not isinstance(additional, Mapping)
+                or str(additional.get(name) or "") != expected_sha256
+            )
+        ):
             return None
         members.append(candidate)
 
