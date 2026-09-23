@@ -400,6 +400,11 @@ def _translate_rejected_arguments(
     required = parameters.get("required") if isinstance(parameters, Mapping) else ()
     if not isinstance(properties, Mapping):
         return None
+    if (
+        not isinstance(required, Sequence)
+        or isinstance(required, (str, bytes, bytearray))
+    ):
+        required = ()
     candidate = {
         str(key): value
         for key, value in parsed.items()
