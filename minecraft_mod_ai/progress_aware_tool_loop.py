@@ -1506,17 +1506,10 @@ def _java_source_identity_error(
     return None
 
 
-def _contextless_authority_error(
-    authority: Any,
-    arguments: Mapping[str, Any],
-    operation: str,
-) -> str | None:
+def _contextless_authority_error(authority: Any, arguments: Mapping[str, Any], operation: str) -> str | None:
     if authority is None:
         return "MUTATION_TARGET_UNBOUND: no host-pinned mutation target is READY"
-    error = authority.mutation_error(
-        _source_edit_path(arguments),
-        operation=arguments.get("operation"),
-    )
+    error = authority.mutation_error(_source_edit_path(arguments), operation=arguments.get("operation"))
     if error is not None:
         return error
     if authority.mode is MutationAuthorityMode.BOUNDED_ROOTS:
@@ -1529,10 +1522,7 @@ def _contextless_authority_error(
             if package_error is not None:
                 return package_error
     if operation == "replace_exact" and "old" not in arguments:
-        return (
-            "MUTATION_ATOMIC_SPAN_REQUIRED: existing source replacement requires "
-            "one exact old span; whole-file model replacement is forbidden"
-        )
+        return "MUTATION_ATOMIC_SPAN_REQUIRED: existing source replacement requires one exact old span; whole-file model replacement is forbidden"
     return None
 
 
@@ -1540,13 +1530,7 @@ def _repair_phase_for_route(route: str | None) -> LoopPhase:
     return LoopPhase.RECOVER if repair_route_requires_retrieval(route) else LoopPhase.ACT
 
 
-def _mutation_target_error(
-    tool_name: str,
-    arguments: Mapping[str, Any],
-    context: TargetMutationContext | None,
-    *,
-    state: Any = None,
-) -> str | None:
+def _mutation_target_error(tool_name: str, arguments: Mapping[str, Any], context: TargetMutationContext | None, *, state: Any = None) -> str | None:
     if tool_name != "apply_source_edit":
         return None
     operation = str(arguments.get("operation") or "").strip().casefold()
@@ -1554,16 +1538,10 @@ def _mutation_target_error(
     if context is None:
         return _contextless_authority_error(authority, arguments, operation)
     if authority is not None:
-        error = authority.mutation_error(
-            _source_edit_path(arguments),
-            operation=arguments.get("operation"),
-        )
+        error = authority.mutation_error(_source_edit_path(arguments), operation=arguments.get("operation"))
         if error is not None:
             return error
-        if (
-            authority.mode is MutationAuthorityMode.BOUNDED_ROOTS
-            and context.evidence_source != "verifier_workspace_source"
-        ):
+        if authority.mode is MutationAuthorityMode.BOUNDED_ROOTS and context.evidence_source != "verifier_workspace_source":
             supplied = _source_edit_path(arguments)
             if operation in _SOURCE_CREATE_OPERATIONS and supplied.casefold().endswith(".java"):
                 create_source = arguments.get("content")
@@ -1572,10 +1550,7 @@ def _mutation_target_error(
                 package_error = _java_path_package_error(supplied, create_source)
                 if package_error is not None:
                     return package_error
-            # Before an authored destination exists, bounded-root authority deliberately
-            # permits the coder to select one file below the host-owned roots. Once a
-            # concrete existing target is rebound and pinned, do not bypass the exact
-            # existing-source semantic guard: the host now owns path + live source.
+            # Once an existing target is pinned, exact source semantics remain host-owned.
             if context.is_new_file or not context_is_host_pinned(context):
                 if operation == "replace_exact" and "old" not in arguments:
                     return (
