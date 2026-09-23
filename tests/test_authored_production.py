@@ -342,7 +342,7 @@ def test_existing_authored_plan_requires_localize_freeze_before_coder():
     assert module.module_id == "authored_existing_001"
     assert module.config["authored_localization_required"] is True
     assert "evidence_task" not in module.config
-    assert module.required_gates == ("target_compile", "project build")
+    assert module.required_gates == ("target_compile",)
     manifest = proposal.game_design["_authored_execution_manifest"]
     assert manifest["policy"] == "host_localize_freeze_exact_targets_before_coder"
     assert manifest["units"][0]["module_id"] == "authored_existing_001"

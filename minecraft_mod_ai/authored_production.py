@@ -360,7 +360,7 @@ def _compile_existing_authored_modules(
                     **dict(target),
                 },
                 depends_on=depends_on,
-                required_gates=("target_compile", "project build"),
+                required_gates=("target_compile",),
             )
         )
         manifest_units.append(
