@@ -432,7 +432,19 @@ def _bounded_env_int(name: str, default: int, *, minimum: int, maximum: int) -> 
     return max(minimum, min(value, maximum))
 
 
-def _retryable_service_ready_miss(receipt: Mapping[str, Any] | None) -> bool:
+def release_diagnostics_timeout_seconds() -> int:
+    return _bounded_env_int(
+        "MMM_JDT_VERIFICATION_TIMEOUT_SECONDS", 180, minimum=30, maximum=600
+    )
+
+
+def release_diagnostics_attempts() -> int:
+    return _bounded_env_int(
+        "MMM_JDT_VERIFICATION_ATTEMPTS", 2, minimum=1, maximum=3
+    )
+
+
+def retryable_service_ready_miss(receipt: Mapping[str, Any] | None) -> bool:
     normalized, _path = unwrap_diagnostic_receipt(receipt)
     if not normalized:
         return False
@@ -453,14 +465,10 @@ def run_diagnostics_with_bootstrap_retry(
 
     per_attempt = timeout_seconds
     if per_attempt is None:
-        per_attempt = _bounded_env_int(
-            "MMM_JDT_VERIFICATION_TIMEOUT_SECONDS", 180, minimum=30, maximum=600
-        )
+        per_attempt = release_diagnostics_timeout_seconds()
     total_attempts = attempts
     if total_attempts is None:
-        total_attempts = _bounded_env_int(
-            "MMM_JDT_VERIFICATION_ATTEMPTS", 2, minimum=1, maximum=3
-        )
+        total_attempts = release_diagnostics_attempts()
     total_attempts = max(1, min(int(total_attempts), 3))
 
     receipt: dict[str, Any] = {}
@@ -470,7 +478,7 @@ def run_diagnostics_with_bootstrap_retry(
             project_root,
             timeout_seconds=int(per_attempt),
         )
-        if not _retryable_service_ready_miss(receipt):
+        if not retryable_service_ready_miss(receipt):
             result = dict(receipt)
             result["verification_attempts"] = attempt
             return result
