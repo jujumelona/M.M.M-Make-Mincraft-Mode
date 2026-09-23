@@ -119,6 +119,7 @@ from .validation_diagnostic_contract import (
 )
 from .validation_diagnostic_contract import (
     run_diagnostics as run_jdt_diagnostics,
+    run_diagnostics_with_bootstrap_retry,
 )
 from .validation_diagnostic_contract import unwrap_diagnostic_receipt
 from .validator import validate_jar
@@ -132,35 +133,6 @@ from .work_graph import (
 )
 
 
-def _jdt_verification_timeout_seconds() -> int:
-    """Return bounded verifier time for Gradle-backed JDT workspace bootstrap."""
-
-    raw = os.environ.get("MMM_JDT_VERIFICATION_TIMEOUT_SECONDS", "180").strip()
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        value = 180
-    return max(30, min(value, 600))
-
-
-def _jdt_verification_attempts() -> int:
-    raw = os.environ.get("MMM_JDT_VERIFICATION_ATTEMPTS", "2").strip()
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        value = 2
-    return max(1, min(value, 3))
-
-
-def _retryable_jdt_bootstrap_failure(receipt: dict[str, Any] | None) -> bool:
-    normalized, _path = unwrap_diagnostic_receipt(receipt)
-    if not normalized:
-        return False
-    if str(normalized.get("status") or "").strip().upper() != "UNAVAILABLE":
-        return False
-    error = str(normalized.get("error") or "").casefold()
-    return "serviceready" in error and "not observed" in error
-
 
 def _run_release_jdt_verification(
     project_root: str | Path,
@@ -168,48 +140,14 @@ def _run_release_jdt_verification(
     timeout_seconds: int | None = None,
     attempts: int | None = None,
 ) -> dict[str, Any]:
-    """Retry only transient JDT ServiceReady bootstrap misses; remain fail-closed."""
+    """Delegate release JDT retry policy to the shared diagnostic contract."""
 
-    per_attempt = (
-        int(timeout_seconds)
-        if timeout_seconds is not None
-        else _jdt_verification_timeout_seconds()
+    return run_diagnostics_with_bootstrap_retry(
+        JavaLanguageService,
+        project_root,
+        timeout_seconds=timeout_seconds,
+        attempts=attempts,
     )
-    total_attempts = (
-        int(attempts) if attempts is not None else _jdt_verification_attempts()
-    )
-    total_attempts = max(1, min(total_attempts, 3))
-    receipt: dict[str, Any] = {}
-    for attempt in range(1, total_attempts + 1):
-        receipt = run_jdt_diagnostics(
-            JavaLanguageService,
-            project_root,
-            timeout_seconds=per_attempt,
-        )
-        if _jdt_release_evidence_passed(receipt):
-            result = dict(receipt)
-            result["verification_attempts"] = attempt
-            return result
-        if _blocking_jdt_errors(receipt) or not _retryable_jdt_bootstrap_failure(receipt):
-            result = dict(receipt)
-            result["verification_attempts"] = attempt
-            return result
-        emit_root_cause(
-            "jdt_release_retry",
-            stage="verify",
-            operation="java_diagnostics",
-            gate="jdt_service_ready",
-            result="RETRY",
-            reason="JDT ServiceReady was not observed; retrying cold bootstrap",
-            details={
-                "attempt": attempt,
-                "max_attempts": total_attempts,
-                "timeout_seconds": per_attempt,
-            },
-        )
-    result = dict(receipt)
-    result["verification_attempts"] = total_attempts
-    return result
 
 
 _REQUIRED_GATE_TO_EVIDENCE = {
