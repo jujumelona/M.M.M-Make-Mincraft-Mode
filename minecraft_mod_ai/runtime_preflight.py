@@ -200,7 +200,7 @@ def _assert_retrieval_model_residency() -> None:
 
 
 def _assert_unordered_retrieval_canonicalization() -> None:
-    from .progress_aware_tool_loop import _stable_value, evidence_fingerprint
+    from .retrieval_progress import _stable_value, evidence_fingerprint
 
     stable = _stable_value({"facts": {"b", "a"}}, drop_volatile=False)
     if stable != {"facts": ["a", "b"]}:

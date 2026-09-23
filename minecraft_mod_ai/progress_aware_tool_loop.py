@@ -47,6 +47,7 @@ from .root_cause_trace import emit_root_cause, trace_scope
 from .retrieval_progress import (
     RetrievalNoProgressError,
     RetrievalProgress as _RetrievalProgress,
+    _stable_value,
     evidence_fingerprint,
     normalize_retrieval_query,
     retrieval_query_signature,
