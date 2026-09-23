@@ -243,10 +243,14 @@ class GradleRunner:
             if force_clean
             else ["--no-daemon", "build"]
         )
-        # Modern Fabric configureTests wires server GameTest into check/build.
-        # Do not exclude or duplicate it. First let the normal build execute the
-        # host-owned test graph, then fall back to an explicitly discovered task
-        # only when the build produced no structured GameTest evidence.
+        gametest_mode: str | None = None
+        gametest_task: str | None = None
+        if run_gametest:
+            gametest_task = self._gametest_task(prepared.project_root)
+            # Keep GameTest out of the packaging build, then execute it exactly once
+            # as its own verifier command. This avoids hidden build-task coupling and
+            # gives GameTest a distinct receipt/log for repair classification.
+            build_arguments.extend(("-x", gametest_task))
         build_arguments.append("--stacktrace")
         build_result = self._run(
             name="clean_build" if force_clean else "build",
@@ -260,58 +264,25 @@ class GradleRunner:
         if build_result.exit_code != 0:
             return self._failed_build(prepared, commands, "Gradle build failed.")
 
-        gametest_mode: str | None = None
-        gametest_task: str | None = None
-        if run_gametest:
-            integrated_task = self._executed_gametest_task(build_result)
-            integrated_report = self._gametest_report(prepared.project_root)
-            if integrated_task is not None and integrated_report is not None:
-                gametest_mode = "integrated_build"
-                gametest_task = integrated_task
-            else:
-                gametest_task, capability_result = self._discover_gametest_task(prepared)
-                commands.append(capability_result)
-                if capability_result.exit_code != 0:
-                    return self._failed_build(
-                        prepared,
-                        commands,
-                        "GameTest capability discovery failed.",
-                        include_artifacts=True,
-                        failure_class="verifier",
-                        error_code="GAMETEST_CAPABILITY_DISCOVERY_FAILED",
-                        repairable=False,
-                    )
-                if gametest_task is None:
-                    return self._failed_build(
-                        prepared,
-                        commands,
-                        (
-                            "GameTest was requested, but the project exposes no supported "
-                            "GameTest task and the successful Gradle build produced no "
-                            "structured GameTest report."
-                        ),
-                        include_artifacts=True,
-                        failure_class="verifier",
-                        error_code="GAMETEST_CAPABILITY_MISSING",
-                        repairable=False,
-                    )
-                gametest_result = self._run(
-                    name="gametest",
-                    executable=prepared.gradle,
-                    arguments=("--no-daemon", gametest_task, "--stacktrace"),
-                    cwd=prepared.project_root,
-                    env=prepared.environment,
-                    log_path=prepared.logs / "gradle-gametest.log",
+        if run_gametest and gametest_task is not None:
+            gametest_result = self._run(
+                name="gametest",
+                executable=prepared.gradle,
+                arguments=("--no-daemon", gametest_task, "--stacktrace"),
+                cwd=prepared.project_root,
+                env=prepared.environment,
+                log_path=prepared.logs / "gradle-gametest.log",
+            )
+            commands.append(gametest_result)
+            gametest_mode = "explicit_task"
+            if gametest_result.exit_code != 0:
+                return self._failed_build(
+                    prepared,
+                    commands,
+                    "Headless Fabric GameTest failed.",
+                    include_artifacts=True,
                 )
-                commands.append(gametest_result)
-                gametest_mode = "explicit_task"
-                if gametest_result.exit_code != 0:
-                    return self._failed_build(
-                        prepared,
-                        commands,
-                        "Headless Fabric GameTest failed.",
-                        include_artifacts=True,
-                    )
+
         jar_path = self._find_release_jar(prepared.project_root)
         if jar_path is None:
             return self._failed_build(
@@ -436,8 +407,10 @@ class GradleRunner:
                     f"Could not read generated Gradle script for GameTest selection: {script}"
                 ) from exc
         text = "\n".join(rendered)
-        if "configureTests" in text or "gameTestServer" in text or "gameTest {" in text:
+        if "configureTests" in text or "gameTest {" in text:
             return "runGameTest"
+        if "gameTestServer" in text:
+            return "runGameTestServer"
         raise BuildRunnerError(
             "Generated Fabric project has no host-owned GameTest configuration."
         )
