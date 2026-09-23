@@ -410,3 +410,56 @@ def test_materialize_authored_scaffold_is_noop_without_game_design(tmp_path) -> 
     result = materialize_authored_execution_scaffold(proposal, project_root)
 
     assert result == project_root.resolve()
+
+from __future__ import annotations
+
+from minecraft_mod_ai.authored_plan import AuthoredPlan
+from minecraft_mod_ai.authored_production import (
+    _authored_execution_units,
+    _implementation_authored_plan,
+)
+
+
+def test_model_reasoning_prefix_is_not_lowered_as_gameplay_work() -> None:
+    source = (
+        "Thinking Process:\n\n"
+        "1. **Analyze the Request:** space mod\n"
+        "2. **Deconstruct the Template Sections for Content:** details\n"
+        "3. **Drafting Content (Mental Outline):** draft\n\n"
+        "# behavior_contract\n"
+        "- player trades resources for ship parts\n"
+        "# verification\n"
+        "- launch without fuel is rejected\n"
+    )
+    plan = AuthoredPlan(requested_prompt="space mod", text=source)
+
+    projected, provenance = _implementation_authored_plan(plan)
+
+    assert projected.text.startswith("# behavior_contract\n")
+    assert "Thinking Process" not in projected.text
+    assert provenance is not None
+    assert provenance["stripped_prefix_bytes"] > 0
+    assert provenance["source_text_sha256"] != provenance["implementation_text_sha256"]
+    units = _authored_execution_units(projected.text)
+    assert all("Thinking Process" not in unit["text"] for unit in units)
+
+
+def test_user_intro_is_preserved_without_model_reasoning_markers() -> None:
+    source = (
+        "Starship economy design.\n\n"
+        "# behavior_contract\n"
+        "- trade ore for credits\n"
+    )
+    plan = AuthoredPlan(requested_prompt="space mod", text=source)
+
+    projected, provenance = _implementation_authored_plan(plan)
+
+    assert projected is plan
+    assert provenance is None
+
+
+def test_authored_units_preserve_projected_text_exactly() -> None:
+    source = "# behavior_contract\n- A\n# state_model\n- B\n"
+    units = _authored_execution_units(source)
+
+    assert "".join(unit["text"] for unit in units) == source
