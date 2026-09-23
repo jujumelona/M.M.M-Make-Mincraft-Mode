@@ -2716,12 +2716,9 @@ class CompleteProductionOrchestrator:
                 future.cancel()
             for _, future, _ in review_futures:
                 future.cancel()
-            # Never block pipeline teardown on a stuck worker; claim fencing owns stale commits.
-            cpu_pool.shutdown(wait=False, cancel_futures=True)
-            llm_pool.shutdown(wait=False, cancel_futures=True)
-            image_pool.shutdown(wait=False, cancel_futures=True)
-            commit_pool.shutdown(wait=False, cancel_futures=True)
-            review_pool.shutdown(wait=False, cancel_futures=True)
+            # Do not return while a mutating worker can still touch the workspace.
+            for pool in (cpu_pool, llm_pool, image_pool, commit_pool, review_pool):
+                pool.shutdown(wait=True, cancel_futures=True)
             lease_heartbeat_stop.set()
             lease_heartbeat_thread.join(timeout=heartbeat_seconds + 5.0)
         module_receipts.sort(key=_generation_receipt_sort_key)

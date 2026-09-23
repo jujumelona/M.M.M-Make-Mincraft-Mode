@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Host-owned coder state machine; evidence policy lives in generation_evidence_controller."""
 
+import hashlib
 import json
 import re
 import threading
