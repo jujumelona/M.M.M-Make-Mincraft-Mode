@@ -84,6 +84,22 @@ def test_feedback_path_selects_only_observed_generation_owner():
     assert [item["node_id"] for item in matches] == ["generate-custom-00000000"]
 
 
+def test_missing_method_binds_feature_owner_even_when_entrypoint_is_host_owned(tmp_path):
+    from minecraft_mod_ai.compiler_diagnostics import compiler_log_diagnostics
+
+    ledger = _FakeLedger([_generation_task(
+        "generate-custom-00000000", "authored_feature_001",
+        "src/main/java/demo/AuthoredFeature001.java", "REQ-ONE",
+    )])
+    log = tmp_path / "build.log"
+    log.write_text("Caused by: java.lang.NoSuchMethodError: 'void demo.AuthoredFeature001.initialize()'\n"
+                   "\tat demo.Main.onInitialize(Main.java:9)\n", encoding="utf-8")
+    diagnostics = compiler_log_diagnostics({"commands": [{"exit_code": 1, "log_path": str(log)}]})
+    seeds, owners, _, _ = feedback._derive_impacted_seeds(ledger, {"checkpoint_id": "gradle-build", "diagnostics": diagnostics})
+    assert seeds == {"generate-custom-00000000"}
+    assert owners == {"authored_feature_001"}
+
+
 def test_unowned_base_project_diagnostics_route_to_prepare_project():
     ledger = _FakeLedger(
         [

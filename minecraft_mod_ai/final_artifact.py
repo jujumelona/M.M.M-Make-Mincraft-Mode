@@ -799,6 +799,12 @@ def _authored_feature_semantic_findings(
                 f"authored module {module_id} source is unreadable or escaped the project root"
             )
             continue
+        from .authored_feature_source import authored_feature_source_diagnostics
+
+        contract_errors = authored_feature_source_diagnostics(source, path=relative, symbol=symbol)
+        if contract_errors:
+            findings.extend(f"authored module {module_id}: {item['message']}" for item in contract_errors)
+            continue
         body = _authored_initialize_body(source, symbol)
         if body is None:
             findings.append(

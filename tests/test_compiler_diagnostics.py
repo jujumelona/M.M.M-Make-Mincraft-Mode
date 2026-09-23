@@ -5,6 +5,19 @@ from pathlib import Path
 from minecraft_mod_ai.compiler_diagnostics import compiler_log_diagnostics
 
 
+def test_missing_runtime_method_reports_declaring_owner_before_call_site(tmp_path):
+    log = tmp_path / "runtime.log"
+    log.write_text(
+        "Caused by: java.lang.NoSuchMethodError: 'void demo.AuthoredFeature001.initialize()'\n"
+        "\tat knot//demo.Main.onInitialize(Main.java:9)\n", encoding="utf-8"
+    )
+    rows = compiler_log_diagnostics({"commands": [{"exit_code": 1, "log_path": str(log)}]})
+    assert rows[0]["path"] == "src/main/java/demo/AuthoredFeature001.java"
+    assert rows[0]["code"] == "runtime:linkage:NoSuchMethodError"
+    assert "line" not in rows[0]
+    assert rows[1]["path"] == "src/main/java/demo/Main.java"
+
+
 def test_diagnostic_file_uri_resolves_to_project_owned_source(tmp_path):
     from minecraft_mod_ai.compiler_diagnostics import normalize_source_path
 

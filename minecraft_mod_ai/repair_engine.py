@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .fixed_template_generation import generate_fixed_template_text
 
-from .model_response_templates import response_schema, response_template_prompt
+from .repair_response_contract import repair_response_schema
 
 import copy
 import hashlib
@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .java_lsp import JavaLanguageService
+from .compiler_diagnostics import compiler_log_diagnostics
 from .validation_diagnostic_contract import (
     diagnostic_errors as _diagnostic_errors,
     diagnostic_items as _diagnostic_items,
@@ -61,6 +62,13 @@ _ACTIVE_REPAIR_PROJECT_INDEX: ContextVar[tuple[Path, ProjectIndex] | None] = Con
     "mmm_active_repair_project_index",
     default=None,
 )
+
+
+def _repair_source_diagnostics(evidence: dict[str, Any], root: Path | None = None) -> list[dict[str, Any]]:
+    return [
+        *compiler_log_diagnostics(evidence.get("build", {}), project_root=root),
+        *(item for item in _diagnostic_items(evidence.get("diagnostics")) if isinstance(item, dict)),
+    ]
 
 
 def active_repair_project_index(root: Path, policy: ScalePolicy) -> ProjectIndex:
@@ -312,7 +320,7 @@ class RepairEngine:
     @staticmethod
     def _signature(evidence: dict[str, Any]) -> str:
         diagnostics = []
-        for item in _diagnostic_items(evidence.get("diagnostics")):
+        for item in _repair_source_diagnostics(evidence):
             if not isinstance(item, dict):
                 continue
             diagnostics.append(
@@ -325,7 +333,9 @@ class RepairEngine:
             )
         build = evidence.get("build", {})
         build_logs = []
-        for item in _failed_build_log_diagnostics(evidence):
+        # Source diagnostics are stable even when Gradle appends different timings,
+        # worker IDs or stacktrace lengths. Keep raw-log identity only as a fallback.
+        for item in (() if diagnostics else _failed_build_log_diagnostics(evidence)):
             output = str(item.get("output") or "")
             build_logs.append(
                 {
@@ -358,7 +368,8 @@ class RepairEngine:
 
         diagnostic_paths: list[str] = []
         query_parts: list[str] = []
-        for item in _diagnostic_items(evidence.get("diagnostics")):
+        source_diagnostics = _repair_source_diagnostics(evidence, root)
+        for item in source_diagnostics:
             if not isinstance(item, dict):
                 continue
             path_value = item.get("path") or item.get("uri")
@@ -420,6 +431,7 @@ class RepairEngine:
             byte_budget=byte_budget,
         )
         context["build_logs"] = build_logs
+        context["source_diagnostics"] = source_diagnostics
 
         # RepairEngine owns its context surface directly. Enrich the source-owned
         # context here instead of allowing late bootstrap wrappers to replace
@@ -429,7 +441,9 @@ class RepairEngine:
         from . import research_evidence_handoff_contract as evidence_handoff
 
         normalized_root = root.expanduser().resolve()
-        diagnostic = reuse_hardener._diagnostic_signature_payload(evidence)
+        diagnostic = reuse_hardener._diagnostic_signature_payload({
+            **evidence, "diagnostics": {"diagnostics": source_diagnostics},
+        })
         stored = reuse_hardener._load_receipts(normalized_root)
         reused, parent_bundles = reuse_hardener._prior_evidence_for_diagnostic(
             stored,
@@ -581,13 +595,13 @@ class RepairEngine:
                             "You are a hash-guarded Minecraft source repair planner. "
                             "Inspect evidence with read-only tools and return patch operations; "
                             "the host transaction is the only writer."
-                            + response_template_prompt("repair")
+                            " Return one JSON value conforming to the supplied repair tool schema."
                         ),
                     },
                     {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                 ],
                 tool_stage="quality",
-                response_schema=response_schema("repair"),
+                response_schema=repair_response_schema(self.policy.max_patch_bytes),
             )
         except Exception as exc:
             print(f"  [!] Repair coder model call failed ({type(exc).__name__}: {exc}); skipping attempt", flush=True)

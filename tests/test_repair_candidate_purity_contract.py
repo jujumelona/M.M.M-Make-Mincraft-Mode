@@ -6,6 +6,18 @@ from types import SimpleNamespace
 from minecraft_mod_ai import platform_repair_target_contract as platform_repair
 
 
+def test_repair_source_limits_remain_bounded_without_mutating_shared_schema():
+    from minecraft_mod_ai.model_response_templates import response_schema
+    from minecraft_mod_ai.repair_response_contract import repair_response_schema
+
+    bounded = repair_response_schema(8192)
+    branches = bounded["properties"]["operations"]["items"]["anyOf"]
+    assert branches[1]["properties"]["content"]["maxLength"] == 8192
+    assert branches[2]["properties"]["replacements"]["items"]["properties"]["new"]["maxLength"] == 4096
+    assert branches[1]["properties"]["expected_sha256"]["pattern"] == "^sha256:[0-9a-f]{64}$"
+    assert response_schema("repair")["properties"]["operations"]["items"]["anyOf"][1]["properties"]["content"]["maxLength"] == 256
+
+
 def test_repair_candidate_is_inert_and_defers_scope_commit() -> None:
     seen: dict[str, object] = {}
 
@@ -32,7 +44,7 @@ def test_repair_candidate_is_inert_and_defers_scope_commit() -> None:
                     {
                         "operation": "create",
                         "path": "src/main/java/PureCandidate.java",
-                        "content": "final class PureCandidate {}",
+                        "content": "final class PureCandidate {\n" + "    // source context\n" * 25 + "}\n",
                     }
                 ]
             }

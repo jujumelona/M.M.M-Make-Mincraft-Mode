@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .authored_feature_source import current_authored_feature_diagnostics
 from .compiler_diagnostics import compiler_log_diagnostics, normalize_source_path
 from .root_cause_trace import emit_root_cause
 from .runner import BuildRunnerError, GradleRunner
@@ -58,16 +59,20 @@ def run_generation_target_compile(
         result="START",
         details={"project_root": str(root), "target_path": target, "gradle_cache": str(cache)},
     )
-    try:
-        build = GradleRunner(cache).compile_java(root).to_dict()
-    except (BuildRunnerError, OSError, TimeoutError) as exc:
-        build = {
-            "status": "UNAVAILABLE",
-            "error": f"{type(exc).__name__}: {exc}",
-            "commands": [],
-        }
+    contract_diagnostics = current_authored_feature_diagnostics(root, target)
+    if contract_diagnostics:
+        build = {"status": "FAIL", "commands": [], "error": "host-authored integration contract failed"}
+    else:
+        try:
+            build = GradleRunner(cache).compile_java(root).to_dict()
+        except (BuildRunnerError, OSError, TimeoutError) as exc:
+            build = {
+                "status": "UNAVAILABLE",
+                "error": f"{type(exc).__name__}: {exc}",
+                "commands": [],
+            }
 
-    diagnostics = compiler_log_diagnostics(build, project_root=root)
+    diagnostics = contract_diagnostics + compiler_log_diagnostics(build, project_root=root)
     owned = [item for item in diagnostics if item.get("path") == target]
     build_status = str(build.get("status") or "").strip().upper()
 

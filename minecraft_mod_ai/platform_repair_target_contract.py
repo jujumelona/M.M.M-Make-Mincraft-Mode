@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .fixed_template_generation import generate_fixed_template_text
 
-from .model_response_templates import response_schema, response_template_prompt
+from .repair_response_contract import repair_response_schema
 
 import json
 from contextvars import ContextVar
@@ -84,6 +84,7 @@ def _install_dynamic_patch_request(module: Any) -> None:
                 "gradle": adapter.gradle,
             },
             "constraints": [
+                "Prefer exact edit replacements. Replace a whole file only when its complete current source is supplied.",
                 "Fill the supplied fixed template with the operations field.",
                 "Use only create, replace or edit operations.",
                 "Every non-create operation must use the supplied exact SHA-256.",
@@ -103,12 +104,12 @@ def _install_dynamic_patch_request(module: Any) -> None:
                     "content": (
                         "You are a hash-guarded Fabric source repair agent. Repair only "
                         "for the exact immutable target object supplied by the host."
-                        + response_template_prompt("repair")
+                        " Return one JSON value conforming to the supplied repair tool schema."
                     ),
                 },
                 {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
             ],
-            response_schema=response_schema("repair"),
+            response_schema=repair_response_schema(self.policy.max_patch_bytes),
             # Best-of-N candidate generation is a pure proposal phase. The normal
             # generation stage exposes mutating MCP tools such as apply_source_patch;
             # allowing candidates to call them would let a losing candidate change the

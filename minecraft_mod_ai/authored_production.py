@@ -265,7 +265,11 @@ def _compile_new_authored_modules(
         obligation = (
             f"Implement approved authored design unit {index}/{len(units)} only in "
             f"{symbol}. The exact class must be public final {symbol} in package "
-            f"{package_name} and expose public static void initialize(). Do not implement "
+            f"{package_name} and expose public static void initialize(). Do not put "
+            "side-only annotations on that class or initialize(): the host invokes it on "
+            "both client and server. Keep side-specific behavior in guarded helpers. "
+            "Replace the MMM_AUTHORED_FEATURE_BODY marker with the approved behavior; "
+            "a placeholder or initialization flag alone is not an implementation. Do not implement "
             "ModInitializer or ClientModInitializer, do not create another entrypoint, and "
             "do not create or edit sibling files. Additional helpers/state needed for this "
             "unit must stay inside this exact class. The host-selected target is authoritative "
@@ -304,6 +308,8 @@ def _compile_new_authored_modules(
                         f"Exact package: {package_name}",
                         f"Exact top-level type: public final class {symbol}",
                         "Required host integration surface: public static void initialize()",
+                        "The feature class and initialize() must exist on both client and server; no side-only annotations on either.",
+                        "Replace the host body marker with approved behavior; no placeholder-only implementation.",
                         "Forbidden: ModInitializer, ClientModInitializer, alternate entrypoints, sibling-file writes.",
                         "Do not require private implementation APIs from sibling feature classes; cross-feature activation is host-owned.",
                     ],

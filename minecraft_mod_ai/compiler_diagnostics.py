@@ -32,6 +32,10 @@ _RUNTIME_EXCEPTION = re.compile(
     r"(?P<type>[A-Za-z_$][A-Za-z0-9_$.]*(?:Exception|Error))"
     r"(?::\s*(?P<message>.*))?\s*$"
 )
+_MISSING_METHOD_OWNER = re.compile(
+    r"(?:^|\s)(?P<class>[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+)"
+    r"\.[A-Za-z_$<>][\w$<>]*\s*\("
+)
 _RUNTIME_FRAME_EXCLUDED_PREFIXES = (
     "java.",
     "javax.",
@@ -159,6 +163,21 @@ def compiler_log_diagnostics(
                 runtime_message = str(exception.group("type"))
                 if detail:
                     runtime_message += ": " + detail
+                if exception.group("type") == "java.lang.NoSuchMethodError":
+                    missing = _MISSING_METHOD_OWNER.search(detail.strip("'\""))
+                    if missing is not None:
+                        owner = missing.group("class").split("$", 1)[0]
+                        if not owner.startswith(_RUNTIME_FRAME_EXCLUDED_PREFIXES):
+                            body = {
+                                "path": "src/main/java/" + owner.replace(".", "/") + ".java",
+                                "severity": 1, "source": "runtime",
+                                "message": runtime_message,
+                                "code": "runtime:linkage:NoSuchMethodError",
+                            }
+                            fingerprint = _sha(body)
+                            if fingerprint not in seen and len(diagnostics) < limit:
+                                seen.add(fingerprint)
+                                diagnostics.append({**body, "diagnostic_sha256": fingerprint})
                 continue
 
             frame = _RUNTIME_STACK_FRAME.match(raw_line)
