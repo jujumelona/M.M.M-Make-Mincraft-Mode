@@ -24,6 +24,31 @@ def test_progress_payload_requests_prompt_events_and_bounded_ping() -> None:
     assert result["sse_ping_interval"] == 30
 
 
+def test_tool_semantic_idle_scales_to_output_budget_without_changing_ping_policy(monkeypatch) -> None:
+    stream_module = SimpleNamespace(
+        _tool_idle_timeout_seconds=lambda: 120.0,
+        _stream_idle_timeout_seconds=lambda: 120.0,
+    )
+    for name in (
+        "MMM_LLAMA_TOOL_SEMANTIC_TPS_FLOOR",
+        "MMM_LLAMA_TOOL_SEMANTIC_GRACE_SECONDS",
+        "MMM_LLAMA_TOOL_SEMANTIC_MAX_IDLE_SECONDS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    short_tool = {"tools": [{"type": "function"}], "max_tokens": 512}
+    long_tool = {"tools": [{"type": "function"}], "max_tokens": 4096}
+    huge_tool = {"tools": [{"type": "function"}], "max_tokens": 32768}
+
+    assert contract._semantic_idle_timeout_seconds(stream_module, short_tool) == 120.0
+    assert contract._semantic_idle_timeout_seconds(stream_module, long_tool) == pytest.approx(439.6)
+    assert contract._semantic_idle_timeout_seconds(stream_module, huge_tool) == 480.0
+    assert contract._semantic_idle_timeout_seconds(
+        stream_module, {"max_tokens": 4096}
+    ) == 120.0
+    assert contract._ping_interval_seconds(stream_module, long_tool) == 30
+
+
 def test_semantic_progress_ignores_transport_ping_and_tracks_prompt_progress() -> None:
     progressed, processed = contract._semantic_progress_from_sse_line(
         ": ping", last_prompt_processed=None
