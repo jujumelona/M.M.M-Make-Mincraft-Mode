@@ -22,10 +22,10 @@ class _Batch:
 def test_install_keeps_existing_planning_and_target_owners(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from minecraft_mod_ai import evidence_first_planning, platform_resolver
+    from minecraft_mod_ai import evidence_first_planning, platform_selection_pipeline
 
     branch_owner = evidence_first_planning._branch_predicates
-    target_owner = platform_resolver._optimize
+    target_owner = platform_selection_pipeline.resolve_platform_fail_closed
     calls: list[str] = []
 
     monkeypatch.setattr(contract, "_INSTALLED", False)
@@ -44,7 +44,7 @@ def test_install_keeps_existing_planning_and_target_owners(
 
     assert calls == ["handoff", "execution"]
     assert evidence_first_planning._branch_predicates is branch_owner
-    assert platform_resolver._optimize is target_owner
+    assert platform_selection_pipeline.resolve_platform_fail_closed is target_owner
 
 
 def test_execution_receipt_bundle_is_the_batch_graph_owner(
