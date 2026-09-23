@@ -554,11 +554,6 @@ def _branch_predicates(
     return result
 
 
-def _active(branches: Mapping[str, Mapping[str, Any]], name: str) -> bool:
-    value = branches.get(name)
-    return isinstance(value, Mapping) and value.get("status") == "ACTIVE"
-
-
 def _ownership_context(game_design: Mapping[str, Any]) -> dict[str, Any]:
     inventory = _mapping(
         game_design.get("_existing_project_inventory")
@@ -791,12 +786,6 @@ def _loader_leaf_steps(
         )
     )
     return tuple(rewritten)
-
-
-def _step_uses_branch(step: TemplateStep, branch: str) -> bool:
-    return branch in step.branch_features or (
-        branch == "needs_loader_leaf" and step.name == "loader_leaf_binding"
-    )
 
 
 def _bind_consumes_dependencies(
