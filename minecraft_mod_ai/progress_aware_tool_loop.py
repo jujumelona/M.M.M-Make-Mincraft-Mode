@@ -1331,15 +1331,8 @@ def _creation_authorized(
     )
 
 
-def _creation_authorized_for_context(
-    supplied: str, pinned: str, context: TargetMutationContext, authority: Any
-) -> bool:
-    return _creation_authorized(supplied, pinned, context) or bool(
-        authority is not None
-        and authority.mode is MutationAuthorityMode.EXACT
-        and not context_is_host_pinned(context)
-        and authority.authorizes(supplied, operation="create_file")
-    )
+def _creation_authorized_for_context(supplied: str, pinned: str, context: TargetMutationContext, authority: Any) -> bool:
+    return _creation_authorized(supplied, pinned, context) or bool(authority is not None and authority.mode is MutationAuthorityMode.EXACT and not context_is_host_pinned(context) and authority.authorizes(supplied, operation="create_file"))
 
 
 _JAVA_PACKAGE_DECLARATION_RE = re.compile(
@@ -1549,9 +1542,7 @@ def _mutation_target_error(tool_name: str, arguments: Mapping[str, Any], context
         return _contextless_authority_error(authority, arguments, operation)
     supplied = _source_edit_path(arguments)
     pinned = _canonical_mutation_path(context.target_path)
-    creation_authorized = _creation_authorized_for_context(
-        supplied, pinned, context, authority
-    )
+    creation_authorized = _creation_authorized_for_context(supplied, pinned, context, authority)
     if authority is not None:
         error = authority.mutation_error(_source_edit_path(arguments), operation=arguments.get("operation"))
         if error is not None:
