@@ -19,6 +19,7 @@ from typing import Any
 
 from .agent_intent import implementation_requested
 from . import generation_compile_recovery as _compile_recovery
+from .external_mcp_recovery_contract import constrain_recovery_tools, record_discovery
 from .generation_evidence_controller import (
     authoritative_java_evidence as _authoritative_java_evidence,
     evidence_obligation_satisfied,
@@ -4058,6 +4059,11 @@ def _generate_with_tools_impl(
                     _tool_name(schema) for schema in phase_tools if _tool_name(schema)
                 ]},
             )
+        phase_tools = constrain_recovery_tools(
+            phase_tools,
+            state=state,
+            repair_route=state.repair_evidence_route,
+        )
         if (
             authored_workspace_refresh
             and state.phase is LoopPhase.OBSERVE
@@ -4150,7 +4156,7 @@ def _generate_with_tools_impl(
                 # reviewed retrieval tools remain available.
                 tool_choice = "required"
                 parallel = False
-            if forced_evidence_tool == "external_mcp_call":
+            if forced_evidence_tool in {"external_mcp_schema", "external_mcp_call"}:
                 for schema in phase_tools:
                     if _tool_name(schema) != forced_evidence_tool:
                         continue
@@ -4766,6 +4772,12 @@ def _generate_with_tools_impl(
         tentative_repair_applied = False
 
         for call, payload in executed:
+            record_discovery(
+                state,
+                call,
+                payload,
+                external_rag_capability=_external_rag_capability,
+            )
             messages.append(dict(bounded_tool_message(
                 {
                     "role": "tool",
