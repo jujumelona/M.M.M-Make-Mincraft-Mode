@@ -77,3 +77,36 @@ def test_bound_provider_runtime_failure_is_unavailable_evidence(
             "error": "RuntimeError: provider transport down",
         }
     ]
+
+def test_call_without_live_schema_returns_unavailable_evidence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    install_binding(external_agent_bridge, external_mcp_router)
+    bridge = external_agent_bridge.ExternalAgentBridge()
+    router = ExternalMCPRouter(_registry(tmp_path))
+    bridge._router = router
+
+    async def unavailable_schema(*args, **kwargs):
+        raise RuntimeError("schema provider down")
+
+    monkeypatch.setattr(external_agent_bridge, "_provider_schema", unavailable_schema)
+
+    result = bridge.call(
+        "generation",
+        external_agent_bridge.CALL_TOOL,
+        {
+            "capability": "source_search",
+            "minecraft_version": "26.2",
+            "loader": "fabric",
+            "mappings": "official",
+            "max_access": "read",
+            "arguments": {"query": "Item registry"},
+        },
+    )
+
+    assert result["status"] == "UNAVAILABLE"
+    assert result["evidence"] == []
+    assert result["attempts"]
+    assert "schema provider down" in result["attempts"][0]["error"]
+
