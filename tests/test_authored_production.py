@@ -339,14 +339,50 @@ def test_existing_authored_plan_requires_localize_freeze_before_coder():
     proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(plan)
     assert len(proposal.modules) == 1
     module = proposal.modules[0]
-    assert module.module_id == "authored_design"
+    assert module.module_id == "authored_existing_001"
     assert module.config["authored_localization_required"] is True
     assert "evidence_task" not in module.config
     assert module.required_gates == ("target_compile", "project build")
     manifest = proposal.game_design["_authored_execution_manifest"]
     assert manifest["policy"] == "host_localize_freeze_exact_targets_before_coder"
-    assert manifest["units"][0]["module_id"] == "authored_design"
+    assert manifest["units"][0]["module_id"] == "authored_existing_001"
     assert manifest["units"][0]["end_byte"] == len(plan.text.encode("utf-8"))
+
+
+def test_existing_authored_design_is_semantic_and_serial_for_small_model():
+    plan = AuthoredPlan(
+        "Modify the existing space mod",
+        (
+            "# Economy\nPreserve trade and prices.\n"
+            "# Ships\nAdd upgrade behavior.\n"
+            "# Planets\nExtend mining and colonies.\n"
+        ),
+        existing_input_sha256="sha256:" + "b" * 64,
+    )
+    proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(plan)
+
+    assert [module.module_id for module in proposal.modules] == [
+        "authored_existing_001",
+        "authored_existing_002",
+        "authored_existing_003",
+    ]
+    assert [module.depends_on for module in proposal.modules] == [
+        (),
+        ("authored_existing_001",),
+        ("authored_existing_002",),
+    ]
+    assert [
+        module.config["authored_unit"]["section"] for module in proposal.modules
+    ] == ["Economy", "Ships", "Planets"]
+    assert "".join(
+        module.config["authored_plan"]["text"] for module in proposal.modules
+    ) == plan.text
+
+    manifest = proposal.game_design["_authored_execution_manifest"]
+    assert manifest["unit_count"] == 3
+    assert [unit["module_id"] for unit in manifest["units"]] == [
+        module.module_id for module in proposal.modules
+    ]
 
 
 def test_materialize_authored_scaffold_is_noop_without_game_design(tmp_path) -> None:

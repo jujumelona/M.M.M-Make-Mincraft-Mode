@@ -358,6 +358,12 @@ def _localized(module: ProductionModule, receipt: Mapping[str, Any]) -> Producti
             },
         },
         "target_cell": target,
+        "depends_on": list(module.depends_on),
+        "consumes": [
+            f"{dependency}_ready"
+            for dependency in module.depends_on
+        ],
+        "provides": [f"{module.module_id}_ready"],
         "owned_anchors": anchors,
         "production_bindings": [{
             "task_ref": module.module_id,
