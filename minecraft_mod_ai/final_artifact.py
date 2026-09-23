@@ -726,6 +726,96 @@ def build_debug_fixture_coverage_receipt(
 
 
 
+_AUTHORED_INITIALIZE_RE = re.compile(
+    r"\\bpublic\\s+static\\s+void\\s+initialize\\s*\\(\\s*\\)\\s*\\{"
+)
+
+
+def _authored_initialize_body(source: str, symbol: str) -> str | None:
+    """Return executable initialize() body text with comments/literals removed."""
+
+    _commentless, code = _debug_java_code_surface(source)
+    if re.search(
+        rf"\\bpublic\\s+final\\s+class\\s+{re.escape(symbol)}\\b",
+        code,
+    ) is None:
+        return None
+    match = _AUTHORED_INITIALIZE_RE.search(code)
+    if match is None:
+        return None
+    depth = 1
+    start = match.end()
+    for index in range(start, len(code)):
+        token = code[index]
+        if token == "{":
+            depth += 1
+        elif token == "}":
+            depth -= 1
+            if depth == 0:
+                return code[start:index]
+    return None
+
+
+def _authored_feature_semantic_findings(
+    project_root: str | Path,
+    units: Sequence[Any],
+) -> list[str]:
+    """Reject host scaffold/no-op authored features before release certification."""
+
+    findings: list[str] = []
+    try:
+        root = _project_root(project_root)
+    except FinalArtifactError as exc:
+        return [f"authored feature source root is unavailable: {exc}"]
+
+    for ordinal, raw_unit in enumerate(units, start=1):
+        if not isinstance(raw_unit, Mapping):
+            continue
+        module_id = str(raw_unit.get("module_id") or f"unit-{ordinal}").strip()
+        relative = str(raw_unit.get("path") or "").replace("\\", "/").strip()
+        symbol = str(raw_unit.get("symbol") or "").strip()
+        if (
+            not relative
+            or not symbol
+            or Path(relative).is_absolute()
+            or ".." in Path(relative).parts
+            or not relative.casefold().endswith(".java")
+        ):
+            findings.append(
+                f"authored module {module_id} has no safe exact Java source binding"
+            )
+            continue
+        safe = _safe_existing_file(root / relative)
+        if safe is None:
+            findings.append(
+                f"authored module {module_id} source is missing or unsafe: {relative}"
+            )
+            continue
+        try:
+            safe.relative_to(root)
+            source = safe.read_text(encoding="utf-8")
+        except (ValueError, OSError, UnicodeError):
+            findings.append(
+                f"authored module {module_id} source is unreadable or escaped the project root"
+            )
+            continue
+        body = _authored_initialize_body(source, symbol)
+        if body is None:
+            findings.append(
+                f"authored module {module_id} does not implement the required {symbol}.initialize() surface"
+            )
+            continue
+        normalized = re.sub(r"\\s+", "", body)
+        if (
+            not normalized
+            or re.fullmatch(r"(?:;|return;)+", normalized) is not None
+        ):
+            findings.append(
+                f"authored module {module_id} initialize() has no executable behavior"
+            )
+    return findings
+
+
 def build_authored_design_coverage_receipt(
     *,
     proposal_hash: str,
@@ -733,6 +823,7 @@ def build_authored_design_coverage_receipt(
     authored_plan: Mapping[str, Any] | None,
     authored_manifest: Mapping[str, Any] | None,
     module_ids: Sequence[str],
+    project_root: str | Path | None = None,
     artifact_sha256: str,
     source_validation: Mapping[str, Any] | None,
     build_report: Mapping[str, Any] | None,
@@ -862,6 +953,12 @@ def build_authored_design_coverage_receipt(
         findings.append("authored execution units do not cover every byte of the approved design")
     if manifest_module_ids != expected_module_ids:
         findings.append("authored execution manifest modules do not match the approved proposal modules")
+
+    if (
+        authored_policy == "host_exact_task_queue_no_coder_file_planning"
+        and project_root is not None
+    ):
+        findings.extend(_authored_feature_semantic_findings(project_root, units))
 
     unresolved = sorted(
         {str(item) for item in unresolved_gates if str(item).strip()}
@@ -1104,7 +1201,18 @@ def write_downloadable_bundle(
     build_receipt: Mapping[str, Any],
     runtime_receipt: Mapping[str, Any],
     additional_artifacts: Mapping[str, Mapping[str, Any]] | None = None,
+    proposal_hash: str = "",
 ) -> dict[str, Any]:
+    expected_proposal_hash = str(proposal_hash or "").strip()
+    coverage_proposal_hash = str(requirement_coverage.get("proposal_hash") or "").strip()
+    if expected_proposal_hash and coverage_proposal_hash != expected_proposal_hash:
+        raise FinalArtifactError(
+            "Requirement coverage is not bound to the requested pipeline proposal."
+        )
+    if not coverage_proposal_hash:
+        raise FinalArtifactError("Download bundle requirement coverage has no proposal hash.")
+    bound_proposal_hash = expected_proposal_hash or coverage_proposal_hash
+
     if artifact_receipt.get("status") != "PASS":
         raise FinalArtifactError("Only a passing final artifact receipt may be bundled.")
     artifact = _safe_existing_file(str(artifact_receipt.get("artifact_path") or ""))
@@ -1203,6 +1311,7 @@ def write_downloadable_bundle(
             "status": "PASS",
             "artifact": artifact.name,
             "artifact_sha256": expected_sha256,
+            "proposal_hash": bound_proposal_hash,
             "additional_artifacts": bundled_additional,
             "members": members,
         }
@@ -1222,6 +1331,13 @@ def bundle_from_pipeline_result(
 ) -> dict[str, Any]:
     if not isinstance(result, Mapping):
         raise FinalArtifactError("Complete pipeline result must be a JSON object.")
+    if result.get("status") != "VERIFIED" or result.get("release_ready") is not True:
+        raise FinalArtifactError(
+            "Download bundle requires a release-ready VERIFIED pipeline result."
+        )
+    result_proposal_hash = str(result.get("complete_proposal_hash") or "").strip()
+    if not result_proposal_hash:
+        raise FinalArtifactError("Complete pipeline result has no proposal hash.")
     project_root = _project_root(str(result.get("project_root") or ""))
     artifact = verify_final_mod_artifact(project_root).to_dict()
     result_jar = _safe_existing_file(str(result.get("jar_path") or ""))
@@ -1257,6 +1373,10 @@ def bundle_from_pipeline_result(
     coverage = _read_optional_json(project_root / ".minecraft_ai/requirement-coverage.json")
     if coverage is None:
         coverage = _coverage_from_project(project_root, result, artifact["sha256"])
+    if str(coverage.get("proposal_hash") or "").strip() != result_proposal_hash:
+        raise FinalArtifactError(
+            "Requirement coverage is not bound to this pipeline result proposal."
+        )
     reuse = _load_reuse_manifest(project_root, artifact["mod_id"])
     build_payload = _read_optional_json(project_root / ".minecraft_ai/build-receipt.json")
     if build_payload is None:
@@ -1283,6 +1403,7 @@ def bundle_from_pipeline_result(
         build_receipt=build_payload,
         runtime_receipt=runtime_payload,
         additional_artifacts=additional_artifacts,
+        proposal_hash=result_proposal_hash,
     )
 
 
