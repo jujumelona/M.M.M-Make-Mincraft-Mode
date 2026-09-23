@@ -270,6 +270,77 @@ def _require_local_cuda() -> Any:
     return torch
 
 
+def _cuda_runtime_library_dirs(torch: Any) -> tuple[Path, ...]:
+    """Discover CUDA runtime shared-library directories used by the active PyTorch."""
+
+    candidates: list[Path] = []
+    torch_file = str(getattr(torch, "__file__", "") or "").strip()
+    if torch_file:
+        candidates.append(Path(torch_file).expanduser().resolve().parent / "lib")
+
+    for package in (
+        "nvidia.cuda_runtime",
+        "nvidia.cublas",
+        "nvidia.cuda_nvrtc",
+        "nvidia.nvjitlink",
+        "nvidia.cusparse",
+        "nvidia.cusolver",
+    ):
+        try:
+            spec = importlib.util.find_spec(package)
+        except (ImportError, ModuleNotFoundError, ValueError):
+            spec = None
+        if spec is None:
+            continue
+        locations = list(spec.submodule_search_locations or ())
+        if not locations and spec.origin:
+            locations = [str(Path(spec.origin).resolve().parent)]
+        for location in locations:
+            candidates.append(Path(location).expanduser().resolve() / "lib")
+
+    for variable in ("CUDA_HOME", "CUDA_PATH", "CUDA_ROOT"):
+        raw = os.environ.get(variable, "").strip()
+        if raw:
+            candidates.append(Path(raw).expanduser().resolve() / "lib64")
+    candidates.extend(
+        (
+            Path("/usr/local/cuda/lib64"),
+            Path("/usr/local/cuda-12/lib64"),
+            Path("/usr/local/cuda-12.4/lib64"),
+        )
+    )
+
+    found: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=False)
+        except OSError:
+            continue
+        key = str(resolved)
+        if key in seen or not resolved.is_dir():
+            continue
+        seen.add(key)
+        found.append(resolved)
+    return tuple(found)
+
+
+def _activate_cuda_runtime_library_path(torch: Any) -> tuple[Path, ...]:
+    """Expose PyTorch's CUDA wheel libraries to native llama subprocesses."""
+
+    directories = _cuda_runtime_library_dirs(torch)
+    current = [
+        part for part in os.environ.get("LD_LIBRARY_PATH", "").split(":") if part
+    ]
+    ordered = [str(path) for path in directories]
+    for value in current:
+        if value not in ordered:
+            ordered.append(value)
+    if ordered:
+        os.environ["LD_LIBRARY_PATH"] = ":".join(ordered)
+    return directories
+
+
 def _native_source_dir() -> Path:
     raw = os.environ.get("MMM_LLAMA_SERVER_SOURCE_DIR", "").strip()
     return (
@@ -484,6 +555,7 @@ def _prepare_native_source(source_dir: Path) -> None:
 
 
 def _ensure_native_server(torch: Any) -> str:
+    _activate_cuda_runtime_library_path(torch)
     existing = _find_verified_native_server()
     if existing is not None:
         resolved = str(existing)
