@@ -300,17 +300,24 @@ class RepairEngine:
             root,
             timeout_seconds=90,
         )
-        try:
-            build = self.runner_factory(self.gradle_cache).build(
-                root, run_gametest=run_gametest
-            ).to_dict()
-        except Exception as exc:
+        diagnostic_errors = _diagnostic_errors(diagnostics)
+        if diagnostic_errors:
             build = {
-                "status": "FAIL",
-                "error": f"{type(exc).__name__}: {exc}",
+                "status": "SKIPPED",
+                "error": "Gradle validation skipped because JDT diagnostics are unavailable or blocking.",
                 "commands": [],
             }
-        diagnostic_errors = _diagnostic_errors(diagnostics)
+        else:
+            try:
+                build = self.runner_factory(self.gradle_cache).build(
+                    root, run_gametest=run_gametest
+                ).to_dict()
+            except Exception as exc:
+                build = {
+                    "status": "FAIL",
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "commands": [],
+                }
         return {
             "passed": build.get("status") == "PASS" and not diagnostic_errors,
             "diagnostics": diagnostics,
