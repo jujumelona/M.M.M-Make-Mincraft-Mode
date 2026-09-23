@@ -460,6 +460,7 @@ def run_diagnostics_with_bootstrap_retry(
     *,
     timeout_seconds: int | None = None,
     attempts: int | None = None,
+    run_once: Any = None,
 ) -> dict[str, Any]:
     """Run JDT diagnostics, retrying only a transient ServiceReady bootstrap miss."""
 
@@ -471,9 +472,10 @@ def run_diagnostics_with_bootstrap_retry(
         total_attempts = release_diagnostics_attempts()
     total_attempts = max(1, min(int(total_attempts), 3))
 
+    runner = run_diagnostics if run_once is None else run_once
     receipt: dict[str, Any] = {}
     for attempt in range(1, total_attempts + 1):
-        receipt = run_diagnostics(
+        receipt = runner(
             diagnostics_factory,
             project_root,
             timeout_seconds=int(per_attempt),

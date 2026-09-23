@@ -163,6 +163,7 @@ def _run_release_jdt_verification(
         project_root,
         timeout_seconds=timeout_seconds,
         attempts=attempts,
+        run_once=run_jdt_diagnostics,
     )
 
 
