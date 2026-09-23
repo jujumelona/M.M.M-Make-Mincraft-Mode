@@ -1086,21 +1086,6 @@ def _build_target_evidence(
         dependency_closure_complete=True,
     )
 
-
-def _inspect_project_receipt_native(
-    client: EcosystemDiscoveryClient,
-    project_id: str,
-    adapter: PlatformAdapter,
-) -> _VerifiedProject | None:
-    """Compatibility wrapper retaining the previous private-call contract."""
-    return _inspect_project_receipt_native_detailed(
-        client,
-        project_id,
-        adapter,
-        role="source_reuse",
-    ).verified
-
-
 def _inspect_project_receipt_native_detailed(
     client: EcosystemDiscoveryClient,
     project_id: str,
