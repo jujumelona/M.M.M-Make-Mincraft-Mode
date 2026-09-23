@@ -551,32 +551,6 @@ class ProjectRAGIndex:
             ),
         )
 
-    def _load(self) -> list[RAGChunk]:
-        """Compatibility helper for callers that used the former private API."""
-
-        if not self.index_path.is_file():
-            raise FileNotFoundError(f"RAG index not found: {self.index_path}")
-        if not _is_sqlite(self.index_path):
-            return self._load_legacy()
-        connection = sqlite3.connect(str(self.index_path))
-        connection.row_factory = sqlite3.Row
-        try:
-            index_meta = _read_index_meta(connection)
-            metadata = json.loads(index_meta.get("metadata", "{}"))
-            return [
-                _chunk_from_row(row, metadata)
-                for row in connection.execute(
-                    """
-                    SELECT chunk_id, source_path, text, start_line, end_line,
-                           sha256, embedding
-                    FROM chunks
-                    ORDER BY source_path, start_line, chunk_id
-                    """
-                )
-            ]
-        finally:
-            connection.close()
-
     def _load_legacy(self) -> list[RAGChunk]:
         default_meta = {
             "minecraft_version": "1.21.1",
