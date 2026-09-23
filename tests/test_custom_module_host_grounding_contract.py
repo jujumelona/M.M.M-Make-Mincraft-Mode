@@ -52,7 +52,7 @@ def test_host_grounding_is_mandatory_and_role_scoped() -> None:
 def test_generator_resolves_grounding_before_agentic_coder_decode() -> None:
     source = inspect.getsource(CustomModuleGenerator.generate)
     grounding_index = source.index("host_grounding = build_coder_grounding(")
-    first_decode_index = source.index("self.router.generate_text(")
+    first_decode_index = source.index("_generate_coder_text(")
     assert grounding_index < first_decode_index
     assert '"host_grounding": host_grounding' in source
     assert 'response_format="text"' in source
