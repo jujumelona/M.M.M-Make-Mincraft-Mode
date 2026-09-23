@@ -1506,6 +1506,40 @@ def _java_source_identity_error(
     return None
 
 
+def _contextless_authority_error(
+    authority: Any,
+    arguments: Mapping[str, Any],
+    operation: str,
+) -> str | None:
+    if authority is None:
+        return "MUTATION_TARGET_UNBOUND: no host-pinned mutation target is READY"
+    error = authority.mutation_error(
+        _source_edit_path(arguments),
+        operation=arguments.get("operation"),
+    )
+    if error is not None:
+        return error
+    if authority.mode is MutationAuthorityMode.BOUNDED_ROOTS:
+        supplied = _source_edit_path(arguments)
+        if operation in _SOURCE_CREATE_OPERATIONS and supplied.casefold().endswith(".java"):
+            create_source = arguments.get("content")
+            if not isinstance(create_source, str):
+                create_source = arguments.get("text")
+            package_error = _java_path_package_error(supplied, create_source)
+            if package_error is not None:
+                return package_error
+    if operation == "replace_exact" and "old" not in arguments:
+        return (
+            "MUTATION_ATOMIC_SPAN_REQUIRED: existing source replacement requires "
+            "one exact old span; whole-file model replacement is forbidden"
+        )
+    return None
+
+
+def _repair_phase_for_route(route: str | None) -> LoopPhase:
+    return LoopPhase.RECOVER if repair_route_requires_retrieval(route) else LoopPhase.ACT
+
+
 def _mutation_target_error(
     tool_name: str,
     arguments: Mapping[str, Any],
@@ -1517,6 +1551,8 @@ def _mutation_target_error(
         return None
     operation = str(arguments.get("operation") or "").strip().casefold()
     authority = CURRENT_MUTATION_AUTHORITY.get()
+    if context is None:
+        return _contextless_authority_error(authority, arguments, operation)
     if authority is not None:
         error = authority.mutation_error(
             _source_edit_path(arguments),
@@ -1524,8 +1560,9 @@ def _mutation_target_error(
         )
         if error is not None:
             return error
-        if authority.mode is MutationAuthorityMode.BOUNDED_ROOTS and not (
-            context is not None and context.evidence_source == "verifier_workspace_source"
+        if (
+            authority.mode is MutationAuthorityMode.BOUNDED_ROOTS
+            and context.evidence_source != "verifier_workspace_source"
         ):
             supplied = _source_edit_path(arguments)
             if operation in _SOURCE_CREATE_OPERATIONS and supplied.casefold().endswith(".java"):
@@ -1539,19 +1576,13 @@ def _mutation_target_error(
             # permits the coder to select one file below the host-owned roots. Once a
             # concrete existing target is rebound and pinned, do not bypass the exact
             # existing-source semantic guard: the host now owns path + live source.
-            if (
-                context is None
-                or context.is_new_file
-                or not context_is_host_pinned(context)
-            ):
+            if context.is_new_file or not context_is_host_pinned(context):
                 if operation == "replace_exact" and "old" not in arguments:
                     return (
                         "MUTATION_ATOMIC_SPAN_REQUIRED: existing source replacement requires "
                         "one exact old span; whole-file model replacement is forbidden"
                     )
                 return None
-    if context is None:
-        return "MUTATION_TARGET_UNBOUND: no host-pinned mutation target is READY"
     supplied = _source_edit_path(arguments)
     pinned = _canonical_mutation_path(context.target_path)
     allowed = set(context.writable_paths) or ({pinned} if pinned else set())
@@ -3818,11 +3849,7 @@ def _generate_with_tools_impl(
                 # is not sufficient implementation evidence: remain in RECOVER so the
                 # reviewed mappings/source/MCP frontier can resolve the exact API first.
                 state.record_evidence(snapshot, usable=True)
-                state.phase = (
-                    LoopPhase.RECOVER
-                    if repair_route_requires_retrieval(state.repair_evidence_route)
-                    else LoopPhase.ACT
-                )
+                state.phase = _repair_phase_for_route(state.repair_evidence_route)
                 emit_root_cause(
                     "verifier_workspace_repair_bound",
                     stage=stage,
@@ -3993,11 +4020,7 @@ def _generate_with_tools_impl(
                             "result": "FAIL",
                         }
                     )
-                    state.phase = (
-                        LoopPhase.RECOVER
-                        if repair_route_requires_retrieval(state.repair_evidence_route)
-                        else LoopPhase.ACT
-                    )
+                    state.phase = _repair_phase_for_route(state.repair_evidence_route)
                     if repeated:
                         raise _fixed_point_error(state)
                     continue
@@ -5028,7 +5051,7 @@ def _generate_with_tools_impl(
                             runtime,
                             stage=stage,
                         )
-                    state.phase = LoopPhase.RECOVER
+                    state.phase = _repair_phase_for_route(state.repair_evidence_route)
                 continue
 
             if is_evidence_tool(call):
