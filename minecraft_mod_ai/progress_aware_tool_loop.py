@@ -438,14 +438,6 @@ def _planir_owned_anchor_sets(
     return context.writable_paths, context.creatable_paths
 
 
-def _approved_donor_source_authority(
-    messages: Sequence[Mapping[str, Any]],
-) -> bool:
-    from .donor_source_authority import approved_donor_authority
-
-    return approved_donor_authority(messages)
-
-
 def _constrain_existing_repair_schema(
     schema: Mapping[str, Any],
     *,
