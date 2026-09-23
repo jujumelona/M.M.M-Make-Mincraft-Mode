@@ -221,10 +221,6 @@ def _canonical_mutation_path(value: Any) -> str:
     return re.sub(r"^(?:\./)+", "", clean)
 
 
-def _normalized_target_path(value: Any) -> str:
-    return _canonical_mutation_path(value)
-
-
 def _is_workspace_file_path(path: str) -> bool:
     clean = _canonical_mutation_path(path)
     if not clean or clean.startswith("/") or ":" in clean:
@@ -448,12 +444,6 @@ def _approved_donor_source_authority(
     from .donor_source_authority import approved_donor_authority
 
     return approved_donor_authority(messages)
-
-
-def _filter_donor_tool_schemas(schemas: Sequence[Any]) -> tuple[Any, ...]:
-    from .donor_source_authority import filter_donor_tool_schemas
-
-    return filter_donor_tool_schemas(schemas)
 
 
 def _constrain_existing_repair_schema(
