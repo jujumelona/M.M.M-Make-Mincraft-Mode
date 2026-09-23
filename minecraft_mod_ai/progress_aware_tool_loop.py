@@ -165,14 +165,11 @@ _GENERATION_VERIFICATION_RECEIPT: ContextVar[dict[str, Any] | None] = ContextVar
     "mmm_generation_verification_receipt",
     default=None,
 )
-
 def clear_generation_verification_receipt() -> None:
     _GENERATION_VERIFICATION_RECEIPT.set(None)
-
 def current_generation_verification_receipt() -> dict[str, Any] | None:
     value = _GENERATION_VERIFICATION_RECEIPT.get()
     return deepcopy(value) if isinstance(value, dict) else None
-
 def _record_terminal_generation_verification(
     state: HostRunState,
     *,
@@ -219,7 +216,6 @@ _CODE_MARKERS = frozenset({
 def _tool_name(schema: Mapping[str, Any]) -> str:
     fn = schema.get("function")
     return str(fn.get("name", "")).strip() if isinstance(fn, Mapping) else ""
-
 
 def _canonical_mutation_path(value: Any) -> str:
     clean = str(value or "").strip().replace("\\", "/")
