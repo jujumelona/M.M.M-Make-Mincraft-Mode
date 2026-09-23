@@ -90,6 +90,42 @@ def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
     return tuple(blocks)
 
 
+def _implementation_authored_plan(plan: AuthoredPlan) -> tuple[AuthoredPlan, dict[str, Any] | None]:
+    """Strip a leaked model-reasoning preamble while preserving its provenance."""
+
+    text = plan.text
+    heading = re.search(r"(?m)^ {0,3}# +behavior_contract\s*$", text, re.IGNORECASE)
+    if heading is None:
+        return plan, None
+    prefix = text[: heading.start()]
+    markers = (
+        "thinking process:",
+        "analyze the request:",
+        "deconstruct the template",
+        "drafting content",
+    )
+    lowered = prefix.casefold()
+    marker_count = sum(marker in lowered for marker in markers)
+    if marker_count < 2:
+        return plan, None
+    implementation_text = text[heading.start() :]
+    projected = AuthoredPlan(
+        requested_prompt=plan.requested_prompt,
+        text=implementation_text,
+        existing_input_sha256=plan.existing_input_sha256,
+        media_paths=plan.media_paths,
+    )
+    provenance = {
+        "schema_version": "mmm/authored-source-projection-v1",
+        "policy": "strip_leaked_model_reasoning_prefix_only",
+        "source_text_sha256": "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "implementation_text_sha256": "sha256:"
+        + hashlib.sha256(implementation_text.encode("utf-8")).hexdigest(),
+        "stripped_prefix_bytes": len(prefix.encode("utf-8")),
+    }
+    return projected, provenance
+
+
 def _authored_execution_units(text: str) -> tuple[dict[str, Any], ...]:
     """Lower saved prose to bounded Markdown-section obligations.
 
@@ -222,14 +258,20 @@ def _compile_new_authored_modules(
         consumes: tuple[str, ...] = ()
         exact_text = str(unit["text"])
         section = str(unit.get("section") or "").strip()
+        target_summary = (
+            f"Minecraft {target.get('minecraft_version', '')}, "
+            f"loader {target.get('loader', '')}, mappings {target.get('mappings', '')}"
+        )
         obligation = (
             f"Implement approved authored design unit {index}/{len(units)} only in "
             f"{symbol}. The exact class must be public final {symbol} in package "
             f"{package_name} and expose public static void initialize(). Do not implement "
             "ModInitializer or ClientModInitializer, do not create another entrypoint, and "
             "do not create or edit sibling files. Additional helpers/state needed for this "
-            "unit must stay inside this exact class. Preserve this approved unit verbatim as "
-            "the semantic source of truth:\n\n" + exact_text
+            "unit must stay inside this exact class. The host-selected target is authoritative "
+            f"({target_summary}); adapt stale version/API examples in the authored prose to "
+            "that target without changing gameplay semantics. Preserve the approved gameplay "
+            "requirements in this unit as the semantic source of truth:\n\n" + exact_text
         )
         task = _exact_authored_task(
             task_id=task_id,
@@ -573,8 +615,9 @@ def _bound_target(design: Mapping[str, Any]) -> dict[str, str]:
 def compile_authored_design(
     router: Any, plan: AuthoredPlan, *, existing_input_sha256: str = ""
 ) -> CompleteProposal:
+    implementation_plan, source_projection = _implementation_authored_plan(plan)
     # These are host project coordinates, not inferred gameplay or placeholder content.
-    mod_id = "authored_" + plan.calculate_hash()[:12]
+    mod_id = "authored_" + implementation_plan.calculate_hash()[:12]
     acceptance = (
         "Implement the behaviors in the saved authored design and exercise them in Minecraft.",
         "Build the project and verify that the mod loads and runs without errors.",
@@ -595,7 +638,9 @@ def compile_authored_design(
         assumptions=(), exclusions=(), deferred_requests=(),
         acceptance_tests=acceptance, evidence_sources=(),
     )
-    design = {"authored_plan": plan.to_dict()}
+    design = {"authored_plan": implementation_plan.to_dict()}
+    if source_projection is not None:
+        design["_authored_source_projection"] = source_projection
     # Bind the actual build toolchain and existing project only. Never enter prepare(),
     # requirement extraction, design validation, or the old PlanIR compiler.
     binding = PlanningPipeline(router)
@@ -613,7 +658,7 @@ def compile_authored_design(
         # Lower the saved prose into an exact-path dependency queue now, before coder
         # decode, so the small model never owns file planning or entrypoint architecture.
         modules, manifest = _compile_new_authored_modules(
-            plan,
+            implementation_plan,
             mod_id=base.spec.mod_id,
             package_name=base.spec.package_name,
             target=target,
@@ -621,7 +666,7 @@ def compile_authored_design(
         design = {**design, "_authored_execution_manifest": manifest}
     else:
         modules, manifest = _compile_existing_authored_modules(
-            plan,
+            implementation_plan,
             target=target,
         )
         design = {**design, "_authored_execution_manifest": manifest}
