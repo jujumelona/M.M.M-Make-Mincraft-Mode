@@ -531,9 +531,18 @@ def install(external_agent_bridge_module: Any, external_mcp_router_module: Any) 
                 allowed,
             )
             if str(described.get("status", "")) != "PASS":
-                raise external_agent_bridge_module.ExternalAgentBridgeError(
-                    "No live external MCP schema is available for this call scope."
-                )
+                bundle = {
+                    "schema_version": "mmm/external-mcp-evidence-bundle-v1",
+                    "capability": capability,
+                    "stage": stage,
+                    "target": target,
+                    "required_corroboration": 1,
+                    "status": "UNAVAILABLE",
+                    "evidence": [],
+                    "attempts": list(described.get("attempts", ()) or ()),
+                }
+                bundle["bundle_sha256"] = external_mcp_router_module._sha256(bundle)
+                return bundle
             with self._lock:
                 binding = _binding_store(self).get(key)
         if binding is None:  # pragma: no cover - defensive invariant
