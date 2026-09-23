@@ -173,6 +173,27 @@ def test_priority_fallback_and_target_argument_binding(
     assert bundle["evidence"][0]["server"] == "dynamic-fallback"
 
 
+def test_nested_provider_exception_exposes_actual_failure(tmp_path, monkeypatch):
+    try:
+        from builtins import ExceptionGroup
+    except ImportError:
+        from exceptiongroup import ExceptionGroup
+
+    router = ExternalMCPRouter(_registry(tmp_path))
+
+    def fail(*_args, **_kwargs):
+        raise ExceptionGroup("unhandled errors in a TaskGroup", [
+            ExceptionGroup("transport", [FileNotFoundError("provider executable missing")]),
+        ])
+
+    monkeypatch.setattr(router, "_call_provider", fail)
+    bundle = router.invoke("source_search", stage="research",
+        arguments={"query": "Item"}, target={"minecraft_version": "26.2", "loader": "fabric"})
+    assert bundle["status"] == "UNAVAILABLE"
+    chain = bundle["attempts"][0].get("exception_chain", [])
+    assert any(row["type"] == "FileNotFoundError" and "provider executable missing" in row["message"] for row in chain)
+
+
 def test_authoritative_runtime_target_conflict_is_rejected() -> None:
     target = MCPRouteTarget.from_value(
         {"minecraft_version": "27.0", "loader": "fabric", "mappings": "mojang"}

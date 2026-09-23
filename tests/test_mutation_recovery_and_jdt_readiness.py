@@ -4,6 +4,8 @@ import json
 
 from types import SimpleNamespace
 
+import pytest
+
 from minecraft_mod_ai.model_adapters import ToolCall
 from minecraft_mod_ai.mutation_authority import (
     CURRENT_MUTATION_AUTHORITY,
@@ -92,7 +94,8 @@ def test_creation_conflict_remains_available_to_corrective_tool_loop() -> None:
     assert _latest_post_argument_semantic_failure(failure) is None
 
 
-def test_creation_conflict_rebinds_live_file_for_small_coder(tmp_path) -> None:
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_creation_conflict_rebinds_live_file_for_small_coder(tmp_path, newline) -> None:
     target_path = "src/main/java/com/example/starforge/StarForgeMod.java"
     target = tmp_path / target_path
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -102,7 +105,8 @@ def test_creation_conflict_rebinds_live_file_for_small_coder(tmp_path) -> None:
         "    public static int credits() { return 1; }\n"
         "}\n"
     )
-    target.write_text(source, encoding="utf-8")
+    source = source.replace("\n", newline)
+    target.write_text(source, encoding="utf-8", newline="")
 
     state = HostRunState()
     state.unchanged_mutation_fingerprints.add("failed-create")

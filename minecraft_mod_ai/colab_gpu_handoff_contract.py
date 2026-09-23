@@ -39,6 +39,7 @@ def _install_asset_handoff(*, services_module: Any, model_router_module: Any) ->
             _release_native_llama_server()
             return current(router, *args, **kwargs)
     generate_assets_atomic_gpu_handoff._mmm_atomic_gpu_handoff = True
+    generate_assets_atomic_gpu_handoff._mmm_releases_managed_llama = True
     services_module.generate_assets = generate_assets_atomic_gpu_handoff
 
 def install(*, services_module: Any, model_router_module: Any) -> None:

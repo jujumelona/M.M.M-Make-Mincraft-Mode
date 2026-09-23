@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+from inspect import unwrap
 from types import SimpleNamespace
+
+import pytest
 
 from minecraft_mod_ai import complete_orchestrator_services
 from minecraft_mod_ai import llama_server_autotune as autotune
@@ -251,6 +254,73 @@ def test_unhealthy_managed_server_is_restarted_once(monkeypatch) -> None:
     )
     assert stopped == [process]
     assert ensured == [(config, request)]
+
+
+@pytest.mark.parametrize("restart_fails", [False, True])
+def test_exited_successful_server_can_restart_between_completion_requests(monkeypatch, restart_fails):
+    """A completed launch must not poison admission after its process exits."""
+    old_url = "http://127.0.0.1:8910/v1"
+    old_process = SimpleNamespace(
+        poll=lambda: -9, pid=123,
+        _mmm_startup_log=SimpleNamespace(text=lambda: "CUDA error: out of memory"),
+    )
+    live_process = SimpleNamespace(poll=lambda: None, pid=124)
+    monkeypatch.setattr(autotune, "_MANAGED_PROCESS", old_process)
+    monkeypatch.setattr(autotune, "_MANAGED_URL", old_url)
+    monkeypatch.setattr(autotune, "_MANAGED_KEY", "runtime")
+    monkeypatch.setattr(autotune, "_ATTEMPTED_KEYS", {"runtime"})
+    monkeypatch.setenv("LLAMA_SERVER_URL", old_url)
+    monkeypatch.setattr(autotune, "_external_server_is_ready", lambda: False)
+    monkeypatch.setattr(autotune, "_server_binary", lambda: "llama-server")
+    monkeypatch.setattr(autotune, "_resolve_model_path", lambda _: "model.gguf")
+    monkeypatch.setattr(autotune, "_fingerprint", lambda *_: "runtime")
+    monkeypatch.setattr(autotune, "_load_cached_decision", lambda _: None)
+    monkeypatch.setattr(autotune, "_request_inline_autotune_enabled", lambda: False)
+    launched = []
+    from minecraft_mod_ai import root_cause_trace
+    events = []
+    monkeypatch.setattr(root_cause_trace, "emit_root_cause", lambda event, **kwargs: events.append((event, kwargs)))
+
+    def launch(*args):
+        launched.append(args)
+        assert autotune._MANAGED_PROCESS is None
+        assert "LLAMA_SERVER_URL" not in os.environ
+        if restart_fails:
+            raise RuntimeError("replacement startup failed")
+        autotune._MANAGED_PROCESS = live_process
+        autotune._MANAGED_URL = old_url
+        return old_url
+
+    monkeypatch.setattr(autotune, "_launch_selected", launch)
+    ensure = unwrap(autotune.ensure_tuned_server)
+    if restart_fails:
+        with pytest.raises(RuntimeError, match="replacement startup failed"):
+            ensure(object(), object())
+        with pytest.raises(RuntimeError, match="startup was already attempted"):
+            ensure(object(), object())
+        assert autotune._MANAGED_PROCESS is None
+        assert autotune._MANAGED_KEY is None
+    else:
+        assert ensure(object(), object()) == old_url
+        assert ensure(object(), object()) == old_url
+        assert autotune._MANAGED_KEY == "runtime"
+    assert len(launched) == 1
+    assert "runtime" in autotune._ATTEMPTED_KEYS
+    assert events[0][1]["details"]["exit_code"] == -9
+    assert "CUDA error: out of memory" in events[0][1]["details"]["stderr_tail"]
+
+
+def test_failed_restart_stays_blocked_until_runtime_changes(monkeypatch):
+    monkeypatch.setattr(autotune, "_MANAGED_PROCESS", None)
+    monkeypatch.setattr(autotune, "_MANAGED_URL", None)
+    monkeypatch.setattr(autotune, "_MANAGED_KEY", None)
+    monkeypatch.setattr(autotune, "_ATTEMPTED_KEYS", {"runtime"})
+    monkeypatch.setattr(autotune, "_external_server_is_ready", lambda: False)
+    monkeypatch.setattr(autotune, "_server_binary", lambda: "llama-server")
+    monkeypatch.setattr(autotune, "_resolve_model_path", lambda _: "model.gguf")
+    monkeypatch.setattr(autotune, "_fingerprint", lambda *_: "runtime")
+    with pytest.raises(RuntimeError, match="startup was already attempted"):
+        unwrap(autotune.ensure_tuned_server)(object(), object())
 
 
 def test_healthy_managed_server_is_reused_during_transport_recovery(monkeypatch) -> None:

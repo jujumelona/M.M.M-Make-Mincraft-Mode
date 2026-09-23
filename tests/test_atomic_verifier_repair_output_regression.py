@@ -4,11 +4,10 @@ import json
 from types import SimpleNamespace
 
 from minecraft_mod_ai.model_adapters.base import ToolCall
+from minecraft_mod_ai.source_repair_semantics import atomic_repair_scope_error
 from minecraft_mod_ai.verifier_repair_admission_recovery import (
     recover_schema_rejected_verifier_repair_calls,
 )
-
-from minecraft_mod_ai.source_repair_semantics import atomic_repair_scope_error
 from minecraft_mod_ai.verifier_repair_window import (
     normalize_model_repair_replacement,
     repair_replacement_max_chars,
@@ -86,7 +85,7 @@ def test_production_import_span_rejects_file_level_replacement_before_runtime():
 
 
 
-def test_schema_rejected_whole_source_import_repair_is_recovered_atomically():
+def test_unrelated_whole_source_rewrite_cannot_become_an_import_deletion():
     old_import = "import net.minecraft.command.argument.ResourceLocationArgumentType;\n"
     source = (
         "package com.authored.space;\n"
@@ -126,9 +125,20 @@ def test_schema_rejected_whole_source_import_repair_is_recovered_atomically():
         repair_window={"old": old_import},
     )
 
-    assert recovered is not None
-    assert recovered[0].name == "apply_source_edit"
-    assert recovered[0].arguments == {"new": ""}
+    assert recovered is None
+
+
+def test_import_projection_preserves_coupled_type_rename():
+    old = "import net.minecraft.server.network.ServerPlayerEntity;\n"
+    source = (
+        "package demo;\n" + old
+        + "public class Demo { ServerPlayerEntity player; }\n"
+    )
+    candidate = source.replace(
+        "net.minecraft.server.network.ServerPlayerEntity", "net.minecraft.server.level.ServerPlayer"
+    ).replace("ServerPlayerEntity player", "ServerPlayer player")
+    # Applying just an import deletion would lose the authored type migration.
+    assert normalize_model_repair_replacement(source, old, candidate) == candidate
 
 
 def test_schema_rejected_unrelated_non_import_rewrite_remains_rejected():

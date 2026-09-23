@@ -300,8 +300,20 @@ def _run_compile_backed_generation_flow(
             self.calls = 0
 
         def generate_turn(self, request):
-            self.calls += 1
             names = {item["function"]["name"] for item in request.tools}
+            if names == {"search_code_rag"}:
+                assert request.tool_choice == {
+                    "type": "function",
+                    "function": {"name": "search_code_rag"},
+                }
+                return GenerationResponse(
+                    tool_calls=(ToolCall(
+                        id="api-evidence",
+                        name="search_code_rag",
+                        arguments={"query": "net.minecraft.item.Item correct package"},
+                    ),)
+                )
+            self.calls += 1
             assert names == {"apply_source_edit"}
             if self.calls > 1:
                 rendered = "\n".join(
@@ -350,6 +362,15 @@ def _run_compile_backed_generation_flow(
 
         def call(self, stage, name, _arguments):
             assert stage == "generation"
+            if name == "search_code_rag":
+                return {
+                    "schema_version": "mmm/code-rag-result-v1",
+                    "hits": [{
+                        "path": "net/minecraft/world/item/Item.java",
+                        "text": "package net.minecraft.world.item; public class Item {}",
+                        "sha256": "target-api-source",
+                    }],
+                }
             if name == "apply_source_edit":
                 return {
                     "schema_version": "mmm/source-patch-receipt-v1",
@@ -398,6 +419,16 @@ def _run_compile_backed_generation_flow(
                     "name": "apply_source_edit",
                     "description": "edit source",
                     "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_code_rag",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                    },
                 },
             },
         ),

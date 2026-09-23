@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 import json
 
+import pytest
+
 from minecraft_mod_ai import progress_aware_tool_loop as loop
 
 
@@ -39,7 +41,8 @@ def test_fresh_host_reserved_target_is_ready_without_searching_its_own_filename(
     ]
 
 
-def test_materialized_atomic_target_reconciles_stale_fresh_authority(tmp_path) -> None:
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_materialized_atomic_target_reconciles_stale_fresh_authority(tmp_path, newline) -> None:
     from types import SimpleNamespace
 
     target = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
@@ -49,7 +52,8 @@ def test_materialized_atomic_target_reconciles_stale_fresh_authority(tmp_path) -
     )
     target_file = tmp_path / target
     target_file.parent.mkdir(parents=True)
-    target_file.write_text(source, encoding="utf-8")
+    source = source.replace("\n", newline)
+    target_file.write_text(source, encoding="utf-8", newline="")
 
     payload = {
         "primary_path": target,

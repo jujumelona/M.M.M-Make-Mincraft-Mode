@@ -1953,6 +1953,8 @@ _VERIFIER_REPAIR_OUTPUT_TOKENS = 2048
 
 
 def _state_requires_authoritative_java_evidence(state: Any) -> bool:
+    if getattr(state, "repair_evidence_route", None) == "official_api":
+        return True
     explicit = getattr(state, "semantic_fresh_java", None)
     if explicit is not None:
         return bool(explicit)
@@ -2056,10 +2058,13 @@ def _target_evidence_ready(
 
     del compile_backed_java
     return evidence_obligation_satisfied(
-        require_evidence=require_rag,
+        require_evidence=bool(
+            require_rag or repair_route_requires_retrieval(state.repair_evidence_route)
+        ),
         semantic_fresh_java_target=bool(
             fresh_java_target
             or getattr(state, "semantic_fresh_java", False) is True
+            or state.repair_evidence_route == "official_api"
         ),
         has_fresh_evidence=state.has_fresh_evidence,
         has_authoritative_java_evidence=state.has_authoritative_java_evidence,
@@ -3463,9 +3468,8 @@ def _sync_phase_tool_transcript(
     compacted: list[dict[str, Any]] = []
     observations: list[str] = []
     verifier_recovery_handoff = bool(
-        last_prompt_phase is LoopPhase.VERIFY
-        and next_phase is LoopPhase.RECOVER
-        and state.validation_status == "FAIL"
+        next_phase is LoopPhase.RECOVER
+        and state.latest_verifier_errors
         and state.latest_verifier_fingerprint
     )
     for raw in messages:
@@ -4083,7 +4087,7 @@ def _generate_with_tools_impl(
             if mutation_is_ready and baseline_ready:
                 state.phase = LoopPhase.ACT
                 continue
-            if mutation_is_ready and require_rag and not baseline_ready:
+            if mutation_is_ready and not baseline_ready:
                 raise ModelConfigurationError(
                     "IMPLEMENTATION_EVIDENCE_STALLED: the mutation target is host-localized, "
                     "but no untried authoritative Java/API evidence route remains."
@@ -4126,10 +4130,13 @@ def _generate_with_tools_impl(
         forced_evidence_tool: str | None = None
         forced_evidence_arguments: dict[str, Any] = {}
         if (
-            required_evidence_choice
-            and require_rag
-            and not baseline_ready
-            and state.phase in {LoopPhase.OBSERVE, LoopPhase.RECOVER}
+            state.phase is LoopPhase.RECOVER
+            or (
+                required_evidence_choice
+                and require_rag
+                and not baseline_ready
+                and state.phase is LoopPhase.OBSERVE
+            )
         ):
             if len(phase_names) == 1:
                 forced_evidence_tool = next(iter(phase_names))

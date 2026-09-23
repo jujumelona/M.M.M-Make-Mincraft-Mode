@@ -228,13 +228,19 @@ def _install_planner_contracts() -> None:
         agentic_optimization_contract,
         complete_orchestrator,
         complete_orchestrator_services,
+        model_router,
         resource_asset_production,
     )
     from .agentic_search_efficiency_contract import install as install_agentic_search_efficiency
     from .asset_resume_efficiency_contract import install as install_asset_resume_efficiency
+    from .colab_gpu_handoff_contract import install as install_gpu_handoff
 
     install_agentic_search_efficiency(agentic_optimization_contract)
     install_asset_resume_efficiency(resource_asset_production)
+    install_gpu_handoff(
+        services_module=resource_asset_production,
+        model_router_module=model_router,
+    )
 
     # generate_assets has one canonical owner. The resume contract decorates that
     # owner during bootstrap, so every already-imported production alias must point

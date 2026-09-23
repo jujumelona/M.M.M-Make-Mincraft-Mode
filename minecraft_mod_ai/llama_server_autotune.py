@@ -728,7 +728,7 @@ def tune_server(config: Any, request: Any, *, force: bool = False) -> AutotuneDe
 
 def ensure_tuned_server(config: Any, request: Any) -> str:
     """Start one managed native server and never fall back to a second GGUF engine."""
-    global _MANAGED_KEY
+    global _MANAGED_KEY, _MANAGED_PROCESS, _MANAGED_URL
 
     if _external_server_is_ready():
         explicit = os.environ.get("LLAMA_SERVER_URL", "").strip()
@@ -744,6 +744,41 @@ def ensure_tuned_server(config: Any, request: Any) -> str:
             if _MANAGED_URL:
                 return _MANAGED_URL
             raise RuntimeError("managed llama-server process has no URL")
+
+        if _MANAGED_PROCESS is not None and _MANAGED_KEY and _MANAGED_URL:
+            # This generation reached readiness and subsequently exited between
+            # requests. It is not a failed startup. Retire its ownership atomically
+            # so concurrent callers share one replacement launch. A failed new
+            # launch still retains its attempt key and cannot spin in a retry loop.
+            from .root_cause_trace import emit_root_cause
+
+            log_reader = getattr(_MANAGED_PROCESS, "_mmm_startup_log_reader", None)
+            if log_reader is not None:
+                log_reader.join(timeout=0.25)
+            log_buffer = getattr(_MANAGED_PROCESS, "_mmm_startup_log", None)
+            stderr_tail = log_buffer.text()[-4096:] if log_buffer is not None else ""
+            emit_root_cause(
+                "managed_llama_process_exited",
+                stage="runtime",
+                operation="ensure_tuned_server",
+                result="RECOVER",
+                reason="previously ready managed process exited between requests",
+                details={
+                    "pid": getattr(_MANAGED_PROCESS, "pid", None),
+                    "exit_code": _MANAGED_PROCESS.poll(),
+                    "runtime_fingerprint": _MANAGED_KEY,
+                    "stderr_tail": stderr_tail,
+                },
+            )
+            _ATTEMPTED_KEYS.discard(_MANAGED_KEY)
+            if (
+                os.environ.get("LLAMA_SERVER_URL", "").strip().rstrip("/")
+                == _MANAGED_URL.rstrip("/")
+            ):
+                os.environ.pop("LLAMA_SERVER_URL", None)
+            _MANAGED_PROCESS = None
+            _MANAGED_URL = None
+            _MANAGED_KEY = None
 
         model_path = _resolve_model_path(config)
         fingerprint = _fingerprint(config, binary, model_path)

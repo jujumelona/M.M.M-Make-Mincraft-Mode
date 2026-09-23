@@ -114,6 +114,12 @@ def test_ordinary_planir_task_stays_exact_and_cannot_follow_localization_drift()
 
 def test_source_owned_progress_loop_uses_same_active_exact_authority() -> None:
     module = _existing_exact_module()
+    module.config["evidence_task"]["target_cell"] = {
+        "minecraft_version": "26.2",
+        "loader": "fabric",
+        "mappings": "",
+        "java_version": "25",
+    }
 
     class Generator:
         @generation_authority_scoped
@@ -190,7 +196,7 @@ def test_fresh_authored_exact_existing_task_first_turn_is_new_only_act(tmp_path)
     )
     target_file = tmp_path / target
     target_file.parent.mkdir(parents=True, exist_ok=True)
-    target_file.write_text(source, encoding="utf-8")
+    target_file.write_text(source, encoding="utf-8", newline="")
 
     class Adapter:
         def __init__(self) -> None:
@@ -240,7 +246,7 @@ def test_fresh_authored_exact_existing_task_first_turn_is_new_only_act(tmp_path)
                     "new": updated,
                     "count": 1,
                 }
-                target_file.write_text(updated, encoding="utf-8")
+                target_file.write_text(updated, encoding="utf-8", newline="")
                 return {
                     "schema_version": "mmm/source-patch-receipt-v1",
                     "status": "APPLIED",

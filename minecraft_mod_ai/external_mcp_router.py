@@ -232,12 +232,15 @@ class ExternalMCPRouter:
                 if len(successes) >= corroborate:
                     break
             except Exception as exc:  # noqa: BLE001 - route failure must fall back
+                from .root_cause_trace import exception_chain
+
                 attempts.append(
                     {
                         "server": server_name,
                         "tool": route_spec["tool"],
                         "status": "ERROR",
                         "error": f"{type(exc).__name__}: {exc}",
+                        "exception_chain": exception_chain(exc),
                     }
                 )
 

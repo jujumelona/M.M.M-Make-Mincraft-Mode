@@ -335,8 +335,11 @@ def exception_chain(exc: BaseException) -> list[dict[str, Any]]:
 
     chain: list[dict[str, Any]] = []
     seen: set[int] = set()
-    current: BaseException | None = exc
-    while current is not None and id(current) not in seen and len(chain) < 16:
+    pending: list[BaseException] = [exc]
+    while pending and len(chain) < 16:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
         seen.add(id(current))
         try:
             frames = traceback.extract_tb(current.__traceback__)[-20:] if current.__traceback__ else []
@@ -356,7 +359,16 @@ def exception_chain(exc: BaseException) -> list[dict[str, Any]]:
                 ],
             }
         )
-        current = current.__cause__ if current.__cause__ is not None else current.__context__
+        # Supports both Python 3.11 groups and the Python 3.10 backport used by
+        # AnyIO. Keep traversal bounded and cycle-safe like ordinary causes.
+        children = getattr(current, "exceptions", ())
+        if isinstance(children, tuple):
+            pending.extend(
+                child for child in reversed(children) if isinstance(child, BaseException)
+            )
+        cause = current.__cause__ if current.__cause__ is not None else current.__context__
+        if cause is not None:
+            pending.append(cause)
     return chain
 
 
