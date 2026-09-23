@@ -384,6 +384,17 @@ def test_existing_authored_design_is_semantic_and_serial_for_small_model():
         module.module_id for module in proposal.modules
     ]
 
+    graph = build_production_work_plan(
+        proposal,
+        policy=ScalePolicy(java_shard_size=48),
+    )
+    custom = [node for node in graph.nodes if node.stage == "generate:custom"]
+    assert len(custom) == 3
+    assert [len(node.payload["members"]) for node in custom] == [1, 1, 1]
+    assert custom[0].dependencies == ("prepare-project",)
+    assert custom[1].dependencies == ("generate-custom-00000000", "prepare-project")
+    assert custom[2].dependencies == ("generate-custom-00000001", "prepare-project")
+
 
 def test_materialize_authored_scaffold_is_noop_without_game_design(tmp_path) -> None:
     from types import SimpleNamespace

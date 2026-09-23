@@ -690,14 +690,16 @@ def _module_stage(
     return 'custom'
 
 def _is_host_exact_authored_module(module: ProductionModule) -> bool:
-    """Return whether one fresh-authored task already has host-owned exact file identity.
+    """Return whether one authored unit requires an independent durable work node.
 
-    These tasks must be durable one-module work nodes. Batching them reintroduces a
-    shard-wide execution deadline and shard-wide rollback, defeating the exact-task
-    architecture's per-task checkpoint semantics.
+    Fresh authored tasks already carry exact host targets. Existing-project authored units
+    acquire exact targets at generation entry, so they must also remain unbatched; otherwise
+    localization, checkpoint, commit, and retry boundaries collapse back into one large task.
     """
 
     config = module.config if isinstance(module.config, dict) else {}
+    if config.get("authored_localization_required") is True:
+        return True
     task = config.get("evidence_task")
     if not isinstance(task, dict):
         return False
