@@ -411,8 +411,6 @@ def test_materialize_authored_scaffold_is_noop_without_game_design(tmp_path) -> 
 
     assert result == project_root.resolve()
 
-from __future__ import annotations
-
 from minecraft_mod_ai.authored_plan import AuthoredPlan
 from minecraft_mod_ai.authored_production import (
     _authored_execution_units,
