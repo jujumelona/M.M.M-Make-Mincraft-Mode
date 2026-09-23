@@ -22,6 +22,52 @@ from minecraft_mod_ai.mutation_authority import CURRENT_MUTATION_AUTHORITY
 from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
 
 
+
+def _exact_authored_module(
+    module_id: str,
+    primary_path: str,
+    *supporting_paths: str,
+):
+    def anchor(path: str, *, primary: bool = False) -> dict:
+        symbol = Path(path).stem if path.endswith(".java") else ""
+        return {
+            "kind": "symbol" if symbol else "resource",
+            "locator": path + (f"#{symbol}" if symbol else ""),
+            "status": "host_reserved" if primary else "existing",
+            "ownership": "host_test_exact",
+            "module_id": module_id,
+            "source_set": "main",
+        }
+
+    primary = anchor(primary_path, primary=True)
+    anchors = [primary, *(anchor(path) for path in supporting_paths)]
+    return SimpleNamespace(
+        module_id=module_id,
+        kind="custom_java",
+        config={
+            "authored_plan": {
+                "schema_version": "mmm/authored-plan-v1",
+                "requested_prompt": "space mode",
+                "text": "space mechanics",
+            },
+            "evidence_task": {
+                "task_id": module_id,
+                "semantic_outcome": "exercise exact authored generation mechanics",
+                "implementation_obligations": ["apply only the host-owned exact edit"],
+                "engineering_worksheet": {"objective": "exact authored test target"},
+                "owned_anchors": anchors,
+                "production_bindings": [{
+                    "task_ref": module_id,
+                    "reuse_action": "fresh",
+                    "owned_anchors": [primary],
+                }],
+                "required_gates": ["target_compile"],
+            },
+        },
+        required_gates=("target_compile",),
+    )
+
+
 @pytest.mark.parametrize("unrepairable_errors_first", [False, True])
 def test_authored_diagnostics_repair_local_files_without_external_discovery(
     tmp_path: Path,
@@ -37,16 +83,10 @@ def test_authored_diagnostics_repair_local_files_without_external_discovery(
         path = tmp_path / target
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(source, encoding="utf-8", newline="")
-    module = SimpleNamespace(
-        module_id="space",
-        kind="custom_java",
-        config={
-            "authored_plan": {
-                "schema_version": "mmm/authored-plan-v1",
-                "requested_prompt": "space mode",
-                "text": "space mechanics",
-            },
-        },
+    module = _exact_authored_module(
+        "space",
+        "src/main/java/demo/Next.java",
+        *targets,
     )
     authority = compile_direct_task_mutation_authority(module)
     assert authority is not None
@@ -335,17 +375,7 @@ def test_authored_repair_fixed_point_stops_non_improving_rewrite_loop(
     target_path.parent.mkdir(parents=True, exist_ok=True)
     target_path.write_text(source_a, encoding="utf-8", newline="")
 
-    module = SimpleNamespace(
-        module_id="space",
-        kind="custom_java",
-        config={
-            "authored_plan": {
-                "schema_version": "mmm/authored-plan-v1",
-                "requested_prompt": "space mode",
-                "text": "space mechanics",
-            },
-        },
-    )
+    module = _exact_authored_module("space", target)
     authority = compile_direct_task_mutation_authority(module)
     assert authority is not None
     runtime_calls: list[tuple[str, dict]] = []

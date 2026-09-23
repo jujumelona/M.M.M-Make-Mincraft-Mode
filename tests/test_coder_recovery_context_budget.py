@@ -28,6 +28,44 @@ def _schema(name: str) -> dict:
     }
 
 
+
+def _exact_authored_module(module_id: str, target: str, *, text: str):
+    symbol = target.rsplit("/", 1)[-1].removesuffix(".java")
+    anchor = {
+        "kind": "symbol",
+        "locator": f"{target}#{symbol}",
+        "status": "existing",
+        "ownership": "host_test_exact",
+        "module_id": module_id,
+        "source_set": "main",
+    }
+    return SimpleNamespace(
+        module_id=module_id,
+        kind="custom_java",
+        config={
+            "authored_plan": {
+                "schema_version": "mmm/authored-plan-v1",
+                "requested_prompt": "space mechanics",
+                "text": text,
+            },
+            "evidence_task": {
+                "task_id": module_id,
+                "semantic_outcome": "exercise exact authored recovery mechanics",
+                "implementation_obligations": ["repair only the exact existing target"],
+                "engineering_worksheet": {"objective": "exact authored recovery target"},
+                "owned_anchors": [anchor],
+                "production_bindings": [{
+                    "task_ref": module_id,
+                    "reuse_action": "fresh",
+                    "owned_anchors": [anchor],
+                }],
+                "required_gates": ["target_compile"],
+            },
+        },
+        required_gates=("target_compile",),
+    )
+
+
 def test_authored_recovery_fits_after_failed_and_empty_evidence_routes() -> None:
     """Exercise the loop through VERIFY->RECOVER and repeated recovery turns."""
     target = "src/main/java/demo/SpaceModeMod.java"
@@ -41,16 +79,10 @@ def test_authored_recovery_fits_after_failed_and_empty_evidence_routes() -> None
         "public class SpaceModeMod {}\n"
     )
     diagnostic = "The import demo.MissingApi cannot be resolved"
-    module = SimpleNamespace(
-        module_id="space-mode",
-        kind="custom_java",
-        config={
-            "authored_plan": {
-                "schema_version": "mmm/authored-plan-v1",
-                "requested_prompt": "space mechanics",
-                "text": "approved behavior " * 650,
-            },
-        },
+    module = _exact_authored_module(
+        "space-mode",
+        target,
+        text="approved behavior " * 650,
     )
     authority = compile_direct_task_mutation_authority(module)
     assert authority is not None
@@ -252,10 +284,10 @@ def test_authored_stale_precondition_rebinds_live_workspace_target(tmp_path) -> 
     target_file.parent.mkdir(parents=True)
     target_file.write_text(live_source, encoding="utf-8")
 
-    module = SimpleNamespace(
-        module_id="space-mode",
-        kind="custom_java",
-        config={"authored_plan": {"schema_version": "mmm/authored-plan-v1"}},
+    module = _exact_authored_module(
+        "space-mode",
+        target,
+        text="update current sync fragment",
     )
     authority = compile_direct_task_mutation_authority(module)
     assert authority is not None
