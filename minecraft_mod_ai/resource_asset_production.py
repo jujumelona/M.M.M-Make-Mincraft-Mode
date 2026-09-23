@@ -509,11 +509,6 @@ def _module_semantic_tokens(module: ProductionModule) -> set[str]:
 def _semantic_words(value: str) -> set[str]:
     return {token.casefold() for token in re.findall('[A-Za-z_][A-Za-z0-9_]{1,127}', value.replace('.', ' ').replace('-', ' ').replace('_', ' ')) if len(token) > 2}
 
-def install_prebootstrap_asset_runtime() -> None:
-    """Compatibility hook for old bootstrap callers. Runtime monkey-patching is gone."""
-    return
-
-
 def _plan_row(router: Any, proposal: CompleteProposal, request: AssetRequest) -> dict[str, Any]:
     from .model_adapters.image_diffusion import ImageGenerationConfig
     from .resource_contracts import resolve_asset
@@ -1041,4 +1036,4 @@ def generate_assets(router: Any, proposal: CompleteProposal, project_root: Path,
 attach_generation_plan._mmm_resource_asset_preflight = True
 generate_assets._mmm_resource_asset_preflight = True
 
-__all__ = ["AssetProductionError", "attach_generation_plan", "bind_reuse_plan", "generate_assets", "install_prebootstrap_asset_runtime"]
+__all__ = ["AssetProductionError", "attach_generation_plan", "bind_reuse_plan", "generate_assets"]
