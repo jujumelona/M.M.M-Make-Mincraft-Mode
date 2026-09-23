@@ -908,6 +908,7 @@ def test_downloadable_bundle_keeps_verified_additional_resource_pack(tmp_path) -
     artifact_sha = CompleteProductionOrchestrator._file_hash(jar)
     pack_sha = CompleteProductionOrchestrator._file_hash(pack)
 
+    proposal_hash = "sha256:" + "1" * 64
     bundle = write_downloadable_bundle(
         tmp_path / "download",
         artifact_receipt={
@@ -918,6 +919,7 @@ def test_downloadable_bundle_keeps_verified_additional_resource_pack(tmp_path) -
         requirement_coverage={
             "status": "PASS",
             "artifact_sha256": artifact_sha,
+            "proposal_hash": proposal_hash,
         },
         reuse_manifest={},
         build_receipt={
@@ -934,8 +936,10 @@ def test_downloadable_bundle_keeps_verified_additional_resource_pack(tmp_path) -
                 "sha256": pack_sha,
             }
         },
+        proposal_hash=proposal_hash,
     )
 
+    assert bundle["proposal_hash"] == proposal_hash
     assert bundle["additional_artifacts"] == {
         "generated-resource-pack.zip": pack_sha
     }
