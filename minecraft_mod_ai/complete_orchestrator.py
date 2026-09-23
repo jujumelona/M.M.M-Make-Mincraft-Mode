@@ -2749,13 +2749,12 @@ class CompleteProductionOrchestrator:
                 future.cancel()
             for _, future, _ in review_futures:
                 future.cancel()
-            # Generation workers mutate the shared staged workspace.  Never return
-            # while a running worker from this attempt can still write into it.
-            cpu_pool.shutdown(wait=True, cancel_futures=True)
-            llm_pool.shutdown(wait=True, cancel_futures=True)
-            image_pool.shutdown(wait=True, cancel_futures=True)
-            commit_pool.shutdown(wait=True, cancel_futures=True)
-            review_pool.shutdown(wait=True, cancel_futures=True)
+            # Never block pipeline teardown on a stuck worker; claim fencing owns stale commits.
+            cpu_pool.shutdown(wait=False, cancel_futures=True)
+            llm_pool.shutdown(wait=False, cancel_futures=True)
+            image_pool.shutdown(wait=False, cancel_futures=True)
+            commit_pool.shutdown(wait=False, cancel_futures=True)
+            review_pool.shutdown(wait=False, cancel_futures=True)
             lease_heartbeat_stop.set()
             lease_heartbeat_thread.join(timeout=heartbeat_seconds + 5.0)
         module_receipts.sort(key=_generation_receipt_sort_key)
