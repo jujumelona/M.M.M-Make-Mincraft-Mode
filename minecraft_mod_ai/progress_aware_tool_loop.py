@@ -166,15 +166,12 @@ _GENERATION_VERIFICATION_RECEIPT: ContextVar[dict[str, Any] | None] = ContextVar
     default=None,
 )
 
-
 def clear_generation_verification_receipt() -> None:
     _GENERATION_VERIFICATION_RECEIPT.set(None)
-
 
 def current_generation_verification_receipt() -> dict[str, Any] | None:
     value = _GENERATION_VERIFICATION_RECEIPT.get()
     return deepcopy(value) if isinstance(value, dict) else None
-
 
 def _record_terminal_generation_verification(
     state: HostRunState,
@@ -1507,7 +1504,8 @@ def _java_source_identity_error(
 
 
 def _contextless_authority_error(authority: Any, arguments: Mapping[str, Any], operation: str) -> str | None:
-    if authority is None: return "MUTATION_TARGET_UNBOUND: no host-pinned mutation target is READY"
+    if authority is None:
+        return "MUTATION_TARGET_UNBOUND: no host-pinned mutation target is READY"
     error = authority.mutation_error(_source_edit_path(arguments), operation=arguments.get("operation"))
     if error is not None:
         return error
@@ -1532,10 +1530,12 @@ def _resume_local_repair(state: Any) -> LoopPhase:
     return _repair_phase_for_route(state.repair_evidence_route) if state.phase is LoopPhase.RECOVER and state.validation_status == "FAIL" else state.phase
 
 def _mutation_target_error(tool_name: str, arguments: Mapping[str, Any], context: TargetMutationContext | None, *, state: Any = None) -> str | None:
-    if tool_name != "apply_source_edit": return None
+    if tool_name != "apply_source_edit":
+        return None
     operation = str(arguments.get("operation") or "").strip().casefold()
     authority = CURRENT_MUTATION_AUTHORITY.get()
-    if context is None: return _contextless_authority_error(authority, arguments, operation)
+    if context is None:
+        return _contextless_authority_error(authority, arguments, operation)
     if authority is not None:
         error = authority.mutation_error(_source_edit_path(arguments), operation=arguments.get("operation"))
         if error is not None:
