@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 import re
 import time
 from collections.abc import Mapping
@@ -418,6 +419,78 @@ def _diagnostic_run_reason(
     if readiness is not None or toolchain is not None:
         return "diagnostic service returned an unready verifier receipt"
     return "diagnostic service returned a receipt"
+
+
+
+def _bounded_env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    """Read one bounded integer setting without duplicating parsing at call sites."""
+
+    try:
+        value = int(os.environ.get(name, str(default)).strip())
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(value, maximum))
+
+
+def _retryable_service_ready_miss(receipt: Mapping[str, Any] | None) -> bool:
+    normalized, _path = unwrap_diagnostic_receipt(receipt)
+    if not normalized:
+        return False
+    if str(normalized.get("status") or "").strip().upper() != "UNAVAILABLE":
+        return False
+    error = str(normalized.get("error") or "").casefold()
+    return "serviceready" in error and "not observed" in error
+
+
+def run_diagnostics_with_bootstrap_retry(
+    diagnostics_factory: Any,
+    project_root: str | Path,
+    *,
+    timeout_seconds: int | None = None,
+    attempts: int | None = None,
+) -> dict[str, Any]:
+    """Run JDT diagnostics, retrying only a transient ServiceReady bootstrap miss."""
+
+    per_attempt = timeout_seconds
+    if per_attempt is None:
+        per_attempt = _bounded_env_int(
+            "MMM_JDT_VERIFICATION_TIMEOUT_SECONDS", 180, minimum=30, maximum=600
+        )
+    total_attempts = attempts
+    if total_attempts is None:
+        total_attempts = _bounded_env_int(
+            "MMM_JDT_VERIFICATION_ATTEMPTS", 2, minimum=1, maximum=3
+        )
+    total_attempts = max(1, min(int(total_attempts), 3))
+
+    receipt: dict[str, Any] = {}
+    for attempt in range(1, total_attempts + 1):
+        receipt = run_diagnostics(
+            diagnostics_factory,
+            project_root,
+            timeout_seconds=int(per_attempt),
+        )
+        if not _retryable_service_ready_miss(receipt):
+            result = dict(receipt)
+            result["verification_attempts"] = attempt
+            return result
+        emit_root_cause(
+            "jdt_release_retry",
+            stage="verify",
+            operation="java_diagnostics",
+            gate="jdt_service_ready",
+            result="RETRY",
+            reason="JDT ServiceReady was not observed; retrying cold bootstrap",
+            details={
+                "attempt": attempt,
+                "max_attempts": total_attempts,
+                "timeout_seconds": int(per_attempt),
+            },
+        )
+
+    result = dict(receipt)
+    result["verification_attempts"] = total_attempts
+    return result
 
 
 def run_diagnostics(
