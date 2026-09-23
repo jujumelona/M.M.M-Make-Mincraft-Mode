@@ -1301,7 +1301,7 @@ class CustomModuleGenerator:
                 checkpoint.pop("cleanup_token", None)
                 return False
             try:
-                _remove_generation_checkpoint(owned[1])
+                _remove_generation_checkpoint(owned[1], owned_lease=owned[2])
             except (CustomModuleGenerationError, OSError):
                 self._checkpoint_cleanup_tokens.pop(token, None)
                 owned[2].close()
@@ -1515,12 +1515,22 @@ def _safe_checkpoint_path(base: Path, key: str) -> Path:
     return checkpoint_root
 
 
-def _remove_generation_checkpoint(checkpoint_root: Path) -> None:
+def _remove_generation_checkpoint(
+    checkpoint_root: Path,
+    *,
+    owned_lease: _GenerationCheckpointLease | None = None,
+) -> None:
     declared_base = checkpoint_root.parent
     if declared_base.is_symlink() or not declared_base.is_dir():
         raise CustomModuleGenerationError("Refusing to remove checkpoint through unsafe host root.")
     base = declared_base.resolve()
-    if base != declared_base or base.name != _CHECKPOINT_DIRECTORY:
+    lease_owned = bool(
+        owned_lease is not None
+        and owned_lease.checkpoint_root == checkpoint_root.resolve()
+    )
+    if base != declared_base or (
+        base.name != _CHECKPOINT_DIRECTORY and not lease_owned
+    ):
         raise CustomModuleGenerationError("Refusing to remove unrecognized checkpoint path.")
     if not _CHECKPOINT_KEY.fullmatch(checkpoint_root.name) or checkpoint_root.is_symlink():
         raise CustomModuleGenerationError("Refusing to remove unsafe checkpoint path.")
