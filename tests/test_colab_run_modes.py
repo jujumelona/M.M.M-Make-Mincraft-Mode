@@ -256,16 +256,26 @@ def test_build_result_download_target_prefers_user_mod_zip(tmp_path: Path) -> No
     resource_pack = bundle / "generated-resource-pack.zip"
     resource_pack.write_bytes(b"resource-pack")
     (bundle / "artifact-receipt.json").write_text("{}", encoding="utf-8")
+    proposal_hash = "sha256:" + "1" * 64
+    jar_sha = "sha256:" + __import__("hashlib").sha256(jar.read_bytes()).hexdigest()
+    pack_sha = "sha256:" + __import__("hashlib").sha256(resource_pack.read_bytes()).hexdigest()
     result = type("Result", (), {
         "release_zip": str(release),
         "jar_path": str(jar),
+        "complete_proposal_hash": proposal_hash,
         "distribution_receipt": {
             "downloadable_bundle": {
                 "status": "PASS",
                 "path": str(bundle),
                 "artifact": jar.name,
+                "artifact_sha256": jar_sha,
+                "proposal_hash": proposal_hash,
+                "members": [
+                    {"path": jar.name, "sha256": jar_sha},
+                    {"path": "generated-resource-pack.zip", "sha256": pack_sha},
+                ],
                 "additional_artifacts": {
-                    "generated-resource-pack.zip": "sha256:" + "0" * 64,
+                    "generated-resource-pack.zip": pack_sha,
                 },
             }
         },
@@ -290,15 +300,21 @@ def test_build_result_download_target_uses_jar_only_user_zip_without_resource_pa
     bundle.mkdir()
     jar = bundle / "mod.jar"
     jar.write_bytes(b"jar")
+    proposal_hash = "sha256:" + "2" * 64
+    jar_sha = "sha256:" + __import__("hashlib").sha256(jar.read_bytes()).hexdigest()
     result = type("Result", (), {
         "release_zip": None,
         "build_bundle_zip": None,
         "jar_path": str(jar),
+        "complete_proposal_hash": proposal_hash,
         "distribution_receipt": {
             "downloadable_bundle": {
                 "status": "PASS",
                 "path": str(bundle),
                 "artifact": jar.name,
+                "artifact_sha256": jar_sha,
+                "proposal_hash": proposal_hash,
+                "members": [{"path": jar.name, "sha256": jar_sha}],
                 "additional_artifacts": {},
             }
         },
@@ -310,6 +326,40 @@ def test_build_result_download_target_uses_jar_only_user_zip_without_resource_pa
     assert kind == "user_mod_zip"
     with zipfile.ZipFile(target, "r") as archive:
         assert archive.namelist() == ["mod.jar"]
+
+
+def test_build_result_download_target_rejects_cross_run_download_bundle(
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "final-mod-download"
+    bundle.mkdir()
+    jar = bundle / "mod.jar"
+    jar.write_bytes(b"jar")
+    jar_sha = "sha256:" + __import__("hashlib").sha256(jar.read_bytes()).hexdigest()
+    fallback = tmp_path / "build-artifact.zip"
+    fallback.write_bytes(b"fallback")
+    result = type("Result", (), {
+        "release_zip": None,
+        "build_bundle_zip": str(fallback),
+        "jar_path": str(jar),
+        "complete_proposal_hash": "sha256:" + "3" * 64,
+        "distribution_receipt": {
+            "downloadable_bundle": {
+                "status": "PASS",
+                "path": str(bundle),
+                "artifact": jar.name,
+                "artifact_sha256": jar_sha,
+                "proposal_hash": "sha256:" + "4" * 64,
+                "members": [{"path": jar.name, "sha256": jar_sha}],
+                "additional_artifacts": {},
+            }
+        },
+    })()
+
+    target, kind = build_result_download_target(result)
+
+    assert target == fallback
+    assert kind == "build_bundle_zip"
 
 
 def test_build_result_download_target_prefers_build_bundle_before_raw_jar(tmp_path: Path) -> None:
