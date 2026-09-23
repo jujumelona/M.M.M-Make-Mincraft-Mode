@@ -46,6 +46,9 @@ class _FakeRouter:
     def __init__(self, *, profile: str) -> None:
         self.profile = profile
 
+    def bind_agent_workspace(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
 
 class _FakeGradleRunner:
     calls = 0
@@ -101,8 +104,9 @@ class _FakeRepairEngine:
         *,
         run_gametest: bool = True,
         max_attempts: int | None = None,
+        initial_build: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        del max_attempts
+        del max_attempts, initial_build
         type(self).calls += 1
         validation = _FakeGradleRunner(Path('.')).build(
             project_root, run_gametest=run_gametest
