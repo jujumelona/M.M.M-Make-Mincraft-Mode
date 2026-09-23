@@ -212,7 +212,6 @@ def _parallel_generate(
     candidate_roots = _clone_candidate_roots(performance_module, root, count=count)
     candidates: list[tuple[int, Path, dict[str, Any], dict[str, Any]]] = []
     winner_index: int | None = None
-    winner_checkpoint_acknowledged = False
     winner_live_committed = False
     try:
         candidates, errors = _run_candidate_generation(
@@ -279,12 +278,7 @@ def _parallel_generate(
             "research_initialization": "content_addressed_singleflight",
             "winner_commit": "three_way_rebase_preserving_concurrent_changes",
         }
-        winner_checkpoint_acknowledged = bool(
-            owner.acknowledge_generation_checkpoint(rewritten)
-        )
-        rewritten["generation_checkpoint_acknowledged"] = (
-            winner_checkpoint_acknowledged
-        )
+        rewritten["generation_checkpoint_acknowledged"] = False
         print(
             "custom generation search:",
             f"candidates={len(evaluations)}",
@@ -296,12 +290,9 @@ def _parallel_generate(
         return rewritten
     finally:
         for candidate_index, _candidate_root, candidate_result, _capture in candidates:
-            if (
-                winner_checkpoint_acknowledged
-                and candidate_index == winner_index
-            ):
+            if winner_live_committed and candidate_index == winner_index:
                 continue
-            if winner_live_committed and candidate_index != winner_index:
+            if winner_live_committed:
                 owner.discard_generation_checkpoint(candidate_result)
             else:
                 owner.release_generation_checkpoint(candidate_result)
@@ -341,9 +332,7 @@ def install_coder_max_efficiency() -> None:
         if count <= 1:
             result = current(self, project_root, *args, **kwargs)
             if isinstance(result, dict):
-                result["generation_checkpoint_acknowledged"] = bool(
-                    self.acknowledge_generation_checkpoint(result)
-                )
+                result["generation_checkpoint_acknowledged"] = False
             return result
         return _parallel_generate(
             self,
