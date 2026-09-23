@@ -5,7 +5,9 @@ import pytest
 
 from minecraft_mod_ai.authored_plan import AuthoredPlan
 from minecraft_mod_ai.authored_production import (
+    _authored_execution_units,
     _compile_new_authored_modules,
+    _implementation_authored_plan,
     materialize_authored_execution_scaffold,
 )
 from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
@@ -410,13 +412,6 @@ def test_materialize_authored_scaffold_is_noop_without_game_design(tmp_path) -> 
     result = materialize_authored_execution_scaffold(proposal, project_root)
 
     assert result == project_root.resolve()
-
-from minecraft_mod_ai.authored_plan import AuthoredPlan
-from minecraft_mod_ai.authored_production import (
-    _authored_execution_units,
-    _implementation_authored_plan,
-)
-
 
 def test_model_reasoning_prefix_is_not_lowered_as_gameplay_work() -> None:
     source = (
