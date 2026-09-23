@@ -600,6 +600,7 @@ class GradleRunner:
         restored.
         """
 
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
         marker = self.cache_dir / ".minecraft-mod-ai-gradle-user-home-bootstrap-v1.ready"
         if marker.is_file():
             return self._run_unlocked(
