@@ -414,7 +414,6 @@ def install(custom_module_generator_module: Any) -> None:
         candidates: list[tuple[int, Path, dict[str, Any]]] = []
         errors: dict[int, BaseException] = {}
         winner_index: int | None = None
-        winner_checkpoint_acknowledged = False
         winner_live_committed = False
 
         def solve(candidate_index: int) -> tuple[int, Path, dict[str, Any]]:
@@ -552,12 +551,7 @@ def install(custom_module_generator_module: Any) -> None:
                 'research_aware': True,
                 'dependency_admission': 'exact',
             }
-            winner_checkpoint_acknowledged = bool(
-                self.acknowledge_generation_checkpoint(rewritten)
-            )
-            rewritten['generation_checkpoint_acknowledged'] = (
-                winner_checkpoint_acknowledged
-            )
+            rewritten['generation_checkpoint_acknowledged'] = False
             print(
                 'custom generation search:',
                 f'candidates={len(evaluations)}',
@@ -569,12 +563,9 @@ def install(custom_module_generator_module: Any) -> None:
             return rewritten
         finally:
             for candidate_index, candidate_root, candidate_result in candidates:
-                if (
-                    winner_checkpoint_acknowledged
-                    and candidate_index == winner_index
-                ):
-                    pass
-                elif winner_live_committed and candidate_index != winner_index:
+                if winner_live_committed and candidate_index == winner_index:
+                    continue
+                if winner_live_committed:
                     self.discard_generation_checkpoint(candidate_result)
                 else:
                     self.release_generation_checkpoint(candidate_result)
