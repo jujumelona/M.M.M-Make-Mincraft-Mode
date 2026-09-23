@@ -1331,6 +1331,17 @@ def _creation_authorized(
     )
 
 
+def _creation_authorized_for_context(
+    supplied: str, pinned: str, context: TargetMutationContext, authority: Any
+) -> bool:
+    return _creation_authorized(supplied, pinned, context) or bool(
+        authority is not None
+        and authority.mode is MutationAuthorityMode.EXACT
+        and not context_is_host_pinned(context)
+        and authority.authorizes(supplied, operation="create_file")
+    )
+
+
 _JAVA_PACKAGE_DECLARATION_RE = re.compile(
     r"(?m)^\s*package\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*;"
 )
@@ -1536,12 +1547,16 @@ def _mutation_target_error(tool_name: str, arguments: Mapping[str, Any], context
     authority = CURRENT_MUTATION_AUTHORITY.get()
     if context is None:
         return _contextless_authority_error(authority, arguments, operation)
+    supplied = _source_edit_path(arguments)
+    pinned = _canonical_mutation_path(context.target_path)
+    creation_authorized = _creation_authorized_for_context(
+        supplied, pinned, context, authority
+    )
     if authority is not None:
         error = authority.mutation_error(_source_edit_path(arguments), operation=arguments.get("operation"))
         if error is not None:
             return error
         if authority.mode is MutationAuthorityMode.BOUNDED_ROOTS and context.evidence_source != "verifier_workspace_source":
-            supplied = _source_edit_path(arguments)
             if operation in _SOURCE_CREATE_OPERATIONS and supplied.casefold().endswith(".java"):
                 create_source = arguments.get("content")
                 if not isinstance(create_source, str):
@@ -1557,8 +1572,6 @@ def _mutation_target_error(tool_name: str, arguments: Mapping[str, Any], context
                         "one exact old span; whole-file model replacement is forbidden"
                     )
                 return None
-    supplied = _source_edit_path(arguments)
-    pinned = _canonical_mutation_path(context.target_path)
     allowed = set(context.writable_paths) or ({pinned} if pinned else set())
     if not supplied:
         return "MUTATION_TARGET_UNBOUND: apply_source_edit requires an explicit host-bound path"
@@ -1569,7 +1582,7 @@ def _mutation_target_error(tool_name: str, arguments: Mapping[str, Any], context
             f"MUTATION_TARGET_DRIFT: writable exact-set {sorted(allowed)!r} "
             f"does not authorize {supplied!r}"
         )
-    if operation in _SOURCE_CREATE_OPERATIONS and not context.is_new_file:
+    if operation in _SOURCE_CREATE_OPERATIONS and not creation_authorized:
         return (
             "MUTATION_TARGET_CREATION_CONFLICT: create operation is not authorized "
             f"for existing target {supplied!r}"
@@ -1585,7 +1598,7 @@ def _mutation_target_error(tool_name: str, arguments: Mapping[str, Any], context
         operation=operation,
         supplied=supplied,
         pinned=pinned,
-        is_new_file=context.is_new_file,
+        is_new_file=creation_authorized,
         current_source=context.source_body,
         old_text=arguments.get("old"),
         new_text=arguments.get("new"),
@@ -1609,7 +1622,7 @@ def _mutation_target_error(tool_name: str, arguments: Mapping[str, Any], context
             return atomic_error
     if operation not in _SOURCE_CREATE_OPERATIONS:
         return None
-    if _creation_authorized(supplied, pinned, context):
+    if creation_authorized:
         return None
     return (
         "MUTATION_TARGET_CREATION_CONFLICT: create operation is not authorized "
