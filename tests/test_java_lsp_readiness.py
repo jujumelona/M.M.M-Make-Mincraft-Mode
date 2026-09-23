@@ -109,13 +109,11 @@ def test_traced_service_cannot_override_canonical_readiness() -> None:
     assert TracedJavaLanguageService._ensure_rpc_locked is java_lsp.JavaLanguageService._ensure_rpc_locked
 
 
-def test_semantic_probe_uses_compiler_diagnostics_without_hover(monkeypatch, tmp_path: Path) -> None:
-    source_root = tmp_path / "src" / "main" / "java"
-    source_root.mkdir(parents=True)
-
+def test_readiness_waits_for_service_ready_without_feature_requests(tmp_path: Path) -> None:
     class FakeRpc:
         def __init__(self):
             self.messages = queue.Queue()
+            self.messages.put({"method": "language/status", "params": {"type": "ServiceReady"}})
             self.process = SimpleNamespace(poll=lambda: None)
             self.stderr = []
             self.requests = []
@@ -126,11 +124,8 @@ def test_semantic_probe_uses_compiler_diagnostics_without_hover(monkeypatch, tmp
 
         def request(self, method, params, timeout):
             self.requests.append((method, params))
-            raise AssertionError("semantic readiness must not use request/hover")
+            raise AssertionError("readiness must not use feature requests")
 
-    monkeypatch.setattr(java_lsp, "_collect_diagnostics", lambda *args, **kwargs: {
-        (source_root / "__MmmJdtReadinessProbe.java").resolve(strict=False).as_uri(): []
-    })
     rpc = FakeRpc()
     java_lsp._await_java_core_ready(
         rpc,
@@ -139,7 +134,7 @@ def test_semantic_probe_uses_compiler_diagnostics_without_hover(monkeypatch, tmp
         quiet_seconds=0,
     )
     assert rpc.requests == []
-    assert rpc.notifications == ["textDocument/didOpen", "textDocument/didClose"]
+    assert rpc.notifications == []
 
 def test_core_type_diagnostic_is_workspace_bootstrap_failure() -> None:
     diagnostics = {
