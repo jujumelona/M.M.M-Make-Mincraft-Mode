@@ -316,22 +316,73 @@ def _compile_new_authored_modules(
     return tuple(modules), manifest
 
 
-def _compile_existing_authored_manifest(plan: AuthoredPlan) -> dict[str, Any]:
+def _compile_existing_authored_modules(
+    plan: AuthoredPlan,
+    *,
+    target: Mapping[str, Any],
+) -> tuple[tuple[ProductionModule, ...], dict[str, Any]]:
+    """Split existing-project authored work into small semantic localization/edit tasks.
+
+    Existing source files may be shared by multiple authored sections, so units are serialized.
+    Each unit localizes a minimal exact target set immediately before editing.
+    """
+
+    units = _authored_execution_units(plan.text)
+    modules: list[ProductionModule] = []
+    manifest_units: list[dict[str, Any]] = []
+    previous_id = ""
+    for unit in units:
+        index = int(unit["index"])
+        task_id = f"authored_existing_{index:03d}"
+        depends_on = (previous_id,) if previous_id else ()
+        unit_plan = AuthoredPlan(
+            requested_prompt=plan.requested_prompt,
+            text=str(unit["text"]),
+            existing_input_sha256=plan.existing_input_sha256,
+            media_paths=plan.media_paths,
+        )
+        modules.append(
+            ProductionModule(
+                module_id=task_id,
+                kind="custom_java",
+                config={
+                    "implementation": "custom",
+                    "authored_plan": unit_plan.to_dict(),
+                    "authored_localization_required": True,
+                    "authored_unit": {
+                        "index": index,
+                        "count": len(units),
+                        "section": str(unit.get("section") or ""),
+                        "start_byte": int(unit["start_byte"]),
+                        "end_byte": int(unit["end_byte"]),
+                        "text_sha256": str(unit["text_sha256"]),
+                    },
+                    **dict(target),
+                },
+                depends_on=depends_on,
+                required_gates=("target_compile", "project build"),
+            )
+        )
+        manifest_units.append(
+            {
+                "module_id": task_id,
+                "start_byte": int(unit["start_byte"]),
+                "end_byte": int(unit["end_byte"]),
+                "text_sha256": str(unit["text_sha256"]),
+                "section": str(unit.get("section") or ""),
+                "depends_on": list(depends_on),
+            }
+        )
+        previous_id = task_id
+
     raw = plan.text.encode("utf-8")
-    source_sha = "sha256:" + hashlib.sha256(raw).hexdigest()
     manifest: dict[str, Any] = {
         "schema_version": _AUTHORED_EXECUTION_SCHEMA,
-        "source_text_sha256": source_sha,
+        "source_text_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
         "source_bytes": len(raw),
-        "unit_count": 1,
+        "unit_count": len(manifest_units),
         "policy": "host_localize_freeze_exact_targets_before_coder",
-        "units": [{
-            "module_id": "authored_design",
-            "start_byte": 0,
-            "end_byte": len(raw),
-            "text_sha256": source_sha,
-            "section": "existing_project_authored_design",
-        }],
+        "units": manifest_units,
         "entrypoint": {
             "owner": "existing_project",
             "path": "",
@@ -340,7 +391,7 @@ def _compile_existing_authored_manifest(plan: AuthoredPlan) -> dict[str, Any]:
         },
     }
     manifest["manifest_sha256"] = _sha256_json(manifest)
-    return manifest
+    return tuple(modules), manifest
 
 
 def materialize_authored_execution_scaffold(
@@ -569,19 +620,11 @@ def compile_authored_design(
         )
         design = {**design, "_authored_execution_manifest": manifest}
     else:
-        manifest = _compile_existing_authored_manifest(plan)
+        modules, manifest = _compile_existing_authored_modules(
+            plan,
+            target=target,
+        )
         design = {**design, "_authored_execution_manifest": manifest}
-        modules = (ProductionModule(
-            module_id="authored_design",
-            kind="custom_java",
-            config={
-                "implementation": "custom",
-                "authored_plan": plan.to_dict(),
-                "authored_localization_required": True,
-                **target,
-            },
-            required_gates=("target_compile", "project build"),
-        ),)
 
     return complete_proposal_from_parts(
         requested_prompt=plan.requested_prompt,
