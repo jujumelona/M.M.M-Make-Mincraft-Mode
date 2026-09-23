@@ -19,11 +19,12 @@ def _load_setup_module():
     return module
 
 
-def _fake_torch():
+def _fake_torch(*, module_file: str = ""):
     return SimpleNamespace(
+        __file__=module_file,
         cuda=SimpleNamespace(
             get_device_capability=lambda _index: (7, 5),
-        )
+        ),
     )
 
 
@@ -115,3 +116,80 @@ def test_bundle_loader_is_source_local_and_exposes_verified_installer() -> None:
     assert callable(bundle.ensure_prebuilt_native_server)
     assert bundle.BUNDLE_SCHEMA_VERSION == "mmm/native-llama-cuda-bundle-v4-immutable"
     assert bundle.BUNDLE_RELEASE_TAG == "native-llama-1d2869c-cuda12.4-max-v4-immutable"
+
+def test_cuda_wheel_library_dirs_are_exported_before_prebuilt_linkage(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_setup_module()
+    site = tmp_path / "site-packages"
+    torch_pkg = site / "torch"
+    torch_lib = torch_pkg / "lib"
+    runtime_lib = site / "nvidia" / "cuda_runtime" / "lib"
+    cublas_lib = site / "nvidia" / "cublas" / "lib"
+    for directory in (torch_pkg, torch_lib, runtime_lib, cublas_lib):
+        directory.mkdir(parents=True, exist_ok=True)
+    (runtime_lib / "libcudart.so.12").write_bytes(b"runtime")
+    (cublas_lib / "libcublas.so.12").write_bytes(b"cublas")
+
+    specs = {
+        "nvidia.cuda_runtime": SimpleNamespace(
+            submodule_search_locations=[str(runtime_lib.parent)],
+            origin=str(runtime_lib.parent / "__init__.py"),
+        ),
+        "nvidia.cublas": SimpleNamespace(
+            submodule_search_locations=[str(cublas_lib.parent)],
+            origin=str(cublas_lib.parent / "__init__.py"),
+        ),
+    }
+    monkeypatch.setattr(
+        module.importlib.util,
+        "find_spec",
+        lambda name: specs.get(name),
+    )
+    monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
+
+    found = module._activate_cuda_runtime_library_path(
+        _fake_torch(module_file=str(torch_pkg / "__init__.py"))
+    )
+
+    assert torch_lib.resolve() in found
+    assert runtime_lib.resolve() in found
+    assert cublas_lib.resolve() in found
+    exported = os.environ["LD_LIBRARY_PATH"].split(":")
+    assert str(runtime_lib.resolve()) in exported
+    assert str(cublas_lib.resolve()) in exported
+
+
+def test_native_server_activates_cuda_runtime_before_bundle_probe(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_setup_module()
+    binary = tmp_path / "prebuilt" / "bin" / "llama-server"
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"native")
+    binary.chmod(0o755)
+    events: list[str] = []
+
+    monkeypatch.setattr(
+        module,
+        "_activate_cuda_runtime_library_path",
+        lambda _torch: events.append("cuda-path") or (),
+    )
+    monkeypatch.setattr(
+        module,
+        "_find_verified_native_server",
+        lambda: events.append("existing-probe") or None,
+    )
+    monkeypatch.setattr(
+        module,
+        "_ensure_prebuilt_native_server",
+        lambda *, cuda_arch: events.append("prebuilt-probe") or str(binary),
+    )
+    monkeypatch.setattr(module, "_verify_native_server", lambda _path: (True, "verified"))
+
+    module._ensure_native_server(_fake_torch())
+
+    assert events[:3] == ["cuda-path", "existing-probe", "prebuilt-probe"]
+
