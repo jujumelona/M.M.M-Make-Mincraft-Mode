@@ -727,7 +727,7 @@ def build_debug_fixture_coverage_receipt(
 
 
 _AUTHORED_INITIALIZE_RE = re.compile(
-    r"\\bpublic\\s+static\\s+void\\s+initialize\\s*\\(\\s*\\)\\s*\\{"
+    r"\bpublic\s+static\s+void\s+initialize\s*\(\s*\)\s*\{"
 )
 
 
@@ -736,7 +736,7 @@ def _authored_initialize_body(source: str, symbol: str) -> str | None:
 
     _commentless, code = _debug_java_code_surface(source)
     if re.search(
-        rf"\\bpublic\\s+final\\s+class\\s+{re.escape(symbol)}\\b",
+        rf"\bpublic\s+final\s+class\s+{re.escape(symbol)}\b",
         code,
     ) is None:
         return None
@@ -805,7 +805,7 @@ def _authored_feature_semantic_findings(
                 f"authored module {module_id} does not implement the required {symbol}.initialize() surface"
             )
             continue
-        normalized = re.sub(r"\\s+", "", body)
+        normalized = re.sub(r"\s+", "", body)
         if (
             not normalized
             or re.fullmatch(r"(?:;|return;)+", normalized) is not None
