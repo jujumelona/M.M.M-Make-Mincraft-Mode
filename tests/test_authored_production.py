@@ -334,7 +334,7 @@ def test_existing_authored_plan_requires_localize_freeze_before_coder():
     plan = AuthoredPlan(
         "Modify the existing space mod",
         "# Economy\nPreserve trading and add ship upgrades.\n",
-        existing_input_sha256="a" * 64,
+        existing_input_sha256="sha256:" + "a" * 64,
     )
     proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(plan)
     assert len(proposal.modules) == 1
