@@ -88,11 +88,15 @@ def _scope(authored: Mapping[str, Any]) -> dict[str, Any]:
         if line.lstrip().startswith("#") and line.lstrip("#").strip()
     ][:16]
     outline = headings or [text[:1200], text[-600:] if len(text) > 1200 else ""]
+    semantic_excerpt = text
+    if len(semantic_excerpt.encode("utf-8")) > 3 * 1024:
+        semantic_excerpt = text[:2200] + "\n…\n" + text[-800:]
     return {
         "requested_prompt": str(authored.get("requested_prompt") or "").strip(),
         "source_text_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
         "source_bytes": len(raw),
         "outline": [value for value in outline if value],
+        "semantic_excerpt": semantic_excerpt,
     }
 
 
@@ -144,6 +148,7 @@ def _candidates(root: Path, scope: Mapping[str, Any], terms: Sequence[str]) -> l
     index = ProjectIndex(root)
     query = " ".join([
         str(scope.get("requested_prompt") or ""),
+        str(scope.get("semantic_excerpt") or ""),
         *[str(x) for x in scope.get("outline", ())],
         *terms,
     ])
