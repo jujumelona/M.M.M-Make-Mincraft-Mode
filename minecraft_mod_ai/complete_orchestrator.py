@@ -1767,6 +1767,7 @@ class CompleteProductionOrchestrator:
                 authored_plan=approved.game_design.get('authored_plan'),
                 authored_manifest=approved.game_design.get('_authored_execution_manifest'),
                 module_ids=tuple(module.module_id for module in approved.modules),
+                project_root=project_root,
                 artifact_sha256=str(artifact_receipt['sha256']),
                 source_validation=source_report,
                 build_report=build,
@@ -2035,6 +2036,7 @@ class CompleteProductionOrchestrator:
                 )
 
             downloadable_input = {
+                'proposal_hash': approved.calculate_hash(),
                 'artifact_sha256': str(artifact_receipt.get('sha256') or ''),
                 'coverage_sha256': str(coverage_receipt.get('coverage_sha256') or ''),
                 'reuse_manifest_sha256': _stable_payload_sha256(reuse_manifest),
@@ -2067,6 +2069,7 @@ class CompleteProductionOrchestrator:
                         reuse_manifest=reuse_manifest,
                         build_receipt=build_receipt,
                         runtime_receipt=persisted_runtime_receipt,
+                        proposal_hash=approved.calculate_hash(),
                         additional_artifacts={
                             **(
                                 {
