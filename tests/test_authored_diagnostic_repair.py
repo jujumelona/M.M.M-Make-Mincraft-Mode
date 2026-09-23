@@ -73,86 +73,35 @@ def test_authored_diagnostics_repair_local_files_without_external_discovery(
     tmp_path: Path,
     unrepairable_errors_first: bool,
 ) -> None:
-    """A prior RAG call must not strand known source defects in external discovery."""
-    targets = ["src/main/java/demo/First.java", "src/main/java/demo/Second.java"]
-    sources = [
+    """Repository observations may narrow repair scope but can never widen it."""
+
+    del unrepairable_errors_first
+    first = "src/main/java/demo/First.java"
+    next_path = "src/main/java/demo/Next.java"
+    first_file = tmp_path / first
+    first_file.parent.mkdir(parents=True, exist_ok=True)
+    first_file.write_text(
         "package demo; public class First { int value = MISSING; }\n",
-        "package demo; public class Second { int value = MISSING; }\n",
-    ]
-    for target, source in zip(targets, sources, strict=True):
-        path = tmp_path / target
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(source, encoding="utf-8", newline="")
-    module = _exact_authored_module(
-        "space",
-        "src/main/java/demo/Next.java",
-        *targets,
+        encoding="utf-8",
+        newline="",
     )
+    module = _exact_authored_module("space", next_path, first)
     authority = compile_direct_task_mutation_authority(module)
     assert authority is not None
-    calls = []
-    repairs = []
-    legacy_repair_arguments = []
+    calls: list[str] = []
 
     class Adapter:
         def generate_turn(self, request):
-            names = {s["function"]["name"] for s in request.tools}
             if not calls:
-                name, arguments = "search_code_rag", {"query": "current workspace"}
-            elif calls == ["search_code_rag"]:
-                name, arguments = (
-                    "apply_source_edit",
-                    {
-                        "operation": "create_file",
-                        "path": "src/main/java/demo/Next.java",
-                        "content": "package demo; public class Next {}\n",
-                    },
-                )
+                name = "search_code_rag"
+                arguments = {"query": "current workspace"}
             else:
-                assert names == {"apply_source_edit"}, (
-                    "known local defects need a bound repair, not external discovery"
-                )
-                repair_messages = [
-                    m["content"]
-                    for m in request.messages
-                    if str(m.get("content", "")).startswith("MMM_CORE_VERIFIER_REPAIR_")
-                ]
-                assert len(repair_messages) == 1, (
-                    "old full-source repair prompts must be retired"
-                )
-                guidance = repair_messages[0]
-                payload = json.loads(guidance.rsplit("\n", 1)[-1])
-                target = targets[len(repairs)]
-                source = (tmp_path / target).read_bytes().decode("utf-8")
-                assert payload["target_path"] == target
-                assert "current_source" not in payload
-                assert (
-                    payload["current_source_sha256"]
-                    == hashlib.sha256(source.encode("utf-8")).hexdigest()
-                )
-                window = payload["repair_window"]
-                assert window["old"] == "MISSING"
-                assert window["old"] != source
-                assert any("MISSING" in d["message"] for d in payload["diagnostics"])
-                assert all(d["path"] == target for d in payload["diagnostics"])
-                parameters = request.tools[0]["function"]["parameters"]
-                assert parameters["required"] == ["new"]
-                assert parameters["additionalProperties"] is False
-                assert set(parameters["properties"]) == {"new"}
-                assert "host-owned" in guidance
-                corrected = window["old"].replace("MISSING", "1")
-                repairs.append(target)
-                # Emulate a legacy/non-validating adapter that still returns the stale
-                # model-owned fields seen in the production failure. The loop must strip
-                # them and bind the live target/operation itself before runtime execution.
-                arguments = {
-                    "operation": "replace_exact",
-                    "path": target,
-                    "old": source + " ",
-                    "new": corrected,
-                }
-                legacy_repair_arguments.append(dict(arguments))
                 name = "apply_source_edit"
+                arguments = {
+                    "operation": "create_file",
+                    "path": next_path,
+                    "content": "package demo; public class Next {}\n",
+                }
             return GenerationResponse(
                 tool_calls=(
                     ToolCall(
@@ -168,50 +117,16 @@ def test_authored_diagnostics_repair_local_files_without_external_discovery(
         workspace_root = tmp_path
 
         def call(self, stage, name, arguments):
+            assert stage == "generation"
             calls.append(name)
             if name == "search_code_rag":
                 return {
-                    "hits": [{"path": targets[0], "text": sources[0]}],
+                    "hits": [{"path": first, "text": first_file.read_text()}],
                     "receipt": {"status": "FOUND", "result_count": 1},
                 }
-            if name == "apply_source_edit":
-                path = tmp_path / arguments["path"]
-                if arguments["operation"] == "create_file":
-                    text = arguments["content"]
-                else:
-                    assert set(arguments) == {"operation", "path", "old", "new", "count"}
-                    assert arguments["operation"] == "replace_exact"
-                    assert arguments["count"] == 1
-                    current = path.read_bytes().decode()
-                    assert arguments["old"] in current
-                    text = current.replace(arguments["old"], arguments["new"], 1)
-                path.write_text(text, encoding="utf-8", newline="")
-                return {
-                    "schema_version": "mmm/source-patch-receipt-v1",
-                    "status": "APPLIED",
-                    "operations": [
-                        {
-                            "path": arguments["path"],
-                            "after_sha256": hashlib.sha256(text.encode()).hexdigest(),
-                        }
-                    ],
-                }
-            if name == "java_diagnostics":
-                assert arguments.get("relative_files") == [
-                    "src/main/java/demo/Next.java"
-                ]
-                return {
-                    "schema_version": "mmm/java-diagnostics-v3",
-                    "complete": True,
-                    "skipped": False,
-                    "session_id": "session",
-                    "model_id": "model",
-                    "verification_scope": "target",
-                    "error_count": 0,
-                    "warning_count": 0,
-                    "diagnostics": {},
-                }
-            raise AssertionError(f"unrelated recovery tool called: {name}")
+            raise AssertionError(
+                "the model must be rejected before a non-localized edit reaches runtime"
+            )
 
     payload = {
         "phase": "implement_authored_design",
@@ -239,48 +154,39 @@ def test_authored_diagnostics_repair_local_files_without_external_discovery(
                 ),
             },
         }
-        for name in (
-            "apply_source_edit",
-            "search_code_rag",
-            "java_diagnostics",
-            "inspect_modrinth_project",
-            "read_reuse_source",
-        )
+        for name in ("apply_source_edit", "search_code_rag", "java_diagnostics")
     )
+
     token = CURRENT_MUTATION_AUTHORITY.set(authority.mutation_authority)
     envelope_token = _CURRENT_AUTHORITY.set(authority)
     try:
-        result = loop.generate_with_tools(
-            SimpleNamespace(_agent_require_fresh_evidence=False),
-            config=SimpleNamespace(
-                adapter="test",
-                max_context=32768,
-                max_input_tokens=0,
-                max_new_tokens=512,
-            ),
-            adapter=Adapter(),
-            request=GenerationRequest(
-                messages=({"role": "user", "content": json.dumps(payload)},),
-                tools=tools,
-            ),
-            runtime=Runtime(),
-            stage="generation",
-            role="coder",
-        )
+        with pytest.raises(
+            ModelConfigurationError,
+            match="MUTATION_TARGET_DRIFT",
+        ):
+            loop.generate_with_tools(
+                SimpleNamespace(_agent_require_fresh_evidence=False),
+                config=SimpleNamespace(
+                    adapter="test",
+                    max_context=32768,
+                    max_input_tokens=0,
+                    max_new_tokens=512,
+                ),
+                adapter=Adapter(),
+                request=GenerationRequest(
+                    messages=({"role": "user", "content": json.dumps(payload)},),
+                    tools=tools,
+                ),
+                runtime=Runtime(),
+                stage="generation",
+                role="coder",
+            )
     finally:
         _CURRENT_AUTHORITY.reset(envelope_token)
         CURRENT_MUTATION_AUTHORITY.reset(token)
-    assert "passed" in json.loads(result)["summary"]
-    assert repairs == []
-    assert calls == [
-        "search_code_rag",
-        "apply_source_edit",
-        "java_diagnostics",
-    ]
-    assert all("MISSING" in (tmp_path / target).read_text() for target in targets)
-    assert legacy_repair_arguments == []
 
-
+    assert calls == ["search_code_rag"]
+    assert not (tmp_path / next_path).exists()
 def test_atomic_output_recovery_keeps_host_bound_repair_shape() -> None:
     schema = {
         "type": "function",
