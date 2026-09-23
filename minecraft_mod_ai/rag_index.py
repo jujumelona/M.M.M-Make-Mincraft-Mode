@@ -7,7 +7,7 @@ import os
 import re
 import sqlite3
 import uuid
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -471,72 +471,25 @@ class ProjectRAGIndex:
                     warning="required_metadata_mismatch",
                 )
 
-            first = _sqlite_search_pass(
-                connection,
+            return _corrective_search(
                 query,
                 route=route,
                 limit=limit,
                 metadata=metadata,
-                router=router,
                 semantic=semantic,
                 rerank=rerank,
-                fts5_available=fts5_available,
-            )
-            first_coverage = _coverage(query, first.hits)
-            threshold = _coverage_threshold(route)
-            corrected_query: str | None = None
-            correction_applied = False
-            passes = [first]
-            hits = list(first.hits)
-            if first_coverage[0] < threshold:
-                corrected_query = _correct_query(
-                    query,
-                    metadata=metadata,
-                    missing_terms=first_coverage[2],
-                )
-                if corrected_query.casefold() != query.casefold():
-                    correction_applied = True
-                    second = _sqlite_search_pass(
-                        connection,
-                        corrected_query,
-                        route=route,
-                        limit=limit,
-                        metadata=metadata,
-                        router=router,
-                        semantic=semantic,
-                        rerank=rerank,
-                        fts5_available=fts5_available,
-                    )
-                    passes.append(second)
-                    hits = _merge_hits(hits, second.hits)
-
-            hits = _finalize_hits(hits, route=route, limit=limit)
-            coverage, covered, missing = _coverage(query, hits)
-            warnings: list[str] = []
-            if not hits:
-                warnings.append("no_relevant_chunks")
-            if coverage < threshold:
-                warnings.append("coverage_below_route_threshold")
-            return _result_with_receipt(
-                query,
-                route=route,
-                hits=hits,
-                corrected_query=corrected_query,
-                correction_applied=correction_applied,
-                lexical_backend=passes[0].lexical_backend,
-                semantic=semantic,
-                rerank=rerank,
-                candidates_considered=sum(
-                    item.candidates_considered for item in passes
-                ),
-                relation_expansions=sum(
-                    item.relation_expansions for item in passes
-                ),
-                covered=covered,
-                missing=missing,
-                coverage=coverage,
                 required_metadata=required_metadata,
-                warnings=warnings,
+                run_pass=lambda search_query: _sqlite_search_pass(
+                    connection,
+                    search_query,
+                    route=route,
+                    limit=limit,
+                    metadata=metadata,
+                    router=router,
+                    semantic=semantic,
+                    rerank=rerank,
+                    fts5_available=fts5_available,
+                ),
             )
         finally:
             connection.close()
@@ -579,68 +532,23 @@ class ProjectRAGIndex:
                 ),
             )
 
-        first = _legacy_search_pass(
-            chunks,
+        return _corrective_search(
             query,
             route=route,
             limit=limit,
-            router=router,
+            metadata=chunks[0].metadata,
             semantic=semantic,
             rerank=rerank,
-        )
-        coverage, _, missing = _coverage(query, first.hits)
-        threshold = _coverage_threshold(route)
-        corrected_query: str | None = None
-        correction_applied = False
-        passes = [first]
-        hits = list(first.hits)
-        if coverage < threshold:
-            corrected_query = _correct_query(
-                query,
-                metadata=chunks[0].metadata,
-                missing_terms=missing,
-            )
-            if corrected_query.casefold() != query.casefold():
-                correction_applied = True
-                second = _legacy_search_pass(
-                    chunks,
-                    corrected_query,
-                    route=route,
-                    limit=limit,
-                    router=router,
-                    semantic=semantic,
-                    rerank=rerank,
-                )
-                passes.append(second)
-                hits = _merge_hits(hits, second.hits)
-
-        hits = _finalize_hits(hits, route=route, limit=limit)
-        coverage, covered, missing = _coverage(query, hits)
-        warnings: list[str] = []
-        if not hits:
-            warnings.append("no_relevant_chunks")
-        if coverage < threshold:
-            warnings.append("coverage_below_route_threshold")
-        return _result_with_receipt(
-            query,
-            route=route,
-            hits=hits,
-            corrected_query=corrected_query,
-            correction_applied=correction_applied,
-            lexical_backend="legacy_scan",
-            semantic=semantic,
-            rerank=rerank,
-            candidates_considered=sum(
-                item.candidates_considered for item in passes
-            ),
-            relation_expansions=sum(
-                item.relation_expansions for item in passes
-            ),
-            covered=covered,
-            missing=missing,
-            coverage=coverage,
             required_metadata=required_metadata,
-            warnings=warnings,
+            run_pass=lambda search_query: _legacy_search_pass(
+                chunks,
+                search_query,
+                route=route,
+                limit=limit,
+                router=router,
+                semantic=semantic,
+                rerank=rerank,
+            ),
         )
 
     def _load(self) -> list[RAGChunk]:
@@ -741,6 +649,67 @@ class ProjectRAGIndex:
                 embedding=(),
             )
         ]
+
+
+def _corrective_search(
+    query: str,
+    *,
+    route: str,
+    limit: int,
+    metadata: dict[str, Any],
+    semantic: bool,
+    rerank: bool,
+    required_metadata: dict[str, Any],
+    run_pass: Callable[[str], _PassResult],
+) -> RAGSearchResult:
+    first = run_pass(query)
+    coverage, _, missing = _coverage(query, first.hits)
+    threshold = _coverage_threshold(route)
+    corrected_query: str | None = None
+    passes = [first]
+    hits = list(first.hits)
+
+    if coverage < threshold:
+        candidate_query = _correct_query(
+            query,
+            metadata=metadata,
+            missing_terms=missing,
+        )
+        if candidate_query.casefold() != query.casefold():
+            corrected_query = candidate_query
+            second = run_pass(candidate_query)
+            passes.append(second)
+            hits = _merge_hits(hits, second.hits)
+
+    hits = _finalize_hits(hits, route=route, limit=limit)
+    coverage, covered, missing = _coverage(query, hits)
+    warnings: list[str] = []
+    if not hits:
+        warnings.append("no_relevant_chunks")
+    if coverage < threshold:
+        warnings.append("coverage_below_route_threshold")
+
+    return _result_with_receipt(
+        query,
+        route=route,
+        hits=hits,
+        corrected_query=corrected_query,
+        correction_applied=corrected_query is not None,
+        lexical_backend=first.lexical_backend,
+        semantic=semantic,
+        rerank=rerank,
+        candidates_considered=sum(
+            item.candidates_considered for item in passes
+        ),
+        relation_expansions=sum(
+            item.relation_expansions for item in passes
+        ),
+        covered=covered,
+        missing=missing,
+        coverage=coverage,
+        required_metadata=required_metadata,
+        warnings=warnings,
+    )
 
 
 def _initialize_sqlite(connection: sqlite3.Connection) -> bool:
