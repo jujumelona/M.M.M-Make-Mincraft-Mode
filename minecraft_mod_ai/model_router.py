@@ -805,6 +805,9 @@ def _execute_tool_waves(
             _agent_tool_call_timeout_seconds(call)
             for call in batch
         )
+        if stage == "agent_read_wave":
+            from .model_concurrency import planning_work_unit_timeout_seconds
+            timeout_seconds = min(timeout_seconds, planning_work_unit_timeout_seconds())
         try:
             for _item, indexed_result in iter_completed_with_deadlines(
                 indexed_batch,
