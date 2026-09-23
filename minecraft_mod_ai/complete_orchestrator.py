@@ -2383,6 +2383,15 @@ class CompleteProductionOrchestrator:
                 )
                 _register_checkpoint_owner(result, node_custom_generator)
                 uncommitted_custom_results.append(result)
+                if not node_custom_generator.ensure_generation_live_commit(
+                    result,
+                    project_root=project_root,
+                ):
+                    raise CompleteProductionError(
+                        "GENERATION_LIVE_COMMIT_MISSING: generated source was verified "
+                        "outside the canonical project but its exact patch could not be "
+                        f"materialized for {module.module_id}."
+                    )
                 return result
 
             if stage == 'content':
