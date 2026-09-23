@@ -100,16 +100,6 @@ class LocalizationStage(str, Enum):
     READY = "READY"
 
 
-_STOPWORDS = frozenset({
-    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how",
-    "in", "into", "is", "it", "of", "on", "or", "the", "to", "what", "when",
-    "where", "which", "with",
-})
-_VOLATILE_EVIDENCE_KEYS = frozenset({
-    "coverage_score", "correction", "elapsed_ms", "generated_at", "latency_ms",
-    "normalized_query", "query", "relevance_score", "request_id", "result_count",
-    "timestamp", "trace_id",
-})
 _LOCALIZATION_EVIDENCE_TOOLS = frozenset({
     "search_code_rag",
     "search_project_rag",
