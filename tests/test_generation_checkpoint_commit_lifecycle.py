@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator
-from minecraft_mod_ai.custom_module_generator import (
+from minecraft_mod_ai.generation_checkpoint import (
     finalize_persisted_generation_checkpoint,
 )
 
