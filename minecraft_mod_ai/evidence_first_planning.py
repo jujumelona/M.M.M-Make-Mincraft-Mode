@@ -564,6 +564,14 @@ def _active(branches: Mapping[str, Mapping[str, Any]], name: str) -> bool:
     return isinstance(value, Mapping) and value.get("status") == "ACTIVE"
 
 
+def _step_uses_branch(step: TemplateStep, branch: str) -> bool:
+    """Return whether one canonical template step is bound to a branch."""
+
+    return branch in step.branch_features or (
+        branch == "needs_loader_leaf" and step.name == "loader_leaf_binding"
+    )
+
+
 def _ownership_context(game_design: Mapping[str, Any]) -> dict[str, Any]:
     inventory = _mapping(
         game_design.get("_existing_project_inventory")
