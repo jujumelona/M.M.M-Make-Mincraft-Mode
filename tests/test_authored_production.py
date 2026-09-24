@@ -660,7 +660,9 @@ def test_compiler_projects_reasoning_before_both_production_routes(prefix, desig
     projection = proposal.game_design["_authored_source_projection"]
     assert projection["source_plan"] == plan.to_dict()
     assert projection["stripped_prefix_bytes"] == len(prefix.encode("utf-8"))
-    sha = lambda text: "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+    def sha(text):
+        return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
     assert projection["source_text_sha256"] == sha(prefix + design)
     assert projection["implementation_text_sha256"] == sha(design)
     manifest = proposal.game_design["_authored_execution_manifest"]
