@@ -67,7 +67,7 @@ def _install_locked_source_patcher(source_patch_module: Any) -> None:
 def _persist_active_custom_checkpoint(project_root: Path) -> None:
     """Durably journal a staged tool edit without coupling the base patcher to MMM."""
 
-    from .custom_module_generator import persist_active_generation_checkpoint
+    from .generation_checkpoint import persist_active_generation_checkpoint
 
     persist_active_generation_checkpoint(project_root)
 
