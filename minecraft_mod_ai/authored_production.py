@@ -29,6 +29,11 @@ _GENERIC_AUTHORED_CONTAINER_TITLES = frozenset({
     "requirements",
     "features",
     "feature design",
+    "systems",
+    "gameplay systems",
+    "core systems",
+    "mechanics",
+    "gameplay mechanics",
     "architecture",
     "implementation",
     "설계",
@@ -37,6 +42,11 @@ _GENERIC_AUTHORED_CONTAINER_TITLES = frozenset({
     "요구사항",
     "기능",
     "기능 목록",
+    "시스템",
+    "게임플레이 시스템",
+    "핵심 시스템",
+    "메커니즘",
+    "게임플레이 메커니즘",
     "아키텍처",
     "구현",
 })
@@ -151,11 +161,11 @@ def _metadata_only_preamble(lines: list[str], start: int, end: int) -> bool:
 def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
     """Split approved prose into semantic implementation units without losing bytes.
 
-    Split points select implementation headings only. The actual slices are built as a
-    lossless partition of the original line stream: every byte before the first selected
-    feature is attached to that first feature, and every later block begins exactly at
-    the preceding block's end. Document wrappers and metadata therefore remain context
-    without ever becoming standalone AuthoredFeature tasks.
+    Document-level wrappers are traversed one heading level at a time. Context-only
+    siblings such as Intro/metadata do not count as implementation units, and a sole
+    semantic child remains one unit unless that child is itself a generic container.
+    This prevents both failure modes: treating the whole design as one task and
+    over-splitting one feature's Trigger/State subheadings.
     """
 
     if not text:
@@ -165,18 +175,48 @@ def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
         return (text,)
 
     shallowest = min(depth for _index, depth, _title in records)
-    split_level = shallowest
     shallow = [record for record in records if record[1] == shallowest]
-    if (
+    split_level = shallowest
+    document_wrapper = bool(
         len(shallow) == 1
         and (
             _generic_authored_container(shallow[0][2])
             or _document_preamble_title(shallow[0][2])
         )
-    ):
-        for depth in sorted({record[1] for record in records if record[1] > shallowest}):
+    )
+
+    if document_wrapper:
+        deeper_levels = sorted(
+            {record[1] for record in records if record[1] > shallowest}
+        )
+        for depth in deeper_levels:
             peers = [record for record in records if record[1] == depth]
-            if len(peers) >= 2:
+            if not peers:
+                continue
+            actionable: list[tuple[int, int, str]] = []
+            for position, record in enumerate(peers):
+                start_line, _level, title = record
+                end_line = (
+                    peers[position + 1][0]
+                    if position + 1 < len(peers)
+                    else len(lines)
+                )
+                if (
+                    _document_context_title(title)
+                    or _metadata_only_preamble(lines, start_line + 1, end_line)
+                ):
+                    continue
+                actionable.append(record)
+
+            if len(actionable) >= 2:
+                split_level = depth
+                break
+            if len(actionable) == 1:
+                # A sole real feature is still one feature. Descend only when that
+                # heading is itself a generic grouping container.
+                only_title = actionable[0][2]
+                if _generic_authored_container(only_title):
+                    continue
                 split_level = depth
                 break
 
@@ -187,7 +227,7 @@ def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
     if not starts:
         return (text,)
 
-    if split_level > shallowest and len(starts) >= 2:
+    if split_level > shallowest:
         record_by_start = {record[0]: record for record in split_records}
         while len(starts) >= 2:
             first_start = starts[0]
@@ -202,8 +242,8 @@ def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
             starts = starts[1:]
 
     # At the document's own split level, a leading title/metadata section is context,
-    # not an implementation unit. Remove only that boundary; slicing below will retain
-    # every byte of the removed preamble in the first real feature block.
+    # not an implementation unit. Remove only that boundary; slicing below retains
+    # every byte of the preamble in the first real feature block.
     if split_level == shallowest and len(starts) >= 2:
         first_start = starts[0]
         first_end = starts[1]
@@ -222,9 +262,6 @@ def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
     pending = ""
     for position, start_line in enumerate(starts):
         end_line = starts[position + 1] if position + 1 < len(starts) else len(lines)
-        # The first implementation block owns *all* preceding source bytes. This is
-        # what makes the partition lossless for leading prose, blank lines, BOM text,
-        # document wrappers, metadata and horizontal rules.
         segment_start = 0 if position == 0 else start_line
         segment = "".join(lines[segment_start:end_line])
         feature_has_body = any(
