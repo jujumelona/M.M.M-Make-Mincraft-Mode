@@ -40,8 +40,10 @@ from .mutation_context_binding import context_is_host_pinned, context_is_localiz
 from .mutation_context_binding import recover_stale_existing_context as _recover_stale
 from .root_cause_trace import emit_root_cause, trace_scope
 from .retrieval_progress import (
+    RetrievalDecision,
     RetrievalNoProgressError,
-    RetrievalProgress as _RetrievalProgress,
+    RetrievalObservation,
+    RetrievalProgress,
     _stable_value,
     evidence_fingerprint,
     normalize_retrieval_query,
@@ -84,17 +86,6 @@ class LoopPhase(str, Enum):
     ACT = "ACT"
     VERIFY = "VERIFY"
     RECOVER = "RECOVER"
-
-
-class RetrievalDecision(str, Enum):
-    EXECUTE = "EXECUTE"
-    DUPLICATE_QUERY = "DUPLICATE_QUERY"
-
-
-class RetrievalObservation(str, Enum):
-    FRESH = "FRESH"
-    DUPLICATE_EVIDENCE = "DUPLICATE_EVIDENCE"
-    WEAK = "WEAK"
 
 
 _LOCALIZATION_EVIDENCE_TOOLS = frozenset({
@@ -1921,26 +1912,6 @@ class HostRunState:
                 return name
         return None
 
-
-
-class RetrievalProgress(_RetrievalProgress):
-    """Compatibility facade; retrieval mechanics live in retrieval_progress."""
-
-    def __init__(
-        self,
-        state: HostRunState | None = None,
-        *,
-        no_progress_limit: int | None = None,
-    ) -> None:
-        super().__init__(
-            state or HostRunState(),
-            execute_decision=RetrievalDecision.EXECUTE,
-            duplicate_decision=RetrievalDecision.DUPLICATE_QUERY,
-            fresh_observation=RetrievalObservation.FRESH,
-            duplicate_observation=RetrievalObservation.DUPLICATE_EVIDENCE,
-            weak_observation=RetrievalObservation.WEAK,
-            no_progress_limit=no_progress_limit,
-        )
 
 
 def _source_edit_schema_for_context(
