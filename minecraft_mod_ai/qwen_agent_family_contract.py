@@ -96,7 +96,7 @@ def _qwen_sampling_mode(role: object, request: Any) -> str | None:
     if tools:
         return "non_thinking"
     if _forced_tool_choice(getattr(request, "tool_choice", None)):
-        return None
+        return "non_thinking"
     if getattr(request, "response_format", None) == "json" and not tools:
         return "non_thinking"
     normalized_role = str(role or "").strip().casefold()
@@ -122,7 +122,7 @@ def _apply_family_payload_policy(
     agent_request = _qwen_agent_request(request)
     tools = getattr(request, "tools", ()) or ()
     json_page = getattr(request, "response_format", None) == "json" and not tools
-    action_page = bool(tools) or json_page
+    action_page = bool(tools) or json_page or _forced_tool_choice(getattr(request, "tool_choice", None))
     if not action_page and not _agent_thinking_enabled(config):
         return payload
     if mode is None and not agent_request and not action_page:

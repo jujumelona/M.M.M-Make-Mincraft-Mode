@@ -60,20 +60,26 @@ def _config(role: str = "planner", *, qwen: bool = True):
     )
 
 
-def _request(*, response_format: str = "text", tools=()):
-    return SimpleNamespace(response_format=response_format, tools=tools)
+def _request(*, response_format: str = "text", tools=(), tool_choice=None):
+    return SimpleNamespace(
+        response_format=response_format,
+        tools=tools,
+        tool_choice=tool_choice,
+    )
 
 
 def _hardware():
     def server_payload(adapter, request):
-        del request
-        return {
+        payload = {
             "temperature": 0.0,
             "reasoning_effort": "none",
             "chat_template_kwargs": {"enable_thinking": False},
             "thinking_budget_tokens": 0,
             "model_id": adapter.config.model_id,
         }
+        if getattr(request, "tool_choice", None) is not None:
+            payload["tool_choice"] = request.tool_choice
+        return payload
 
     return SimpleNamespace(_server_payload=server_payload)
 
@@ -162,6 +168,26 @@ def test_tool_action_uses_qwen_native_non_thinking_mode() -> None:
 
     assert payload["temperature"] == 0.7
     assert payload["top_p"] == 0.8
+    assert "reasoning_effort" not in payload
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_required_tool_choice_uses_qwen_native_non_thinking_mode() -> None:
+    _autotune_module, hardware = _install_isolated()
+    adapter = SimpleNamespace(config=_config("planner"))
+    tool = {"type": "function", "function": {"name": "lookup"}}
+
+    payload = hardware._server_payload(
+        adapter,
+        _request(tools=(tool,), tool_choice="required"),
+    )
+
+    assert payload["temperature"] == 0.7
+    assert payload["top_p"] == 0.8
+    assert payload["top_k"] == 20
+    assert payload["min_p"] == 0.0
+    assert payload["presence_penalty"] == 1.5
+    assert payload["repeat_penalty"] == 1.0
     assert "reasoning_effort" not in payload
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 

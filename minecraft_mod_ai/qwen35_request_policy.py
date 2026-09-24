@@ -48,12 +48,17 @@ def _is_qwen35(config: Any) -> bool:
 
 def _request_sampling_mode(config: Any, request: Any) -> SamplingMode:
     tools = getattr(request, "tools", ()) or ()
+    tool_choice = getattr(request, "tool_choice", None)
+    forced_choice = (
+        isinstance(tool_choice, Mapping)
+        or str(tool_choice or "").casefold() == "required"
+    )
     # Tool-capable turns are action pages: the causal/planning layer has already
     # selected the visible action surface and this decode only has to materialize a
     # bounded, schema-validated call. Qwen3.5 thinks by default, so treating these as
     # precise-coding pages can spend the whole action allowance inside ``<think>``
     # before the tool envelope closes.
-    if tools:
+    if tools or forced_choice:
         return "non_thinking"
     structured_fill = (
         getattr(request, "response_format", None) == "json" and not tools
@@ -88,14 +93,6 @@ def _install_payload_policy(hardware_policy: Any) -> None:
         config = getattr(adapter, "config", None)
         if not _policy_enabled(config):
             return result
-
-        # A named/required one-tool request is a transport control turn, not a normal
-        # agent sampling page. Reassert the shared wire invariant after this outer
-        # profile wrapper so Qwen3.5 defaults cannot turn forced recovery stochastic.
-        from .llama_server_hardware_policy import _enforce_required_tool_sampling
-
-        if result.get("tool_choice") == "required":
-            return _enforce_required_tool_sampling(result)
 
         mode = _request_sampling_mode(config, request)
         defaults = _request_defaults(config, request)

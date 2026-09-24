@@ -240,6 +240,7 @@ def _tool_probe_payload(config: Any) -> tuple[Any, dict[str, Any]]:
     payload = _server_payload(SimpleNamespace(config=config), request)
     payload.update(
         {
+            "temperature": 0.0,
             "max_tokens": 48,
             "seed": 1234,
             "cache_prompt": False,
