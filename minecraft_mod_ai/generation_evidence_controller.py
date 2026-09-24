@@ -681,7 +681,14 @@ def normalize_forced_evidence_rejection_calls(
     phase_tools: Sequence[Mapping[str, Any]],
     forced_evidence_tool: str | None,
 ) -> tuple[Any, ...] | None:
-    """Rebind an alternate reviewed retriever call to the host-owned route."""
+    """Rebind a rejected model call to one host-owned evidence route.
+
+    Metadata-only external MCP discovery/schema calls do not contain model-authored
+    search intent. When one of those calls is the sole host-selected route, synthesize
+    it directly even if the small model hallucinated an unrelated non-visible tool
+    such as read_file. Search-bearing calls still require a reviewed retriever
+    translation so the host never invents model search semantics.
+    """
 
     forced = str(forced_evidence_tool or "").strip()
     if not forced or len(calls) != 1:
@@ -692,7 +699,22 @@ def normalize_forced_evidence_rejection_calls(
     payload = getattr(call, "arguments", None)
     if not isinstance(payload, Mapping):
         return None
-    arguments = _translate_rejected_arguments(phase_tools, forced, payload)
+
+    schema = next(
+        (
+            item
+            for item in phase_tools
+            if isinstance(item, Mapping) and _tool_name(item) == forced
+        ),
+        None,
+    )
+    if forced == "external_mcp_capabilities" and isinstance(schema, Mapping):
+        arguments: dict[str, Any] | None = {}
+    elif forced == "external_mcp_schema" and isinstance(schema, Mapping):
+        capability = _singleton_capability_from_schema(schema)
+        arguments = {"capability": capability} if capability else None
+    else:
+        arguments = _translate_rejected_arguments(phase_tools, forced, payload)
     if arguments is None:
         return None
     return (

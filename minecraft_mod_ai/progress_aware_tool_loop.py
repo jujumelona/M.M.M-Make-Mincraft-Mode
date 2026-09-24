@@ -1440,6 +1440,7 @@ class HostRunState:
     host_grounded: bool = False
     compile_backed_java: bool = False
     evidence_adjudications: list[dict[str, Any]] = field(default_factory=list)
+    recovery_evidence_epoch_fingerprint: str | None = None
     retrieval_target_binding_enabled: bool = True
     mutation_context: TargetMutationContext | None = None
     applied_mutations: list[str] = field(default_factory=list)
@@ -1677,6 +1678,30 @@ class HostRunState:
             self.fixed_point_snapshot = None
             self.semantic_fixed_point = self.unapplied_mutation_fixed_point
             self.no_progress_streak = 0
+
+    def begin_recovery_evidence_epoch(self, verifier_fingerprint: str | None) -> bool:
+        """Re-open retrieval once for a new concrete verifier diagnostic state."""
+
+        fingerprint = str(verifier_fingerprint or "").strip()
+        if not fingerprint:
+            return False
+        with self._lock:
+            if self.recovery_evidence_epoch_fingerprint == fingerprint:
+                return False
+            self.recovery_evidence_epoch_fingerprint = fingerprint
+            self.attempted_queries.clear()
+            self.attempted_sources.clear()
+            self.seen_no_progress_digests.clear()
+            self.no_progress_digest_first_step.clear()
+            self.fixed_point_digest = None
+            self.fixed_point_first_seen_step = None
+            self.fixed_point_repeat_step = None
+            self.fixed_point_snapshot = None
+            self.semantic_fixed_point = self.unapplied_mutation_fixed_point
+            self.no_progress_streak = 0
+            self._external_mcp_completed_capabilities = set()
+            self._external_mcp_schema_capability = ""
+            return True
 
     def next_untried_internal_tool(
         self,
@@ -2994,6 +3019,25 @@ def _evidence_call_adjudication(
     }
 
 
+def _should_compile_after_initial_evidence_exhaustion(
+    *,
+    phase: LoopPhase,
+    implementation_requires_mutation: bool,
+    fresh_java_target: bool,
+    compile_backed_java: bool,
+    validation_status: str,
+) -> bool:
+    """Permit one compile-backed candidate only after the initial evidence frontier is empty."""
+
+    return bool(
+        phase is LoopPhase.OBSERVE
+        and implementation_requires_mutation
+        and fresh_java_target
+        and compile_backed_java
+        and validation_status != "FAIL"
+    )
+
+
 def _generate_with_tools_impl(
     router: Any,
     *,
@@ -3298,6 +3342,33 @@ def _generate_with_tools_impl(
                 state.repair_evidence_route = str(
                     repair_route.get("route") or "project_local"
                 )
+                if (
+                    repair_route_requires_retrieval(state.repair_evidence_route)
+                    and state.begin_recovery_evidence_epoch(
+                        state.latest_verifier_fingerprint
+                    )
+                ):
+                    emit_root_cause(
+                        "recovery_evidence_epoch_started",
+                        stage=stage,
+                        operation="generate_with_tools",
+                        gate="diagnostic_evidence_frontier",
+                        result="PASS",
+                        reason=(
+                            "a new compiler diagnostic fingerprint reopened the "
+                            "reviewed evidence frontier; initial speculative attempts "
+                            "do not consume diagnostic-bound recovery"
+                        ),
+                        details={
+                            "verifier_fingerprint": state.latest_verifier_fingerprint,
+                            "repair_evidence_route": state.repair_evidence_route,
+                            "target_path": (
+                                state.mutation_context.target_path
+                                if state.mutation_context is not None
+                                else None
+                            ),
+                        },
+                    )
                 if _compile_recovery.rebase_invalid_api_candidate(
                     state,
                     runtime,
@@ -3452,6 +3523,77 @@ def _generate_with_tools_impl(
                 state.phase = LoopPhase.ACT
                 continue
             if mutation_is_ready and not baseline_ready:
+                if _should_compile_after_initial_evidence_exhaustion(
+                    phase=state.phase,
+                    implementation_requires_mutation=implementation_requires_mutation,
+                    fresh_java_target=fresh_java_target,
+                    compile_backed_java=compile_backed_java,
+                    validation_status=state.validation_status,
+                ):
+                    mcp_state = recovery_state_snapshot(
+                        state,
+                        state.repair_evidence_route,
+                    )
+                    emit_root_cause(
+                        "initial_evidence_exhausted_compile_fallback",
+                        stage=stage,
+                        operation="generate_with_tools",
+                        gate="authoritative_evidence",
+                        result="RECOVER",
+                        reason=(
+                            "all reviewed pre-implementation evidence routes were "
+                            "exhausted; the host-localized fresh Java target will proceed "
+                            "to ACT and mandatory target_compile so concrete compiler "
+                            "diagnostics can drive a new recovery evidence epoch"
+                        ),
+                        details={
+                            "target_path": (
+                                state.mutation_context.target_path
+                                if state.mutation_context is not None
+                                else None
+                            ),
+                            "attempted_sources": sorted(state.attempted_sources),
+                            "last_evidence_adjudications": list(
+                                state.evidence_adjudications[-8:]
+                            ),
+                            **mcp_state,
+                        },
+                    )
+                    require_rag = False
+                    state.require_evidence = False
+                    required_evidence_choice = False
+                    state.clear_no_progress_result()
+                    state.phase = LoopPhase.ACT
+                    continue
+                emit_root_cause(
+                    "implementation_evidence_stalled",
+                    stage=stage,
+                    operation="generate_with_tools",
+                    gate="authoritative_evidence",
+                    result="FAIL",
+                    reason=(
+                        "mutation target is host-localized but no untried "
+                        "authoritative Java/API evidence route remains"
+                    ),
+                    details={
+                        "target_path": (
+                            state.mutation_context.target_path
+                            if state.mutation_context is not None
+                            else None
+                        ),
+                        "fresh_java_target": fresh_java_target,
+                        "compile_backed_java": compile_backed_java,
+                        "validation_status": state.validation_status,
+                        "attempted_sources": sorted(state.attempted_sources),
+                        "last_evidence_adjudications": list(
+                            state.evidence_adjudications[-8:]
+                        ),
+                        **recovery_state_snapshot(
+                            state,
+                            state.repair_evidence_route,
+                        ),
+                    },
+                )
                 raise ModelConfigurationError(
                     "IMPLEMENTATION_EVIDENCE_STALLED: the mutation target is host-localized, "
                     "but no untried authoritative Java/API evidence route remains."
@@ -4489,6 +4631,33 @@ def _generate_with_tools_impl(
                     state.repair_evidence_route = str(
                         repair_route.get("route") or "project_local"
                     )
+                    if (
+                        repair_route_requires_retrieval(state.repair_evidence_route)
+                        and state.begin_recovery_evidence_epoch(
+                            state.latest_verifier_fingerprint
+                        )
+                    ):
+                        emit_root_cause(
+                            "recovery_evidence_epoch_started",
+                            stage=stage,
+                            operation="generate_with_tools",
+                            gate="diagnostic_evidence_frontier",
+                            result="PASS",
+                            reason=(
+                                "a new verifier diagnostic fingerprint reopened the "
+                                "reviewed evidence frontier; initial speculative attempts "
+                                "do not consume diagnostic-bound recovery"
+                            ),
+                            details={
+                                "verifier_fingerprint": state.latest_verifier_fingerprint,
+                                "repair_evidence_route": state.repair_evidence_route,
+                                "target_path": (
+                                    state.mutation_context.target_path
+                                    if state.mutation_context is not None
+                                    else None
+                                ),
+                            },
+                        )
                     if state.last_verifier_quality in {"NON_IMPROVING", "UNCHANGED"}:
                         _rollback_non_improving_verifier_repair(
                             state,

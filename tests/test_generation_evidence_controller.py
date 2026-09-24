@@ -469,3 +469,73 @@ def test_authoritative_evidence_diagnostic_explains_self_target_rejection() -> N
     assert diagnostic["accepted"] is False
     assert diagnostic["reason"] == "CODE_RAG_API_HIT_MISSING"
     assert diagnostic["api_hit"] is False
+
+
+def test_nonvisible_read_file_is_rebound_to_host_owned_mcp_capabilities() -> None:
+    rejected = _Call(
+        id="read-file-capabilities",
+        name="__mmm_rejected_tool_call__",
+        arguments={
+            "failure_code": "TOOL_NOT_VISIBLE",
+            "original_tool": "read_file",
+            "raw_arguments": '{"path":"src/main/java/demo/AuthoredFeature001.java"}',
+        },
+        raw_arguments="{}",
+    )
+    phase_tool = {
+        "type": "function",
+        "function": {
+            "name": "external_mcp_capabilities",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        },
+    }
+    normalized = controller.normalize_forced_evidence_rejection_calls(
+        (rejected,),
+        phase_tools=(phase_tool,),
+        forced_evidence_tool="external_mcp_capabilities",
+    )
+    assert normalized is not None
+    assert normalized[0].name == "external_mcp_capabilities"
+    assert normalized[0].arguments == {}
+
+
+def test_nonvisible_read_file_is_rebound_to_host_owned_mcp_schema() -> None:
+    rejected = _Call(
+        id="read-file-schema",
+        name="__mmm_rejected_tool_call__",
+        arguments={
+            "failure_code": "TOOL_NOT_VISIBLE",
+            "original_tool": "read_file",
+            "raw_arguments": '{"path":"src/main/java/demo/AuthoredFeature001.java"}',
+        },
+        raw_arguments="{}",
+    )
+    phase_tool = {
+        "type": "function",
+        "function": {
+            "name": "external_mcp_schema",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "capability": {
+                        "type": "string",
+                        "enum": ["source_search"],
+                    }
+                },
+                "required": ["capability"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    normalized = controller.normalize_forced_evidence_rejection_calls(
+        (rejected,),
+        phase_tools=(phase_tool,),
+        forced_evidence_tool="external_mcp_schema",
+    )
+    assert normalized is not None
+    assert normalized[0].name == "external_mcp_schema"
+    assert normalized[0].arguments == {"capability": "source_search"}

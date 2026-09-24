@@ -321,3 +321,55 @@ def test_external_mcp_frontier_snapshot_exposes_completed_and_next_capability() 
         "source_search",
     ]
     assert snapshot["next_capability"] == "registry_lookup"
+
+
+def test_compile_fallback_only_applies_to_fresh_compile_backed_initial_observe() -> None:
+    assert loop._should_compile_after_initial_evidence_exhaustion(
+        phase=loop.LoopPhase.OBSERVE,
+        implementation_requires_mutation=True,
+        fresh_java_target=True,
+        compile_backed_java=True,
+        validation_status="PENDING",
+    )
+    assert not loop._should_compile_after_initial_evidence_exhaustion(
+        phase=loop.LoopPhase.RECOVER,
+        implementation_requires_mutation=True,
+        fresh_java_target=True,
+        compile_backed_java=True,
+        validation_status="FAIL",
+    )
+    assert not loop._should_compile_after_initial_evidence_exhaustion(
+        phase=loop.LoopPhase.OBSERVE,
+        implementation_requires_mutation=True,
+        fresh_java_target=True,
+        compile_backed_java=False,
+        validation_status="PENDING",
+    )
+
+
+def test_new_verifier_diagnostic_reopens_evidence_frontier_once() -> None:
+    state = loop.HostRunState()
+    state.attempted_queries.update({"search_code_rag:q=old"})
+    state.attempted_sources.update(
+        {"search_code_rag", "external_mcp_call:source_search"}
+    )
+    state._external_mcp_completed_capabilities = {"source_search"}
+    state._external_mcp_schema_capability = "source_search"
+    state.seen_no_progress_digests.add("old-digest")
+    state.no_progress_digest_first_step["old-digest"] = 2
+    state.no_progress_streak = 4
+
+    assert state.begin_recovery_evidence_epoch("diag-new") is True
+    assert state.attempted_queries == set()
+    assert state.attempted_sources == set()
+    assert state._external_mcp_completed_capabilities == set()
+    assert state._external_mcp_schema_capability == ""
+    assert state.seen_no_progress_digests == set()
+    assert state.no_progress_streak == 0
+
+    state.attempted_sources.add("search_code_rag")
+    assert state.begin_recovery_evidence_epoch("diag-new") is False
+    assert state.attempted_sources == {"search_code_rag"}
+
+    assert state.begin_recovery_evidence_epoch("diag-newer") is True
+    assert state.attempted_sources == set()
