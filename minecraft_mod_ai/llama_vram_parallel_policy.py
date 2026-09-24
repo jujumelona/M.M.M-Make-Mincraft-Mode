@@ -14,19 +14,20 @@ from collections.abc import Callable, Iterable
 from functools import wraps
 from typing import Any
 
-_POLICY_VERSION = 6
+_POLICY_VERSION = 7
 _MIB = 1024 * 1024
-_RESOURCE_MARKER = "_mmm_vram_parallel_resource_policy_v6"
-_SELECTION_MARKER = "_mmm_vram_parallel_selection_policy_v6"
-_CANDIDATE_MARKER = "_mmm_vram_parallel_bounded_candidates_v6"
-_SEARCH_MARKER = "_mmm_llama_bounded_cold_search_v6"
-_FAST_START_MARKER = "_mmm_llama_no_reload_fast_start_v6"
+_RESOURCE_MARKER = "_mmm_vram_parallel_resource_policy_v7"
+_SELECTION_MARKER = "_mmm_vram_parallel_selection_policy_v7"
+_CANDIDATE_MARKER = "_mmm_vram_parallel_bounded_candidates_v7"
+_SEARCH_MARKER = "_mmm_llama_bounded_cold_search_v7"
+_FAST_START_MARKER = "_mmm_llama_no_reload_fast_start_v7"
 _LEGACY_RESOURCE_MARKERS = (
     "_mmm_vram_parallel_resource_policy_v1",
     "_mmm_vram_parallel_resource_policy_v2",
     "_mmm_vram_parallel_resource_policy_v3",
     "_mmm_vram_parallel_resource_policy_v4",
     "_mmm_vram_parallel_resource_policy_v5",
+    "_mmm_vram_parallel_resource_policy_v6",
 )
 _LEGACY_SELECTION_MARKERS = (
     "_mmm_vram_parallel_selection_policy_v1",
@@ -34,6 +35,7 @@ _LEGACY_SELECTION_MARKERS = (
     "_mmm_vram_parallel_selection_policy_v3",
     "_mmm_vram_parallel_selection_policy_v4",
     "_mmm_vram_parallel_selection_policy_v5",
+    "_mmm_vram_parallel_selection_policy_v6",
 )
 _RUNTIME_RECEIPT_SCHEMA = "mmm/llama-runtime-receipt-v1"
 
@@ -242,10 +244,13 @@ def _install_resource_admission(runtime_tuning: Any) -> None:
             + total_context * runtime_tuning._kv_bytes_per_token()
             + 1280 * _MIB
         )
-        host_runtime_required = (512 + 256 * slots) * _MIB
+        host_runtime_required = runtime_tuning._host_ram_required_bytes(
+            slots,
+            model_path,
+        )
         return bool(
             gpu_required <= int(gpu_free * 0.97)
-            and host_runtime_required <= int(ram_available * 0.94)
+            and host_runtime_required <= int(ram_available * 0.85)
         )
 
     setattr(vram_first_parallel_feasible, _RESOURCE_MARKER, True)
@@ -334,7 +339,34 @@ def _recommended_parallel(
     model_path: str,
 ) -> int:
     explicit = runtime_tuning._explicit_parallel()
-    if explicit is not None:
+    auto_owned = (
+        os.environ.get("MMM_LLAMA_PARALLEL_ORIGIN", "").strip().lower() == "auto"
+        and os.environ.get("MMM_LLAMA_AUTO_PARALLEL_VALUE", "").strip()
+        == os.environ.get("MMM_LLAMA_PARALLEL", "").strip()
+    )
+    if explicit is not None and not auto_owned:
+        resources = runtime_tuning._runtime_resources()
+        if not runtime_tuning._parallel_resource_feasible(
+            explicit,
+            config,
+            model_path,
+            resources,
+        ):
+            required = runtime_tuning._host_ram_required_bytes(
+                explicit,
+                model_path,
+            )
+            available = int(getattr(resources, "ram_available_bytes", 0) or 0)
+            error_type = getattr(
+                runtime_tuning,
+                "RecoverableResourceLaunchError",
+                RuntimeError,
+            )
+            raise error_type(
+                "explicit llama parallel width is unsafe for current RAM: "
+                f"slots={explicit} required_mib={required // _MIB} "
+                f"available_mib={available // _MIB}"
+            )
         return int(explicit)
     if runtime_tuning._performance_mode() == "latency" and not os.environ.get(
         "MMM_LLAMA_CONCURRENT_REQUESTS", ""
@@ -382,12 +414,49 @@ def _install_fast_start_profile(runtime_tuning: Any, autotune: Any) -> None:
         # An operator-set value is authoritative.  Otherwise persist the auto-selected
         # width in-process so fingerprints, stale-runtime checks and the launch receipt all
         # observe the same selection on every subsequent request.
-        if not os.environ.get("MMM_LLAMA_PARALLEL", "").strip():
-            model_path = autotune._resolve_model_path(config)
-            os.environ["MMM_LLAMA_PARALLEL"] = str(
+        model_path = autotune._resolve_model_path(config)
+        auto_owned = (
+            os.environ.get("MMM_LLAMA_PARALLEL_ORIGIN", "").strip().lower() == "auto"
+            and os.environ.get("MMM_LLAMA_AUTO_PARALLEL_VALUE", "").strip()
+            == os.environ.get("MMM_LLAMA_PARALLEL", "").strip()
+        )
+        if not os.environ.get("MMM_LLAMA_PARALLEL", "").strip() or auto_owned:
+            selected_parallel = str(
                 _recommended_parallel(runtime_tuning, config, model_path)
             )
+            os.environ["MMM_LLAMA_PARALLEL"] = selected_parallel
+            os.environ["MMM_LLAMA_PARALLEL_ORIGIN"] = "auto"
+            os.environ["MMM_LLAMA_AUTO_PARALLEL_VALUE"] = selected_parallel
+        else:
+            # Operator-provided widths are respected only after live RAM/VRAM
+            # admission. Failing here is recoverable and preferable to a Colab
+            # kernel SIGKILL/OOM with no Python traceback.
+            _recommended_parallel(runtime_tuning, config, model_path)
 
+        from .root_cause_trace import emit_root_cause
+
+        resources = runtime_tuning._runtime_resources()
+        slots = int(os.environ.get("MMM_LLAMA_PARALLEL", "1"))
+        emit_root_cause(
+            "managed_llama_resource_admission",
+            stage="runtime",
+            operation="ensure_tuned_server",
+            gate="ram_vram_admission",
+            result="PASS",
+            reason="managed llama-server launch width admitted by live RAM/VRAM budget",
+            details={
+                "slots": slots,
+                "parallel_origin": os.environ.get("MMM_LLAMA_PARALLEL_ORIGIN") or "operator",
+                "ram_available_mib": int(resources.ram_available_bytes) // _MIB,
+                "ram_required_mib": runtime_tuning._host_ram_required_bytes(
+                    slots,
+                    model_path,
+                )
+                // _MIB,
+                "gpu_free_mib": int(resources.gpu_free_bytes) // _MIB,
+                "model_mib": runtime_tuning._model_size(model_path) // _MIB,
+            },
+        )
         return current(config, request)
 
     setattr(ensure_fast_start, _FAST_START_MARKER, True)

@@ -193,6 +193,33 @@ def _setup_receipt() -> Any:
         return {}
 
 
+def _cgroup_memory_available_bytes() -> int:
+    """Return remaining cgroup memory when a hard container limit is active."""
+
+    candidates = (
+        (Path("/sys/fs/cgroup/memory.current"), Path("/sys/fs/cgroup/memory.max")),
+        (
+            Path("/sys/fs/cgroup/memory/memory.usage_in_bytes"),
+            Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+        ),
+    )
+    for current_path, limit_path in candidates:
+        try:
+            current_raw = current_path.read_text(encoding="utf-8").strip()
+            limit_raw = limit_path.read_text(encoding="utf-8").strip()
+            if not current_raw or not limit_raw or limit_raw == "max":
+                continue
+            current = max(0, int(current_raw))
+            limit = max(0, int(limit_raw))
+            # Ignore effectively-unbounded sentinel limits used by cgroup v1.
+            if limit <= 0 or limit >= (1 << 60):
+                continue
+            return max(0, limit - current)
+        except (OSError, UnicodeError, ValueError):
+            continue
+    return 0
+
+
 def _runtime_resources() -> RuntimeResources:
     receipt = _setup_receipt()
     gpu_free = 0
@@ -247,6 +274,13 @@ def _runtime_resources() -> RuntimeResources:
             _receipt_bytes(receipt, "ram_available")
             or _receipt_bytes(receipt, "system_ram_available")
             or _receipt_bytes(receipt, "system_memory_available")
+        )
+    cgroup_available = _cgroup_memory_available_bytes()
+    if cgroup_available:
+        ram_available = (
+            min(ram_available, cgroup_available)
+            if ram_available
+            else cgroup_available
         )
     cpu_count = max(0, int(os.cpu_count() or 0))
     receipt_cpu = _receipt_number(receipt, {"cpu_count", "logical_cpu_count", "cpu_threads"})
@@ -367,6 +401,27 @@ def _model_size(model_path: str | None) -> int:
         return 0
 
 
+def _host_ram_required_bytes(slots: int, model_path: str | None) -> int:
+    """Estimate host RAM that must remain safely available before server launch."""
+
+    slots = max(1, int(slots))
+    model_bytes = _model_size(model_path) or 6 * 1024 * _MIB
+    try:
+        model_fraction = float(
+            os.environ.get("MMM_LLAMA_MODEL_HOST_RAM_FRACTION", "0.70")
+        )
+    except ValueError:
+        model_fraction = 0.70
+    model_fraction = max(0.25, min(1.0, model_fraction))
+    reserve_mib = _optional_env_int("MMM_LLAMA_RAM_RESERVE_MIB") or 1536
+    runtime_mib = 768 + 256 * slots
+    cache_mib = _cache_ram_mib()
+    return (
+        int(model_bytes * model_fraction)
+        + (reserve_mib + runtime_mib + cache_mib) * _MIB
+    )
+
+
 def _parallel_resource_feasible(
     slots: int,
     config: Any,
@@ -376,8 +431,6 @@ def _parallel_resource_feasible(
     slots = max(1, int(slots))
     if slots > _MAX_PARALLEL:
         return False
-    if slots == 1:
-        return True
     context = _per_request_context(config)
     try:
         total_context = _total_context(context, slots)
@@ -389,10 +442,10 @@ def _parallel_resource_feasible(
     if not gpu_free or not ram_avail:
         return False
     gpu_required = int(model_bytes * 1.05) + total_context * _kv_bytes_per_token() + 512 * _MIB
-    ram_required = int(model_bytes * 0.30) + (512 + 256 * slots) * _MIB
+    ram_required = _host_ram_required_bytes(slots, model_path)
     return bool(
         gpu_required <= int(gpu_free * 0.95)
-        and ram_required <= int(ram_avail * 0.95)
+        and ram_required <= int(ram_avail * 0.85)
     )
 
 

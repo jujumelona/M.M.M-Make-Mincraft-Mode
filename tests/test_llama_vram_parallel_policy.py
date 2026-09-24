@@ -21,6 +21,10 @@ def _runtime(*, original_feasible=False):
         _total_context=lambda context, slots: context * slots,
         _model_size=lambda model_path: 5 * 1024 * _MIB if model_path else 0,
         _kv_bytes_per_token=lambda: 24 * 1024,
+        _host_ram_required_bytes=lambda slots, model_path: (
+            int(5 * 1024 * _MIB * 0.70)
+            + (1536 + 768 + 256 * slots + 1024) * _MIB
+        ),
     )
 
 
@@ -31,7 +35,7 @@ def _runtime_receipt(slots: int) -> str:
     )
 
 
-def test_relaxed_admission_uses_incremental_host_ram(monkeypatch):
+def test_relaxed_admission_rejects_vram_only_fit_when_host_ram_is_unsafe(monkeypatch):
     monkeypatch.delenv("MMM_LLAMA_VRAM_PARALLEL", raising=False)
     runtime = _runtime()
     policy.install(runtime)
@@ -41,7 +45,7 @@ def test_relaxed_admission_uses_incremental_host_ram(monkeypatch):
         ram_available_bytes=2100 * _MIB,
     )
 
-    assert runtime._parallel_resource_feasible(4, config, "/model.gguf", resources)
+    assert not runtime._parallel_resource_feasible(4, config, "/model.gguf", resources)
 
 
 def test_relaxed_admission_still_rejects_insufficient_vram(monkeypatch):
@@ -141,9 +145,49 @@ def test_selection_version_forces_reconsideration_and_install_is_idempotent():
     first_selection = runtime._selection_inputs
 
     selection = runtime._selection_inputs(SimpleNamespace(model_id="qwen"))
-    assert selection["vram_parallel_policy_version"] == 6
+    assert selection["vram_parallel_policy_version"] == 7
     assert selection["autotune_search"] in {"fast", "balanced", "full"}
 
     policy.install(runtime)
     assert runtime._parallel_resource_feasible is first_resource
     assert runtime._selection_inputs is first_selection
+
+
+def test_runtime_single_slot_is_not_unconditionally_admitted_on_low_ram(monkeypatch):
+    monkeypatch.setattr(
+        runtime_tuning,
+        "_model_size",
+        lambda _path: 6 * 1024 * _MIB,
+    )
+    monkeypatch.setattr(runtime_tuning, "_cache_ram_mib", lambda: 1024)
+    config = SimpleNamespace(max_context=32768)
+    resources = runtime_tuning.RuntimeResources(
+        gpu_free_bytes=14 * 1024 * _MIB,
+        gpu_total_bytes=15 * 1024 * _MIB,
+        ram_available_bytes=4 * 1024 * _MIB,
+        cpu_count=2,
+    )
+
+    assert not runtime_tuning._parallel_resource_feasible(
+        1,
+        config,
+        "/model.gguf",
+        resources,
+    )
+
+
+def test_runtime_host_ram_budget_reserves_model_cache_and_headroom(monkeypatch):
+    monkeypatch.setattr(
+        runtime_tuning,
+        "_model_size",
+        lambda _path: 6 * 1024 * _MIB,
+    )
+    monkeypatch.setattr(runtime_tuning, "_cache_ram_mib", lambda: 1024)
+    monkeypatch.delenv("MMM_LLAMA_MODEL_HOST_RAM_FRACTION", raising=False)
+    monkeypatch.delenv("MMM_LLAMA_RAM_RESERVE_MIB", raising=False)
+
+    one = runtime_tuning._host_ram_required_bytes(1, "/model.gguf")
+    four = runtime_tuning._host_ram_required_bytes(4, "/model.gguf")
+
+    assert one >= 7 * 1024 * _MIB
+    assert four > one

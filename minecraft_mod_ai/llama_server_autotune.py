@@ -675,6 +675,9 @@ def _launch_selected(
     _MANAGED_PROCESS = process
     _MANAGED_URL = url
     os.environ["LLAMA_SERVER_URL"] = url
+    from .runtime_memory_watchdog import start_managed_process_watchdog
+
+    start_managed_process_watchdog(int(getattr(process, "pid", 0) or 0))
     return url
 
 
@@ -729,6 +732,44 @@ def tune_server(config: Any, request: Any, *, force: bool = False) -> AutotuneDe
 def ensure_tuned_server(config: Any, request: Any) -> str:
     """Start one managed native server and never fall back to a second GGUF engine."""
     global _MANAGED_KEY, _MANAGED_PROCESS, _MANAGED_URL
+
+    from .root_cause_trace import emit_root_cause
+    from .runtime_memory_watchdog import (
+        cleanup_orphaned_managed_process,
+        previous_kernel_crash_diagnostic,
+    )
+
+    crash = previous_kernel_crash_diagnostic()
+    if crash:
+        emit_root_cause(
+            "previous_kernel_memory_snapshot",
+            stage="runtime",
+            operation="ensure_tuned_server",
+            gate="memory_forensics",
+            result=(
+                "OBSERVED"
+                if crash.get("cgroup_oom_kill_increased")
+                else "PASS"
+            ),
+            reason=(
+                "cgroup OOM-kill counter increased across kernel restart"
+                if crash.get("cgroup_oom_kill_increased")
+                else "previous kernel memory snapshot recovered after restart"
+            ),
+            details=crash,
+        )
+    orphan = cleanup_orphaned_managed_process()
+    if orphan:
+        os.environ.pop("LLAMA_SERVER_URL", None)
+        emit_root_cause(
+            "orphaned_managed_llama_cleaned",
+            stage="runtime",
+            operation="ensure_tuned_server",
+            gate="process_ownership",
+            result="RECOVER",
+            reason="stale managed llama-server from a dead kernel was terminated",
+            details=orphan,
+        )
 
     if _external_server_is_ready():
         explicit = os.environ.get("LLAMA_SERVER_URL", "").strip()
@@ -850,6 +891,9 @@ def recover_managed_server(
             return None
 
         managed_key = _MANAGED_KEY
+        from .runtime_memory_watchdog import stop_managed_process_watchdog
+
+        stop_managed_process_watchdog()
         _stop_server(process)
         _MANAGED_PROCESS = None
         _MANAGED_URL = None
@@ -895,6 +939,9 @@ def _shutdown_managed_server() -> None:
     global _MANAGED_KEY, _MANAGED_PROCESS, _MANAGED_URL
     with _AUTOTUNE_LOCK:
         managed_key = _MANAGED_KEY
+        from .runtime_memory_watchdog import stop_managed_process_watchdog
+
+        stop_managed_process_watchdog()
         _stop_server(_MANAGED_PROCESS)
         _MANAGED_PROCESS = None
         _MANAGED_URL = None
