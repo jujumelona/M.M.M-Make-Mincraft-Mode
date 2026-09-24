@@ -3238,6 +3238,14 @@ def _generate_with_tools_impl(
         )
     )
     state.semantic_fresh_java = fresh_java_target
+    approved_task_evidence_query = _approved_task_evidence_query(
+        request.messages,
+        target_path=(
+            state.mutation_context.target_path
+            if state.mutation_context is not None
+            else None
+        ),
+    )
     initial_execution_authority = _host_target_execution_authority(state)
     active_mutation_authority = CURRENT_MUTATION_AUTHORITY.get()
     bounded_root_execution_authority = bool(
@@ -3304,6 +3312,7 @@ def _generate_with_tools_impl(
             "implementation_requires_mutation": implementation_requires_mutation,
             "mutation_ready": mutation_ready,
             "compile_backed_java": compile_backed_java,
+            "approved_task_evidence_query": approved_task_evidence_query or None,
             "initial_phase": state.phase.value,
         },
     )
@@ -3956,8 +3965,8 @@ def _generate_with_tools_impl(
                 gate="tool_admission",
                 result="PASS",
                 reason=(
-                    "host rebound the rejected reviewed retriever to the exact "
-                    "host-selected tool and capability"
+                    "host rebound the rejected model tool call to the exact "
+                    "host-selected evidence tool and capability"
                 ),
                 details={
                     "step_index": state.step_index,
@@ -3999,13 +4008,9 @@ def _generate_with_tools_impl(
                 if state.mutation_context is not None
                 else None
             )
-            task_query = _approved_task_evidence_query(
-                messages,
-                target_path=target_path,
-            )
             normalized_initial_calls = _normalize_initial_task_evidence_calls(
                 turn.tool_calls,
-                query=task_query,
+                query=approved_task_evidence_query,
                 target_path=target_path,
             )
             if normalized_initial_calls is not None:
@@ -4036,7 +4041,7 @@ def _generate_with_tools_impl(
                         "step_index": state.step_index,
                         "target_path": target_path,
                         "original_queries": original_queries,
-                        "task_query": task_query,
+                        "task_query": approved_task_evidence_query,
                     },
                 )
         if state.phase is LoopPhase.RECOVER:
