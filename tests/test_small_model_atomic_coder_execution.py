@@ -591,3 +591,58 @@ def test_atomic_step_capsule_rejects_target_outside_parent_task() -> None:
                 "src/main/java/demo/Foreign.java#Foreign",
             ),
         )
+
+
+
+def test_bounded_initial_observations_use_source_observation_owner_helpers() -> None:
+    from minecraft_mod_ai import custom_module_generator
+
+    class Index:
+        calls = 0
+
+        def select_page(
+            self,
+            *,
+            query: str,
+            diagnostic_paths,
+            byte_budget: int,
+            cursor: str,
+        ):
+            self.calls += 1
+            assert query == "Feature"
+            assert tuple(diagnostic_paths) == ()
+            assert byte_budget == 4096
+            assert cursor == ""
+            content = "public final class Feature {}"
+            return {
+                "page_index": 0,
+                "project_sha256": "sha256:" + "a" * 64,
+                "query_sha256": "sha256:" + "b" * 64,
+                "start_position": 0,
+                "start_offset": 0,
+                "next_cursor": "unused-because-bootstrap-is-single-page",
+                "complete": False,
+                "files": [
+                    {
+                        "path": "src/main/java/demo/Feature.java",
+                        "sha256": "sha256:" + "c" * 64,
+                        "content_start_bytes": 0,
+                        "content_end_bytes": len(content.encode("utf-8")),
+                        "content": content,
+                    }
+                ],
+            }
+
+    index = Index()
+    ledger = custom_module_generator._collect_initial_observations(
+        index,
+        query="Feature",
+        byte_budget=4096,
+    )
+
+    assert index.calls == 1
+    assert ledger["receipt"]["source_page_count"] == 1
+    assert ledger["receipt"]["observation_count"] == 1
+    assert ledger["receipt"]["policy"]["initial_page_only"] is True
+    assert ledger["records"][0]["path"] == "src/main/java/demo/Feature.java"
+    assert ledger["records"][0]["text"] == "public final class Feature {}"
