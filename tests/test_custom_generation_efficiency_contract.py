@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from minecraft_mod_ai import custom_module_generator as generator
+from minecraft_mod_ai import generation_checkpoint as checkpoint
 from minecraft_mod_ai.custom_generation_search_contract import (
     _ResearchEvidenceRouter,
     _width,
@@ -94,7 +95,7 @@ def test_post_generation_stage_snapshot_is_reused_for_checkpoint_and_diff(
     base_source.write_text("final class Feature {}\n", encoding="utf-8")
     staged_source.write_text("final class Feature { int value; }\n", encoding="utf-8")
 
-    real_digest = generator.content_digest
+    real_digest = checkpoint.content_digest
     calls = {"base": 0, "stage": 0}
 
     def counted_digest(path):
@@ -105,12 +106,12 @@ def test_post_generation_stage_snapshot_is_reused_for_checkpoint_and_diff(
             calls["base"] += 1
         return real_digest(path)
 
-    monkeypatch.setattr(generator, "content_digest", counted_digest)
+    monkeypatch.setattr(checkpoint, "content_digest", counted_digest)
 
-    stage_tree_sha256, after = generator._stage_tree_snapshot(staged_root)
+    stage_tree_sha256, after = checkpoint._stage_tree_snapshot(staged_root)
     assert calls == {"base": 0, "stage": 1}
 
-    generator._persist_generation_checkpoint(
+    checkpoint._persist_generation_checkpoint(
         checkpoint_root,
         staged_root,
         identity_sha256="sha256:" + "a" * 64,
@@ -118,7 +119,7 @@ def test_post_generation_stage_snapshot_is_reused_for_checkpoint_and_diff(
     )
     assert calls == {"base": 1, "stage": 1}
 
-    operations, touched, discarded = generator._collect_staged_operations(
+    operations, touched, discarded = checkpoint._collect_staged_operations(
         base_root,
         staged_root,
         {"src/main/java/example/Feature.java": "sha256:" + "b" * 64},
