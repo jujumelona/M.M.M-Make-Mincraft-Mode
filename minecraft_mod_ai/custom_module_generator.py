@@ -37,7 +37,6 @@ from .generation_checkpoint import (
     _prepare_generation_checkpoint,
     _project_snapshot,
     _remove_generation_checkpoint,
-    _sha256_json,
     _stage_tree_snapshot,
     _track_checkpoint_lease,
     _transfer_checkpoint_lease,
