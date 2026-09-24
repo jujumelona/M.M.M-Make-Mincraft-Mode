@@ -540,14 +540,15 @@ def _host_bound_existing_rewrite_ready(
 
 
 def _authored_implementation_recovery(state: Any) -> bool:
-    """An unimplemented fresh host slot needs its implementation, not a line repair.
+    """Keep a fresh authored scaffold in implementation mode until it compiles.
 
-    Only trusted target-compile findings for the exact scaffold can select this
-    mode. An unfinished implementation can also have host integration defects;
-    those do not turn its remaining implementation into a bounded line repair.
-    Compiler/API failures and side-only failures without an unfinished-body
-    finding retain ordinary bounded repair.
+    The host-created scaffold is lifecycle evidence: if its trusted baseline contains
+    the authored body marker, a target_compile failure for that exact target is still
+    an implementation attempt. Diagnostic wording must not demote it to a tiny repair
+    window merely because the model removed the marker, added volatile/synchronized
+    syntax, or produced an ordinary Java/API compiler error.
     """
+
     context = getattr(state, "mutation_context", None)
     baseline = _compile_recovery.trusted_baseline(state, context)
     if (
@@ -559,19 +560,18 @@ def _authored_implementation_recovery(state: Any) -> bool:
         or not _host_bound_existing_rewrite_ready(context, implementation_recovery=True)
     ):
         return False
-    diagnostics = getattr(state, "latest_verifier_errors", ())
-    unfinished_codes = {"host:authored-placeholder", "host:authored-empty"}
-    integration_codes = unfinished_codes | {
-        "host:authored-side-only", "host:authored-surface",
-    }
-    return bool(diagnostics) and all(
+
+    target = _canonical_mutation_path(getattr(context, "target_path", ""))
+    diagnostics = tuple(
+        getattr(state, "repair_target_diagnostics", ())
+        or getattr(state, "latest_verifier_errors", ())
+        or ()
+    )
+    return bool(target) and any(
         isinstance(item, Mapping)
-        and item.get("source") == "host-authored-contract"
-        and item.get("code") in integration_codes
-        and _canonical_mutation_path(item.get("path", ""))
-        == _canonical_mutation_path(context.target_path)
+        and _canonical_mutation_path(item.get("path", "")) == target
         for item in diagnostics
-    ) and any(item.get("code") in unfinished_codes for item in diagnostics)
+    )
 
 
 def _bind_host_owned_existing_source_call(
