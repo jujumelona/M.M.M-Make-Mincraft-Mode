@@ -178,6 +178,51 @@ def test_fresh_authored_execution_is_exact_path_dependency_queue():
         for index in range(1, manifest["unit_count"] + 1)
     ]
 
+def test_document_metadata_preamble_is_context_not_a_standalone_feature():
+    text = (
+        "# Stellar Odyssey Mod Design Document\n"
+        "**Mod Name:** Stellar Odyssey (별유람선)\n"
+        "**Version:** 1.0\n"
+        "**Target Minecraft Version:** 1.21+\n"
+        "**Genre:** Sci-Fi, Survival, Base Building, Space Combat\n"
+        "---\n"
+        "# Resource Economy\n"
+        "Persist player credits and exchange mined resources for credits.\n"
+        "# Ship Construction\n"
+        "Spend credits to install ship parts and upgrades.\n"
+    )
+
+    units = _authored_execution_units(text)
+
+    assert len(units) == 2
+    assert [unit["section"] for unit in units] == [
+        "Resource Economy",
+        "Ship Construction",
+    ]
+    assert units[0]["text"].startswith("# Stellar Odyssey Mod Design Document\n")
+    assert "# Resource Economy\n" in units[0]["text"]
+    assert "Persist player credits" in units[0]["text"]
+    assert "".join(unit["text"] for unit in units) == text
+
+
+def test_single_generic_wrapper_metadata_attaches_to_first_child_feature():
+    text = (
+        "# Design\n"
+        "**Mod Name:** Example\n"
+        "**Version:** 1.0\n"
+        "## Wallet\nPersist each player's balance.\n"
+        "## Purchase\nDeduct once and grant once.\n"
+    )
+
+    units = _authored_execution_units(text)
+
+    assert len(units) == 2
+    assert [unit["section"] for unit in units] == ["Wallet", "Purchase"]
+    assert units[0]["text"].startswith("# Design\n**Mod Name:** Example\n")
+    assert "## Wallet\n" in units[0]["text"]
+    assert "".join(unit["text"] for unit in units) == text
+
+
 def test_authored_execution_uses_markdown_sections_not_arbitrary_byte_packing():
     text = (
         "# Economy\nCredits, trade and prices.\n"
