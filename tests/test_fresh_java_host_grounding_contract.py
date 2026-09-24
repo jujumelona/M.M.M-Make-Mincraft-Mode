@@ -233,7 +233,6 @@ def test_untrusted_user_owned_anchor_cannot_bypass_generic_rag(monkeypatch) -> N
 def test_materialized_fresh_authored_slot_uses_compile_probe_after_evidence_exhaustion(tmp_path, mode):
     from minecraft_mod_ai.model_adapters import (
         GenerationResponse,
-        ModelConfigurationError,
         ToolCall,
     )
     from minecraft_mod_ai.mutation_authority import (
