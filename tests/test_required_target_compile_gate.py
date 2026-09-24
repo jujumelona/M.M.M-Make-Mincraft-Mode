@@ -8,6 +8,7 @@ from minecraft_mod_ai.complete_orchestrator import (
     _requested_verification_failures,
     _run_release_jdt_verification,
 )
+from minecraft_mod_ai.complete_orchestrator_support import file_sha256
 
 
 def test_absent_optional_jdt_evidence_does_not_emit_a_failure(monkeypatch):
@@ -257,7 +258,7 @@ def test_blockbench_required_gate_uses_entity_review_receipt(tmp_path):
                 "entity": "boss_dragon",
                 "uv": {"status": "PASS"},
                 "preview": str(preview),
-                "preview_sha256": CompleteProductionOrchestrator._file_hash(preview),
+                "preview_sha256": file_sha256(preview),
             },
         ),
         runtime_receipt=None,
