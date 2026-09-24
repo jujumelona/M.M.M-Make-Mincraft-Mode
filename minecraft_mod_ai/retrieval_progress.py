@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
+from enum import Enum
 from typing import Any, Protocol
 
 from .model_adapters import ModelConfigurationError
@@ -20,6 +21,17 @@ _VOLATILE_EVIDENCE_KEYS = frozenset({
     "normalized_query", "query", "relevance_score", "request_id", "result_count",
     "timestamp", "trace_id",
 })
+
+
+class RetrievalDecision(str, Enum):
+    EXECUTE = "EXECUTE"
+    DUPLICATE_QUERY = "DUPLICATE_QUERY"
+
+
+class RetrievalObservation(str, Enum):
+    FRESH = "FRESH"
+    DUPLICATE_EVIDENCE = "DUPLICATE_EVIDENCE"
+    WEAK = "WEAK"
 
 
 class RetrievalState(Protocol):
@@ -111,38 +123,78 @@ class RetrievalNoProgressError(ModelConfigurationError):
     pass
 
 
+class _StandaloneRetrievalState:
+    def __init__(self) -> None:
+        self.attempted_queries: set[str] = set()
+        self.attempted_sources: set[str] = set()
+        self.evidence_fingerprints: set[str] = set()
+
+    @property
+    def has_fresh_evidence(self) -> bool:
+        return bool(self.evidence_fingerprints)
+
+    def record_query(self, tool_name: str, arguments: Mapping[str, Any]) -> bool:
+        signature = retrieval_query_signature(tool_name, arguments)
+        if signature in self.attempted_queries:
+            return False
+        self.attempted_queries.add(signature)
+        self.attempted_sources.add(str(tool_name or "").strip())
+        self.attempted_sources.add(retrieval_source_key(tool_name, arguments))
+        return True
+
+    def record_evidence(self, value: Any, *, usable: bool = True) -> bool:
+        if not usable:
+            return False
+        fingerprint = evidence_fingerprint(value)
+        if fingerprint is None or fingerprint in self.evidence_fingerprints:
+            return False
+        self.evidence_fingerprints.add(fingerprint)
+        return True
+
+    def next_untried_internal_tool(
+        self,
+        exposed_tools: Sequence[str] | set[str] | frozenset[str],
+        *,
+        preferred: Sequence[str],
+    ) -> str | None:
+        exposed = set(exposed_tools)
+        for name in preferred:
+            if name in exposed and name not in self.attempted_sources:
+                return name
+        return None
+
+
 class RetrievalProgress:
     def __init__(
         self,
-        state: RetrievalState,
+        state: RetrievalState | None = None,
         *,
-        execute_decision: Any,
-        duplicate_decision: Any,
-        fresh_observation: Any,
-        duplicate_observation: Any,
-        weak_observation: Any,
         no_progress_limit: int | None = None,
     ) -> None:
-        self._state = state
-        self._execute_decision = execute_decision
-        self._duplicate_decision = duplicate_decision
-        self._fresh_observation = fresh_observation
-        self._duplicate_observation = duplicate_observation
-        self._weak_observation = weak_observation
-        self.attempted_queries = state.attempted_queries
-        self.attempted_sources = state.attempted_sources
-        self.evidence_fingerprints = state.evidence_fingerprints
+        self._state: RetrievalState = state or _StandaloneRetrievalState()
+        self.attempted_queries = self._state.attempted_queries
+        self.attempted_sources = self._state.attempted_sources
+        self.evidence_fingerprints = self._state.evidence_fingerprints
         self.no_progress_observations = 0
         self._no_progress_limit = no_progress_limit
 
-    def begin(self, tool_name: str, arguments: Mapping[str, Any]) -> Any:
+    def begin(
+        self,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+    ) -> RetrievalDecision:
         return (
-            self._execute_decision
+            RetrievalDecision.EXECUTE
             if self._state.record_query(tool_name, arguments)
-            else self._duplicate_decision
+            else RetrievalDecision.DUPLICATE_QUERY
         )
 
-    def observe(self, *args: Any, usable: bool = True, **kwargs: Any) -> Any:
+    def observe(
+        self,
+        *args: Any,
+        usable: bool = True,
+        **kwargs: Any,
+    ) -> RetrievalObservation:
         value = args[2] if len(args) >= 3 else (args[0] if args else kwargs.get("value"))
         if not usable:
             self.no_progress_observations += 1
@@ -151,11 +203,11 @@ class RetrievalProgress:
                 and self.no_progress_observations >= self._no_progress_limit
             ):
                 raise RetrievalNoProgressError("no novel usable evidence")
-            return self._weak_observation
+            return RetrievalObservation.WEAK
         if self._state.record_evidence(value, usable=True):
             self.no_progress_observations = 0
-            return self._fresh_observation
-        return self._duplicate_observation
+            return RetrievalObservation.FRESH
+        return RetrievalObservation.DUPLICATE_EVIDENCE
 
     @property
     def has_fresh_evidence(self) -> bool:
@@ -167,4 +219,7 @@ class RetrievalProgress:
         *,
         preferred: Sequence[str],
     ) -> str | None:
-        return self._state.next_untried_internal_tool(exposed_tools, preferred=preferred)
+        return self._state.next_untried_internal_tool(
+            exposed_tools,
+            preferred=preferred,
+        )
