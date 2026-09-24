@@ -240,8 +240,8 @@ def test_in_memory_finalize_refuses_cleanup_when_live_patch_drifted(tmp_path) ->
 
 def test_ensure_live_commit_replays_owned_checkpoint_delta(tmp_path) -> None:
     import threading
-    from minecraft_mod_ai.custom_module_generator import (
-        CustomModuleGenerator,
+    from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
+    from minecraft_mod_ai.generation_checkpoint import (
         _GenerationCheckpointLease,
         _initialize_generation_checkpoint,
     )
