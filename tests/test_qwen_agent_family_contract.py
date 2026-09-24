@@ -111,13 +111,12 @@ def test_registry_declared_auto_tool_action_disables_thinking() -> None:
         "preserve_thinking": False,
     }
     assert "reasoning_effort" not in payload
-    assert payload["temperature"] == 0.11
-    assert payload["top_p"] == 0.61
-    assert payload["top_k"] == 7
-    assert payload["min_p"] == 0.01
-    assert payload["presence_penalty"] == 0.04
-    assert payload["repeat_penalty"] == 0.83
-
+    assert payload["temperature"] == 0.23
+    assert payload["top_p"] == 0.67
+    assert payload["top_k"] == 13
+    assert payload["min_p"] == 0.02
+    assert payload["presence_penalty"] == 0.12
+    assert payload["repeat_penalty"] == 0.89
 
 def test_registry_metadata_not_model_name_selects_agent_policy() -> None:
     enabled = hardware._server_payload(_Adapter(enabled=True), _request())
@@ -177,26 +176,24 @@ def test_named_required_action_uses_calibrated_non_thinking_template() -> None:
         if family in {"qwen3.6", "qwen3.8"}:
             expected_template["preserve_thinking"] = False
         assert payload["tool_choice"] == "required"
-        assert payload["temperature"] == _SAMPLING["non_thinking"]["temperature"]
-        assert payload["top_p"] == _SAMPLING["non_thinking"]["top_p"]
-        assert payload["top_k"] == _SAMPLING["non_thinking"]["top_k"]
-        assert payload["min_p"] == _SAMPLING["non_thinking"]["min_p"]
-        assert payload["presence_penalty"] == _SAMPLING["non_thinking"]["presence_penalty"]
-        assert payload["repeat_penalty"] == _SAMPLING["non_thinking"]["repeat_penalty"]
+        assert payload["temperature"] == _SAMPLING["precise_coding"]["temperature"]
+        assert payload["top_p"] == _SAMPLING["precise_coding"]["top_p"]
+        assert payload["top_k"] == _SAMPLING["precise_coding"]["top_k"]
+        assert payload["min_p"] == _SAMPLING["precise_coding"]["min_p"]
+        assert payload["presence_penalty"] == _SAMPLING["precise_coding"]["presence_penalty"]
+        assert payload["repeat_penalty"] == _SAMPLING["precise_coding"]["repeat_penalty"]
         assert payload["chat_template_kwargs"] == expected_template
         assert "reasoning_effort" not in payload
-
 
 def test_generic_required_action_uses_non_thinking_template() -> None:
     request = _request(tool_choice="required")
     payload = hardware._server_payload(_Adapter(family="qwen3.5"), request)
 
     assert payload["tool_choice"] == "required"
-    assert payload["temperature"] == _SAMPLING["non_thinking"]["temperature"]
-    assert payload["presence_penalty"] == _SAMPLING["non_thinking"]["presence_penalty"]
+    assert payload["temperature"] == _SAMPLING["precise_coding"]["temperature"]
+    assert payload["presence_penalty"] == _SAMPLING["precise_coding"]["presence_penalty"]
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert "reasoning_effort" not in payload
-
 
 def test_atomic_output_recovery_caps_required_tool_decode() -> None:
     adapter = _Adapter(family="qwen3.5")
