@@ -27,6 +27,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .coder_execution_contract import project_task_for_coder
+from .custom_module_errors import CustomModuleGenerationError
 from .complete_spec import ProductionModule
 from .host_grounding import (
     build_coder_grounding,
@@ -55,10 +56,6 @@ from .small_model_write_scope_enforcement import (
 )
 from .source_patch import SourcePatchError, TransactionalSourcePatcher
 from .target_contract import TargetContractError, validate_target_coordinates
-
-
-class CustomModuleGenerationError(RuntimeError):
-    pass
 
 
 def _bounded_execution_feedback(value: Any) -> dict[str, Any] | None:
