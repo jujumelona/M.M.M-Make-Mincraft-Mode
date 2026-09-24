@@ -285,6 +285,19 @@ def _authored_block_section(block: str) -> str:
     return first_title
 
 
+def _authored_block_implementation_text(block: str, section: str) -> str:
+    """Return only the executable feature slice while retaining block provenance elsewhere."""
+
+    wanted = str(section or "").strip()
+    if not block or not wanted:
+        return block
+    lines, records = _authored_heading_records(block)
+    for start_line, _level, title in records:
+        if title == wanted:
+            return "".join(lines[start_line:])
+    return block
+
+
 def _implementation_authored_plan(plan: AuthoredPlan) -> tuple[AuthoredPlan, dict[str, Any] | None]:
     """Project a delimited final design without interpreting or rewriting its content.
 
@@ -376,8 +389,10 @@ def _authored_execution_units(text: str) -> tuple[dict[str, Any], ...]:
             "start_byte": 0,
             "end_byte": 0,
             "text": "",
+            "implementation_text": "",
             "section": "",
             "text_sha256": "sha256:" + hashlib.sha256(b"").hexdigest(),
+            "implementation_text_sha256": "sha256:" + hashlib.sha256(b"").hexdigest(),
         },)
 
     chunks = [
@@ -393,13 +408,17 @@ def _authored_execution_units(text: str) -> tuple[dict[str, Any], ...]:
     for index, (chunk, section) in enumerate(chunks, start=1):
         raw = chunk.encode("utf-8")
         end = start + len(raw)
+        implementation_text = _authored_block_implementation_text(chunk, section)
         units.append({
             "index": index,
             "start_byte": start,
             "end_byte": end,
             "text": chunk,
+            "implementation_text": implementation_text,
             "section": section,
             "text_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
+            "implementation_text_sha256": "sha256:"
+            + hashlib.sha256(implementation_text.encode("utf-8")).hexdigest(),
         })
         start = end
     return tuple(units)
@@ -487,6 +506,7 @@ def _compile_new_authored_modules(
         depends_on = (previous_id,) if previous_id else ()
         consumes = (previous_provide,) if previous_provide else ()
         exact_text = str(unit["text"])
+        implementation_text = str(unit.get("implementation_text") or exact_text)
         section = str(unit.get("section") or "").strip()
         target_summary = (
             f"Minecraft {target.get('minecraft_version', '')}, "
@@ -508,7 +528,8 @@ def _compile_new_authored_modules(
             "shared state. The host-selected target is authoritative "
             f"({target_summary}); adapt stale version/API examples in the authored prose to "
             "that target without changing gameplay semantics. Preserve the approved gameplay "
-            "requirements in this unit as the semantic source of truth:\n\n" + exact_text
+            "requirements in this unit as the semantic source of truth:\n\n"
+            + implementation_text
         )
         task = _exact_authored_task(
             task_id=task_id,
@@ -533,6 +554,8 @@ def _compile_new_authored_modules(
                     "start_byte": unit["start_byte"],
                     "end_byte": unit["end_byte"],
                     "text": exact_text,
+                    "implementation_text": implementation_text,
+                    "implementation_text_sha256": unit["implementation_text_sha256"],
                 },
                 "java_contract": {
                     "status": "applicable",
