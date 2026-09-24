@@ -159,6 +159,7 @@ _SOURCE_CREATE_OPERATIONS = frozenset({
     "write", "write_file",
 })
 _REPAIR_CONTEXT_PREFIX = "MMM_CORE_VERIFIER_REPAIR_"
+_AUTHORED_SURFACE_RECOVERY_PREFIX = "MMM_AUTHORED_SURFACE_RECOVERY"
 _HOST_AUTHORITY_ROLES = frozenset({"system", "developer", "tool"})
 _GENERATION_VERIFICATION_RECEIPT: ContextVar[dict[str, Any] | None] = ContextVar(
     "mmm_generation_verification_receipt",
@@ -1009,6 +1010,38 @@ def _forced_act_messages(
         )
     projected.append({"role": "system", "content": directive})
     return projected
+
+
+def _authored_surface_recovery_message(state: Any, error: str) -> dict[str, str] | None:
+    context = getattr(state, "mutation_context", None)
+    source = getattr(context, "source_body", None) if context is not None else None
+    target = _canonical_mutation_path(getattr(context, "target_path", ""))
+    if (
+        not getattr(state, "semantic_fresh_java", False)
+        or not target
+        or not isinstance(source, str)
+        or "MMM_AUTHORED_FEATURE_BODY_" not in source
+    ):
+        return None
+    symbol = str(getattr(context, "target_symbol", "") or "").strip()
+    return {
+        "role": "system",
+        "content": (
+            _AUTHORED_SURFACE_RECOVERY_PREFIX
+            + "\nThe previous candidate was rejected before execution because it changed "
+            "the host-owned authored Java surface. Do not redesign the class, extend a "
+            "Minecraft Feature type, remove initialize(), or replace the task architecture. "
+            f"Keep the exact existing class {symbol or '<host-owned>'!r} and public static "
+            "void initialize(). Add only imports/state/helpers required by this one approved "
+            "feature and replace the body marker with executable behavior. The next "
+            "apply_source_edit call must use the visible schema and preserve this exact "
+            "current source identity.\nREJECTION="
+            + error
+            + "\nCURRENT_SOURCE_BEGIN\n"
+            + source
+            + "\nCURRENT_SOURCE_END"
+        ),
+    }
 
 
 def _model_rejection_progress_key(
@@ -4740,6 +4773,25 @@ def _generate_with_tools_impl(
                             state.phase = LoopPhase.ACT
                         else:
                             state.phase = LoopPhase.OBSERVE
+                    elif code == "REPAIR_SEMANTIC_FOOTPRINT_VIOLATION":
+                        recovery_message = _authored_surface_recovery_message(state, error)
+                        if recovery_message is not None:
+                            messages[:] = [
+                                message
+                                for message in messages
+                                if not (
+                                    message.get("role") == "system"
+                                    and str(message.get("content") or "").startswith(
+                                        _AUTHORED_SURFACE_RECOVERY_PREFIX
+                                    )
+                                )
+                            ]
+                            messages.append(recovery_message)
+                        state.phase = (
+                            LoopPhase.ACT
+                            if state.mutation_context and state.mutation_context.is_mutation_ready
+                            else LoopPhase.OBSERVE
+                        )
                     elif code in {
                         "MUTATION_TARGET_DRIFT",
                         "MUTATION_TARGET_UNBOUND",
