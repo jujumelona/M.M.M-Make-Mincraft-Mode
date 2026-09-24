@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from minecraft_mod_ai.complete_orchestrator import (
-    CompleteProductionOrchestrator,
-    _unchanged_postbuild_validation,
+from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator
+from minecraft_mod_ai.complete_validation_gates import (
+    unchanged_postbuild_validation as _unchanged_postbuild_validation,
 )
 from minecraft_mod_ai.repairability import source_repair_block_reason
 from minecraft_mod_ai.runner import CommandResult, GradleRunner
