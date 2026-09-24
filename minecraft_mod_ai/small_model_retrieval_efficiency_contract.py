@@ -7,6 +7,7 @@ from typing import Any
 
 from .custom_generation_research import _sanitized_messages
 from .runtime_contract_wrappers import has_contract_marker, owns_contract_marker
+from .source_observation_context import json_size
 
 _TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_.$:/-]{1,127}")
 _ANCHOR_WORDS = frozenset(
@@ -154,7 +155,7 @@ def _install_anchor_compaction(custom_module_generator_module: Any) -> None:
             if index > 0:
                 page["global_anchors"] = refs
             page["global_anchor_ref_bytes"] = (
-                custom_module_generator_module._json_size(refs) if refs else 0
+                json_size(refs) if refs else 0
             )
         return tuple(pages)
 
