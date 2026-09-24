@@ -363,16 +363,29 @@ def test_approved_task_query_replaces_generated_self_search() -> None:
                     "kind": "custom_java",
                     "evidence_task": {
                         "task_id": "authored_feature_002",
-                        "semantic_outcome": (
-                            "Implement spacecraft planetary landing and life detection state"
-                        ),
-                        "acceptance": [
-                            "landing state persists",
-                            "detected life is observable",
-                        ],
-                        "provides": ["capability:spacecraft.planetary_landing"],
-                        "engineering_worksheet": {
-                            "state": "planet landing status and detected life",
+                        "coder_execution_contract": {
+                            "semantic_outcome": (
+                                "Implement spacecraft planetary landing and life detection state"
+                            ),
+                            "engineering_worksheet": {
+                                "objective": "planet landing status and detected life",
+                                "obligations": [
+                                    "landing state persists",
+                                    "detected life is observable",
+                                ],
+                            },
+                            "implementation_steps": [
+                                {
+                                    "obligation": (
+                                        "record planetary landing and detected life state"
+                                    )
+                                }
+                            ],
+                            "dataflow": {
+                                "provides": [
+                                    "capability:spacecraft.planetary_landing"
+                                ]
+                            },
                         },
                     },
                 }

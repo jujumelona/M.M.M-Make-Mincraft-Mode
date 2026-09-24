@@ -3047,6 +3047,9 @@ def _task_evidence_payload(
             continue
         task = module.get("evidence_task")
         if isinstance(task, Mapping):
+            contract = task.get("coder_execution_contract")
+            if isinstance(contract, Mapping):
+                return contract
             return task
         config = module.get("config")
         if isinstance(config, Mapping):
@@ -3094,6 +3097,8 @@ def _approved_task_evidence_query(
         "public_acceptance",
         "provides",
         "engineering_worksheet",
+        "implementation_steps",
+        "dataflow",
     ):
         if field_name in task:
             _task_query_fragments(task.get(field_name), fragments)
