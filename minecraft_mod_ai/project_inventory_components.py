@@ -129,7 +129,7 @@ def _test_capability_aliases(name: str) -> tuple[str, ...]:
     return _capability_aliases(qualified)
 
 
-def _component(
+def component_record(
     *,
     kind: str,
     name: str,
@@ -240,7 +240,7 @@ def source_components(
                     provides.add("test:" + owner)
                     provides.update(_test_capability_aliases(owner))
                 components.append(
-                    _component(
+                    component_record(
                         kind="test" if is_test else "symbol",
                         name=owner,
                         evidence=evidence,
@@ -279,7 +279,7 @@ def source_components(
                     provides.add("test:" + qualified)
                     provides.update(_test_capability_aliases(qualified))
                 components.append(
-                    _component(
+                    component_record(
                         kind="test" if is_test else "symbol",
                         name=qualified,
                         evidence=evidence,
@@ -303,7 +303,7 @@ def source_components(
                         owner or package or Path(file.path).stem
                     ) + "#" + field_name
                     components.append(
-                        _component(
+                        component_record(
                             kind="symbol",
                             name=qualified,
                             evidence=_evidence(file, line_number, line_number),
@@ -328,7 +328,7 @@ def source_components(
                 else Path(file.path).stem
             )
             components.append(
-                _component(
+                component_record(
                     kind="test" if is_test else "symbol",
                     name=name,
                     evidence=_evidence(file),
@@ -373,7 +373,7 @@ def resource_components(
             references.update(found_references)
         module_id, source_set, side = _source_location(file, module_paths)
         components.append(
-            _component(
+            component_record(
                 kind="resource",
                 name=provides[0],
                 evidence=_evidence(file),
@@ -403,7 +403,7 @@ def config_components(
     for dependency in dependencies:
         dependencies_by_module.setdefault(dependency.module_id, []).append(dependency)
         components.append(
-            _component(
+            component_record(
                 kind="dependency",
                 name=dependency.coordinate,
                 evidence=dependency.evidence,
@@ -448,7 +448,7 @@ def config_components(
                     for item in module.generated_resource_roots
                 )
             components.append(
-                _component(
+                component_record(
                     kind="build_config",
                     name=file.path,
                     evidence=_evidence(file),
@@ -482,7 +482,7 @@ def config_components(
                 if dependency.dependency_id in record.dependency_ids
             )
             components.append(
-                _component(
+                component_record(
                     kind="build_config",
                     name=file.path,
                     evidence=record.evidence,
@@ -514,7 +514,7 @@ def config_components(
         )
         if release_name or release_path:
             components.append(
-                _component(
+                component_record(
                     kind="release_config",
                     name=file.path,
                     evidence=_evidence(file),
@@ -569,6 +569,7 @@ def build_component_catalog(
 
 __all__ = [
     "build_component_catalog",
+    "component_record",
     "config_components",
     "resource_components",
     "source_components",
