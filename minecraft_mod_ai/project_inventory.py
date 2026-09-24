@@ -1490,6 +1490,11 @@ def inspect_existing_archive_inventory(archive_path: str | Path) -> ProjectInven
 
     from .importer import inspect_existing_project_archive
 
+    from .project_inventory_components import (
+        build_component_catalog,
+        component_record,
+    )
+
     archive = Path(archive_path).expanduser()
     with tempfile.TemporaryDirectory(prefix="mmm-project-inventory-") as temporary:
         report = inspect_existing_project_archive(archive, extract_root=temporary)
@@ -1520,7 +1525,7 @@ def inspect_existing_archive_inventory(archive_path: str | Path) -> ProjectInven
             "archive_metadata:" + (report.mod_id or archive.name),
             *( {"namespace:" + report.mod_id} if report.mod_id else set() ),
         }
-        archive_component = _component(
+        archive_component = component_record(
             kind="build_config",
             name=report.fabric_metadata_paths[0] if report.fabric_metadata_paths else archive.name,
             evidence=archive_locator,
@@ -1532,7 +1537,7 @@ def inspect_existing_archive_inventory(archive_path: str | Path) -> ProjectInven
             requires=(),
             license_refs=(),
         )
-        catalog = _build_component_catalog((*inventory.components, archive_component))
+        catalog = build_component_catalog((*inventory.components, archive_component))
         augmented = replace(inventory, target=target, component_catalog=catalog, inventory_sha256="")
         augmented = replace(augmented, inventory_sha256=canonical_sha256(_inventory_hash_payload(augmented)))
         augmented.validate()
