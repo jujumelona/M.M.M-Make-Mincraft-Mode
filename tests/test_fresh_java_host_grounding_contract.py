@@ -230,7 +230,7 @@ def test_untrusted_user_owned_anchor_cannot_bypass_generic_rag(monkeypatch) -> N
 
 
 @pytest.mark.parametrize("mode", ["first_turn", "provider_fallback", "exhausted"])
-def test_materialized_fresh_authored_slot_cannot_compile_its_way_past_missing_evidence(tmp_path, mode):
+def test_materialized_fresh_authored_slot_uses_compile_probe_after_evidence_exhaustion(tmp_path, mode):
     from minecraft_mod_ai.model_adapters import (
         GenerationResponse,
         ModelConfigurationError,
@@ -306,8 +306,7 @@ def test_materialized_fresh_authored_slot_cannot_compile_its_way_past_missing_ev
     token = _CURRENT_CAPSULE.set(capsule)
     authority = CURRENT_MUTATION_AUTHORITY.set(MutationAuthority.exact((path,)))
     try:
-        expected = (pytest.raises(ModelConfigurationError, match="IMPLEMENTATION_EVIDENCE_STALLED")
-                    if mode == "exhausted" else pytest.raises(_StopFirstTurn))
+        expected = pytest.raises(_StopFirstTurn)
         with expected:
             loop.generate_with_tools(
                 SimpleNamespace(_agent_require_fresh_evidence=True),
@@ -328,5 +327,9 @@ def test_materialized_fresh_authored_slot_cannot_compile_its_way_past_missing_ev
             ("external_mcp_schema", "source_search"), ("external_mcp_call", "source_search"),
             ("external_mcp_schema", "official_mod_docs"), ("external_mcp_call", "official_mod_docs"),
         ]
-    if mode == "provider_fallback":
+    if mode in {"provider_fallback", "exhausted"}:
+        # Once all reviewed evidence routes are exhausted, the host exposes only
+        # the exact task-owned mutation action. Completion still requires the
+        # downstream target_compile gate; this is a bounded compile probe, not
+        # evidence-free acceptance.
         assert adapter.requests[-1].tools[0]["function"]["name"] == "apply_source_edit"
