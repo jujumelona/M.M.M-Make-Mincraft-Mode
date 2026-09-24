@@ -1,3 +1,4 @@
+import hashlib
 import json
 from types import SimpleNamespace
 
@@ -197,6 +198,67 @@ def test_authored_execution_uses_markdown_sections_not_arbitrary_byte_packing():
         module.config["evidence_task"]["engineering_worksheet"]["authored_unit"]["text"]
         for module in modules
     ) == text
+
+
+def test_nested_authored_behavior_reaches_one_manifest_target_and_atomic_coder():
+    text = (
+        "# Trading\n"
+        "## Trigger\nRight click a trader to exchange one ore for 10 credits.\n"
+        "## State\nKeep each player credit balance across relog.\n"
+        "# Travel\n"
+        "## Trigger\nSpend 20 credits to launch the player's ship.\n"
+        "## Rejection\nInsufficient credits leaves both balance and ship unchanged.\n"
+    )
+    proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(
+        AuthoredPlan("Space trading for Fabric 1.21.11", text)
+    )
+    manifest = proposal.game_design["_authored_execution_manifest"]
+    assert manifest["unit_count"] == len(proposal.modules) == 2
+    assert [unit["section"] for unit in manifest["units"]] == ["Trading", "Travel"]
+    source = text.encode("utf-8")
+    next_start = 0
+    for module, record in zip(proposal.modules, manifest["units"], strict=True):
+        capsule = compile_task_capsule(module)
+        batches = atomicize_coder_messages([{"role": "user", "content": json.dumps({
+            "phase": "implement_module", "module": _task_local_module_contract(module),
+        })}])
+        atomic = json.loads(batches[0][-1]["content"])["module"]["evidence_task"]["coder_execution_contract"]
+        unit = atomic["engineering_worksheet"]["authored_unit"]
+        assert unit["start_byte"] == record["start_byte"] == next_start
+        next_start = unit["end_byte"]
+        exact = source[unit["start_byte"]:next_start]
+        assert unit["text"].encode("utf-8") == exact
+        assert unit["source_text_sha256"] == record["text_sha256"] == "sha256:" + hashlib.sha256(exact).hexdigest()
+        assert unit["text"].strip() in atomic["step"]["obligation"]
+        assert capsule.primary_path == record["path"]
+        assert atomic["step"]["target_refs"] == [record["path"] + "#" + record["symbol"]]
+        if unit["section"] == "Trading":
+            assert "10 credits" in unit["text"] and "across relog" in unit["text"]
+        else:
+            assert "20 credits" in unit["text"] and "Insufficient credits" in unit["text"]
+    assert next_start == len(source)
+
+
+@pytest.mark.parametrize("text", [
+    "# Trading\n## Trigger\nExchange ore for credits.\n## State\nPersist credits.\n",
+    "# Overview\n# Trading\nExchange ore for credits.\n# Appendix\n",
+    "# Trading\nExchange ore for credits.\n```markdown\n# Not a feature\n```\n",
+])
+def test_authored_headings_do_not_create_empty_or_code_fence_tasks(text):
+    units = _authored_execution_units(text)
+    assert len(units) == 1
+    assert units[0]["text"] == text
+
+
+def test_oversized_nested_authored_section_stays_bounded_and_byte_exact():
+    text = "# Trading\n## Trigger\n" + "광석 하나를 열 크레딧으로 교환한다.\n" * 160
+    units = _authored_execution_units(text)
+    assert len(units) > 1
+    assert {unit["section"] for unit in units} == {"Trading"}
+    assert all(len(unit["text"].encode("utf-8")) <= 2048 for unit in units)
+    assert "".join(unit["text"] for unit in units) == text
+    assert all(any(line.strip() and not line.startswith("#")
+                   for line in unit["text"].splitlines()) for unit in units)
 
 
 def test_fresh_authored_work_graph_checkpoints_each_exact_task_independently(monkeypatch):

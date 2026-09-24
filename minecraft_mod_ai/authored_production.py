@@ -70,21 +70,45 @@ def _split_utf8_piece(text: str, *, max_bytes: int) -> tuple[str, ...]:
 
 
 def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
-    """Preserve authored Markdown section boundaries as implementation boundaries."""
+    """Keep a section's subordinate obligations together, including its heading."""
 
     if not text:
         return ("",)
     lines = text.splitlines(keepends=True)
+    heading = re.compile(r"^ {0,3}(#{1,6})[ \t]+\S")
+    headings: dict[int, int] = {}
+    fence = None
+    for index, line in enumerate(lines):
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if fence is not None:
+            if (marker and marker[1][0] == fence[0]
+                    and len(marker[1]) >= len(fence)
+                    and not line[marker.end():].strip()):
+                fence = None
+            continue
+        if marker:
+            fence = marker[1]
+            continue
+        match = heading.match(line)
+        if match:
+            headings[index] = len(match[1])
+    level = min(headings.values(), default=7)
+    starts = [0] + [index for index, depth in headings.items() if depth == level and index]
     blocks: list[str] = []
-    current: list[str] = []
-    heading = re.compile(r"^ {0,3}#{1,6}[ \t]+\S")
-    for line in lines:
-        if heading.match(line) and current:
-            blocks.append("".join(current))
-            current = []
-        current.append(line)
-    if current:
-        blocks.append("".join(current))
+    pending = ""
+    for start, end in zip(starts, starts[1:] + [len(lines)]):
+        block = "".join(lines[start:end])
+        if not any(line.strip() and index not in headings
+                   for index, line in enumerate(lines[start:end], start)):
+            pending += block
+            continue
+        blocks.append(pending + block)
+        pending = ""
+    if pending:
+        if blocks:
+            blocks[-1] += pending
+        else:
+            blocks.append(pending)
     if "".join(blocks) != text:
         raise ValueError("Authored semantic block parsing changed approved design text.")
     return tuple(blocks)

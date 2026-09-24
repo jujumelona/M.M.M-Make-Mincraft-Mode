@@ -20,7 +20,8 @@ public final class AuthoredFeature001 {
 
 @pytest.mark.parametrize("case", [
     "allowed", "other_path", "compiler_error", "side_only", "untrusted_diagnostic",
-    "existing_feature", "missing_baseline", "wrong_authority",
+    "existing_feature", "missing_baseline", "wrong_authority", "mixed_side_only",
+    "mixed_surface", "mixed_compiler_error", "mixed_other_path", "mixed_untrusted",
 ])
 def test_full_implementation_recovery_requires_fresh_owned_scaffold(case):
     from minecraft_mod_ai import progress_aware_tool_loop as loop
@@ -42,10 +43,22 @@ def test_full_implementation_recovery_requires_fresh_owned_scaffold(case):
         diagnostic["code"] = "host:authored-side-only"
     elif case == "untrusted_diagnostic":
         diagnostic["source"] = "model"
+    diagnostics = [diagnostic]
+    if case.startswith("mixed_"):
+        companion = {**diagnostic, "code": "host:authored-side-only"}
+        if case == "mixed_surface":
+            companion["code"] = "host:authored-surface"
+        elif case == "mixed_compiler_error":
+            companion["code"] = "compiler.err.cant.resolve"
+        elif case == "mixed_other_path":
+            companion["path"] = "src/main/java/demo/Other.java"
+        elif case == "mixed_untrusted":
+            companion["source"] = "model"
+        diagnostics.append(companion)
     state = loop.HostRunState(
         validation_status="FAIL", latest_verifier_tool="target_compile",
         semantic_fresh_java=case != "existing_feature",
-        latest_verifier_errors=(diagnostic,),
+        latest_verifier_errors=tuple(diagnostics),
         trusted_materialized_baseline=None if case == "missing_baseline" else (TARGET, scaffold, False),
         mutation_context=loop.TargetMutationContext(
             target_path=TARGET, source_body=scaffold, target_pinned=True,
@@ -56,7 +69,9 @@ def test_full_implementation_recovery_requires_fresh_owned_scaffold(case):
         ("src/main/java/demo/Other.java",) if case == "wrong_authority" else (TARGET,)
     ))
     try:
-        assert loop._authored_implementation_recovery(state) is (case == "allowed")
+        assert loop._authored_implementation_recovery(state) is (
+            case in {"allowed", "mixed_side_only", "mixed_surface"}
+        )
     finally:
         CURRENT_MUTATION_AUTHORITY.reset(token)
 
@@ -190,6 +205,7 @@ def test_side_specific_helper_and_annotation_text_are_allowed(tmp_path, monkeypa
     "failure", [
         "side_annotation", "unimplemented", "unimplemented_retry",
         "unimplemented_fixedpoint", "unimplemented_javac",
+        "unimplemented_mixed", "unimplemented_mixed_javac", "unimplemented_guard_only",
     ]
 )
 def test_authored_contract_is_repaired_by_same_coder_before_completion(
@@ -214,9 +230,9 @@ def test_authored_contract_is_repaired_by_same_coder_before_completion(
     )
 
     source = tmp_path / TARGET
-    javac = shutil.which("javac") if failure == "unimplemented_javac" else None
-    java = shutil.which("java") if failure == "unimplemented_javac" else None
-    if failure == "unimplemented_javac" and not (javac and java):
+    javac = shutil.which("javac") if failure.endswith("_javac") else None
+    java = shutil.which("java") if failure.endswith("_javac") else None
+    if failure.endswith("_javac") and not (javac and java):
         pytest.skip("Java compiler/runtime is not installed")
     source.parent.mkdir(parents=True)
     baseline = BASE if failure == "side_annotation" else """package demo;
@@ -295,14 +311,35 @@ public final class AuthoredFeature001 {
                                      3 if failure == "unimplemented_retry" else 2)
             if failure.startswith("unimplemented"):
                 new = baseline.rstrip() if len(requests) == 1 else implemented
+                if failure.startswith("unimplemented_mixed") and len(requests) == 1:
+                    new = new.replace(
+                        "public static void initialize()",
+                        "@net.fabricmc.api.Environment(net.fabricmc.api.EnvType.CLIENT)\n"
+                        "    public static void initialize()",
+                    )
+                if failure == "unimplemented_guard_only" and len(requests) == 1:
+                    new = new.replace(
+                        "private AuthoredFeature001() {}",
+                        "private AuthoredFeature001() {}\n    private static boolean initialized;",
+                    ).replace(
+                        "// MMM_AUTHORED_FEATURE_BODY_001",
+                        "if (initialized) return;\n        initialized = true;",
+                    )
                 if ((failure == "unimplemented_retry" and len(requests) == 2)
                         or (failure == "unimplemented_fixedpoint" and len(requests) > 1)):
                     new = baseline.replace("slot 1/13", "slot 1 of 13")
                 if len(requests) > 1:
-                    assert "host:authored-placeholder" in str(request.messages)
-                    assert "Mining range must be 1 through 5" in str(request.messages)
                     parameters = request.tools[0]["function"]["parameters"]
                     jsonschema.validate({"new": new}, parameters)
+                    expected_diagnostic = (
+                        "host:authored-empty" if failure == "unimplemented_guard_only"
+                        else "host:authored-placeholder"
+                    )
+                    assert expected_diagnostic in str(request.messages)
+                    if failure.startswith("unimplemented_mixed"):
+                        assert "host:authored-side-only" in str(request.messages)
+                        assert len(new) > 256
+                    assert "Mining range must be 1 through 5" in str(request.messages)
                     assert request.metadata["mmm_output_token_ceiling"] == 4096
                     assert "Never regenerate the complete source file" not in str(request.messages)
             elif len(requests) == 1:

@@ -527,7 +527,10 @@ def _authored_implementation_recovery(state: Any) -> bool:
     """An unimplemented fresh host slot needs its implementation, not a line repair.
 
     Only trusted target-compile findings for the exact scaffold can select this
-    mode. Compiler/API/side-only failures retain ordinary bounded repair.
+    mode. An unfinished implementation can also have host integration defects;
+    those do not turn its remaining implementation into a bounded line repair.
+    Compiler/API failures and side-only failures without an unfinished-body
+    finding retain ordinary bounded repair.
     """
     context = getattr(state, "mutation_context", None)
     baseline = _compile_recovery.trusted_baseline(state, context)
@@ -541,14 +544,18 @@ def _authored_implementation_recovery(state: Any) -> bool:
     ):
         return False
     diagnostics = getattr(state, "latest_verifier_errors", ())
+    unfinished_codes = {"host:authored-placeholder", "host:authored-empty"}
+    integration_codes = unfinished_codes | {
+        "host:authored-side-only", "host:authored-surface",
+    }
     return bool(diagnostics) and all(
         isinstance(item, Mapping)
         and item.get("source") == "host-authored-contract"
-        and item.get("code") in {"host:authored-placeholder", "host:authored-empty"}
+        and item.get("code") in integration_codes
         and _canonical_mutation_path(item.get("path", ""))
         == _canonical_mutation_path(context.target_path)
         for item in diagnostics
-    )
+    ) and any(item.get("code") in unfinished_codes for item in diagnostics)
 
 
 def _bind_host_owned_existing_source_call(
@@ -1349,7 +1356,11 @@ def _repair_guidance_payload(state: Any) -> dict[str, Any] | None:
         target_diagnostics,
         repair_window,
     )
-    selected_errors = (selected_diagnostic,) if selected_diagnostic is not None else ()
+    selected_errors = (
+        target_diagnostics
+        if _authored_implementation_recovery(state)
+        else (selected_diagnostic,) if selected_diagnostic is not None else ()
+    )
     diagnostic_snapshot = (
         json.loads(_bounded_verifier_recovery_observation(
             state,

@@ -18,6 +18,38 @@ _SIDE_ONLY = re.compile(
 )
 
 
+def _only_private_initialization_guard(code: str, body_start: int, body_end: int) -> bool:
+    """Recognize inert latches without guessing whether arbitrary Java is gameplay.
+
+    Accept only private nonvolatile boolean fields and private Object monitors
+    used exclusively by this initializer. Any other operation or external use
+    leaves judgment to the compiler and subsequent behavior gates.
+    """
+    outside = code[:body_start] + code[body_end:]
+    guard_field = re.compile(
+        r"(?<=[;{}])\s*private\s+static\s+boolean\s+([A-Za-z_$][\w$]*)\s*(?:=\s*(?:true|false))?\s*;"
+    )
+    lock_field = re.compile(
+        r"(?<=[;{}])\s*private\s+static\s+final\s+(?:java\.lang\.)?Object\s+([A-Za-z_$][\w$]*)"
+        r"\s*=\s*new\s+(?:java\.lang\.)?Object\s*\(\s*\)\s*;"
+    )
+    guards = [match.group(1) for match in guard_field.finditer(outside)]
+    locks = [match.group(1) for match in lock_field.finditer(outside)]
+    remaining = lock_field.sub("", guard_field.sub("", outside))
+    guards = [name for name in guards if not re.search(rf"\b{re.escape(name)}\b", remaining)]
+    locks = [name for name in locks if not re.search(rf"\b{re.escape(name)}\b", remaining)]
+    if not guards:
+        return False
+    body = code[body_start:body_end]
+    names = "(?:" + "|".join(re.escape(name) for name in guards) + ")"
+    body = re.sub(rf"\bif\s*\(\s*!?\s*{names}\s*\)", "", body)
+    body = re.sub(rf"\b{names}\s*=\s*(?:true|false)\s*;", "", body)
+    for name in locks:
+        body = re.sub(rf"\bsynchronized\s*\(\s*{re.escape(name)}\s*\)", "", body)
+    body = re.sub(r"\breturn\s*;|\belse\b", "", body)
+    return not re.sub(r"[\s{};]", "", body)
+
+
 def authored_feature_source_diagnostics(
     source: str, *, path: str, symbol: str
 ) -> list[dict]:
@@ -98,10 +130,11 @@ def authored_feature_source_diagnostics(
             depth += (code[index] == "{") - (code[index] == "}")
             if depth == 0:
                 body = re.sub(r"\s+", "", code[method.end() : index])
-                if not body or re.fullmatch(r"(?:;|return;)+", body):
+                if (not body or re.fullmatch(r"(?:;|return;)+", body)
+                        or _only_private_initialization_guard(code, method.end(), index)):
                     add(
                         "host:authored-empty",
-                        "The authored initialize() has no executable behavior. Implement the approved unit.",
+                        "The authored initialize() has no executable behavior beyond an empty body or private initialization guard. Implement the approved unit; removing the marker or setting an initialization flag alone is insufficient.",
                         method.start(),
                     )
                 break
