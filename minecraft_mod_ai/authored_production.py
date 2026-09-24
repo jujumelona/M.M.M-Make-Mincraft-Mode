@@ -20,8 +20,26 @@ from .target_contract import TargetContractError, target_coordinates_from_mappin
 
 _TARGET_KEYS = ("minecraft_version", "loader", "mappings")
 _AUTHORED_EXECUTION_SCHEMA = "mmm/authored-execution-manifest-v2"
-_AUTHORED_UNIT_TARGET_BYTES = 2 * 1024
-_AUTHORED_UNIT_MAX_COUNT = 24
+_GENERIC_AUTHORED_CONTAINER_TITLES = frozenset({
+    "design",
+    "design document",
+    "game design",
+    "spec",
+    "specification",
+    "requirements",
+    "features",
+    "feature design",
+    "architecture",
+    "implementation",
+    "설계",
+    "설계 문서",
+    "게임 설계",
+    "요구사항",
+    "기능",
+    "기능 목록",
+    "아키텍처",
+    "구현",
+})
 
 
 def _sha256_json(value: Any) -> str:
@@ -41,65 +59,78 @@ def _main_class_name(mod_id: str) -> str:
     return "".join(part.capitalize() for part in str(mod_id).split("_")) + "Mod"
 
 
-def _split_utf8_piece(text: str, *, max_bytes: int) -> tuple[str, ...]:
-    """Split one large authored block at UTF-8-safe natural boundaries."""
+def _authored_heading_records(text: str) -> tuple[list[str], tuple[tuple[int, int, str], ...]]:
+    """Parse Markdown headings outside fences while preserving exact source lines."""
 
-    if len(text.encode("utf-8")) <= max_bytes:
-        return (text,)
-    pieces: list[str] = []
-    remaining = text
-    preferred = frozenset("\n\r\t .,!?:;。！？、，；：")
-    while remaining:
-        used = 0
-        hard_end = 0
-        preferred_end = 0
-        for index, char in enumerate(remaining):
-            size = len(char.encode("utf-8"))
-            if used + size > max_bytes:
-                break
-            used += size
-            hard_end = index + 1
-            if char in preferred:
-                preferred_end = index + 1
-        if hard_end <= 0:
-            raise ValueError("Authored design contains a character larger than the unit budget.")
-        end = preferred_end if preferred_end >= max(1, hard_end // 2) else hard_end
-        pieces.append(remaining[:end])
-        remaining = remaining[end:]
-    return tuple(pieces)
-
-
-def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
-    """Keep a section's subordinate obligations together, including its heading."""
-
-    if not text:
-        return ("",)
     lines = text.splitlines(keepends=True)
-    heading = re.compile(r"^ {0,3}(#{1,6})[ \t]+\S")
-    headings: dict[int, int] = {}
-    fence = None
+    heading = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)\s*$")
+    records: list[tuple[int, int, str]] = []
+    fence = ""
     for index, line in enumerate(lines):
         marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
-        if fence is not None:
-            if (marker and marker[1][0] == fence[0]
-                    and len(marker[1]) >= len(fence)
-                    and not line[marker.end():].strip()):
-                fence = None
+        if fence:
+            if (
+                marker
+                and marker[1][0] == fence[0]
+                and len(marker[1]) >= len(fence)
+                and not line[marker.end():].strip()
+            ):
+                fence = ""
             continue
         if marker:
             fence = marker[1]
             continue
         match = heading.match(line)
         if match:
-            headings[index] = len(match[1])
-    level = min(headings.values(), default=7)
-    starts = [0] + [index for index, depth in headings.items() if depth == level and index]
+            title = re.sub(r"[ \t]+#+[ \t]*$", "", match[2]).strip("*_` ")
+            records.append((index, len(match[1]), title))
+    return lines, tuple(records)
+
+
+def _generic_authored_container(title: str) -> bool:
+    normalized = re.sub(r"\s+", " ", str(title or "").strip()).casefold()
+    return normalized in _GENERIC_AUTHORED_CONTAINER_TITLES
+
+
+def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
+    """Split on feature headings, descending through one generic document wrapper.
+
+    A single top-level Design/설계 wrapper is not an implementation unit. When it
+    contains multiple peer child headings, those children become the units. Feature-
+    internal headings such as Trigger and State remain together when the parent heading
+    is itself semantic.
+    """
+
+    if not text:
+        return ("",)
+    lines, records = _authored_heading_records(text)
+    if not records:
+        return (text,)
+
+    shallowest = min(depth for _index, depth, _title in records)
+    split_level = shallowest
+    shallow = [record for record in records if record[1] == shallowest]
+    if len(shallow) == 1 and _generic_authored_container(shallow[0][2]):
+        for depth in sorted({record[1] for record in records if record[1] > shallowest}):
+            peers = [record for record in records if record[1] == depth]
+            if len(peers) >= 2:
+                split_level = depth
+                break
+
+    heading_indexes = {index for index, _depth, _title in records}
+    starts = [0] + [
+        index
+        for index, depth, _title in records
+        if depth == split_level and index
+    ]
     blocks: list[str] = []
     pending = ""
-    for start, end in zip(starts, starts[1:] + [len(lines)]):
-        block = "".join(lines[start:end])
-        if not any(line.strip() and index not in headings
-                   for index, line in enumerate(lines[start:end], start)):
+    for start_line, end_line in zip(starts, starts[1:] + [len(lines)]):
+        block = "".join(lines[start_line:end_line])
+        if not any(
+            line.strip() and index not in heading_indexes
+            for index, line in enumerate(lines[start_line:end_line], start_line)
+        ):
             pending += block
             continue
         blocks.append(pending + block)
@@ -112,6 +143,18 @@ def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
     if "".join(blocks) != text:
         raise ValueError("Authored semantic block parsing changed approved design text.")
     return tuple(blocks)
+
+
+def _authored_block_section(block: str) -> str:
+    _lines, records = _authored_heading_records(block)
+    if not records:
+        return ""
+    _index, level, title = records[0]
+    if _generic_authored_container(title):
+        for _child_index, child_level, child_title in records[1:]:
+            if child_level > level:
+                return child_title
+    return title
 
 
 def _implementation_authored_plan(plan: AuthoredPlan) -> tuple[AuthoredPlan, dict[str, Any] | None]:
@@ -191,12 +234,11 @@ def _implementation_authored_plan(plan: AuthoredPlan) -> tuple[AuthoredPlan, dic
 
 
 def _authored_execution_units(text: str) -> tuple[dict[str, Any], ...]:
-    """Lower saved prose to bounded Markdown-section obligations.
+    """Lower saved prose to semantic Markdown-section obligations.
 
-    A section is never packed together with a later heading merely to hit a byte target.
-    Oversized individual sections are split only inside that section at UTF-8-safe natural
-    boundaries. This keeps the coder's task aligned with the authored design structure
-    instead of arbitrary byte windows.
+    Byte length never creates a new class or implementation task. Generic document
+    wrappers may expose peer child features, but one semantic feature remains one unit
+    even when its prose is long.
     """
 
     encoded = text.encode("utf-8")
@@ -210,16 +252,10 @@ def _authored_execution_units(text: str) -> tuple[dict[str, Any], ...]:
             "text_sha256": "sha256:" + hashlib.sha256(b"").hexdigest(),
         },)
 
-    target = max(
-        _AUTHORED_UNIT_TARGET_BYTES,
-        (len(encoded) + _AUTHORED_UNIT_MAX_COUNT - 1) // _AUTHORED_UNIT_MAX_COUNT,
-    )
-    chunks: list[tuple[str, str]] = []
-    for block in _semantic_authored_blocks(text):
-        first_line = block.splitlines()[0].strip() if block.splitlines() else ""
-        section = first_line.lstrip("#").strip() if first_line.startswith("#") else ""
-        for piece in _split_utf8_piece(block, max_bytes=target):
-            chunks.append((piece, section))
+    chunks = [
+        (block, _authored_block_section(block))
+        for block in _semantic_authored_blocks(text)
+    ]
 
     if "".join(chunk for chunk, _section in chunks) != text:
         raise ValueError("Authored execution lowering changed the approved design text.")
@@ -312,14 +348,16 @@ def _compile_new_authored_modules(
     package_path = package_name.replace(".", "/")
     modules: list[ProductionModule] = []
     manifest_units: list[dict[str, Any]] = []
+    previous_id = ""
+    previous_provide = ""
     for unit in units:
         index = int(unit["index"])
         task_id = f"authored_feature_{index:03d}"
         symbol = f"AuthoredFeature{index:03d}"
         path = f"src/main/java/{package_path}/{symbol}.java"
         provide = f"{task_id}_ready"
-        depends_on: tuple[str, ...] = ()
-        consumes: tuple[str, ...] = ()
+        depends_on = (previous_id,) if previous_id else ()
+        consumes = (previous_provide,) if previous_provide else ()
         exact_text = str(unit["text"])
         section = str(unit.get("section") or "").strip()
         target_summary = (
@@ -336,7 +374,10 @@ def _compile_new_authored_modules(
             "a placeholder or initialization flag alone is not an implementation. Do not implement "
             "ModInitializer or ClientModInitializer, do not create another entrypoint, and "
             "do not create or edit sibling files. Additional helpers/state needed for this "
-            "unit must stay inside this exact class. The host-selected target is authoritative "
+            "unit must stay inside this exact class. Earlier authored units, when present, are "
+            "already compiled in the same staged workspace: inspect and reuse their public or "
+            "package-visible API/state when this requirement depends on them instead of duplicating "
+            "shared state. The host-selected target is authoritative "
             f"({target_summary}); adapt stale version/API examples in the authored prose to "
             "that target without changing gameplay semantics. Preserve the approved gameplay "
             "requirements in this unit as the semantic source of truth:\n\n" + exact_text
@@ -399,9 +440,13 @@ def _compile_new_authored_modules(
             "start_byte": unit["start_byte"],
             "end_byte": unit["end_byte"],
             "text_sha256": unit["text_sha256"],
+            "depends_on": list(depends_on),
+            "consumes": list(consumes),
             "provides": provide,
             "section": section,
         })
+        previous_id = task_id
+        previous_provide = provide
 
     main_symbol = _main_class_name(mod_id)
     main_path = f"src/main/java/{package_path}/{main_symbol}.java"
