@@ -693,6 +693,169 @@ def test_materialized_authored_scaffold_enters_act_before_rag(monkeypatch, tmp_p
     assert runtime.calls == ["apply_source_edit", "target_compile"]
 
 
+def test_authored_surface_drift_recovers_before_fixed_point(monkeypatch, tmp_path) -> None:
+    from types import SimpleNamespace
+
+    from minecraft_mod_ai import small_model_task_capsule_contract as capsules
+    from minecraft_mod_ai.model_adapters import GenerationRequest, GenerationResponse, ToolCall
+
+    target = "src/main/java/dev/mmm/AuthoredFeature001.java"
+    scaffold = (
+        "package dev.mmm;\n"
+        "public final class AuthoredFeature001 {\n"
+        "    private AuthoredFeature001() {}\n"
+        "    public static void initialize() {\n"
+        "        // MMM_AUTHORED_FEATURE_BODY_001\n"
+        "    }\n"
+        "}\n"
+    )
+    bad = (
+        "package dev.mmm;\n"
+        "public class AuthoredFeature001 {\n"
+        "    public AuthoredFeature001() {}\n"
+        "}\n"
+    )
+    good = (
+        "package dev.mmm;\n"
+        "public final class AuthoredFeature001 {\n"
+        "    private AuthoredFeature001() {}\n"
+        "    public static void initialize() {\n"
+        "        System.setProperty(\"mmm.authored.test\", \"ready\");\n"
+        "    }\n"
+        "}\n"
+    )
+    target_file = tmp_path / target
+    target_file.parent.mkdir(parents=True)
+    target_file.write_text(scaffold, encoding="utf-8")
+
+    monkeypatch.setattr(capsules, "current_task_required_gates", lambda: ("target_compile",))
+    monkeypatch.setattr(capsules, "current_task_reuse_action", lambda: "fresh")
+
+    class Adapter:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate_turn(self, request):
+            self.calls += 1
+            assert {item["function"]["name"] for item in request.tools} == {
+                "apply_source_edit"
+            }
+            if self.calls == 1:
+                source = bad
+            else:
+                assert any(
+                    str(message.get("content") or "").startswith(
+                        "MMM_AUTHORED_SURFACE_RECOVERY"
+                    )
+                    for message in request.messages
+                )
+                source = good
+            arguments = {"new": source}
+            return GenerationResponse(
+                tool_calls=(
+                    ToolCall(
+                        id=f"edit-authored-{self.calls}",
+                        name="apply_source_edit",
+                        arguments=arguments,
+                        raw_arguments=json.dumps(arguments),
+                    ),
+                )
+            )
+
+    class Runtime:
+        def __init__(self) -> None:
+            self.workspace_root = str(tmp_path)
+            self.calls: list[str] = []
+
+        def call(self, stage, name, arguments):
+            assert stage == "generation"
+            self.calls.append(name)
+            if name == "apply_source_edit":
+                assert arguments["old"] == scaffold
+                assert arguments["new"] == good
+                target_file.write_text(good, encoding="utf-8")
+                return {
+                    "schema_version": "mmm/source-patch-receipt-v1",
+                    "status": "APPLIED",
+                    "operations": [
+                        {
+                            "operation": "replace",
+                            "path": target,
+                            "before_sha256": "sha256:" + "1" * 64,
+                            "after_sha256": "sha256:" + "2" * 64,
+                        }
+                    ],
+                }
+            if name == "target_compile":
+                return {
+                    "schema_version": "mmm/generation-target-compile-v1",
+                    "status": "PASS",
+                    "target_path": target,
+                    "diagnostics": [],
+                }
+            raise AssertionError(name)
+
+    request = GenerationRequest(
+        messages=(
+            {
+                "role": "developer",
+                "content": json.dumps(
+                    {
+                        "primary_path": target,
+                        "writable_paths": [target],
+                        "reuse_action": "fresh",
+                    }
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "phase": "implement_module",
+                        "task": "Implement the approved authored behavior in initialize().",
+                    }
+                ),
+            },
+        ),
+        tools=(
+            {
+                "type": "function",
+                "function": {
+                    "name": "apply_source_edit",
+                    "description": "edit source",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ),
+    )
+    adapter = Adapter()
+    runtime = Runtime()
+    token = CURRENT_MUTATION_AUTHORITY.set(
+        MutationAuthority.exact((target,), task_id="authored_feature_001")
+    )
+    try:
+        result = loop.generate_with_tools(
+            SimpleNamespace(_agent_require_fresh_evidence=True),
+            config=SimpleNamespace(
+                adapter="test",
+                max_context=32768,
+                max_input_tokens=0,
+                max_new_tokens=512,
+            ),
+            adapter=adapter,
+            request=request,
+            runtime=runtime,
+            stage="generation",
+            role="coder",
+        )
+    finally:
+        CURRENT_MUTATION_AUTHORITY.reset(token)
+
+    assert "passed generation-time host verification" in json.loads(result)["summary"]
+    assert adapter.calls == 2
+    assert runtime.calls == ["apply_source_edit", "target_compile"]
+
+
 def test_fresh_java_without_reviewed_evidence_tool_fails_before_model_mutation() -> None:
     from types import SimpleNamespace
 
