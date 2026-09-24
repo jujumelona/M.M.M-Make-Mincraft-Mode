@@ -41,6 +41,19 @@ _SYMBOL_LINE_RE = re.compile(
     r"symbol:\s+(?:(?:class|variable|method)\s+)?([A-Za-z_$][A-Za-z0-9_$]*)",
     re.IGNORECASE,
 )
+_IMPORT_API_RE = re.compile(
+    r"\bimport\s+((?:net\.minecraft|net\.fabricmc|com\.mojang|org\.quiltmc)"
+    r"(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+)\s*;"
+)
+_QUALIFIED_API_RE = re.compile(
+    r"\b((?:net\.minecraft|net\.fabricmc|com\.mojang|org\.quiltmc)"
+    r"(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+)"
+)
+_MISSING_PACKAGE_RE = re.compile(
+    r"\bpackage\s+([A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+)"
+    r"\s+does\s+not\s+exist",
+    re.IGNORECASE,
+)
 
 
 def initial_evidence_required(
@@ -173,6 +186,118 @@ def verifier_diagnostic_bundle(
         if path and path not in files:
             files.append(path)
     return {"messages": messages, "files": files, "symbols": symbols}
+
+
+def verifier_recovery_query(
+    errors: Sequence[Mapping[str, Any]],
+    *,
+    target_path: str | None = None,
+) -> str:
+    """Build a deterministic API-recovery query from verifier diagnostics."""
+
+    target = str(target_path or "").replace("\\", "/").strip()
+    target_symbol = target.rsplit("/", 1)[-1].rsplit(".", 1)[0] if target else ""
+    terms: list[str] = []
+
+    def add(value: str) -> None:
+        token = str(value or "").strip()
+        if not token or token == target_symbol or token in terms:
+            return
+        terms.append(token)
+
+    for item in errors:
+        if not isinstance(item, Mapping):
+            continue
+        message = str(item.get("message") or "").strip()
+        if not message:
+            continue
+        for match in _IMPORT_API_RE.finditer(message):
+            add(match.group(1))
+        for match in _QUALIFIED_API_RE.finditer(message):
+            add(match.group(1))
+        for match in _MISSING_PACKAGE_RE.finditer(message):
+            add(match.group(1))
+        for match in _SYMBOL_LINE_RE.finditer(message):
+            add(match.group(1))
+
+    if not terms:
+        for item in errors:
+            if not isinstance(item, Mapping):
+                continue
+            message = str(item.get("message") or "").strip()
+            for raw_line in message.splitlines():
+                line = raw_line.strip()
+                if not line or line.casefold() in {
+                    "cannot find symbol",
+                    "incompatible types",
+                }:
+                    continue
+                add(line[:160])
+                break
+            if terms:
+                break
+
+    return " ".join(terms[:8])[:512]
+
+
+def normalize_recovery_evidence_calls(
+    calls: Sequence[Any],
+    *,
+    errors: Sequence[Mapping[str, Any]],
+    target_path: str | None,
+    repair_route: str | None,
+) -> tuple[Any, ...] | None:
+    """Bind RECOVER retriever queries to the active verifier diagnostics."""
+
+    if not repair_route_requires_retrieval(repair_route) or not calls:
+        return None
+    query = verifier_recovery_query(errors, target_path=target_path)
+    if not query:
+        return None
+
+    changed = False
+    normalized: list[Any] = []
+    for call in calls:
+        name = str(getattr(call, "name", "") or "").strip()
+        raw_arguments = getattr(call, "arguments", None)
+        if not isinstance(raw_arguments, Mapping):
+            normalized.append(call)
+            continue
+        arguments = dict(raw_arguments)
+
+        if name in {"search_project_rag", "search_code_rag", "java_workspace_symbols"}:
+            if str(arguments.get("query") or "").strip() != query:
+                arguments["query"] = query
+                changed = True
+        elif (
+            name == "external_mcp_call"
+            and str(arguments.get("capability") or "").strip() == "source_search"
+        ):
+            nested = arguments.get("arguments")
+            if isinstance(nested, Mapping) and "query" in nested:
+                nested_arguments = dict(nested)
+                primary = query.split(" ", 1)[0]
+                if str(nested_arguments.get("query") or "").strip() != primary:
+                    nested_arguments["query"] = primary
+                    arguments["arguments"] = nested_arguments
+                    changed = True
+
+        if arguments != dict(raw_arguments):
+            normalized.append(
+                replace(
+                    call,
+                    arguments=arguments,
+                    raw_arguments=json.dumps(
+                        arguments,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+            )
+        else:
+            normalized.append(call)
+
+    return tuple(normalized) if changed else None
 
 
 def repair_evidence_route_for_errors(
@@ -463,9 +588,11 @@ __all__ = [
     "initial_evidence_frontier",
     "initial_evidence_required",
     "normalize_forced_evidence_rejection_calls",
+    "normalize_recovery_evidence_calls",
     "recovery_evidence_frontier",
     "repair_evidence_route_for_errors",
     "repair_route_requires_retrieval",
     "semantic_fresh_java",
     "verifier_diagnostic_bundle",
+    "verifier_recovery_query",
 ]
