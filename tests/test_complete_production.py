@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from minecraft_mod_ai.complete_orchestrator_support import file_sha256
 from minecraft_mod_ai.complete_orchestrator import (
     CompleteExecutionOptions,
     CompleteProductionError,
@@ -238,7 +239,7 @@ def test_required_gate_matrix_is_receipt_backed_and_fail_closed(tmp_path: Path) 
         'runtime_screenshots': [{
             'server_running': True,
             'client_running': True,
-            'sha256': CompleteProductionOrchestrator._file_hash(screenshot),
+            'sha256': file_sha256(screenshot),
             'evidence_path': str(screenshot),
         }],
     }
