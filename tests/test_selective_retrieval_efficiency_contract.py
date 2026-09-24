@@ -4,6 +4,7 @@ from pathlib import Path
 
 from minecraft_mod_ai import custom_generation_search_contract as search_contract
 from minecraft_mod_ai import custom_module_generator as generator_module
+from minecraft_mod_ai import source_observation_context as observation_module
 
 
 class _DirectRouter:
@@ -86,6 +87,8 @@ def test_exact_source_anchor_payload_is_only_sent_on_first_page() -> None:
         "records": records,
     }
 
+    assert not hasattr(generator_module, "_json_size")
+
     pages = generator_module._observation_context_pages(
         ledger,
         query="crossFileHook navigation",
@@ -103,6 +106,9 @@ def test_exact_source_anchor_payload_is_only_sent_on_first_page() -> None:
         assert "FIRST_PAGE_SOURCE_FACT" in joined
         assert "source-body-should-not-repeat" not in joined
         assert page["policy"]["global_anchor_source_payload"] == "first_page_only"
+        assert page["global_anchor_ref_bytes"] == observation_module.json_size(
+            page["global_anchors"]
+        )
 
     assert getattr(
         generator_module._observation_context_pages,
