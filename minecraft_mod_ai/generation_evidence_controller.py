@@ -74,18 +74,27 @@ def initial_evidence_required(
     compile_backed_java: bool,
     authored_workspace_refresh: bool = False,
     semantic_fresh_java_target: bool = False,
+    host_authored_scaffold: bool = False,
 ) -> bool:
     """Decide whether mutation needs speculative pre-implementation retrieval.
 
-    A compiler can verify a candidate, but cannot supply missing implementation
-    facts for a fresh task. Honor explicit fresh-evidence policy before its first
-    mutation, even when the host has already materialized the target scaffold.
-    Existing-source edits retain compile-first feedback when appropriate.
+    A host-authored exact scaffold already carries the approved gameplay semantics and
+    a mandatory target compiler. Let the coder materialize that behavior first; only a
+    verifier-classified platform/API failure should open authoritative Java retrieval.
+    Other fresh Java tasks still honor the router's explicit pre-implementation
+    evidence policy.
     """
 
     if authored_workspace_refresh:
         return True
     if role not in {"coder", "coder_safe"} or host_grounded:
+        return False
+    if (
+        host_authored_scaffold
+        and implementation_requires_mutation
+        and host_target_execution_authority
+        and compile_backed_java
+    ):
         return False
     if semantic_fresh_java_target and router_requires_fresh_evidence:
         return True
