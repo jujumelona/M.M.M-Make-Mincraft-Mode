@@ -243,16 +243,9 @@ class GradleRunner:
             if force_clean
             else ["--no-daemon", "build"]
         )
-        gametest_mode: str | None = None
-        gametest_task: str | None = None
-        if run_gametest:
-            gametest_task = self._gametest_task(prepared.project_root)
-            # Modern configureTests can wire runGameTest into build; exclude it there
-            # so the explicit verifier below is the single execution. Legacy
-            # gameTestServer is not build-wired, so excluding it is unnecessary and
-            # changes the observable Gradle contract.
-            if gametest_task == "runGameTest":
-                build_arguments.extend(("-x", gametest_task))
+        gametest_task = self._gametest_task(prepared.project_root) if run_gametest else None
+        if gametest_task == "runGameTest":
+            build_arguments.extend(("-x", gametest_task))
         build_arguments.append("--stacktrace")
         build_result = self._run(
             name="clean_build" if force_clean else "build",
@@ -266,7 +259,8 @@ class GradleRunner:
         if build_result.exit_code != 0:
             return self._failed_build(prepared, commands, "Gradle build failed.")
 
-        if run_gametest and gametest_task is not None:
+        gametest_mode = None
+        if gametest_task is not None:
             gametest_result = self._run(
                 name="gametest",
                 executable=prepared.gradle,
