@@ -130,10 +130,11 @@ def _metadata_only_preamble(lines: list[str], start: int, end: int) -> bool:
 def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
     """Split approved prose into semantic implementation units without losing bytes.
 
-    Document wrappers and metadata are context, not executable features. When the
-    implementation headings live below one wrapper, or the first peer heading is only
-    a document preamble, attach that prefix to the first real feature instead of
-    allocating a standalone AuthoredFeature class for it.
+    Split points select implementation headings only. The actual slices are built as a
+    lossless partition of the original line stream: every byte before the first selected
+    feature is attached to that first feature, and every later block begins exactly at
+    the preceding block's end. Document wrappers and metadata therefore remain context
+    without ever becoming standalone AuthoredFeature tasks.
     """
 
     if not text:
@@ -159,19 +160,17 @@ def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
     if not starts:
         return (text,)
 
-    prefix = ""
-    if split_level > shallowest and starts[0] > 0:
-        # We deliberately descended through one document wrapper. Its title and any
-        # metadata/prose before the first child are context for child 1, never a task.
-        prefix = "".join(lines[: starts[0]])
-    elif len(starts) >= 2 and starts[0] == 0:
-        first_title = split_records[0][2]
+    # At the document's own split level, a leading title/metadata section is context,
+    # not an implementation unit. Remove only that boundary; slicing below will retain
+    # every byte of the removed preamble in the first real feature block.
+    if split_level == shallowest and len(starts) >= 2:
+        first_start = starts[0]
         first_end = starts[1]
+        first_title = split_records[0][2]
         if (
             _document_preamble_title(first_title)
-            or _metadata_only_preamble(lines, starts[0] + 1, first_end)
+            or _metadata_only_preamble(lines, first_start + 1, first_end)
         ):
-            prefix = "".join(lines[:first_end])
             starts = starts[1:]
 
     if not starts:
@@ -179,22 +178,30 @@ def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
 
     heading_indexes = {index for index, _depth, _title in records}
     blocks: list[str] = []
-    pending = prefix
-    for start_line, end_line in zip(starts, starts[1:] + [len(lines)]):
-        block_text = "".join(lines[start_line:end_line])
-        if not any(
+    pending = ""
+    for position, start_line in enumerate(starts):
+        end_line = starts[position + 1] if position + 1 < len(starts) else len(lines)
+        # The first implementation block owns *all* preceding source bytes. This is
+        # what makes the partition lossless for leading prose, blank lines, BOM text,
+        # document wrappers, metadata and horizontal rules.
+        segment_start = 0 if position == 0 else start_line
+        segment = "".join(lines[segment_start:end_line])
+        feature_has_body = any(
             line.strip() and index not in heading_indexes
             for index, line in enumerate(lines[start_line:end_line], start_line)
-        ):
-            pending += block_text
+        )
+        if not feature_has_body:
+            pending += segment
             continue
-        blocks.append(pending + block_text)
+        blocks.append(pending + segment)
         pending = ""
+
     if pending:
         if blocks:
             blocks[-1] += pending
         else:
             blocks.append(pending)
+
     if "".join(blocks) != text:
         raise ValueError("Authored semantic block parsing changed approved design text.")
     return tuple(blocks)
