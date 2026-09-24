@@ -30,6 +30,7 @@ remains host-owned.
 import copy
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -43,6 +44,8 @@ from typing import Any
 
 from .platform_catalog import adapter_for_target
 from .project_index import ProjectIndex
+
+_LOGGER = logging.getLogger(__name__)
 
 _TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_.$:+/-]{1,127}|[가-힣]{2,}")
 _IDENTIFIER = re.compile(r"\b[A-Za-z_$][A-Za-z0-9_$]*\b")
@@ -1012,8 +1015,8 @@ class ResearchCodeContext:
                     if exact:
                         return exact[:limit]
                     return candidates[:limit]
-            except Exception:
-                pass
+            except (TypeError, ValueError, RuntimeError) as exc:
+                _LOGGER.debug("semantic rerank unavailable; using deterministic fallback: %s", exc)
         return candidates[:limit]
 
     def _source_lines(self, path: str) -> tuple[str, ...]:
