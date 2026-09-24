@@ -21,9 +21,6 @@ from minecraft_mod_ai.complete_orchestrator import (
     _blocking_jdt_errors,
     _final_validation_failure,
     _gametest_attestation_status,
-    _jdt_verification_attempts,
-    _jdt_verification_timeout_seconds,
-    _retryable_jdt_bootstrap_failure,
     _generation_receipt_sort_key,
     _persisted_runtime_evidence,
     _refresh_runtime_receipt_status,
@@ -34,6 +31,11 @@ from minecraft_mod_ai.complete_orchestrator import (
     _stable_payload_sha256,
     _validate_external_execution_preflight,
     _validate_required_gate_contract,
+)
+from minecraft_mod_ai.validation_diagnostic_contract import (
+    release_diagnostics_attempts,
+    release_diagnostics_timeout_seconds,
+    retryable_service_ready_miss,
 )
 
 
@@ -1319,18 +1321,18 @@ def test_generic_native_gametest_name_is_not_release_attestation(tmp_path) -> No
 
 def test_jdt_verification_timeout_defaults_to_colab_safe_window(monkeypatch) -> None:
     monkeypatch.delenv("MMM_JDT_VERIFICATION_TIMEOUT_SECONDS", raising=False)
-    assert _jdt_verification_timeout_seconds() == 180
+    assert release_diagnostics_timeout_seconds() == 180
 
 
 def test_jdt_verification_timeout_is_bounded_and_configurable(monkeypatch) -> None:
     monkeypatch.setenv("MMM_JDT_VERIFICATION_TIMEOUT_SECONDS", "240")
-    assert _jdt_verification_timeout_seconds() == 240
+    assert release_diagnostics_timeout_seconds() == 240
     monkeypatch.setenv("MMM_JDT_VERIFICATION_TIMEOUT_SECONDS", "5")
-    assert _jdt_verification_timeout_seconds() == 30
+    assert release_diagnostics_timeout_seconds() == 30
     monkeypatch.setenv("MMM_JDT_VERIFICATION_TIMEOUT_SECONDS", "9999")
-    assert _jdt_verification_timeout_seconds() == 600
+    assert release_diagnostics_timeout_seconds() == 600
     monkeypatch.setenv("MMM_JDT_VERIFICATION_TIMEOUT_SECONDS", "bad")
-    assert _jdt_verification_timeout_seconds() == 180
+    assert release_diagnostics_timeout_seconds() == 180
 
 
 def test_build_artifact_bundle_preserves_unresolved_release_state(tmp_path) -> None:
@@ -1367,18 +1369,18 @@ def test_build_artifact_bundle_preserves_unresolved_release_state(tmp_path) -> N
 
 def test_jdt_verification_attempts_default_and_bounds(monkeypatch) -> None:
     monkeypatch.delenv("MMM_JDT_VERIFICATION_ATTEMPTS", raising=False)
-    assert _jdt_verification_attempts() == 2
+    assert release_diagnostics_attempts() == 2
     monkeypatch.setenv("MMM_JDT_VERIFICATION_ATTEMPTS", "99")
-    assert _jdt_verification_attempts() == 3
+    assert release_diagnostics_attempts() == 3
 
 
 def test_only_service_ready_bootstrap_miss_is_retryable() -> None:
-    assert _retryable_jdt_bootstrap_failure({
+    assert retryable_service_ready_miss({
         "status": "UNAVAILABLE",
         "error": "JDTWorkspaceBootstrapError: ServiceReady was not observed before validation",
         "diagnostics": {},
     })
-    assert not _retryable_jdt_bootstrap_failure({
+    assert not retryable_service_ready_miss({
         "status": "UNAVAILABLE",
         "error": "JDTWorkspaceBootstrapError: no project JDK matching Java 25",
         "diagnostics": {},
