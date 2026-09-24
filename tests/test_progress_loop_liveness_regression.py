@@ -8,9 +8,9 @@ from minecraft_mod_ai.generation_output_budget import (
     GenerationOutputBudgetError,
     apply_payload_generation_budget,
 )
-from minecraft_mod_ai.progress_aware_tool_loop import (
-    _fixed_point_tool_results,
-    _verification_outcome,
+from minecraft_mod_ai.generation_loop_outcomes import (
+    fixed_point_tool_results as _fixed_point_tool_results,
+    verification_outcome as _verification_outcome,
 )
 
 
