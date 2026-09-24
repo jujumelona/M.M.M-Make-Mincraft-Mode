@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from minecraft_mod_ai import progress_aware_tool_loop
+from minecraft_mod_ai.generation_loop_outcomes import verification_outcome
 from minecraft_mod_ai.mutation_failure_classification import (
     is_post_argument_semantic_failure_code as _is_post_argument_semantic_failure_code,
     is_recoverable_mutation_failure,
@@ -138,7 +139,7 @@ def test_jdt_core_runtime_failure_is_readiness_not_source_repair_input() -> None
 
     # Runtime finalization installs the repair contract. The progress loop must retire
     # this verifier instead of entering a source-repair ACT turn.
-    assert progress_aware_tool_loop._verification_outcome(
+    assert verification_outcome(
         "jdt_diagnostics", {"ok": True, "result": receipt}
     ) == "UNAVAILABLE"
 
