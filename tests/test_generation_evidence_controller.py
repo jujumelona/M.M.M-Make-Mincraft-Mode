@@ -285,3 +285,40 @@ def test_external_source_search_query_is_bound_to_verifier_diagnostic() -> None:
     assert query == "net.minecraft.client.MinecraftClient"
     assert "AuthoredFeature001" not in query
 
+def test_malformed_external_source_search_is_rebuilt_from_verifier_diagnostic() -> None:
+    call = _Call(
+        id="r2",
+        name="external_mcp_call",
+        arguments={
+            "capability": "source_search",
+            "arguments": {
+                "action": "read",
+                "path": "src/main/java/demo/AuthoredFeature001.java",
+            },
+        },
+        raw_arguments=(
+            '{"capability":"source_search","arguments":'
+            '{"action":"read","path":"src/main/java/demo/AuthoredFeature001.java"}}'
+        ),
+    )
+    normalized = controller.normalize_recovery_evidence_calls(
+        (call,),
+        errors=(
+            {
+                "message": (
+                    "cannot find symbol\n"
+                    "import net.minecraft.client.MinecraftClient;\n"
+                    "symbol: class MinecraftClient"
+                ),
+            },
+        ),
+        target_path="src/main/java/demo/AuthoredFeature001.java",
+        repair_route="official_api",
+    )
+    assert normalized is not None
+    nested = normalized[0].arguments["arguments"]
+    assert nested == {
+        "query": "net.minecraft.client.MinecraftClient",
+        "searchType": "class",
+    }
+
