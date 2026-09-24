@@ -836,6 +836,30 @@ def _execute_tool_waves(
                 args = getattr(call, "arguments", None)
                 if isinstance(args, Mapping):
                     capability = str(args.get("capability") or "").strip()
+                from .root_cause_trace import emit_root_cause
+
+                emit_root_cause(
+                    "agent_tool_deadline_expired",
+                    stage="generation",
+                    operation=name,
+                    gate="tool_deadline",
+                    result="OBSERVED",
+                    reason=(
+                        "host deadline expired; Python cannot forcibly stop an "
+                        "already-running worker thread, so late provider transport "
+                        "logs may appear after this synthetic timeout result"
+                    ),
+                    details={
+                        "capability": capability or None,
+                        "deadline_kind": exc.deadline_kind,
+                        "elapsed_seconds": round(exc.elapsed_seconds, 3),
+                        "work_unit_timeout_seconds": round(
+                            exc.work_unit_timeout_seconds,
+                            3,
+                        ),
+                        "late_completion_possible": True,
+                    },
+                )
                 ordered[index] = (
                     call,
                     {

@@ -478,6 +478,69 @@ def _api_hit_exists(value: Any, *, target_path: str | None) -> bool:
     return False
 
 
+def authoritative_java_evidence_diagnostic(
+    value: Any,
+    *,
+    target_path: str | None = None,
+) -> dict[str, Any]:
+    """Explain exactly why retrieval is or is not authoritative Java evidence."""
+
+    schema_version = (
+        str(value.get("schema_version") or "").strip()
+        if isinstance(value, Mapping)
+        else ""
+    )
+    base = {
+        "accepted": False,
+        "reason": "",
+        "schema_version": schema_version or None,
+        "quality_warning": False,
+        "api_hit": False,
+        "symbol_records": False,
+        "mapping_records": False,
+        "target_path": str(target_path or "").replace("\\", "/") or None,
+    }
+    if not isinstance(value, Mapping):
+        return {**base, "reason": "VALUE_NOT_MAPPING"}
+    if not value:
+        return {**base, "reason": "EMPTY_EVIDENCE"}
+    if _has_quality_warning(value):
+        return {**base, "quality_warning": True, "reason": "QUALITY_WARNING"}
+    if _mapping_schema(value, "mmm/rag-result-v2"):
+        return {**base, "reason": "PROJECT_RAG_NOT_AUTHORITATIVE"}
+
+    symbol_records = _has_symbol_records(value)
+    api_hit = _api_hit_exists(value, target_path=target_path)
+    mapping_records = _has_mapping_records(value)
+    facts = {
+        **base,
+        "api_hit": api_hit,
+        "symbol_records": symbol_records,
+        "mapping_records": mapping_records,
+    }
+    if _mapping_schema(value, "mmm/java-symbols-v1"):
+        return {
+            **facts,
+            "accepted": symbol_records,
+            "reason": (
+                "JAVA_SYMBOL_RECORDS"
+                if symbol_records
+                else "JAVA_SYMBOL_RECORDS_MISSING"
+            ),
+        }
+    if _mapping_schema(value, "mmm/code-rag-result-v1"):
+        return {
+            **facts,
+            "accepted": api_hit,
+            "reason": "CODE_RAG_API_HIT" if api_hit else "CODE_RAG_API_HIT_MISSING",
+        }
+    if api_hit:
+        return {**facts, "accepted": True, "reason": "API_HIT"}
+    if mapping_records:
+        return {**facts, "accepted": True, "reason": "MAPPING_RECORDS"}
+    return {**facts, "reason": "NO_API_OR_MAPPING_RECORDS"}
+
+
 def authoritative_java_evidence(
     value: Any,
     *,
@@ -485,17 +548,29 @@ def authoritative_java_evidence(
 ) -> bool:
     """Require concrete, non-degraded target/API evidence for fresh Java."""
 
-    if not isinstance(value, Mapping) or not value or _has_quality_warning(value):
-        return False
-    if _mapping_schema(value, "mmm/rag-result-v2"):
-        return False
-    if _mapping_schema(value, "mmm/java-symbols-v1"):
-        return _has_symbol_records(value)
-    if _mapping_schema(value, "mmm/code-rag-result-v1"):
-        return _api_hit_exists(value, target_path=target_path)
-    if _api_hit_exists(value, target_path=target_path):
-        return True
-    return _has_mapping_records(value)
+    return bool(
+        authoritative_java_evidence_diagnostic(
+            value,
+            target_path=target_path,
+        )["accepted"]
+    )
+
+
+def _singleton_capability_from_schema(schema: Mapping[str, Any]) -> str:
+    function = schema.get("function")
+    parameters = function.get("parameters") if isinstance(function, Mapping) else None
+    properties = parameters.get("properties") if isinstance(parameters, Mapping) else None
+    capability = properties.get("capability") if isinstance(properties, Mapping) else None
+    enum = capability.get("enum") if isinstance(capability, Mapping) else None
+    if (
+        isinstance(enum, Sequence)
+        and not isinstance(enum, (str, bytes, bytearray))
+        and len(enum) == 1
+        and isinstance(enum[0], str)
+        and enum[0].strip()
+    ):
+        return enum[0].strip()
+    return ""
 
 
 def _tool_name(schema: Mapping[str, Any]) -> str:
@@ -540,11 +615,30 @@ def _translate_rejected_arguments(
     required = parameters.get("required") if isinstance(parameters, Mapping) else ()
     if not isinstance(properties, Mapping):
         return None
-    if forced_evidence_tool == "external_mcp_call" and original != "external_mcp_call":
-        arguments_payload = dict(parsed) if isinstance(parsed, Mapping) else {}
+    host_capability = (
+        _singleton_capability_from_schema(schema)
+        if forced_evidence_tool in {"external_mcp_schema", "external_mcp_call"}
+        else ""
+    )
+    if (
+        forced_evidence_tool == "external_mcp_call"
+        and original != "external_mcp_call"
+        and original in {
+            "source_search",
+            "official_mod_docs",
+            "mapping_resolution",
+            "mod_examples",
+            "registry_lookup",
+            "vanilla_knowledge",
+            "version_diff",
+            "mod_jar_analysis",
+        }
+    ):
+        if not host_capability:
+            return None
         return {
-            "capability": original,
-            "arguments": arguments_payload,
+            "capability": host_capability,
+            "arguments": dict(parsed),
         }
     if (
         not isinstance(required, Sequence)
@@ -556,26 +650,15 @@ def _translate_rejected_arguments(
         for key, value in parsed.items()
         if str(key) in properties
     }
-    if original == forced_evidence_tool:
-        # The host owns the selected external MCP capability.  Small models can
-        # reproduce the correct visible tool name while hallucinating an enum
-        # value from a previous/provider-specific schema.  Rebind only this
-        # host-owned discriminator; preserve model-authored nested search args.
-        if forced_evidence_tool not in {"external_mcp_schema", "external_mcp_call"}:
+    if forced_evidence_tool in {"external_mcp_schema", "external_mcp_call"}:
+        # Capability selection is always host-owned, including cross-wrapper
+        # rebinding (external_mcp_call -> external_mcp_schema). Keeping the
+        # rejected call's old capability can resurrect an exhausted route.
+        if not host_capability:
             return None
-        capability_schema = properties.get("capability")
-        capability_enum = (
-            capability_schema.get("enum")
-            if isinstance(capability_schema, Mapping)
-            else None
-        )
-        if (
-            not isinstance(capability_enum, Sequence)
-            or isinstance(capability_enum, (str, bytes, bytearray))
-            or len(capability_enum) != 1
-        ):
-            return None
-        candidate["capability"] = str(capability_enum[0])
+        candidate["capability"] = host_capability
+    elif original == forced_evidence_tool:
+        return None
     required_names = {
         str(name)
         for name in required
@@ -625,6 +708,7 @@ def normalize_forced_evidence_rejection_calls(
 
 __all__ = [
     "authoritative_java_evidence",
+    "authoritative_java_evidence_diagnostic",
     "evidence_obligation_satisfied",
     "initial_evidence_frontier",
     "initial_evidence_required",

@@ -43,3 +43,22 @@ def test_semantic_cycle_detection_catches_nonconsecutive_recurrence():
     assert state.record_no_progress_result(a) is False
     assert state.record_no_progress_result(b) is False
     assert state.record_no_progress_result(a) is True
+
+
+def test_fixed_point_records_exact_first_and_repeat_steps():
+    state = HostRunState()
+    semantic = {
+        "phase": "OBSERVE",
+        "calls": [
+            {"name": "external_mcp_schema", "capability": "source_search"}
+        ],
+        "results": [{"name": "external_mcp_schema", "ok": True}],
+    }
+    state.step_index = 4
+    assert state.record_no_progress_result(semantic) is False
+    state.step_index = 9
+    assert state.record_no_progress_result(semantic) is True
+    assert state.fixed_point_first_seen_step == 4
+    assert state.fixed_point_repeat_step == 9
+    assert state.fixed_point_digest
+    assert state.fixed_point_snapshot["phase"] == "OBSERVE"

@@ -410,3 +410,62 @@ def test_rejected_host_selected_external_capability_is_rebound() -> None:
     assert normalized is not None
     assert normalized[0].name == "external_mcp_schema"
     assert normalized[0].arguments == {"capability": "source_search"}
+
+
+def test_cross_tool_external_rebind_uses_host_selected_capability() -> None:
+    rejected = _Call(
+        id="cross-tool",
+        name="__mmm_rejected_tool_call__",
+        arguments={
+            "failure_code": "TOOL_NOT_VISIBLE",
+            "original_tool": "external_mcp_call",
+            "raw_arguments": (
+                '{"capability":"source_search","arguments":'
+                '{"query":"AuthoredFeature002.java","searchType":"file"}}'
+            ),
+        },
+        raw_arguments="{}",
+    )
+    phase_tool = {
+        "type": "function",
+        "function": {
+            "name": "external_mcp_schema",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "capability": {
+                        "type": "string",
+                        "enum": ["registry_lookup"],
+                    }
+                },
+                "required": ["capability"],
+            },
+        },
+    }
+    normalized = controller.normalize_forced_evidence_rejection_calls(
+        (rejected,),
+        phase_tools=(phase_tool,),
+        forced_evidence_tool="external_mcp_schema",
+    )
+    assert normalized is not None
+    assert normalized[0].name == "external_mcp_schema"
+    assert normalized[0].arguments == {"capability": "registry_lookup"}
+
+
+def test_authoritative_evidence_diagnostic_explains_self_target_rejection() -> None:
+    target = "src/main/java/dev/mmm/AuthoredFeature002.java"
+    diagnostic = controller.authoritative_java_evidence_diagnostic(
+        {
+            "schema_version": "mmm/code-rag-result-v1",
+            "hits": [
+                {
+                    "source_path": target,
+                    "text": "package dev.mmm; public final class AuthoredFeature002 {}",
+                }
+            ],
+        },
+        target_path=target,
+    )
+    assert diagnostic["accepted"] is False
+    assert diagnostic["reason"] == "CODE_RAG_API_HIT_MISSING"
+    assert diagnostic["api_hit"] is False

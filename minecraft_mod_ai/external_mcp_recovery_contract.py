@@ -66,6 +66,39 @@ def _preferred_capability(state: Any, repair_route: str | None) -> str:
     return next((name for name in order if name in available), "")
 
 
+def recovery_state_snapshot(
+    state: Any,
+    repair_route: str | None,
+) -> dict[str, Any]:
+    """Return a small, log-safe view of the external MCP recovery frontier."""
+
+    available = tuple(
+        str(item)
+        for item in (getattr(state, "_external_mcp_recovery_capabilities", ()) or ())
+        if str(item)
+    )
+    completed = tuple(
+        sorted(
+            str(item)
+            for item in (getattr(state, "_external_mcp_completed_capabilities", ()) or ())
+            if str(item)
+        )
+    )
+    return {
+        "capabilities_seen": bool(
+            getattr(state, "_external_mcp_capabilities_seen", False)
+        ),
+        "available_capabilities": list(available),
+        "completed_capabilities": list(completed),
+        "bound_schema_capability": str(
+            getattr(state, "_external_mcp_schema_capability", "") or ""
+        )
+        or None,
+        "next_capability": _preferred_capability(state, repair_route) or None,
+        "repair_route": str(repair_route or "") or None,
+    }
+
+
 def constrain_recovery_tools(
     phase_tools: Sequence[Mapping[str, Any]],
     *,
@@ -161,4 +194,8 @@ def record_discovery(
     state._external_mcp_schema_capability = capability
 
 
-__all__ = ["constrain_recovery_tools", "record_discovery"]
+__all__ = [
+    "constrain_recovery_tools",
+    "record_discovery",
+    "recovery_state_snapshot",
+]

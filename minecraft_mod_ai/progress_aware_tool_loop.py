@@ -19,8 +19,24 @@ from typing import Any
 
 from .agent_intent import implementation_requested
 from . import generation_compile_recovery as _compile_recovery
-from .external_mcp_recovery_contract import constrain_recovery_tools, record_discovery
-from .generation_evidence_controller import authoritative_java_evidence as _authoritative_java_evidence, evidence_obligation_satisfied, initial_evidence_frontier, initial_evidence_required, normalize_forced_evidence_rejection_calls, normalize_recovery_evidence_calls, recovery_evidence_frontier, repair_evidence_route_for_errors, repair_route_requires_retrieval, semantic_fresh_java as _semantic_fresh_java
+from .external_mcp_recovery_contract import (
+    constrain_recovery_tools,
+    record_discovery,
+    recovery_state_snapshot,
+)
+from .generation_evidence_controller import (
+    authoritative_java_evidence as _authoritative_java_evidence,
+    authoritative_java_evidence_diagnostic as _authoritative_java_evidence_diagnostic,
+    evidence_obligation_satisfied,
+    initial_evidence_frontier,
+    initial_evidence_required,
+    normalize_forced_evidence_rejection_calls,
+    normalize_recovery_evidence_calls,
+    recovery_evidence_frontier,
+    repair_evidence_route_for_errors,
+    repair_route_requires_retrieval,
+    semantic_fresh_java as _semantic_fresh_java,
+)
 from .generation_loop_outcomes import (
     MUTATION_ACT_TOOLS as _MUTATION_ACT_TOOLS,
     VERIFY_TOOLS as _VERIFY_TOOLS,
@@ -1409,12 +1425,21 @@ class HostRunState:
     step_index: int = 0
     no_progress_streak: int = 0
     seen_no_progress_digests: set[str] = field(default_factory=set)
+    no_progress_digest_first_step: dict[str, int] = field(default_factory=dict)
     semantic_fixed_point: bool = False
+    fixed_point_digest: str | None = None
+    fixed_point_first_seen_step: int | None = None
+    fixed_point_repeat_step: int | None = None
+    fixed_point_snapshot: dict[str, Any] | None = None
     attempted_queries: set[str] = field(default_factory=set)
     attempted_sources: set[str] = field(default_factory=set)
     evidence_fingerprints: set[str] = field(default_factory=set)
     authoritative_java_evidence_fingerprints: set[str] = field(default_factory=set)
     semantic_fresh_java: bool | None = None
+    require_evidence: bool = False
+    host_grounded: bool = False
+    compile_backed_java: bool = False
+    evidence_adjudications: list[dict[str, Any]] = field(default_factory=list)
     retrieval_target_binding_enabled: bool = True
     mutation_context: TargetMutationContext | None = None
     applied_mutations: list[str] = field(default_factory=list)
@@ -1485,6 +1510,12 @@ class HostRunState:
             return False
         with self._lock:
             return _record_evidence_locked(self, value, fp)
+
+    def record_evidence_adjudication(self, value: Mapping[str, Any]) -> None:
+        with self._lock:
+            self.evidence_adjudications.append(dict(value))
+            if len(self.evidence_adjudications) > 16:
+                del self.evidence_adjudications[:-16]
 
 
     def record_mutation(
@@ -1608,8 +1639,9 @@ class HostRunState:
             self.last_failure_reason = None
 
     def record_no_progress_result(self, value: Any) -> bool:
+        stable = _stable_value(value)
         canonical = json.dumps(
-            _stable_value(value),
+            stable,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -1617,15 +1649,32 @@ class HostRunState:
         )
         digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         with self._lock:
-            repeated = digest in self.seen_no_progress_digests
+            first_seen_step = self.no_progress_digest_first_step.get(digest)
+            repeated = first_seen_step is not None
+            if first_seen_step is None:
+                self.no_progress_digest_first_step[digest] = self.step_index
             self.seen_no_progress_digests.add(digest)
             self.semantic_fixed_point = repeated
             self.no_progress_streak += 1
+            if repeated:
+                self.fixed_point_digest = digest
+                self.fixed_point_first_seen_step = first_seen_step
+                self.fixed_point_repeat_step = self.step_index
+                self.fixed_point_snapshot = (
+                    dict(stable)
+                    if isinstance(stable, Mapping)
+                    else {"value": stable}
+                )
             return repeated
 
     def clear_no_progress_result(self) -> None:
         with self._lock:
             self.seen_no_progress_digests.clear()
+            self.no_progress_digest_first_step.clear()
+            self.fixed_point_digest = None
+            self.fixed_point_first_seen_step = None
+            self.fixed_point_repeat_step = None
+            self.fixed_point_snapshot = None
             self.semantic_fixed_point = self.unapplied_mutation_fixed_point
             self.no_progress_streak = 0
 
@@ -2683,16 +2732,141 @@ def _rollback_non_improving_verifier_repair(
     return True
 
 
+def _fixed_point_diagnostic(state: HostRunState) -> dict[str, Any]:
+    context = state.mutation_context
+    has_fresh = state.has_fresh_evidence
+    has_authoritative = state.has_authoritative_java_evidence
+    evidence_ready = evidence_obligation_satisfied(
+        require_evidence=state.require_evidence
+        or repair_route_requires_retrieval(state.repair_evidence_route),
+        semantic_fresh_java_target=bool(
+            state.semantic_fresh_java
+            or state.repair_evidence_route == "official_api"
+        ),
+        has_fresh_evidence=has_fresh,
+        has_authoritative_java_evidence=has_authoritative,
+    )
+    blockers: list[str] = []
+    if state.require_evidence and state.semantic_fresh_java and not has_authoritative:
+        blockers.append("AUTHORITATIVE_JAVA_EVIDENCE_MISSING")
+    if any(
+        item.get("query_mentions_target") and not item.get("authoritative_accepted")
+        for item in state.evidence_adjudications
+    ):
+        blockers.append("SELF_TARGET_QUERY_NOT_AUTHORITATIVE")
+    timeout_count = sum(
+        1
+        for step in state.trajectory
+        for result in step.tool_results
+        if str(result.get("failure_code") or "") == "EXTERNAL_MCP_TIMEOUT"
+    )
+    if timeout_count:
+        blockers.append("EXTERNAL_MCP_TIMEOUT_OBSERVED")
+    if state.last_failure_reason:
+        blockers.append("MODEL_OR_TOOL_REJECTION_OBSERVED")
+    mcp_state = recovery_state_snapshot(state, state.repair_evidence_route)
+    return {
+        "phase": state.phase.value,
+        "validation_status": state.validation_status,
+        "target_path": context.target_path if context is not None else None,
+        "target_symbol": context.target_symbol if context is not None else None,
+        "require_evidence": state.require_evidence,
+        "semantic_fresh_java": state.semantic_fresh_java,
+        "host_grounded": state.host_grounded,
+        "compile_backed_java": state.compile_backed_java,
+        "has_fresh_evidence": has_fresh,
+        "has_authoritative_java_evidence": has_authoritative,
+        "evidence_ready": evidence_ready,
+        "no_progress_streak": state.no_progress_streak,
+        "fixed_point_digest": state.fixed_point_digest,
+        "fixed_point_first_seen_step": state.fixed_point_first_seen_step,
+        "fixed_point_repeat_step": state.fixed_point_repeat_step,
+        "blockers": blockers,
+        "external_mcp_timeout_count": timeout_count,
+        "last_failure_reason": state.last_failure_reason,
+        "attempted_sources": sorted(state.attempted_sources),
+        "mcp_capabilities_seen": mcp_state["capabilities_seen"],
+        "mcp_available_capabilities": mcp_state["available_capabilities"],
+        "mcp_completed_capabilities": mcp_state["completed_capabilities"],
+        "mcp_bound_schema_capability": mcp_state["bound_schema_capability"],
+        "mcp_next_capability": mcp_state["next_capability"],
+        "last_evidence_adjudications": list(state.evidence_adjudications[-6:]),
+        "repeated_state": state.fixed_point_snapshot,
+    }
+
+
+def _format_fixed_point_diagnostic(details: Mapping[str, Any]) -> str:
+    blockers = ",".join(str(item) for item in details.get("blockers", ())) or "<none>"
+    lines = [
+        (
+            "ROOT_CAUSE_DIAGNOSIS:"
+            f" blockers={blockers}"
+            f" evidence_required={details.get('require_evidence')}"
+            f" semantic_fresh_java={details.get('semantic_fresh_java')}"
+            f" evidence_ready={details.get('evidence_ready')}"
+            f" fresh_evidence={details.get('has_fresh_evidence')}"
+            f" authoritative_java_evidence={details.get('has_authoritative_java_evidence')}"
+        ),
+        (
+            "FIXED_POINT_RECURRENCE:"
+            f" digest={details.get('fixed_point_digest')}"
+            f" first_seen_step={details.get('fixed_point_first_seen_step')}"
+            f" repeated_step={details.get('fixed_point_repeat_step')}"
+        ),
+        (
+            "MCP_FRONTIER:"
+            f" completed={details.get('mcp_completed_capabilities')}"
+            f" next={details.get('mcp_next_capability')}"
+            f" bound_schema={details.get('mcp_bound_schema_capability')}"
+            f" timeouts={details.get('external_mcp_timeout_count')}"
+        ),
+    ]
+    evidence_rows = details.get("last_evidence_adjudications")
+    if isinstance(evidence_rows, Sequence):
+        for row in evidence_rows[-4:]:
+            if not isinstance(row, Mapping):
+                continue
+            lines.append(
+                "EVIDENCE:"
+                f" step={row.get('step_index')}"
+                f" tool={row.get('tool')}"
+                f" capability={row.get('capability')}"
+                f" query={row.get('query')!r}"
+                f" usable={row.get('semantic_usable')}"
+                f" authoritative={row.get('authoritative_accepted')}"
+                f" reason={row.get('authoritative_reason')}"
+                f" ready={row.get('evidence_ready')}"
+            )
+    return "\n".join(lines)
+
+
 def _fixed_point_error(state: HostRunState) -> ModelConfigurationError:
     trajectory = format_trajectory_summary(state.trajectory)
+    diagnostic = _fixed_point_diagnostic(state)
+    emit_root_cause(
+        "agent_fixed_point_diagnosis",
+        stage="generation",
+        operation="generate_with_tools",
+        gate="semantic_convergence",
+        result="BLOCKED",
+        reason=",".join(diagnostic["blockers"]) or "SEMANTIC_STATE_REPEATED",
+        details=diagnostic,
+    )
+    readable = _format_fixed_point_diagnostic(diagnostic)
     if state.validation_status == "FAIL":
         return ModelConfigurationError(
             "VERIFICATION_REPAIR_FIXED_POINT: the same repair state repeated while "
-            "trustworthy verifier diagnostics remain unresolved.\n" + trajectory
+            "trustworthy verifier diagnostics remain unresolved.\n"
+            + readable
+            + "\n"
+            + trajectory
         )
     return ModelConfigurationError(
         "AGENT_SEMANTIC_FIXED_POINT: the same action/result state repeated without "
-        "workspace, localization, evidence, or verification progress.\n" + trajectory
+        "workspace, localization, evidence, or verification progress.\n"
+        + readable
+        + "\n"
+        + trajectory
     )
 
 
@@ -2743,6 +2917,81 @@ def _call_is_evidence_tool(
     if call.name != "external_mcp_call":
         return False
     return bool(external_rag_capability(call.arguments))
+
+
+def _evidence_call_adjudication(
+    state: HostRunState,
+    call: Any,
+    payload: Mapping[str, Any],
+    *,
+    semantic_usable: bool,
+    recorded: bool,
+) -> dict[str, Any]:
+    arguments = call.arguments if isinstance(call.arguments, Mapping) else {}
+    nested = arguments.get("arguments")
+    nested_arguments = nested if isinstance(nested, Mapping) else {}
+    query = str(
+        arguments.get("query")
+        or nested_arguments.get("query")
+        or ""
+    ).strip()
+    capability = str(arguments.get("capability") or "").strip()
+    context = state.mutation_context
+    target_path = context.target_path if context is not None else None
+    target_symbol = (
+        str(context.target_symbol or "").strip()
+        if context is not None
+        else ""
+    )
+    if not target_symbol and target_path:
+        target_symbol = (
+            str(target_path).replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        )
+    diagnostic = _authoritative_java_evidence_diagnostic(
+        payload.get("result"),
+        target_path=target_path,
+    )
+    evidence_ready = evidence_obligation_satisfied(
+        require_evidence=state.require_evidence
+        or repair_route_requires_retrieval(state.repair_evidence_route),
+        semantic_fresh_java_target=bool(
+            state.semantic_fresh_java
+            or state.repair_evidence_route == "official_api"
+        ),
+        has_fresh_evidence=state.has_fresh_evidence,
+        has_authoritative_java_evidence=state.has_authoritative_java_evidence,
+    )
+    query_cf = query.casefold()
+    target_cf = target_symbol.casefold()
+    return {
+        "step_index": state.step_index,
+        "phase": state.phase.value,
+        "tool": str(call.name),
+        "capability": capability or None,
+        "query": query[:320] or None,
+        "query_mentions_target": bool(
+            query_cf and target_cf and target_cf in query_cf
+        ),
+        "runtime_ok": bool(payload.get("ok")),
+        "failure_code": payload.get("failure_code"),
+        "semantic_usable": bool(semantic_usable),
+        "new_evidence_fingerprint": bool(recorded),
+        "authoritative_required": bool(
+            state.semantic_fresh_java
+            or state.repair_evidence_route == "official_api"
+        ),
+        "authoritative_accepted": bool(diagnostic["accepted"]),
+        "authoritative_reason": str(diagnostic["reason"]),
+        "evidence_schema": diagnostic.get("schema_version"),
+        "api_hit": bool(diagnostic.get("api_hit")),
+        "symbol_records": bool(diagnostic.get("symbol_records")),
+        "mapping_records": bool(diagnostic.get("mapping_records")),
+        "evidence_ready": bool(evidence_ready),
+        "has_fresh_evidence": state.has_fresh_evidence,
+        "has_authoritative_java_evidence": state.has_authoritative_java_evidence,
+        "target_path": target_path,
+        "target_symbol": target_symbol or None,
+    }
 
 
 def _generate_with_tools_impl(
@@ -2851,6 +3100,9 @@ def _generate_with_tools_impl(
         semantic_fresh_java_target=fresh_java_target,
     )
     required_evidence_choice = bool(require_rag)
+    state.require_evidence = bool(require_rag)
+    state.host_grounded = bool(host_grounded)
+    state.compile_backed_java = bool(compile_backed_java)
 
     if require_rag:
         state.phase = LoopPhase.OBSERVE
@@ -3455,7 +3707,24 @@ def _generate_with_tools_impl(
             forced_evidence_tool=forced_evidence_tool,
         )
         if normalized_evidence_calls is not None:
+            rejected_before_normalization = tuple(turn.tool_calls)
             turn = replace(turn, tool_calls=normalized_evidence_calls)
+            normalized_call = (
+                normalized_evidence_calls[0]
+                if normalized_evidence_calls
+                else None
+            )
+            rejected_call = (
+                rejected_before_normalization[0]
+                if rejected_before_normalization
+                else None
+            )
+            rejected_payload = (
+                rejected_call.arguments
+                if rejected_call is not None
+                and isinstance(getattr(rejected_call, "arguments", None), Mapping)
+                else {}
+            )
             emit_root_cause(
                 "forced_evidence_tool_host_normalized",
                 stage=stage,
@@ -3463,10 +3732,37 @@ def _generate_with_tools_impl(
                 gate="tool_admission",
                 result="PASS",
                 reason=(
-                    "model selected another reviewed retriever; host preserved the "
-                    "search intent and rebound it to the single host-owned evidence route"
+                    "host rebound the rejected reviewed retriever to the exact "
+                    "host-selected tool and capability"
                 ),
-                details={"step_index": state.step_index},
+                details={
+                    "step_index": state.step_index,
+                    "forced_tool": forced_evidence_tool,
+                    "original_tool": rejected_payload.get("original_tool"),
+                    "original_raw_arguments": str(
+                        rejected_payload.get("raw_arguments") or ""
+                    )[:512]
+                    or None,
+                    "normalized_tool": (
+                        str(getattr(normalized_call, "name", "") or "")
+                        if normalized_call is not None
+                        else None
+                    ),
+                    "normalized_capability": (
+                        str(
+                            getattr(normalized_call, "arguments", {}).get(
+                                "capability"
+                            )
+                            or ""
+                        )
+                        if normalized_call is not None
+                        and isinstance(
+                            getattr(normalized_call, "arguments", None),
+                            Mapping,
+                        )
+                        else None
+                    ),
+                },
             )
         if state.phase is LoopPhase.RECOVER:
             recovery_diagnostics = tuple(
@@ -3898,7 +4194,38 @@ def _generate_with_tools_impl(
         tentative_repair_applied = False
 
         for call, payload in executed:
-            record_discovery(state, call, payload, external_rag_capability=_external_rag_capability)
+            record_discovery(
+                state,
+                call,
+                payload,
+                external_rag_capability=_external_rag_capability,
+            )
+            if str(call.name).startswith("external_mcp_"):
+                mcp_state = recovery_state_snapshot(
+                    state,
+                    state.repair_evidence_route,
+                )
+                emit_root_cause(
+                    "external_mcp_frontier_state",
+                    stage=stage,
+                    operation=str(call.name),
+                    gate="external_mcp_recovery_frontier",
+                    result="PASS" if bool(payload.get("ok")) else "SKIP",
+                    reason=(
+                        "external MCP frontier after this tool observation; "
+                        "completed capabilities are ineligible for reselection"
+                    ),
+                    details={
+                        "step_index": state.step_index,
+                        "requested_capability": (
+                            str(call.arguments.get("capability") or "")
+                            if isinstance(call.arguments, Mapping)
+                            else ""
+                        )
+                        or None,
+                        **mcp_state,
+                    },
+                )
             messages.append(dict(bounded_tool_message(
                 {
                     "role": "tool",
@@ -4182,7 +4509,35 @@ def _generate_with_tools_impl(
                 else:
                     usable = bool(payload.get("result"))
                 before = _mutation_context_dict(state.mutation_context)
-                recorded = state.record_evidence(payload.get("result"), usable=usable)
+                recorded = state.record_evidence(
+                    payload.get("result"),
+                    usable=usable,
+                )
+                adjudication = _evidence_call_adjudication(
+                    state,
+                    call,
+                    payload,
+                    semantic_usable=usable,
+                    recorded=recorded,
+                )
+                state.record_evidence_adjudication(adjudication)
+                emit_root_cause(
+                    "evidence_adjudicated",
+                    stage=stage,
+                    operation=call.name,
+                    gate="authoritative_evidence",
+                    result=(
+                        "PASS"
+                        if adjudication["evidence_ready"]
+                        else "SKIP"
+                    ),
+                    reason=(
+                        "EVIDENCE_OBLIGATION_SATISFIED"
+                        if adjudication["evidence_ready"]
+                        else str(adjudication["authoritative_reason"])
+                    ),
+                    details=adjudication,
+                )
                 after = _mutation_context_dict(state.mutation_context)
                 localization_progress = before != after
                 evidence_progress = bool(recorded and usable)

@@ -295,3 +295,29 @@ def test_progress_loop_does_not_duplicate_evidence_or_repair_policy() -> None:
     assert "_API_EVIDENCE_DIAGNOSTIC_MARKERS" not in source
     assert "repair_requires_api_evidence" not in source
     assert "_consume_rejected_evidence_fixed_point" not in source
+
+
+def test_external_mcp_frontier_snapshot_exposes_completed_and_next_capability() -> None:
+    from minecraft_mod_ai.external_mcp_recovery_contract import recovery_state_snapshot
+
+    state = loop.HostRunState()
+    state._external_mcp_capabilities_seen = True
+    state._external_mcp_recovery_capabilities = (
+        "source_search",
+        "official_mod_docs",
+        "mapping_resolution",
+        "registry_lookup",
+    )
+    state._external_mcp_completed_capabilities = {
+        "source_search",
+        "official_mod_docs",
+        "mapping_resolution",
+    }
+    state._external_mcp_schema_capability = ""
+    snapshot = recovery_state_snapshot(state, "official_api")
+    assert snapshot["completed_capabilities"] == [
+        "mapping_resolution",
+        "official_mod_docs",
+        "source_search",
+    ]
+    assert snapshot["next_capability"] == "registry_lookup"
