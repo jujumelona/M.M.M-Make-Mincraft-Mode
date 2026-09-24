@@ -8,6 +8,7 @@ from minecraft_mod_ai.complete_orchestrator import (
     CompleteProductionOrchestrator,
     _validate_external_execution_preflight,
 )
+from minecraft_mod_ai.complete_orchestrator_support import file_sha256
 
 
 def test_full_entity_preflight_requires_blockbench_even_if_plan_omits_gate() -> None:
@@ -68,7 +69,7 @@ def test_host_required_blockbench_review_is_independent_of_plan_gate(tmp_path) -
         "entity": "dragon",
         "uv": {"status": "PASS"},
         "preview": str(preview),
-        "preview_sha256": CompleteProductionOrchestrator._file_hash(preview),
+        "preview_sha256": file_sha256(preview),
     }
 
     assert CompleteProductionOrchestrator._mandatory_blockbench_failures(
