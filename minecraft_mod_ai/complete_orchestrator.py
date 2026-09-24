@@ -32,6 +32,7 @@ from .complete_orchestrator_support import (
     CompleteProductionError,
     _external_gates,
     _jar_path,
+    file_sha256,
     _locate_existing_fabric_root,
     _module_dict,
     _normalize_modules,
@@ -471,11 +472,11 @@ def _attach_verified_release_artifact(
         if not candidate.is_file() or candidate.is_symlink():
             raise CompleteProductionError(f'{label} is missing or unsafe: {candidate}')
 
-    if CompleteProductionOrchestrator._file_hash(release_path) != release_result['sha256']:
+    if file_sha256(release_path) != release_result['sha256']:
         raise CompleteProductionError('Release ZIP changed before verified attachment.')
     expected = str(descriptor.get('sha256') or '') if descriptor is not None else ''
     if source is not None and (
-        not expected or CompleteProductionOrchestrator._file_hash(source) != expected
+        not expected or file_sha256(source) != expected
     ):
         raise CompleteProductionError('Release attachment digest mismatch.')
 
@@ -562,7 +563,7 @@ def _attach_verified_release_artifact(
             temp.unlink()
 
     updated = dict(release_result)
-    updated['sha256'] = CompleteProductionOrchestrator._file_hash(release_path)
+    updated['sha256'] = file_sha256(release_path)
     if descriptor is not None:
         updated['additional_artifacts'] = dict(
             sorted(
@@ -841,7 +842,7 @@ def _collect_runtime_screenshot_receipts(
             if (
                 evidence_path.is_symlink()
                 or not evidence_path.is_file()
-                or CompleteProductionOrchestrator._file_hash(evidence_path)
+                or file_sha256(evidence_path)
                 != expected_sha
             ):
                 raise CompleteProductionError(
@@ -849,7 +850,7 @@ def _collect_runtime_screenshot_receipts(
                 )
         else:
             shutil.copy2(path, evidence_path)
-            if CompleteProductionOrchestrator._file_hash(evidence_path) != expected_sha:
+            if file_sha256(evidence_path) != expected_sha:
                 evidence_path.unlink(missing_ok=True)
                 raise CompleteProductionError(
                     "Runtime screenshot changed while preserving visual evidence."
@@ -894,7 +895,7 @@ def _visual_runtime_evidence_passed(
             and isinstance(item.get("evidence_path"), str)
             and Path(str(item["evidence_path"])).is_file()
             and not Path(str(item["evidence_path"])).is_symlink()
-            and CompleteProductionOrchestrator._file_hash(
+            and file_sha256(
                 Path(str(item["evidence_path"]))
             )
             == item.get("sha256")
@@ -1454,7 +1455,7 @@ class CompleteProductionOrchestrator:
                 'validate-jar',
                 {
                     'graph_hash': work_plan.graph_hash,
-                    'jar_sha256': self._file_hash(jar_path),
+                    'jar_sha256': file_sha256(jar_path),
                 },
             ),
             action=lambda: validate_jar(jar_path, spec).to_dict(),
@@ -1503,7 +1504,7 @@ class CompleteProductionOrchestrator:
                 'Built JAR failed independent validation.'
                 + (f' {summary}' if summary else '')
             )
-        self._succeed_work_node(ledger, 'validate-jar', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'PASS', 'jar_sha256': self._file_hash(jar_path), 'checks_run': jar_validation.get('checks_run', 0)})
+        self._succeed_work_node(ledger, 'validate-jar', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'PASS', 'jar_sha256': file_sha256(jar_path), 'checks_run': jar_validation.get('checks_run', 0)})
         runtime_manager: MinecraftRuntimeManager | None = None
         try:
             if options.run_runtime:
@@ -1836,7 +1837,7 @@ class CompleteProductionOrchestrator:
                 'graph_hash': work_plan.graph_hash,
                 'proposal_hash': approved.calculate_hash(),
                 'base_proposal_hash': base.calculate_hash(),
-                'jar_sha256': self._file_hash(jar_path),
+                'jar_sha256': file_sha256(jar_path),
                 'coverage_sha256': str(coverage_receipt.get('coverage_sha256') or ''),
                 'runtime_receipt_sha256': _stable_payload_sha256(persisted_runtime_receipt),
                 'build_receipt_sha256': _stable_payload_sha256(build_receipt),
@@ -2780,7 +2781,7 @@ class CompleteProductionOrchestrator:
         return {
             'status': 'PASS',
             'path': str(target),
-            'sha256': CompleteProductionOrchestrator._file_hash(target),
+            'sha256': file_sha256(target),
             'file_count': len(files),
         }
 
@@ -3517,7 +3518,7 @@ class CompleteProductionOrchestrator:
                 return False
             if not path.is_file() or path.is_symlink():
                 return False
-            if CompleteProductionOrchestrator._file_hash(path) != expected:
+            if file_sha256(path) != expected:
                 return False
         if not raw_paths:
             return CompleteProductionOrchestrator._valid_project_root(project_root)
@@ -3532,14 +3533,6 @@ class CompleteProductionOrchestrator:
         return str(execution_project_index(ProjectIndex, project_root, policy=self.policy).manifest_receipt()['sha256'])
 
     @staticmethod
-    def _file_hash(path: Path) -> str:
-        digest = hashlib.sha256()
-        with path.open('rb') as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b''):
-                digest.update(chunk)
-        return 'sha256:' + digest.hexdigest()
-
-    @staticmethod
     def _source_package_receipt(path: str) -> dict[str, Any]:
         target = Path(path).expanduser().resolve()
         if not target.is_file() or target.is_symlink():
@@ -3549,7 +3542,7 @@ class CompleteProductionOrchestrator:
         return {
             'status': 'PACKAGED',
             'release_zip': str(target),
-            'sha256': CompleteProductionOrchestrator._file_hash(target),
+            'sha256': file_sha256(target),
         }
 
     @staticmethod
@@ -3576,7 +3569,7 @@ class CompleteProductionOrchestrator:
                 if (
                     not path.is_file()
                     or path.is_symlink()
-                    or CompleteProductionOrchestrator._file_hash(path) != expected
+                    or file_sha256(path) != expected
                 ):
                     return False
         graph = receipt.get('resource_graph_validation')
@@ -3609,7 +3602,7 @@ class CompleteProductionOrchestrator:
             raise CompleteProductionError(
                 'Entity geometry is missing or unsafe before Blockbench review.'
             )
-        return CompleteProductionOrchestrator._file_hash(path)
+        return file_sha256(path)
 
     @staticmethod
     def _cached_blockbench_review(receipt: Any) -> bool:
@@ -3629,7 +3622,7 @@ class CompleteProductionOrchestrator:
         return (
             path.is_file()
             and not path.is_symlink()
-            and CompleteProductionOrchestrator._file_hash(path) == expected
+            and file_sha256(path) == expected
         )
 
     @staticmethod
@@ -3658,7 +3651,7 @@ class CompleteProductionOrchestrator:
             target = root / name
             if not target.is_file() or target.is_symlink():
                 return False
-            if CompleteProductionOrchestrator._file_hash(target) != expected:
+            if file_sha256(target) != expected:
                 return False
         manifest_path = root / 'bundle-receipt.json'
         if not manifest_path.is_file() or manifest_path.is_symlink():
@@ -3685,7 +3678,7 @@ class CompleteProductionOrchestrator:
         path = Path(raw).expanduser().resolve()
         if not path.is_file() or path.is_symlink():
             return False
-        return CompleteProductionOrchestrator._file_hash(path) == expected
+        return file_sha256(path) == expected
 
     @staticmethod
     def _cached_build_exists(
@@ -3788,7 +3781,7 @@ class CompleteProductionOrchestrator:
                 path.relative_to(project_root.resolve())
             except ValueError:
                 return False
-            return path.is_file() and (not path.is_symlink()) and (CompleteProductionOrchestrator._file_hash(path) == expected)
+            return path.is_file() and (not path.is_symlink()) and (file_sha256(path) == expected)
         passed_research = {str(receipt.get('module_id')): (str(receipt.get('shard_sha256', '')), str(receipt.get('corpus_sha256', ''))) for receipt in research_ledger_receipts if receipt.get('status') in {'WRITTEN', 'VERIFIED_EXISTING'} and research_file_matches(receipt)}
         gradle_passed = CompleteProductionOrchestrator._full_gradle_build_receipt_passed(
             build_report
