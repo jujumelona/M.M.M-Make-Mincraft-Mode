@@ -18,7 +18,10 @@ from minecraft_mod_ai.model_adapters import (
     ModelConfigurationError,
     ToolCall,
 )
-from minecraft_mod_ai.mutation_authority import CURRENT_MUTATION_AUTHORITY
+from minecraft_mod_ai.mutation_authority import (
+    CURRENT_MUTATION_AUTHORITY,
+    MutationAuthority,
+)
 from minecraft_mod_ai.source_edit_scalar_protocol_contract import SOURCE_EDIT_SCHEMA
 
 
@@ -66,6 +69,59 @@ def _exact_authored_module(
         },
         required_gates=("target_compile",),
     )
+
+
+def test_fresh_authored_scaffold_compile_failure_stays_in_implementation_mode() -> None:
+    target = "src/main/java/demo/AuthoredFeature001.java"
+    baseline = (
+        "package demo;\n"
+        "public final class AuthoredFeature001 {\n"
+        "  public static void initialize() {\n"
+        "    // MMM_AUTHORED_FEATURE_BODY_001\n"
+        "  }\n"
+        "}\n"
+    )
+    current = (
+        "package demo;\n"
+        "public final class AuthoredFeature001 {\n"
+        "  private static volatile boolean ready;\n"
+        "  public static void initialize() {\n"
+        "    synchronized (AuthoredFeature001.class) { ready = true; MissingApi.call(); }\n"
+        "  }\n"
+        "}\n"
+    )
+    diagnostic = {
+        "path": target,
+        "severity": 1,
+        "source": "javac",
+        "code": "compiler.err.cant.resolve.location",
+        "message": "cannot find symbol MissingApi",
+    }
+    state = loop.HostRunState(
+        semantic_fresh_java=True,
+        validation_status="FAIL",
+        latest_verifier_tool="target_compile",
+        latest_verifier_errors=(diagnostic,),
+        repair_target_diagnostics=(diagnostic,),
+        mutation_context=loop.TargetMutationContext(
+            target_path=target,
+            target_symbol="AuthoredFeature001",
+            source_body=current,
+            is_new_file=False,
+            evidence_source="verifier_workspace_source",
+            writable_paths=(target,),
+            target_pinned=True,
+        ),
+        trusted_materialized_baseline=(target, baseline, False),
+    )
+    token = CURRENT_MUTATION_AUTHORITY.set(
+        MutationAuthority.exact((target,), task_id="authored_feature_001")
+    )
+    try:
+        assert loop._authored_implementation_recovery(state) is True
+        assert loop._repair_source_window(state) is None
+    finally:
+        CURRENT_MUTATION_AUTHORITY.reset(token)
 
 
 @pytest.mark.parametrize("unrepairable_errors_first", [False, True])
