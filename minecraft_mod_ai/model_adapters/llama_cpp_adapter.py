@@ -210,25 +210,9 @@ def _normalized_tool_request(request: GenerationRequest) -> GenerationRequest:
     )
 
 
-def _plain_completion(
-    adapter: LlamaCppAdapter,
-    server_url: str,
-    request: GenerationRequest,
-) -> GenerationResponse:
-    from ..llama_exact_context import capacity_safe_payload
-    from ..llama_server_hardware_policy import _server_payload
-    from ..llama_stream_efficiency_contract import _report_server_connection
+def _plain_generation_response(message: Mapping[str, Any]) -> GenerationResponse:
+    """Decode a plain assistant message through the production response boundary."""
 
-    payload = capacity_safe_payload(
-        server_url,
-        _server_payload(adapter, request),
-        structured_output=request.response_format == "json",
-    )
-    from ..llama_lora_runtime import apply_request_lora
-
-    apply_request_lora(payload, server_url, adapter.config, request)
-    message = _completion_message(server_url, payload)
-    _report_server_connection(server_url)
     if message.get("tool_calls"):
         raise RuntimeError("plain completion unexpectedly returned tool_calls")
     content = message.get("content")
@@ -243,6 +227,64 @@ def _plain_completion(
     )
 
 
+def _completion_exchange(
+    adapter: LlamaCppAdapter,
+    server_url: str,
+    request: GenerationRequest,
+    *,
+    payload_overrides: Mapping[str, Any] | None = None,
+) -> tuple[GenerationResponse, dict[str, Any], Mapping[str, Any]]:
+    """Run the exact production payload/parser path and optionally expose capture data."""
+
+    from ..llama_exact_context import capacity_safe_payload
+    from ..llama_server_hardware_policy import _server_payload
+    from ..llama_stream_efficiency_contract import _report_server_connection
+
+    prepared = _normalized_tool_request(request) if request.tools else request
+    if prepared.tools:
+        payload = capacity_safe_payload(
+            server_url,
+            _tool_server_payload(adapter, prepared),
+            structured_output=False,
+        )
+    else:
+        payload = capacity_safe_payload(
+            server_url,
+            _server_payload(adapter, prepared),
+            structured_output=prepared.response_format == "json",
+        )
+
+    from ..llama_lora_runtime import apply_request_lora
+
+    apply_request_lora(payload, server_url, adapter.config, prepared)
+    if payload_overrides:
+        unsupported = set(payload_overrides) - {"seed", "temperature"}
+        if unsupported:
+            raise ValueError(
+                "capture payload overrides are restricted to seed/temperature: "
+                + ", ".join(sorted(unsupported))
+            )
+        payload.update(dict(payload_overrides))
+
+    message = _completion_message(server_url, payload)
+    _report_server_connection(server_url)
+    response = (
+        _native_tool_generation_response(message, prepared)
+        if prepared.tools
+        else _plain_generation_response(message)
+    )
+    return response, payload, message
+
+
+def _plain_completion(
+    adapter: LlamaCppAdapter,
+    server_url: str,
+    request: GenerationRequest,
+) -> GenerationResponse:
+    response, _payload, _message = _completion_exchange(adapter, server_url, request)
+    return response
+
+
 def _native_tool_completion(
     adapter: LlamaCppAdapter,
     server_url: str,
@@ -250,21 +292,8 @@ def _native_tool_completion(
 ) -> GenerationResponse:
     """Run one native tool completion without semantic regeneration or whole-turn repair."""
 
-    from ..llama_exact_context import capacity_safe_payload
-    from ..llama_stream_efficiency_contract import _report_server_connection
-
-    request = _normalized_tool_request(request)
-    payload = capacity_safe_payload(
-        server_url,
-        _tool_server_payload(adapter, request),
-        structured_output=False,
-    )
-    from ..llama_lora_runtime import apply_request_lora
-
-    apply_request_lora(payload, server_url, adapter.config, request)
-    message = _completion_message(server_url, payload)
-    _report_server_connection(server_url)
-    return _native_tool_generation_response(message, request)
+    response, _payload, _message = _completion_exchange(adapter, server_url, request)
+    return response
 
 
 def _tool_choice_requires_call(choice: Any) -> bool:
