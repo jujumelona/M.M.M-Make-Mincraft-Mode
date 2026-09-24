@@ -199,3 +199,89 @@ def test_official_api_recovery_does_not_route_through_modrinth_or_jdt() -> None:
         route="official_api",
     )
     assert selected == ("search_code_rag",)
+
+def test_verifier_recovery_query_prefers_failed_api_over_local_target() -> None:
+    errors = (
+        {
+            "path": "src/main/java/demo/AuthoredFeature002.java",
+            "message": (
+                "cannot find symbol\n"
+                "import net.fabricmc.fabric.api.event.lifecycle.v1.ClientTickEvents;\n"
+                "symbol: class ClientTickEvents\n"
+                "location: package net.fabricmc.fabric.api.event.lifecycle.v1"
+            ),
+        },
+    )
+    query = controller.verifier_recovery_query(
+        errors,
+        target_path="src/main/java/demo/AuthoredFeature002.java",
+    )
+    assert "net.fabricmc.fabric.api.event.lifecycle.v1.ClientTickEvents" in query
+    assert "ClientTickEvents" in query
+    assert "AuthoredFeature002" not in query
+
+
+def test_recovery_call_query_is_host_bound_to_verifier_diagnostic() -> None:
+    call = _Call(
+        id="r1",
+        name="search_code_rag",
+        arguments={"query": "AuthoredFeature002 generated local class"},
+        raw_arguments='{"query":"AuthoredFeature002 generated local class"}',
+    )
+    normalized = controller.normalize_recovery_evidence_calls(
+        (call,),
+        errors=(
+            {
+                "message": (
+                    "package net.minecraft.registry does not exist\n"
+                    "import net.minecraft.registry.Registry;"
+                ),
+            },
+        ),
+        target_path="src/main/java/demo/AuthoredFeature002.java",
+        repair_route="official_api",
+    )
+    assert normalized is not None
+    query = normalized[0].arguments["query"]
+    assert "net.minecraft.registry.Registry" in query
+    assert "AuthoredFeature002" not in query
+
+
+def test_external_source_search_query_is_bound_to_verifier_diagnostic() -> None:
+    call = _Call(
+        id="r1",
+        name="external_mcp_call",
+        arguments={
+            "capability": "source_search",
+            "arguments": {
+                "query": "class AuthoredFeature001",
+                "searchType": "class",
+                "version": "26.2",
+                "mapping": "mojmap",
+            },
+        },
+        raw_arguments=(
+            '{"capability":"source_search","arguments":'
+            '{"query":"class AuthoredFeature001","searchType":"class",'
+            '"version":"26.2","mapping":"mojmap"}}'
+        ),
+    )
+    normalized = controller.normalize_recovery_evidence_calls(
+        (call,),
+        errors=(
+            {
+                "message": (
+                    "cannot find symbol\n"
+                    "import net.minecraft.client.MinecraftClient;\n"
+                    "symbol: class MinecraftClient"
+                ),
+            },
+        ),
+        target_path="src/main/java/demo/AuthoredFeature001.java",
+        repair_route="official_api",
+    )
+    assert normalized is not None
+    query = normalized[0].arguments["arguments"]["query"]
+    assert query == "net.minecraft.client.MinecraftClient"
+    assert "AuthoredFeature001" not in query
+
