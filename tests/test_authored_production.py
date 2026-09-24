@@ -203,7 +203,33 @@ def test_named_design_document_descends_into_feature_sections():
         "## Intro\n"
     )
     assert "## Resource Economy\n" in units[0]["text"]
+    assert units[0]["implementation_text"].startswith(
+        "## Resource Economy\n"
+    )
+    assert "Galaxy Ascension: Minecraft Mod Design Document" not in units[0]["implementation_text"]
+    assert "## Intro\n" not in units[0]["implementation_text"]
     assert "".join(unit["text"] for unit in units) == text
+
+    modules, manifest = _compile_new_authored_modules(
+        AuthoredPlan("space mod", text),
+        mod_id="authored_test",
+        package_name="ai.minecraft.generated.authored_test",
+        target={
+            "minecraft_version": "1.21.11",
+            "loader": "fabric",
+            "mappings": "1.21.11+build.1",
+        },
+    )
+    assert manifest["unit_count"] == 2
+    first_task = modules[0].config["evidence_task"]
+    first_obligation = first_task["implementation_obligations"][0]
+    authored_unit = first_task["engineering_worksheet"]["authored_unit"]
+    assert "unit 1/2" in first_obligation
+    assert "## Resource Economy\n" in first_obligation
+    assert "Galaxy Ascension: Minecraft Mod Design Document" not in first_obligation
+    assert "## Intro\n" not in first_obligation
+    assert authored_unit["text"].startswith("# Galaxy Ascension: Minecraft Mod Design Document\n")
+    assert authored_unit["implementation_text"].startswith("## Resource Economy\n")
 
 
 def test_document_metadata_preamble_is_context_not_a_standalone_feature():
