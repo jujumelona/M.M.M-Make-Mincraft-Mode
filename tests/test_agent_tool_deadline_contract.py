@@ -75,3 +75,26 @@ def test_java_verifier_outer_deadline_still_bounds_hung_worker(monkeypatch) -> N
     assert payload["failure_code"] == "VERIFIER_TIMEOUT"
     assert payload["result"]["status"] == "UNAVAILABLE"
     assert payload["result"]["diagnostics"][0]["code"] == "JDT_DIAGNOSTICS_TIMEOUT"
+
+
+def test_external_mcp_outer_deadline_is_isolated_on_timeout(monkeypatch) -> None:
+    monkeypatch.setattr(model_router, "_agent_tool_timeout_seconds", lambda: 0.05)
+    call = SimpleNamespace(
+        id="call_mcp_1",
+        name="external_mcp_call",
+        arguments={"capability": "source_search", "arguments": {"query": "Block"}},
+    )
+
+    started = time.monotonic()
+    executed = model_router._execute_tool_waves((call,), _blocking_execute)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.30
+    assert len(executed) == 1
+    returned_call, payload = executed[0]
+    assert returned_call is call
+    assert payload["ok"] is False
+    assert payload["failure_code"] == "EXTERNAL_MCP_TIMEOUT"
+    assert payload["result"]["status"] == "UNAVAILABLE"
+    assert payload["result"]["capability"] == "source_search"
+

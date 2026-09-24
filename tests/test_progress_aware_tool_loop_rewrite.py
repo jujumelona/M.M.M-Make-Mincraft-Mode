@@ -522,3 +522,204 @@ def test_fresh_java_without_reviewed_evidence_tool_fails_before_model_mutation()
             stage="generation",
             role="coder",
         )
+
+
+def test_fresh_java_transitions_to_act_when_retrieval_makes_no_progress_on_localized_target() -> None:
+    from types import SimpleNamespace
+    from minecraft_mod_ai.model_adapters import GenerationRequest, GenerationResponse, ToolCall
+
+    target = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+
+    class Adapter:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate_turn(self, request):
+            self.calls += 1
+            names = {item["function"]["name"] for item in request.tools}
+            if self.calls == 1:
+                assert "search_code_rag" in names
+                arguments = {"query": "CustomFeature"}
+                return GenerationResponse(
+                    tool_calls=(
+                        ToolCall(
+                            id="ev-1",
+                            name="search_code_rag",
+                            arguments=arguments,
+                            raw_arguments=json.dumps(arguments, separators=(",", ":")),
+                        ),
+                    )
+                )
+            if self.calls == 2:
+                # Second turn: search_project_rag
+                assert "search_project_rag" in names
+                arguments = {"query": "CustomFeature"}
+                return GenerationResponse(
+                    tool_calls=(
+                        ToolCall(
+                            id="ev-2",
+                            name="search_project_rag",
+                            arguments=arguments,
+                            raw_arguments=json.dumps(arguments, separators=(",", ":")),
+                        ),
+                    )
+                )
+            if self.calls == 3:
+                # With no progress streak reaching 2 on localized target, loop must transition to ACT
+                assert names == {"apply_source_edit"}
+                arguments = {
+                    "operation": "create_file",
+                    "path": target,
+                    "content": (
+                        "package dev.mmm.debugfixture;\n"
+                        "public final class DebugToken {}\n"
+                    ),
+                }
+                return GenerationResponse(
+                    tool_calls=(
+                        ToolCall(
+                            id="edit-1",
+                            name="apply_source_edit",
+                            arguments=arguments,
+                            raw_arguments=json.dumps(arguments, separators=(",", ":")),
+                        ),
+                    )
+                )
+            if self.calls == 4:
+                assert names == {"java_diagnostics"}
+                return GenerationResponse(
+                    tool_calls=(
+                        ToolCall(
+                            id="v-1",
+                            name="java_diagnostics",
+                            arguments={},
+                            raw_arguments="{}",
+                        ),
+                    )
+                )
+            raise AssertionError("terminal verifier state must not invoke the coder again")
+
+    class Runtime:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def call(self, stage, name, _arguments):
+            assert stage == "generation"
+            self.calls.append(name)
+            if name == "search_code_rag":
+                return {
+                    "schema_version": "mmm/code-rag-result-v1",
+                    "receipt": {"result_count": 0, "coverage_score": 0.0, "relevance_score": 0.0},
+                    "hits": [],
+                }
+            if name == "search_project_rag":
+                return {
+                    "schema_version": "mmm/code-rag-result-v1",
+                    "receipt": {"result_count": 0, "coverage_score": 0.0, "relevance_score": 0.0},
+                    "hits": [],
+                }
+            if name == "apply_source_edit":
+                return {
+                    "schema_version": "mmm/source-patch-receipt-v1",
+                    "status": "APPLIED",
+                    "operations": [
+                        {
+                            "operation": "create",
+                            "path": target,
+                            "before_sha256": None,
+                            "after_sha256": "sha256:" + "4" * 64,
+                        }
+                    ],
+                }
+            if name == "java_diagnostics":
+                return {
+                    "schema_version": "mmm/java-diagnostics-v3",
+                    "status": "PASS",
+                    "available": True,
+                    "complete": True,
+                    "session_id": "session",
+                    "model_id": "model",
+                    "files_opened": 1,
+                    "error_count": 0,
+                    "warning_count": 0,
+                    "diagnostics": {},
+                }
+            raise AssertionError(f"unexpected tool execution: {name}")
+
+    request = GenerationRequest(
+        messages=(
+            {
+                "role": "developer",
+                "content": json.dumps(
+                    {
+                        "primary_path": target,
+                        "writable_paths": [target],
+                        "reuse_action": "fresh",
+                    }
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "phase": "implement_module",
+                        "task": "Implement the approved debug token item.",
+                    }
+                ),
+            },
+        ),
+        tools=(
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_code_rag",
+                    "description": "search code",
+                    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_project_rag",
+                    "description": "search project",
+                    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "apply_source_edit",
+                    "description": "edit source",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "java_diagnostics",
+                    "description": "verify Java",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ),
+    )
+
+    runtime = Runtime()
+    summary = loop.generate_with_tools(
+        SimpleNamespace(_agent_require_fresh_evidence=True),
+        config=SimpleNamespace(
+            adapter="test",
+            max_context=32768,
+            max_input_tokens=0,
+            max_new_tokens=512,
+        ),
+        adapter=Adapter(),
+        request=request,
+        runtime=runtime,
+        stage="generation",
+        role="coder",
+    )
+
+    assert "Applied the approved source mutation" in summary
+    assert runtime.calls == ["search_code_rag", "search_project_rag", "apply_source_edit", "java_diagnostics"]
+

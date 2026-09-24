@@ -2941,7 +2941,6 @@ def _generate_with_tools_impl(
             and _implementation_obligation_has_progress(state)
             and state.validation_status == "PROJECT_BUILD_DEFERRED"
             and bounded_root_execution_authority
-            and baseline_ready
         ):
             state.termination_reason = "VERIFICATION_DEFERRED_TO_PROJECT_BUILD"
             emit_root_cause(
@@ -2965,7 +2964,6 @@ def _generate_with_tools_impl(
             implementation_requires_mutation
             and _implementation_obligation_has_progress(state)
             and state.validation_status == "DEFERRED"
-            and baseline_ready
         ):
             state.termination_reason = "VERIFICATION_DEFERRED_TO_TARGET_COMPILE"
             _record_terminal_generation_verification(
@@ -2995,7 +2993,6 @@ def _generate_with_tools_impl(
             implementation_requires_mutation
             and _implementation_obligation_has_progress(state)
             and state.validation_status == "PASS"
-            and baseline_ready
         ):
             state.termination_reason = "VERIFICATION_PASSED"
             _record_terminal_generation_verification(
@@ -3167,15 +3164,6 @@ def _generate_with_tools_impl(
         if implementation_requires_mutation and state.phase == LoopPhase.ACT and not phase_tools:
             raise ModelConfigurationError("MUTATION_TOOL_UNAVAILABLE: no reviewed source mutation tool is exposed.")
         if implementation_requires_mutation and state.phase in {LoopPhase.OBSERVE, LoopPhase.RECOVER} and not phase_tools:
-            mutation_is_ready = is_mutation_ready(messages, state)
-            if mutation_is_ready and baseline_ready:
-                state.phase = LoopPhase.ACT
-                continue
-            if mutation_is_ready and not baseline_ready:
-                raise ModelConfigurationError(
-                    "IMPLEMENTATION_EVIDENCE_STALLED: the mutation target is host-localized, "
-                    "but no untried authoritative Java/API evidence route remains."
-                )
             if (
                 bounded_root_execution_authority
                 and implementation_requires_mutation
@@ -3203,6 +3191,15 @@ def _generate_with_tools_impl(
                     },
                 )
                 continue
+            mutation_is_ready = is_mutation_ready(messages, state)
+            if mutation_is_ready and baseline_ready:
+                state.phase = LoopPhase.ACT
+                continue
+            if mutation_is_ready and not baseline_ready:
+                raise ModelConfigurationError(
+                    "IMPLEMENTATION_EVIDENCE_STALLED: the mutation target is host-localized, "
+                    "but no untried authoritative Java/API evidence route remains."
+                )
             raise ModelConfigurationError(
                 "MUTATION_LOCALIZATION_STALLED: no untried relevant source-evidence route remains."
             )
@@ -3555,6 +3552,14 @@ def _generate_with_tools_impl(
             if require_rag and not baseline_ready:
                 required_evidence_choice = True
             if repeated:
+                if (
+                    state.phase is LoopPhase.OBSERVE
+                    and implementation_requires_mutation
+                    and is_mutation_ready(messages, state)
+                ):
+                    state.phase = LoopPhase.ACT
+                    state.clear_no_progress_result()
+                    continue
                 raise _fixed_point_error(state)
             continue
 
@@ -3863,6 +3868,7 @@ def _generate_with_tools_impl(
                     result = runtime.call(stage, call.name, call.arguments)
                 if is_evidence_tool(call):
                     state.record_query(call.name, call.arguments)
+                    state.record_source_attempt(call.name, call.arguments)
                 return call, {
                     "ok": True,
                     "tool": call.name,
@@ -3872,6 +3878,7 @@ def _generate_with_tools_impl(
             except Exception as exc:  # noqa: BLE001 - tool failures become typed recovery observations
                 if is_evidence_tool(call):
                     state.record_query(call.name, call.arguments)
+                    state.record_source_attempt(call.name, call.arguments)
                 error = f"{type(exc).__name__}: {exc}"
                 return call, {
                     "ok": False,
@@ -4256,7 +4263,17 @@ def _generate_with_tools_impl(
                 fresh_java_target=fresh_java_target,
                 compile_backed_java=compile_backed_java,
             ):
-                required_evidence_choice = True
+                if (
+                    state.phase is LoopPhase.OBSERVE
+                    and implementation_requires_mutation
+                    and is_mutation_ready(messages, state)
+                    and state.no_progress_streak >= 2
+                ):
+                    state.phase = LoopPhase.ACT
+                    state.clear_no_progress_result()
+                    required_evidence_choice = False
+                else:
+                    required_evidence_choice = True
 
         trace = ExecutionStepTrace(
             step_index=state.step_index,

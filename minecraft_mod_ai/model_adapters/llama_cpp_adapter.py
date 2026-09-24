@@ -545,6 +545,20 @@ def _rejected_tool_call(
     )
 
 
+_EXTERNAL_CAPABILITY_ALIASES = frozenset(
+    {
+        "source_search",
+        "official_mod_docs",
+        "mapping_resolution",
+        "mod_examples",
+        "registry_lookup",
+        "vanilla_knowledge",
+        "version_diff",
+        "mod_jar_analysis",
+    }
+)
+
+
 def _canonical_tool_call(
     call: ToolCall,
     schemas: Mapping[str, Mapping[str, Any]],
@@ -552,9 +566,21 @@ def _canonical_tool_call(
     if call.name in schemas:
         return call
     resolved = resolve_exposed_model_tool(call.name, schemas.keys())
-    if resolved is None or resolved == call.name:
-        return call
-    return replace(call, name=resolved)
+    if resolved is not None and resolved != call.name:
+        return replace(call, name=resolved)
+    if "external_mcp_call" in schemas and call.name in _EXTERNAL_CAPABILITY_ALIASES:
+        nested = dict(call.arguments)
+        normalized_args = {
+            "capability": call.name,
+            "arguments": nested,
+        }
+        raw = json.dumps(normalized_args, ensure_ascii=False, separators=(",", ":"), default=str)
+        return replace(call, name="external_mcp_call", arguments=normalized_args, raw_arguments=raw)
+    if "external_mcp_schema" in schemas and call.name in _EXTERNAL_CAPABILITY_ALIASES:
+        normalized_args = {"capability": call.name}
+        raw = json.dumps(normalized_args, ensure_ascii=False, separators=(",", ":"), default=str)
+        return replace(call, name="external_mcp_schema", arguments=normalized_args, raw_arguments=raw)
+    return call
 
 
 def _admission_enum_key(value: str) -> str:
@@ -652,9 +678,30 @@ def _normalize_admission_arguments(
     if schema is None:
         return call, None
     properties = _admission_properties(schema)
+    call_arguments = dict(call.arguments)
+    if call.name == "external_mcp_call":
+        nested_args = call_arguments.get("arguments")
+        if isinstance(nested_args, str):
+            try:
+                nested_args = json.loads(nested_args)
+            except (json.JSONDecodeError, TypeError):
+                nested_args = {}
+        if not isinstance(nested_args, Mapping):
+            nested_args = {}
+        nested_dict = dict(nested_args)
+        extra_keys = [
+            k for k in list(call_arguments.keys())
+            if k not in properties and k not in _HOST_OWNED_MODEL_ARGUMENTS
+        ]
+        for k in extra_keys:
+            if k not in nested_dict:
+                nested_dict[k] = call_arguments.pop(k)
+            else:
+                call_arguments.pop(k)
+        call_arguments["arguments"] = nested_dict
     normalized: dict[str, Any] = {}
     sources: dict[str, str] = {}
-    for raw_key, raw_value in call.arguments.items():
+    for raw_key, raw_value in call_arguments.items():
         emitted_key = str(raw_key).strip()
         if emitted_key in _HOST_OWNED_MODEL_ARGUMENTS and emitted_key not in properties:
             continue

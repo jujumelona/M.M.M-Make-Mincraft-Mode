@@ -30,6 +30,14 @@ _REVIEWED_EVIDENCE_TOOLS = frozenset(
         "external_mcp_capabilities",
         "external_mcp_schema",
         "external_mcp_call",
+        "source_search",
+        "official_mod_docs",
+        "mapping_resolution",
+        "mod_examples",
+        "registry_lookup",
+        "vanilla_knowledge",
+        "version_diff",
+        "mod_jar_analysis",
     }
 )
 _JAVA_API_EVIDENCE_RE = re.compile(
@@ -536,6 +544,12 @@ def _translate_rejected_arguments(
     required = parameters.get("required") if isinstance(parameters, Mapping) else ()
     if not isinstance(properties, Mapping):
         return None
+    if forced_evidence_tool == "external_mcp_call" and original != "external_mcp_call":
+        arguments_payload = dict(parsed) if isinstance(parsed, Mapping) else {}
+        return {
+            "capability": original,
+            "arguments": arguments_payload,
+        }
     if (
         not isinstance(required, Sequence)
         or isinstance(required, (str, bytes, bytearray))

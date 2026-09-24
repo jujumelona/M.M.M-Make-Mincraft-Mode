@@ -334,3 +334,42 @@ def test_malformed_external_source_search_is_rebuilt_from_verifier_diagnostic() 
         "query": "net.minecraft.client.MinecraftClient",
         "searchType": "class",
     }
+
+
+def test_rejected_source_search_is_translated_to_external_mcp_call() -> None:
+    rejected_call = _Call(
+        id="call_rejected_1",
+        name="__mmm_rejected_tool_call__",
+        arguments={
+            "original_tool": "source_search",
+            "raw_arguments": '{"query":"BlockEntity","searchType":"class"}',
+            "failure_code": "TOOL_NOT_VISIBLE",
+            "error": "model emitted non-visible tool 'source_search'",
+        },
+        raw_arguments='{"original_tool":"source_search"}',
+    )
+    phase_tool = {
+        "type": "function",
+        "function": {
+            "name": "external_mcp_call",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "capability": {"type": "string"},
+                    "arguments": {"type": "object"},
+                },
+                "required": ["capability", "arguments"],
+            },
+        },
+    }
+    normalized = controller.normalize_forced_evidence_rejection_calls(
+        (rejected_call,),
+        phase_tools=(phase_tool,),
+        forced_evidence_tool="external_mcp_call",
+    )
+    assert normalized is not None
+    assert len(normalized) == 1
+    assert normalized[0].name == "external_mcp_call"
+    assert normalized[0].arguments["capability"] == "source_search"
+    assert normalized[0].arguments["arguments"] == {"query": "BlockEntity", "searchType": "class"}
+

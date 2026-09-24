@@ -831,32 +831,61 @@ def _execute_tool_waves(
             else:
                 raise
             name = str(getattr(call, "name", "") or "").strip()
-            if name not in _VERIFIER_TIMEOUT_ISOLATION_TOOLS:
-                raise
-            ordered[index] = (
-                call,
-                {
-                    "ok": False,
-                    "tool": name,
-                    "failure_code": "VERIFIER_TIMEOUT",
-                    "error": str(exc),
-                    "result": {
-                        "schema_version": "mmm/java-diagnostics-v3",
-                        "status": "UNAVAILABLE",
-                        "available": False,
-                        "complete": False,
-                        "skipped": True,
-                        "diagnostics": [
-                            {
-                                "severity": 1,
-                                "code": "JDT_DIAGNOSTICS_TIMEOUT",
-                                "source": "agent_tool_deadline",
-                                "message": str(exc),
-                            }
-                        ],
+            if name.startswith("external_mcp_"):
+                capability = ""
+                args = getattr(call, "arguments", None)
+                if isinstance(args, Mapping):
+                    capability = str(args.get("capability") or "").strip()
+                ordered[index] = (
+                    call,
+                    {
+                        "ok": False,
+                        "tool": name,
+                        "failure_code": "EXTERNAL_MCP_TIMEOUT",
+                        "error": str(exc),
+                        "result": {
+                            "schema_version": "mmm/external-mcp-evidence-bundle-v1",
+                            "status": "UNAVAILABLE",
+                            "capability": capability,
+                            "evidence": [],
+                            "attempts": [
+                                {
+                                    "server": "external_provider",
+                                    "tool": name,
+                                    "status": "TIMEOUT",
+                                    "error": str(exc),
+                                }
+                            ],
+                        },
                     },
-                },
-            )
+                )
+            elif name in _VERIFIER_TIMEOUT_ISOLATION_TOOLS:
+                ordered[index] = (
+                    call,
+                    {
+                        "ok": False,
+                        "tool": name,
+                        "failure_code": "VERIFIER_TIMEOUT",
+                        "error": str(exc),
+                        "result": {
+                            "schema_version": "mmm/java-diagnostics-v3",
+                            "status": "UNAVAILABLE",
+                            "available": False,
+                            "complete": False,
+                            "skipped": True,
+                            "diagnostics": [
+                                {
+                                    "severity": 1,
+                                    "code": "JDT_DIAGNOSTICS_TIMEOUT",
+                                    "source": "agent_tool_deadline",
+                                    "message": str(exc),
+                                }
+                            ],
+                        },
+                    },
+                )
+            else:
+                raise
         if any(item is None for item in ordered):
             raise ModelConfigurationError(
                 f"{stage} lost a completed tool result."

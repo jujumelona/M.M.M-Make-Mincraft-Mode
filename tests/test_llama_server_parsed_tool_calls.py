@@ -97,3 +97,72 @@ def test_qwen_markup_fallback_uses_same_host_validation_surface() -> None:
     assert len(turn.tool_calls) == 1
     assert turn.tool_calls[0].name == "lookup"
     assert turn.tool_calls[0].arguments == {"q": "registry"}
+
+
+def test_external_capability_emission_is_canonicalized_to_external_mcp_call() -> None:
+    external_tool = {
+        "type": "function",
+        "function": {
+            "name": "external_mcp_call",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "capability": {"type": "string"},
+                    "arguments": {"type": "object"},
+                },
+                "required": ["capability", "arguments"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    request = GenerationRequest(
+        messages=({"role": "user", "content": "search source"},),
+        tools=(external_tool,),
+        tool_choice="required",
+        parallel_tool_calls=False,
+    )
+    turn = _native_tool_generation_response(
+        _native_message('{"query":"BlockEntity","searchType":"class"}', name="source_search"),
+        request,
+    )
+
+    assert len(turn.tool_calls) == 1
+    call = turn.tool_calls[0]
+    assert call.name == "external_mcp_call"
+    assert call.arguments["capability"] == "source_search"
+    assert call.arguments["arguments"] == {"query": "BlockEntity", "searchType": "class"}
+
+
+def test_external_mcp_call_flattened_arguments_are_normalized() -> None:
+    external_tool = {
+        "type": "function",
+        "function": {
+            "name": "external_mcp_call",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "capability": {"type": "string"},
+                    "arguments": {"type": "object"},
+                },
+                "required": ["capability", "arguments"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    request = GenerationRequest(
+        messages=({"role": "user", "content": "search source"},),
+        tools=(external_tool,),
+        tool_choice="required",
+        parallel_tool_calls=False,
+    )
+    turn = _native_tool_generation_response(
+        _native_message('{"capability":"source_search","query":"AuthoredFeature002"}', name="external_mcp_call"),
+        request,
+    )
+
+    assert len(turn.tool_calls) == 1
+    call = turn.tool_calls[0]
+    assert call.name == "external_mcp_call"
+    assert call.arguments["capability"] == "source_search"
+    assert call.arguments["arguments"] == {"query": "AuthoredFeature002"}
+
