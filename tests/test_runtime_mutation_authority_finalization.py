@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import inspect
 
+from minecraft_mod_ai import generation_loop_outcomes
 from minecraft_mod_ai import progress_aware_tool_loop as tool_loop
 
 
-def test_mutation_authority_is_owned_directly_by_progress_loop() -> None:
+def test_mutation_authority_uses_canonical_progress_and_outcome_owners() -> None:
     assert inspect.getmodule(tool_loop.is_mutation_ready) is tool_loop
-    assert inspect.getmodule(tool_loop._verification_outcome) is tool_loop
+    assert inspect.getmodule(tool_loop._verification_outcome) is generation_loop_outcomes
     assert tool_loop._authority_allowed("developer", {}) is True
     assert tool_loop._authority_allowed("user", {}) is False
 

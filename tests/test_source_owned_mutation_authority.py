@@ -4,6 +4,7 @@ import inspect
 import json
 
 from minecraft_mod_ai import progress_aware_tool_loop as tool_loop
+from minecraft_mod_ai import target_mutation_context
 
 TASK_ID = "task_debug_token"
 TARGET = "src/main/java/dev/mmm/DebugToken.java"
@@ -47,8 +48,11 @@ def _authority_payload() -> dict:
     }
 
 
-def test_mutation_guard_is_owned_directly_by_progress_loop() -> None:
-    assert inspect.getmodule(tool_loop.TargetMutationContext.merge) is tool_loop
+def test_mutation_guard_uses_canonical_target_context_owner() -> None:
+    assert (
+        inspect.getmodule(tool_loop.TargetMutationContext.merge)
+        is target_mutation_context
+    )
     assert inspect.getmodule(tool_loop.is_mutation_ready) is tool_loop
     assert getattr(tool_loop, "_mmm_mutation_authority_final_guard_v1", False) is True
     assert getattr(tool_loop, "_mmm_post_argument_semantic_boundary_v1", False) is True
