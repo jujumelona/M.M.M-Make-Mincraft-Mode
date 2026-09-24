@@ -232,6 +232,49 @@ def test_named_design_document_descends_into_feature_sections():
     assert authored_unit["implementation_text"].startswith("## Resource Economy\n")
 
 
+def test_named_document_intro_plus_generic_systems_descends_to_real_features():
+    text = (
+        "# Galaxy Ascension: Minecraft Mod Design Document\n"
+        "## Intro\n"
+        "**Version:** 1.0.0-alpha\n"
+        "## Gameplay Systems\n"
+        "### Resource Economy\n"
+        "Persist credits and trade resources.\n"
+        "### Ship Construction\n"
+        "Spend credits on modular ship parts.\n"
+    )
+
+    units = _authored_execution_units(text)
+
+    assert len(units) == 2
+    assert [unit["section"] for unit in units] == [
+        "Resource Economy",
+        "Ship Construction",
+    ]
+    assert units[0]["implementation_text"].startswith("### Resource Economy\n")
+    assert "## Intro\n" not in units[0]["implementation_text"]
+    assert "## Gameplay Systems\n" not in units[0]["implementation_text"]
+    assert "".join(unit["text"] for unit in units) == text
+
+
+def test_generic_document_wrapper_keeps_single_semantic_feature_with_subheadings():
+    text = (
+        "# Design\n"
+        "## Trading\n"
+        "### Trigger\nExchange ore for credits.\n"
+        "### State\nPersist credits across relog.\n"
+    )
+
+    units = _authored_execution_units(text)
+
+    assert len(units) == 1
+    assert units[0]["section"] == "Trading"
+    assert units[0]["implementation_text"].startswith("## Trading\n")
+    assert "### Trigger\n" in units[0]["implementation_text"]
+    assert "### State\n" in units[0]["implementation_text"]
+    assert units[0]["text"] == text
+
+
 def test_document_metadata_preamble_is_context_not_a_standalone_feature():
     text = (
         "# Stellar Odyssey Mod Design Document\n"
