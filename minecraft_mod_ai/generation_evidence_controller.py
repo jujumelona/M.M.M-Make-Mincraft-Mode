@@ -634,10 +634,13 @@ def _translate_rejected_arguments(
             "mod_jar_analysis",
         }
     ):
-        if not host_capability:
-            return None
+        # A directly emitted reviewed capability (for example source_search)
+        # can be wrapped into external_mcp_call even before the phase schema has
+        # been narrowed. Once the host *has* narrowed the schema, that singleton
+        # capability wins. This preserves the generic wrapper translation while
+        # preventing stale-capability resurrection on a host-selected frontier.
         return {
-            "capability": host_capability,
+            "capability": host_capability or original,
             "arguments": dict(parsed),
         }
     if (
