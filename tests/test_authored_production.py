@@ -397,7 +397,7 @@ def test_fresh_authored_work_graph_checkpoints_each_exact_task_independently(mon
         for node in custom
     ] == [f"authored_feature_{index:03d}" for index in range(1, 5)]
     assert custom[0].dependencies == ("prepare-project",)
-    for previous, node in zip(custom, custom[1:], strict=True):
+    for previous, node in zip(custom[:-1], custom[1:], strict=True):
         assert set(node.dependencies) == {"prepare-project", previous.node_id}
 
 
