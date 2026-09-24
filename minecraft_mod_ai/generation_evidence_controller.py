@@ -274,13 +274,23 @@ def normalize_recovery_evidence_calls(
             and str(arguments.get("capability") or "").strip() == "source_search"
         ):
             nested = arguments.get("arguments")
-            if isinstance(nested, Mapping) and "query" in nested:
-                nested_arguments = dict(nested)
-                primary = query.split(" ", 1)[0]
-                if str(nested_arguments.get("query") or "").strip() != primary:
-                    nested_arguments["query"] = primary
-                    arguments["arguments"] = nested_arguments
-                    changed = True
+            nested_arguments = (
+                {
+                    str(key): value
+                    for key, value in nested.items()
+                    if str(key) in {"limit", "mapping", "query", "searchType", "version"}
+                }
+                if isinstance(nested, Mapping)
+                else {}
+            )
+            primary = query.split(" ", 1)[0]
+            if str(nested_arguments.get("query") or "").strip() != primary:
+                nested_arguments["query"] = primary
+            if not str(nested_arguments.get("searchType") or "").strip():
+                nested_arguments["searchType"] = "class"
+            if nested_arguments != (dict(nested) if isinstance(nested, Mapping) else {}):
+                arguments["arguments"] = nested_arguments
+                changed = True
 
         if arguments != dict(raw_arguments):
             normalized.append(
