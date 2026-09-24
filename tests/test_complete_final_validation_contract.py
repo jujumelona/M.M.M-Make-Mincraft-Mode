@@ -803,7 +803,8 @@ def test_generation_executor_quiesces_mutating_workers_before_return() -> None:
     assert "run_with_model_execution_deadline" in source
     assert "time.monotonic() + lease_seconds" in source
     assert "shutdown(wait=False" not in source
-    assert source.count("shutdown(wait=True, cancel_futures=True)") == 5
+    assert source.count("shutdown(wait=True, cancel_futures=True)") == 1
+    assert "for pool in (cpu_pool, llm_pool, image_pool, commit_pool, review_pool):" in source
 
 
 def test_asset_shard_cache_validates_asset_and_document_digests(tmp_path) -> None:
