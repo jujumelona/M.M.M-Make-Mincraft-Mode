@@ -92,13 +92,48 @@ def _generic_authored_container(title: str) -> bool:
     return normalized in _GENERIC_AUTHORED_CONTAINER_TITLES
 
 
-def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
-    """Split on feature headings, descending through one generic document wrapper.
+def _document_preamble_title(title: str) -> bool:
+    """Recognize document-level wrappers without hard-coding a project name."""
 
-    A single top-level Design/설계 wrapper is not an implementation unit. When it
-    contains multiple peer child headings, those children become the units. Feature-
-    internal headings such as Trigger and State remain together when the parent heading
-    is itself semantic.
+    normalized = re.sub(r"\s+", " ", str(title or "").strip()).casefold()
+    return bool(
+        re.search(
+            r"(?:^|\s)(?:game\s+)?(?:mod\s+)?design\s+document$"
+            r"|(?:^|\s)design\s+spec(?:ification)?$"
+            r"|(?:^|\s)requirements(?:\s+document)?$"
+            r"|(?:^|\s)설계\s*문서$"
+            r"|(?:^|\s)기획서$",
+            normalized,
+        )
+    )
+
+
+def _metadata_only_preamble(lines: list[str], start: int, end: int) -> bool:
+    """Return whether a leading section contains document metadata, not behavior."""
+
+    meaningful = []
+    for line in lines[start:end]:
+        value = line.strip()
+        if not value or re.fullmatch(r"[-*_]{3,}", value):
+            continue
+        if value.startswith("#"):
+            continue
+        meaningful.append(value)
+    if not meaningful:
+        return False
+    metadata = re.compile(
+        r"^(?:[-*+]\s+)?(?:\*\*)?[^:]{1,80}:(?:\*\*)?\s*\S.*$"
+    )
+    return all(metadata.match(value) for value in meaningful)
+
+
+def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
+    """Split approved prose into semantic implementation units without losing bytes.
+
+    Document wrappers and metadata are context, not executable features. When the
+    implementation headings live below one wrapper, or the first peer heading is only
+    a document preamble, attach that prefix to the first real feature instead of
+    allocating a standalone AuthoredFeature class for it.
     """
 
     if not text:
@@ -117,23 +152,43 @@ def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
                 split_level = depth
                 break
 
-    heading_indexes = {index for index, _depth, _title in records}
-    starts = [0] + [
-        index
-        for index, depth, _title in records
-        if depth == split_level and index
+    split_records = [
+        record for record in records if record[1] == split_level
     ]
+    starts = [record[0] for record in split_records]
+    if not starts:
+        return (text,)
+
+    prefix = ""
+    if split_level > shallowest and starts[0] > 0:
+        # We deliberately descended through one document wrapper. Its title and any
+        # metadata/prose before the first child are context for child 1, never a task.
+        prefix = "".join(lines[: starts[0]])
+    elif len(starts) >= 2 and starts[0] == 0:
+        first_title = split_records[0][2]
+        first_end = starts[1]
+        if (
+            _document_preamble_title(first_title)
+            or _metadata_only_preamble(lines, starts[0] + 1, first_end)
+        ):
+            prefix = "".join(lines[:first_end])
+            starts = starts[1:]
+
+    if not starts:
+        return (text,)
+
+    heading_indexes = {index for index, _depth, _title in records}
     blocks: list[str] = []
-    pending = ""
+    pending = prefix
     for start_line, end_line in zip(starts, starts[1:] + [len(lines)]):
-        block = "".join(lines[start_line:end_line])
+        block_text = "".join(lines[start_line:end_line])
         if not any(
             line.strip() and index not in heading_indexes
             for index, line in enumerate(lines[start_line:end_line], start_line)
         ):
-            pending += block
+            pending += block_text
             continue
-        blocks.append(pending + block)
+        blocks.append(pending + block_text)
         pending = ""
     if pending:
         if blocks:
@@ -146,15 +201,25 @@ def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
 
 
 def _authored_block_section(block: str) -> str:
-    _lines, records = _authored_heading_records(block)
+    lines, records = _authored_heading_records(block)
     if not records:
         return ""
-    _index, level, title = records[0]
-    if _generic_authored_container(title):
+    first_index, first_level, first_title = records[0]
+    if _generic_authored_container(first_title):
         for _child_index, child_level, child_title in records[1:]:
-            if child_level > level:
+            if child_level > first_level:
                 return child_title
-    return title
+    if len(records) >= 2:
+        second_index, second_level, second_title = records[1]
+        if (
+            second_level == first_level
+            and (
+                _document_preamble_title(first_title)
+                or _metadata_only_preamble(lines, first_index + 1, second_index)
+            )
+        ):
+            return second_title
+    return first_title
 
 
 def _implementation_authored_plan(plan: AuthoredPlan) -> tuple[AuthoredPlan, dict[str, Any] | None]:
