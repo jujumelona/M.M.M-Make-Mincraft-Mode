@@ -20,7 +20,7 @@ from typing import Any
 from .agent_intent import implementation_requested
 from . import generation_compile_recovery as _compile_recovery
 from .external_mcp_recovery_contract import constrain_recovery_tools, record_discovery
-from .generation_evidence_controller import authoritative_java_evidence as _authoritative_java_evidence, evidence_obligation_satisfied, initial_evidence_frontier, initial_evidence_required, normalize_forced_evidence_rejection_calls, recovery_evidence_frontier, repair_evidence_route_for_errors, repair_route_requires_retrieval, semantic_fresh_java as _semantic_fresh_java
+from .generation_evidence_controller import authoritative_java_evidence as _authoritative_java_evidence, evidence_obligation_satisfied, initial_evidence_frontier, initial_evidence_required, normalize_forced_evidence_rejection_calls, normalize_recovery_evidence_calls, recovery_evidence_frontier, repair_evidence_route_for_errors, repair_route_requires_retrieval, semantic_fresh_java as _semantic_fresh_java
 from .generation_loop_outcomes import (
     MUTATION_ACT_TOOLS as _MUTATION_ACT_TOOLS,
     VERIFY_TOOLS as _VERIFY_TOOLS,
@@ -3452,6 +3452,38 @@ def _generate_with_tools_impl(
                 ),
                 details={"step_index": state.step_index},
             )
+        if state.phase is LoopPhase.RECOVER:
+            recovery_diagnostics = tuple(
+                state.repair_target_diagnostics or state.latest_verifier_errors
+            )
+            normalized_recovery_calls = normalize_recovery_evidence_calls(
+                turn.tool_calls,
+                errors=recovery_diagnostics,
+                target_path=(
+                    state.mutation_context.target_path
+                    if state.mutation_context is not None
+                    else None
+                ),
+                repair_route=state.repair_evidence_route,
+            )
+            if normalized_recovery_calls is not None:
+                turn = replace(turn, tool_calls=normalized_recovery_calls)
+                emit_root_cause(
+                    "recovery_evidence_query_host_bound",
+                    stage=stage,
+                    operation=forced_evidence_tool or "evidence",
+                    gate="tool_admission",
+                    result="PASS",
+                    reason=(
+                        "host rebound verifier recovery search intent to the concrete "
+                        "failed Java/API symbols instead of the generated target class"
+                    ),
+                    details={
+                        "step_index": state.step_index,
+                        "repair_evidence_route": state.repair_evidence_route,
+                        "diagnostic_count": len(recovery_diagnostics),
+                    },
+                )
         turn = reject_noop_repair(
             turn, state=state, binder=_bind_existing_verifier_repair_call
         )
