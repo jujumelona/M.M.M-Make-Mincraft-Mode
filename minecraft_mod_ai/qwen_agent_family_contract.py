@@ -86,21 +86,22 @@ def _qwen_agent_request(request: Any) -> bool:
 
 
 def _qwen_sampling_mode(role: object, request: Any) -> str | None:
-    """Map MMM request semantics onto registry-declared generation modes.
+    """Select sampling from task semantics, independently of template thinking mode.
 
-    Tool pages, including named/required calls, use the registry non-thinking profile so
-    they retain anti-repetition sampling instead of falling into deterministic loops.
+    Tool transport still uses the action template with thinking disabled. A coder
+    materializing source through a tool, however, keeps the registry's precise-coding
+    sampling profile instead of inheriting the generic non-thinking profile merely
+    because a function schema is present.
     """
 
+    normalized_role = str(role or "").strip().casefold()
+    coder = normalized_role in {"coder", "coder_safe"}
     tools = getattr(request, "tools", ()) or ()
-    if tools:
-        return "non_thinking"
-    if _forced_tool_choice(getattr(request, "tool_choice", None)):
-        return "non_thinking"
+    if tools or _forced_tool_choice(getattr(request, "tool_choice", None)):
+        return "precise_coding" if coder else "non_thinking"
     if getattr(request, "response_format", None) == "json" and not tools:
         return "non_thinking"
-    normalized_role = str(role or "").strip().casefold()
-    if normalized_role in {"coder", "coder_safe"}:
+    if coder:
         return "precise_coding"
     return "general_thinking"
 
