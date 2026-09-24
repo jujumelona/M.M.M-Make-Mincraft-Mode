@@ -45,8 +45,6 @@ from .custom_module_generator import (
 from .execution_feedback_replan_contract import (
     execution_feedback_scoped,
     feedback_run_context,
-)
-from .execution_feedback_replan_contract import (
     semantic_execution_observation as _semantic_execution_observation,
 )
 from .extended_content_generator import generate_extended_content
@@ -67,8 +65,8 @@ from .importer import ExistingProjectImportError, inspect_existing_project_archi
 from .java_lsp import JavaLanguageService
 from .local_ai_sidecar_generator import (
     INTEGRATION_TYPE as LOCAL_AI_SIDECAR_INTEGRATION_TYPE,
+    generate_local_ai_sidecar,
 )
-from .local_ai_sidecar_generator import generate_local_ai_sidecar
 from .model_concurrency import run_with_model_execution_deadline
 from .model_router import ModelRouter
 from .platform_catalog import adapter_for_lock_values, adapter_from_project
@@ -86,12 +84,8 @@ from .project_index import ProjectIndex
 from .project_index_execution_reuse_contract import (
     execution_scoped,
     mark_post_generation,
-    tune_gradle_resources,
-)
-from .project_index_execution_reuse_contract import (
     project_index as execution_project_index,
-)
-from .project_index_execution_reuse_contract import (
+    tune_gradle_resources,
     update_from_receipt as update_execution_project_index_from_receipt,
 )
 from .proposal_store import write_sharded_complete_proposal
@@ -116,12 +110,10 @@ from .validation_checkpoint_policy import (
 )
 from .validation_diagnostic_contract import (
     diagnostic_errors as jdt_diagnostic_errors,
-)
-from .validation_diagnostic_contract import (
     run_diagnostics as run_jdt_diagnostics,
     run_diagnostics_with_bootstrap_retry,
+    unwrap_diagnostic_receipt,
 )
-from .validation_diagnostic_contract import unwrap_diagnostic_receipt
 from .validator import validate_jar
 from .work_graph import (
     DurableWorkLedger,
@@ -131,8 +123,6 @@ from .work_graph import (
     build_production_work_plan,
     run_named_checkpoint,
 )
-
-
 
 
 
