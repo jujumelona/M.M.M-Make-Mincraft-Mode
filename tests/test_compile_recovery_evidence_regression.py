@@ -103,7 +103,10 @@ def test_compile_recovery_forces_live_retriever_then_recompiles_authored_source(
                 assert "package net.minecraft.item does not exist" in str(
                     request.messages
                 )
-                args = {"query": "net.minecraft.item.Item correct API package"}
+                # Deliberately reproduce the small-model failure from production:
+                # it searches the generated local class instead of the compiler-failed API.
+                # The host must rewrite this before runtime execution.
+                args = {"query": "AuthoredFeature002 generated local class"}
             else:
                 assert observed == [
                     "apply_source_edit",
@@ -175,6 +178,8 @@ def test_compile_recovery_forces_live_retriever_then_recompiles_authored_source(
                     else [],
                 }
             if name == "search_project_rag":
+                assert "net.minecraft.item" in str(args.get("query") or "")
+                assert "AuthoredFeature002" not in str(args.get("query") or "")
                 return {
                     "schema_version": "mmm/rag-result-v2",
                     "sources": [
@@ -182,6 +187,8 @@ def test_compile_recovery_forces_live_retriever_then_recompiles_authored_source(
                     ],
                 }
             if name == "search_code_rag":
+                assert "net.minecraft.item" in str(args.get("query") or "")
+                assert "AuthoredFeature002" not in str(args.get("query") or "")
                 return {
                     "schema_version": "mmm/code-rag-result-v1",
                     "hits": [
