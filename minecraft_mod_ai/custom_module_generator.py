@@ -42,7 +42,6 @@ from .generation_checkpoint import (
     _track_checkpoint_lease,
     _transfer_checkpoint_lease,
     finalize_persisted_generation_checkpoint,
-    persist_active_generation_checkpoint,
 )
 from .complete_spec import ProductionModule
 from .host_grounding import (
