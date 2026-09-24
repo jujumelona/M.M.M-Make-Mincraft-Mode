@@ -38,10 +38,8 @@ from .complete_orchestrator_support import (
     _system_groups,
 )
 from .complete_spec import AssetRequest, CompleteProposal, CompleteProposalStatus, ProductionModule
-from .custom_module_generator import (
-    CustomModuleGenerator,
-    finalize_persisted_generation_checkpoint,
-)
+from .custom_module_generator import CustomModuleGenerator
+from .generation_checkpoint import finalize_persisted_generation_checkpoint
 from .execution_feedback_replan_contract import (
     execution_feedback_scoped,
     feedback_run_context,
