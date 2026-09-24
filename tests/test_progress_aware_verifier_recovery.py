@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 
 from minecraft_mod_ai import progress_aware_tool_loop as loop
+from minecraft_mod_ai.model_adapters import ToolCall
 
 
 def _schema(name: str) -> dict:
@@ -323,30 +324,6 @@ def test_external_mcp_frontier_snapshot_exposes_completed_and_next_capability() 
     assert snapshot["next_capability"] == "registry_lookup"
 
 
-def test_compile_fallback_only_applies_to_fresh_compile_backed_initial_observe() -> None:
-    assert loop._should_compile_after_initial_evidence_exhaustion(
-        phase=loop.LoopPhase.OBSERVE,
-        implementation_requires_mutation=True,
-        fresh_java_target=True,
-        compile_backed_java=True,
-        validation_status="PENDING",
-    )
-    assert not loop._should_compile_after_initial_evidence_exhaustion(
-        phase=loop.LoopPhase.RECOVER,
-        implementation_requires_mutation=True,
-        fresh_java_target=True,
-        compile_backed_java=True,
-        validation_status="FAIL",
-    )
-    assert not loop._should_compile_after_initial_evidence_exhaustion(
-        phase=loop.LoopPhase.OBSERVE,
-        implementation_requires_mutation=True,
-        fresh_java_target=True,
-        compile_backed_java=False,
-        validation_status="PENDING",
-    )
-
-
 def test_new_verifier_diagnostic_reopens_evidence_frontier_once() -> None:
     state = loop.HostRunState()
     state.attempted_queries.update({"search_code_rag:q=old"})
@@ -373,3 +350,75 @@ def test_new_verifier_diagnostic_reopens_evidence_frontier_once() -> None:
 
     assert state.begin_recovery_evidence_epoch("diag-newer") is True
     assert state.attempted_sources == set()
+
+
+def test_approved_task_query_replaces_generated_self_search() -> None:
+    target = "src/main/java/demo/AuthoredFeature002.java"
+    messages = (
+        {
+            "role": "user",
+            "content": {
+                "module": {
+                    "module_id": "authored_feature_002",
+                    "kind": "custom_java",
+                    "evidence_task": {
+                        "task_id": "authored_feature_002",
+                        "semantic_outcome": (
+                            "Implement spacecraft planetary landing and life detection state"
+                        ),
+                        "acceptance": [
+                            "landing state persists",
+                            "detected life is observable",
+                        ],
+                        "provides": ["capability:spacecraft.planetary_landing"],
+                        "engineering_worksheet": {
+                            "state": "planet landing status and detected life",
+                        },
+                    },
+                }
+            },
+        },
+    )
+    query = loop._approved_task_evidence_query(
+        messages,
+        target_path=target,
+    )
+    assert "AuthoredFeature002" not in query
+    assert "spacecraft planetary landing" in query
+    assert "landing state persists" in query
+
+    call = ToolCall(
+        id="self-search",
+        name="search_code_rag",
+        arguments={
+            "query": "AuthoredFeature002.java implementation details fabric mod 26.2",
+            "limit": 5,
+        },
+        raw_arguments=(
+            '{"query":"AuthoredFeature002.java implementation details fabric mod 26.2",'
+            '"limit":5}'
+        ),
+    )
+    normalized = loop._normalize_initial_task_evidence_calls(
+        (call,),
+        query=query,
+        target_path=target,
+    )
+    assert normalized is not None
+    assert normalized[0].arguments["query"] == query
+    assert normalized[0].arguments["limit"] == 5
+
+
+def test_initial_task_query_does_not_override_non_self_model_search() -> None:
+    call = ToolCall(
+        id="semantic-search",
+        name="search_code_rag",
+        arguments={"query": "Fabric block registration Registry.register", "limit": 5},
+        raw_arguments='{"query":"Fabric block registration Registry.register","limit":5}',
+    )
+    normalized = loop._normalize_initial_task_evidence_calls(
+        (call,),
+        query="approved semantic task query",
+        target_path="src/main/java/demo/AuthoredFeature002.java",
+    )
+    assert normalized is None

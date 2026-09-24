@@ -3019,23 +3019,147 @@ def _evidence_call_adjudication(
     }
 
 
-def _should_compile_after_initial_evidence_exhaustion(
-    *,
-    phase: LoopPhase,
-    implementation_requires_mutation: bool,
-    fresh_java_target: bool,
-    compile_backed_java: bool,
-    validation_status: str,
-) -> bool:
-    """Permit one compile-backed candidate only after the initial evidence frontier is empty."""
+def _message_mapping_payload(message: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    content = message.get("content")
+    if isinstance(content, Mapping):
+        return content
+    if not isinstance(content, str):
+        return None
+    raw = content.strip()
+    if not raw.startswith("{"):
+        return None
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, Mapping) else None
 
-    return bool(
-        phase is LoopPhase.OBSERVE
-        and implementation_requires_mutation
-        and fresh_java_target
-        and compile_backed_java
-        and validation_status != "FAIL"
-    )
+
+def _task_evidence_payload(
+    messages: Sequence[Mapping[str, Any]],
+) -> Mapping[str, Any] | None:
+    for message in reversed(messages):
+        payload = _message_mapping_payload(message)
+        if payload is None:
+            continue
+        module = payload.get("module")
+        if not isinstance(module, Mapping):
+            continue
+        task = module.get("evidence_task")
+        if isinstance(task, Mapping):
+            return task
+        config = module.get("config")
+        if isinstance(config, Mapping):
+            task = config.get("evidence_task")
+            if isinstance(task, Mapping):
+                return task
+    return None
+
+
+def _task_query_fragments(value: Any, result: list[str]) -> None:
+    if len(result) >= 24:
+        return
+    if isinstance(value, str):
+        text = " ".join(value.split()).strip()
+        if text and not text.casefold().startswith("sha256:") and text not in result:
+            result.append(text)
+        return
+    if isinstance(value, Mapping):
+        for child in value.values():
+            _task_query_fragments(child, result)
+            if len(result) >= 24:
+                return
+        return
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for child in value:
+            _task_query_fragments(child, result)
+            if len(result) >= 24:
+                return
+
+
+def _approved_task_evidence_query(
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    target_path: str | None,
+) -> str:
+    """Build one bounded retrieval query from the approved task, never its generated name."""
+
+    task = _task_evidence_payload(messages)
+    if task is None:
+        return ""
+    fragments: list[str] = []
+    for field in (
+        "semantic_outcome",
+        "acceptance",
+        "public_acceptance",
+        "provides",
+        "engineering_worksheet",
+    ):
+        if field in task:
+            _task_query_fragments(task.get(field), fragments)
+    target = str(target_path or "").replace("\\", "/").strip()
+    target_symbol = target.rsplit("/", 1)[-1].rsplit(".", 1)[0] if target else ""
+    cleaned: list[str] = []
+    for fragment in fragments:
+        value = fragment
+        if target_symbol:
+            value = re.sub(re.escape(target_symbol), " ", value, flags=re.IGNORECASE)
+        value = re.sub(r"\bAuthoredFeature\d+\b", " ", value, flags=re.IGNORECASE)
+        value = " ".join(value.split()).strip()
+        if value and value not in cleaned:
+            cleaned.append(value)
+    return " ".join(cleaned)[:768]
+
+
+def _normalize_initial_task_evidence_calls(
+    calls: Sequence[Any],
+    *,
+    query: str,
+    target_path: str | None,
+) -> tuple[Any, ...] | None:
+    """Replace generated-self searches with the approved task's semantic query."""
+
+    task_query = str(query or "").strip()
+    if not task_query:
+        return None
+    target = str(target_path or "").replace("\\", "/").strip()
+    target_symbol = target.rsplit("/", 1)[-1].rsplit(".", 1)[0] if target else ""
+    target_folded = target_symbol.casefold()
+    changed = False
+    normalized: list[Any] = []
+    for call in calls:
+        name = str(getattr(call, "name", "") or "").strip()
+        arguments = getattr(call, "arguments", None)
+        if (
+            name not in {"search_code_rag", "search_project_rag"}
+            or not isinstance(arguments, Mapping)
+        ):
+            normalized.append(call)
+            continue
+        current_query = str(arguments.get("query") or "").strip()
+        self_target = bool(
+            target_folded
+            and current_query
+            and target_folded in current_query.casefold()
+        )
+        if not self_target:
+            normalized.append(call)
+            continue
+        rebound = dict(arguments)
+        rebound["query"] = task_query
+        normalized.append(
+            replace(
+                call,
+                arguments=rebound,
+                raw_arguments=json.dumps(
+                    rebound,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+        )
+        changed = True
+    return tuple(normalized) if changed else None
 
 
 def _generate_with_tools_impl(
@@ -3523,48 +3647,6 @@ def _generate_with_tools_impl(
                 state.phase = LoopPhase.ACT
                 continue
             if mutation_is_ready and not baseline_ready:
-                if _should_compile_after_initial_evidence_exhaustion(
-                    phase=state.phase,
-                    implementation_requires_mutation=implementation_requires_mutation,
-                    fresh_java_target=fresh_java_target,
-                    compile_backed_java=compile_backed_java,
-                    validation_status=state.validation_status,
-                ):
-                    mcp_state = recovery_state_snapshot(
-                        state,
-                        state.repair_evidence_route,
-                    )
-                    emit_root_cause(
-                        "initial_evidence_exhausted_compile_fallback",
-                        stage=stage,
-                        operation="generate_with_tools",
-                        gate="authoritative_evidence",
-                        result="RECOVER",
-                        reason=(
-                            "all reviewed pre-implementation evidence routes were "
-                            "exhausted; the host-localized fresh Java target will proceed "
-                            "to ACT and mandatory target_compile so concrete compiler "
-                            "diagnostics can drive a new recovery evidence epoch"
-                        ),
-                        details={
-                            "target_path": (
-                                state.mutation_context.target_path
-                                if state.mutation_context is not None
-                                else None
-                            ),
-                            "attempted_sources": sorted(state.attempted_sources),
-                            "last_evidence_adjudications": list(
-                                state.evidence_adjudications[-8:]
-                            ),
-                            **mcp_state,
-                        },
-                    )
-                    require_rag = False
-                    state.require_evidence = False
-                    required_evidence_choice = False
-                    state.clear_no_progress_result()
-                    state.phase = LoopPhase.ACT
-                    continue
                 emit_root_cause(
                     "implementation_evidence_stalled",
                     stage=stage,
@@ -3906,6 +3988,57 @@ def _generate_with_tools_impl(
                     ),
                 },
             )
+        if (
+            state.phase is LoopPhase.OBSERVE
+            and fresh_java_target
+            and require_rag
+            and not baseline_ready
+        ):
+            target_path = (
+                state.mutation_context.target_path
+                if state.mutation_context is not None
+                else None
+            )
+            task_query = _approved_task_evidence_query(
+                messages,
+                target_path=target_path,
+            )
+            normalized_initial_calls = _normalize_initial_task_evidence_calls(
+                turn.tool_calls,
+                query=task_query,
+                target_path=target_path,
+            )
+            if normalized_initial_calls is not None:
+                original_queries = [
+                    str(
+                        call.arguments.get("query")
+                        if isinstance(call.arguments, Mapping)
+                        else ""
+                    )
+                    for call in turn.tool_calls
+                ]
+                turn = replace(turn, tool_calls=normalized_initial_calls)
+                emit_root_cause(
+                    "initial_evidence_query_host_bound",
+                    stage=stage,
+                    operation=(
+                        str(normalized_initial_calls[0].name)
+                        if normalized_initial_calls
+                        else "evidence"
+                    ),
+                    gate="authoritative_evidence",
+                    result="PASS",
+                    reason=(
+                        "generated-target self-search was replaced by the approved "
+                        "task semantic outcome and acceptance contract"
+                    ),
+                    details={
+                        "step_index": state.step_index,
+                        "target_path": target_path,
+                        "original_queries": original_queries,
+                        "task_query": task_query,
+                    },
+                )
         if state.phase is LoopPhase.RECOVER:
             recovery_diagnostics = tuple(
                 state.repair_target_diagnostics or state.latest_verifier_errors
