@@ -303,6 +303,7 @@ def _authored_block_section(block: str) -> str:
                     break
             if (
                 _document_context_title(child_title)
+                or _generic_authored_container(child_title)
                 or _metadata_only_preamble(lines, child_index + 1, next_index)
             ):
                 continue
