@@ -19,6 +19,46 @@ class ExternalMCPError(RuntimeError):
     pass
 
 
+def _mcp_error(raw: Any) -> bool:
+    return bool(getattr(raw, "isError", getattr(raw, "is_error", False)))
+
+
+def _provider_error_text(raw: Any) -> str:
+    from .root_cause_trace import bounded_safe
+
+    result = _normalize_tool_result(raw)
+    # Provider content remains untrusted diagnostic data, never a tool instruction.
+    return str(bounded_safe(json.dumps(result, ensure_ascii=False, default=str)))[:4096]
+
+
+async def _checked_provider_call(
+    session: Any, tool: str, arguments: Mapping[str, Any], *,
+    listed: Any, prepare_minecraft_source: bool = False,
+) -> Any:
+    raw = await session.call_tool(tool, arguments=dict(arguments))
+    if _mcp_error(raw) and prepare_minecraft_source and tool == "search_minecraft_code":
+        message = _provider_error_text(raw)
+        if "Decompiled source not found" in message:
+            # This prerequisite is fixed by the reviewed minecraft-dev protocol.
+            # Never forward query, jarPath, force, or a tool named by remote text.
+            prerequisites = [item for item in getattr(listed, "tools", ())
+                             if item.name == "decompile_minecraft_version"]
+            if len(prerequisites) != 1:
+                raise ExternalMCPError("Minecraft source preparation tool is missing or ambiguous.")
+            version, mapping = arguments.get("version"), arguments.get("mapping")
+            if not isinstance(version, str) or not version or mapping not in {"mojmap", "yarn"}:
+                raise ExternalMCPError("Minecraft source preparation requires the bound version and mapping.")
+            prepared = await session.call_tool(
+                "decompile_minecraft_version", arguments={"version": version, "mapping": mapping},
+            )
+            if _mcp_error(prepared):
+                raise ExternalMCPError("Minecraft source preparation failed: " + _provider_error_text(prepared))
+            raw = await session.call_tool(tool, arguments=dict(arguments))
+    if _mcp_error(raw):
+        raise ExternalMCPError("External MCP tool failed: " + _provider_error_text(raw))
+    return raw
+
+
 def _server_scope(values: Collection[str] | None) -> frozenset[str] | None:
     if values is None:
         return None
@@ -301,7 +341,7 @@ class ExternalMCPRouter:
 
         thread = threading.Thread(target=worker, daemon=True)
         thread.start()
-        thread.join(self.timeout_seconds + 5.0)
+        thread.join(self._provider_timeout(server_name, tool) + 5.0)
         if thread.is_alive():
             raise ExternalMCPError(
                 f"External MCP {server_name} exceeded the synchronous bridge timeout."
@@ -309,6 +349,12 @@ class ExternalMCPRouter:
         if error:
             raise ExternalMCPError(str(error[0])) from error[0]
         return value["result"]
+
+    def _provider_timeout(self, server_name: str, tool: str) -> float:
+        # A cold Minecraft source cache needs a download and full decompilation.
+        if server_name == "minecraft-dev" and tool == "search_minecraft_code":
+            return max(self.timeout_seconds, 600.0)
+        return self.timeout_seconds
 
     async def _call_provider_async(
         self,
@@ -326,7 +372,7 @@ class ExternalMCPRouter:
             raise ExternalMCPError("The pinned MCP Python client is unavailable.") from exc
 
         transport = entry.get("transport")
-        with anyio.fail_after(self.timeout_seconds):
+        with anyio.fail_after(self._provider_timeout(server_name, tool)):
             if transport == "stdio":
                 command = entry.get("command")
                 if not isinstance(command, list) or not command:
@@ -339,7 +385,10 @@ class ExternalMCPRouter:
                 with open_mcp_stdio_errlog() as errlog:
                     async with stdio_client(params, errlog=errlog) as (read_stream, write_stream):
                         async with ClientSession(read_stream, write_stream) as session:
-                            return await self._initialized_call(session, tool, arguments)
+                            return await self._initialized_call(
+                                session, tool, arguments,
+                                prepare_minecraft_source=(server_name == "minecraft-dev"),
+                            )
             if transport == "streamable_http":
                 url = self._server_url(entry)
                 if not url:
@@ -359,6 +408,8 @@ class ExternalMCPRouter:
         session: Any,
         tool: str,
         arguments: Mapping[str, Any],
+        *,
+        prepare_minecraft_source: bool = False,
     ) -> dict[str, Any]:
         initialized = await session.initialize()
         listed = await session.list_tools()
@@ -367,9 +418,10 @@ class ExternalMCPRouter:
             raise ExternalMCPError(
                 f"Provider does not expose reviewed tool {tool!r}; available={sorted(available)}"
             )
-        raw = await session.call_tool(tool, arguments=dict(arguments))
-        if bool(getattr(raw, "isError", getattr(raw, "is_error", False))):
-            raise ExternalMCPError("External MCP tool returned an MCP error result.")
+        raw = await _checked_provider_call(
+            session, tool, arguments, listed=listed,
+            prepare_minecraft_source=prepare_minecraft_source,
+        )
         return {
             "server_info": _jsonable(getattr(initialized, "serverInfo", None)),
             "result": _normalize_tool_result(raw),

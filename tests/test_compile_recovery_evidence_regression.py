@@ -243,7 +243,9 @@ def test_compile_recovery_forces_live_retriever_then_recompiles_authored_source(
     token = CURRENT_MUTATION_AUTHORITY.set(MutationAuthority.exact((target,)))
     try:
         result = loop.generate_with_tools(
-            SimpleNamespace(_agent_require_fresh_evidence=True),
+            # Exercise compiler-triggered recovery separately from the fresh-task
+            # policy: this fixture explicitly permits the initial compile-first edit.
+            SimpleNamespace(_agent_require_fresh_evidence=False),
             config=SimpleNamespace(
                 adapter="test",
                 max_context=32768,

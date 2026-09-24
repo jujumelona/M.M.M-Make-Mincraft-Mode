@@ -155,7 +155,7 @@ def test_evidence_obligation_admission_is_controller_owned() -> None:
     )
 
 
-def test_compile_backed_pinned_fresh_java_skips_speculative_presearch() -> None:
+def test_compile_backed_existing_java_skips_speculative_presearch() -> None:
     assert not controller.initial_evidence_required(
         role="coder",
         host_grounded=False,
@@ -174,6 +174,19 @@ def test_unverified_fresh_java_still_requires_initial_evidence() -> None:
         implementation_requires_mutation=True,
         host_target_execution_authority=True,
         compile_backed_java=False,
+    )
+
+
+def test_materialized_fresh_java_honors_explicit_evidence_policy() -> None:
+    options = {
+        "role": "coder", "host_grounded": False, "router_requires_fresh_evidence": True,
+        "implementation_requires_mutation": True, "host_target_execution_authority": True,
+        "compile_backed_java": True, "semantic_fresh_java_target": True,
+    }
+    assert controller.initial_evidence_required(**options)
+    assert not controller.initial_evidence_required(**{**options, "host_grounded": True})
+    assert not controller.initial_evidence_required(
+        **{**options, "router_requires_fresh_evidence": False}
     )
 
 
@@ -321,4 +334,3 @@ def test_malformed_external_source_search_is_rebuilt_from_verifier_diagnostic() 
         "query": "net.minecraft.client.MinecraftClient",
         "searchType": "class",
     }
-

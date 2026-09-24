@@ -4,13 +4,13 @@ from jsonschema import Draft202012Validator
 
 from minecraft_mod_ai import generation_evidence_controller as evidence_controller
 from minecraft_mod_ai import progress_aware_tool_loop as tool_loop
-from minecraft_mod_ai.model_adapters import ToolCall
 from minecraft_mod_ai.agent_tool_runtime import AgentToolRuntime
 from minecraft_mod_ai.external_agent_bridge import ExternalAgentBridge
 from minecraft_mod_ai.external_mcp_recovery_contract import (
     constrain_recovery_tools,
     record_discovery,
 )
+from minecraft_mod_ai.model_adapters import ToolCall
 
 
 def _schema(name: str) -> dict:
@@ -216,8 +216,8 @@ def test_recovery_mcp_schema_is_narrowed_to_reviewed_discovered_capability() -> 
 
 def test_recovery_mcp_call_requires_successful_schema_binding() -> None:
     state = tool_loop.HostRunState(phase=tool_loop.LoopPhase.RECOVER)
-    setattr(state, "_external_mcp_capabilities_seen", True)
-    setattr(state, "_external_mcp_recovery_capabilities", ("source_search",))
+    state._external_mcp_capabilities_seen = True
+    state._external_mcp_recovery_capabilities = "source_search",
 
     assert constrain_recovery_tools(
         (_external_schema("external_mcp_call"),),
@@ -246,3 +246,47 @@ def test_recovery_mcp_call_requires_successful_schema_binding() -> None:
         "source_search"
     ]
 
+
+def test_fabric_api_diagnostic_prefers_loader_docs_over_vanilla_source():
+    state = tool_loop.HostRunState(phase=tool_loop.LoopPhase.RECOVER,
+        latest_verifier_errors=({"message": "package net.fabricmc.fabric.api.client.itemgroup.v1 does not exist"},))
+    state._external_mcp_capabilities_seen = True
+    state._external_mcp_recovery_capabilities = ("source_search", "official_mod_docs")
+    narrowed = constrain_recovery_tools((_external_schema("external_mcp_schema"),),
+        state=state, repair_route="official_api")
+    assert narrowed[0]["function"]["parameters"]["properties"]["capability"]["enum"] == ["official_mod_docs"]
+
+
+def test_failed_provider_does_not_exhaust_other_discovered_capabilities():
+    tools = tuple(_external_schema(name) for name in (
+        "external_mcp_capabilities", "external_mcp_schema", "external_mcp_call"))
+    state = tool_loop.HostRunState(phase=tool_loop.LoopPhase.RECOVER)
+    state.record_source_attempt("external_mcp_capabilities", {})
+    record_discovery(state, ToolCall(id="caps", name="external_mcp_capabilities", arguments={}),
+                     {"ok": True, "result": {"capabilities": {
+                         "source_search": [{}], "official_mod_docs": [{}]}}},
+                     external_rag_capability=lambda value: value["capability"])
+    called = []
+    for capability in ("source_search", "official_mod_docs"):
+        for tool_name in ("external_mcp_schema", "external_mcp_call"):
+            frontier = tool_loop._filter_tools_for_phase(
+                tools, state.phase, "coder", attempted_sources=state.attempted_sources,
+                repair_evidence_route="official_api")
+            selected = constrain_recovery_tools(frontier, state=state, repair_route="official_api",
+                                                available_tools=tools)
+            assert len(selected) == 1
+            assert selected[0]["function"]["name"] == tool_name
+            assert selected[0]["function"]["parameters"]["properties"]["capability"]["enum"] == [capability]
+            args = {"capability": capability}
+            call = ToolCall(id=str(len(called)), name=tool_name, arguments=args)
+            state.record_source_attempt(tool_name, args)
+            record_discovery(state, call, {"ok": True, "result": {
+                "status": "PASS" if tool_name == "external_mcp_schema" else "UNAVAILABLE"}},
+                external_rag_capability=lambda value: value["capability"])
+            called.append((tool_name, capability))
+    assert len(called) == 4
+    assert constrain_recovery_tools((), state=state, repair_route="official_api",
+                                    available_tools=tools) == ()
+    state.phase = tool_loop.LoopPhase.ACT
+    assert constrain_recovery_tools((), state=state, repair_route="official_api",
+                                    available_tools=tools) == ()

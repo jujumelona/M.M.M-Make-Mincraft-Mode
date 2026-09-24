@@ -1154,9 +1154,8 @@ def _target_evidence_ready(
 ) -> bool:
     """Decide whether the current evidence obligation is satisfied.
 
-    For compile-backed pinned Java, initial evidence policy is already false and this
-    gate is therefore open. If repair later establishes a concrete evidence obligation,
-    this same gate still requires the controller-approved evidence class.
+    Both initial fresh-task policy and concrete repair obligations require the
+    controller-approved evidence class. A target compiler is not API evidence.
     """
 
     del compile_backed_java
@@ -2849,6 +2848,7 @@ def _generate_with_tools_impl(
         host_target_execution_authority=initial_execution_authority,
         compile_backed_java=compile_backed_java,
         authored_workspace_refresh=authored_workspace_refresh,
+        semantic_fresh_java_target=fresh_java_target,
     )
     required_evidence_choice = bool(require_rag)
 
@@ -3138,7 +3138,10 @@ def _generate_with_tools_impl(
                     _tool_name(schema) for schema in phase_tools if _tool_name(schema)
                 ]},
             )
-        phase_tools = constrain_recovery_tools(phase_tools, state=state, repair_route=state.repair_evidence_route)
+        phase_tools = constrain_recovery_tools(
+            phase_tools, state=state, repair_route=state.repair_evidence_route,
+            available_tools=all_tools,
+        )
         if (
             authored_workspace_refresh
             and state.phase is LoopPhase.OBSERVE
@@ -3274,7 +3277,7 @@ def _generate_with_tools_impl(
         if (
             state.phase == LoopPhase.OBSERVE
             and state.mutation_context
-            and state.mutation_context.is_new_file
+            and fresh_java_target
             and state.mutation_context.is_mutation_ready
             and require_rag
             and not baseline_ready
@@ -3282,8 +3285,9 @@ def _generate_with_tools_impl(
             messages.append({
                 "role": "system",
                 "content": (
-                    "The host target is a NEW reserved Java file and does not exist yet. "
-                    "Do not search for that filename. Before writing code, retrieve task-relevant "
+                    "The host target needs a NEW Java implementation; an existing scaffold "
+                    "is not API evidence. Do not search for that generated filename. "
+                    "Before writing code, retrieve task-relevant "
                     "symbols from the actual Java workspace when available, plus project conventions "
                     "or version-pinned API/mapping evidence needed to implement the requested behavior. "
                     "Do not guess Minecraft/Fabric package names from memory."

@@ -56,7 +56,13 @@ def _with_capability(schema: Mapping[str, Any], capability: str) -> Mapping[str,
 
 def _preferred_capability(state: Any, repair_route: str | None) -> str:
     available = set(getattr(state, "_external_mcp_recovery_capabilities", ()) or ())
+    available.difference_update(getattr(state, "_external_mcp_completed_capabilities", ()) or ())
     order = _RECOVERY_ORDER.get(str(repair_route or "").strip(), _DEFAULT_ORDER)
+    diagnostics = getattr(state, "latest_verifier_errors", ()) or ()
+    if any(isinstance(error, Mapping) and "net.fabricmc." in str(error.get("message", ""))
+           for error in diagnostics):
+        # Fabric API classes are not in the decompiled vanilla Minecraft tree.
+        order = ("official_mod_docs",) + tuple(name for name in order if name != "official_mod_docs")
     return next((name for name in order if name in available), "")
 
 
@@ -65,10 +71,32 @@ def constrain_recovery_tools(
     *,
     state: Any,
     repair_route: str | None,
+    available_tools: Sequence[Mapping[str, Any]] = (),
 ) -> tuple[Mapping[str, Any], ...]:
     """Project schema/call tools to one host-selected discovered capability."""
 
     tools = tuple(phase_tools)
+    phase = getattr(state, "phase", None)
+    phase_name = getattr(phase, "value", phase)
+    external_frontier = not tools or (
+        len(tools) == 1
+        and _tool_name(tools[0]) in {"external_mcp_schema", "external_mcp_call"}
+    )
+    if (
+        available_tools
+        and phase_name in {"OBSERVE", "RECOVER"}
+        and bool(getattr(state, "_external_mcp_capabilities_seen", False))
+        and external_frontier
+    ):
+        # A generic tool attempt is not a capability attempt. Each discovered
+        # provider route gets one schema/call pair; exhaustion remains finite.
+        capability = _preferred_capability(state, repair_route)
+        if not capability:
+            return ()
+        bound = getattr(state, "_external_mcp_schema_capability", "")
+        name = "external_mcp_call" if bound == capability else "external_mcp_schema"
+        schema = next((item for item in available_tools if _tool_name(item) == name), None)
+        return (_with_capability(schema, capability),) if schema is not None else ()
     if len(tools) != 1:
         return tools
     name = _tool_name(tools[0])
@@ -111,21 +139,26 @@ def record_discovery(
                     )
                 )
             )
-        setattr(state, "_external_mcp_capabilities_seen", True)
-        setattr(state, "_external_mcp_recovery_capabilities", reviewed)
-        setattr(state, "_external_mcp_schema_capability", "")
+        state._external_mcp_capabilities_seen = True
+        state._external_mcp_recovery_capabilities = reviewed
+        state._external_mcp_schema_capability = ""
+        state._external_mcp_completed_capabilities = set()
         return
-    if name != "external_mcp_schema":
+    if name not in {"external_mcp_schema", "external_mcp_call"}:
         return
     result = payload.get("result")
     status = str(result.get("status") or "").strip() if isinstance(result, Mapping) else ""
     capability = str(getattr(call, "arguments", {}).get("capability") or "").strip()
     available = set(getattr(state, "_external_mcp_recovery_capabilities", ()) or ())
-    setattr(
-        state,
-        "_external_mcp_schema_capability",
-        capability if status == "PASS" and capability in available else "",
-    )
+    if capability not in available:
+        return
+    if name == "external_mcp_call" or status != "PASS":
+        completed = set(getattr(state, "_external_mcp_completed_capabilities", ()) or ())
+        completed.add(capability)
+        state._external_mcp_completed_capabilities = completed
+        state._external_mcp_schema_capability = ""
+        return
+    state._external_mcp_schema_capability = capability
 
 
 __all__ = ["constrain_recovery_tools", "record_discovery"]

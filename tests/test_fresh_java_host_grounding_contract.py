@@ -9,7 +9,6 @@ from minecraft_mod_ai.grounding_policy import host_baseline_evidence_ready
 from minecraft_mod_ai.host_grounding import _SCHEMA_VERSION as HOST_GROUNDING_SCHEMA
 from minecraft_mod_ai.model_adapters import GenerationRequest
 
-
 TARGET = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
 
 
@@ -228,3 +227,106 @@ def test_untrusted_user_owned_anchor_cannot_bypass_generic_rag(monkeypatch) -> N
         "function": {"name": "search_code_rag"},
     }
     assert first.parallel_tool_calls is False
+
+
+@pytest.mark.parametrize("mode", ["first_turn", "provider_fallback", "exhausted"])
+def test_materialized_fresh_authored_slot_cannot_compile_its_way_past_missing_evidence(tmp_path, mode):
+    from minecraft_mod_ai.model_adapters import (
+        GenerationResponse,
+        ModelConfigurationError,
+        ToolCall,
+    )
+    from minecraft_mod_ai.mutation_authority import (
+        CURRENT_MUTATION_AUTHORITY,
+        MutationAuthority,
+    )
+    from minecraft_mod_ai.small_model_task_capsule_contract import (
+        _CURRENT_CAPSULE,
+        compile_task_capsule,
+    )
+
+    path = "src/main/java/demo/AuthoredFeature001.java"
+    source = tmp_path / path
+    source.parent.mkdir(parents=True)
+    source.write_text("package demo; public final class AuthoredFeature001 {\n"
+                      " public static void initialize() { // MMM_AUTHORED_FEATURE_BODY_001\n }\n}",
+                      encoding="utf-8")
+    anchor = {"kind": "symbol", "locator": path + "#AuthoredFeature001",
+              "status": "existing", "ownership": "host_exact_authored_lowering"}
+    module = SimpleNamespace(module_id="authored_feature_001", kind="custom_java", config={
+        "evidence_task": {"task_id": "authored_feature_001", "owned_anchors": [anchor],
+                          "production_bindings": [{"task_ref": "authored_feature_001",
+                                                   "reuse_action": "fresh", "owned_anchors": [anchor]}],
+                          "required_gates": ["target_compile"]}})
+    capsule = compile_task_capsule(module)
+    operations = []
+
+    class EvidenceAdapter(_CapturingAdapter):
+        def generate_turn(self, request):
+            self.requests.append(request)
+            assert len(self.requests) <= 8
+            schema = request.tools[0]["function"]
+            if mode == "first_turn" or schema["name"] == "apply_source_edit":
+                raise _StopFirstTurn
+            name = schema["name"]
+            args = {}
+            if name in {"external_mcp_schema", "external_mcp_call"}:
+                args["capability"] = schema["parameters"]["properties"]["capability"]["enum"][0]
+            return GenerationResponse(tool_calls=(ToolCall(id=str(len(self.requests)), name=name, arguments=args),))
+
+    def call(stage, name, args, **kwargs):
+        assert stage == "generation"
+        operations.append((name, args.get("capability")))
+        if name == "search_code_rag":
+            return {"schema_version": "mmm/code-rag-result-v1", "hits": []}
+        if name == "external_mcp_capabilities":
+            return {"capabilities": {"source_search": [{}], "official_mod_docs": [{}]}}
+        if name == "external_mcp_schema":
+            return {"status": "PASS"}
+        assert name == "external_mcp_call"
+        cap = args["capability"]
+        if cap == "source_search" or mode == "exhausted":
+            return {"schema_version": "mmm/external-mcp-evidence-bundle-v1",
+                    "capability": cap, "status": "UNAVAILABLE", "evidence": []}
+        return {"schema_version": "mmm/external-mcp-evidence-bundle-v1", "capability": cap,
+                "status": "PASS", "evidence": [{
+                    "schema_version": "mmm/external-mcp-call-receipt-v1", "capability": cap,
+                    "status": "PASS", "access": "read", "result": {"text": [
+                        "import net.minecraft.world.level.block.Block;\npublic class LaunchPad extends Block {}"
+                    ]}}]}
+
+    adapter = EvidenceAdapter()
+    tools = [_tool("search_code_rag"), _tool("apply_source_edit")]
+    if mode != "first_turn":
+        for name in ("external_mcp_capabilities", "external_mcp_schema", "external_mcp_call"):
+            tool = _tool(name)
+            tool["function"]["parameters"]["properties"] = {
+                "capability": {"type": "string"}, "arguments": {"type": "object"}}
+            tools.append(tool)
+    token = _CURRENT_CAPSULE.set(capsule)
+    authority = CURRENT_MUTATION_AUTHORITY.set(MutationAuthority.exact((path,)))
+    try:
+        expected = (pytest.raises(ModelConfigurationError, match="IMPLEMENTATION_EVIDENCE_STALLED")
+                    if mode == "exhausted" else pytest.raises(_StopFirstTurn))
+        with expected:
+            loop.generate_with_tools(
+                SimpleNamespace(_agent_require_fresh_evidence=True),
+                config=SimpleNamespace(max_context=32768, max_new_tokens=4096), adapter=adapter,
+                request=GenerationRequest(messages=(
+                    {"role": "developer", "content": capsule.to_host_authority_payload()},
+                    {"role": "user", "content": {"phase": "implement_module", "task": "Register the launch pad using the selected target API."}},
+                ), tools=tuple(tools)),
+                runtime=SimpleNamespace(workspace_root=tmp_path, call=call, call_scoped=call), stage="generation", role="coder",
+            )
+    finally:
+        _CURRENT_CAPSULE.reset(token)
+        CURRENT_MUTATION_AUTHORITY.reset(authority)
+    assert [tool["function"]["name"] for tool in adapter.requests[0].tools] == ["search_code_rag"]
+    if mode != "first_turn":
+        assert operations == [
+            ("search_code_rag", None), ("external_mcp_capabilities", None),
+            ("external_mcp_schema", "source_search"), ("external_mcp_call", "source_search"),
+            ("external_mcp_schema", "official_mod_docs"), ("external_mcp_call", "official_mod_docs"),
+        ]
+    if mode == "provider_fallback":
+        assert adapter.requests[-1].tools[0]["function"]["name"] == "apply_source_edit"

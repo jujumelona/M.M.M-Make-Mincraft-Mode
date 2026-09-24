@@ -279,6 +279,8 @@ def install(
             session: Any,
             tool: str,
             arguments: Mapping[str, Any],
+            *,
+            prepare_minecraft_source: bool = False,
         ) -> dict[str, Any]:
             initialized = await session.initialize()
             listed = await session.list_tools()
@@ -288,11 +290,10 @@ def install(
                 jsonable=external_mcp_router_module._jsonable,
                 error_type=external_mcp_router_module.ExternalMCPError,
             )
-            raw = await session.call_tool(tool, arguments=dict(arguments))
-            if bool(getattr(raw, "isError", getattr(raw, "is_error", False))):
-                raise external_mcp_router_module.ExternalMCPError(
-                    "External MCP tool returned an MCP error result."
-                )
+            raw = await external_mcp_router_module._checked_provider_call(
+                session, tool, arguments, listed=listed,
+                prepare_minecraft_source=prepare_minecraft_source,
+            )
             return {
                 "server_info": external_mcp_router_module._jsonable(
                     getattr(initialized, "serverInfo", None)

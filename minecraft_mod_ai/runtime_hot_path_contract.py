@@ -286,7 +286,7 @@ def _install_parallel_external_provider(external_mcp_router_module: Any) -> None
 
         thread = threading.Thread(target=worker, daemon=True)
         thread.start()
-        thread.join(self.timeout_seconds + 5.0)
+        thread.join(self._provider_timeout(server_name, tool) + 5.0)
         if thread.is_alive():
             raise external_mcp_router_module.ExternalMCPError(
                 f"External MCP {server_name} exceeded the synchronous bridge timeout."

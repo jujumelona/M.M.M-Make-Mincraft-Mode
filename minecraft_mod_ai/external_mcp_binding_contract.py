@@ -240,6 +240,8 @@ def install(external_agent_bridge_module: Any, external_mcp_router_module: Any) 
                 # transport/tool failure is evidence unavailability, not a host
                 # execution-authority failure. Route/schema drift above still fails
                 # closed; only the actual provider invocation is downgraded.
+                from .root_cause_trace import exception_chain
+
                 bundle = {
                     "schema_version": "mmm/external-mcp-evidence-bundle-v1",
                     "capability": capability,
@@ -254,6 +256,7 @@ def install(external_agent_bridge_module: Any, external_mcp_router_module: Any) 
                             "tool": tool,
                             "status": "ERROR",
                             "error": f"{type(exc).__name__}: {exc}",
+                            "exception_chain": exception_chain(exc),
                         }
                     ],
                 }

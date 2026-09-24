@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -192,6 +194,61 @@ def test_nested_provider_exception_exposes_actual_failure(tmp_path, monkeypatch)
     assert bundle["status"] == "UNAVAILABLE"
     chain = bundle["attempts"][0].get("exception_chain", [])
     assert any(row["type"] == "FileNotFoundError" and "provider executable missing" in row["message"] for row in chain)
+
+
+@pytest.mark.parametrize("mode", ["cold", "cached", "prepare_failure", "still_missing", "other_error", "unreviewed"])
+def test_source_search_prepares_only_missing_reviewed_cache_then_retries_once(mode):
+    calls = []
+
+    class Session:
+        async def initialize(self):
+            return SimpleNamespace(serverInfo={})
+
+        async def list_tools(self):
+            return SimpleNamespace(tools=[
+                SimpleNamespace(name=name, inputSchema={"type": "object", "properties": {}})
+                for name in ("search_minecraft_code", "decompile_minecraft_version")
+            ])
+
+        async def call_tool(self, tool, *, arguments):
+            calls.append((tool, dict(arguments)))
+            error = False
+            text = "package net.minecraft.world.item; public class Item {}"
+            if tool == "decompile_minecraft_version":
+                error = mode == "prepare_failure"
+                text = "Java executable missing" if error else "Prepared 26.2 mojmap"
+            elif mode == "other_error":
+                error, text = True, "Invalid query"
+            elif mode != "cached" and (len(calls) == 1 or mode == "still_missing"):
+                error, text = True, "Decompiled source not found for 26.2 with mojmap mappings. Run decompile_minecraft_version first."
+            return SimpleNamespace(is_error=error, content=[SimpleNamespace(text=text)])
+
+    args = {"version": "26.2", "mapping": "mojmap", "query": "Item", "searchType": "class"}
+    run = ExternalMCPRouter._initialized_call(
+        Session(), "search_minecraft_code", args, prepare_minecraft_source=mode != "unreviewed",
+    )
+    if mode in {"cold", "cached"}:
+        result = asyncio.run(run)
+        assert "public class Item" in str(result)
+    else:
+        expected = {"prepare_failure": "Java executable missing", "other_error": "Invalid query"}.get(
+            mode, "Decompiled source not found")
+        with pytest.raises(ExternalMCPError, match=expected):
+            asyncio.run(run)
+    if mode in {"cold", "prepare_failure", "still_missing"}:
+        assert calls[1] == ("decompile_minecraft_version", {"version": "26.2", "mapping": "mojmap"})
+        assert len(calls) == (2 if mode == "prepare_failure" else 3)
+        if len(calls) == 3:
+            assert calls[0] == calls[2]
+    else:
+        assert calls == [("search_minecraft_code", args)]
+
+
+def test_only_reviewed_cold_source_search_gets_preparation_time():
+    router = ExternalMCPRouter(timeout_seconds=45)
+    assert router._provider_timeout("minecraft-dev", "search_minecraft_code") == 600
+    assert router._provider_timeout("other", "search_minecraft_code") == 45
+    assert router._provider_timeout("minecraft-dev", "find_mapping") == 45
 
 
 def test_authoritative_runtime_target_conflict_is_rejected() -> None:

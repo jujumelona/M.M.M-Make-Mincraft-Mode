@@ -65,21 +65,22 @@ def initial_evidence_required(
     host_target_execution_authority: bool,
     compile_backed_java: bool,
     authored_workspace_refresh: bool = False,
+    semantic_fresh_java_target: bool = False,
 ) -> bool:
     """Decide whether mutation needs speculative pre-implementation retrieval.
 
-    A pinned Java target with a mandatory target compiler already has a stronger
-    executable feedback loop than speculative API search. In that case the host
-    lets the coder perform the bounded edit first and routes only concrete compiler
-    diagnostics into repair evidence. Retrieval remains mandatory when there is no
-    executable target authority, when the host explicitly needs a workspace refresh,
-    or when no compile-backed feedback loop exists and policy requires fresh evidence.
+    A compiler can verify a candidate, but cannot supply missing implementation
+    facts for a fresh task. Honor explicit fresh-evidence policy before its first
+    mutation, even when the host has already materialized the target scaffold.
+    Existing-source edits retain compile-first feedback when appropriate.
     """
 
     if authored_workspace_refresh:
         return True
     if role not in {"coder", "coder_safe"} or host_grounded:
         return False
+    if semantic_fresh_java_target and router_requires_fresh_evidence:
+        return True
     if (
         implementation_requires_mutation
         and host_target_execution_authority

@@ -386,12 +386,15 @@ class ExternalAgentBridge:
                     "status": "PASS",
                 }
             except Exception as exc:  # noqa: BLE001 - provider failure must fall back
+                from .root_cause_trace import exception_chain
+
                 attempts.append(
                     {
                         "server": server,
                         "tool": tool,
                         "status": "ERROR",
                         "error": f"{type(exc).__name__}: {exc}",
+                        "exception_chain": exception_chain(exc),
                     }
                 )
         return {
