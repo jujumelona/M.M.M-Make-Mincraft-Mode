@@ -108,6 +108,27 @@ def _document_preamble_title(title: str) -> bool:
     )
 
 
+def _document_context_title(title: str) -> bool:
+    normalized = re.sub(r"\s+", " ", str(title or "").strip()).casefold()
+    return normalized in {
+        "intro",
+        "introduction",
+        "overview",
+        "document overview",
+        "project overview",
+        "metadata",
+        "project metadata",
+        "summary",
+        "about",
+        "소개",
+        "개요",
+        "문서 개요",
+        "프로젝트 개요",
+        "메타데이터",
+        "요약",
+    }
+
+
 def _metadata_only_preamble(lines: list[str], start: int, end: int) -> bool:
     """Return whether a leading section contains document metadata, not behavior."""
 
@@ -166,6 +187,20 @@ def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
     if not starts:
         return (text,)
 
+    if split_level > shallowest and len(starts) >= 2:
+        record_by_start = {record[0]: record for record in split_records}
+        while len(starts) >= 2:
+            first_start = starts[0]
+            first_end = starts[1]
+            first_record = record_by_start.get(first_start)
+            first_title = first_record[2] if first_record is not None else ""
+            if not (
+                _document_context_title(first_title)
+                or _metadata_only_preamble(lines, first_start + 1, first_end)
+            ):
+                break
+            starts = starts[1:]
+
     # At the document's own split level, a leading title/metadata section is context,
     # not an implementation unit. Remove only that boundary; slicing below will retain
     # every byte of the removed preamble in the first real feature block.
@@ -219,9 +254,24 @@ def _authored_block_section(block: str) -> str:
         return ""
     first_index, first_level, first_title = records[0]
     if _generic_authored_container(first_title) or _document_preamble_title(first_title):
-        for _child_index, child_level, child_title in records[1:]:
-            if child_level > first_level:
-                return child_title
+        descendants = [
+            record for record in records[1:]
+            if record[1] > first_level
+        ]
+        for position, (child_index, child_level, child_title) in enumerate(descendants):
+            next_index = len(lines)
+            for later_index, later_level, _later_title in descendants[position + 1:]:
+                if later_level == child_level:
+                    next_index = later_index
+                    break
+            if (
+                _document_context_title(child_title)
+                or _metadata_only_preamble(lines, child_index + 1, next_index)
+            ):
+                continue
+            return child_title
+        if descendants:
+            return descendants[-1][2]
     if len(records) >= 2:
         second_index, second_level, second_title = records[1]
         if (
