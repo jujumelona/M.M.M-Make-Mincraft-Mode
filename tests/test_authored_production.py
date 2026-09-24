@@ -125,7 +125,12 @@ def test_real_compiler_hands_saved_text_to_coder_without_replanning(monkeypatch,
 
 
 def test_fresh_authored_execution_is_exact_path_dependency_queue():
-    text = ("행성 경제와 우주선 업그레이드를 구현한다.\n" * 300)
+    text = (
+        "# Design\n"
+        "## Wallet\nPersist each player's credit balance.\n"
+        "## Purchase\nReject purchases without enough credits and deduct exactly once.\n"
+        "## Reward\nGrant the purchased reward exactly once.\n"
+    )
     plan = AuthoredPlan("우주 모드", text)
     package = "ai.minecraft.generated.authored_test"
     modules, manifest = _compile_new_authored_modules(
@@ -139,8 +144,12 @@ def test_fresh_authored_execution_is_exact_path_dependency_queue():
         },
     )
 
-    assert len(modules) == manifest["unit_count"]
-    assert manifest["unit_count"] > 1
+    assert len(modules) == manifest["unit_count"] == 3
+    assert [item["section"] for item in manifest["units"]] == [
+        "Wallet",
+        "Purchase",
+        "Reward",
+    ]
     assert "".join(
         module.config["evidence_task"]["engineering_worksheet"]["authored_unit"]["text"]
         for module in modules
@@ -149,7 +158,13 @@ def test_fresh_authored_execution_is_exact_path_dependency_queue():
     paths = set()
     for index, module in enumerate(modules, start=1):
         assert module.module_id == f"authored_feature_{index:03d}"
-        assert module.depends_on == ()
+        expected_dependency = () if index == 1 else (f"authored_feature_{index - 1:03d}",)
+        assert module.depends_on == expected_dependency
+        task = module.config["evidence_task"]
+        expected_consumes = [] if index == 1 else [f"authored_feature_{index - 1:03d}_ready"]
+        assert task["consumes"] == expected_consumes
+        assert manifest["units"][index - 1]["depends_on"] == list(expected_dependency)
+        assert manifest["units"][index - 1]["consumes"] == expected_consumes
         capsule = compile_task_capsule(module)
         assert capsule is not None
         assert len(capsule.writable_paths) == 1
@@ -162,8 +177,6 @@ def test_fresh_authored_execution_is_exact_path_dependency_queue():
         f"AuthoredFeature{index:03d}"
         for index in range(1, manifest["unit_count"] + 1)
     ]
-
-
 
 def test_authored_execution_uses_markdown_sections_not_arbitrary_byte_packing():
     text = (
@@ -193,7 +206,11 @@ def test_authored_execution_uses_markdown_sections_not_arbitrary_byte_packing():
         module.config["evidence_task"]["engineering_worksheet"]["authored_unit"]["section"]
         for module in modules
     ] == ["Economy", "Ship Building", "Planets"]
-    assert all(module.depends_on == () for module in modules)
+    assert [module.depends_on for module in modules] == [
+        (),
+        ("authored_feature_001",),
+        ("authored_feature_002",),
+    ]
     assert "".join(
         module.config["evidence_task"]["engineering_worksheet"]["authored_unit"]["text"]
         for module in modules
@@ -250,16 +267,14 @@ def test_authored_headings_do_not_create_empty_or_code_fence_tasks(text):
     assert units[0]["text"] == text
 
 
-def test_oversized_nested_authored_section_stays_bounded_and_byte_exact():
+def test_oversized_semantic_authored_section_is_not_split_by_bytes():
     text = "# Trading\n## Trigger\n" + "광석 하나를 열 크레딧으로 교환한다.\n" * 160
     units = _authored_execution_units(text)
-    assert len(units) > 1
-    assert {unit["section"] for unit in units} == {"Trading"}
-    assert all(len(unit["text"].encode("utf-8")) <= 2048 for unit in units)
-    assert "".join(unit["text"] for unit in units) == text
-    assert all(any(line.strip() and not line.startswith("#")
-                   for line in unit["text"].splitlines()) for unit in units)
 
+    assert len(units) == 1
+    assert units[0]["section"] == "Trading"
+    assert units[0]["text"] == text
+    assert units[0]["end_byte"] == len(text.encode("utf-8"))
 
 def test_fresh_authored_work_graph_checkpoints_each_exact_task_independently(monkeypatch):
     monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
@@ -286,7 +301,9 @@ def test_fresh_authored_work_graph_checkpoints_each_exact_task_independently(mon
         node.payload["members"][0]["module_id"]
         for node in custom
     ] == [f"authored_feature_{index:03d}" for index in range(1, 5)]
-    assert all(node.dependencies == ("prepare-project",) for node in custom)
+    assert custom[0].dependencies == ("prepare-project",)
+    for previous, node in zip(custom, custom[1:], strict=True):
+        assert set(node.dependencies) == {"prepare-project", previous.node_id}
 
 
 def test_authored_scaffold_materializes_existing_exact_targets_and_host_entrypoint(tmp_path):
