@@ -3661,6 +3661,46 @@ def _generate_with_tools_impl(
                 state.phase = LoopPhase.ACT
                 continue
             if mutation_is_ready and not baseline_ready:
+                if compile_backed_java and fresh_java_target:
+                    # Speculative retrieval is allowed to fail closed without killing
+                    # the task before the compiler can provide concrete diagnostics.
+                    # The mutation remains exact-path/task-owned; after this one bounded
+                    # probe, target_compile either passes or opens a fresh diagnostic-
+                    # bound evidence epoch via begin_recovery_evidence_epoch().
+                    state.phase = LoopPhase.ACT
+                    required_evidence_choice = False
+                    state.clear_no_progress_result()
+                    emit_root_cause(
+                        "evidence_frontier_exhausted_compile_probe",
+                        stage=stage,
+                        operation="generate_with_tools",
+                        gate="diagnostic_evidence_frontier",
+                        result="PASS",
+                        reason=(
+                            "initial authoritative evidence frontier exhausted; "
+                            "transitioning to one exact task-owned compile probe so "
+                            "subsequent recovery can bind to concrete compiler diagnostics"
+                        ),
+                        details={
+                            "target_path": (
+                                state.mutation_context.target_path
+                                if state.mutation_context is not None
+                                else None
+                            ),
+                            "fresh_java_target": fresh_java_target,
+                            "compile_backed_java": compile_backed_java,
+                            "validation_status": state.validation_status,
+                            "attempted_sources": sorted(state.attempted_sources),
+                            "last_evidence_adjudications": list(
+                                state.evidence_adjudications[-8:]
+                            ),
+                            **recovery_state_snapshot(
+                                state,
+                                state.repair_evidence_route,
+                            ),
+                        },
+                    )
+                    continue
                 emit_root_cause(
                     "implementation_evidence_stalled",
                     stage=stage,

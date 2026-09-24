@@ -524,16 +524,23 @@ def test_fresh_java_without_reviewed_evidence_tool_fails_before_model_mutation()
         )
 
 
-def test_fresh_java_required_grounding_fails_closed_after_retrieval_exhaustion() -> None:
+def test_fresh_java_retrieval_exhaustion_transitions_to_compile_probe(monkeypatch) -> None:
     from types import SimpleNamespace
+
+    from minecraft_mod_ai import small_model_task_capsule_contract as capsules
     from minecraft_mod_ai.model_adapters import (
         GenerationRequest,
         GenerationResponse,
-        ModelConfigurationError,
         ToolCall,
     )
 
     target = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
+    monkeypatch.setattr(
+        capsules,
+        "current_task_required_gates",
+        lambda: ("target_compile",),
+    )
+    monkeypatch.setattr(capsules, "current_task_reuse_action", lambda: "fresh")
 
     class Adapter:
         def __init__(self) -> None:
@@ -551,7 +558,7 @@ def test_fresh_java_required_grounding_fails_closed_after_retrieval_exhaustion()
                             id="ev-1",
                             name="search_code_rag",
                             arguments=arguments,
-                            raw_arguments=json.dumps(arguments, separators=(",", ":")),
+                            raw_arguments=json.dumps(arguments),
                         ),
                     )
                 )
@@ -564,12 +571,29 @@ def test_fresh_java_required_grounding_fails_closed_after_retrieval_exhaustion()
                             id="ev-2",
                             name="search_project_rag",
                             arguments=arguments,
-                            raw_arguments=json.dumps(arguments, separators=(",", ":")),
+                            raw_arguments=json.dumps(arguments),
                         ),
                     )
                 )
-            raise AssertionError(
-                "required grounding exhaustion must fail before any mutation turn"
+            assert self.calls == 3
+            assert names == {"apply_source_edit"}
+            arguments = {
+                "operation": "create_file",
+                "path": target,
+                "content": (
+                    "package dev.mmm.debugfixture; "
+                    "public final class DebugToken {}\n"
+                ),
+            }
+            return GenerationResponse(
+                tool_calls=(
+                    ToolCall(
+                        id="edit-1",
+                        name="apply_source_edit",
+                        arguments=arguments,
+                        raw_arguments=json.dumps(arguments),
+                    ),
+                )
             )
 
     class Runtime:
@@ -589,7 +613,27 @@ def test_fresh_java_required_grounding_fails_closed_after_retrieval_exhaustion()
                     },
                     "hits": [],
                 }
-            raise AssertionError(f"unexpected tool execution: {name}")
+            if name == "apply_source_edit":
+                return {
+                    "schema_version": "mmm/source-patch-receipt-v1",
+                    "status": "APPLIED",
+                    "operations": [
+                        {
+                            "operation": "create",
+                            "path": target,
+                            "before_sha256": None,
+                            "after_sha256": "sha256:" + "1" * 64,
+                        }
+                    ],
+                }
+            if name == "target_compile":
+                return {
+                    "schema_version": "mmm/generation-target-compile-v1",
+                    "status": "PASS",
+                    "target_path": target,
+                    "diagnostics": [],
+                }
+            raise AssertionError(name)
 
     request = GenerationRequest(
         messages=(
@@ -599,6 +643,7 @@ def test_fresh_java_required_grounding_fails_closed_after_retrieval_exhaustion()
                     {
                         "primary_path": target,
                         "writable_paths": [target],
+                        "creatable_paths": [target],
                         "reuse_action": "fresh",
                     }
                 ),
@@ -644,32 +689,30 @@ def test_fresh_java_required_grounding_fails_closed_after_retrieval_exhaustion()
                     "parameters": {"type": "object", "properties": {}},
                 },
             },
-            {
-                "type": "function",
-                "function": {
-                    "name": "java_diagnostics",
-                    "description": "verify Java",
-                    "parameters": {"type": "object", "properties": {}},
-                },
-            },
         ),
     )
 
     runtime = Runtime()
-    with pytest.raises(ModelConfigurationError, match="IMPLEMENTATION_EVIDENCE_STALLED"):
-        loop.generate_with_tools(
-            SimpleNamespace(_agent_require_fresh_evidence=True),
-            config=SimpleNamespace(
-                adapter="test",
-                max_context=32768,
-                max_input_tokens=0,
-                max_new_tokens=512,
-            ),
-            adapter=Adapter(),
-            request=request,
-            runtime=runtime,
-            stage="generation",
-            role="coder",
-        )
+    result = loop.generate_with_tools(
+        SimpleNamespace(_agent_require_fresh_evidence=True),
+        config=SimpleNamespace(
+            adapter="test",
+            max_context=32768,
+            max_input_tokens=0,
+            max_new_tokens=512,
+        ),
+        adapter=Adapter(),
+        request=request,
+        runtime=runtime,
+        stage="generation",
+        role="coder",
+    )
 
-    assert runtime.calls == ["search_code_rag", "search_project_rag"]
+    payload = json.loads(result)
+    assert "passed generation-time host verification" in payload["summary"]
+    assert runtime.calls == [
+        "search_code_rag",
+        "search_project_rag",
+        "apply_source_edit",
+        "target_compile",
+    ]
