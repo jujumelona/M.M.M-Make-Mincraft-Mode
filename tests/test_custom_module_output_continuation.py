@@ -7,8 +7,10 @@ from pathlib import Path
 from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.custom_module_generator import (
     CustomModuleGenerator,
-    _mutable_stage_state_sha256,
     _output_exhaustion_continuation_messages,
+)
+from minecraft_mod_ai.generation_checkpoint import (
+    _mutable_stage_state_sha256,
     _persist_generation_checkpoint,
     _prepare_generation_checkpoint,
     _read_generation_checkpoint_manifest,
