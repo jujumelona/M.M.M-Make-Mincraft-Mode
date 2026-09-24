@@ -177,6 +177,20 @@ def test_unverified_fresh_java_still_requires_initial_evidence() -> None:
     )
 
 
+def test_compile_backed_host_authored_scaffold_skips_speculative_presearch() -> None:
+    options = {
+        "role": "coder",
+        "host_grounded": False,
+        "router_requires_fresh_evidence": True,
+        "implementation_requires_mutation": True,
+        "host_target_execution_authority": True,
+        "compile_backed_java": True,
+        "semantic_fresh_java_target": True,
+        "host_authored_scaffold": True,
+    }
+    assert not controller.initial_evidence_required(**options)
+
+
 def test_materialized_fresh_java_honors_explicit_evidence_policy() -> None:
     options = {
         "role": "coder", "host_grounded": False, "router_requires_fresh_evidence": True,
