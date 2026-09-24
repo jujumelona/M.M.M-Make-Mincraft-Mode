@@ -15,6 +15,7 @@ from minecraft_mod_ai.final_artifact import (
 )
 from minecraft_mod_ai.mcp_tools import MMMToolService
 
+from minecraft_mod_ai.complete_orchestrator_support import file_sha256
 from minecraft_mod_ai.complete_orchestrator import (
     CompleteProductionOrchestrator,
     _attach_verified_release_artifact,
@@ -538,7 +539,7 @@ def test_required_runtime_needs_live_client_playtest_and_visual_evidence(tmp_pat
         "artifact_sha256": artifact_sha,
         "runtime_screenshots": [
             {
-                "sha256": CompleteProductionOrchestrator._file_hash(evidence),
+                "sha256": file_sha256(evidence),
                 "evidence_path": str(evidence),
                 "server_running": True,
                 "client_running": True,
@@ -603,7 +604,7 @@ def test_package_cache_requires_matching_file_digest(tmp_path) -> None:
     receipt = {
         "status": "PACKAGED",
         "path": str(package),
-        "sha256": CompleteProductionOrchestrator._file_hash(package),
+        "sha256": file_sha256(package),
     }
 
     assert CompleteProductionOrchestrator._cached_package_exists(
@@ -649,7 +650,7 @@ def test_cached_download_bundle_validates_every_member_digest(tmp_path) -> None:
     members = [
         {
             "path": "demo.jar",
-            "sha256": CompleteProductionOrchestrator._file_hash(jar),
+            "sha256": file_sha256(jar),
         }
     ]
     receipt = {
@@ -817,13 +818,13 @@ def test_asset_shard_cache_validates_asset_and_document_digests(tmp_path) -> Non
         "assets": [
             {
                 "target": str(texture),
-                "sha256": CompleteProductionOrchestrator._file_hash(texture),
+                "sha256": file_sha256(texture),
             }
         ],
         "documents": [
             {
                 "resolved_path": str(document),
-                "sha256": CompleteProductionOrchestrator._file_hash(document),
+                "sha256": file_sha256(document),
             }
         ],
         "resource_graph_validation": {"status": "PASS"},
@@ -908,8 +909,8 @@ def test_downloadable_bundle_keeps_verified_additional_resource_pack(tmp_path) -
     jar.write_bytes(b"jar")
     pack = tmp_path / "resource-pack.zip"
     pack.write_bytes(b"pack")
-    artifact_sha = CompleteProductionOrchestrator._file_hash(jar)
-    pack_sha = CompleteProductionOrchestrator._file_hash(pack)
+    artifact_sha = file_sha256(jar)
+    pack_sha = file_sha256(pack)
 
     proposal_hash = "sha256:" + "1" * 64
     bundle = write_downloadable_bundle(
@@ -973,9 +974,9 @@ def test_primary_release_zip_keeps_mcp_authority_narrow_and_attaches_privately(t
     release = {
         "status": "PACKAGED",
         "release_zip": str(release_zip),
-        "sha256": CompleteProductionOrchestrator._file_hash(release_zip),
+        "sha256": file_sha256(release_zip),
     }
-    pack_sha = CompleteProductionOrchestrator._file_hash(pack)
+    pack_sha = file_sha256(pack)
 
     updated = _attach_verified_release_artifact(
         release,
@@ -984,7 +985,7 @@ def test_primary_release_zip_keeps_mcp_authority_narrow_and_attaches_privately(t
         allowed_root=run_root,
     )
 
-    assert updated["sha256"] == CompleteProductionOrchestrator._file_hash(release_zip)
+    assert updated["sha256"] == file_sha256(release_zip)
     assert updated["additional_artifacts"] == {
         "generated-resource-pack.zip": pack_sha
     }
@@ -1016,7 +1017,7 @@ def test_release_manifest_rebinds_complete_provenance_without_attachment(tmp_pat
     release = {
         "status": "PACKAGED",
         "release_zip": str(release_zip),
-        "sha256": CompleteProductionOrchestrator._file_hash(release_zip),
+        "sha256": file_sha256(release_zip),
     }
 
     updated = _attach_verified_release_artifact(
@@ -1031,7 +1032,7 @@ def test_release_manifest_rebinds_complete_provenance_without_attachment(tmp_pat
         },
     )
 
-    assert updated["sha256"] == CompleteProductionOrchestrator._file_hash(release_zip)
+    assert updated["sha256"] == file_sha256(release_zip)
     assert updated["manifest_provenance"]["proposal_hash"] == "sha256:complete"
     with zipfile.ZipFile(release_zip) as archive:
         manifest = json.loads(archive.read("release-manifest.json"))
@@ -1084,7 +1085,7 @@ def test_runtime_visual_evidence_rejects_unbound_or_stale_receipts(tmp_path) -> 
         "artifact_sha256": artifact_sha,
     }
     screenshot = {
-        "sha256": CompleteProductionOrchestrator._file_hash(evidence),
+        "sha256": file_sha256(evidence),
         "evidence_path": str(evidence),
         "server_running": True,
         "client_running": True,
@@ -1184,7 +1185,7 @@ def test_host_required_blockbench_review_is_independent_of_plan_gate(tmp_path) -
         "entity": "dragon",
         "uv": {"status": "PASS"},
         "preview": str(preview),
-        "preview_sha256": CompleteProductionOrchestrator._file_hash(preview),
+        "preview_sha256": file_sha256(preview),
     }
 
     assert CompleteProductionOrchestrator._mandatory_blockbench_failures(
@@ -1213,7 +1214,7 @@ def test_runtime_verification_rejects_playtest_from_other_artifact(tmp_path) -> 
         "artifact_sha256": artifact_sha,
         "runtime_screenshots": [
             {
-                "sha256": CompleteProductionOrchestrator._file_hash(evidence),
+                "sha256": file_sha256(evidence),
                 "evidence_path": str(evidence),
                 "server_running": True,
                 "client_running": True,
@@ -1248,7 +1249,7 @@ def test_runtime_verification_rejects_playtest_from_other_artifact(tmp_path) -> 
 def test_runtime_visual_download_artifacts_preserve_verified_screenshots(tmp_path) -> None:
     evidence = tmp_path / "proof.png"
     evidence.write_bytes(b"proof")
-    digest = CompleteProductionOrchestrator._file_hash(evidence)
+    digest = file_sha256(evidence)
     artifacts = _runtime_visual_download_artifacts(
         {
             "status": "PASS",
