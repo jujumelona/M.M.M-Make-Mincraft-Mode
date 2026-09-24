@@ -118,9 +118,6 @@ from .validation_diagnostic_contract import (
     diagnostic_errors as jdt_diagnostic_errors,
 )
 from .validation_diagnostic_contract import (
-    release_diagnostics_attempts,
-    release_diagnostics_timeout_seconds,
-    retryable_service_ready_miss,
     run_diagnostics as run_jdt_diagnostics,
     run_diagnostics_with_bootstrap_retry,
 )
@@ -137,17 +134,6 @@ from .work_graph import (
 
 
 
-
-def _jdt_verification_timeout_seconds() -> int:
-    return release_diagnostics_timeout_seconds()
-
-
-def _jdt_verification_attempts() -> int:
-    return release_diagnostics_attempts()
-
-
-def _retryable_jdt_bootstrap_failure(receipt: dict[str, Any] | None) -> bool:
-    return retryable_service_ready_miss(receipt)
 
 
 def _run_release_jdt_verification(
