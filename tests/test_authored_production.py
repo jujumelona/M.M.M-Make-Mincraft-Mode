@@ -178,6 +178,34 @@ def test_fresh_authored_execution_is_exact_path_dependency_queue():
         for index in range(1, manifest["unit_count"] + 1)
     ]
 
+def test_named_design_document_descends_into_feature_sections():
+    text = (
+        "# Galaxy Ascension: Minecraft Mod Design Document\n"
+        "## Intro\n"
+        "**Mod Title:** Galactic Ascension\n"
+        "**Version:** 1.0.0-alpha\n"
+        "**Description:** A progression mod transforming survival into space exploration.\n"
+        "## Resource Economy\n"
+        "Persist credits and trade mined resources.\n"
+        "## Ship Construction\n"
+        "Spend credits to install modular ship parts.\n"
+    )
+
+    units = _authored_execution_units(text)
+
+    assert len(units) == 2
+    assert [unit["section"] for unit in units] == [
+        "Resource Economy",
+        "Ship Construction",
+    ]
+    assert units[0]["text"].startswith(
+        "# Galaxy Ascension: Minecraft Mod Design Document\n"
+        "## Intro\n"
+    )
+    assert "## Resource Economy\n" in units[0]["text"]
+    assert "".join(unit["text"] for unit in units) == text
+
+
 def test_document_metadata_preamble_is_context_not_a_standalone_feature():
     text = (
         "# Stellar Odyssey Mod Design Document\n"
