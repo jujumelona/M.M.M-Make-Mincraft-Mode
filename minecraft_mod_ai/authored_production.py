@@ -146,7 +146,13 @@ def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
     shallowest = min(depth for _index, depth, _title in records)
     split_level = shallowest
     shallow = [record for record in records if record[1] == shallowest]
-    if len(shallow) == 1 and _generic_authored_container(shallow[0][2]):
+    if (
+        len(shallow) == 1
+        and (
+            _generic_authored_container(shallow[0][2])
+            or _document_preamble_title(shallow[0][2])
+        )
+    ):
         for depth in sorted({record[1] for record in records if record[1] > shallowest}):
             peers = [record for record in records if record[1] == depth]
             if len(peers) >= 2:
@@ -212,7 +218,7 @@ def _authored_block_section(block: str) -> str:
     if not records:
         return ""
     first_index, first_level, first_title = records[0]
-    if _generic_authored_container(first_title):
+    if _generic_authored_container(first_title) or _document_preamble_title(first_title):
         for _child_index, child_level, child_title in records[1:]:
             if child_level > first_level:
                 return child_title
