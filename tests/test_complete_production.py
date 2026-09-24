@@ -216,7 +216,33 @@ def test_required_gate_matrix_is_receipt_backed_and_fail_closed(tmp_path: Path) 
     gametest_report = tmp_path / 'gametest-report.xml'
     gametest_report.write_text(f'<testsuite failures="0" errors="0" skipped="0"><testcase name="{main_class}GameTests.generatedRegistriesAreLive"/></testsuite>', encoding='utf-8')
     build = {'status': 'PASS', 'gametest_report': str(gametest_report), 'commands': [{'name': 'clean_build', 'exit_code': 0, 'timed_out': False}, {'name': 'gametest', 'exit_code': 0, 'timed_out': False}]}
-    common = {'source_validation': {'status': 'PASS'}, 'jdt_receipt': {'files_opened': 4, 'error_count': 0}, 'build_report': build, 'jar_validation': {'status': 'PASS'}, 'blockbench_receipts': (), 'runtime_receipt': None, 'playtest_receipt': {'status': 'PASS', 'interaction_count': 1, 'assertion_count': 1}, 'visual_receipt': {'status': 'PASS'}}
+    screenshot = tmp_path / 'visual-proof.bin'
+    screenshot.write_bytes(b'verified visual proof')
+    artifact_sha256 = 'sha256:' + hashlib.sha256(b'verified artifact').hexdigest()
+    runtime_receipt = {
+        'artifact_sha256': artifact_sha256,
+        'server': {'server_running': True},
+        'client': {'client_running': True},
+    }
+    playtest_receipt = {
+        'status': 'PASS',
+        'interaction_count': 1,
+        'assertion_count': 1,
+        'acceptance_tests': ['item works'],
+        'covered_acceptance_tests': ['item works'],
+        'acceptance_test_results': [{'test': 'item works', 'status': 'PASS'}],
+    }
+    visual_receipt = {
+        'status': 'PASS',
+        'artifact_sha256': artifact_sha256,
+        'runtime_screenshots': [{
+            'server_running': True,
+            'client_running': True,
+            'sha256': CompleteProductionOrchestrator._file_hash(screenshot),
+            'evidence_path': str(screenshot),
+        }],
+    }
+    common = {'source_validation': {'status': 'PASS'}, 'jdt_receipt': {'status': 'PASS', 'files_opened': 4, 'error_count': 0}, 'build_report': build, 'jar_validation': {'status': 'PASS'}, 'blockbench_receipts': (), 'runtime_receipt': runtime_receipt, 'playtest_receipt': playtest_receipt, 'visual_receipt': visual_receipt}
     assert CompleteProductionOrchestrator._required_gate_failures(proposal, generated_receipts=(), **common) == []
     failures = CompleteProductionOrchestrator._required_gate_failures(proposal, generated_receipts=({'required_gates': ['restart persistence test']},), **{**common, 'build_report': {'status': 'PASS', 'commands': [build['commands'][0]]}})
     assert any('GameTest:missing-gametest' in item for item in failures)
