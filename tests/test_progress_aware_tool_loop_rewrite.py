@@ -6,6 +6,10 @@ import json
 import pytest
 
 from minecraft_mod_ai import progress_aware_tool_loop as loop
+from minecraft_mod_ai.mutation_authority import (
+    CURRENT_MUTATION_AUTHORITY,
+    MutationAuthority,
+)
 
 
 def _schema(name: str) -> dict:
@@ -614,20 +618,26 @@ def test_materialized_authored_scaffold_enters_act_before_rag(monkeypatch, tmp_p
     )
     adapter = Adapter()
     runtime = Runtime()
-    result = loop.generate_with_tools(
-        SimpleNamespace(_agent_require_fresh_evidence=True),
-        config=SimpleNamespace(
-            adapter="test",
-            max_context=32768,
-            max_input_tokens=0,
-            max_new_tokens=512,
-        ),
-        adapter=adapter,
-        request=request,
-        runtime=runtime,
-        stage="generation",
-        role="coder",
+    token = CURRENT_MUTATION_AUTHORITY.set(
+        MutationAuthority.exact((target,), task_id="authored_feature_001")
     )
+    try:
+        result = loop.generate_with_tools(
+            SimpleNamespace(_agent_require_fresh_evidence=True),
+            config=SimpleNamespace(
+                adapter="test",
+                max_context=32768,
+                max_input_tokens=0,
+                max_new_tokens=512,
+            ),
+            adapter=adapter,
+            request=request,
+            runtime=runtime,
+            stage="generation",
+            role="coder",
+        )
+    finally:
+        CURRENT_MUTATION_AUTHORITY.reset(token)
 
     assert "passed generation-time host verification" in json.loads(result)["summary"]
     assert adapter.calls == 1
