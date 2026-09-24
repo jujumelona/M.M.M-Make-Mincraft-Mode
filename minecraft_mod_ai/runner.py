@@ -247,10 +247,12 @@ class GradleRunner:
         gametest_task: str | None = None
         if run_gametest:
             gametest_task = self._gametest_task(prepared.project_root)
-            # Keep GameTest out of the packaging build, then execute it exactly once
-            # as its own verifier command. This avoids hidden build-task coupling and
-            # gives GameTest a distinct receipt/log for repair classification.
-            build_arguments.extend(("-x", gametest_task))
+            # Modern configureTests can wire runGameTest into build; exclude it there
+            # so the explicit verifier below is the single execution. Legacy
+            # gameTestServer is not build-wired, so excluding it is unnecessary and
+            # changes the observable Gradle contract.
+            if gametest_task == "runGameTest":
+                build_arguments.extend(("-x", gametest_task))
         build_arguments.append("--stacktrace")
         build_result = self._run(
             name="clean_build" if force_clean else "build",
