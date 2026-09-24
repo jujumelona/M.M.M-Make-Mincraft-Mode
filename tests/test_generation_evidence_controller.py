@@ -177,7 +177,7 @@ def test_unverified_fresh_java_still_requires_initial_evidence() -> None:
     )
 
 
-def test_materialized_fresh_java_requires_evidence_independent_of_router_preference() -> None:
+def test_materialized_fresh_java_honors_explicit_evidence_policy() -> None:
     options = {
         "role": "coder", "host_grounded": False, "router_requires_fresh_evidence": True,
         "implementation_requires_mutation": True, "host_target_execution_authority": True,
@@ -185,7 +185,7 @@ def test_materialized_fresh_java_requires_evidence_independent_of_router_prefere
     }
     assert controller.initial_evidence_required(**options)
     assert not controller.initial_evidence_required(**{**options, "host_grounded": True})
-    assert controller.initial_evidence_required(
+    assert not controller.initial_evidence_required(
         **{**options, "router_requires_fresh_evidence": False}
     )
 

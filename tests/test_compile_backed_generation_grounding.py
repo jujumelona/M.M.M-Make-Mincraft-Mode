@@ -153,7 +153,7 @@ def test_target_compile_requires_authoritative_evidence_before_pinned_fresh_java
 
     adapter = Adapter()
     result = loop.generate_with_tools(
-        SimpleNamespace(_agent_require_fresh_evidence=False),
+        SimpleNamespace(_agent_require_fresh_evidence=True),
         config=SimpleNamespace(
             adapter="test",
             max_context=32768,

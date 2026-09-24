@@ -524,9 +524,14 @@ def test_fresh_java_without_reviewed_evidence_tool_fails_before_model_mutation()
         )
 
 
-def test_fresh_java_transitions_to_act_when_retrieval_makes_no_progress_on_localized_target() -> None:
+def test_fresh_java_required_grounding_fails_closed_after_retrieval_exhaustion() -> None:
     from types import SimpleNamespace
-    from minecraft_mod_ai.model_adapters import GenerationRequest, GenerationResponse, ToolCall
+    from minecraft_mod_ai.model_adapters import (
+        GenerationRequest,
+        GenerationResponse,
+        ModelConfigurationError,
+        ToolCall,
+    )
 
     target = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
 
@@ -538,7 +543,7 @@ def test_fresh_java_transitions_to_act_when_retrieval_makes_no_progress_on_local
             self.calls += 1
             names = {item["function"]["name"] for item in request.tools}
             if self.calls == 1:
-                assert "search_code_rag" in names
+                assert names == {"search_code_rag"}
                 arguments = {"query": "CustomFeature"}
                 return GenerationResponse(
                     tool_calls=(
@@ -551,8 +556,7 @@ def test_fresh_java_transitions_to_act_when_retrieval_makes_no_progress_on_local
                     )
                 )
             if self.calls == 2:
-                # Second turn: search_project_rag
-                assert "search_project_rag" in names
+                assert names == {"search_project_rag"}
                 arguments = {"query": "CustomFeature"}
                 return GenerationResponse(
                     tool_calls=(
@@ -564,40 +568,9 @@ def test_fresh_java_transitions_to_act_when_retrieval_makes_no_progress_on_local
                         ),
                     )
                 )
-            if self.calls == 3:
-                # With no progress streak reaching 2 on localized target, loop must transition to ACT
-                assert names == {"apply_source_edit"}
-                arguments = {
-                    "operation": "create_file",
-                    "path": target,
-                    "content": (
-                        "package dev.mmm.debugfixture;\n"
-                        "public final class DebugToken {}\n"
-                    ),
-                }
-                return GenerationResponse(
-                    tool_calls=(
-                        ToolCall(
-                            id="edit-1",
-                            name="apply_source_edit",
-                            arguments=arguments,
-                            raw_arguments=json.dumps(arguments, separators=(",", ":")),
-                        ),
-                    )
-                )
-            if self.calls == 4:
-                assert names == {"java_diagnostics"}
-                return GenerationResponse(
-                    tool_calls=(
-                        ToolCall(
-                            id="v-1",
-                            name="java_diagnostics",
-                            arguments={},
-                            raw_arguments="{}",
-                        ),
-                    )
-                )
-            raise AssertionError("terminal verifier state must not invoke the coder again")
+            raise AssertionError(
+                "required grounding exhaustion must fail before any mutation turn"
+            )
 
     class Runtime:
         def __init__(self) -> None:
@@ -606,43 +579,15 @@ def test_fresh_java_transitions_to_act_when_retrieval_makes_no_progress_on_local
         def call(self, stage, name, _arguments):
             assert stage == "generation"
             self.calls.append(name)
-            if name == "search_code_rag":
+            if name in {"search_code_rag", "search_project_rag"}:
                 return {
                     "schema_version": "mmm/code-rag-result-v1",
-                    "receipt": {"result_count": 0, "coverage_score": 0.0, "relevance_score": 0.0},
+                    "receipt": {
+                        "result_count": 0,
+                        "coverage_score": 0.0,
+                        "relevance_score": 0.0,
+                    },
                     "hits": [],
-                }
-            if name == "search_project_rag":
-                return {
-                    "schema_version": "mmm/code-rag-result-v1",
-                    "receipt": {"result_count": 0, "coverage_score": 0.0, "relevance_score": 0.0},
-                    "hits": [],
-                }
-            if name == "apply_source_edit":
-                return {
-                    "schema_version": "mmm/source-patch-receipt-v1",
-                    "status": "APPLIED",
-                    "operations": [
-                        {
-                            "operation": "create",
-                            "path": target,
-                            "before_sha256": None,
-                            "after_sha256": "sha256:" + "4" * 64,
-                        }
-                    ],
-                }
-            if name == "java_diagnostics":
-                return {
-                    "schema_version": "mmm/java-diagnostics-v3",
-                    "status": "PASS",
-                    "available": True,
-                    "complete": True,
-                    "session_id": "session",
-                    "model_id": "model",
-                    "files_opened": 1,
-                    "error_count": 0,
-                    "warning_count": 0,
-                    "diagnostics": {},
                 }
             raise AssertionError(f"unexpected tool execution: {name}")
 
@@ -674,7 +619,10 @@ def test_fresh_java_transitions_to_act_when_retrieval_makes_no_progress_on_local
                 "function": {
                     "name": "search_code_rag",
                     "description": "search code",
-                    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                    },
                 },
             },
             {
@@ -682,7 +630,10 @@ def test_fresh_java_transitions_to_act_when_retrieval_makes_no_progress_on_local
                 "function": {
                     "name": "search_project_rag",
                     "description": "search project",
-                    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                    },
                 },
             },
             {
@@ -705,21 +656,20 @@ def test_fresh_java_transitions_to_act_when_retrieval_makes_no_progress_on_local
     )
 
     runtime = Runtime()
-    summary = loop.generate_with_tools(
-        SimpleNamespace(_agent_require_fresh_evidence=True),
-        config=SimpleNamespace(
-            adapter="test",
-            max_context=32768,
-            max_input_tokens=0,
-            max_new_tokens=512,
-        ),
-        adapter=Adapter(),
-        request=request,
-        runtime=runtime,
-        stage="generation",
-        role="coder",
-    )
+    with pytest.raises(ModelConfigurationError, match="IMPLEMENTATION_EVIDENCE_STALLED"):
+        loop.generate_with_tools(
+            SimpleNamespace(_agent_require_fresh_evidence=True),
+            config=SimpleNamespace(
+                adapter="test",
+                max_context=32768,
+                max_input_tokens=0,
+                max_new_tokens=512,
+            ),
+            adapter=Adapter(),
+            request=request,
+            runtime=runtime,
+            stage="generation",
+            role="coder",
+        )
 
-    assert "Applied the approved source mutation" in summary
-    assert runtime.calls == ["search_code_rag", "search_project_rag", "apply_source_edit", "java_diagnostics"]
-
+    assert runtime.calls == ["search_code_rag", "search_project_rag"]

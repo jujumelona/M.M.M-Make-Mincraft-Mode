@@ -87,12 +87,7 @@ def initial_evidence_required(
         return True
     if role not in {"coder", "coder_safe"} or host_grounded:
         return False
-    # A semantically fresh Java target has no implementation history that can
-    # substitute for target/API evidence.  A downstream compiler can reject a
-    # guessed API, but it cannot make that guess grounded.  Therefore fresh
-    # Java must remain evidence-first even when a router preference is disabled
-    # or target_compile is mandatory.
-    if semantic_fresh_java_target:
+    if semantic_fresh_java_target and router_requires_fresh_evidence:
         return True
     if (
         implementation_requires_mutation
