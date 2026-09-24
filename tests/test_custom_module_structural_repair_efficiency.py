@@ -135,10 +135,11 @@ def test_custom_module_uses_coding_agent_tool_loop_not_file_plan(tmp_path: Path)
     router = _AgenticRouter()
     target = adapter_for_target("1.20.1", "fabric")
 
-    result = CustomModuleGenerator(
+    generator = CustomModuleGenerator(
         router,
         policy=ScalePolicy(model_context_bytes=4096),
-    ).generate(
+    )
+    result = generator.generate(
         root,
         module=_task_module("agentic_custom", "shape"),
         minecraft_version=target.minecraft_version,
@@ -147,7 +148,9 @@ def test_custom_module_uses_coding_agent_tool_loop_not_file_plan(tmp_path: Path)
     )
 
     assert result["status"] == "SOURCE_GENERATED"
-    assert result["generation_checkpoint_acknowledged"] is True
+    assert result["generation_checkpoint"]["status"] == "AWAITING_LIVE_COMMIT"
+    assert "cleanup_token" in result["generation_checkpoint"]
+    assert generator.finalize_committed_generation_checkpoint(result, project_root=root) is True
     assert result["generation_checkpoint"]["status"] == "CLEANED_AFTER_LIVE_COMMIT"
     assert "cleanup_token" not in result["generation_checkpoint"]
     assert "path" not in result["generation_checkpoint"]
@@ -233,7 +236,7 @@ def test_checkpoint_cleanup_failure_revokes_token_and_releases_lease(
     monkeypatch.setattr(
         generator_module,
         "_remove_generation_checkpoint",
-        lambda _path: (_ for _ in ()).throw(OSError("busy")),
+        lambda _path, **_kwargs: (_ for _ in ()).throw(OSError("busy")),
     )
 
     assert generator.acknowledge_generation_checkpoint(result) is False
@@ -682,11 +685,12 @@ def test_exact_input_rerun_resumes_hash_bound_checkpoint(tmp_path: Path) -> None
             return json.dumps({"summary": "Completed the resumed module."})
 
     resumed = _ResumeRouter()
-    result = CustomModuleGenerator(
+    generator = CustomModuleGenerator(
         resumed,
         policy=ScalePolicy(model_context_bytes=4096),
         checkpoint_root=checkpoint_root,
-    ).generate(
+    )
+    result = generator.generate(
         root,
         module=module,
         minecraft_version=platform.minecraft_version,
@@ -700,4 +704,6 @@ def test_exact_input_rerun_resumes_hash_bound_checkpoint(tmp_path: Path) -> None
     ) == "// preserved chunk\nfinal class Durable {}\n"
     assert resumed.workspace is not None
     assert not resumed.workspace.exists()
+    assert checkpoint_root.exists()
+    assert generator.finalize_committed_generation_checkpoint(result, project_root=root) is True
     assert not checkpoint_root.exists()
