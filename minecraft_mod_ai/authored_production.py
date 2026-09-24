@@ -158,104 +158,82 @@ def _metadata_only_preamble(lines: list[str], start: int, end: int) -> bool:
     return all(metadata.match(value) for value in meaningful)
 
 
-def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
-    """Split approved prose into semantic implementation units without losing bytes.
-
-    Document-level wrappers are traversed one heading level at a time. Context-only
-    siblings such as Intro/metadata do not count as implementation units, and a sole
-    semantic child remains one unit unless that child is itself a generic container.
-    This prevents both failure modes: treating the whole design as one task and
-    over-splitting one feature's Trigger/State subheadings.
-    """
-
-    if not text:
-        return ("",)
-    lines, records = _authored_heading_records(text)
-    if not records:
-        return (text,)
-
-    shallowest = min(depth for _index, depth, _title in records)
-    shallow = [record for record in records if record[1] == shallowest]
-    split_level = shallowest
-    document_wrapper = bool(
-        len(shallow) == 1
-        and (
-            _generic_authored_container(shallow[0][2])
-            or _document_preamble_title(shallow[0][2])
-        )
+def _heading_peer_is_context(
+    lines: list[str],
+    peers: list[tuple[int, int, str]],
+    position: int,
+) -> bool:
+    start_line, _level, title = peers[position]
+    end_line = peers[position + 1][0] if position + 1 < len(peers) else len(lines)
+    return bool(
+        _document_context_title(title)
+        or _metadata_only_preamble(lines, start_line + 1, end_line)
     )
 
-    if document_wrapper:
-        deeper_levels = sorted(
-            {record[1] for record in records if record[1] > shallowest}
-        )
-        for depth in deeper_levels:
-            peers = [record for record in records if record[1] == depth]
-            if not peers:
-                continue
-            actionable: list[tuple[int, int, str]] = []
-            for position, record in enumerate(peers):
-                start_line, _level, title = record
-                end_line = (
-                    peers[position + 1][0]
-                    if position + 1 < len(peers)
-                    else len(lines)
-                )
-                if (
-                    _document_context_title(title)
-                    or _metadata_only_preamble(lines, start_line + 1, end_line)
-                ):
-                    continue
-                actionable.append(record)
 
-            if len(actionable) >= 2:
-                split_level = depth
-                break
-            if len(actionable) == 1:
-                # A sole real feature is still one feature. Descend only when that
-                # heading is itself a generic grouping container.
-                only_title = actionable[0][2]
-                if _generic_authored_container(only_title):
-                    continue
-                split_level = depth
-                break
+def _document_wrapper_split_level(
+    lines: list[str],
+    records: tuple[tuple[int, int, str], ...],
+    shallowest: int,
+) -> int:
+    for depth in sorted({record[1] for record in records if record[1] > shallowest}):
+        peers = [record for record in records if record[1] == depth]
+        actionable = [
+            record
+            for position, record in enumerate(peers)
+            if not _heading_peer_is_context(lines, peers, position)
+        ]
+        if len(actionable) >= 2:
+            return depth
+        if len(actionable) == 1 and not _generic_authored_container(actionable[0][2]):
+            return depth
+    return shallowest
 
-    split_records = [
-        record for record in records if record[1] == split_level
-    ]
+
+def _trim_leading_authored_context(
+    lines: list[str],
+    split_records: list[tuple[int, int, str]],
+    *,
+    split_level: int,
+    shallowest: int,
+) -> list[int]:
     starts = [record[0] for record in split_records]
-    if not starts:
-        return (text,)
-
     if split_level > shallowest:
-        record_by_start = {record[0]: record for record in split_records}
         while len(starts) >= 2:
-            first_start = starts[0]
-            first_end = starts[1]
-            first_record = record_by_start.get(first_start)
-            first_title = first_record[2] if first_record is not None else ""
-            if not (
-                _document_context_title(first_title)
-                or _metadata_only_preamble(lines, first_start + 1, first_end)
+            first_position = next(
+                (
+                    position
+                    for position, record in enumerate(split_records)
+                    if record[0] == starts[0]
+                ),
+                None,
+            )
+            if first_position is None or not _heading_peer_is_context(
+                lines, split_records, first_position
             ):
                 break
             starts = starts[1:]
+        return starts
 
-    # At the document's own split level, a leading title/metadata section is context,
-    # not an implementation unit. Remove only that boundary; slicing below retains
-    # every byte of the preamble in the first real feature block.
-    if split_level == shallowest and len(starts) >= 2:
-        first_start = starts[0]
-        first_end = starts[1]
-        first_title = split_records[0][2]
-        if (
-            _document_preamble_title(first_title)
-            or _metadata_only_preamble(lines, first_start + 1, first_end)
-        ):
-            starts = starts[1:]
+    if len(starts) < 2:
+        return starts
+    first_start, first_end = starts[:2]
+    first_title = split_records[0][2]
+    if (
+        _document_preamble_title(first_title)
+        or _metadata_only_preamble(lines, first_start + 1, first_end)
+    ):
+        return starts[1:]
+    return starts
 
+
+def _lossless_authored_partition(
+    lines: list[str],
+    records: tuple[tuple[int, int, str], ...],
+    starts: list[int],
+) -> tuple[str, ...]:
     if not starts:
-        return (text,)
+        return ("".join(lines),)
 
     heading_indexes = {index for index, _depth, _title in records}
     blocks: list[str] = []
@@ -268,48 +246,89 @@ def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
             line.strip() and index not in heading_indexes
             for index, line in enumerate(lines[start_line:end_line], start_line)
         )
-        if not feature_has_body:
+        if feature_has_body:
+            blocks.append(pending + segment)
+            pending = ""
+        else:
             pending += segment
-            continue
-        blocks.append(pending + segment)
-        pending = ""
 
     if pending:
         if blocks:
             blocks[-1] += pending
         else:
             blocks.append(pending)
+    return tuple(blocks)
 
+
+def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
+    """Split approved prose into semantic implementation units without losing bytes."""
+
+    if not text:
+        return ("",)
+    lines, records = _authored_heading_records(text)
+    if not records:
+        return (text,)
+
+    shallowest = min(depth for _index, depth, _title in records)
+    shallow = [record for record in records if record[1] == shallowest]
+    document_wrapper = bool(
+        len(shallow) == 1
+        and (
+            _generic_authored_container(shallow[0][2])
+            or _document_preamble_title(shallow[0][2])
+        )
+    )
+    split_level = (
+        _document_wrapper_split_level(lines, records, shallowest)
+        if document_wrapper
+        else shallowest
+    )
+    split_records = [record for record in records if record[1] == split_level]
+    starts = _trim_leading_authored_context(
+        lines,
+        split_records,
+        split_level=split_level,
+        shallowest=shallowest,
+    )
+    blocks = _lossless_authored_partition(lines, records, starts)
     if "".join(blocks) != text:
         raise ValueError("Authored semantic block parsing changed approved design text.")
-    return tuple(blocks)
+    return blocks
+
+
+def _first_authored_feature_title(
+    lines: list[str],
+    records: tuple[tuple[int, int, str], ...],
+    first_level: int,
+) -> str:
+    descendants = [record for record in records[1:] if record[1] > first_level]
+    for position, (child_index, _child_level, child_title) in enumerate(descendants):
+        next_index = (
+            descendants[position + 1][0]
+            if position + 1 < len(descendants)
+            else len(lines)
+        )
+        if (
+            _document_context_title(child_title)
+            or _generic_authored_container(child_title)
+            or _metadata_only_preamble(lines, child_index + 1, next_index)
+        ):
+            continue
+        return child_title
+    return descendants[-1][2] if descendants else ""
 
 
 def _authored_block_section(block: str) -> str:
     lines, records = _authored_heading_records(block)
     if not records:
         return ""
+
     first_index, first_level, first_title = records[0]
     if _generic_authored_container(first_title) or _document_preamble_title(first_title):
-        descendants = [
-            record for record in records[1:]
-            if record[1] > first_level
-        ]
-        for position, (child_index, child_level, child_title) in enumerate(descendants):
-            next_index = len(lines)
-            for later_index, later_level, _later_title in descendants[position + 1:]:
-                if later_level == child_level:
-                    next_index = later_index
-                    break
-            if (
-                _document_context_title(child_title)
-                or _generic_authored_container(child_title)
-                or _metadata_only_preamble(lines, child_index + 1, next_index)
-            ):
-                continue
-            return child_title
-        if descendants:
-            return descendants[-1][2]
+        descendant_title = _first_authored_feature_title(lines, records, first_level)
+        if descendant_title:
+            return descendant_title
+
     if len(records) >= 2:
         second_index, second_level, second_title = records[1]
         if (
