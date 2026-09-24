@@ -124,10 +124,8 @@ from .validation_checkpoint_policy import (
     validation_checkpoint_input,
 )
 from .validation_diagnostic_contract import (
-    diagnostic_errors as jdt_diagnostic_errors,
     run_diagnostics as run_jdt_diagnostics,
     run_diagnostics_with_bootstrap_retry,
-    unwrap_diagnostic_receipt,
 )
 from .validator import validate_jar
 from .work_graph import (
