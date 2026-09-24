@@ -42,10 +42,11 @@ def test_parallel_read_wave_has_deadline(monkeypatch: pytest.MonkeyPatch) -> Non
     assert time.monotonic() - started < 0.18
 
 
-def test_orchestrator_generation_shutdown_is_nonblocking() -> None:
+def test_orchestrator_generation_shutdown_quiesces_mutating_workers() -> None:
     source = inspect.getsource(CompleteProductionOrchestrator._execute_generation_work)
     assert "lease_until" in source
     assert "FIRST_COMPLETED" in source
-    assert "shutdown(wait=True" not in source
-    assert "shutdown(wait=False" in source
+    assert "shutdown(wait=False" not in source
+    assert "shutdown(wait=True, cancel_futures=True)" in source
+    assert "for pool in (cpu_pool, llm_pool, image_pool, commit_pool, review_pool):" in source
     assert "Blockbench review deadline exceeded" in source
