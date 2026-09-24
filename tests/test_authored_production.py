@@ -205,6 +205,56 @@ def test_document_metadata_preamble_is_context_not_a_standalone_feature():
     assert "".join(unit["text"] for unit in units) == text
 
 
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "\n",
+        "---\n",
+        "Saved authored design\n\n",
+        "\ufeff",
+    ],
+)
+def test_document_preamble_with_leading_source_bytes_is_lossless(prefix):
+    text = (
+        prefix
+        + "# Stellar Odyssey Mod Design Document\n"
+        "**Mod Name:** Stellar Odyssey\n"
+        "**Version:** 1.0\n"
+        "---\n"
+        "# Resource Economy\n"
+        "Persist credits and mined resources.\n"
+        "# Ship Construction\n"
+        "Install ship parts and upgrades.\n"
+    )
+
+    units = _authored_execution_units(text)
+
+    assert len(units) == 2
+    assert [unit["section"] for unit in units] == [
+        "Resource Economy",
+        "Ship Construction",
+    ]
+    assert units[0]["text"].startswith(prefix)
+    assert "".join(unit["text"] for unit in units) == text
+
+
+def test_generic_wrapper_with_leading_prose_is_lossless():
+    text = (
+        "Saved design context that must not be dropped.\n\n"
+        "# Design\n"
+        "**Mod Name:** Example\n"
+        "## Wallet\nPersist each player's balance.\n"
+        "## Purchase\nDeduct once and grant once.\n"
+    )
+
+    units = _authored_execution_units(text)
+
+    assert len(units) == 2
+    assert [unit["section"] for unit in units] == ["Wallet", "Purchase"]
+    assert units[0]["text"].startswith("Saved design context")
+    assert "".join(unit["text"] for unit in units) == text
+
+
 def test_single_generic_wrapper_metadata_attaches_to_first_child_feature():
     text = (
         "# Design\n"
