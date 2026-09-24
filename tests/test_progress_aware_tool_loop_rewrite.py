@@ -530,6 +530,7 @@ def test_materialized_authored_scaffold_enters_act_before_rag(monkeypatch, tmp_p
                 assert arguments["operation"] == "replace_exact"
                 assert arguments["old"] == scaffold
                 assert arguments["new"] == implemented
+                target_file.write_text(implemented, encoding="utf-8")
                 return {
                     "schema_version": "mmm/source-patch-receipt-v1",
                     "status": "APPLIED",
