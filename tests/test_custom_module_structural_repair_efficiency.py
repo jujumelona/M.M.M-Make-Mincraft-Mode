@@ -703,7 +703,8 @@ def test_exact_input_rerun_resumes_hash_bound_checkpoint(tmp_path: Path) -> None
         encoding="utf-8"
     ) == "// preserved chunk\nfinal class Durable {}\n"
     assert resumed.workspace is not None
-    assert not resumed.workspace.exists()
+    assert resumed.workspace.exists()
     assert checkpoint_root.exists()
     assert generator.finalize_committed_generation_checkpoint(result, project_root=root) is True
+    assert not resumed.workspace.exists()
     assert not checkpoint_root.exists()
