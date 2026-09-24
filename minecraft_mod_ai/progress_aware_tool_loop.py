@@ -36,8 +36,13 @@ from .model_context_budget import (
     request_message_budget,
 )
 from .mutation_authority import CURRENT_MUTATION_AUTHORITY, MutationAuthorityMode
-from .mutation_context_binding import context_is_host_pinned, context_is_localized, materialized_create_context, observed_context_may_bind
-from .mutation_context_binding import recover_stale_existing_context as _recover_stale
+from .mutation_context_binding import (
+    context_is_host_pinned,
+    context_is_localized,
+    materialized_create_context,
+    observed_context_may_bind,
+    recover_stale_existing_context as _recover_stale,
+)
 from .root_cause_trace import emit_root_cause, trace_scope
 from .retrieval_progress import (
     RetrievalDecision,
