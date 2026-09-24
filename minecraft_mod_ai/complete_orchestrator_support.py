@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+import hashlib
 import heapq
 import json
 from pathlib import Path
 from typing import Any
 
 from .complete_spec import CompleteProposal, ProductionModule
+
+
+def file_sha256(path: Path) -> str:
+    """Hash one artifact without loading the complete file into memory."""
+
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
 
 
 class CompleteProductionError(RuntimeError):
