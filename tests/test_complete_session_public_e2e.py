@@ -227,6 +227,7 @@ def test_complete_session_build_uses_real_orchestrator_and_repair_path(
         digest = "sha256:" + hashlib.sha256(jar.read_bytes()).hexdigest()
         return _DictReport(
             {
+                "status": "PASS",
                 "artifact_path": str(jar.resolve()),
                 "sha256": digest,
                 "integrity": "PASS",
