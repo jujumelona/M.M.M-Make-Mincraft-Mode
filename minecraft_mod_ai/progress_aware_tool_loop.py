@@ -3287,6 +3287,11 @@ def _generate_with_tools_impl(
         and "target_compile" in current_task_required_gates()
     )
     router_requires_fresh_evidence = bool(router._agent_require_fresh_evidence)
+    host_authored_scaffold = bool(
+        state.mutation_context is not None
+        and isinstance(state.mutation_context.source_body, str)
+        and "MMM_AUTHORED_FEATURE_BODY_" in state.mutation_context.source_body
+    )
     require_rag = initial_evidence_required(
         role=role,
         host_grounded=host_grounded,
@@ -3296,6 +3301,7 @@ def _generate_with_tools_impl(
         compile_backed_java=compile_backed_java,
         authored_workspace_refresh=authored_workspace_refresh,
         semantic_fresh_java_target=fresh_java_target,
+        host_authored_scaffold=host_authored_scaffold,
     )
     required_evidence_choice = bool(require_rag)
     state.require_evidence = bool(require_rag)
@@ -3334,6 +3340,7 @@ def _generate_with_tools_impl(
             "implementation_requires_mutation": implementation_requires_mutation,
             "mutation_ready": mutation_ready,
             "compile_backed_java": compile_backed_java,
+            "host_authored_scaffold": host_authored_scaffold,
             "approved_task_evidence_query": approved_task_evidence_query or None,
             "initial_phase": state.phase.value,
         },
