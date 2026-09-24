@@ -3088,15 +3088,15 @@ def _approved_task_evidence_query(
     if task is None:
         return ""
     fragments: list[str] = []
-    for field in (
+    for field_name in (
         "semantic_outcome",
         "acceptance",
         "public_acceptance",
         "provides",
         "engineering_worksheet",
     ):
-        if field in task:
-            _task_query_fragments(task.get(field), fragments)
+        if field_name in task:
+            _task_query_fragments(task.get(field_name), fragments)
     target = str(target_path or "").replace("\\", "/").strip()
     target_symbol = target.rsplit("/", 1)[-1].rsplit(".", 1)[0] if target else ""
     cleaned: list[str] = []
