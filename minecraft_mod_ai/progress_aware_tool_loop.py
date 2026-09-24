@@ -58,11 +58,8 @@ from .source_repair_semantics import (
 from .target_mutation_context import (
     LocalizationStage,
     TargetMutationContext,
-    _anchor_path_and_symbol,
     _canonical_mutation_path,
     _extract_mutation_context_from_payload,
-    _is_code_bearing_text,
-    _is_workspace_file_path,
     _mutation_context_dict,
     _task_authority_context,
     _without_target_path,
@@ -80,7 +77,6 @@ from .verifier_repair_window import (
     select_verifier_repair_window,
     selected_repair_diagnostic,
 )
-from .value_shapes import as_sequence as _sequence
 from .value_shapes import structured_payload as _structured_payload
 
 class LoopPhase(str, Enum):
