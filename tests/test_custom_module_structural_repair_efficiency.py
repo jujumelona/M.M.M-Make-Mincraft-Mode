@@ -9,10 +9,10 @@ import pytest
 from minecraft_mod_ai import agent_tool_runtime
 from minecraft_mod_ai import custom_module_generator as generator_module
 from minecraft_mod_ai.complete_spec import ProductionModule
-from minecraft_mod_ai.custom_module_generator import (
+from minecraft_mod_ai.custom_module_errors import CustomModuleGenerationError
+from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
+from minecraft_mod_ai.generation_checkpoint import (
     _CHECKPOINT_SCHEMA,
-    CustomModuleGenerationError,
-    CustomModuleGenerator,
     _checkpoint_router_scope,
     _generation_checkpoint_identity,
     _persist_generation_checkpoint,
