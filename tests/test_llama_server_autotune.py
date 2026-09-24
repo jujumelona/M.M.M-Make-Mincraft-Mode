@@ -69,7 +69,7 @@ def test_server_runtime_tuning_contract_is_installed() -> None:
     assert getattr(autotune._fingerprint, "_mmm_runtime_tuning_fingerprint", False)
     assert getattr(autotune._cache_path, "_mmm_persistent_tuning_cache", False)
     assert getattr(autotune.ensure_tuned_server, "_mmm_managed_server_fast_path", False)
-    assert getattr(autotune.ensure_tuned_server, "_mmm_llama_no_reload_fast_start_v6", False)
+    assert getattr(autotune.ensure_tuned_server, "_mmm_llama_no_reload_fast_start_v7", False)
     assert getattr(
         complete_orchestrator_services.generate_assets,
         "_mmm_releases_managed_llama",

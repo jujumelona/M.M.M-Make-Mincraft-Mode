@@ -45,19 +45,25 @@ def _clear_parallel_env(monkeypatch) -> None:
         "MMM_LLAMA_ACTIVE_SPEC_TYPE",
         "MMM_LLAMA_ACTIVE_CACHE_TYPE_K",
         "MMM_LLAMA_ACTIVE_CACHE_TYPE_V",
+        "MMM_LLAMA_PARALLEL_ORIGIN",
+        "MMM_LLAMA_AUTO_PARALLEL_VALUE",
+        "MMM_LLAMA_AUTOTUNE_SEARCH",
     ):
         monkeypatch.delenv(name, raising=False)
 
 
 def test_auto_mode_probes_p1_p2_p4_only_when_resources_fit(monkeypatch) -> None:
     _clear_parallel_env(monkeypatch)
+    monkeypatch.setenv("MMM_LLAMA_AUTOTUNE_SEARCH", "full")
     monkeypatch.setattr(runtime, "_model_size", lambda _path: 6 * _GIB)
-    fit = runtime.RuntimeResources(15 * _GIB, 15 * _GIB, 8 * _GIB, 2)
-    tighter = runtime.RuntimeResources(10 * _GIB, 15 * _GIB, 8 * _GIB, 2)
+    fit = runtime.RuntimeResources(15 * _GIB, 15 * _GIB, 12 * _GIB, 2)
+    ram_tight = runtime.RuntimeResources(15 * _GIB, 15 * _GIB, 8 * _GIB, 2)
+    gpu_tight = runtime.RuntimeResources(10 * _GIB, 15 * _GIB, 12 * _GIB, 2)
 
     assert runtime._performance_mode() == "auto"
     assert runtime._parallel_candidates(_config(), "model.gguf", fit) == (1, 2, 4)
-    assert runtime._parallel_candidates(_config(), "model.gguf", tighter) == (1,)
+    assert runtime._parallel_candidates(_config(), "model.gguf", ram_tight) == (1,)
+    assert runtime._parallel_candidates(_config(), "model.gguf", gpu_tight) == (1,)
     assert runtime._parallel_candidates(
         _config(), "model.gguf", runtime.RuntimeResources()
     ) == (1,)

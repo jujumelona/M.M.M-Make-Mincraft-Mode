@@ -232,26 +232,53 @@ def _install_parallel_repair_search(agentic_module: Any) -> None:
                 }
                 return base(self, copy.deepcopy(evidence), candidate_context)
 
+            # Run the first candidate synchronously before fan-out. Control-flow
+            # exceptions (KeyboardInterrupt/SystemExit/GeneratorExit) must be observed
+            # before any sibling candidate is launched; otherwise a cancellation can
+            # multiply the model call by the full search width before future.result()
+            # has a chance to re-raise it.
+            try:
+                generated.append((0, solve(0)))
+            except BaseException as exc:
+                if not isinstance(exc, Exception):
+                    raise
+                errors[0] = exc
+
+            remaining = tuple(range(1, width))
             if workers <= 1:
-                for candidate_index in range(width):
+                for candidate_index in remaining:
                     try:
                         generated.append((candidate_index, solve(candidate_index)))
-                    except Exception as exc:
+                    except BaseException as exc:
+                        if not isinstance(exc, Exception):
+                            raise
                         errors[candidate_index] = exc
-            else:
-                contexts = [copy_context() for _ in range(width)]
+            elif remaining:
+                sibling_workers = min(workers, len(remaining))
+                contexts = {index: copy_context() for index in remaining}
                 with ThreadPoolExecutor(
-                    max_workers=workers,
+                    max_workers=sibling_workers,
                     thread_name_prefix="mmm_repair_generate",
                 ) as pool:
                     futures = [
-                        pool.submit(contexts[index].run, solve, index)
-                        for index in range(width)
+                        (
+                            candidate_index,
+                            pool.submit(
+                                contexts[candidate_index].run,
+                                solve,
+                                candidate_index,
+                            ),
+                        )
+                        for candidate_index in remaining
                     ]
-                    for candidate_index, future in enumerate(futures):
+                    for candidate_index, future in futures:
                         try:
                             generated.append((candidate_index, future.result()))
-                        except Exception as exc:
+                        except BaseException as exc:
+                            if not isinstance(exc, Exception):
+                                for _, sibling in futures:
+                                    sibling.cancel()
+                                raise
                             errors[candidate_index] = exc
 
             if not generated:
