@@ -528,7 +528,6 @@ def atomicize_coder_messages(
 
 
 def _bounded_initial_observations(
-    generator_module: Any,
     index: Any,
     *,
     query: str,
@@ -544,6 +543,17 @@ def _bounded_initial_observations(
     later source is retrieved on demand from the same indexed project.
     """
 
+    # These helpers are owned by source_observation_context after the source-observation
+    # extraction. Import them lazily to avoid the module cycle created by that module's
+    # @bounded_initial_observations decorator.
+    from .custom_module_errors import CustomModuleGenerationError
+    from .source_observation_context import (
+        append_observation,
+        exact_observation,
+        json_size,
+        update_digest,
+    )
+
     page_budget = max(1024, min(int(byte_budget), _MAX_INITIAL_SOURCE_BYTES))
     page = index.select_page(
         query=query,
@@ -551,8 +561,8 @@ def _bounded_initial_observations(
         byte_budget=page_budget,
         cursor="",
     )
-    if generator_module._json_size(page) > page_budget:
-        raise generator_module.CustomModuleGenerationError(
+    if json_size(page) > page_budget:
+        raise CustomModuleGenerationError(
             "Host project context page exceeded its byte budget."
         )
 
@@ -576,7 +586,7 @@ def _bounded_initial_observations(
             for item in page["files"]
         ],
     }
-    generator_module._update_digest(source_page_digest, page_commitment)
+    update_digest(source_page_digest, page_commitment)
 
     records: list[dict[str, Any]] = []
     record_keys: set[tuple[str, int, int]] = set()
@@ -588,10 +598,10 @@ def _bounded_initial_observations(
         ):
             continue
         content_str = str(item.get("content", item.get("text", "")))
-        generator_module._append_observation(
+        append_observation(
             records,
             record_keys,
-            generator_module._exact_observation(
+            exact_observation(
                 path=str(item["path"]),
                 sha256=str(item.get("sha256", "")),
                 start=int(item.get("content_start_bytes", 0)),
@@ -602,7 +612,7 @@ def _bounded_initial_observations(
 
     observation_digest = hashlib.sha256()
     for record in records:
-        generator_module._update_digest(observation_digest, record)
+        update_digest(observation_digest, record)
     receipt = {
         "schema_version": "mmm/source-observation-receipt-v1",
         "project_sha256": project_sha256,
@@ -719,6 +729,8 @@ def bounded_initial_observations(
 ) -> Any:
     """Own the bounded bootstrap source page directly instead of late rebinding."""
 
+    del generator_module
+
     @wraps(func)
     def collect_initial_observations(
         index: Any,
@@ -727,11 +739,7 @@ def bounded_initial_observations(
         byte_budget: int,
         diagnostic_paths: Iterable[str] = (),
     ) -> dict[str, Any]:
-        module = generator_module
-        if module is None:
-            from . import custom_module_generator as module
         return _bounded_initial_observations(
-            module,
             index,
             query=query,
             byte_budget=byte_budget,
