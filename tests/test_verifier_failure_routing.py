@@ -1,4 +1,5 @@
 from minecraft_mod_ai import progress_aware_tool_loop as loop
+from minecraft_mod_ai.generation_loop_outcomes import verification_outcome
 from minecraft_mod_ai.validation_diagnostic_contract import diagnostic_errors
 
 
@@ -28,7 +29,7 @@ def test_jdt_release_mismatch_never_becomes_source_failure() -> None:
     assert [item["code"] for item in errors] == ["JDT_DIAGNOSTICS_UNAVAILABLE"]
 
     payload = {"ok": True, "result": result}
-    assert loop._verification_outcome("java_diagnostics", payload) == "UNAVAILABLE"
+    assert verification_outcome("java_diagnostics", payload) == "UNAVAILABLE"
 
 
 def test_real_source_failure_remains_source_failure() -> None:
@@ -45,7 +46,7 @@ def test_real_source_failure_remains_source_failure() -> None:
             ],
         },
     }
-    assert loop._verification_outcome("java_diagnostics", payload) == "FAIL"
+    assert verification_outcome("java_diagnostics", payload) == "FAIL"
 
 
 def test_recover_is_evidence_only_and_cannot_mutate_source() -> None:
