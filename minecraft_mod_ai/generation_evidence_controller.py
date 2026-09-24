@@ -87,7 +87,12 @@ def initial_evidence_required(
         return True
     if role not in {"coder", "coder_safe"} or host_grounded:
         return False
-    if semantic_fresh_java_target and router_requires_fresh_evidence:
+    # A semantically fresh Java target has no implementation history that can
+    # substitute for target/API evidence.  A downstream compiler can reject a
+    # guessed API, but it cannot make that guess grounded.  Therefore fresh
+    # Java must remain evidence-first even when a router preference is disabled
+    # or target_compile is mandatory.
+    if semantic_fresh_java_target:
         return True
     if (
         implementation_requires_mutation
@@ -523,11 +528,7 @@ def _translate_rejected_arguments(
     if not isinstance(schema, Mapping):
         return None
     original = str(payload.get("original_tool") or "").strip()
-    if (
-        not original
-        or original == forced_evidence_tool
-        or original not in _REVIEWED_EVIDENCE_TOOLS
-    ):
+    if not original or original not in _REVIEWED_EVIDENCE_TOOLS:
         return None
     raw = payload.get("raw_arguments")
     if not isinstance(raw, str) or not raw.strip():
@@ -560,6 +561,26 @@ def _translate_rejected_arguments(
         for key, value in parsed.items()
         if str(key) in properties
     }
+    if original == forced_evidence_tool:
+        # The host owns the selected external MCP capability.  Small models can
+        # reproduce the correct visible tool name while hallucinating an enum
+        # value from a previous/provider-specific schema.  Rebind only this
+        # host-owned discriminator; preserve model-authored nested search args.
+        if forced_evidence_tool not in {"external_mcp_schema", "external_mcp_call"}:
+            return None
+        capability_schema = properties.get("capability")
+        capability_enum = (
+            capability_schema.get("enum")
+            if isinstance(capability_schema, Mapping)
+            else None
+        )
+        if (
+            not isinstance(capability_enum, Sequence)
+            or isinstance(capability_enum, (str, bytes, bytearray))
+            or len(capability_enum) != 1
+        ):
+            return None
+        candidate["capability"] = str(capability_enum[0])
     required_names = {
         str(name)
         for name in required

@@ -3170,10 +3170,14 @@ def _generate_with_tools_impl(
                 and state.phase is LoopPhase.OBSERVE
                 and state.validation_status != "FAIL"
             ):
-                # Authored bounded-root generation has host write authority without an
-                # exact preselected file. Retrieval may improve implementation evidence,
-                # but exhausting localization routes must not make a small coder fail:
-                # ACT is the deliberate bounded-root destination-selection frontier.
+                # Bounded-root write authority chooses *where* the coder may write; it
+                # is not API evidence.  Never convert exhausted required grounding into
+                # permission to guess a fresh implementation.
+                if require_rag and not baseline_ready:
+                    raise ModelConfigurationError(
+                        "IMPLEMENTATION_EVIDENCE_STALLED: bounded-root mutation authority "
+                        "is available, but no untried authoritative Java/API evidence route remains."
+                    )
                 state.phase = LoopPhase.ACT
                 emit_root_cause(
                     "bounded_root_localization_exhausted_resume_act",
@@ -3182,8 +3186,8 @@ def _generate_with_tools_impl(
                     gate="mutation_localization",
                     result="PASS",
                     reason=(
-                        "bounded-root authored generation exhausted localization evidence; "
-                        "resume the host-authorized ACT frontier instead of terminating"
+                        "bounded-root authored generation exhausted optional localization "
+                        "evidence after all required grounding obligations were satisfied"
                     ),
                     details={
                         "attempted_sources": sorted(state.attempted_sources),
@@ -3556,6 +3560,7 @@ def _generate_with_tools_impl(
                     state.phase is LoopPhase.OBSERVE
                     and implementation_requires_mutation
                     and is_mutation_ready(messages, state)
+                    and (not require_rag or baseline_ready)
                 ):
                     state.phase = LoopPhase.ACT
                     state.clear_no_progress_result()
@@ -4263,17 +4268,10 @@ def _generate_with_tools_impl(
                 fresh_java_target=fresh_java_target,
                 compile_backed_java=compile_backed_java,
             ):
-                if (
-                    state.phase is LoopPhase.OBSERVE
-                    and implementation_requires_mutation
-                    and is_mutation_ready(messages, state)
-                    and state.no_progress_streak >= 2
-                ):
-                    state.phase = LoopPhase.ACT
-                    state.clear_no_progress_result()
-                    required_evidence_choice = False
-                else:
-                    required_evidence_choice = True
+                # Required grounding is a hard gate.  Multiple empty/control-plane
+                # retrieval turns must advance to another evidence route or fail
+                # closed; they must never silently downgrade into ACT.
+                required_evidence_choice = True
 
         trace = ExecutionStepTrace(
             step_index=state.step_index,

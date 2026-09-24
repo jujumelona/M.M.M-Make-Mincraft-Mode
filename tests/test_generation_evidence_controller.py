@@ -177,7 +177,7 @@ def test_unverified_fresh_java_still_requires_initial_evidence() -> None:
     )
 
 
-def test_materialized_fresh_java_honors_explicit_evidence_policy() -> None:
+def test_materialized_fresh_java_requires_evidence_independent_of_router_preference() -> None:
     options = {
         "role": "coder", "host_grounded": False, "router_requires_fresh_evidence": True,
         "implementation_requires_mutation": True, "host_target_execution_authority": True,
@@ -185,7 +185,7 @@ def test_materialized_fresh_java_honors_explicit_evidence_policy() -> None:
     }
     assert controller.initial_evidence_required(**options)
     assert not controller.initial_evidence_required(**{**options, "host_grounded": True})
-    assert not controller.initial_evidence_required(
+    assert controller.initial_evidence_required(
         **{**options, "router_requires_fresh_evidence": False}
     )
 
@@ -373,3 +373,40 @@ def test_rejected_source_search_is_translated_to_external_mcp_call() -> None:
     assert normalized[0].arguments["capability"] == "source_search"
     assert normalized[0].arguments["arguments"] == {"query": "BlockEntity", "searchType": "class"}
 
+
+
+def test_rejected_host_selected_external_capability_is_rebound() -> None:
+    rejected = _Call(
+        id="r-external",
+        name="__mmm_rejected_tool_call__",
+        arguments={
+            "failure_code": "TOOL_SCHEMA_INVALID",
+            "original_tool": "external_mcp_schema",
+            "raw_arguments": '{"capability":"minecraft_api_docs"}',
+        },
+        raw_arguments="{}",
+    )
+    phase_tool = {
+        "type": "function",
+        "function": {
+            "name": "external_mcp_schema",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "capability": {
+                        "type": "string",
+                        "enum": ["source_search"],
+                    }
+                },
+                "required": ["capability"],
+            },
+        },
+    }
+    normalized = controller.normalize_forced_evidence_rejection_calls(
+        (rejected,),
+        phase_tools=(phase_tool,),
+        forced_evidence_tool="external_mcp_schema",
+    )
+    assert normalized is not None
+    assert normalized[0].name == "external_mcp_schema"
+    assert normalized[0].arguments == {"capability": "source_search"}

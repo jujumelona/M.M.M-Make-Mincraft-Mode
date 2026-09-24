@@ -8,7 +8,7 @@ from minecraft_mod_ai import small_model_task_capsule_contract as capsules
 from minecraft_mod_ai.model_adapters import GenerationRequest, GenerationResponse, ToolCall
 
 
-def test_target_compile_allows_pinned_fresh_java_before_speculative_search(
+def test_target_compile_requires_authoritative_evidence_before_pinned_fresh_java(
     monkeypatch,
 ) -> None:
     target = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
@@ -16,6 +16,11 @@ def test_target_compile_allows_pinned_fresh_java_before_speculative_search(
         capsules,
         "current_task_required_gates",
         lambda: ("target_compile",),
+    )
+    monkeypatch.setattr(
+        capsules,
+        "current_task_reuse_action",
+        lambda: "fresh",
     )
 
     class Adapter:
@@ -25,7 +30,20 @@ def test_target_compile_allows_pinned_fresh_java_before_speculative_search(
         def generate_turn(self, request):
             self.calls += 1
             names = {item["function"]["name"] for item in request.tools}
-            assert self.calls == 1
+            if self.calls == 1:
+                assert names == {"search_code_rag"}
+                arguments = {"query": "DebugToken Minecraft API"}
+                return GenerationResponse(
+                    tool_calls=(
+                        ToolCall(
+                            id="search-1",
+                            name="search_code_rag",
+                            arguments=arguments,
+                            raw_arguments=json.dumps(arguments),
+                        ),
+                    )
+                )
+            assert self.calls == 2
             assert names == {"apply_source_edit"}
             arguments = {
                 "operation": "create_file",
@@ -52,6 +70,18 @@ def test_target_compile_allows_pinned_fresh_java_before_speculative_search(
         def call(self, stage, name, _arguments):
             assert stage == "generation"
             runtime_calls.append(name)
+            if name == "search_code_rag":
+                return {
+                    "schema_version": "mmm/code-rag-result-v1",
+                    "hits": [
+                        {
+                            "text": (
+                                "import net.minecraft.world.item.Item; "
+                                "public final class ExistingItem {}"
+                            )
+                        }
+                    ],
+                }
             if name == "apply_source_edit":
                 return {
                     "schema_version": "mmm/source-patch-receipt-v1",
@@ -82,6 +112,7 @@ def test_target_compile_allows_pinned_fresh_java_before_speculative_search(
                     {
                         "primary_path": target,
                         "writable_paths": [target],
+                        "creatable_paths": [target],
                         "reuse_action": "fresh",
                     }
                 ),
@@ -122,7 +153,7 @@ def test_target_compile_allows_pinned_fresh_java_before_speculative_search(
 
     adapter = Adapter()
     result = loop.generate_with_tools(
-        SimpleNamespace(_agent_require_fresh_evidence=True),
+        SimpleNamespace(_agent_require_fresh_evidence=False),
         config=SimpleNamespace(
             adapter="test",
             max_context=32768,
@@ -138,5 +169,9 @@ def test_target_compile_allows_pinned_fresh_java_before_speculative_search(
 
     payload = json.loads(result)
     assert "passed generation-time host verification" in payload["summary"]
-    assert adapter.calls == 1
-    assert runtime_calls == ["apply_source_edit", "target_compile"]
+    assert adapter.calls == 2
+    assert runtime_calls == [
+        "search_code_rag",
+        "apply_source_edit",
+        "target_compile",
+    ]
