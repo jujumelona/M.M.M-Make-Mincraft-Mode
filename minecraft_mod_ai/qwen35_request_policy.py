@@ -46,28 +46,35 @@ def _is_qwen35(config: Any) -> bool:
     return _policy_enabled(config)
 
 
-def _request_sampling_mode(config: Any, request: Any) -> SamplingMode:
+def _request_is_action_page(request: Any) -> bool:
     tools = getattr(request, "tools", ()) or ()
     tool_choice = getattr(request, "tool_choice", None)
     forced_choice = (
         isinstance(tool_choice, Mapping)
         or str(tool_choice or "").casefold() == "required"
     )
-    # Tool-capable turns are action pages: the causal/planning layer has already
-    # selected the visible action surface and this decode only has to materialize a
-    # bounded, schema-validated call. Qwen3.5 thinks by default, so treating these as
-    # precise-coding pages can spend the whole action allowance inside ``<think>``
-    # before the tool envelope closes.
-    if tools or forced_choice:
-        return "non_thinking"
     structured_fill = (
         getattr(request, "response_format", None) == "json" and not tools
     )
-    if structured_fill:
-        return "non_thinking"
+    return bool(tools) or forced_choice or structured_fill
+
+
+def _request_sampling_mode(config: Any, request: Any) -> SamplingMode:
+    """Choose sampling independently from the action-template thinking switch."""
 
     role = str(getattr(config, "role", "")).strip().casefold()
-    if role in {"coder", "coder_safe"}:
+    coder = role in {"coder", "coder_safe"}
+    tools = getattr(request, "tools", ()) or ()
+    tool_choice = getattr(request, "tool_choice", None)
+    forced_choice = (
+        isinstance(tool_choice, Mapping)
+        or str(tool_choice or "").casefold() == "required"
+    )
+    if tools or forced_choice:
+        return "precise_coding" if coder else "non_thinking"
+    if getattr(request, "response_format", None) == "json" and not tools:
+        return "non_thinking"
+    if coder:
         return "precise_coding"
     return "general_thinking"
 
@@ -95,17 +102,18 @@ def _install_payload_policy(hardware_policy: Any) -> None:
             return result
 
         mode = _request_sampling_mode(config, request)
+        action_page = _request_is_action_page(request)
         defaults = _request_defaults(config, request)
         result.pop("chat_template_kwargs", None)
         result.pop("thinking_budget_tokens", None)
         if "reasoning_effort" not in defaults:
             result.pop("reasoning_effort", None)
         result.update(defaults)
-        if mode == "non_thinking":
+        if action_page:
             capabilities = qwen_family_capabilities(config, required=True)
             assert capabilities is not None
-            # Qwen3.5's published hard switch is the template kwarg. Do not rely on
-            # llama.cpp's OpenAI-specific reasoning_effort alias as a model contract.
+            # Tool/JSON transport stays non-thinking so a required action cannot spend
+            # its decode budget in <think>. Sampling is selected separately above.
             result.pop("reasoning_effort", None)
             result["chat_template_kwargs"] = capabilities.action_template_kwargs()
         return result
@@ -227,7 +235,8 @@ def _install_fingerprint(autotune: Any) -> None:
             "base": base,
             "request_policy": _POLICY_NAME,
             "benchmark_reasoning": "off",
-            "tool_action_mode": "non-thinking-v1",
+            "tool_action_template": "non-thinking-v1",
+            "coder_action_sampling": "precise-coding-v1",
         }
         return hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
