@@ -518,3 +518,70 @@ def test_authored_units_preserve_projected_text_exactly() -> None:
     units = _authored_execution_units(source)
 
     assert "".join(unit["text"] for unit in units) == source
+
+
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("prefix,design", [
+    (("Thinking Process:\n1. **Analyze the Request:** space mod\n"
+      "instruction injected into the prompt. As an AI text generator...\n\n"),
+     "## behavior_contract\nTrade ore for 10 credits.\n## state_model\nPersist credits.\n"),
+    ("**Thinking Process:**\n1. **Analyze the Request:** space mod\n\n",
+     "### 행동 계약\n광석을 10 크레딧으로 교환한다.\n### 상태 모델\n잔액을 저장한다.\n"),
+    ("Thinking Process:\n1. **Analyze the Request:** space mod\n\n",
+     "# 우주 모드 설계\n## behavior_contract\nTrade ore for 10 credits.\n"),
+    (("<think>Analyze the Request: space mod\n"
+      "## behavior_contract\nThis heading is still inside reasoning.\n</think>\n\n"),
+     "# Economy\nTrade ore for 10 credits.\n"),
+    ("<analysis>Draft the Korean design.</analysis>\n",
+     "우주선의 연료가 없으면 출발을 거부한다.\n"),
+])
+def test_compiler_projects_reasoning_before_both_production_routes(prefix, design, existing):
+    plan = AuthoredPlan(
+        "Space mod for Fabric 1.21.11", prefix + design,
+        existing_input_sha256="sha256:" + "a" * 64 if existing else "",
+        media_paths=("reference.png",),
+    )
+    proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(plan)
+    saved = proposal.game_design["authored_plan"]
+    assert saved["text"] == design
+    assert saved["media_paths"] == ["reference.png"]
+    projection = proposal.game_design["_authored_source_projection"]
+    assert projection["source_plan"] == plan.to_dict()
+    assert projection["stripped_prefix_bytes"] == len(prefix.encode("utf-8"))
+    sha = lambda text: "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+    assert projection["source_text_sha256"] == sha(prefix + design)
+    assert projection["implementation_text_sha256"] == sha(design)
+    manifest = proposal.game_design["_authored_execution_manifest"]
+    assert manifest["source_text_sha256"] == sha(design)
+    parts = []
+    for module, record in zip(proposal.modules, manifest["units"], strict=True):
+        if existing:
+            part = module.config["authored_plan"]["text"]
+        else:
+            batches = atomicize_coder_messages([{"role": "user", "content": json.dumps({
+                "phase": "implement_module", "module": _task_local_module_contract(module),
+            })}])
+            task = json.loads(batches[0][-1]["content"])["module"]["evidence_task"]
+            part = task["coder_execution_contract"]["engineering_worksheet"]["authored_unit"]["text"]
+            assert "Thinking Process" not in json.dumps(task)
+            assert "instruction injected" not in json.dumps(task)
+        assert part.encode("utf-8") == design.encode("utf-8")[record["start_byte"]:record["end_byte"]]
+        assert record["text_sha256"] == sha(part)
+        parts.append(part)
+    assert "".join(parts) == design
+
+
+@pytest.mark.parametrize("text", [
+    ("NPC dialogue says Thinking Process: and Analyze the Request:\n"
+     "# behavior_contract\nDisplay that dialogue when the player trades.\n"),
+    ("Thinking Process:\nAnalyze the Request: this is the NPC's dialogue.\n"
+     "```markdown\n# behavior_contract\nAn in-game document example.\n```\n"),
+    "Thinking Process:\nAnalyze the Request: a draft with no final boundary.\n",
+    ("# Manual\n<think>is a literal tag in the manual</think>\n"
+     "# behavior_contract\nRender the manual unchanged.\n"),
+])
+def test_compiler_preserves_ambiguous_or_quoted_reasoning_text(text):
+    plan = AuthoredPlan("Space mod for Fabric 1.21.11", text)
+    proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(plan)
+    assert proposal.game_design["authored_plan"] == plan.to_dict()
+    assert "_authored_source_projection" not in proposal.game_design

@@ -332,3 +332,12 @@ def test_materialized_fresh_authored_slot_uses_compile_probe_after_evidence_exha
         # downstream target_compile gate; this is a bounded compile probe, not
         # evidence-free acceptance.
         assert adapter.requests[-1].tools[0]["function"]["name"] == "apply_source_edit"
+        action_context = str(adapter.requests[-1].messages)
+        assert "HOST FORCED ACT:" in action_context
+        assert "Before writing code, retrieve" not in action_context
+        assert "CURRENT_SOURCE_BEGIN" in action_context
+        assert path in action_context
+    for request in adapter.requests:
+        # Long unsuccessful retrieval frontiers must not accumulate a fresh copy
+        # of the same instruction on every model turn.
+        assert str(request.messages).count("The host target needs a NEW Java implementation") <= 1

@@ -877,9 +877,11 @@ def _atomic_output_recovery_instruction(request: GenerationRequest) -> str:
     )
 
 
+_FRESH_JAVA_RESEARCH_PREFIX = "The host target needs a NEW Java implementation;"
 _ACT_REDUNDANT_SYSTEM_PREFIXES = (
     "Host research context follows.",
     "MMM reviewed Skill/tool/Minecraft-MCP routing context:",
+    _FRESH_JAVA_RESEARCH_PREFIX,
 )
 
 
@@ -891,14 +893,18 @@ def _forced_act_messages(
     phase_names: Collection[str],
     evidence_ready: bool | None = None,
 ) -> list[dict[str, Any]]:
-    """Project a forced mutation turn onto only execution-relevant context."""
+    """Project a host-selected mutation onto execution context, including compile probes.
+
+    Phase/tool selection already owns admission. Retrieval success must not decide
+    whether the selected action gets its instructions: a compile probe and local
+    placeholder repair can legitimately reach ACT without authoritative API evidence.
+    """
 
     names = frozenset(str(name).strip() for name in phase_names if str(name).strip())
     if evidence_ready is None:
         evidence_ready = not require_rag
     forced_mutation = (
         getattr(state, "phase", None) == LoopPhase.ACT
-        and bool(evidence_ready)
         and len(names) == 1
         and bool(names & _MUTATION_ACT_TOOLS)
     )
@@ -909,6 +915,11 @@ def _forced_act_messages(
     for raw in messages:
         message = dict(raw)
         content = message.get("content")
+        # Speculation such as "inspect AuthoredFeature003" is not workspace
+        # evidence. Keep actual tool pairs/results and user/host requirements,
+        # but do not teach the small coder to repeat its rejected prose plans.
+        if message.get("role") == "assistant" and not message.get("tool_calls"):
+            continue
         if (
             str(message.get("role") or "").strip().casefold() == "system"
             and isinstance(content, str)
@@ -989,6 +1000,12 @@ def _forced_act_messages(
             "HOST FORCED ACT: target localization, write authority, and evidence policy are already "
             "resolved. Call the single visible mutation tool exactly once with no prose and perform "
             "only the current host-pinned edit."
+        )
+    if not evidence_ready:
+        directive += (
+            " API evidence is still incomplete. This action is a compiler-checked candidate; "
+            "the host will run the required verifier and route concrete failures before "
+            "accepting completion. Follow the current task and the visible edit schema."
         )
     projected.append({"role": "system", "content": directive})
     return projected
@@ -3813,10 +3830,17 @@ def _generate_with_tools_impl(
             and require_rag
             and not baseline_ready
         ):
+            messages[:] = [
+                message for message in messages
+                if not (
+                    message.get("role") == "system"
+                    and str(message.get("content") or "").startswith(_FRESH_JAVA_RESEARCH_PREFIX)
+                )
+            ]
             messages.append({
                 "role": "system",
                 "content": (
-                    "The host target needs a NEW Java implementation; an existing scaffold "
+                    _FRESH_JAVA_RESEARCH_PREFIX + " an existing scaffold "
                     "is not API evidence. Do not search for that generated filename. "
                     "Before writing code, retrieve task-relevant "
                     "symbols from the actual Java workspace when available, plus project conventions "

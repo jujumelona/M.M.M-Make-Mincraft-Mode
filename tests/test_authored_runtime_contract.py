@@ -201,6 +201,7 @@ def test_side_specific_helper_and_annotation_text_are_allowed(tmp_path, monkeypa
     )
 
 
+@pytest.mark.parametrize("require_evidence", [False, True])
 @pytest.mark.parametrize(
     "failure", [
         "side_annotation", "unimplemented", "unimplemented_retry",
@@ -209,7 +210,7 @@ def test_side_specific_helper_and_annotation_text_are_allowed(tmp_path, monkeypa
     ]
 )
 def test_authored_contract_is_repaired_by_same_coder_before_completion(
-    tmp_path, monkeypatch, failure
+    tmp_path, monkeypatch, failure, require_evidence
 ):
     import shutil
     import subprocess
@@ -399,7 +400,7 @@ public final class AuthoredFeature001 {
     try:
         with expected:
             result = loop.generate_with_tools(
-                SimpleNamespace(_agent_require_fresh_evidence=False),
+                SimpleNamespace(_agent_require_fresh_evidence=require_evidence),
                 config=SimpleNamespace(
                     adapter="test",
                     max_context=32768,

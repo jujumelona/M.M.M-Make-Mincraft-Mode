@@ -272,6 +272,54 @@ def test_forced_act_projects_after_required_rag_is_satisfied() -> None:
     assert any("HOST FORCED ACT:" in value for value in contents)
 
 
+def test_compile_probe_action_drops_search_directives_and_model_speculation() -> None:
+    target = "src/main/java/demo/AuthoredFeature002.java"
+    source = "package demo; public final class AuthoredFeature002 { public static void initialize() {} }"
+    state = tool_loop.HostRunState(
+        phase=tool_loop.LoopPhase.ACT,
+        semantic_fresh_java=True,
+        mutation_context=tool_loop.TargetMutationContext(
+            target_path=target, target_symbol="AuthoredFeature002", source_body=source,
+            evidence_source="workspace_existing_target", writable_paths=(target,),
+            target_pinned=True,
+        ),
+    )
+    messages = (
+        {"role": "system", "content": "Repository branch policy: main only"},
+        {"role": "system", "content": "Host research context follows.\nold route"},
+        {"role": "system", "content": "The host target needs a NEW Java implementation; Before writing code, retrieve symbols."},
+        {"role": "user", "content": "Register ore trading for 5 credits in AuthoredFeature002."},
+        {"role": "assistant", "content": "I need to implement AuthoredFeature003 mode switching. Let me check the project structure."},
+        {"role": "system", "content": "MMM_PHASE_HANDOFF OBSERVE->ACT\nNo authoritative API evidence was found."},
+        tool_loop._existing_target_refresh_message(state.mutation_context),
+    )
+
+    projected = tool_loop._forced_act_messages(
+        messages, state=state, require_rag=True, evidence_ready=False,
+        phase_names={"apply_source_edit"},
+    )
+
+    rendered = str(projected)
+    assert "HOST FORCED ACT:" in rendered
+    assert "Before writing code, retrieve" not in rendered
+    assert "Host research context follows." not in rendered
+    assert "AuthoredFeature003" not in rendered
+    assert "ore trading for 5 credits" in rendered
+    assert "No authoritative API evidence was found." in rendered
+    assert "Repository branch policy: main only" in rendered
+    assert source in rendered
+    assert not state.has_authoritative_java_evidence
+
+
+def test_observe_context_is_unchanged_until_host_selects_mutation() -> None:
+    messages = [{"role": "assistant", "content": "Search for Item registry."}]
+    state = tool_loop.HostRunState(phase=tool_loop.LoopPhase.OBSERVE)
+    assert tool_loop._forced_act_messages(
+        messages, state=state, require_rag=True, evidence_ready=False,
+        phase_names={"search_code_rag"},
+    ) == messages
+
+
 
 def test_large_rag_transition_projects_to_bounded_act_context() -> None:
     import json

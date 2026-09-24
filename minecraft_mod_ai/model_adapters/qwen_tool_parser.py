@@ -78,19 +78,28 @@ def _next_call_start(text: str, cursor: int) -> int:
 def _bounded_end(text: str, start: int) -> int:
     """Bound one malformed candidate without leaking wrapper syntax into prose."""
 
-    if text.startswith(TOOL_CALL_OPEN, start):
-        wrapped_end = text.find(TOOL_CALL_CLOSE, start + len(TOOL_CALL_OPEN))
+    wrapped = text.startswith(TOOL_CALL_OPEN, start)
+    inner_start = start + len(TOOL_CALL_OPEN) if wrapped else start
+    while inner_start < len(text) and text[inner_start].isspace():
+        inner_start += 1
+    # A wrapper and its immediate function form one candidate, even when decoding
+    # ended before either closing tag. Never count that owned function as a sibling.
+    search_start = inner_start
+    if text.startswith(FUNCTION_OPEN, inner_start):
+        search_start += len(FUNCTION_OPEN)
+    next_start = _next_call_start(text, max(search_start, start + 1))
+    limit = next_start if next_start >= 0 else len(text)
+
+    if wrapped:
+        wrapped_end = text.find(TOOL_CALL_CLOSE, inner_start, limit)
         if wrapped_end >= 0:
             return wrapped_end + len(TOOL_CALL_CLOSE)
 
-    function_end = text.find(FUNCTION_CLOSE, start)
+    function_end = text.find(FUNCTION_CLOSE, inner_start, limit)
     if function_end >= 0:
         return function_end + len(FUNCTION_CLOSE)
 
-    next_start = _next_call_start(text, start + 1)
-    if next_start > start:
-        return next_start
-    return len(text)
+    return limit
 
 
 def _parse_function(text: str, function_start: int, index: int) -> tuple[ToolCall, int]:
@@ -189,7 +198,8 @@ def parse_qwen_tool_markup(
         try:
             if not text.startswith(FUNCTION_OPEN, function_start):
                 raise ValueError("tool_call block does not begin with a function")
-            call, function_end = _parse_function(text, function_start, len(calls))
+            # Closing tags from a later sibling cannot complete this candidate.
+            call, function_end = _parse_function(text[:end], function_start, len(calls))
             end = function_end
             if wrapped:
                 close_at = function_end

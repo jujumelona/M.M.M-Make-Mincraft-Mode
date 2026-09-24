@@ -89,3 +89,58 @@ def test_malformed_markup_becomes_non_executable_candidate_then_rejection() -> N
 def test_plain_text_contract_is_unchanged() -> None:
     text = "ordinary assistant prose"
     assert parse_qwen_tool_markup(text, {}) == (text, ())
+
+
+def test_truncated_wrapped_source_edit_is_one_rejected_candidate() -> None:
+    text = (
+        "<tool_call>\n<function=apply_source_edit>\n"
+        "<parameter=path>src/Feature.java</parameter>\n"
+        "<parameter=new>public final class Feature {"
+    )
+
+    visible, calls = parse_qwen_tool_markup(text)
+
+    assert visible == ""
+    assert len(calls) == 1
+    assert calls[0].name == MALFORMED_TOOL_CALL_NAME
+    assert calls[0].arguments["original_tool"] == "apply_source_edit"
+    assert calls[0].arguments["raw_arguments"] == text
+    admitted = _admit_model_tool_calls(
+        calls, {}, tool_choice="required", parallel_tool_calls=False
+    )
+    assert len(admitted) == 1
+    assert admitted[0].arguments["failure_code"] == "TOOL_MARKUP_MALFORMED"
+    assert "missing </function>" in admitted[0].arguments["error"]
+
+
+def test_unclosed_function_cannot_borrow_a_siblings_closing_tags() -> None:
+    malformed = "<tool_call><function=first><parameter=value>partial"
+    sibling = _call("second", "value", "complete")
+
+    visible, calls = parse_qwen_tool_markup(malformed + sibling)
+
+    assert visible == ""
+    assert len(calls) == 2
+    assert calls[0].name == MALFORMED_TOOL_CALL_NAME
+    assert calls[0].arguments["raw_arguments"] == malformed
+    assert calls[1].name == "second"
+    assert calls[1].arguments == {"value": "complete"}
+    admitted = _admit_model_tool_calls(
+        calls, {"second": _schema("value")},
+        tool_choice="required", parallel_tool_calls=True,
+    )
+    assert len(admitted) == 1
+    assert admitted[0].name == "__mmm_rejected_tool_call__"
+
+
+def test_truncated_wrapper_does_not_absorb_an_unwrapped_sibling() -> None:
+    malformed = "<tool_call><function=first><parameter=value>partial"
+    sibling = "<function=second><parameter=value>complete</parameter></function>"
+
+    visible, calls = parse_qwen_tool_markup(malformed + sibling)
+
+    assert visible == ""
+    assert len(calls) == 2
+    assert calls[0].name == MALFORMED_TOOL_CALL_NAME
+    assert calls[0].arguments["raw_arguments"] == malformed
+    assert calls[1].name == "second"

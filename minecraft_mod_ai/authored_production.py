@@ -115,24 +115,62 @@ def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
 
 
 def _implementation_authored_plan(plan: AuthoredPlan) -> tuple[AuthoredPlan, dict[str, Any] | None]:
-    """Strip a leaked model-reasoning preamble while preserving its provenance."""
+    """Project a delimited final design without interpreting or rewriting its content.
+
+    Legacy saved responses sometimes contain an explicitly labelled reasoning prefix.
+    Only a leading envelope or a labelled prefix followed by a final-design boundary
+    is recoverable here. Mentions in prose, examples and ambiguous drafts stay intact.
+    """
 
     text = plan.text
-    heading = re.search(r"(?m)^ {0,3}# +behavior_contract\s*$", text, re.IGNORECASE)
-    if heading is None:
-        return plan, None
-    prefix = text[: heading.start()]
-    markers = (
-        "thinking process:",
-        "analyze the request:",
-        "deconstruct the template",
-        "drafting content",
+    start = 0
+    # These are response envelopes, not tags embedded in a design or fenced example.
+    envelope = re.compile(
+        r"\A\s*<(think|analysis)>.*?</\1>[ \t]*(?:\r?\n)*", re.IGNORECASE | re.DOTALL
     )
-    lowered = prefix.casefold()
-    marker_count = sum(marker in lowered for marker in markers)
-    if marker_count < 2:
+    while match := envelope.match(text[start:]):
+        start += match.end()
+    remainder = text[start:]
+    labelled_reasoning = re.match(
+        r"\A\s*(?:#{1,6}[ \t]+)?(?:\*\*)?"
+        r"(?:thinking process|사고 과정|생각 과정)[ \t]*:?(?:\*\*)?[ \t]*\r?\n",
+        remainder, re.IGNORECASE,
+    )
+    if labelled_reasoning is not None:
+        # Ignore fenced examples when looking for the actual final document.
+        fence = ""
+        offset = 0
+        for line in remainder.splitlines(keepends=True):
+            marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+            if fence:
+                if (marker and marker[1][0] == fence[0]
+                        and len(marker[1]) >= len(fence)
+                        and not line[marker.end():].strip()):
+                    fence = ""
+            elif marker:
+                fence = marker[1]
+            else:
+                heading = re.match(r"^ {0,3}#{1,6}[ \t]+(.+?)\s*$", line)
+                if heading:
+                    title = re.sub(r"[ \t]+#+[ \t]*$", "", heading[1]).strip("*_` ")
+                    final_heading = re.fullmatch(
+                        r"(?:behavior[ _-]+contract|행동[ _-]*계약|동작[ _-]*계약|"
+                        r"(?:.+[ \t]+)?(?:design|설계)(?:[ \t]+(?:document|문서))?)",
+                        title, re.IGNORECASE,
+                    )
+                    prefix = remainder[:offset].casefold()
+                    has_analysis = any(token in prefix for token in (
+                        "analyze the request", "deconstruct the template", "drafting content",
+                        "요청 분석", "요청을 분석",
+                    ))
+                    if final_heading and has_analysis:
+                        start += offset
+                        break
+            offset += len(line)
+    if not start or not text[start:].strip():
         return plan, None
-    implementation_text = text[heading.start() :]
+    prefix = text[:start]
+    implementation_text = text[start:]
     projected = AuthoredPlan(
         requested_prompt=plan.requested_prompt,
         text=implementation_text,
@@ -142,6 +180,8 @@ def _implementation_authored_plan(plan: AuthoredPlan) -> tuple[AuthoredPlan, dic
     provenance = {
         "schema_version": "mmm/authored-source-projection-v1",
         "policy": "strip_leaked_model_reasoning_prefix_only",
+        # Keep the source recoverable; modules receive only the projected exact suffix.
+        "source_plan": plan.to_dict(),
         "source_text_sha256": "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest(),
         "implementation_text_sha256": "sha256:"
         + hashlib.sha256(implementation_text.encode("utf-8")).hexdigest(),
