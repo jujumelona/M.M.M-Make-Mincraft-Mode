@@ -1044,6 +1044,31 @@ def _authored_surface_recovery_message(state: Any, error: str) -> dict[str, str]
     }
 
 
+def _apply_authored_surface_recovery_feedback(
+    state: Any,
+    messages: list[dict[str, Any]],
+    *,
+    code: str,
+    error: str,
+) -> None:
+    if code != "REPAIR_SEMANTIC_FOOTPRINT_VIOLATION":
+        return
+    recovery_message = _authored_surface_recovery_message(state, error)
+    if recovery_message is None:
+        return
+    messages[:] = [
+        message
+        for message in messages
+        if not (
+            message.get("role") == "system"
+            and str(message.get("content") or "").startswith(
+                _AUTHORED_SURFACE_RECOVERY_PREFIX
+            )
+        )
+    ]
+    messages.append(recovery_message)
+
+
 def _model_rejection_progress_key(
     state: Any,
     rejection_payloads: Sequence[Mapping[str, Any]],
@@ -4773,32 +4798,20 @@ def _generate_with_tools_impl(
                             state.phase = LoopPhase.ACT
                         else:
                             state.phase = LoopPhase.OBSERVE
-                    elif code == "REPAIR_SEMANTIC_FOOTPRINT_VIOLATION":
-                        recovery_message = _authored_surface_recovery_message(state, error)
-                        if recovery_message is not None:
-                            messages[:] = [
-                                message
-                                for message in messages
-                                if not (
-                                    message.get("role") == "system"
-                                    and str(message.get("content") or "").startswith(
-                                        _AUTHORED_SURFACE_RECOVERY_PREFIX
-                                    )
-                                )
-                            ]
-                            messages.append(recovery_message)
-                        state.phase = (
-                            LoopPhase.ACT
-                            if state.mutation_context and state.mutation_context.is_mutation_ready
-                            else LoopPhase.OBSERVE
-                        )
                     elif code in {
                         "MUTATION_TARGET_DRIFT",
                         "MUTATION_TARGET_UNBOUND",
                         "REPAIR_ATOMIC_REPLACEMENT_TOO_LARGE",
                         "REPAIR_ATOMIC_SCOPE_VIOLATION",
+                        "REPAIR_SEMANTIC_FOOTPRINT_VIOLATION",
                         "PHASE_PROTOCOL_VIOLATION",
                     }:
+                        _apply_authored_surface_recovery_feedback(
+                            state,
+                            messages,
+                            code=code,
+                            error=error,
+                        )
                         if state.mutation_context and state.mutation_context.is_mutation_ready:
                             state.phase = LoopPhase.ACT
                         else:
