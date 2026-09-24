@@ -6,23 +6,15 @@ from .custom_module_architecture_support import (
     output_exhaustion_continuation_messages as _architecture_continuation_messages,
     task_local_module_contract as _architecture_task_contract,
 )
-from .filesystem_copy import reflink_or_copy
 from .model_response_templates import parse_response_text, response_template_prompt
-from .research_validation_fingerprint_performance import content_digest
-
 
 import hashlib
 import json
 import os
 import re
 import secrets
-import shutil
-import stat
-import tempfile
 import threading
 from collections.abc import Iterable, Mapping, Sequence
-from contextlib import contextmanager
-from functools import wraps
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -52,7 +44,6 @@ from .generation_checkpoint import (
     finalize_persisted_generation_checkpoint,
     persist_active_generation_checkpoint,
 )
-from .custom_module_errors import CustomModuleGenerationError
 from .complete_spec import ProductionModule
 from .host_grounding import (
     build_coder_grounding,
