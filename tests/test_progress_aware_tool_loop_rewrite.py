@@ -16,6 +16,55 @@ def _schema(name: str) -> dict:
     return {"type": "function", "function": {"name": name, "parameters": {"type": "object"}}}
 
 
+def test_authored_surface_violation_reinjects_exact_scaffold_contract() -> None:
+    target = "src/main/java/dev/mmm/AuthoredFeature001.java"
+    source = (
+        "package dev.mmm;\n"
+        "public final class AuthoredFeature001 {\n"
+        "    private AuthoredFeature001() {}\n"
+        "    public static void initialize() {\n"
+        "        // MMM_AUTHORED_FEATURE_BODY_001\n"
+        "    }\n"
+        "}\n"
+    )
+    state = loop.HostRunState(
+        semantic_fresh_java=True,
+        mutation_context=loop.TargetMutationContext(
+            target_path=target,
+            target_symbol="AuthoredFeature001",
+            source_body=source,
+            is_new_file=False,
+            evidence_source="workspace_existing_target",
+            writable_paths=(target,),
+            target_pinned=True,
+        ),
+    )
+    messages = [
+        {"role": "system", "content": "keep"},
+        {"role": "system", "content": "MMM_AUTHORED_SURFACE_RECOVERY\nstale"},
+    ]
+
+    loop._apply_authored_surface_recovery_feedback(
+        state,
+        messages,
+        code="REPAIR_SEMANTIC_FOOTPRINT_VIOLATION",
+        error="removed existing member anchors: ['method:initialize']",
+    )
+
+    recovery = [
+        message["content"]
+        for message in messages
+        if str(message.get("content") or "").startswith(
+            "MMM_AUTHORED_SURFACE_RECOVERY"
+        )
+    ]
+    assert len(recovery) == 1
+    assert "Do not redesign the class" in recovery[0]
+    assert "public static void initialize()" in recovery[0]
+    assert "MMM_AUTHORED_FEATURE_BODY_001" in recovery[0]
+    assert source in recovery[0]
+
+
 def test_fresh_host_reserved_target_is_ready_without_searching_its_own_filename() -> None:
     path = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
     payload = {
