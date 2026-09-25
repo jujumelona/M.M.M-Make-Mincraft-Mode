@@ -339,25 +339,45 @@ def adapter_from_project(project_root: str | Path) -> TargetContract:
         raw = json.loads(lock_file.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise ValueError("Generated platform lock must be an object.")
-        loader = str(raw.get("loader") or "").strip()
-        version = str(raw.get("minecraft_version") or "").strip()
-        adapter = adapter_for_target(version, loader)
-        fields = [
-            "minecraft_version",
-            "loader",
-            "java_version",
-            "fabric_loader",
-            "fabric_api",
-            "fabric_loom",
-            "gradle",
-        ]
-        if adapter.mappings_applicable:
-            fields.append("yarn_mappings")
-        for field in fields:
-            if str(raw.get(field) or "") != str(getattr(adapter, field) or ""):
-                raise ValueError(
-                    f"Generated platform lock disagrees with executable provider: {field}"
-                )
+
+        from .resolved_version_context import ResolvedVersionContext
+        from .spec import PlatformLock
+        from .target_contract import target_contract_from_mapping
+
+        lock_fields = PlatformLock.__dataclass_fields__
+        lock = PlatformLock(
+            **{
+                name: raw[name]
+                for name in lock_fields
+                if name in raw
+            }
+        )
+        lock.validate()
+        if not lock.has_full_execution_receipt():
+            raise ValueError(
+                "Generated platform lock is not a complete immutable execution receipt."
+            )
+
+        adapter = target_contract_from_mapping(
+            {
+                name: getattr(lock, name)
+                for name in lock_fields
+            }
+        )
+        adapter.validate()
+        if adapter.host_facts_json:
+            context = adapter.version_context
+            context_id = raw.get("context_id")
+            if context_id is not None:
+                context.assert_context(str(context_id))
+            resolved = raw.get("resolved_version_context")
+            if resolved is not None:
+                if not isinstance(resolved, dict):
+                    raise ValueError(
+                        "Generated resolved_version_context must be an object."
+                    )
+                saved_context = ResolvedVersionContext.from_dict(resolved)
+                context.assert_context(saved_context.context_id)
         return adapter
 
     properties = read_gradle_properties(root / "gradle.properties")
