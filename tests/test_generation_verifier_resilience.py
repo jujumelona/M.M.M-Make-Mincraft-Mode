@@ -326,9 +326,6 @@ def _run_compile_backed_generation_flow(
                 "import net.minecraft.item.Item; "
                 "public final class DebugToken {}\n"
             )
-            fixed_source = (
-                "package dev.mmm.debugfixture; public final class DebugToken {}\n"
-            )
             arguments = (
                 {
                     "operation": "create_file",
