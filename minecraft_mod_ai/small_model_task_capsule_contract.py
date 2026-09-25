@@ -16,7 +16,7 @@ import copy
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import wraps
 from pathlib import PurePosixPath
 from typing import Any
@@ -42,7 +42,9 @@ _ALLOWED_TARGET_PREFIXES = (
 _COMPACT_TASK_FIELDS = (
     "task_id",
     "task_sha256",
+    "execution_role",
     "semantic_outcome",
+    "implementation_obligations",
     "engineering_worksheet",
     "research_reuse_candidates",
     "requirement_refs",
@@ -113,8 +115,8 @@ class TaskCapsule:
     reuse_action: str
     required_gates: tuple[str, ...]
     task_sha256: str
-    coder_contract: Mapping[str, Any]
     capsule_sha256: str
+    coder_contract: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def writable_paths(self) -> tuple[str, ...]:
