@@ -726,19 +726,24 @@ def _merge_accepted_owner(existing: dict[str, Any], proposed: dict[str, Any]) ->
     existing_by_key = {
         _public_api_contract_key(api): api for api in existing["public_api"]
     }
+    # Accepted API ownership is immutable. Later pages may restate the same Java
+    # signature with a drifted return type/modifier/throws clause; that is not a
+    # repairable decision and must never consume another model call. Preserve the
+    # admitted declaration and admit only genuinely new contract keys (including
+    # real overloads with different parameter types).
+    novel_api: list[str] = []
+    seen_keys = set(existing_by_key)
     for api in proposed["public_api"]:
         key = _public_api_contract_key(api)
-        old = existing_by_key.get(key)
-        if old is not None and old != api:
-            raise ImplementationGraphError(
-                "IMPLEMENTATION_IR_DUPLICATE_CONTRACT_CONFLICT: "
-                f"{existing['symbol']} changed public_api {old!r} -> {api!r}"
-            )
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        novel_api.append(api)
 
     merged = deepcopy(existing)
     merged["requirements"] = _stable_union(existing["requirements"], proposed["requirements"])
     merged["obligations"] = _stable_union(existing["obligations"], proposed["obligations"])
-    merged["public_api"] = _stable_union(existing["public_api"], proposed["public_api"])
+    merged["public_api"] = existing["public_api"] + novel_api
     merged["depends_on"] = _stable_union(existing["depends_on"], proposed["depends_on"])
     # The first admitted responsibility remains the owner identity. Later pages add
     # precise requirement text through requirements[] and obligations[] instead of
