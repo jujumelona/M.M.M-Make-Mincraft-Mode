@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from minecraft_mod_ai import custom_module_generator as generator
 from minecraft_mod_ai import generation_checkpoint as checkpoint
 from minecraft_mod_ai.custom_generation_search_contract import (
     _ResearchEvidenceRouter,
