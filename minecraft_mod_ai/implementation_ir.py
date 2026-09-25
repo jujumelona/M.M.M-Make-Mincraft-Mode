@@ -16,7 +16,7 @@ from typing import Any
 from .custom_module_errors import CustomModuleGenerationError
 from .model_adapters.base import NativeToolDecisionRejected
 
-IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v8"
+IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v9"
 
 
 class ImplementationGraphError(CustomModuleGenerationError):
@@ -79,24 +79,7 @@ PAGE_SCHEMA = {
     "required": ["nodes"],
     "properties": {
         "nodes": {"type": "array", "items": NODE_SCHEMA},
-        "done": {"type": "boolean"},
-        "continuation": {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "remaining_unit_ids": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                },
-            },
-        },
     },
-    "allOf": [
-        {
-            "if": {"properties": {"nodes": {"maxItems": 0}}},
-            "then": {"properties": {"done": {"const": True}}},
-        }
-    ],
 }
 
 
@@ -153,6 +136,10 @@ def _canonicalize_schema_page(page: Any) -> Any:
     if not isinstance(page, dict) or not isinstance(page.get("nodes"), list):
         return page
     normalized = deepcopy(page)
+    # Legacy control fields are host-owned now. Ignore them before schema validation
+    # so old checkpoints/tests cannot force a model-visible pagination protocol.
+    normalized.pop("done", None)
+    normalized.pop("continuation", None)
     for node in normalized["nodes"]:
         if not isinstance(node, dict) or node.get("kind") != "java":
             continue
