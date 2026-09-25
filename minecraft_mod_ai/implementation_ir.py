@@ -605,8 +605,6 @@ def ordered_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if (len({n["symbol"].casefold() for n in nodes}) != len(nodes)
             or len({n["path"].casefold() for n in nodes}) != len(nodes)):
         raise ImplementationGraphError("IMPLEMENTATION_IR_DUPLICATE_OWNER")
-    if len(nodes) > MAX_NODES:
-        raise ImplementationGraphError("IMPLEMENTATION_IR_NODE_LIMIT")
     if any(not set(n["depends_on"]) <= by_symbol.keys() for n in nodes):
         raise ImplementationGraphError("IMPLEMENTATION_IR_UNKNOWN_DEPENDENCY")
     result: list[dict[str, Any]] = []
@@ -624,7 +622,8 @@ def refine_node(router: Any, node: dict[str, Any], *, nodes: list[dict[str, Any]
                 package: str, mod_id: str, requirements: dict[str, str], reason: str,
                 budget: int | None = None, pending: dict[str, Any] | None = None,
                 checkpoint: Callable[[dict[str, Any]], None] | None = None) -> list[dict[str, Any]]:
-    budget = budget or admissible_tokens()
+    if budget is None:
+        budget = admissible_tokens(router)
     payload = {
         "rejected_node": node, "reason": reason, "admission_tokens": budget,
         "requirements": {r: requirements[r] for r in node["requirements"]},
@@ -633,7 +632,7 @@ def refine_node(router: Any, node: dict[str, Any], *, nodes: list[dict[str, Any]
     }
     def admit(page: dict[str, Any]) -> list[dict[str, Any]]:
         try:
-            if not page["done"] or len(page["nodes"]) < 2:
+            if len(page["nodes"]) < 2:
                 raise ImplementationGraphError("IMPLEMENTATION_IR_DECOMPOSITION_REQUIRED")
             children = [validate_node(n, package=package, mod_id=mod_id, refs=set(node["requirements"])) for n in page["nodes"]]
             original = next((n for n in children if n["symbol"] == node["symbol"]), None)
@@ -646,8 +645,15 @@ def refine_node(router: Any, node: dict[str, Any], *, nodes: list[dict[str, Any]
             for child in children:
                 if child is not original and (not child["symbol"].startswith(node["symbol"] + "Part") or child["activation"]):
                     raise ImplementationGraphError("IMPLEMENTATION_IR_HELPER_SCOPE_INVALID")
-                if (child["symbol"] in external or node_cost(child) >= node_cost(node)
-                        or (reason == "OUTPUT_BUDGET_EXHAUSTED" and node_cost(child) > budget)):
+                if (
+                    child["symbol"] in external
+                    or node_cost(child) >= node_cost(node)
+                    or (
+                        reason == "OUTPUT_BUDGET_EXHAUSTED"
+                        and budget is not None
+                        and node_cost(child) > budget
+                    )
+                ):
                     raise ImplementationGraphError("IMPLEMENTATION_IR_DECOMPOSITION_NO_PROGRESS")
             if set().union(*(set(n["requirements"]) for n in children)) != set(node["requirements"]):
                 raise ImplementationGraphError("IMPLEMENTATION_IR_DECOMPOSITION_LOST_REQUIREMENTS")
