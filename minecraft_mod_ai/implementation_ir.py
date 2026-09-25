@@ -358,20 +358,15 @@ def _next_active_batch(
 
 
 def node_cost(node: Mapping[str, Any]) -> int:
-    # Conservative host floor plus the semantic compiler's whole-file estimate.
-    # Requirements accumulate when later pages extend an existing owner, so their
-    # count must increase the admission estimate or monotonic merge could recreate
-    # the output-exhaustion failure that decomposition is meant to prevent.
+    # Conservative source-output floor plus the semantic compiler's whole-file
+    # estimate. Requirement/dependency metadata is planner context, not serialized
+    # Java/JSON source, so charging it here can make a genuinely smaller helper look
+    # larger than half of its parent and falsely block decomposition.
     api_bytes = len(json.dumps(node["public_api"], ensure_ascii=False).encode())
     obligation_bytes = len(json.dumps(node["obligations"], ensure_ascii=False).encode())
-    requirement_cost = 192 * len(node["requirements"])
-    dependency_cost = 64 * len(node["depends_on"])
-    floor = (
-        384
-        + api_bytes // 2
-        + max(obligation_bytes // 2, 256 * len(node["obligations"]))
-        + requirement_cost
-        + dependency_cost
+    floor = 384 + api_bytes // 2 + max(
+        obligation_bytes // 2,
+        256 * len(node["obligations"]),
     )
     return max(node["estimated_tokens"], floor)
 
