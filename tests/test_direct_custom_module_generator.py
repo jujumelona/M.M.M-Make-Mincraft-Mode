@@ -243,3 +243,68 @@ def test_invalid_or_truncated_model_output_is_retried_as_whole_file(
     assert len(calls) == 2
     assert "DIRECT_CODER_RESPONSE_FAILED" in calls[1][-1]["content"]
     assert (root / path).read_text(encoding="utf-8") == good
+
+
+def test_host_reserved_missing_target_is_materialized_and_does_not_require_initialize(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    path = "src/main/java/example/FreshFeature.java"
+    symbol = "FreshFeature"
+    task = {
+        "task_id": "fresh_feature",
+        "semantic_outcome": "create one fresh exact source",
+        "implementation_obligations": ["create the exact source"],
+        "owned_anchors": [
+            {
+                "kind": "symbol",
+                "locator": f"{path}#{symbol}",
+                "status": "host_reserved",
+                "ownership": "exclusive",
+            }
+        ],
+        "required_gates": ["target_compile"],
+    }
+    module = ProductionModule(
+        module_id="fresh_feature",
+        kind="custom_java",
+        config={"implementation": "custom", "evidence_task": task},
+        required_gates=("target_compile",),
+    )
+    source = (
+        "package example;\n\n"
+        "public final class FreshFeature {\n"
+        "    private FreshFeature() {}\n"
+        "    public static final int VALUE = 1;\n"
+        "}\n"
+    )
+    prompts: list[str] = []
+
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            del role, kwargs
+            prompts.append(messages[-1]["content"])
+            return json.dumps({"content": source, "summary": "created"})
+
+    class Runner:
+        def __init__(self, _cache):
+            pass
+
+        def compile_java(self, _root):
+            return SimpleNamespace(status="PASS", commands=(), error=None)
+
+    monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
+    monkeypatch.setattr(direct, "GradleRunner", Runner)
+
+    result = direct.CustomModuleGenerator(Router()).generate(
+        root,
+        module=module,
+        minecraft_version="1.21.1",
+        loader="fabric",
+    )
+
+    assert result["status"] == "SOURCE_GENERATED"
+    assert result["patch_receipt"]["operations"][0]["operation"] == "create"
+    assert "MMM_AUTHORED_FEATURE_BODY" in prompts[0]
+    assert (root / path).read_text(encoding="utf-8") == source
