@@ -168,7 +168,42 @@ def test_native_output_limit_does_not_enter_schema_correction_loop():
     router = Exhausted([])
     with pytest.raises(LlamaCompletionBoundaryError):
         compile_graph(router)
-    assert len(router.calls) == 1
+    assert len(router.calls) == 3
+    assert all("validation_feedback" not in str(call) for call in router.calls)
+
+
+def test_output_limit_reduces_scope_and_recovers():
+    from minecraft_mod_ai.llama_finish_reason_contract import (
+        OUTPUT_EXHAUSTED,
+        LlamaCompletionBoundaryError,
+    )
+
+    first_slice = node("PlayerCredits", refs=["R1", "R2"])
+    second_slice = node("TradeService", refs=["R3", "R4", "R5", "R6"], dependencies=["PlayerCredits"])
+    calls = []
+
+    class ReducingRouter(Decisions):
+        def generate_tool_decision(self, role, messages, **kwargs):
+            payload = json.loads(messages[-1]["content"])
+            calls.append(payload)
+            req_count = len(payload["requirements"])
+            # The initial batch has all 6 requirements and hits output budget limit
+            if req_count > 2:
+                raise LlamaCompletionBoundaryError("output ceiling", kind=OUTPUT_EXHAUSTED,
+                                                   completion_tokens=8192, max_tokens=8192)
+            if "R1" in payload["requirements"]:
+                return {"nodes": [first_slice], "done": False}
+            return {"nodes": [second_slice], "done": True}
+
+    router = ReducingRouter([])
+    graph = compile_graph(router)
+    assert len(graph["nodes"]) == 2
+    # Verify Call 1 hit the ceiling, Call 2 and Call 3 had strictly smaller requirements and succeeded
+    assert len(calls) == 3
+    assert len(calls[0]["requirements"]) > len(calls[1]["requirements"])
+    assert len(calls[1]["requirements"]) <= 2
+    assert "validation_feedback" not in calls[1]
+    assert [n["symbol"] for n in graph["nodes"]] == ["PlayerCredits", "TradeService"]
 
 
 def test_executor_persists_admitted_pages_before_a_planning_transport_failure(tmp_path):
@@ -251,3 +286,58 @@ def test_semantic_error_can_correct_a_provisional_sibling_after_schema_repair():
     assert len(graph["nodes"]) == 2
     assert router.calls[1][1]["validation_feedback"]["preserve_nodes"] == [wallet]
     assert router.calls[2][1]["validation_feedback"]["preserve_nodes"] == []
+
+
+def test_large_authored_design_deterministic_units_and_checkpoint_continuation():
+    sections = [
+        "behavior_contract", "state_model", "algorithm", "integration",
+        "authority_and_network", "persistence", "resources_and_ui",
+        "failure_and_limits", "reuse_assessment", "verification"
+    ]
+    design_lines = []
+    for s in sections:
+        design_lines.append(f"# {s}")
+        for i in range(1, 4):
+            design_lines.append(f"Requirement for {s} rule {i}.")
+    large_design = "\n".join(design_lines)
+
+    units = ir.decompose_authored_units(large_design)
+    assert len(units) >= 10
+    assert all(len(u["requirements"]) <= ir.MAX_UNIT_REQUIREMENTS for u in units)
+
+    all_refs = ir.source_requirements(large_design)
+    assert len(all_refs) == len(design_lines)
+
+    checkpoints = []
+    calls = []
+
+    class MultiUnitRouter(Decisions):
+        def generate_tool_decision(self, role, messages, **kwargs):
+            payload = json.loads(messages[-1]["content"])
+            calls.append(payload)
+            # Ensure payload enforces bounded requirements limit
+            assert len(payload["requirements"]) <= ir.MAX_BATCH_REQUIREMENTS
+            unit_id = payload["unit_ids"][0] if payload["unit_ids"] else "terminal"
+            sym = f"Component{len(calls)}"
+            node_inst = {
+                "symbol": sym, "kind": "java", "resource_path": "",
+                "responsibility": f"Implement {unit_id}",
+                "requirements": list(payload["requirements"].keys()),
+                "obligations": ["Implement assigned unit behavior."],
+                "public_api": [f"public static void exec{len(calls)}()"],
+                "depends_on": [f"Component{len(calls) - 1}"] if len(calls) > 1 else [],
+                "activation": False, "estimated_tokens": 800,
+            }
+            # Set done=True only on the last remaining unit
+            is_last = len(payload["remaining_unit_ids"]) == 0
+            return {"nodes": [node_inst], "done": is_last,
+                    "continuation": {"remaining_unit_ids": payload["remaining_unit_ids"]}}
+
+    router = MultiUnitRouter([])
+    graph = ir.compile_graph(router, text=large_design, package="example", mod_id="test", target=TARGET,
+                             checkpoint=lambda s: checkpoints.append(copy.deepcopy(s)))
+
+    assert len(graph["nodes"]) == len(calls)
+    assert len(checkpoints) >= len(units)
+    assert set().union(*(set(n["requirements"]) for n in graph["nodes"])) == set(all_refs.keys())
+

@@ -21,6 +21,9 @@ MAX_NODES = 128
 MAX_PAGES = 32
 MAX_REFINEMENTS = 6
 MAX_PAGE_CORRECTIONS = 2
+MAX_UNIT_REQUIREMENTS = 6
+MAX_BATCH_REQUIREMENTS = 8
+MAX_BATCH_UNITS = 3
 
 
 class ImplementationGraphError(CustomModuleGenerationError):
@@ -83,20 +86,38 @@ NODE_SCHEMA = {
     ],
 }
 PAGE_SCHEMA = {
-    "type": "object", "additionalProperties": False, "required": ["nodes", "done"],
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["nodes"],
     "properties": {
         "nodes": {"type": "array", "maxItems": 4, "items": NODE_SCHEMA},
         "done": {"type": "boolean"},
+        "continuation": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "remaining_unit_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+        },
     },
-    "allOf": [{"if": {"properties": {"nodes": {"maxItems": 0}}},
-               "then": {"properties": {"done": {"const": True}}}}],
+    "allOf": [
+        {
+            "if": {"properties": {"nodes": {"maxItems": 0}}},
+            "then": {"properties": {"done": {"const": True}}},
+        }
+    ],
 }
 
 
 def _page_schema(payload: Mapping[str, Any]) -> dict[str, Any]:
     schema = deepcopy(PAGE_SCHEMA)
     item = schema["properties"]["nodes"]["items"]
-    item["properties"]["requirements"]["items"] = {"type": "string", "enum": list(payload["requirements"])}
+    reqs = list(payload.get("requirements", {}))
+    if reqs:
+        item["properties"]["requirements"]["items"] = {"type": "string", "enum": reqs}
     if payload.get("mod_id"):
         namespace = re.escape(str(payload["mod_id"]))
         item["allOf"][0]["else"]["properties"]["resource_path"]["pattern"] = (
@@ -126,6 +147,106 @@ def source_requirements(text: str) -> dict[str, str]:
     return {f"R{i}": line for i, line in enumerate(text.splitlines(), 1) if line.strip()}
 
 
+def is_completion_boundary_error(exc: BaseException) -> bool:
+    from .llama_finish_reason_contract import (
+        OUTPUT_EXHAUSTED,
+        LlamaCompletionBoundaryError,
+    )
+
+    if isinstance(exc, OutputBudgetExhausted):
+        return True
+    if isinstance(exc, LlamaCompletionBoundaryError):
+        return (
+            exc.kind == OUTPUT_EXHAUSTED
+            or (exc.max_tokens > 0 and exc.completion_tokens >= exc.max_tokens)
+        )
+    cause = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
+    if cause is not None and is_completion_boundary_error(cause):
+        return True
+    msg = str(exc).lower()
+    return "exhausted the bounded output allowance" in msg or "output_exhausted" in msg
+
+
+def decompose_authored_units(
+    text: str, max_requirements_per_unit: int = MAX_UNIT_REQUIREMENTS
+) -> list[dict[str, Any]]:
+    """Deterministically slice authored prose into bounded implementation units."""
+    req_map = source_requirements(text)
+    if not req_map:
+        return []
+
+    lines = text.splitlines(keepends=False)
+    heading_pattern = re.compile(r"^ {0,3}#{1,6}[ \t]+(.+?)\s*$")
+
+    sections: list[tuple[str, list[str]]] = []
+    current_title = "overview"
+    current_req_ids: list[str] = []
+
+    for idx, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        req_id = f"R{idx}"
+        if req_id not in req_map:
+            continue
+        match = heading_pattern.match(line)
+        if match:
+            if current_req_ids:
+                sections.append((current_title, current_req_ids))
+                current_req_ids = []
+            current_title = re.sub(r"[ \t]+#+[ \t]*$", "", match[1]).strip("*_` ")
+        current_req_ids.append(req_id)
+
+    if current_req_ids:
+        sections.append((current_title, current_req_ids))
+
+    units: list[dict[str, Any]] = []
+    unit_counter = 0
+
+    for title, req_ids in sections:
+        if len(req_ids) <= max_requirements_per_unit:
+            units.append({
+                "unit_id": f"unit_{unit_counter}",
+                "title": title,
+                "requirements": {r: req_map[r] for r in req_ids},
+            })
+            unit_counter += 1
+        else:
+            for chunk_idx in range(0, len(req_ids), max_requirements_per_unit):
+                chunk = req_ids[chunk_idx : chunk_idx + max_requirements_per_unit]
+                part_num = (chunk_idx // max_requirements_per_unit) + 1
+                units.append({
+                    "unit_id": f"unit_{unit_counter}",
+                    "title": f"{title} (part {part_num})",
+                    "requirements": {r: req_map[r] for r in chunk},
+                })
+                unit_counter += 1
+
+    return units
+
+
+def _next_active_batch(
+    pending_units: list[dict[str, Any]],
+    *,
+    max_batch_units: int = MAX_BATCH_UNITS,
+    max_batch_reqs: int = MAX_BATCH_REQUIREMENTS,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if not pending_units:
+        return [], []
+    batch: list[dict[str, Any]] = []
+    total_reqs = 0
+    for unit in pending_units:
+        unit_req_count = len(unit.get("requirements", {}))
+        if batch and (
+            len(batch) >= max_batch_units
+            or (total_reqs + unit_req_count > max_batch_reqs)
+        ):
+            break
+        batch.append(unit)
+        total_reqs += unit_req_count
+    remaining = pending_units[len(batch) :]
+    return batch, remaining
+
+
 def node_cost(node: Mapping[str, Any]) -> int:
     # Conservative host floor plus the semantic compiler's whole-file estimate.
     # This is admission estimation, not a guarantee; runtime exhaustion refines the DAG.
@@ -151,11 +272,13 @@ def _decision(router: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]
                 "Markdown headings describe concerns, NOT Java classes. Group requirements across "
                 "sections by state ownership and coherent responsibility. Separate state/models, "
                 "persistence, services, integration, networking, UI/resources and verification where "
-                "the design needs them. Cite every R identifier at least once. Return at most four "
-                "nodes per page, then explicitly done=true. Each Java node is one public final class "
-                "with a concrete name and NONEMPTY public_api declaration strings (no bodies). Java "
-                "resource_path must be exactly the empty string: the host derives it. Include "
-                "constructors/fields/methods used by consumers. List actual symbol dependencies, "
+                "the design needs them. Cite every R identifier in the active requirements at least once. "
+                "Return at most four nodes per page. If remaining units exist, you may report them in "
+                "continuation.remaining_unit_ids, or set done=true when all units are complete. "
+                "Each Java node is one public final class with a concrete name and NONEMPTY public_api "
+                "declaration strings (no bodies). Java resource_path must be exactly the empty string: "
+                "the host derives it. Include constructors/fields/methods used by consumers. List actual "
+                "symbol dependencies (referencing already accepted_nodes or nodes in this page), "
                 "never an artificial previous-section chain. No dependency cycles. Only integration "
                 "nodes need activation=true and public static void initialize(). Other classes may "
                 "have constructors and state without lifecycle methods. JSON resources use kind "
@@ -171,8 +294,7 @@ def _decision(router: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]
                 "the rejected task. Dependencies outside the replacement must already exist. "
                 "When validation_feedback is supplied, return the corrected page, preserve_nodes "
                 "unchanged; fix the named fields. Never repeat the rejected page. Do not repeat "
-                "already accepted_nodes on later pages. Remaining requirement IDs and unresolved "
-                "dependencies must be covered before done=true."
+                "already accepted_nodes on later pages."
             )}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
             tool_name=name, parameters=_page_schema(payload),
             description="Host-owned implementation graph compilation; does not mutate source.",
@@ -399,14 +521,28 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
                   target: dict[str, Any], context: str = "",
                   resume: dict[str, Any] | None = None,
                   checkpoint: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
-    requirements = source_requirements(text)
+    from .root_cause_trace import emit_root_cause
+
+    all_requirements = source_requirements(text)
+    all_req_keys = set(all_requirements.keys())
+    units = decompose_authored_units(text, max_requirements_per_unit=MAX_UNIT_REQUIREMENTS)
+
     request_hash = digest({"text": text, "package": package, "mod_id": mod_id, "target": target})
     state = deepcopy(resume) if resume else {
-        "schema_version": "mmm/implementation-ir-draft-v1", "request_hash": request_hash,
-        "nodes": [], "page": 1, "done": False, "pending": None, "refinements": 0,
+        "schema_version": "mmm/implementation-ir-draft-v1",
+        "request_hash": request_hash,
+        "nodes": [],
+        "page": 1,
+        "done": False,
+        "pending": None,
+        "refinements": 0,
+        "unit_queue": deepcopy(units),
     }
     if state.get("request_hash") != request_hash or state.get("schema_version") != "mmm/implementation-ir-draft-v1":
         raise ImplementationGraphError("IMPLEMENTATION_IR_CHECKPOINT_DRIFT")
+
+    if not state.get("unit_queue"):
+        state["unit_queue"] = deepcopy(units)
 
     def save() -> None:
         if checkpoint:
@@ -417,37 +553,140 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
         save()
 
     def admit(page: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
-        combined = _admit_graph_page(page, accepted=state["nodes"], package=package, mod_id=mod_id, requirements=requirements)
-        covered = set().union(*(set(n["requirements"]) for n in combined))
+        combined = _admit_graph_page(
+            page,
+            accepted=state["nodes"],
+            package=package,
+            mod_id=mod_id,
+            requirements=all_requirements,
+        )
+        page_covered = set().union(*(set(n["requirements"]) for n in combined))
         known = {n["symbol"] for n in combined}
         missing = any(not set(n["depends_on"]) <= known for n in combined)
-        if not page["nodes"] and (not combined or set(requirements) != covered or missing):
-            raise _InvalidPage([{"code": "IMPLEMENTATION_IR_UNCOVERED_REQUIREMENTS", "node": "", "field": "nodes",
-                                 "message": "Add nodes for remaining requirements and unresolved dependencies before finishing."}], page)
-        return combined, page["done"]
+        if not page["nodes"] and (not combined or set(all_req_keys) != page_covered or missing):
+            raise _InvalidPage(
+                [{"code": "IMPLEMENTATION_IR_UNCOVERED_REQUIREMENTS", "node": "", "field": "nodes",
+                  "message": "Add nodes for remaining requirements and unresolved dependencies before finishing."}],
+                page,
+            )
+        continuation = page.get("continuation") or {}
+        rem_units = continuation.get("remaining_unit_ids")
+        if rem_units:
+            page_done = False
+        else:
+            page_done = page.get("done", True)
+        return combined, page_done
 
     while not state["done"] and state["page"] <= MAX_PAGES:
         nodes = state["nodes"]
-        covered = set().union(*(set(n["requirements"]) for n in nodes))
+        covered = set().union(*(set(n["requirements"]) for n in nodes)) if nodes else set()
         known = {n["symbol"] for n in nodes}
         missing = sorted({dep for n in nodes for dep in n["depends_on"] if dep not in known})
+
+        pending_units = [u for u in state["unit_queue"] if not set(u["requirements"].keys()) <= covered]
+        if covered == all_req_keys and not missing and state.get("done"):
+            save()
+            break
+
+        batch_units, rem_after_batch = _next_active_batch(
+            pending_units,
+            max_batch_units=MAX_BATCH_UNITS,
+            max_batch_reqs=MAX_BATCH_REQUIREMENTS,
+        )
+        if batch_units:
+            batch_reqs = {r: all_requirements[r] for u in batch_units for r in u["requirements"] if r not in covered}
+        else:
+            batch_reqs = {}
+
+        remaining_req_list = [r for r in all_requirements if r not in covered]
+        active_reqs = (
+            batch_reqs
+            if batch_reqs
+            else (
+                all_requirements
+                if covered == all_req_keys
+                else {r: all_requirements[r] for r in remaining_req_list[:MAX_BATCH_REQUIREMENTS]}
+            )
+        )
+
         payload = {
-            "requirements": requirements, "remaining_requirements": [r for r in requirements if r not in covered],
-            "unresolved_dependencies": missing, "platform": target, "project_context": context,
-            "package": package, "mod_id": mod_id, "admission_tokens": admissible_tokens(),
-            "page": state["page"], "accepted_nodes": nodes,
+            "current_units": [u["title"] for u in batch_units],
+            "unit_ids": [u["unit_id"] for u in batch_units],
+            "requirements": active_reqs,
+            "remaining_requirements": remaining_req_list,
+            "remaining_unit_ids": [u["unit_id"] for u in rem_after_batch],
+            "unresolved_dependencies": missing,
+            "platform": target,
+            "project_context": context,
+            "package": package,
+            "mod_id": mod_id,
+            "admission_tokens": admissible_tokens(),
+            "page": state["page"],
+            "accepted_nodes": nodes,
         }
 
-        combined, done = _validated_page(router, "compile_implementation_graph", payload, validator=admit,
-                                         pending=state["pending"], checkpoint=save_pending)
-        state["nodes"] = combined
-        state["page"] += 1
-        state["pending"] = None
-        covered = set().union(*(set(n["requirements"]) for n in combined))
-        known = {n["symbol"] for n in combined}
-        all_dependencies_known = all(set(n["depends_on"]) <= known for n in combined)
-        state["done"] = done and covered == set(requirements) and all_dependencies_known
-        save()
+        try:
+            combined, page_done = _validated_page(
+                router,
+                "compile_implementation_graph",
+                payload,
+                validator=admit,
+                pending=state["pending"],
+                checkpoint=save_pending,
+            )
+            state["nodes"] = combined
+            state["page"] += 1
+            state["pending"] = None
+            covered = set().union(*(set(n["requirements"]) for n in combined))
+            known = {n["symbol"] for n in combined}
+            all_dependencies_known = all(set(n["depends_on"]) <= known for n in combined)
+
+            state["unit_queue"] = [
+                u for u in state["unit_queue"] if not set(u["requirements"].keys()) <= covered
+            ]
+            state["done"] = page_done and covered == all_req_keys and all_dependencies_known
+            save()
+        except Exception as exc:
+            if is_completion_boundary_error(exc):
+                emit_root_cause(
+                    "implementation_graph_output_exhausted",
+                    stage="production",
+                    result="REDUCING_SCOPE",
+                    details={
+                        "page": state["page"],
+                        "batch_units": [u["unit_id"] for u in batch_units],
+                        "requirement_count": len(payload["requirements"]),
+                    },
+                )
+                save()
+                active_req_items = list(payload["requirements"].items())
+                if len(batch_units) > 1:
+                    first_u = batch_units[0]
+                    other_u = [u for u in state["unit_queue"] if u["unit_id"] != first_u["unit_id"]]
+                    state["unit_queue"] = [first_u] + other_u
+                    save()
+                    continue
+                elif len(active_req_items) > 1:
+                    mid = max(1, len(active_req_items) // 2)
+                    target_u = batch_units[0] if batch_units else {"unit_id": "unit_split", "title": "split"}
+                    sub_1 = {
+                        "unit_id": f"{target_u['unit_id']}_a",
+                        "title": f"{target_u['title']} (slice 1)",
+                        "requirements": dict(active_req_items[:mid]),
+                    }
+                    sub_2 = {
+                        "unit_id": f"{target_u['unit_id']}_b",
+                        "title": f"{target_u['title']} (slice 2)",
+                        "requirements": dict(active_req_items[mid:]),
+                    }
+                    other_u = [u for u in state["unit_queue"] if u["unit_id"] != target_u["unit_id"]]
+                    state["unit_queue"] = [sub_1, sub_2] + other_u
+                    save()
+                    continue
+                else:
+                    raise
+            raise
+
     if not state["done"]:
         raise ImplementationGraphError("IMPLEMENTATION_IR_PAGE_LIMIT")
     nodes = ordered_nodes(state["nodes"])
@@ -466,11 +705,11 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
             state["refinements"] += 1
             save()
         nodes = refine_node(router, oversized, nodes=nodes, package=package, mod_id=mod_id,
-                            requirements=requirements, reason="preflight_output_budget",
+                            requirements=all_requirements, reason="preflight_output_budget",
                             pending=state.get("refinement_pending"), checkpoint=save_refinement)
         state["nodes"] = nodes
         state.pop("refinement_pending", None)
         save()
     return {"schema_version": "mmm/implementation-ir-v1", "source_text": text,
             "source_sha256": hashlib.sha256(text.encode()).hexdigest(),
-            "requirements": requirements, "nodes": nodes}
+            "requirements": all_requirements, "nodes": nodes}
