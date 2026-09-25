@@ -4,9 +4,11 @@ import hashlib
 import json
 import os
 import re
+import threading
 import uuid
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +82,17 @@ class _SourceCacheEntry:
     content: bytes
 
 
+def _snapshot_locked(method):
+    """Serialize one ProjectIndex snapshot mutation/read against the same instance."""
+
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        with self._snapshot_lock:
+            return method(self, *args, **kwargs)
+
+    return guarded
+
+
 class ProjectIndex:
     """Whole-project metadata index with native incremental update and manifest I/O."""
 
@@ -90,6 +103,7 @@ class ProjectIndex:
         policy: ScalePolicy | None = None,
     ) -> None:
         self.root = Path(project_root).expanduser().resolve()
+        self._snapshot_lock = threading.RLock()
         if not self.root.is_dir() or self.root.is_symlink():
             raise ValueError(
                 f"Project root must be a regular directory: {self.root}"
@@ -192,6 +206,7 @@ class ProjectIndex:
         for shard in dirty_shards:
             self._manifest_shard_cache.pop(shard, None)
 
+    @_snapshot_locked
     def update_files(self, touched_paths: Iterable[str | Path]) -> None:
         """Update only touched sorted entries and invalidate only affected caches."""
 
@@ -385,6 +400,7 @@ class ProjectIndex:
             )
         return raw
 
+    @_snapshot_locked
     def manifest(self) -> dict[str, Any]:
         """Return the legacy expanded view for explicit compatibility callers.
 
@@ -409,6 +425,7 @@ class ProjectIndex:
             copied["suffix_counts"] = dict(suffix_counts)
         return copied
 
+    @_snapshot_locked
     def manifest_receipt(self) -> dict[str, Any]:
         """Return a cached fixed-size stable commitment to the complete source tree."""
 
@@ -448,6 +465,7 @@ class ProjectIndex:
         self._manifest_receipt_cache = self._copy_receipt(value)
         return self._copy_receipt(value)
 
+    @_snapshot_locked
     def select(
         self,
         *,
@@ -515,6 +533,7 @@ class ProjectIndex:
             "files": selected,
         }
 
+    @_snapshot_locked
     def select_page(
         self,
         *,
@@ -977,6 +996,7 @@ class ProjectIndex:
             parts.append((part, digest))
         return parts
 
+    @_snapshot_locked
     def write_manifest(self, path: str | Path | None = None) -> Path:
         """Persist only changed manifest shards and reuse validated existing shards."""
 
