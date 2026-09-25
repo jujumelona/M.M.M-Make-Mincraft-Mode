@@ -98,7 +98,10 @@ def _qwen_sampling_mode(role: object, request: Any) -> str | None:
     coder = normalized_role in {"coder", "coder_safe"}
     tools = getattr(request, "tools", ()) or ()
     if tools or _forced_tool_choice(getattr(request, "tool_choice", None)):
-        return "precise_coding" if coder else "non_thinking"
+        # Tool pages are rendered through Qwen's non-thinking action template and
+        # must use the matching model-recommended sampling profile. Role-specific
+        # coding sampling is reserved for free-text coding turns.
+        return "non_thinking"
     if getattr(request, "response_format", None) == "json" and not tools:
         return "non_thinking"
     if coder:
