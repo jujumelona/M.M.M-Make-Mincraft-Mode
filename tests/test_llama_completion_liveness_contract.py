@@ -331,3 +331,26 @@ def test_active_decode_reports_periodic_semantic_progress(monkeypatch, capsys) -
     assert "first semantic progress" in output
     assert "llama server: semantic progress" in output
     assert "events=2" in output
+
+
+def test_completion_wall_deadline_does_not_refresh_with_progress(monkeypatch) -> None:
+    ticks = iter([0.0, 10.0, 301.0, 301.1])
+    monkeypatch.setattr(contract.time, "monotonic", lambda: next(ticks))
+    response = SimpleNamespace(
+        iter_lines=lambda: iter(
+            [
+                'data: {"choices":[{"delta":{"content":"a"}}]}',
+                'data: {"choices":[{"delta":{"content":"b"}}]}',
+            ]
+        )
+    )
+    wrapped = contract._ProgressCheckedResponse(
+        response,
+        120.0,
+        request_id="hard-wall",
+        started_at=0.0,
+        wall_seconds=300.0,
+    )
+
+    with pytest.raises(contract.LlamaSemanticProgressTimeout, match="wall-clock ceiling"):
+        list(wrapped.iter_lines())
