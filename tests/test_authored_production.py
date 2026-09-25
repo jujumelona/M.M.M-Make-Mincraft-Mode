@@ -38,6 +38,7 @@ from minecraft_mod_ai.work_graph import build_production_work_plan
 
 
 @pytest.mark.parametrize("version", ["1.21.11", "26.2"])
+
 def test_saved_design_compiler_preserves_target_through_coder_handoff(version):
     from minecraft_mod_ai.custom_generation_research import _target_values
     from minecraft_mod_ai.platform_catalog import adapter_for_target
@@ -46,39 +47,27 @@ def test_saved_design_compiler_preserves_target_through_coder_handoff(version):
     proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(plan)
     adapter = adapter_for_target(version, "fabric")
     expected = (version, "fabric", adapter.yarn_mappings)
+
     assert _target_values(proposal.game_design) == expected
-    assert _target_values(proposal.modules[0].config) == expected
     assert proposal.game_design["authored_plan"] == plan.to_dict()
     manifest = proposal.game_design["_authored_execution_manifest"]
     assert manifest["policy"] == "host_exact_task_queue_no_coder_file_planning"
     assert len(proposal.modules) == manifest["unit_count"]
     assert manifest["entrypoint"]["owner"] == "host_scaffold"
-    assert all("authored_plan" not in module.config for module in proposal.modules)
-    assert all("evidence_task" in module.config for module in proposal.modules)
-    assert all(_target_values(module.config) == expected for module in proposal.modules)
-    for module in proposal.modules:
-        capsule = compile_task_capsule(module)
-        assert capsule is not None
-        assert capsule.primary_path
-        assert capsule.writable_paths == (capsule.primary_path,)
-        assert capsule.creatable_paths == ()
-        authority = compile_direct_task_mutation_authority(module)
-        assert authority is not None
-        assert authority.mutation_authority.mode is MutationAuthorityMode.EXACT
-        assert authority.writable_paths == (capsule.primary_path,)
-        assert authority.creatable_paths == ()
-        context = _task_authority_context({
-            "module": _task_local_module_contract(module),
-            "primary_path": capsule.primary_path,
-            "writable_paths": list(capsule.writable_paths),
-            "reuse_action": capsule.reuse_action,
-        })
-        assert context is not None
-        assert context.target_path == capsule.primary_path
-        assert context.is_new_file is False
-        assert context.creatable_paths == ()
-    assert proposal.game_design["_platform_selection"]["target"] == adapter.public_dict()
 
+    for module, record in zip(proposal.modules, manifest["units"], strict=True):
+        assert "authored_plan" not in module.config
+        assert _target_values(module.config) == expected
+        task = _task_local_module_contract(module)
+        anchors = task["owned_anchors"]
+        assert len(anchors) == 1
+        anchor = anchors[0]
+        assert anchor["status"] == "host_reserved"
+        assert anchor["ownership"] == "exclusive"
+        assert anchor["locator"] == f"{record['path']}#{record['symbol']}"
+        assert task["required_gates"] == ["target_compile"]
+
+    assert proposal.game_design["_platform_selection"]["target"] == adapter.public_dict()
 
 @pytest.mark.parametrize("text", [
     "우주선을 만들고 행성마다 다른 광물을 거래한다.",
@@ -86,6 +75,7 @@ def test_saved_design_compiler_preserves_target_through_coder_handoff(version):
     "0",
     "# 설계\n" + "선원, 무기, 연료, 수리, 거래를 구현한다.\n" * 1000,
 ], ids=["plain", "fenced", "zero", "long"])
+
 def test_real_compiler_hands_saved_text_to_coder_without_replanning(monkeypatch, text):
     def forbidden(*args, **kwargs):
         pytest.fail("saved design entered planner again")
@@ -103,38 +93,27 @@ def test_real_compiler_hands_saved_text_to_coder_without_replanning(monkeypatch,
 
     manifest = proposal.game_design["_authored_execution_manifest"]
     assert manifest["unit_count"] >= 1
-    feature_modules = proposal.modules
-    assert len(feature_modules) == manifest["unit_count"]
-    reconstructed = "".join(
-        module.config["evidence_task"]["engineering_worksheet"]["authored_unit"]["text"]
-        for module in feature_modules
-    )
-    assert reconstructed == text
+    assert len(proposal.modules) == manifest["unit_count"]
+
+    reconstructed = []
+    paths = []
+    for module, record in zip(proposal.modules, manifest["units"], strict=True):
+        task = _task_local_module_contract(module)
+        unit = task["engineering_worksheet"]["authored_unit"]
+        reconstructed.append(unit["text"])
+        anchors = task["owned_anchors"]
+        assert len(anchors) == 1
+        assert anchors[0]["locator"] == f"{record['path']}#{record['symbol']}"
+        assert task["required_gates"] == ["target_compile"]
+        paths.append(record["path"])
+
+    assert "".join(reconstructed) == text
+    assert len(paths) == len(set(paths))
+    assert manifest["entrypoint"]["path"] not in paths
 
     graph = build_production_work_plan(proposal)
     generation = [node for node in graph.nodes if node.stage == "generate:custom"]
     assert generation
-
-    paths = []
-    for module in proposal.modules:
-        contract = _task_local_module_contract(module)
-        assert "evidence_task" in contract
-        messages = [{"role": "user", "content": json.dumps({
-            "phase": "implement_module",
-            "module": contract,
-        }, ensure_ascii=False)}]
-        batches = atomicize_coder_messages(messages)
-        assert len(batches) == 1
-        payload = json.loads(batches[0][-1]["content"])
-        atomic = payload["module"]["evidence_task"]["coder_execution_contract"]
-        assert atomic["schema_version"] == "mmm/atomic-coder-step"
-        refs = atomic["step"]["target_refs"]
-        assert len(refs) == 1
-        paths.append(refs[0].split("#", 1)[0])
-
-    assert len(paths) == len(set(paths))
-    assert manifest["entrypoint"]["path"] not in paths
-
 
 def test_fresh_authored_execution_is_exact_path_dependency_queue():
     text = (
@@ -421,7 +400,8 @@ def test_authored_execution_uses_markdown_sections_not_arbitrary_byte_packing():
     ) == text
 
 
-def test_nested_authored_behavior_reaches_one_manifest_target_and_atomic_coder():
+
+def test_nested_authored_behavior_reaches_exact_direct_targets():
     text = (
         "# Trading\n"
         "## Trigger\nRight click a trader to exchange one ore for 10 credits.\n"
@@ -436,29 +416,28 @@ def test_nested_authored_behavior_reaches_one_manifest_target_and_atomic_coder()
     manifest = proposal.game_design["_authored_execution_manifest"]
     assert manifest["unit_count"] == len(proposal.modules) == 2
     assert [unit["section"] for unit in manifest["units"]] == ["Trading", "Travel"]
+
     source = text.encode("utf-8")
     next_start = 0
     for module, record in zip(proposal.modules, manifest["units"], strict=True):
-        capsule = compile_task_capsule(module)
-        batches = atomicize_coder_messages([{"role": "user", "content": json.dumps({
-            "phase": "implement_module", "module": _task_local_module_contract(module),
-        })}])
-        atomic = json.loads(batches[0][-1]["content"])["module"]["evidence_task"]["coder_execution_contract"]
-        unit = atomic["engineering_worksheet"]["authored_unit"]
+        task = _task_local_module_contract(module)
+        unit = task["engineering_worksheet"]["authored_unit"]
         assert unit["start_byte"] == record["start_byte"] == next_start
         next_start = unit["end_byte"]
         exact = source[unit["start_byte"]:next_start]
         assert unit["text"].encode("utf-8") == exact
-        assert unit["source_text_sha256"] == record["text_sha256"] == "sha256:" + hashlib.sha256(exact).hexdigest()
-        assert unit["text"].strip() in atomic["step"]["obligation"]
-        assert capsule.primary_path == record["path"]
-        assert atomic["step"]["target_refs"] == [record["path"] + "#" + record["symbol"]]
+        assert unit["source_text_sha256"] == record["text_sha256"] == (
+            "sha256:" + hashlib.sha256(exact).hexdigest()
+        )
+        assert unit["text"].strip() in task["implementation_obligations"][0]
+        anchors = task["owned_anchors"]
+        assert len(anchors) == 1
+        assert anchors[0]["locator"] == record["path"] + "#" + record["symbol"]
         if unit["section"] == "Trading":
             assert "10 credits" in unit["text"] and "across relog" in unit["text"]
         else:
             assert "20 credits" in unit["text"] and "Insufficient credits" in unit["text"]
     assert next_start == len(source)
-
 
 @pytest.mark.parametrize("text", [
     "# Trading\n## Trigger\nExchange ore for credits.\n## State\nPersist credits.\n",
@@ -756,9 +735,11 @@ def test_authored_units_preserve_projected_text_exactly() -> None:
     ("<analysis>Draft the Korean design.</analysis>\n",
      "우주선의 연료가 없으면 출발을 거부한다.\n"),
 ])
+
 def test_compiler_projects_reasoning_before_both_production_routes(prefix, design, existing):
     plan = AuthoredPlan(
-        "Space mod for Fabric 1.21.11", prefix + design,
+        "Space mod for Fabric 1.21.11",
+        prefix + design,
         existing_input_sha256="sha256:" + "a" * 64 if existing else "",
         media_paths=("reference.png",),
     )
@@ -769,6 +750,7 @@ def test_compiler_projects_reasoning_before_both_production_routes(prefix, desig
     projection = proposal.game_design["_authored_source_projection"]
     assert projection["source_plan"] == plan.to_dict()
     assert projection["stripped_prefix_bytes"] == len(prefix.encode("utf-8"))
+
     def sha(text):
         return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -776,23 +758,26 @@ def test_compiler_projects_reasoning_before_both_production_routes(prefix, desig
     assert projection["implementation_text_sha256"] == sha(design)
     manifest = proposal.game_design["_authored_execution_manifest"]
     assert manifest["source_text_sha256"] == sha(design)
+
     parts = []
     for module, record in zip(proposal.modules, manifest["units"], strict=True):
         if existing:
             part = module.config["authored_plan"]["text"]
         else:
-            batches = atomicize_coder_messages([{"role": "user", "content": json.dumps({
-                "phase": "implement_module", "module": _task_local_module_contract(module),
-            })}])
-            task = json.loads(batches[0][-1]["content"])["module"]["evidence_task"]
-            part = task["coder_execution_contract"]["engineering_worksheet"]["authored_unit"]["text"]
-            assert "Thinking Process" not in json.dumps(task)
-            assert "instruction injected" not in json.dumps(task)
-        assert part.encode("utf-8") == design.encode("utf-8")[record["start_byte"]:record["end_byte"]]
+            task = _task_local_module_contract(module)
+            part = task["engineering_worksheet"]["authored_unit"]["text"]
+            rendered = json.dumps(task, ensure_ascii=False)
+            assert "Thinking Process" not in rendered
+            assert "instruction injected" not in rendered
+            anchors = task["owned_anchors"]
+            assert len(anchors) == 1
+            assert anchors[0]["locator"] == f"{record['path']}#{record['symbol']}"
+        assert part.encode("utf-8") == design.encode("utf-8")[
+            record["start_byte"]:record["end_byte"]
+        ]
         assert record["text_sha256"] == sha(part)
         parts.append(part)
     assert "".join(parts) == design
-
 
 @pytest.mark.parametrize("text", [
     ("NPC dialogue says Thinking Process: and Analyze the Request:\n"
@@ -811,7 +796,10 @@ def test_compiler_preserves_ambiguous_or_quoted_reasoning_text(text):
 
 
 @pytest.mark.parametrize("wrapper", ["", "## 개요 (Overview)\nStarForge space trading.\n\n"])
-def test_contract_shaped_authored_design_stays_one_coherent_bounded_module(monkeypatch, tmp_path, wrapper):
+
+def test_contract_shaped_authored_design_uses_exact_direct_task_queue(monkeypatch, tmp_path, wrapper):
+    del tmp_path
+
     def forbidden(*args, **kwargs):
         pytest.fail("saved design entered planner again")
 
@@ -835,95 +823,31 @@ def test_contract_shaped_authored_design_stays_one_coherent_bounded_module(monke
         for section in sections
     )
     assert len(text.encode("utf-8")) > 2048
-    plan = AuthoredPlan("Make a space trading mod for Fabric 1.21.11", text)
 
-    proposal = CompleteGameDesignPlanner(router).compile_for_production(plan)
-
-    assert len(proposal.modules) == 1
-    module = proposal.modules[0]
-    assert module.module_id == "authored_design"
-    assert module.config["authored_execution_mode"] == "bounded_coherent"
-    assert module.config["authored_bounded_scope"] is True
-    assert module.config["authored_plan"]["text"] == text
-    assert compile_task_capsule(module) is None
-
+    proposal = CompleteGameDesignPlanner(router).compile_for_production(
+        AuthoredPlan("Make a space trading mod for Fabric 1.21.11", text)
+    )
     manifest = proposal.game_design["_authored_execution_manifest"]
-    assert manifest["policy"] == "host_bounded_coherent_authored_design"
-    assert manifest["unit_count"] == 1
-    assert manifest["units"][0]["module_id"] == "authored_design"
+    assert manifest["policy"] == "host_exact_task_queue_no_coder_file_planning"
+    assert len(proposal.modules) == manifest["unit_count"] >= 1
 
-    authority = compile_direct_task_mutation_authority(module)
-    assert authority is not None
-    assert authority.mutation_authority.mode is MutationAuthorityMode.BOUNDED_ROOTS
+    reconstructed = []
+    seen_paths = set()
+    for module, record in zip(proposal.modules, manifest["units"], strict=True):
+        assert module.config.get("authored_execution_mode") != "bounded_coherent"
+        assert module.config.get("authored_bounded_scope") is not True
+        task = _task_local_module_contract(module)
+        unit = task["engineering_worksheet"]["authored_unit"]
+        reconstructed.append(unit["text"])
+        anchors = task["owned_anchors"]
+        assert len(anchors) == 1
+        assert anchors[0]["status"] == "host_reserved"
+        assert anchors[0]["locator"] == f"{record['path']}#{record['symbol']}"
+        assert record["path"] not in seen_paths
+        seen_paths.add(record["path"])
 
-    package_path = proposal.base_proposal.spec.package_name.replace(".", "/")
-    mod_id = proposal.base_proposal.spec.mod_id
-    assert authority.mutation_authority.authorizes(
-        f"src/main/java/{package_path}/economy/TradeService.java",
-        operation="create_file",
-    )
-    assert authority.mutation_authority.authorizes(
-        f"src/main/resources/assets/{mod_id}/lang/ko_kr.json",
-        operation="create_file",
-    )
-    assert authority.mutation_authority.authorizes(
-        f"src/main/resources/data/{mod_id}/recipes/ship_part.json",
-        operation="create_file",
-    )
-    assert not authority.mutation_authority.authorizes(
-        "src/main/resources/fabric.mod.json",
-        operation="replace_exact",
-    )
-    assert not authority.mutation_authority.authorizes(
-        "src/main/java/com/example/Foreign.java",
-        operation="create_file",
-    )
-    assert not authority.mutation_authority.authorizes(
-        f"src/main/java/{package_path}/Old.java",
-        operation="delete_file",
-    )
-
-    # Exercise the same generation boundary as production, not just the two
-    # compilers independently: localization previously replaced this authority.
-    class Generator:
-        @task_capsule_generation_scope
-        @generation_authority_scoped
-        def generate(self, project_root, *, module, **kwargs):
-            assert _CURRENT_AUTHORITY.get() == authority
-            assert _CURRENT_CAPSULE.get() is None
-            assert module is proposal.modules[0]
-            return module.config["authored_plan"]["text"]
-
-    generator = Generator()
-    generator.router = router
-    assert generator.generate(tmp_path, module=module) == text
-    assert _CURRENT_AUTHORITY.get() is None
-    assert _CURRENT_CAPSULE.get() is None
-
-    contract = _task_local_module_contract(module)
-    assert contract["authored_execution_mode"] == "bounded_coherent"
-    assert contract["authored_write_scope"]["mod_id"] == mod_id
-    assert contract["authored_write_scope"]["java_package"] == proposal.base_proposal.spec.package_name
-
-    messages = [{
-        "role": "user",
-        "content": json.dumps({
-            "phase": "implement_authored_design",
-            "module": contract,
-        }, ensure_ascii=False),
-    }]
-    batches = atomicize_coder_messages(messages)
-    assert len(batches) == 1
-    assert json.loads(batches[0][0]["content"])["module"]["authored_plan"]["text"] == text
-
-    evidence_query = _approved_task_evidence_query(messages, target_path=None)
-    assert "space trading mod" in evidence_query
-    assert "integration:" in evidence_query
-    assert "authority_and_network:" in evidence_query
-    assert "persistence:" in evidence_query
-    assert "resources_and_ui:" in evidence_query
-    assert "n, a, m, e" not in evidence_query
-
+    assert "".join(reconstructed) == text
+    assert manifest["entrypoint"]["path"] not in seen_paths
 
 def test_worksheet_with_supplementary_section_is_not_split_into_feature_classes():
     from minecraft_mod_ai.authored_production import _contract_shaped_authored_design
