@@ -16,7 +16,7 @@ from typing import Any
 from .custom_module_errors import CustomModuleGenerationError
 from .model_adapters.base import NativeToolDecisionRejected
 
-IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v7"
+IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v8"
 
 
 class ImplementationGraphError(CustomModuleGenerationError):
@@ -435,36 +435,52 @@ def _decision(router: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]
     return response
 
 
+def _repair_measure(feedback: Mapping[str, Any]) -> tuple[int, int, int]:
+    """Well-founded repair measure; smaller means objectively closer to admission."""
+    diagnostics = list(feedback.get("diagnostics") or [])
+    schema_like = {
+        "IMPLEMENTATION_IR_SCHEMA_INVALID",
+        "IMPLEMENTATION_IR_REPAIR_NODE_COUNT",
+    }
+    schema_phase = int(any(str(item.get("code", "")) in schema_like for item in diagnostics))
+    invalid_nodes: set[str] = set()
+    for item in diagnostics:
+        field = str(item.get("field", ""))
+        match = re.match(r"^nodes\.(\d+)(?:\.|$)", field)
+        invalid_nodes.add(match.group(1) if match else field or str(item.get("node", "")))
+    return schema_phase, len(invalid_nodes), len(diagnostics)
+
+
 def _validated_page(router: Any, name: str, payload: dict[str, Any], *,
                     validator: Callable[[dict[str, Any]], Any],
                     pending: dict[str, Any] | None = None,
                     checkpoint: Callable[[dict[str, Any]], None] | None = None) -> Any:
-    """Correct a rejected decision with explicit feedback, never blind replay.
-
-    Only admission failures are correctable here. Transport, output-limit and context
-    exceptions retain their own type and cannot enter this loop.
-    """
+    """Correct only when each rejected response makes measurable progress."""
     from .root_cause_trace import emit_root_cause
 
     request_hash = digest({"name": name, "payload": payload})
     state = deepcopy(pending) if pending else {
-        "request_hash": request_hash, "attempt": 0, "seen": [], "feedback": None,
+        "request_hash": request_hash,
+        "attempt": 0,
+        "seen": [],
+        "feedback": None,
+        "repair_measure": None,
     }
     if state.get("request_hash") != request_hash:
         raise ImplementationGraphError("IMPLEMENTATION_IR_CHECKPOINT_DRIFT")
     if state.get("terminal"):
-        raise ImplementationGraphError(state["terminal"] + ": " + json.dumps(state["feedback"], ensure_ascii=False))
+        raise ImplementationGraphError(
+            state["terminal"] + ": " + json.dumps(state["feedback"], ensure_ascii=False)
+        )
     schema = _page_schema(payload)
-    while state["attempt"] <= MAX_PAGE_CORRECTIONS:
+
+    while True:
         request = dict(payload)
         if state["feedback"]:
             request["validation_feedback"] = state["feedback"]
         page = None
         try:
             page = _canonicalize_schema_page(_decision(router, name, request))
-            # If a prior schema rejection identified valid siblings, those siblings
-            # are host-owned. The model may return only the invalid nodes (preferred)
-            # or may redundantly rewrite siblings; either way, sibling text is ignored.
             page = _merge_scoped_schema_repair(page, state.get("feedback") or {})
             diagnostics = _schema_diagnostics(page, schema)
             if diagnostics:
@@ -473,9 +489,13 @@ def _validated_page(router: Any, name: str, payload: dict[str, Any], *,
         except _InvalidPage as exc:
             feedback = exc.feedback
             bad_page = feedback["rejected_page"]
-            schema_failure = any(d["code"] == "IMPLEMENTATION_IR_SCHEMA_INVALID" for d in feedback["diagnostics"])
+            schema_failure = any(
+                d["code"] == "IMPLEMENTATION_IR_SCHEMA_INVALID"
+                for d in feedback["diagnostics"]
+            )
             scoped_repair_failure = any(
-                d["code"] == "IMPLEMENTATION_IR_REPAIR_NODE_COUNT" for d in feedback["diagnostics"]
+                d["code"] == "IMPLEMENTATION_IR_REPAIR_NODE_COUNT"
+                for d in feedback["diagnostics"]
             )
             prior_feedback = state.get("feedback") or {}
 
@@ -487,10 +507,6 @@ def _validated_page(router: Any, name: str, payload: dict[str, Any], *,
                     feedback["preserve_nodes"] = preserve
                     feedback["repair_count"] = repair_count
 
-            # Once scoped schema repair starts, valid siblings remain frozen in host
-            # state through every correction. Graph-level failures intentionally do
-            # not inherit provisional siblings because those siblings may participate
-            # in the graph error.
             keep_protected = schema_failure or scoped_repair_failure
             if keep_protected and prior_feedback.get("preserve_nodes"):
                 protected = list(prior_feedback["preserve_nodes"])
@@ -503,32 +519,68 @@ def _validated_page(router: Any, name: str, payload: dict[str, Any], *,
                 )
                 feedback["preserve_nodes"] = protected
                 feedback["repair_count"] = int(
-                    prior_feedback.get("repair_count") or feedback.get("repair_count") or 0
+                    prior_feedback.get("repair_count")
+                    or feedback.get("repair_count")
+                    or 0
                 )
             elif not keep_protected:
                 feedback["preserve_nodes"] = []
                 feedback.pop("repair_count", None)
-            fingerprint = digest({"page": bad_page, "diagnostics": feedback["diagnostics"] if bad_page is None else None})
+
+            fingerprint = digest({
+                "page": bad_page,
+                "diagnostics": feedback["diagnostics"] if bad_page is None else None,
+            })
+            measure = _repair_measure(feedback)
+            prior_measure_raw = state.get("repair_measure")
+            prior_measure = tuple(prior_measure_raw) if prior_measure_raw is not None else None
             repeated = fingerprint in state["seen"]
+            improved = prior_measure is None or measure < prior_measure
+
             state["attempt"] += 1
             state["feedback"] = feedback
             state["seen"].append(fingerprint)
-            if repeated or state["attempt"] > MAX_PAGE_CORRECTIONS:
-                state["terminal"] = "IMPLEMENTATION_IR_NO_PROGRESS" if repeated else "IMPLEMENTATION_IR_CORRECTION_LIMIT"
+            state["repair_measure"] = list(measure)
+            if repeated or not improved:
+                state["terminal"] = "IMPLEMENTATION_IR_NO_PROGRESS"
+
             if checkpoint:
                 checkpoint(state)
-            emit_root_cause("implementation_graph_page_rejected", stage="production", operation=name,
-                            result="REJECTED", details={"page": payload.get("page"),
-                            "attempt": state["attempt"], "response_sha256": digest(bad_page),
-                            "validation_feedback": feedback, "same_response": repeated})
+            emit_root_cause(
+                "implementation_graph_page_rejected",
+                stage="production",
+                operation=name,
+                result="REJECTED",
+                details={
+                    "page": payload.get("page"),
+                    "attempt": state["attempt"],
+                    "response_sha256": digest(bad_page),
+                    "validation_feedback": feedback,
+                    "same_response": repeated,
+                    "repair_measure": list(measure),
+                    "strictly_improved": improved,
+                },
+            )
             if state.get("terminal"):
-                raise ImplementationGraphError(state["terminal"] + ": " + json.dumps(feedback["diagnostics"], ensure_ascii=False)) from exc
+                raise ImplementationGraphError(
+                    state["terminal"] + ": "
+                    + json.dumps(feedback["diagnostics"], ensure_ascii=False)
+                ) from exc
             continue
-        emit_root_cause("implementation_graph_page_accepted", stage="production", operation=name,
-                        result="PASS", details={"page": payload.get("page"), "response": page,
-                        "response_sha256": digest(page), "corrections": state["attempt"]})
+
+        emit_root_cause(
+            "implementation_graph_page_accepted",
+            stage="production",
+            operation=name,
+            result="PASS",
+            details={
+                "page": payload.get("page"),
+                "response": page,
+                "response_sha256": digest(page),
+                "corrections": state["attempt"],
+            },
+        )
         return result
-    raise ImplementationGraphError("IMPLEMENTATION_IR_CORRECTION_LIMIT: " + json.dumps(state["feedback"], ensure_ascii=False))
 
 
 def validate_node(raw: Any, *, package: str, mod_id: str, refs: set[str]) -> dict[str, Any]:
