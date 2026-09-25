@@ -346,3 +346,42 @@ def test_guarded_repair_evidence_uses_target_compile_not_base_jdt(
     assert evidence["passed"] is False
     assert evidence["build"]["status"] == "FAIL"
     assert evidence["diagnostics"]["status"] == "DEFERRED_TO_POST_BUILD"
+
+
+def test_build_checkpoint_freezes_runtime_linkage_owner(tmp_path: Path) -> None:
+    log = tmp_path / "gradle-gametest.log"
+    log.write_text(
+        "Caused by: java.lang.NoSuchMethodError: "
+        "'void demo.AuthoredFeature001.initializeClient()'\n"
+        "\tat demo.AuthoredFeature001.initialize(AuthoredFeature001.java:32)\n",
+        encoding="utf-8",
+    )
+    bundle = {
+        "build": {
+            "status": "FAIL",
+            "error": "Headless Fabric GameTest failed.",
+            "commands": [
+                {
+                    "name": "gametest",
+                    "exit_code": 1,
+                    "timed_out": False,
+                    "log_path": str(log),
+                }
+            ],
+        },
+        "repair": None,
+    }
+
+    persisted = complete_build_repair._persist_build_diagnostics(
+        bundle,
+        project_root=tmp_path,
+    )
+
+    diagnostic = next(
+        item
+        for item in persisted["diagnostics"]
+        if item.get("code") == "runtime:linkage:NoSuchMethodError"
+    )
+    assert diagnostic["path"] == "src/main/java/demo/AuthoredFeature001.java"
+    assert "initializeClient" in diagnostic["message"]
+
