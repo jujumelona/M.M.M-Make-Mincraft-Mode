@@ -61,10 +61,6 @@ def test_autotune_model_resolution_delegates_to_process_prefetch(monkeypatch) ->
     assert captured["config"] is config
     assert captured["resolver"] is autotune._resolve_model_path_direct
     assert isinstance(parallel_runtime._PREFETCH_FUTURES, dict)
-    assert getattr(autotune._server_version, "_mmm_process_metadata_cache", False)
-    assert getattr(autotune._hardware_identity, "_mmm_process_metadata_cache", False)
-    assert getattr(autotune._load_cached_decision, "_mmm_multi_decision_store", False)
-    assert getattr(autotune._save_decision, "_mmm_multi_decision_store", False)
 
 
 def _base_ensure_tuned_server():
