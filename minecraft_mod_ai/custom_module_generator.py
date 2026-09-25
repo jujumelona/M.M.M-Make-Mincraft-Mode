@@ -170,7 +170,7 @@ def _atomic_write(path: Path, content: str) -> None:
         f"{hashlib.sha256(content.encode()).hexdigest()[:10]}.tmp"
     )
     try:
-        temporary.write_text(content, encoding="utf-8", newline="\\n")
+        temporary.write_text(content, encoding="utf-8", newline="\n")
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
@@ -199,7 +199,7 @@ def _project_context(root: Path, target: Path) -> str:
         except (OSError, UnicodeError):
             continue
         relative = path.relative_to(root).as_posix()
-        chunk = f"\\n--- {relative} ---\\n{text}\\n"
+        chunk = f"\n--- {relative} ---\n{text}\n"
         raw = chunk.encode("utf-8")
         if used + len(raw) > _MAX_CONTEXT_BYTES:
             remaining = _MAX_CONTEXT_BYTES - used
@@ -421,9 +421,9 @@ class CustomModuleGenerator:
         bounded_feedback = _bounded_execution_feedback(execution_feedback)
         system = (
             "You implement exactly one host-owned Minecraft Java source file. "
-            "Return one JSON object only: {\\\"content\\\": "
-            "\\\"<complete Java file>\\\", \\\"summary\\\": "
-            "\\\"<short summary>\\\"}. Never return a patch or diff. "
+            "Return one JSON object only: {\"content\": "
+            "\"<complete Java file>\", \"summary\": "
+            "\"<short summary>\"}. Never return a patch or diff. "
             "Do not change the package, public final top-level class name, or "
             "public static void initialize() integration surface. Do not create "
             "another mod entrypoint. The host will compile the real project and "
@@ -432,15 +432,15 @@ class CustomModuleGenerator:
         initial_user = (
             f"Platform: Minecraft {adapter.minecraft_version}; "
             f"loader {adapter.loader}; Java {adapter.java_version}; "
-            f"mappings {adapter.yarn_mappings or '<none>'}.\\n"
-            f"Exact target: {relative}#{symbol}\\n\\n"
-            f"Approved task:\\n{task_text}\\n\\n"
-            f"Current host scaffold:\\n{original}\\n\\n"
-            f"Relevant existing project source:\\n{context or '<none>'}"
+            f"mappings {adapter.yarn_mappings or '<none>'}.\n"
+            f"Exact target: {relative}#{symbol}\n\n"
+            f"Approved task:\n{task_text}\n\n"
+            f"Current host scaffold:\n{original}\n\n"
+            f"Relevant existing project source:\n{context or '<none>'}"
         )
         if bounded_feedback:
             initial_user += (
-                "\\n\\nDownstream execution feedback from the previous attempt:\\n"
+                "\n\nDownstream execution feedback from the previous attempt:\n"
                 + json.dumps(
                     bounded_feedback,
                     ensure_ascii=False,
@@ -469,11 +469,11 @@ class CustomModuleGenerator:
                             "role": "user",
                             "content": (
                                 f"Repair attempt {attempt}/{attempts} for "
-                                f"{relative}#{symbol}.\\n"
+                                f"{relative}#{symbol}.\n"
                                 "Return the complete corrected Java file, "
-                                "not a patch.\\n\\n"
-                                f"Current complete source:\\n{current}\\n\\n"
-                                "Exact validation/compiler failure:\\n"
+                                "not a patch.\n\n"
+                                f"Current complete source:\n{current}\n\n"
+                                "Exact validation/compiler failure:\n"
                                 f"{last_failure}"
                             ),
                         },
@@ -489,8 +489,8 @@ class CustomModuleGenerator:
                     continue
                 candidate = (
                     payload["content"]
-                    .replace("\\r\\n", "\\n")
-                    .replace("\\r", "\\n")
+                    .replace("\r\n", "\n")
+                    .replace("\r", "\n")
                 )
                 summary = payload["summary"]
                 invariant_errors = _source_invariant_errors(
@@ -500,7 +500,7 @@ class CustomModuleGenerator:
                 )
                 if invariant_errors:
                     current = candidate
-                    last_failure = "\\n".join(
+                    last_failure = "\n".join(
                         f"- {error}" for error in invariant_errors
                     )
                     continue
@@ -560,7 +560,7 @@ class CustomModuleGenerator:
             raise CustomModuleGenerationError(
                 "DIRECT_CODER_COMPILE_FAILED: exact whole-file generation "
                 f"did not compile after {attempts} attempts for {relative}. "
-                "Last failure:\\n"
+                "Last failure:\n"
                 + last_failure[-_MAX_LOG_BYTES:]
             )
 
