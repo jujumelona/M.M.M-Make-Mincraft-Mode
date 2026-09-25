@@ -24,7 +24,7 @@ from .generation_implementation_grounding import (
     render_generation_implementation_authority_prompt,
 )
 from .host_grounding import custom_module_path_allowed
-from .implementation_ir import OutputBudgetExhausted, output_token_ceiling
+from .implementation_ir import OutputBudgetExhausted
 from .llama_finish_reason_contract import OUTPUT_EXHAUSTED, completion_boundary_error
 from .model_router import ModelRouter
 from .platform_catalog import adapter_for_target, adapter_from_project
@@ -385,7 +385,6 @@ def _call_coder(
         ("response_format", "json"),
         ("response_schema", _SOURCE_SCHEMA),
         ("enable_tools", False),
-        ("output_token_ceiling", _direct_coder_output_token_ceiling()),
     ):
         if _supports_kwarg(callback, key):
             kwargs[key] = value
@@ -418,10 +417,6 @@ def _compile_log(report: Any) -> str:
         return data.decode("utf-8", errors="replace")
     except OSError:
         return str(getattr(report, "error", "") or "")[:_MAX_LOG_BYTES]
-
-
-def _direct_coder_output_token_ceiling() -> int:
-    return output_token_ceiling()
 
 
 def _repair_attempts() -> int:
