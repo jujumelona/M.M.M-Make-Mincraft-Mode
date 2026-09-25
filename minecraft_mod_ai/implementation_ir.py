@@ -261,16 +261,20 @@ def is_completion_boundary_error(exc: BaseException) -> bool:
     return "exhausted the bounded output allowance" in msg or "output_exhausted" in msg
 
 
-def decompose_authored_units(
-    text: str, max_requirements_per_unit: int = MAX_UNIT_REQUIREMENTS
-) -> list[dict[str, Any]]:
-    """Deterministically slice authored prose into bounded implementation units."""
+def decompose_authored_units(text: str) -> list[dict[str, Any]]:
+    """Create one semantic unit per authored heading.
+
+    Unit size is not pre-clamped. A small model first sees one coherent authored
+    concern; typed output exhaustion recursively bisects only that unit until the
+    runtime can serve it. This keeps granularity evidence-driven instead of encoding
+    a guessed requirement count.
+    """
     req_map = source_requirements(text)
     if not req_map:
         return []
 
     lines = text.splitlines(keepends=False)
-    heading_pattern = re.compile(r"^ {0,3}#{1,6}[ \t]+(.+?)\s*$")
+    heading_pattern = re.compile(r"^ {0,3}#{1,6}[ \\t]+(.+?)\\s*$")
 
     sections: list[tuple[str, list[str]]] = []
     current_title = "overview"
@@ -287,76 +291,58 @@ def decompose_authored_units(
             if current_req_ids:
                 sections.append((current_title, current_req_ids))
                 current_req_ids = []
-            current_title = re.sub(r"[ \t]+#+[ \t]*$", "", match[1]).strip("*_` ")
+            current_title = re.sub(r"[ \\t]+#+[ \\t]*$", "", match[1]).strip("*_` ")
         current_req_ids.append(req_id)
 
     if current_req_ids:
         sections.append((current_title, current_req_ids))
 
-    units: list[dict[str, Any]] = []
-    unit_counter = 0
-
-    for title, req_ids in sections:
-        if len(req_ids) <= max_requirements_per_unit:
-            units.append({
-                "unit_id": f"unit_{unit_counter}",
-                "title": title,
-                "requirements": {r: req_map[r] for r in req_ids},
-            })
-            unit_counter += 1
-        else:
-            for chunk_idx in range(0, len(req_ids), max_requirements_per_unit):
-                chunk = req_ids[chunk_idx : chunk_idx + max_requirements_per_unit]
-                part_num = (chunk_idx // max_requirements_per_unit) + 1
-                units.append({
-                    "unit_id": f"unit_{unit_counter}",
-                    "title": f"{title} (part {part_num})",
-                    "requirements": {r: req_map[r] for r in chunk},
-                })
-                unit_counter += 1
-
-    return units
+    return [
+        {
+            "unit_id": f"unit_{index}",
+            "title": title,
+            "requirements": {req_id: req_map[req_id] for req_id in req_ids},
+        }
+        for index, (title, req_ids) in enumerate(sections)
+    ]
 
 
-def _next_active_batch(
+def _next_active_unit(
     pending_units: list[dict[str, Any]],
-    *,
-    max_batch_units: int = MAX_BATCH_UNITS,
-    max_batch_reqs: int = MAX_BATCH_REQUIREMENTS,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     if not pending_units:
-        return [], []
-    batch: list[dict[str, Any]] = []
-    total_reqs = 0
-    for unit in pending_units:
-        unit_req_count = len(unit.get("requirements", {}))
-        if batch and (
-            len(batch) >= max_batch_units
-            or (total_reqs + unit_req_count > max_batch_reqs)
-        ):
-            break
-        batch.append(unit)
-        total_reqs += unit_req_count
-    remaining = pending_units[len(batch) :]
-    return batch, remaining
+        return None, []
+    return pending_units[0], pending_units[1:]
 
 
 def node_cost(node: Mapping[str, Any]) -> int:
-    # Conservative source-output floor plus the semantic compiler's whole-file
-    # estimate. Requirement/dependency metadata is planner context, not serialized
-    # Java/JSON source, so charging it here can make a genuinely smaller helper look
-    # larger than half of its parent and falsely block decomposition.
-    api_bytes = len(json.dumps(node["public_api"], ensure_ascii=False).encode())
-    obligation_bytes = len(json.dumps(node["obligations"], ensure_ascii=False).encode())
-    floor = 384 + api_bytes // 2 + max(
-        obligation_bytes // 2,
-        256 * len(node["obligations"]),
-    )
-    return max(node["estimated_tokens"], floor)
+    """Use the model-authored complete-source estimate without invented coefficients."""
+    return int(node["estimated_tokens"])
 
 
-def admissible_tokens() -> int:
-    return output_token_ceiling() * 3 // 4
+def admissible_tokens(router: Any) -> int | None:
+    """Return the planner runtime tool budget when the router exposes it.
+
+    Production ModelRouter uses the same tool-action budget as llama generation.
+    Alternate routers may expose implementation_output_budget explicitly. If no
+    runtime budget is knowable, skip speculative preflight sizing and let typed
+    output exhaustion drive recursive decomposition.
+    """
+    explicit = getattr(router, "implementation_output_budget", None)
+    if explicit is not None:
+        value = int(explicit)
+        return value if value > 0 else None
+    registry = getattr(router, "registry", None)
+    profile = getattr(router, "profile", None)
+    if registry is None or profile is None:
+        return None
+    try:
+        config = registry.role(profile, "planner")
+        from .model_context_budget import tool_action_token_budget
+        value = int(tool_action_token_budget(config))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return value if value > 0 else None
 
 
 def _decision(router: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -372,7 +358,7 @@ def _decision(router: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]
                 "sections by state ownership and coherent responsibility. Separate state/models, "
                 "persistence, services, integration, networking, UI/resources and verification where "
                 "the design needs them. Cite every R identifier in the active requirements at least once. "
-                "Return at most four nodes per page. If remaining units exist, you may report them in "
+                "Return only the nodes needed for the active unit. If remaining units exist, you may report them in "
                 "continuation.remaining_unit_ids, or set done=true when all units are complete. "
                 "Each Java node is one public final class with a concrete name and NONEMPTY public_api "
                 "MEMBER declaration strings (no bodies and no public class/interface/enum/record type "
@@ -388,7 +374,7 @@ def _decision(router: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]
                 "approved requirements, including failure handling and tests. Do not claim tests ran. "
                 "Estimate COMPLETE serialized source output tokens, not just method bodies. "
                 "Respect the host admission budget by factoring smaller collaborating types. "
-                "For decomposition return 2-4 nodes, done=true: retain the original symbol, kind, "
+                "For decomposition return the original facade plus one or more helper nodes: retain the original symbol, kind, "
                 "resource_path, activation and exact public_api as a smaller facade; use helper "
                 "symbols prefixed with OriginalSymbolPart. Move work into those helpers. Preserve "
                 "all original requirement refs. Every replacement must be strictly smaller than "
