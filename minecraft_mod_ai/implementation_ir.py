@@ -739,7 +739,6 @@ def _model_node_view(node: Mapping[str, Any]) -> dict[str, Any]:
             "kind",
             "resource_path",
             "responsibility",
-            "requirements",
             "public_api",
             "depends_on",
             "activation",
