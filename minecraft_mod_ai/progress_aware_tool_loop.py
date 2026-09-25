@@ -105,7 +105,6 @@ from .verifier_repair_admission_recovery import (
 from .verifier_repair_frontier import reject_noop_repair, target_scoped_verifier_files
 from .verifier_repair_window import (
     exact_rollback_arguments,
-    normalize_model_repair_replacement,
     repair_replacement_max_chars,
     select_verifier_repair_window,
     selected_repair_diagnostic,
