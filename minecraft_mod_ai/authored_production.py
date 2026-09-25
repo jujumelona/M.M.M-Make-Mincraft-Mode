@@ -546,144 +546,43 @@ def _compile_new_authored_modules(
     package_name: str,
     target: Mapping[str, Any],
 ) -> tuple[tuple[ProductionModule, ...], dict[str, Any]]:
-    """Compile a saved design into exact-path tasks small coders can execute independently."""
+    """Reserve graph compilation, not Java files derived from Markdown sections.
 
-    units = _authored_execution_units(plan.text)
-    package_path = package_name.replace(".", "/")
-    modules: list[ProductionModule] = []
-    manifest_units: list[dict[str, Any]] = []
-    previous_id = ""
-    previous_provide = ""
-    for unit in units:
-        index = int(unit["index"])
-        task_id = f"authored_feature_{index:03d}"
-        symbol = f"AuthoredFeature{index:03d}"
-        path = f"src/main/java/{package_path}/{symbol}.java"
-        provide = f"{task_id}_ready"
-        depends_on = (previous_id,) if previous_id else ()
-        consumes = (previous_provide,) if previous_provide else ()
-        exact_text = str(unit["text"])
-        implementation_text = str(unit.get("implementation_text") or exact_text)
-        section = str(unit.get("section") or "").strip()
-        target_summary = (
-            f"Minecraft {target.get('minecraft_version', '')}, "
-            f"loader {target.get('loader', '')}, mappings {target.get('mappings', '')}"
-        )
-        obligation = (
-            f"Implement approved authored design unit {index}/{len(units)} only in "
-            f"{symbol}. The exact class must be public final {symbol} in package "
-            f"{package_name} and expose public static void initialize(). Do not put "
-            "side-only annotations on that class or initialize(): the host invokes it on "
-            "both client and server. Do not invent @Environment(CLIENT/SERVER) helpers or "
-            "client/server lifecycle splits unless this exact approved unit explicitly requires "
-            "side-specific behavior and the current project already exposes the matching "
-            "side-specific caller. Common initialize() must never directly call a method that "
-            "Fabric can strip on the opposite environment. "
-            "Replace the MMM_AUTHORED_FEATURE_BODY marker with the approved behavior; "
-            "a placeholder or initialization flag alone is not an implementation. Do not implement "
-            "ModInitializer or ClientModInitializer, do not create another entrypoint, and "
-            "do not create or edit sibling files. Additional helpers/state needed for this "
-            "unit must stay inside this exact class. Earlier authored units, when present, are "
-            "already compiled in the same staged workspace: inspect and reuse their public or "
-            "package-visible API/state when this requirement depends on them instead of duplicating "
-            "shared state. The host-selected target is authoritative "
-            f"({target_summary}); adapt stale version/API examples in the authored prose to "
-            "that target without changing gameplay semantics. Preserve the approved gameplay "
-            "requirements in this unit as the semantic source of truth:\n\n"
-            + implementation_text
-        )
-        task = _exact_authored_task(
-            task_id=task_id,
-            path=path,
-            symbol=symbol,
-            target=target,
-            obligation=obligation,
-            semantic_outcome=(
-                f"Approved authored design unit {index}/{len(units)} is implemented behind "
-                f"{symbol}.initialize() without inventing project architecture."
-            ),
-            depends_on=depends_on,
-            consumes=consumes,
-            provides=(provide,),
-            worksheet={
-                "objective": "Implement exactly one host-scheduled authored design section.",
-                "authored_unit": {
-                    "index": index,
-                    "section": section,
-                    "count": len(units),
-                    "source_text_sha256": unit["text_sha256"],
-                    "start_byte": unit["start_byte"],
-                    "end_byte": unit["end_byte"],
-                    "text": exact_text,
-                    "implementation_text": implementation_text,
-                    "implementation_text_sha256": unit["implementation_text_sha256"],
-                },
-                "java_contract": {
-                    "status": "applicable",
-                    "requirements": [
-                        f"Exact target: {path}#{symbol}",
-                        f"Exact package: {package_name}",
-                        f"Exact top-level type: public final class {symbol}",
-                        "Required host integration surface: public static void initialize()",
-                        "The feature class and initialize() must exist on both client and server; no side-only annotations on either.",
-                        "Do not invent side-only helpers/lifecycle splits. If side-specific behavior is explicitly required, use only a verified existing side-specific caller; common initialize() must not call a side-stripped method.",
-                        "Replace the host body marker with approved behavior; no placeholder-only implementation.",
-                        "Forbidden: ModInitializer, ClientModInitializer, alternate entrypoints, sibling-file writes.",
-                        "Do not require private implementation APIs from sibling feature classes; cross-feature activation is host-owned.",
-                    ],
-                },
-            },
-            required_gates=("target_compile",),
-        )
-        modules.append(ProductionModule(
-            module_id=task_id,
-            kind="custom_java",
-            config={
-                "implementation": "custom",
-                "evidence_task": task,
-                **dict(target),
-            },
-            depends_on=depends_on,
-            required_gates=("target_compile",),
-        ))
-        manifest_units.append({
-            "module_id": task_id,
-            "path": path,
-            "symbol": symbol,
-            "start_byte": unit["start_byte"],
-            "end_byte": unit["end_byte"],
-            "text_sha256": unit["text_sha256"],
-            "depends_on": list(depends_on),
-            "consumes": list(consumes),
-            "provides": provide,
-            "section": section,
-        })
-        previous_id = task_id
-        previous_provide = provide
-
+    Semantic lowering runs with the production router and actual project context,
+    before the first source decode. The saved document remains exact and recoverable.
+    """
     main_symbol = _main_class_name(mod_id)
-    main_path = f"src/main/java/{package_path}/{main_symbol}.java"
-    feature_symbols = [str(item["symbol"]) for item in manifest_units]
-
-    source_sha = "sha256:" + hashlib.sha256(plan.text.encode("utf-8")).hexdigest()
+    main_path = f"src/main/java/{package_name.replace('.', '/')}/{main_symbol}.java"
+    task_id = "authored_implementation_graph"
+    request = {
+        "text": plan.text, "package": package_name, "mod_id": mod_id,
+        "target": dict(target), "entrypoint_path": main_path,
+        "entrypoint_symbol": main_symbol,
+    }
+    task = _exact_authored_task(
+        task_id=task_id, path=main_path, symbol=main_symbol, target=target,
+        obligation="Compile the complete saved design into a responsibility/dependency IR, then execute admitted source units.",
+        semantic_outcome="Implement the saved design through budgeted collaborating source units.",
+        depends_on=(), consumes=(), provides=("authored_implementation_ready",),
+        worksheet={"implementation_graph_request": request}, required_gates=("target_compile",),
+    )
+    module = ProductionModule(
+        module_id=task_id, kind="custom_java",
+        config={"implementation": "custom", "evidence_task": task,
+                "implementation_graph_request": request, **dict(target)},
+        required_gates=("target_compile",),
+    )
     manifest = {
         "schema_version": _AUTHORED_EXECUTION_SCHEMA,
-        "source_text_sha256": source_sha,
-        "source_bytes": len(plan.text.encode("utf-8")),
-        "unit_count": len(manifest_units),
-        "policy": "host_exact_task_queue_no_coder_file_planning",
-        "units": manifest_units,
-        "entrypoint": {
-            "owner": "host_scaffold",
-            "path": main_path,
-            "symbol": main_symbol,
-            # feature_symbols is the single host-owned integration source of truth.
-            # Entry-point calls are derived from it during scaffold materialization.
-            "feature_symbols": feature_symbols,
-        },
+        "policy": "host_implementation_graph_before_source",
+        "source_text_sha256": "sha256:" + hashlib.sha256(plan.text.encode()).hexdigest(),
+        "source_bytes": len(plan.text.encode()), "unit_count": 0,
+        "units": [], "graph_status": "pending_production_context",
+        "entrypoint": {"owner": "host_scaffold", "path": main_path,
+                       "symbol": main_symbol, "feature_symbols": []},
     }
     manifest["manifest_sha256"] = _sha256_json(manifest)
-    return tuple(modules), manifest
+    return (module,), manifest
 
 
 def _compile_existing_authored_modules(
@@ -774,8 +673,8 @@ def materialize_authored_execution_scaffold(
     integration. The coder receives only already-existing exact feature files.
     """
 
-    from pathlib import Path
     import re
+    from pathlib import Path
 
     root = Path(project_root).expanduser().resolve()
     game_design = getattr(proposal, "game_design", None)
@@ -789,6 +688,7 @@ def materialize_authored_execution_scaffold(
     if policy not in {
         "host_exact_task_queue_no_coder_file_planning",
         "host_bounded_coherent_authored_design",
+        "host_implementation_graph_before_source",
     }:
         raise ValueError("AUTHORED_SCAFFOLD_POLICY_MISMATCH")
 
@@ -797,7 +697,7 @@ def materialize_authored_execution_scaffold(
     if supplied_digest != _sha256_json(expected_manifest):
         raise ValueError("AUTHORED_SCAFFOLD_MANIFEST_HASH_MISMATCH")
 
-    if policy == "host_bounded_coherent_authored_design":
+    if policy in {"host_bounded_coherent_authored_design", "host_implementation_graph_before_source"}:
         # The canonical Fabric template is already materialized by the host. Coherent
         # authored generation owns architecture inside bounded package/resource roots,
         # so creating synthetic AuthoredFeatureNNN placeholders here would reintroduce
@@ -813,7 +713,7 @@ def materialize_authored_execution_scaffold(
     feature_symbols: list[str] = []
     for index, raw_unit in enumerate(units, start=1):
         if not isinstance(raw_unit, Mapping):
-            raise ValueError("AUTHORED_SCAFFOLD_UNIT_INVALID")
+            raise ValueError("AUTHORED_SCAFFOLD_UNIT_INVALID")  # noqa: TRY004 - persisted manifest error contract
         symbol = str(raw_unit.get("symbol") or "").strip()
         path = str(raw_unit.get("path") or "").replace("\\", "/").strip()
         expected_symbol = f"AuthoredFeature{index:03d}"
@@ -860,7 +760,7 @@ def materialize_authored_execution_scaffold(
 
     entry = manifest.get("entrypoint")
     if not isinstance(entry, Mapping):
-        raise ValueError("AUTHORED_SCAFFOLD_ENTRYPOINT_MISSING")
+        raise ValueError("AUTHORED_SCAFFOLD_ENTRYPOINT_MISSING")  # noqa: TRY004 - persisted manifest error contract
     main_symbol = _main_class_name(proposal.base_proposal.spec.mod_id)
     main_path = f"src/main/java/{package_path}/{main_symbol}.java"
     if str(entry.get("symbol") or "") != main_symbol or str(
@@ -1071,10 +971,8 @@ def compile_authored_design(
     design = {**design, **target}
     effective_existing = existing_input_sha256 or plan.existing_input_sha256
     if not effective_existing:
-        # Fresh authored production always lowers to host-owned exact Java targets.
-        # The coder never chooses a file, patch span, entrypoint, or integration
-        # surface. Each task receives one complete source file and is compiled before
-        # the next task can depend on it.
+        # Reserve semantic graph compilation in the actual production context.
+        # No document section is assumed to be a class or executable source unit.
         modules, manifest = _compile_new_authored_modules(
             implementation_plan,
             mod_id=base.spec.mod_id,

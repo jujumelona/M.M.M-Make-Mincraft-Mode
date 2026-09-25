@@ -2,12 +2,10 @@ from __future__ import annotations
 
 """Direct, whole-file custom-module generation.
 
-There is intentionally no model-facing patch protocol here. A production task owns an
-exact host-selected source file. The coder returns the complete replacement source for
-that file, the host validates immutable integration invariants, Gradle compiles the real
-project, and any repair turn receives the complete current source plus the exact compiler
-failure. No hidden old-span binding, runtime monkey patch, or repair-of-repair layer is
-involved.
+Authored designs first compile to a responsibility/dependency implementation graph.
+Each admitted source unit owns an exact host-selected file. The coder returns complete
+source, and Gradle failures enter compiler repair. Output exhaustion instead returns to
+graph decomposition and cannot retry the exhausted task. No patch transport is involved.
 """
 
 import hashlib
@@ -21,11 +19,13 @@ from typing import Any
 
 from .complete_spec import ProductionModule
 from .custom_module_errors import CustomModuleGenerationError
-from .host_grounding import custom_module_path_allowed
 from .generation_implementation_grounding import (
     build_generation_implementation_grounding,
     render_generation_implementation_authority_prompt,
 )
+from .host_grounding import custom_module_path_allowed
+from .implementation_ir import OutputBudgetExhausted, output_token_ceiling
+from .llama_finish_reason_contract import OUTPUT_EXHAUSTED, completion_boundary_error
 from .model_router import ModelRouter
 from .platform_catalog import adapter_for_target, adapter_from_project
 from .project_write_lock import project_write_lock
@@ -251,14 +251,15 @@ def _materialize_host_scaffold(
     return source
 
 
-def _atomic_write(path: Path, content: str) -> None:
+def _atomic_write(path: Path, content: str | bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    raw = content.encode("utf-8") if isinstance(content, str) else content
     temporary = path.with_name(
         f".{path.name}.mmm-{os.getpid()}-"
-        f"{hashlib.sha256(content.encode()).hexdigest()[:10]}.tmp"
+        f"{hashlib.sha256(raw).hexdigest()[:10]}.tmp"
     )
     try:
-        temporary.write_text(content, encoding="utf-8", newline="\n")
+        temporary.write_bytes(raw)
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
@@ -388,7 +389,16 @@ def _call_coder(
     ):
         if _supports_kwarg(callback, key):
             kwargs[key] = value
-    text = callback("coder", messages, **kwargs)
+    try:
+        text = callback("coder", messages, **kwargs)
+    except Exception as exc:
+        boundary = completion_boundary_error(exc)
+        if boundary is not None and boundary.kind == OUTPUT_EXHAUSTED:
+            raise OutputBudgetExhausted(
+                "OUTPUT_BUDGET_EXHAUSTED: return to implementation decomposition; "
+                f"completion_tokens={boundary.completion_tokens}, max_tokens={boundary.max_tokens}"
+            ) from exc
+        raise
     return _response_payload(text)
 
 
@@ -411,12 +421,7 @@ def _compile_log(report: Any) -> str:
 
 
 def _direct_coder_output_token_ceiling() -> int:
-    raw = os.environ.get("MMM_DIRECT_CODER_OUTPUT_TOKEN_CEILING", "4096").strip()
-    try:
-        value = int(raw)
-    except ValueError:
-        value = 4096
-    return max(1024, min(value, 8192))
+    return output_token_ceiling()
 
 
 def _repair_attempts() -> int:
@@ -473,6 +478,12 @@ class CustomModuleGenerator:
         mappings: str | None = None,
         execution_feedback: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if "implementation_graph_request" in module.config:
+            from .implementation_graph_execution import execute_implementation_graph
+
+            return execute_implementation_graph(
+                self, project_root, module=module, execution_feedback=execution_feedback,
+            )
         del research_modules, mappings
         module.validate(policy=self.policy)
         root = Path(project_root).expanduser().resolve()
@@ -496,6 +507,7 @@ class CustomModuleGenerator:
             )
         if target_existed:
             try:
+                original_bytes = target.read_bytes()
                 original = target.read_text(encoding="utf-8")
             except (OSError, UnicodeError) as exc:
                 raise CustomModuleGenerationError(
@@ -525,7 +537,11 @@ class CustomModuleGenerator:
             ensure_ascii=False,
             sort_keys=True,
         )
-        context = _project_context(root, target)
+        ir_contract = module.config.get("implementation_ir_node")
+        if isinstance(ir_contract, Mapping):
+            context = str(module.config.get("implementation_dependency_context") or "")
+        else:
+            context = _project_context(root, target)
         bounded_feedback = _bounded_execution_feedback(execution_feedback)
         system = (
             "You implement exactly one host-owned Minecraft Java source file. "
@@ -533,7 +549,7 @@ class CustomModuleGenerator:
             "\"<complete Java file>\", \"summary\": "
             "\"<short summary>\"}. Never return a patch or diff. "
             "Do not change the package, public final top-level class name, or "
-            "public static void initialize() integration surface. Do not create "
+            "declared public API (including initialize() when required). Do not create "
             "another mod entrypoint. The host will compile the real project and "
             "return the exact compiler failure for repair."
             + ("\n\n" + authority_prompt if authority_prompt else "")
@@ -593,7 +609,13 @@ class CustomModuleGenerator:
 
                 try:
                     payload = _call_coder(self.router, messages)
-                except Exception as exc:
+                except OutputBudgetExhausted:
+                    if target_existed:
+                        _atomic_write(target, original_bytes)
+                    else:
+                        target.unlink(missing_ok=True)
+                    raise
+                except Exception as exc:  # noqa: BLE001 - bounded response repair, exhaustion handled above
                     last_failure = (
                         "DIRECT_CODER_RESPONSE_FAILED: "
                         f"{type(exc).__name__}: {exc}"
@@ -611,6 +633,9 @@ class CustomModuleGenerator:
                     expected_package=expected_package,
                     require_initialize=require_initialize,
                 )
+                if isinstance(ir_contract, Mapping):
+                    from .implementation_graph_execution import public_api_errors
+                    invariant_errors += public_api_errors(candidate, ir_contract)
                 if invariant_errors:
                     current = candidate
                     last_failure = "\n".join(
@@ -643,8 +668,7 @@ class CustomModuleGenerator:
                         },
                         "operation_count": 1,
                         "runtime_tests": [
-                            "Build the real project and execute the requested "
-                            "GameTest/runtime gates."
+                            "Build the real project and execute the requested GameTest/runtime gates."
                         ],
                         "source_observation_receipt": {
                             "path": relative,
@@ -670,7 +694,7 @@ class CustomModuleGenerator:
                 )
 
             if target_existed:
-                _atomic_write(target, original)
+                _atomic_write(target, original_bytes)
             else:
                 target.unlink(missing_ok=True)
             raise CustomModuleGenerationError(
@@ -693,26 +717,29 @@ class CustomModuleGenerator:
         if (
             not isinstance(paths, Sequence)
             or isinstance(paths, (str, bytes, bytearray))
-            or len(paths) != 1
+            or not paths
             or not isinstance(receipt, Mapping)
         ):
             return False
         operations = receipt.get("operations")
-        if not isinstance(operations, Sequence) or len(operations) != 1:
+        if not isinstance(operations, Sequence) or len(operations) != len(paths):
             return False
-        operation = operations[0]
-        if not isinstance(operation, Mapping):
+        if any(not isinstance(path, str) for path in paths) or len(set(paths)) != len(paths):
             return False
-        expected = str(operation.get("after_sha256") or "")
-        try:
-            target = _safe_target(
-                Path(project_root).expanduser().resolve(),
-                _normalize_project_path(paths[0]),
-            )
-            content = target.read_text(encoding="utf-8")
-        except (CustomModuleGenerationError, OSError, UnicodeError):
-            return False
-        return _sha256_text(content) == expected
+        for path, operation in zip(paths, operations, strict=True):
+            if not isinstance(operation, Mapping) or operation.get("path") != path:
+                return False
+            expected = str(operation.get("after_sha256") or "")
+            try:
+                target = _safe_target(
+                    Path(project_root).expanduser().resolve(), _normalize_project_path(path),
+                )
+                content = target.read_text(encoding="utf-8")
+            except (CustomModuleGenerationError, OSError, UnicodeError):
+                return False
+            if _sha256_text(content) != expected:
+                return False
+        return True
 
     def finalize_committed_generation_checkpoint(
         self,

@@ -42,7 +42,7 @@ _STRUCTURAL_COMPACT_TOOLS = frozenset({"apply_source_edit"})
 # inherit nearly the whole 32k runtime context (~30k output tokens). Reuse the existing
 # bounded function-call page budget instead of inventing a planner-specific token number.
 _HOST_STRUCTURED_DECISION_TOOLS = frozenset(
-    {"compile_semantic_requirements"}
+    {"compile_semantic_requirements", "compile_implementation_graph", "decompose_implementation_node"}
 )
 _EXPANSIVE_TOOL_EFFECTS = frozenset(
     {

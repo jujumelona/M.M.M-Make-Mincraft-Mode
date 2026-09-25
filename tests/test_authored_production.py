@@ -1,6 +1,5 @@
 import hashlib
 import json
-from itertools import pairwise
 from types import SimpleNamespace
 
 import pytest
@@ -16,7 +15,6 @@ from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
 from minecraft_mod_ai.custom_module_generator import _task_local_module_contract
 from minecraft_mod_ai.planning_pipeline import PlanningPipeline
 from minecraft_mod_ai.scale_policy import ScalePolicy
-from minecraft_mod_ai.small_model_task_capsule_contract import compile_task_capsule
 from minecraft_mod_ai.work_graph import build_production_work_plan
 
 
@@ -25,31 +23,18 @@ from minecraft_mod_ai.work_graph import build_production_work_plan
 def test_saved_design_compiler_preserves_target_through_coder_handoff(version):
     from minecraft_mod_ai.custom_generation_research import _target_values
     from minecraft_mod_ai.platform_catalog import adapter_for_target
-
     plan = AuthoredPlan(f"Create a token item for Fabric {version}", "Add one token item.")
     proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(plan)
     adapter = adapter_for_target(version, "fabric")
     expected = (version, "fabric", adapter.yarn_mappings)
-
     assert _target_values(proposal.game_design) == expected
     assert proposal.game_design["authored_plan"] == plan.to_dict()
     manifest = proposal.game_design["_authored_execution_manifest"]
-    assert manifest["policy"] == "host_exact_task_queue_no_coder_file_planning"
-    assert len(proposal.modules) == manifest["unit_count"]
-    assert manifest["entrypoint"]["owner"] == "host_scaffold"
-
-    for module, record in zip(proposal.modules, manifest["units"], strict=True):
-        assert "authored_plan" not in module.config
-        assert _target_values(module.config) == expected
-        task = _task_local_module_contract(module)
-        anchors = task["owned_anchors"]
-        assert len(anchors) == 1
-        anchor = anchors[0]
-        assert anchor["status"] == "host_reserved"
-        assert anchor["ownership"] == "exclusive"
-        assert anchor["locator"] == f"{record['path']}#{record['symbol']}"
-        assert task["required_gates"] == ["target_compile"]
-
+    assert manifest["policy"] == "host_implementation_graph_before_source"
+    assert manifest["unit_count"] == 0
+    request = proposal.modules[0].config["implementation_graph_request"]
+    assert request["text"] == plan.text
+    assert _target_values(request["target"]) == expected
     assert proposal.game_design["_platform_selection"]["target"] == adapter.public_dict()
 
 @pytest.mark.parametrize("text", [
@@ -61,96 +46,31 @@ def test_saved_design_compiler_preserves_target_through_coder_handoff(version):
 
 def test_real_compiler_hands_saved_text_to_coder_without_replanning(monkeypatch, text):
     def forbidden(*args, **kwargs):
-        pytest.fail("saved design entered planner again")
-
+        pytest.fail("saved design entered gameplay planning again")
     monkeypatch.setattr(PlanningPipeline, "prepare", forbidden)
     monkeypatch.setattr(PlanningPipeline, "_semantic_design", forbidden)
     router = SimpleNamespace(generate_text=forbidden, generate_tool_decision=forbidden)
     plan = AuthoredPlan("Make a space trading mod for Fabric 1.21.11", text)
     proposal = CompleteGameDesignPlanner(router).compile_for_production(plan)
-
-    assert proposal.requested_prompt == plan.requested_prompt
     assert proposal.game_design["authored_plan"] == plan.to_dict()
     assert proposal.base_proposal.spec.contents == ()
     assert proposal.base_proposal.spec.boss is None
-
-    manifest = proposal.game_design["_authored_execution_manifest"]
-    assert manifest["unit_count"] >= 1
-    assert len(proposal.modules) == manifest["unit_count"]
-
-    reconstructed = []
-    paths = []
-    for module, record in zip(proposal.modules, manifest["units"], strict=True):
-        task = _task_local_module_contract(module)
-        unit = task["engineering_worksheet"]["authored_unit"]
-        reconstructed.append(unit["text"])
-        anchors = task["owned_anchors"]
-        assert len(anchors) == 1
-        assert anchors[0]["locator"] == f"{record['path']}#{record['symbol']}"
-        assert task["required_gates"] == ["target_compile"]
-        paths.append(record["path"])
-
-    assert "".join(reconstructed) == text
-    assert len(paths) == len(set(paths))
-    assert manifest["entrypoint"]["path"] not in paths
-
+    assert len(proposal.modules) == 1
+    request = proposal.modules[0].config["implementation_graph_request"]
+    assert request["text"].encode() == text.encode()
     graph = build_production_work_plan(proposal)
-    generation = [node for node in graph.nodes if node.stage == "generate:custom"]
-    assert generation
+    generation = [n for n in graph.nodes if n.stage == "generate:custom"]
+    assert len(generation) == 1
 
-def test_fresh_authored_execution_is_exact_path_dependency_queue():
-    text = (
-        "# Design\n"
-        "## Wallet\nPersist each player's credit balance.\n"
-        "## Purchase\nReject purchases without enough credits and deduct exactly once.\n"
-        "## Reward\nGrant the purchased reward exactly once.\n"
-    )
-    plan = AuthoredPlan("우주 모드", text)
-    package = "ai.minecraft.generated.authored_test"
-    modules, manifest = _compile_new_authored_modules(
-        plan,
-        mod_id="authored_test",
-        package_name=package,
-        target={
-            "minecraft_version": "1.21.11",
-            "loader": "fabric",
-            "mappings": "1.21.11+build.1",
-        },
-    )
-
-    assert len(modules) == manifest["unit_count"] == 3
-    assert [item["section"] for item in manifest["units"]] == [
-        "Wallet",
-        "Purchase",
-        "Reward",
-    ]
-    assert "".join(
-        module.config["evidence_task"]["engineering_worksheet"]["authored_unit"]["text"]
-        for module in modules
-    ) == text
-
-    paths = set()
-    for index, module in enumerate(modules, start=1):
-        assert module.module_id == f"authored_feature_{index:03d}"
-        expected_dependency = () if index == 1 else (f"authored_feature_{index - 1:03d}",)
-        assert module.depends_on == expected_dependency
-        task = module.config["evidence_task"]
-        expected_consumes = [] if index == 1 else [f"authored_feature_{index - 1:03d}_ready"]
-        assert task["consumes"] == expected_consumes
-        assert manifest["units"][index - 1]["depends_on"] == list(expected_dependency)
-        assert manifest["units"][index - 1]["consumes"] == expected_consumes
-        capsule = compile_task_capsule(module)
-        assert capsule is not None
-        assert len(capsule.writable_paths) == 1
-        assert capsule.primary_path not in paths
-        paths.add(capsule.primary_path)
-
-    assert manifest["entrypoint"]["owner"] == "host_scaffold"
-    assert manifest["entrypoint"]["path"] not in paths
-    assert manifest["entrypoint"]["feature_symbols"] == [
-        f"AuthoredFeature{index:03d}"
-        for index in range(1, manifest["unit_count"] + 1)
-    ]
+def test_fresh_authored_execution_defers_source_ownership_until_ir():
+    plan = AuthoredPlan("space mod", "# Design\n## Wallet\nPersist credits.\n## Purchase\nSpend credits.")
+    modules, manifest = _compile_new_authored_modules(plan, mod_id="authored_test", package_name="example", target={})
+    assert manifest["units"] == []
+    assert len(modules) == 1
+    task = modules[0].config["evidence_task"]
+    assert task["engineering_worksheet"]["implementation_graph_request"]["text"] == plan.text
+    assert task["depends_on"] == []
+    assert task["owned_anchors"][0]["locator"] == manifest["entrypoint"]["path"] + "#" + manifest["entrypoint"]["symbol"]
 
 def test_named_design_document_descends_into_feature_sections():
     text = (
@@ -183,27 +103,6 @@ def test_named_design_document_descends_into_feature_sections():
     assert "Galaxy Ascension: Minecraft Mod Design Document" not in units[0]["implementation_text"]
     assert "## Intro\n" not in units[0]["implementation_text"]
     assert "".join(unit["text"] for unit in units) == text
-
-    modules, manifest = _compile_new_authored_modules(
-        AuthoredPlan("space mod", text),
-        mod_id="authored_test",
-        package_name="ai.minecraft.generated.authored_test",
-        target={
-            "minecraft_version": "1.21.11",
-            "loader": "fabric",
-            "mappings": "1.21.11+build.1",
-        },
-    )
-    assert manifest["unit_count"] == 2
-    first_task = modules[0].config["evidence_task"]
-    first_obligation = first_task["implementation_obligations"][0]
-    authored_unit = first_task["engineering_worksheet"]["authored_unit"]
-    assert "unit 1/2" in first_obligation
-    assert "## Resource Economy\n" in first_obligation
-    assert "Galaxy Ascension: Minecraft Mod Design Document" not in first_obligation
-    assert "## Intro\n" not in first_obligation
-    assert authored_unit["text"].startswith("# Galaxy Ascension: Minecraft Mod Design Document\n")
-    assert authored_unit["implementation_text"].startswith("## Resource Economy\n")
 
 
 def test_named_document_intro_plus_generic_systems_descends_to_real_features():
@@ -344,83 +243,20 @@ def test_single_generic_wrapper_metadata_attaches_to_first_child_feature():
     assert "".join(unit["text"] for unit in units) == text
 
 
-def test_authored_execution_uses_markdown_sections_not_arbitrary_byte_packing():
-    text = (
-        "# Economy\nCredits, trade and prices.\n"
-        "# Ship Building\nParts, upgrades and crew.\n"
-        "# Planets\nMining, aliens and colonies.\n"
-    )
-    plan = AuthoredPlan("space mod", text)
-    modules, manifest = _compile_new_authored_modules(
-        plan,
-        mod_id="authored_test",
-        package_name="ai.minecraft.generated.authored_test",
-        target={
-            "minecraft_version": "1.21.11",
-            "loader": "fabric",
-            "mappings": "1.21.11+build.1",
-        },
-    )
-
-    assert manifest["unit_count"] == 3
-    assert [item["section"] for item in manifest["units"]] == [
-        "Economy",
-        "Ship Building",
-        "Planets",
-    ]
-    assert [
-        module.config["evidence_task"]["engineering_worksheet"]["authored_unit"]["section"]
-        for module in modules
-    ] == ["Economy", "Ship Building", "Planets"]
-    assert [module.depends_on for module in modules] == [
-        (),
-        ("authored_feature_001",),
-        ("authored_feature_002",),
-    ]
-    assert "".join(
-        module.config["evidence_task"]["engineering_worksheet"]["authored_unit"]["text"]
-        for module in modules
-    ) == text
+def test_fresh_authored_document_sections_are_provenance_not_source_units():
+    text = "# Economy\nCredits and trade.\n# Ships\nParts and upgrades.\n# Verification\nCheck failures."
+    modules, manifest = _compile_new_authored_modules(AuthoredPlan("space mod", text), mod_id="authored_test", package_name="example", target={})
+    assert manifest["unit_count"] == 0
+    assert modules[0].config["implementation_graph_request"]["text"] == text
+    assert "AuthoredFeature" not in json.dumps(manifest)
 
 
 
-def test_nested_authored_behavior_reaches_exact_direct_targets():
-    text = (
-        "# Trading\n"
-        "## Trigger\nRight click a trader to exchange one ore for 10 credits.\n"
-        "## State\nKeep each player credit balance across relog.\n"
-        "# Travel\n"
-        "## Trigger\nSpend 20 credits to launch the player's ship.\n"
-        "## Rejection\nInsufficient credits leaves both balance and ship unchanged.\n"
-    )
-    proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(
-        AuthoredPlan("Space trading for Fabric 1.21.11", text)
-    )
-    manifest = proposal.game_design["_authored_execution_manifest"]
-    assert manifest["unit_count"] == len(proposal.modules) == 2
-    assert [unit["section"] for unit in manifest["units"]] == ["Trading", "Travel"]
-
-    source = text.encode("utf-8")
-    next_start = 0
-    for module, record in zip(proposal.modules, manifest["units"], strict=True):
-        task = _task_local_module_contract(module)
-        unit = task["engineering_worksheet"]["authored_unit"]
-        assert unit["start_byte"] == record["start_byte"] == next_start
-        next_start = unit["end_byte"]
-        exact = source[unit["start_byte"]:next_start]
-        assert unit["text"].encode("utf-8") == exact
-        assert unit["source_text_sha256"] == record["text_sha256"] == (
-            "sha256:" + hashlib.sha256(exact).hexdigest()
-        )
-        assert unit["text"].strip() in task["implementation_obligations"][0]
-        anchors = task["owned_anchors"]
-        assert len(anchors) == 1
-        assert anchors[0]["locator"] == record["path"] + "#" + record["symbol"]
-        if unit["section"] == "Trading":
-            assert "10 credits" in unit["text"] and "across relog" in unit["text"]
-        else:
-            assert "20 credits" in unit["text"] and "Insufficient credits" in unit["text"]
-    assert next_start == len(source)
+def test_nested_authored_behavior_reaches_ir_without_loss():
+    text = "# Trading\n## Trigger\nTrade for 10 credits.\n## State\nPersist credits.\n# Travel\nSpend 20 credits.\n## Failure\nKeep balance unchanged."
+    proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(AuthoredPlan("Fabric 1.21.11 mod", text))
+    assert proposal.modules[0].config["implementation_graph_request"]["text"] == text
+    assert proposal.game_design["_authored_execution_manifest"]["source_text_sha256"] == "sha256:" + hashlib.sha256(text.encode()).hexdigest()
 
 @pytest.mark.parametrize("text", [
     "# Trading\n## Trigger\nExchange ore for credits.\n## State\nPersist credits.\n",
@@ -442,103 +278,31 @@ def test_oversized_semantic_authored_section_is_not_split_by_bytes():
     assert units[0]["text"] == text
     assert units[0]["end_byte"] == len(text.encode("utf-8"))
 
-def test_fresh_authored_work_graph_checkpoints_each_exact_task_independently(monkeypatch):
+def test_fresh_authored_work_graph_schedules_ir_execution_after_project_preparation(monkeypatch):
     monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
-    text = (
-        "# Economy\nCredits and trade.\n"
-        "# Ships\nParts and upgrades.\n"
-        "# Planets\nMining and colonies.\n"
-        "# Combat\nWeapons and aliens.\n"
-    )
     proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(
-        AuthoredPlan("space mod", text)
-    )
-
-    graph = build_production_work_plan(
-        proposal,
-        policy=ScalePolicy(java_shard_size=48),
-    )
-    custom = [node for node in graph.nodes if node.stage == "generate:custom"]
-
-    assert len(custom) == len(proposal.modules) == 4
-    assert all(node.resource_class == "llm" for node in custom)
-    assert all(len(node.payload["members"]) == 1 for node in custom)
-    assert [
-        node.payload["members"][0]["module_id"]
-        for node in custom
-    ] == [f"authored_feature_{index:03d}" for index in range(1, 5)]
+        AuthoredPlan("space mod", "# Economy\nCredits.\n# Ships\nParts.\n# Planets\nMining."))
+    graph = build_production_work_plan(proposal, policy=ScalePolicy(java_shard_size=48))
+    custom = [n for n in graph.nodes if n.stage == "generate:custom"]
+    assert len(custom) == 1
+    assert custom[0].resource_class == "llm"
     assert custom[0].dependencies == ("prepare-project",)
-    for previous, node in pairwise(custom):
-        assert set(node.dependencies) == {"prepare-project", previous.node_id}
+    assert custom[0].payload["members"][0]["module_id"] == "authored_implementation_graph"
 
 
-def test_authored_scaffold_materializes_existing_exact_targets_and_host_entrypoint(tmp_path):
-    plan = AuthoredPlan("Space mod for Fabric 1.21.11", "경제\n우주선\n행성")
-    modules, manifest = _compile_new_authored_modules(
-        plan,
-        mod_id="authored_test",
-        package_name="ai.minecraft.generated.authored_test",
-        target={
-            "minecraft_version": "1.21.11",
-            "loader": "fabric",
-            "mappings": "1.21.11+build.1",
-        },
-    )
-    base = SimpleNamespace(
-        spec=SimpleNamespace(
-            mod_id="authored_test",
-            package_name="ai.minecraft.generated.authored_test",
-        )
-    )
-    proposal = SimpleNamespace(
-        game_design={"_authored_execution_manifest": manifest},
-        base_proposal=base,
-    )
-    main = (
-        tmp_path
-        / "src/main/java/ai/minecraft/generated/authored_test/AuthoredTestMod.java"
-    )
+def test_authored_scaffold_defers_source_materialization_until_ir(tmp_path):
+    modules, manifest = _compile_new_authored_modules(AuthoredPlan("space mod", "Economy, ships, planets"),
+        mod_id="authored_test", package_name="example", target={})
+    proposal = SimpleNamespace(game_design={"_authored_execution_manifest": manifest})
+    main = tmp_path / manifest["entrypoint"]["path"]
     main.parent.mkdir(parents=True)
-    main.write_text(
-        "package ai.minecraft.generated.authored_test;\n"
-        "import net.fabricmc.api.ModInitializer;\n"
-        "public final class AuthoredTestMod implements ModInitializer {\n"
-        "    @Override\n"
-        "    public void onInitialize() {\n"
-        "        // host baseline\n"
-        "    }\n"
-        "}\n",
-        encoding="utf-8",
-    )
-
-    assert materialize_authored_execution_scaffold(proposal, tmp_path) == tmp_path.resolve()
-    first_main = main.read_text(encoding="utf-8")
-    assert first_main.count("// MMM_AUTHORED_HOST_ENTRYPOINT_BINDING") == 1
-
-    for index, module in enumerate(modules, start=1):
-        capsule = compile_task_capsule(module)
-        assert capsule is not None
-        assert capsule.creatable_paths == ()
-        target = tmp_path / capsule.primary_path
-        assert target.is_file()
-        source = target.read_text(encoding="utf-8")
-        assert f"public final class AuthoredFeature{index:03d}" in source
-        assert "public static void initialize()" in source
-        call = f"AuthoredFeature{index:03d}.initialize();"
-        assert first_main.count(call) == 1
-
-    # Preparation is idempotent and must not overwrite coder-filled feature sources.
-    first_capsule = compile_task_capsule(modules[0])
-    assert first_capsule is not None
-    first_target = tmp_path / first_capsule.primary_path
-    filled = first_target.read_text(encoding="utf-8").replace(
-        "// MMM_AUTHORED_FEATURE_BODY_001",
-        'System.out.println("filled");',
-    )
-    first_target.write_text(filled, encoding="utf-8")
-    materialize_authored_execution_scaffold(proposal, tmp_path)
-    assert first_target.read_text(encoding="utf-8") == filled
-    assert main.read_text(encoding="utf-8") == first_main
+    original = b"package example; public final class AuthoredTestMod { public void onInitialize() {} }"
+    main.write_bytes(original)
+    for _ in range(2):
+        assert materialize_authored_execution_scaffold(proposal, tmp_path) == tmp_path.resolve()
+        assert main.read_bytes() == original
+        assert list(main.parent.glob("*.java")) == [main]
+    assert modules[0].config["implementation_graph_request"]["entrypoint_path"] == manifest["entrypoint"]["path"]
 
 
 def test_real_orchestrator_accepts_authored_handoff(monkeypatch, tmp_path):
@@ -742,6 +506,13 @@ def test_compiler_projects_reasoning_before_both_production_routes(prefix, desig
     manifest = proposal.game_design["_authored_execution_manifest"]
     assert manifest["source_text_sha256"] == sha(design)
 
+    if not existing:
+        request = proposal.modules[0].config["implementation_graph_request"]
+        assert request["text"] == design
+        assert "instruction injected" not in request["text"]
+        assert manifest["units"] == []
+        return
+
     parts = []
     for module, record in zip(proposal.modules, manifest["units"], strict=True):
         if existing:
@@ -780,57 +551,21 @@ def test_compiler_preserves_ambiguous_or_quoted_reasoning_text(text):
 
 @pytest.mark.parametrize("wrapper", ["", "## 개요 (Overview)\nStarForge space trading.\n\n"])
 
-def test_contract_shaped_authored_design_uses_exact_direct_task_queue(monkeypatch, tmp_path, wrapper):
-    del tmp_path
-
+def test_contract_shaped_authored_design_preserves_full_graph_input(monkeypatch, tmp_path, wrapper):
     def forbidden(*args, **kwargs):
-        pytest.fail("saved design entered planner again")
-
+        pytest.fail("saved design re-entered gameplay planning")
     monkeypatch.setattr(PlanningPipeline, "prepare", forbidden)
     monkeypatch.setattr(PlanningPipeline, "_semantic_design", forbidden)
+    sections = ("behavior_contract", "state_model", "algorithm", "integration", "authority_and_network", "persistence", "resources_and_ui", "failure_and_limits", "reuse_assessment", "verification")
+    text = wrapper + "\n".join(f"# {section}\n" + "Preserve behavior, state and constraints. " * 12 for section in sections)
     router = SimpleNamespace(generate_text=forbidden, generate_tool_decision=forbidden)
-    sections = (
-        "state_model",
-        "algorithm",
-        "integration",
-        "authority_and_network",
-        "persistence",
-        "resources_and_ui",
-        "failure_and_limits",
-        "reuse_assessment",
-        "verification",
-    )
-    text = wrapper + "\n".join(
-        f"# {section}\n- concrete_{section}: "
-        + ("observable behavior, owned state, and exact constraints. " * 12)
-        for section in sections
-    )
-    assert len(text.encode("utf-8")) > 2048
-
-    proposal = CompleteGameDesignPlanner(router).compile_for_production(
-        AuthoredPlan("Make a space trading mod for Fabric 1.21.11", text)
-    )
+    proposal = CompleteGameDesignPlanner(router).compile_for_production(AuthoredPlan("Fabric 1.21.11 space mod", text))
     manifest = proposal.game_design["_authored_execution_manifest"]
-    assert manifest["policy"] == "host_exact_task_queue_no_coder_file_planning"
-    assert len(proposal.modules) == manifest["unit_count"] >= 1
-
-    reconstructed = []
-    seen_paths = set()
-    for module, record in zip(proposal.modules, manifest["units"], strict=True):
-        assert module.config.get("authored_execution_mode") != "bounded_coherent"
-        assert module.config.get("authored_bounded_scope") is not True
-        task = _task_local_module_contract(module)
-        unit = task["engineering_worksheet"]["authored_unit"]
-        reconstructed.append(unit["text"])
-        anchors = task["owned_anchors"]
-        assert len(anchors) == 1
-        assert anchors[0]["status"] == "host_reserved"
-        assert anchors[0]["locator"] == f"{record['path']}#{record['symbol']}"
-        assert record["path"] not in seen_paths
-        seen_paths.add(record["path"])
-
-    assert "".join(reconstructed) == text
-    assert manifest["entrypoint"]["path"] not in seen_paths
+    assert manifest["unit_count"] == 0
+    assert manifest["units"] == []
+    assert len(proposal.modules) == 1
+    assert proposal.modules[0].config["implementation_graph_request"]["text"] == text
+    assert not list(tmp_path.rglob("AuthoredFeature*.java"))
 
 def test_worksheet_with_supplementary_section_is_not_split_into_feature_classes():
     from minecraft_mod_ai.authored_production import _contract_shaped_authored_design
