@@ -302,3 +302,32 @@ def test_second_protocol_disconnect_is_not_retried_forever() -> None:
         )
 
     assert calls == 2
+
+
+def test_active_decode_reports_periodic_semantic_progress(monkeypatch, capsys) -> None:
+    ticks = iter([0.0, 0.1, 0.2, 20.0, 20.1, 20.2, 20.3, 20.4])
+    monkeypatch.setattr(contract.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setenv("MMM_LLAMA_PROGRESS_LOG_INTERVAL_SECONDS", "15")
+
+    response = SimpleNamespace(
+        iter_lines=lambda: iter(
+            [
+                'data: {"choices":[{"delta":{"content":"a"}}]}',
+                'data: {"choices":[{"delta":{"content":"b"}}]}',
+                "data: [DONE]",
+            ]
+        )
+    )
+    wrapped = contract._ProgressCheckedResponse(
+        response,
+        120.0,
+        request_id="periodic-progress",
+        started_at=0.0,
+    )
+
+    list(wrapped.iter_lines())
+    output = capsys.readouterr().out
+
+    assert "first semantic progress" in output
+    assert "llama server: semantic progress" in output
+    assert "events=2" in output
