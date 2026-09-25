@@ -846,7 +846,8 @@ class CustomModuleGenerator:
                 "Implement the feature directly; do not return a file-plan protocol.",
                 "Use host_grounding.evidence_bindings.implementation_contract first when present; its API symbols and admitted templates are target authority, not examples to rewrite from memory. When a grounding fact supplies required_imports, import those exact fully-qualified owners and never substitute Yarn, intermediary, neighbouring-version, or remembered package names.",
                 "When implementation_contract templates expose symbol_usage/topology_policy, preserve each template's exact receiver/member/argument topology while composing code. Do not swap registry roots, keys, identifiers, owners, receivers, or arguments between admitted templates even when Java types appear compatible.",
-                "Keep the first implementation minimal: do not invent extra entrypoints, registries, helper classes, creative tabs/groups, logging, or lifecycle hooks unless the approved task explicitly requires them.",
+                "Keep the first implementation minimal but semantically complete: implement the exact coder_execution_contract obligation and authored-unit text; do not substitute a generic placeholder, sample feature, initialization flag, or lifecycle skeleton.",
+                "Do not invent @Environment(CLIENT/SERVER) helpers or client/server lifecycle splits. Use them only when the approved unit explicitly requires side-specific behavior and exact project/API evidence identifies the matching side-specific caller; common initialize() must remain callable on both sides and must not invoke side-stripped methods.",
                 "Use workspace/RAG/MCP retrieval only when the host implementation grounding and exact project context do not contain a fact required by the approved task.",
                 "Apply real edits with the source-edit tool; target compile feedback is handled inside this same generation run before any fallback repair stage.",
                 "Fill the final summary in the supplied fixed template.",
@@ -880,10 +881,16 @@ class CustomModuleGenerator:
                 "role": "system",
                 "content": (
                     "You are the implementation coder for one approved Minecraft/Fabric module. "
-                    "Prefer exact host-owned implementation facts and the current project over memory. "
-                    "Write the smallest source change that satisfies the approved task, then let the "
-                    "host target compiler verify it in this same generation run. Do not invent extra "
-                    "entrypoints, files, lifecycle hooks, or a second patch/file-plan protocol."
+                    "The developer task capsule is the semantic source of truth: read its "
+                    "coder_execution_contract, implementation_steps, engineering_worksheet, and exact "
+                    "authored-unit text before writing code. Prefer exact host-owned implementation facts "
+                    "and retrieved target-version API evidence over memory. Implement the approved behavior, "
+                    "not a generic placeholder, demo, test fixture, lifecycle skeleton, or guessed client/server "
+                    "split. Preserve the host-owned common initialize() surface; never make common initialization "
+                    "depend on a method that Fabric can strip with @Environment. Write the smallest complete "
+                    "source change that satisfies the approved task, then let the host target compiler verify it "
+                    "in this same generation run. Do not invent extra entrypoints, files, lifecycle hooks, or a "
+                    "second patch/file-plan protocol."
                 ),
             },
             *(
