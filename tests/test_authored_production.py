@@ -817,9 +817,11 @@ def test_contract_shaped_authored_design_stays_one_coherent_bounded_module(monke
         "verification",
     )
     text = "\n".join(
-        f"# {section}\n- concrete_{section}: value"
+        f"# {section}\n- concrete_{section}: "
+        + ("observable behavior, owned state, and exact constraints. " * 12)
         for section in sections
     )
+    assert len(text.encode("utf-8")) > 2048
     plan = AuthoredPlan("Make a space trading mod for Fabric 1.21.11", text)
 
     proposal = CompleteGameDesignPlanner(router).compile_for_production(plan)
@@ -872,4 +874,15 @@ def test_contract_shaped_authored_design_stays_one_coherent_bounded_module(monke
     assert contract["authored_execution_mode"] == "bounded_coherent"
     assert contract["authored_write_scope"]["mod_id"] == mod_id
     assert contract["authored_write_scope"]["java_package"] == proposal.base_proposal.spec.package_name
+
+    messages = [{
+        "role": "user",
+        "content": json.dumps({
+            "phase": "implement_authored_design",
+            "module": contract,
+        }, ensure_ascii=False),
+    }]
+    batches = atomicize_coder_messages(messages)
+    assert len(batches) == 1
+    assert json.loads(batches[0][0]["content"])["module"]["authored_plan"]["text"] == text
 
