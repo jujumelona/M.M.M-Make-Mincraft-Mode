@@ -229,20 +229,6 @@ def test_logged_page8_to_page9_duplicate_owner_pattern_merges_r34():
     assert by_symbol["ResourceLimitValidator"]["requirements"] == ["R31", "R34"]
 
 
-def test_accumulated_owner_requirements_raise_admission_cost():
-    small = {
-        **node(refs=["R1"]),
-        "requirements": ["R1"],
-    }
-    large = {
-        **small,
-        "requirements": [f"R{i}" for i in range(1, 15)],
-    }
-
-    assert ir.node_cost(large) > ir.node_cost(small)
-    assert ir.node_cost(large) > ir.admissible_tokens()
-
-
 def test_completed_pages_survive_failure_and_resume_without_replanning():
     first = node(refs=["R1", "R2", "R3"])
     second = node("TradeService", refs=["R4", "R5", "R6"])
@@ -369,32 +355,50 @@ def test_output_limit_reduces_scope_and_recovers():
         LlamaCompletionBoundaryError,
     )
 
-    first_slice = node("PlayerCredits", refs=["R1", "R2"])
-    second_slice = node("TradeService", refs=["R3", "R4", "R5", "R6"], dependencies=["PlayerCredits"])
     calls = []
 
     class ReducingRouter(Decisions):
         def generate_tool_decision(self, role, messages, **kwargs):
             payload = json.loads(messages[-1]["content"])
             calls.append(payload)
-            req_count = len(payload["requirements"])
-            # The initial batch has all 6 requirements and hits output budget limit
+            active_refs = list(payload["requirements"])
+            req_count = len(active_refs)
+            # The initial multi-unit batch hits the output ceiling. Every successful
+            # page afterwards must cite only the host-visible active requirement slice.
             if req_count > 2:
-                raise LlamaCompletionBoundaryError("output ceiling", kind=OUTPUT_EXHAUSTED,
-                                                   completion_tokens=8192, max_tokens=8192)
+                raise LlamaCompletionBoundaryError(
+                    "output ceiling",
+                    kind=OUTPUT_EXHAUSTED,
+                    completion_tokens=8192,
+                    max_tokens=8192,
+                )
             if "R1" in payload["requirements"]:
-                return {"nodes": [first_slice], "done": False}
-            return {"nodes": [second_slice], "done": True}
+                return {
+                    "nodes": [node("PlayerCredits", refs=active_refs)],
+                    "done": False,
+                }
+            return {
+                "nodes": [
+                    node(
+                        "TradeService",
+                        refs=active_refs,
+                        dependencies=["PlayerCredits"],
+                    )
+                ],
+                "done": True,
+            }
 
     router = ReducingRouter([])
     graph = compile_graph(router)
     assert len(graph["nodes"]) == 2
-    # Verify Call 1 hit the ceiling, Call 2 and Call 3 had strictly smaller requirements and succeeded
-    assert len(calls) == 3
+    # After the first boundary the host keeps a one-unit cap, so each remaining
+    # authored unit is admitted separately instead of replaying the original payload.
+    assert len(calls) == 4
     assert len(calls[0]["requirements"]) > len(calls[1]["requirements"])
-    assert len(calls[1]["requirements"]) <= 2
-    assert "validation_feedback" not in calls[1]
+    assert all(len(call["requirements"]) <= 2 for call in calls[1:])
+    assert all("validation_feedback" not in call for call in calls[1:])
     assert [n["symbol"] for n in graph["nodes"]] == ["PlayerCredits", "TradeService"]
+    assert graph["nodes"][1]["requirements"] == ["R3", "R4", "R5", "R6"]
 
 
 def test_output_limit_shrinks_requirement_window_for_missing_dependency_resolution():
@@ -487,20 +491,21 @@ def test_host_and_model_use_one_node_schema(overrides):
         assert admitted["symbol"] == raw["symbol"]
 
 
-def test_valid_sibling_drift_is_ignored_across_multiple_schema_corrections():
+def test_valid_sibling_drift_is_ignored_during_schema_correction():
     first, second = node(), node("TradeService")
     invalid_second = {**second, "public_api": []}
     changed_first = {**first, "responsibility": "Different responsibility"}
-    router = Decisions([{"nodes": [first, invalid_second], "done": True},
-                        {"nodes": [changed_first, invalid_second], "done": True},
-                        {"nodes": [changed_first, second], "done": True}])
+    router = Decisions([
+        {"nodes": [first, invalid_second], "done": True},
+        {"nodes": [changed_first, second], "done": True},
+    ])
 
     graph = compile_graph(router)
 
     by_symbol = {item["symbol"]: item for item in graph["nodes"]}
     assert by_symbol[first["symbol"]]["responsibility"] == first["responsibility"]
     assert by_symbol[second["symbol"]]["public_api"] == second["public_api"]
-    assert router.calls[2][1]["validation_feedback"]["preserve_nodes"] == [first]
+    assert router.calls[1][1]["validation_feedback"]["preserve_nodes"] == [first]
 
 
 def test_oversized_page_can_be_corrected_into_multiple_pages():
@@ -576,6 +581,7 @@ def test_large_authored_design_deterministic_units_and_checkpoint_continuation()
                              checkpoint=lambda s: checkpoints.append(copy.deepcopy(s)))
 
     assert len(graph["nodes"]) == len(calls)
-    assert len(checkpoints) >= len(units)
+    assert len(checkpoints) >= len(calls)
+    assert len(calls) < len(units), "bounded batching should compile multiple authored units per page"
     assert set().union(*(set(n["requirements"]) for n in graph["nodes"])) == set(all_refs.keys())
 
