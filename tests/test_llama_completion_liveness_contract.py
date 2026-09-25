@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from minecraft_mod_ai import llama_completion_liveness_contract as contract
@@ -149,7 +150,7 @@ def test_runtime_client_owns_semantic_progress_without_install(monkeypatch) -> N
         def close(self):
             return None
 
-    monkeypatch.setattr(stream_contract.httpx, "Client", RawClient)
+    monkeypatch.setattr(httpx, "Client", RawClient)
     stream_contract._CLIENTS.clear()
 
     client = stream_contract._client("http://127.0.0.1:18080")
