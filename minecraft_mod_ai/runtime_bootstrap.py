@@ -140,7 +140,6 @@ def _install_platform_contracts() -> None:
         complete_orchestrator,
         complete_planner,
         complete_spec,
-        custom_module_generator,
         geckolib_generator,
         generator,
         mineflayer_bridge,
