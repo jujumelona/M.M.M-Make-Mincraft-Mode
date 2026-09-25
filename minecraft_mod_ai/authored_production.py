@@ -960,27 +960,19 @@ def _contract_shaped_authored_design(text: str) -> bool:
 
     from .planning_detail_template import WORKSHEET_SECTIONS
 
-    lines, records = _authored_heading_records(text)
+    _lines, records = _authored_heading_records(text)
     if not records:
         return False
-    shallowest = min(depth for _index, depth, _title in records)
-    split_level = shallowest
-    shallow = [record for record in records if record[1] == shallowest]
-    if len(shallow) == 1 and (
-        _generic_authored_container(shallow[0][2])
-        or _document_preamble_title(shallow[0][2])
-    ):
-        split_level = _document_wrapper_split_level(lines, records, shallowest)
-
-    peers = [record for record in records if record[1] == split_level]
-    actionable = [
-        record
-        for position, record in enumerate(peers)
-        if not _heading_peer_is_context(lines, peers, position)
-    ]
-    names = tuple(_normalized_contract_heading(record[2]) for record in actionable)
     canonical = set(WORKSHEET_SECTIONS)
-    return len(names) >= 3 and bool(names) and set(names).issubset(canonical)
+    for depth in sorted({record[1] for record in records}):
+        names = tuple(
+            _normalized_contract_heading(title)
+            for _index, record_depth, title in records
+            if record_depth == depth and not _document_context_title(title)
+        )
+        if len(names) >= 3 and set(names).issubset(canonical):
+            return True
+    return False
 
 
 def _compile_coherent_authored_module(
