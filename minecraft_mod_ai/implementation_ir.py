@@ -192,7 +192,7 @@ def _schema_repair_scope(
     nodes = page["nodes"]
     bad_indexes: set[int] = set()
     for diagnostic in diagnostics:
-        match = re.match(r"^nodes\\.(\\d+)(?:\\.|$)", str(diagnostic.get("field", "")))
+        match = re.match(r"^nodes\.(\d+)(?:\.|$)", str(diagnostic.get("field", "")))
         if not match:
             return [], 0
         index = int(match.group(1))
