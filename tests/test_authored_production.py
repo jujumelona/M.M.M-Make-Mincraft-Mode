@@ -796,3 +796,80 @@ def test_compiler_preserves_ambiguous_or_quoted_reasoning_text(text):
     proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(plan)
     assert proposal.game_design["authored_plan"] == plan.to_dict()
     assert "_authored_source_projection" not in proposal.game_design
+
+
+def test_contract_shaped_authored_design_stays_one_coherent_bounded_module(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("saved design entered planner again")
+
+    monkeypatch.setattr(PlanningPipeline, "prepare", forbidden)
+    monkeypatch.setattr(PlanningPipeline, "_semantic_design", forbidden)
+    router = SimpleNamespace(generate_text=forbidden, generate_tool_decision=forbidden)
+    sections = (
+        "state_model",
+        "algorithm",
+        "integration",
+        "authority_and_network",
+        "persistence",
+        "resources_and_ui",
+        "failure_and_limits",
+        "reuse_assessment",
+        "verification",
+    )
+    text = "\n".join(
+        f"# {section}\n- concrete_{section}: value"
+        for section in sections
+    )
+    plan = AuthoredPlan("Make a space trading mod for Fabric 1.21.11", text)
+
+    proposal = CompleteGameDesignPlanner(router).compile_for_production(plan)
+
+    assert len(proposal.modules) == 1
+    module = proposal.modules[0]
+    assert module.module_id == "authored_design"
+    assert module.config["authored_execution_mode"] == "bounded_coherent"
+    assert module.config["authored_bounded_scope"] is True
+    assert module.config["authored_plan"]["text"] == text
+    assert compile_task_capsule(module) is None
+
+    manifest = proposal.game_design["_authored_execution_manifest"]
+    assert manifest["policy"] == "host_bounded_coherent_authored_design"
+    assert manifest["unit_count"] == 1
+    assert manifest["units"][0]["module_id"] == "authored_design"
+
+    authority = compile_direct_task_mutation_authority(module)
+    assert authority is not None
+    assert authority.mutation_authority.mode is MutationAuthorityMode.BOUNDED_ROOTS
+
+    package_path = proposal.base_proposal.spec.package_name.replace(".", "/")
+    mod_id = proposal.base_proposal.spec.mod_id
+    assert authority.mutation_authority.authorizes(
+        f"src/main/java/{package_path}/economy/TradeService.java",
+        operation="create_file",
+    )
+    assert authority.mutation_authority.authorizes(
+        f"src/main/resources/assets/{mod_id}/lang/ko_kr.json",
+        operation="create_file",
+    )
+    assert authority.mutation_authority.authorizes(
+        f"src/main/resources/data/{mod_id}/recipes/ship_part.json",
+        operation="create_file",
+    )
+    assert not authority.mutation_authority.authorizes(
+        "src/main/resources/fabric.mod.json",
+        operation="replace_exact",
+    )
+    assert not authority.mutation_authority.authorizes(
+        "src/main/java/com/example/Foreign.java",
+        operation="create_file",
+    )
+    assert not authority.mutation_authority.authorizes(
+        f"src/main/java/{package_path}/Old.java",
+        operation="delete_file",
+    )
+
+    contract = _task_local_module_contract(module)
+    assert contract["authored_execution_mode"] == "bounded_coherent"
+    assert contract["authored_write_scope"]["mod_id"] == mod_id
+    assert contract["authored_write_scope"]["java_package"] == proposal.base_proposal.spec.package_name
+
