@@ -3249,6 +3249,11 @@ def _normalize_initial_task_evidence_calls(
     target = str(target_path or "").replace("\\", "/").strip()
     target_symbol = target.rsplit("/", 1)[-1].rsplit(".", 1)[0] if target else ""
     target_folded = target_symbol.casefold()
+    active_authority = CURRENT_MUTATION_AUTHORITY.get()
+    bounded_authored = bool(
+        active_authority is not None
+        and active_authority.mode is MutationAuthorityMode.BOUNDED_ROOTS
+    )
     changed = False
     normalized: list[Any] = []
     for call in calls:
@@ -3266,7 +3271,7 @@ def _normalize_initial_task_evidence_calls(
             and current_query
             and target_folded in current_query.casefold()
         )
-        if not self_target:
+        if not self_target and not bounded_authored:
             normalized.append(call)
             continue
         rebound = dict(arguments)
@@ -3945,9 +3950,14 @@ def _generate_with_tools_impl(
 
         if (
             state.phase == LoopPhase.OBSERVE
-            and state.mutation_context
             and fresh_java_target
-            and state.mutation_context.is_mutation_ready
+            and (
+                bounded_root_execution_authority
+                or (
+                    state.mutation_context is not None
+                    and state.mutation_context.is_mutation_ready
+                )
+            )
             and require_rag
             and not baseline_ready
         ):
