@@ -359,10 +359,20 @@ def _next_active_batch(
 
 def node_cost(node: Mapping[str, Any]) -> int:
     # Conservative host floor plus the semantic compiler's whole-file estimate.
-    # This is admission estimation, not a guarantee; runtime exhaustion refines the DAG.
+    # Requirements accumulate when later pages extend an existing owner, so their
+    # count must increase the admission estimate or monotonic merge could recreate
+    # the output-exhaustion failure that decomposition is meant to prevent.
     api_bytes = len(json.dumps(node["public_api"], ensure_ascii=False).encode())
     obligation_bytes = len(json.dumps(node["obligations"], ensure_ascii=False).encode())
-    floor = 384 + api_bytes // 2 + max(obligation_bytes // 2, 256 * len(node["obligations"]))
+    requirement_cost = 192 * len(node["requirements"])
+    dependency_cost = 64 * len(node["depends_on"])
+    floor = (
+        384
+        + api_bytes // 2
+        + max(obligation_bytes // 2, 256 * len(node["obligations"]))
+        + requirement_cost
+        + dependency_cost
+    )
     return max(node["estimated_tokens"], floor)
 
 
@@ -685,6 +695,7 @@ def _java_parameter_types(raw: str) -> tuple[str, ...]:
         value = re.sub(r"^(?:final\s+)+", "", value)
         # Drop a conventional parameter name while retaining the complete type.
         value = re.sub(r"\s+[A-Za-z_$][A-Za-z0-9_$]*$", "", value)
+        value = re.sub(r"\s*([<>,\[\]])\s*", r"\1", value)
         normalized.append(value.strip())
     return tuple(normalized)
 
