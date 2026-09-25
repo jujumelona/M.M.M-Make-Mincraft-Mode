@@ -275,6 +275,7 @@ class ModelRouter:
             response_schema=response_schema,
             tool_stage=tool_stage,
             enable_tools=enable_tools,
+            output_token_ceiling=output_token_ceiling,
         )
         if (
             self._agent_require_fresh_evidence
