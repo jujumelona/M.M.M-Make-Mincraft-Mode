@@ -21,7 +21,7 @@ def test_source_validation_fingerprint_includes_active_validators(
 ) -> None:
     names = _fingerprinted_module_names(monkeypatch, "validate-source")
     assert "minecraft_mod_ai.validation_checkpoint_policy" in names
-    assert "minecraft_mod_ai.runtime_bootstrap" in names
+    assert "minecraft_mod_ai.runtime_bootstrap" not in names
     assert "minecraft_mod_ai.complete_orchestrator" in names
     assert "minecraft_mod_ai.scalable_validator" in names
     assert "minecraft_mod_ai.validator" in names
