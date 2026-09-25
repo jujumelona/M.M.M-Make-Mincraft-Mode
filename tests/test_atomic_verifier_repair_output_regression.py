@@ -273,3 +273,52 @@ def test_schema_rejected_host_surface_repair_drops_redundant_host_fields():
     assert recovered is not None
     assert recovered[0].name == "apply_source_edit"
     assert recovered[0].arguments == {"new": "public final class AuthoredFeature001"}
+
+def test_schema_rejected_host_surface_repair_accepts_live_source_old_field():
+    target = "src/main/java/dev/mmm/AuthoredFeature001.java"
+    old_decl = "public class AuthoredFeature001"
+    new_decl = "public final class AuthoredFeature001"
+    source = (
+        "package dev.mmm;\n"
+        + old_decl
+        + " {\n"
+        "    public static void initialize() {}\n"
+        "}\n"
+    )
+    corrected = source.replace(old_decl, new_decl, 1)
+    rejected = ToolCall(
+        id="call-rejected-host-surface-live-old",
+        name="__mmm_rejected_tool_call__",
+        arguments={
+            "failure_code": "TOOL_SCHEMA_INVALID",
+            "original_tool": "apply_source_edit",
+            "raw_arguments": json.dumps(
+                {
+                    "operation": "replace_exact",
+                    "path": target,
+                    "old": source,
+                    "new": corrected,
+                    "count": 1,
+                }
+            ),
+            "error": "redundant host-owned fields",
+        },
+    )
+    context = SimpleNamespace(
+        source_body=source,
+        target_path=target,
+        is_new_file=False,
+        evidence_source="mutation_receipt",
+    )
+
+    recovered = recover_schema_rejected_verifier_repair_calls(
+        (rejected,),
+        phase="ACT",
+        validation_status="FAIL",
+        context=context,
+        repair_window={"old": old_decl},
+    )
+
+    assert recovered is not None
+    assert recovered[0].arguments == {"new": new_decl}
+
