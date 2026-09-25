@@ -1120,3 +1120,52 @@ def test_fresh_java_retrieval_exhaustion_transitions_to_compile_probe(monkeypatc
         "apply_source_edit",
         "target_compile",
     ]
+
+def test_host_authored_surface_failure_is_not_whole_file_implementation_recovery(monkeypatch) -> None:
+    target = "src/main/java/dev/mmm/AuthoredFeature001.java"
+    scaffold = (
+        "package dev.mmm;\n"
+        "public final class AuthoredFeature001 {\n"
+        "    public static void initialize() {\n"
+        "        // MMM_AUTHORED_FEATURE_BODY_001\n"
+        "    }\n"
+        "}\n"
+    )
+    implemented = (
+        "package dev.mmm;\n"
+        "public class AuthoredFeature001 {\n"
+        "    public static void initialize() {\n"
+        "        System.setProperty(\"mmm.authored.test\", \"ready\");\n"
+        "    }\n"
+        "}\n"
+    )
+    state = loop.HostRunState(
+        validation_status="FAIL",
+        latest_verifier_tool="target_compile",
+        semantic_fresh_java=True,
+        latest_verifier_errors=(
+            {
+                "path": target,
+                "severity": 1,
+                "source": "host-authored-contract",
+                "code": "host:authored-surface",
+                "message": "Host integration requires public final class AuthoredFeature001.",
+            },
+        ),
+        mutation_context=loop.TargetMutationContext(
+            target_path=target,
+            target_symbol="AuthoredFeature001",
+            source_body=implemented,
+            is_new_file=False,
+            evidence_source="mutation_receipt",
+            writable_paths=(target,),
+            target_pinned=True,
+        ),
+    )
+    monkeypatch.setattr(loop._compile_recovery, "trusted_baseline", lambda *_args: scaffold)
+    monkeypatch.setattr(loop, "_host_bound_existing_rewrite_ready", lambda *_args, **_kwargs: True)
+
+    assert loop._authored_implementation_recovery(state) is False
+    window = loop._repair_source_window(state)
+    assert window is not None
+    assert window["old"] == "public class AuthoredFeature001"
