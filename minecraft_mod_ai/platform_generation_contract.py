@@ -72,6 +72,16 @@ def _matching_existing_bootstrap(
     return dict(bootstrap) if isinstance(bootstrap, dict) else None
 
 
+def _platform_context_fields(adapter: Any) -> dict[str, Any]:
+    if not adapter.host_facts_json:
+        return {}
+    context = adapter.version_context
+    return {
+        "resolved_version_context": context.to_dict(),
+        "context_id": context.context_id,
+    }
+
+
 def write_platform_lock(
     project_root: Path,
     adapter: Any,
@@ -113,10 +123,8 @@ def write_platform_lock(
         "deterministic_module_kinds": sorted(adapter.deterministic_module_kinds),
         "host_facts_json": adapter.host_facts_json,
     }
+    payload.update(_platform_context_fields(adapter))
     payload["receipt_sha256"] = platform_receipt_sha256(payload)
-    if adapter.host_facts_json:
-        payload["resolved_version_context"] = adapter.version_context.to_dict()
-        payload["context_id"] = adapter.version_context.context_id
     if resolved_bootstrap is not None:
         payload["bootstrap"] = resolved_bootstrap
     target.write_text(
