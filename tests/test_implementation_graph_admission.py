@@ -133,6 +133,23 @@ def test_terminal_failure_is_not_retried_on_resume():
     assert len(router.calls) == 2
 
 
+def test_stale_terminal_checkpoint_is_invalidated_after_ir_contract_change():
+    invalid = {**node(), "public_api": []}
+    saved = []
+    failing = Decisions([{"nodes": [invalid], "done": True}] * 2)
+    with pytest.raises(ir.ImplementationGraphError, match="NO_PROGRESS"):
+        compile_graph(failing, checkpoint=lambda state: saved.append(copy.deepcopy(state)))
+
+    stale = copy.deepcopy(saved[-1])
+    stale["schema_version"] = "mmm/implementation-ir-draft-v1"
+    valid = node()
+    router = Decisions([{"nodes": [valid], "done": True}])
+    graph = compile_graph(router, resume=stale)
+
+    assert len(router.calls) == 1
+    assert graph["nodes"][0]["symbol"] == valid["symbol"]
+
+
 def test_different_invalid_responses_have_a_finite_correction_budget():
     pages = [{"nodes": [{**node(f"Owner{i}"), "public_api": []}], "done": True} for i in range(4)]
     router = Decisions(pages)
