@@ -254,23 +254,17 @@ def _required_tool_semantic_violation(
     message: Mapping[str, Any],
     delta: Mapping[str, Any],
 ) -> bool:
-    """Bound semantic preface before one host-required tool invocation starts."""
+    """Never truncate a required tool turn before its function markup can close.
 
-    del delta
-    if _required_tool_markup_prefix_pending(message):
-        return False
-    total = 0
-    for key in ("content", "reasoning_content", "reasoning"):
-        value = message.get(key)
-        if isinstance(value, str):
-            total += len(value)
-    limit = int(
-        _positive_env_float(
-            "MMM_LLAMA_REQUIRED_TOOL_PREFACE_MAX_CHARS",
-            float(_DEFAULT_REQUIRED_TOOL_PREFACE_MAX_CHARS),
-        )
-    )
-    return total > max(1, limit)
+    The request already has a finite decode allowance and an idle deadline. Aborting a
+    live stream merely because the model emitted a semantic preface can cut an in-flight
+    tool call before its closing tags arrive, converting a recoverable model turn into
+    host-created TOOL_MARKUP_MALFORMED noise. Admission remains authoritative after the
+    complete bounded response is received.
+    """
+
+    del message, delta
+    return False
 
 
 def _required_tool_stream_state(
