@@ -78,6 +78,72 @@ def test_premature_done_requests_only_remaining_coverage():
     assert next_page["accepted_nodes"][0]["symbol"] == "PlayerCredits"
 
 
+def test_later_requirements_monotonically_extend_an_accepted_owner():
+    first = node(refs=["R1", "R2", "R3"], api=["public static int balance()"])
+    first["obligations"] = ["Own the balance state."]
+
+    extension = node(
+        refs=["R4", "R5", "R6"],
+        api=["public static int balance()", "public static boolean spend(int amount)"],
+    )
+    extension["obligations"] = ["Reject spending when balance is insufficient."]
+
+    router = Decisions([
+        {"nodes": [first], "done": False},
+        {"nodes": [extension], "done": True},
+    ])
+    graph = compile_graph(router)
+
+    assert len(graph["nodes"]) == 1
+    merged = graph["nodes"][0]
+    assert merged["symbol"] == "PlayerCredits"
+    assert merged["requirements"] == ["R1", "R2", "R3", "R4", "R5", "R6"]
+    assert merged["obligations"] == [
+        "Own the balance state.",
+        "Reject spending when balance is insufficient.",
+    ]
+    assert merged["public_api"] == [
+        "public static int balance()",
+        "public static boolean spend(int amount)",
+    ]
+    assert len(router.calls) == 2
+
+
+def test_duplicate_owner_cannot_rewrite_an_existing_api_contract():
+    first = node(refs=["R1", "R2", "R3"], api=["public static int balance()"])
+    conflicting = node(refs=["R4", "R5", "R6"], api=["public static long balance()"])
+
+    router = Decisions([
+        {"nodes": [first], "done": False},
+        {"nodes": [conflicting], "done": True},
+        {"nodes": [conflicting], "done": True},
+    ])
+    with pytest.raises(ir.ImplementationGraphError, match="DUPLICATE_CONTRACT_CONFLICT"):
+        compile_graph(router)
+    assert len(router.calls) == 3
+
+
+def test_repeated_accepted_owner_is_ignored_when_same_page_adds_real_new_work():
+    refs = ir.source_requirements(DESIGN)
+    accepted_raw = node(refs=["R1", "R2", "R3"])
+    accepted = ir.validate_node(
+        accepted_raw, package="example", mod_id="test", refs=set(refs)
+    )
+    duplicate_raw = copy.deepcopy(accepted_raw)
+    new_raw = node("TradeService", refs=["R4", "R5", "R6"], dependencies=["PlayerCredits"])
+
+    combined = ir._admit_graph_page(
+        {"nodes": [duplicate_raw, new_raw], "done": True},
+        accepted=[accepted],
+        package="example",
+        mod_id="test",
+        requirements=refs,
+    )
+
+    assert [item["symbol"] for item in combined] == ["PlayerCredits", "TradeService"]
+    assert combined[0] == accepted
+
+
 def test_completed_pages_survive_failure_and_resume_without_replanning():
     first = node(refs=["R1", "R2", "R3"])
     second = node("TradeService", refs=["R4", "R5", "R6"])
@@ -133,7 +199,11 @@ def test_terminal_failure_is_not_retried_on_resume():
     assert len(router.calls) == 2
 
 
-def test_stale_terminal_checkpoint_is_invalidated_after_ir_contract_change():
+@pytest.mark.parametrize(
+    "stale_version",
+    ["mmm/implementation-ir-draft-v1", "mmm/implementation-ir-draft-v2"],
+)
+def test_stale_terminal_checkpoint_is_invalidated_after_ir_contract_change(stale_version):
     invalid = {**node(), "public_api": []}
     saved = []
     failing = Decisions([{"nodes": [invalid], "done": True}] * 2)
@@ -141,7 +211,7 @@ def test_stale_terminal_checkpoint_is_invalidated_after_ir_contract_change():
         compile_graph(failing, checkpoint=lambda state: saved.append(copy.deepcopy(state)))
 
     stale = copy.deepcopy(saved[-1])
-    stale["schema_version"] = "mmm/implementation-ir-draft-v1"
+    stale["schema_version"] = stale_version
     valid = node()
     router = Decisions([{"nodes": [valid], "done": True}])
     graph = compile_graph(router, resume=stale)
