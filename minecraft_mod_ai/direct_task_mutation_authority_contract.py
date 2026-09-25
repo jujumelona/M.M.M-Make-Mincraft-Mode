@@ -10,12 +10,13 @@ than being upgraded to directory/root authority.
 import contextvars
 import hashlib
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
 
-from .mutation_authority import MutationAuthority
+from .mutation_authority import MutationAuthority, MutationAuthorityMode
 from .owned_target_contract import target_is_writable
 
 _SCHEMA = "mmm/direct-task-mutation-authority-v1"
@@ -49,10 +50,14 @@ class DirectTaskMutationAuthority:
 
     @property
     def writable_paths(self) -> tuple[str, ...]:
+        if self.mutation_authority.mode is MutationAuthorityMode.BOUNDED_ROOTS:
+            return self.mutation_authority.roots
         return self.mutation_authority.paths
 
     @property
     def creatable_paths(self) -> tuple[str, ...]:
+        if self.mutation_authority.mode is MutationAuthorityMode.BOUNDED_ROOTS:
+            return self.mutation_authority.roots
         return _authority_creatable_paths(self)
 
     def to_host_payload(self) -> dict[str, Any]:
@@ -68,6 +73,25 @@ def _authority_creatable_paths(authority: DirectTaskMutationAuthority) -> tuple[
 
 
 def _authority_host_payload(authority: DirectTaskMutationAuthority) -> dict[str, Any]:
+    if authority.mutation_authority.mode is MutationAuthorityMode.BOUNDED_ROOTS:
+        return {
+            "schema_version": "mmm/authored-bounded-mutation-authority-v2",
+            "task_id": authority.task_id,
+            "authority_sha256": authority.authority_sha256,
+            "mutation_authority": {
+                "mode": authority.mutation_authority.mode.value,
+                "roots": list(authority.mutation_authority.roots),
+                "delete_allowed": False,
+            },
+            "instruction": (
+                "Implement the approved authored design coherently inside these exact "
+                "host-owned roots. Choose the Java/resource files required by the design; "
+                "document headings are contract facets, not file/class names. Preserve the "
+                "existing canonical Fabric entrypoint and never write build configuration "
+                "or another mod namespace."
+            ),
+        }
+
     primary_anchor = next(
         anchor
         for anchor in authority.writable_anchors
@@ -102,10 +126,71 @@ def _authority_host_payload(authority: DirectTaskMutationAuthority) -> dict[str,
     }
 
 
+def _authored_bounded_roots(module: Any) -> tuple[str, ...]:
+    config = _module_config(module)
+    if config.get("authored_bounded_scope") is not True:
+        return ()
+    package_name = str(config.get("authored_java_package") or "").strip()
+    mod_id = str(config.get("authored_mod_id") or "").strip()
+    if not package_name or re.fullmatch(
+        r"[A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*", package_name
+    ) is None:
+        raise DirectTaskMutationAuthorityError(
+            "AUTHORED_AUTHORITY_PACKAGE_INVALID: bounded authored generation requires "
+            "one safe host-generated Java package."
+        )
+    if not mod_id or re.fullmatch(r"[a-z0-9][a-z0-9_-]*", mod_id) is None:
+        raise DirectTaskMutationAuthorityError(
+            "AUTHORED_AUTHORITY_MOD_ID_INVALID: bounded authored generation requires "
+            "one safe host-owned mod id."
+        )
+    package_path = package_name.replace(".", "/")
+    return (
+        f"src/main/java/{package_path}/",
+        f"src/client/java/{package_path}/",
+        f"src/main/resources/assets/{mod_id}/",
+        f"src/main/resources/data/{mod_id}/",
+        f"src/client/resources/assets/{mod_id}/",
+        f"src/test/java/{package_path}/",
+        f"src/gametest/{package_path}/",
+    )
+
+
+def _compile_bounded_authored_authority(module: Any) -> DirectTaskMutationAuthority:
+    module_id = str(getattr(module, "module_id", "") or "").strip()
+    if not module_id:
+        raise DirectTaskMutationAuthorityError(
+            "AUTHORED_AUTHORITY_TASK_MISSING: bounded authored design has no module id."
+        )
+    roots = _authored_bounded_roots(module)
+    if not roots:
+        raise DirectTaskMutationAuthorityError(
+            "AUTHORED_AUTHORITY_SCOPE_MISSING: bounded authored design has no roots."
+        )
+    mutation_authority = MutationAuthority.bounded_roots(roots, task_id=module_id)
+    payload = {
+        "task_id": module_id,
+        "module_kind": str(getattr(module, "kind", "") or "").strip(),
+        "mode": mutation_authority.mode.value,
+        "roots": mutation_authority.roots,
+    }
+    return DirectTaskMutationAuthority(
+        task_id=module_id,
+        module_kind=str(getattr(module, "kind", "") or "").strip(),
+        primary_path="",
+        primary_symbol="",
+        writable_anchors=(),
+        authority_sha256=_authority_digest(payload),
+        mutation_authority=mutation_authority,
+    )
+
+
 def _special_authority(module: Any) -> tuple[bool, DirectTaskMutationAuthority | None]:
     if module is None:
         return True, None
     if _is_authored_design(module) and _module_evidence_task(module) is None:
+        if _module_config(module).get("authored_bounded_scope") is True:
+            return True, _compile_bounded_authored_authority(module)
         raise DirectTaskMutationAuthorityError(
             "AUTHORED_LOCALIZATION_REQUIRED: saved authored work must be localized "
             "and frozen to an exact evidence_task before mutation authority is compiled."
