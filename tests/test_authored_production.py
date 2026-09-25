@@ -18,7 +18,10 @@ from minecraft_mod_ai.direct_task_mutation_authority_contract import (
 )
 from minecraft_mod_ai.mutation_authority import MutationAuthorityMode
 from minecraft_mod_ai.planning_pipeline import PlanningPipeline
-from minecraft_mod_ai.progress_aware_tool_loop import _task_authority_context
+from minecraft_mod_ai.progress_aware_tool_loop import (
+    _approved_task_evidence_query,
+    _task_authority_context,
+)
 from minecraft_mod_ai.scale_policy import ScalePolicy
 from minecraft_mod_ai.small_model_atomic_coder_execution import atomicize_coder_messages
 from minecraft_mod_ai.small_model_task_capsule_contract import compile_task_capsule
@@ -885,4 +888,12 @@ def test_contract_shaped_authored_design_stays_one_coherent_bounded_module(monke
     batches = atomicize_coder_messages(messages)
     assert len(batches) == 1
     assert json.loads(batches[0][0]["content"])["module"]["authored_plan"]["text"] == text
+
+    evidence_query = _approved_task_evidence_query(messages, target_path=None)
+    assert "space trading mod" in evidence_query
+    assert "integration:" in evidence_query
+    assert "authority_and_network:" in evidence_query
+    assert "persistence:" in evidence_query
+    assert "resources_and_ui:" in evidence_query
+    assert "n, a, m, e" not in evidence_query
 
