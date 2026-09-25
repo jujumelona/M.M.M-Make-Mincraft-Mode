@@ -419,6 +419,8 @@ def _decision(router: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]
                 rejected_page = json.loads(matching[0].get("raw_arguments") or "")
             except (ValueError, TypeError):
                 pass
+
+        diagnostics: list[dict[str, Any]] = []
         if rejected_page is not None:
             # Native tool validation can reject mechanically repairable member syntax.
             # Accept host normalization only when it actually changed a schema-invalid
@@ -435,16 +437,17 @@ def _decision(router: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]
                 return normalized_page
             rejected_page = normalized_page
             diagnostics = normalized_diagnostics or original_diagnostics
-        else:
-            diagnostics = []
+
         if not diagnostics:
-                return rejected_page
-        else:
-            diagnostics = []
-        if not diagnostics:
-            diagnostics = [{"code": r.get("failure_code", "TOOL_DECISION_REJECTED"),
-                            "node": "", "field": "tool_call", "message": str(r.get("error", ""))}
-                           for r in exc.rejections]
+            diagnostics = [
+                {
+                    "code": r.get("failure_code", "TOOL_DECISION_REJECTED"),
+                    "node": "",
+                    "field": "tool_call",
+                    "message": str(r.get("error", "")),
+                }
+                for r in exc.rejections
+            ]
         failure = _InvalidPage(diagnostics, rejected_page)
         failure.feedback["native_rejections"] = list(exc.rejections)
         raise failure from exc
