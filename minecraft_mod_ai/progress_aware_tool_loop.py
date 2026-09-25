@@ -3185,12 +3185,12 @@ def _approved_task_evidence_query(
         # Retrieval for a coherent authored design must cover the API-heavy facets
         # instead of truncating the document from state_model onward. Pull a small
         # representative body from each high-value engineering section.
-        heading = re.compile(r"^ {0,3}#{1,6}[ \t]+(.+?)\\s*$", re.MULTILINE)
+        heading = re.compile(r"^ {0,3}#{1,6}[ \t]+(.+?)\s*$", re.MULTILINE)
         matches = list(heading.finditer(authored_text))
         sections: dict[str, str] = {}
         for index, match in enumerate(matches):
             title = re.sub(r"[ \t]+#+[ \t]*$", "", match.group(1)).strip("*_\x60 ")
-            key = re.sub(r"[\\s-]+", "_", title.casefold()).strip("_")
+            key = re.sub(r"[\s-]+", "_", title.casefold()).strip("_")
             body_start = match.end()
             body_end = matches[index + 1].start() if index + 1 < len(matches) else len(authored_text)
             body = " ".join(authored_text[body_start:body_end].split()).strip()
