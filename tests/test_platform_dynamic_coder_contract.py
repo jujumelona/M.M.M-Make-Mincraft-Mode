@@ -2,14 +2,9 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from minecraft_mod_ai import platform_selection_pipeline as selection_pipeline
 from minecraft_mod_ai import repair_engine
-from minecraft_mod_ai.custom_module_generator import (
-    CustomModuleGenerationError,
-    CustomModuleGenerator,
-)
+from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
 from minecraft_mod_ai.model_router import ModelRouter
 from minecraft_mod_ai.platform_catalog import PlatformAdapter, adapter_for_target
 from minecraft_mod_ai.platform_custom_coder_contract import _bind_target
@@ -125,19 +120,8 @@ def test_custom_coder_prose_prompt_is_not_rewritten() -> None:
     assert _bind_target(message, _future_adapter()) == message
 
 
-def test_custom_patch_scope_allows_kotlin_gradle_metadata_but_not_arbitrary_files() -> None:
-    generator = object.__new__(CustomModuleGenerator)
-    generator._validate_operations(
-        [
-            {"operation": "create", "path": "build.gradle.kts", "content": ""},
-            {"operation": "create", "path": "settings.gradle.kts", "content": ""},
-            {"operation": "create", "path": "gradle/libs.versions.toml", "content": ""},
-        ]
-    )
-    with pytest.raises(CustomModuleGenerationError):
-        generator._validate_operations(
-            [{"operation": "create", "path": "scripts/migrate.sh", "content": ""}]
-        )
+def test_custom_coder_has_no_legacy_operation_patch_surface() -> None:
+    assert not hasattr(CustomModuleGenerator, "_validate_operations")
 
 
 def test_repair_scope_supports_kotlin_gradle_metadata() -> None:
