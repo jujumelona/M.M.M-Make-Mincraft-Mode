@@ -1,5 +1,6 @@
 import hashlib
 import json
+from itertools import pairwise
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +15,7 @@ from minecraft_mod_ai.authored_production import (
 from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
 from minecraft_mod_ai.custom_module_generator import _task_local_module_contract
 from minecraft_mod_ai.direct_task_mutation_authority_contract import (
+    _CURRENT_AUTHORITY,
     compile_direct_task_mutation_authority,
 )
 from minecraft_mod_ai.mutation_authority import MutationAuthorityMode
@@ -24,7 +26,14 @@ from minecraft_mod_ai.progress_aware_tool_loop import (
 )
 from minecraft_mod_ai.scale_policy import ScalePolicy
 from minecraft_mod_ai.small_model_atomic_coder_execution import atomicize_coder_messages
-from minecraft_mod_ai.small_model_task_capsule_contract import compile_task_capsule
+from minecraft_mod_ai.small_model_task_capsule_contract import (
+    _CURRENT_CAPSULE,
+    compile_task_capsule,
+    task_capsule_generation_scope,
+)
+from minecraft_mod_ai.small_model_write_scope_enforcement import (
+    generation_authority_scoped,
+)
 from minecraft_mod_ai.work_graph import build_production_work_plan
 
 
@@ -497,7 +506,7 @@ def test_fresh_authored_work_graph_checkpoints_each_exact_task_independently(mon
         for node in custom
     ] == [f"authored_feature_{index:03d}" for index in range(1, 5)]
     assert custom[0].dependencies == ("prepare-project",)
-    for previous, node in zip(custom[:-1], custom[1:], strict=True):
+    for previous, node in pairwise(custom):
         assert set(node.dependencies) == {"prepare-project", previous.node_id}
 
 
@@ -801,7 +810,7 @@ def test_compiler_preserves_ambiguous_or_quoted_reasoning_text(text):
     assert "_authored_source_projection" not in proposal.game_design
 
 
-def test_contract_shaped_authored_design_stays_one_coherent_bounded_module(monkeypatch):
+def test_contract_shaped_authored_design_stays_one_coherent_bounded_module(monkeypatch, tmp_path):
     def forbidden(*args, **kwargs):
         pytest.fail("saved design entered planner again")
 
@@ -873,6 +882,23 @@ def test_contract_shaped_authored_design_stays_one_coherent_bounded_module(monke
         operation="delete_file",
     )
 
+    # Exercise the same generation boundary as production, not just the two
+    # compilers independently: localization previously replaced this authority.
+    class Generator:
+        @task_capsule_generation_scope
+        @generation_authority_scoped
+        def generate(self, project_root, *, module, **kwargs):
+            assert _CURRENT_AUTHORITY.get() == authority
+            assert _CURRENT_CAPSULE.get() is None
+            assert module is proposal.modules[0]
+            return module.config["authored_plan"]["text"]
+
+    generator = Generator()
+    generator.router = router
+    assert generator.generate(tmp_path, module=module) == text
+    assert _CURRENT_AUTHORITY.get() is None
+    assert _CURRENT_CAPSULE.get() is None
+
     contract = _task_local_module_contract(module)
     assert contract["authored_execution_mode"] == "bounded_coherent"
     assert contract["authored_write_scope"]["mod_id"] == mod_id
@@ -896,4 +922,3 @@ def test_contract_shaped_authored_design_stays_one_coherent_bounded_module(monke
     assert "persistence:" in evidence_query
     assert "resources_and_ui:" in evidence_query
     assert "n, a, m, e" not in evidence_query
-

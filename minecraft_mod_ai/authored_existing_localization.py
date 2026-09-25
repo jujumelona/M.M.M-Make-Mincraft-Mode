@@ -10,14 +10,23 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .complete_spec import ProductionModule
+from .model_output_atomicity_contract import (
+    MAX_MODEL_ARRAY_ITEMS,
+    assert_atomic_model_schema,
+)
 from .project_index import ProjectIndex
 from .root_cause_trace import emit_root_cause
+from .structured_output import (
+    StructuredOutputValidationError,
+    validate_structured_output,
+)
 
 _SCHEMA = "mmm/authored-existing-localization-v1"
 _MAX_CANDIDATES = 24
 _MAX_SNIPPET_CANDIDATES = 8
 _SNIPPET_CHARS = 900
 _MAX_SUPPORTING_PATHS = 5
+_MAX_SEARCH_TERMS = 8
 _ALLOWED_PREFIXES = (
     "src/main/java/", "src/client/java/", "src/main/resources/",
     "src/client/resources/", "src/test/java/", "src/gametest/",
@@ -40,6 +49,9 @@ def needs_authored_existing_localization(module: Any) -> bool:
         isinstance(config, Mapping)
         and isinstance(config.get("authored_plan"), Mapping)
         and not isinstance(config.get("evidence_task"), Mapping)
+        # Coherent authored generation already has host-owned package/resource roots.
+        # Localizing it would replace creation authority with existing-file-only edits.
+        and config.get("authored_bounded_scope") is not True
     )
 
 
@@ -104,48 +116,76 @@ def _scope(authored: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _search_terms(router: Any, scope: Mapping[str, Any]) -> tuple[str, ...]:
-    schema = {
-        "type": "object",
-        "properties": {
-            "terms": {
-                "type": "array",
-                "items": {"type": "string", "minLength": 2, "maxLength": 64},
-                "minItems": 1,
-                "maxItems": 8,
-                "uniqueItems": True,
-            }
-        },
-        "required": ["terms"],
-        "additionalProperties": False,
-    }
+def _decision(
+    router: Any, *, tool_name: str, schema: Mapping[str, Any],
+    instruction: str, payload: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    # Validate the request even with alternate routers, then validate returned values.
+    # Configuration defects must fail before inference, never enter a model retry loop.
+    assert_atomic_model_schema(schema, surface=tool_name)
     result = router.generate_tool_decision(
         "coder",
         [
-            {
-                "role": "system",
-                "content": (
-                    "You are only a repository retrieval-query role for a small coder. "
-                    "Do not design or implement. Return concrete source identifier/search "
-                    "terms for the authored scope; translate concepts when useful."
-                ),
-            },
+            {"role": "system", "content": instruction},
             {
                 "role": "user",
-                "content": json.dumps(scope, ensure_ascii=False, separators=(",", ":")),
+                "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
             },
         ],
-        tool_name="derive_authored_repository_search_terms",
+        tool_name=tool_name,
         parameters=schema,
-        description="Derive bounded repository search terms only.",
+        description=instruction,
     )
-    raw = result.get("terms") if isinstance(result, Mapping) else None
-    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, bytearray)):
-        raise AuthoredExistingLocalizationError("AUTHORED_LOCALIZATION_TERMS_INVALID")
-    terms = tuple(dict.fromkeys(str(x).strip() for x in raw if str(x).strip()))
-    if not terms:
-        raise AuthoredExistingLocalizationError("AUTHORED_LOCALIZATION_TERMS_EMPTY")
-    return terms[:8]
+    try:
+        validate_structured_output(
+            json.dumps(result, ensure_ascii=False), response_format="json", response_schema=schema
+        )
+    except (StructuredOutputValidationError, TypeError, ValueError) as exc:
+        raise AuthoredExistingLocalizationError(
+            f"AUTHORED_LOCALIZATION_DECISION_INVALID: {tool_name}: {exc}"
+        ) from exc
+    return result
+
+
+def _search_terms(router: Any, scope: Mapping[str, Any]) -> tuple[str, ...]:
+    terms: list[str] = []
+    # The total retrieval budget is distinct from the per-call model array bound.
+    # Each continuation must add a term, so there are at most _MAX_SEARCH_TERMS calls.
+    while len(terms) < _MAX_SEARCH_TERMS:
+        schema = {
+            "type": "object",
+            "properties": {
+                "terms": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 2, "maxLength": 64},
+                    "minItems": 0 if terms else 1,
+                    "maxItems": min(MAX_MODEL_ARRAY_ITEMS, _MAX_SEARCH_TERMS - len(terms)),
+                    "uniqueItems": True,
+                },
+                "done": {"type": "boolean"},
+            },
+            "required": ["terms", "done"],
+            "additionalProperties": False,
+        }
+        result = _decision(
+            router, tool_name="derive_authored_repository_search_terms", schema=schema,
+            instruction=(
+                "You are only a repository retrieval-query role for a small coder. "
+                "Do not design or implement. Return a page of new concrete source "
+                "identifier/search terms for the authored scope; translate concepts when useful. "
+                "Do not repeat previous_terms. Set done=true when no further terms are needed."
+            ),
+            payload={"authored_scope": dict(scope), "previous_terms": list(terms)},
+        )
+        page = [term.strip() for term in result["terms"]]
+        if any(len(term) < 2 or term in terms for term in page) or len(set(page)) != len(page):
+            raise AuthoredExistingLocalizationError("AUTHORED_LOCALIZATION_TERMS_INVALID")
+        terms.extend(page)
+        if result["done"]:
+            break
+        if not page:
+            raise AuthoredExistingLocalizationError("AUTHORED_LOCALIZATION_TERMS_STALLED")
+    return tuple(terms)
 
 
 def _candidates(root: Path, scope: Mapping[str, Any], terms: Sequence[str]) -> list[dict[str, Any]]:
@@ -208,20 +248,6 @@ def _select(
 ) -> tuple[str, tuple[str, ...]]:
     paths = [str(row["path"]) for row in candidates]
     java_paths = [path for path in paths if _java(path)]
-    schema = {
-        "type": "object",
-        "properties": {
-            "primary_path": {"type": "string", "enum": java_paths},
-            "supporting_paths": {
-                "type": "array",
-                "items": {"type": "string", "enum": paths},
-                "maxItems": _MAX_SUPPORTING_PATHS,
-                "uniqueItems": True,
-            },
-        },
-        "required": ["primary_path", "supporting_paths"],
-        "additionalProperties": False,
-    }
     payload = {
         "authored_scope": dict(scope),
         "search_terms": list(terms),
@@ -234,44 +260,44 @@ def _select(
             for i, row in enumerate(candidates)
         ],
     }
-    result = router.generate_tool_decision(
-        "coder",
-        [
-            {
-                "role": "system",
-                "content": (
-                    "You are only the read-only localization role. Select the minimum "
-                    "existing files for the approved authored scope. Do not implement, "
-                    "invent files, redesign architecture, or choose outside candidates."
-                ),
-            },
-            {
-                "role": "user",
-                "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-            },
-        ],
-        tool_name="freeze_existing_authored_targets",
-        parameters=schema,
-        description="Freeze minimum exact existing-project edit targets.",
-    )
-    if not isinstance(result, Mapping):
-        raise AuthoredExistingLocalizationError("AUTHORED_LOCALIZATION_DECISION_INVALID")
-    primary = _path(result.get("primary_path"))
-    if not primary or primary not in java_paths:
-        raise AuthoredExistingLocalizationError("AUTHORED_LOCALIZATION_PRIMARY_INVALID")
-    raw_support = result.get("supporting_paths")
-    if not isinstance(raw_support, Sequence) or isinstance(raw_support, (str, bytes, bytearray)):
-        raise AuthoredExistingLocalizationError("AUTHORED_LOCALIZATION_SUPPORT_INVALID")
-    allowed = set(paths)
+    primary = ""
     support: list[str] = []
-    for value in raw_support:
-        path = _path(value)
-        if not path or path not in allowed:
-            raise AuthoredExistingLocalizationError("AUTHORED_LOCALIZATION_PATH_DRIFT")
-        if path != primary and path not in support:
-            support.append(path)
-    if len(support) > _MAX_SUPPORTING_PATHS:
-        raise AuthoredExistingLocalizationError("AUTHORED_LOCALIZATION_TOO_WIDE")
+    while len(support) < _MAX_SUPPORTING_PATHS:
+        remaining = [path for path in paths if path != primary and path not in support]
+        if not remaining:
+            break
+        schema = {
+            "type": "object",
+            "properties": {
+                "primary_path": {"type": "string", "enum": [primary] if primary else java_paths},
+                "supporting_paths": {
+                    "type": "array", "items": {"type": "string", "enum": remaining},
+                    "maxItems": min(MAX_MODEL_ARRAY_ITEMS, _MAX_SUPPORTING_PATHS - len(support)),
+                    "uniqueItems": True,
+                },
+                "done": {"type": "boolean"},
+            },
+            "required": ["primary_path", "supporting_paths", "done"],
+            "additionalProperties": False,
+        }
+        result = _decision(
+            router, tool_name="freeze_existing_authored_targets", schema=schema,
+            instruction=(
+                "You are only the read-only localization role. Select the minimum "
+                "existing files for the approved authored scope. Do not implement, "
+                "invent files, redesign architecture, or choose outside candidates. "
+                "Keep primary_path fixed after the first page. Return only new supporting "
+                "paths, excluding the primary. Set done=true when the selection is complete."
+            ),
+            payload={**payload, "primary_path": primary, "selected_supporting_paths": list(support)},
+        )
+        primary = str(result["primary_path"])
+        page = [path for path in result["supporting_paths"] if path != primary]
+        support.extend(page)
+        if result["done"]:
+            break
+        if not page:
+            raise AuthoredExistingLocalizationError("AUTHORED_LOCALIZATION_SUPPORT_STALLED")
     return primary, tuple(support)
 
 
