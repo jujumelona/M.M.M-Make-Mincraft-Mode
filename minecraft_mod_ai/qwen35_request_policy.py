@@ -71,7 +71,10 @@ def _request_sampling_mode(config: Any, request: Any) -> SamplingMode:
         or str(tool_choice or "").casefold() == "required"
     )
     if tools or forced_choice:
-        return "precise_coding" if coder else "non_thinking"
+        # Qwen3.5 tool actions use the model family's recommended non-thinking
+        # sampling profile. Coding-specific free-text sampling must not leak into
+        # the XML function-call page.
+        return "non_thinking"
     if getattr(request, "response_format", None) == "json" and not tools:
         return "non_thinking"
     if coder:
