@@ -111,8 +111,12 @@ def write_platform_lock(
         "release_metadata_url": adapter.release_metadata_url,
         "source_api_family": adapter.source_api_family,
         "deterministic_module_kinds": sorted(adapter.deterministic_module_kinds),
+        "host_facts_json": adapter.host_facts_json,
     }
     payload["receipt_sha256"] = platform_receipt_sha256(payload)
+    if adapter.host_facts_json:
+        payload["resolved_version_context"] = adapter.version_context.to_dict()
+        payload["context_id"] = adapter.version_context.context_id
     if resolved_bootstrap is not None:
         payload["bootstrap"] = resolved_bootstrap
     target.write_text(
