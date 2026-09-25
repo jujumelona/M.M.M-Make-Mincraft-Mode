@@ -574,7 +574,11 @@ def _compile_new_authored_modules(
             f"{symbol}. The exact class must be public final {symbol} in package "
             f"{package_name} and expose public static void initialize(). Do not put "
             "side-only annotations on that class or initialize(): the host invokes it on "
-            "both client and server. Keep side-specific behavior in guarded helpers. "
+            "both client and server. Do not invent @Environment(CLIENT/SERVER) helpers or "
+            "client/server lifecycle splits unless this exact approved unit explicitly requires "
+            "side-specific behavior and the current project already exposes the matching "
+            "side-specific caller. Common initialize() must never directly call a method that "
+            "Fabric can strip on the opposite environment. "
             "Replace the MMM_AUTHORED_FEATURE_BODY marker with the approved behavior; "
             "a placeholder or initialization flag alone is not an implementation. Do not implement "
             "ModInitializer or ClientModInitializer, do not create another entrypoint, and "
@@ -622,6 +626,7 @@ def _compile_new_authored_modules(
                         f"Exact top-level type: public final class {symbol}",
                         "Required host integration surface: public static void initialize()",
                         "The feature class and initialize() must exist on both client and server; no side-only annotations on either.",
+                        "Do not invent side-only helpers/lifecycle splits. If side-specific behavior is explicitly required, use only a verified existing side-specific caller; common initialize() must not call a side-stripped method.",
                         "Replace the host body marker with approved behavior; no placeholder-only implementation.",
                         "Forbidden: ModInitializer, ClientModInitializer, alternate entrypoints, sibling-file writes.",
                         "Do not require private implementation APIs from sibling feature classes; cross-feature activation is host-owned.",
