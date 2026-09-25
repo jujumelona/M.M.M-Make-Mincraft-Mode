@@ -356,6 +356,14 @@ def _atomicize_authored_coder_messages(
     if not isinstance(text, str):
         _fail("implement_authored_design authored_plan.text is not a string")
 
+    if str(module.get("authored_execution_mode") or "").strip() == "bounded_coherent":
+        # A worksheet-shaped authored design is one semantic contract. Splitting it by
+        # byte range makes the first model turn architect from state_model alone before
+        # it can see integration, persistence, UI, failure, and verification facets.
+        # Keep the complete contract in one canonical tool loop; context budgeting may
+        # trim repository observations, but it must never fragment the approved design.
+        return (tuple(dict(message) for message in messages),)
+
     fragments = _split_authored_text(text, max_bytes=_MAX_AUTHORED_FRAGMENT_BYTES)
     if len(fragments) == 1:
         return (tuple(dict(message) for message in messages),)
