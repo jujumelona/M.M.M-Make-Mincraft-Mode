@@ -355,6 +355,8 @@ def test_terminal_failure_is_not_retried_on_resume():
         "mmm/implementation-ir-draft-v3",
         "mmm/implementation-ir-draft-v4",
         "mmm/implementation-ir-draft-v5",
+        "mmm/implementation-ir-draft-v6",
+        "mmm/implementation-ir-draft-v7",
     ],
 )
 def test_stale_terminal_checkpoint_is_invalidated_after_ir_contract_change(stale_version):
@@ -577,6 +579,56 @@ def test_semantic_error_can_correct_a_provisional_sibling_after_schema_repair():
     assert len(graph["nodes"]) == 2
     assert router.calls[1][1]["validation_feedback"]["preserve_nodes"] == [wallet]
     assert router.calls[2][1]["validation_feedback"]["preserve_nodes"] == []
+
+
+def test_graph_has_no_legacy_fixed_node_count_limit():
+    nodes = [node(f"Owner{index}") for index in range(129)]
+    graph = compile_graph(Decisions([{"nodes": nodes, "done": True}]))
+    assert len(graph["nodes"]) == len(nodes)
+
+
+def test_progress_driven_compilation_can_cross_the_legacy_page_count():
+    section_count = 40
+    lines = []
+    for index in range(section_count):
+        lines.extend((f"# section_{index}", f"Requirement {index}."))
+    design = "\n".join(lines)
+    calls = []
+
+    class Router(Decisions):
+        def generate_tool_decision(self, role, messages, **kwargs):
+            payload = json.loads(messages[-1]["content"])
+            calls.append(payload)
+            symbol = f"Component{len(calls)}"
+            return {
+                "nodes": [{
+                    "symbol": symbol,
+                    "kind": "java",
+                    "resource_path": "",
+                    "responsibility": f"Implement {payload['unit_ids'][0]}",
+                    "requirements": list(payload["requirements"]),
+                    "obligations": ["Implement the active semantic unit."],
+                    "public_api": [f"public static void run{len(calls)}()"],
+                    "depends_on": [],
+                    "activation": False,
+                    "estimated_tokens": 800,
+                }],
+                "done": False,
+            }
+
+    graph = ir.compile_graph(
+        Router([]),
+        text=design,
+        package="example",
+        mod_id="test",
+        target=TARGET,
+    )
+
+    assert len(calls) == section_count
+    assert len(graph["nodes"]) == section_count
+    assert set().union(*(set(item["requirements"]) for item in graph["nodes"])) == set(
+        ir.source_requirements(design)
+    )
 
 
 def test_large_authored_design_uses_one_semantic_unit_per_heading_and_host_completion():
