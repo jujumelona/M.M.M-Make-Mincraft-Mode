@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from minecraft_mod_ai import minecraft_mcp_evidence_contract as mcp_contract
 from minecraft_mod_ai.central_research import (
     normalize_research_brief,
@@ -15,6 +17,11 @@ _EXTERNAL_AGENT_TOOLS = {
     "external_mcp_schema",
     "external_mcp_call",
 }
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _install_minecraft_mcp_contract() -> None:
+    mcp_contract.install()
 
 
 class _FakeRouter:
