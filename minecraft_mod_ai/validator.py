@@ -208,6 +208,7 @@ class ProjectValidator:
             complete,
             findings,
         )
+        checks += self._validate_gametest_metadata(root, spec, findings)
         if spec.boss is None and not complete_entity_ids and not complete_client_allowed:
             checks += self._validate_no_unapproved_client_or_entity(
                 root,
@@ -365,21 +366,16 @@ class ProjectValidator:
             return checks
 
         main_class = f"{spec.package_name}.{_class_name(spec.mod_id)}Mod"
-        gametest_class = main_class + "GameTests"
-        for group, required in (
-            ("main", main_class),
-            ("fabric-gametest", gametest_class),
-        ):
-            checks += 1
-            if required not in _entrypoint_values(entrypoints.get(group)):
-                findings.append(
-                    Finding(
-                        "BAD_ENTRYPOINTS",
-                        "error",
-                        self._rel(root, path),
-                        f"{group} must include {required}.",
-                    )
+        checks += 1
+        if main_class not in _entrypoint_values(entrypoints.get("main")):
+            findings.append(
+                Finding(
+                    "BAD_ENTRYPOINTS",
+                    "error",
+                    self._rel(root, path),
+                    f"main must include {main_class}.",
                 )
+            )
 
         if spec.boss is not None:
             required_client = (
@@ -407,6 +403,92 @@ class ProjectValidator:
                         "Approved complete project requires a client entrypoint.",
                     )
                 )
+        return checks
+
+    def _validate_gametest_metadata(
+        self,
+        root: Path,
+        spec: ModSpec,
+        findings: list[Finding],
+    ) -> int:
+        """Validate Loom's dedicated GameTest mod instead of main runtime metadata."""
+
+        checks = 0
+        metadata_path = root / "src/gametest/resources/fabric.mod.json"
+        metadata = self._load_json(metadata_path, findings, root)
+        checks += 1
+
+        expected_id = f"{spec.mod_id}_gametest"
+        for key, expected in (
+            ("id", expected_id),
+            ("environment", "*"),
+        ):
+            checks += 1
+            if metadata.get(key) != expected:
+                findings.append(
+                    Finding(
+                        "BAD_GAMETEST_METADATA",
+                        "error",
+                        self._rel(root, metadata_path),
+                        f"{key} must equal {expected!r}.",
+                    )
+                )
+
+        main_class = f"{spec.package_name}.{_class_name(spec.mod_id)}Mod"
+        gametest_class = main_class + "GameTests"
+        entrypoints = metadata.get("entrypoints")
+        checks += 1
+        if not isinstance(entrypoints, dict):
+            findings.append(
+                Finding(
+                    "BAD_GAMETEST_ENTRYPOINTS",
+                    "error",
+                    self._rel(root, metadata_path),
+                    "GameTest entrypoints must be an object.",
+                )
+            )
+        else:
+            checks += 1
+            if gametest_class not in _entrypoint_values(
+                entrypoints.get("fabric-gametest")
+            ):
+                findings.append(
+                    Finding(
+                        "BAD_GAMETEST_ENTRYPOINTS",
+                        "error",
+                        self._rel(root, metadata_path),
+                        f"fabric-gametest must include {gametest_class}.",
+                    )
+                )
+
+        depends = metadata.get("depends")
+        checks += 1
+        if not isinstance(depends, dict) or depends.get(spec.mod_id) != "*":
+            findings.append(
+                Finding(
+                    "BAD_GAMETEST_DEPENDS",
+                    "error",
+                    self._rel(root, metadata_path),
+                    f"GameTest metadata must depend on {spec.mod_id!r}.",
+                )
+            )
+
+        source_path = (
+            root
+            / "src/gametest/java"
+            / Path(*spec.package_name.split("."))
+            / f"{_class_name(spec.mod_id)}ModGameTests.java"
+        )
+        checks += 1
+        if not source_path.is_file() or source_path.is_symlink():
+            findings.append(
+                Finding(
+                    "MISSING_GAMETEST_SOURCE",
+                    "error",
+                    self._rel(root, source_path),
+                    "Dedicated Loom GameTest source is missing.",
+                )
+            )
         return checks
 
     def _validate_no_unapproved_client_or_entity(
