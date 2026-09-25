@@ -255,7 +255,7 @@ def _atomic_write(path: Path, content: str | bytes) -> None:
     raw = content.encode("utf-8") if isinstance(content, str) else content
     temporary = path.with_name(
         f".{path.name}.mmm-{os.getpid()}-"
-        f"{hashlib.sha256(raw).hexdigest()[:10]}.tmp"
+        f"{hashlib.sha256(raw).hexdigest()}.tmp"
     )
     try:
         temporary.write_bytes(raw)
