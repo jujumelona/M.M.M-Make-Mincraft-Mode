@@ -351,6 +351,12 @@ class _ProgressCheckedResponse:
         self._request_id = request_id
         self._started_at = started_at
         self._first_progress = False
+        self._semantic_events = 0
+        self._last_progress_log_at = started_at
+        self._progress_log_interval = _positive_env_float(
+            "MMM_LLAMA_PROGRESS_LOG_INTERVAL_SECONDS",
+            15.0,
+        )
         self._saw_done = False
         self._finalized = False
 
@@ -408,14 +414,29 @@ class _ProgressCheckedResponse:
                 progressed = watchdog.observe(raw_line)
                 if progressed:
                     refresh_model_execution_deadline(self._idle_seconds)
-                if progressed and not self._first_progress and not _done_line(raw_line):
-                    self._first_progress = True
-                    print(
-                        "llama server: first semantic progress",
-                        f" request_id={self._request_id}",
-                        f" elapsed={time.monotonic() - self._started_at:.1f}s",
-                        flush=True,
-                    )
+                    self._semantic_events += 1
+                    now = time.monotonic()
+                    if not self._first_progress and not _done_line(raw_line):
+                        self._first_progress = True
+                        self._last_progress_log_at = now
+                        print(
+                            "llama server: first semantic progress",
+                            f" request_id={self._request_id}",
+                            f" elapsed={now - self._started_at:.1f}s",
+                            flush=True,
+                        )
+                    elif (
+                        not _done_line(raw_line)
+                        and now - self._last_progress_log_at >= self._progress_log_interval
+                    ):
+                        self._last_progress_log_at = now
+                        print(
+                            "llama server: semantic progress",
+                            f" request_id={self._request_id}",
+                            f" elapsed={now - self._started_at:.1f}s",
+                            f" events={self._semantic_events}",
+                            flush=True,
+                        )
                 if _done_line(raw_line):
                     self._saw_done = True
                 yield raw_line
