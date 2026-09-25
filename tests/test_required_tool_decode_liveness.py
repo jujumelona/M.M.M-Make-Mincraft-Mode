@@ -164,7 +164,7 @@ def test_required_tool_completed_without_tool_is_rejected_after_done() -> None:
     assert rejected.arguments["failure_code"] == "REQUIRED_TOOL_MISSING"
 
 
-def test_required_tool_long_semantic_preface_is_rejected_before_full_decode() -> None:
+def test_required_tool_semantic_preface_does_not_truncate_following_tool_call() -> None:
     response = _FakeStreamResponse(
         [
             _sse({"content": "x" * 1200}),
@@ -176,8 +176,8 @@ def test_required_tool_long_semantic_preface_is_rejected_before_full_decode() ->
     data = _post(response)
     choice = data["choices"][0]
 
-    assert response.saw_done is False
-    assert response.lines_requested == 1
+    assert response.saw_done is True
+    assert response.lines_requested == 3
     tool = _apply_source_edit_tool()
     request = GenerationRequest(
         tools=(tool,),
@@ -186,8 +186,7 @@ def test_required_tool_long_semantic_preface_is_rejected_before_full_decode() ->
         parallel_tool_calls=False,
     )
     generation = _native_tool_generation_response(choice["message"], request)
-    assert generation.tool_calls[0].name == "__mmm_rejected_tool_call__"
-    assert generation.tool_calls[0].arguments["failure_code"] == "REQUIRED_TOOL_MISSING"
+    assert generation.tool_calls[0].name == "apply_source_edit"
 
 
 def test_required_tool_fragmented_text_marker_is_not_rejected() -> None:
