@@ -38,7 +38,8 @@ def test_identical_persistent_skill_rows_are_deduplicated_by_committed_identity(
     assert identity.verified_persistent_skills([valid, dict(valid)]) == [valid]
 
 
-def test_persistent_skill_loader_is_bound_to_identity_validation() -> None:
+def test_persistent_skill_loader_can_be_explicitly_bound_to_identity_validation() -> None:
+    identity.install(skills)
     assert getattr(
         skills._load_persistent_skills,
         "_mmm_persistent_skill_identity_v1",
