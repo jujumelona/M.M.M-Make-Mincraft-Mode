@@ -75,7 +75,10 @@ NODE_SCHEMA = {
         {"if": {"properties": {"kind": {"const": "java"}}},
          "then": {"properties": {
              "resource_path": {"const": ""},
-             "public_api": {"minItems": 1, "items": {"type": "string", "pattern": r"^[^{}]+$"}},
+             "public_api": {"minItems": 1, "items": {
+                 "type": "string",
+                 "pattern": r"^(?!\s*public\s+(?:final\s+)?(?:class|interface|enum|record)\b)[^{}]+$",
+             }},
          }},
          "else": {"properties": {
              "resource_path": {"minLength": 1, "pattern": r"^src/main/resources/(assets|data)/[^/]+/(?!.*(?:\.\.|\\)).+\.json$"},
@@ -142,13 +145,17 @@ def _schema_diagnostics(page: Any, schema: Mapping[str, Any]) -> list[dict[str, 
 
 
 def _canonicalize_public_api_declaration(value: Any) -> Any:
-    """Normalize a model-emitted Java API entry to a declaration-only signature."""
+    """Normalize mechanically repairable Java member syntax only."""
     if not isinstance(value, str):
         return value
-    text = re.sub(r"\\s+", " ", value.strip()).rstrip(";").strip()
-    # public_api is declaration-only by contract. Models commonly emit enum/class
-    # bodies despite that contract; discard the body deterministically instead of
-    # spending another model turn repairing syntax the host can prove how to fix.
+    text = re.sub(r"\s+", " ", value.strip()).rstrip(";").strip()
+    # public_api entries are members of the host-required top-level final class.
+    # A top-level class/interface/enum/record is a semantic contract error, not a
+    # syntax cleanup: leave it invalid so scoped repair can replace it.
+    if re.match(r"^public\s+(?:final\s+)?(?:class|interface|enum|record)\b", text):
+        return text
+    # Method/field bodies are mechanically removable because the declaration itself
+    # remains the same member contract.
     brace = text.find("{")
     if brace >= 0:
         text = text[:brace].rstrip()
@@ -378,7 +385,9 @@ def _decision(router: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]
                 "Return at most four nodes per page. If remaining units exist, you may report them in "
                 "continuation.remaining_unit_ids, or set done=true when all units are complete. "
                 "Each Java node is one public final class with a concrete name and NONEMPTY public_api "
-                "declaration strings (no bodies). Java resource_path must be exactly the empty string: "
+                "MEMBER declaration strings (no bodies and no public class/interface/enum/record type "
+                "declarations). Represent finite states as public static final fields and supporting "
+                "methods on that class. Java resource_path must be exactly the empty string: "
                 "the host derives it. Include constructors/fields/methods used by consumers. List actual "
                 "symbol dependencies (referencing already accepted_nodes or nodes in this page), "
                 "never an artificial previous-section chain. No dependency cycles. Only integration "
@@ -411,12 +420,24 @@ def _decision(router: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]
             except (ValueError, TypeError):
                 pass
         if rejected_page is not None:
-            # Native tool validation can reject a declaration that is mechanically
-            # repairable (for example, an enum body in public_api). Canonicalize the
-            # raw arguments before consuming a model correction turn.
-            rejected_page = _canonicalize_schema_page(rejected_page)
-            diagnostics = _schema_diagnostics(rejected_page, _page_schema(payload))
-            if not diagnostics:
+            # Native tool validation can reject mechanically repairable member syntax.
+            # Accept host normalization only when it actually changed a schema-invalid
+            # page into a schema-valid page; never swallow unrelated native rejections.
+            page_schema = _page_schema(payload)
+            original_diagnostics = _schema_diagnostics(rejected_page, page_schema)
+            normalized_page = _canonicalize_schema_page(rejected_page)
+            normalized_diagnostics = _schema_diagnostics(normalized_page, page_schema)
+            if (
+                original_diagnostics
+                and normalized_page != rejected_page
+                and not normalized_diagnostics
+            ):
+                return normalized_page
+            rejected_page = normalized_page
+            diagnostics = normalized_diagnostics or original_diagnostics
+        else:
+            diagnostics = []
+        if not diagnostics:
                 return rejected_page
         else:
             diagnostics = []
