@@ -214,6 +214,27 @@ def select_verifier_repair_window(
         return None
     usable = tuple(item for item in diagnostics if isinstance(item, Mapping))
     for diagnostic_index, diagnostic in enumerate(usable):
+        if (
+            str(diagnostic.get("code") or "").strip() == "host:authored-surface"
+            or str(diagnostic.get("source") or "").strip() == "host-authored-contract"
+        ):
+            message = str(diagnostic.get("message") or "")
+            expected = re.search(r"public\\s+final\\s+class\\s+([A-Za-z_$][\\w$]*)", message)
+            if expected is not None:
+                symbol = expected.group(1)
+                declaration = re.search(
+                    rf"public\\s+(?:final\\s+)?class\\s+{re.escape(symbol)}\\b",
+                    source,
+                )
+                if declaration is not None:
+                    old = declaration.group(0)
+                    return {
+                        "start_line": source.count("\\n", 0, declaration.start()) + 1,
+                        "end_line": source.count("\\n", 0, declaration.end()) + 1,
+                        "old": old,
+                        "old_chars": len(old),
+                        "diagnostic_index": diagnostic_index,
+                    }
         line_index = _diagnostic_line_index(diagnostic, len(lines))
         if line_index is not None:
             window = _unique_line_window(source, lines, line_index)
