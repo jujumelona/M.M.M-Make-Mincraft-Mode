@@ -272,6 +272,8 @@ def _bootstrap_imports_and_calls(tree: ast.AST) -> tuple[set[str], Counter[str],
 
 def audit_bootstrap_owner_modules() -> list[str]:
     path = PKG / "runtime_bootstrap.py"
+    if not path.exists():
+        return []
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     installer_aliases, called_installers, errors = _bootstrap_imports_and_calls(tree)
     missing_calls = sorted(name for name in installer_aliases if called_installers[name] == 0)
