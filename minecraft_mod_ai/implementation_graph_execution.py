@@ -9,7 +9,6 @@ from typing import Any
 
 from .complete_spec import ProductionModule
 from .implementation_ir import (
-    MAX_REFINEMENTS,
     ImplementationGraphError,
     OutputBudgetExhausted,
     admissible_tokens,
@@ -197,13 +196,16 @@ def execute_implementation_graph(generator: Any, project_root: str | Path, *,
                                     details={"reason": reason, "symbol": node["symbol"],
                                              "node_hash": fingerprint, "same_decode_retry": False})
                     if not state.get("refinement_pending"):
-                        if state["refinements"] >= MAX_REFINEMENTS:
-                            raise ImplementationGraphError("IMPLEMENTATION_IR_REFINEMENT_LIMIT")
                         state["refinements"] += 1
                         save()
                     # Halve the admitted workload after an observed exhaustion. Merely
                     # lowering the model's estimate cannot make the same request eligible.
-                    budget = min(admissible_tokens(), node_cost(node) // 2) if reason == "OUTPUT_BUDGET_EXHAUSTED" else admissible_tokens()
+                    runtime_budget = admissible_tokens(generator.router)
+                    budget = (
+                        min(runtime_budget, node_cost(node) // 2)
+                        if reason == "OUTPUT_BUDGET_EXHAUSTED" and runtime_budget is not None
+                        else runtime_budget
+                    )
                     refined = refine_node(generator.router, node, nodes=graph["nodes"],
                                           package=package, mod_id=mod_id,
                                           requirements=graph["requirements"], reason=reason, budget=budget,
