@@ -143,6 +143,8 @@ def fixed_point_tool_calls(calls: Sequence[Any]) -> list[dict[str, Any]]:
 
 def runtime_failure_code(tool_name: str, error: str) -> str:
     lowered = str(error or "").casefold()
+    if "external_mcp_arguments_invalid" in lowered:
+        return "EXTERNAL_MCP_ARGUMENTS_INVALID"
     if tool_name in MUTATION_ACT_TOOLS:
         if "exact source-edit precondition failed" in lowered:
             return "MUTATION_STALE_PRECONDITION"

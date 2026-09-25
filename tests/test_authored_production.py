@@ -810,7 +810,8 @@ def test_compiler_preserves_ambiguous_or_quoted_reasoning_text(text):
     assert "_authored_source_projection" not in proposal.game_design
 
 
-def test_contract_shaped_authored_design_stays_one_coherent_bounded_module(monkeypatch, tmp_path):
+@pytest.mark.parametrize("wrapper", ["", "## 개요 (Overview)\nStarForge space trading.\n\n"])
+def test_contract_shaped_authored_design_stays_one_coherent_bounded_module(monkeypatch, tmp_path, wrapper):
     def forbidden(*args, **kwargs):
         pytest.fail("saved design entered planner again")
 
@@ -828,7 +829,7 @@ def test_contract_shaped_authored_design_stays_one_coherent_bounded_module(monke
         "reuse_assessment",
         "verification",
     )
-    text = "\n".join(
+    text = wrapper + "\n".join(
         f"# {section}\n- concrete_{section}: "
         + ("observable behavior, owned state, and exact constraints. " * 12)
         for section in sections
@@ -922,3 +923,15 @@ def test_contract_shaped_authored_design_stays_one_coherent_bounded_module(monke
     assert "persistence:" in evidence_query
     assert "resources_and_ui:" in evidence_query
     assert "n, a, m, e" not in evidence_query
+
+
+def test_worksheet_with_supplementary_section_is_not_split_into_feature_classes():
+    from minecraft_mod_ai.authored_production import _contract_shaped_authored_design
+
+    text = (
+        "# StarForge\n## 개요 (Overview)\nSpace trading.\n"
+        "## behavior_contract\nBuild ships.\n## state_model\nStore credits.\n"
+        "## integration\nUse server events.\n## verification\nTest trades.\n"
+        "## 추가 설명\nPreserve this custom design note.\n"
+    )
+    assert _contract_shaped_authored_design(text)

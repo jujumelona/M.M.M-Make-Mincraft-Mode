@@ -5,6 +5,8 @@ from __future__ import annotations
 import builtins
 import sys
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from functools import wraps
 from typing import IO, Any
 
@@ -34,7 +36,8 @@ def install_mcp_protocol_print_guard() -> None:
     builtins.print = protocol_safe_print
 
 
-def open_mcp_stdio_errlog() -> IO[str]:
+@contextmanager
+def open_mcp_stdio_errlog() -> Iterator[IO[str]]:
     """Return a real fd-backed text stream suitable for ``mcp.stdio_client``.
 
     Colab/IPython replaces ``sys.stderr`` with objects that may not implement a usable
@@ -43,7 +46,29 @@ def open_mcp_stdio_errlog() -> IO[str]:
     returned context-managed file object.
     """
 
-    return tempfile.TemporaryFile(mode="w+", encoding="utf-8")
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as stream:
+        failed = False
+        try:
+            yield stream
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            try:
+                stream.flush()
+                stream.seek(0)
+                stderr = stream.read()
+                if stderr:
+                    from .agent_tool_runtime import _redact_text
+                    from .root_cause_trace import emit_root_cause
+
+                    emit_root_cause(
+                        "mcp_child_stderr", stage="external_mcp", operation="stdio",
+                        gate="subprocess_diagnostics", result="FAIL" if failed else "INFO",
+                        details={"stderr": _redact_text(stderr)},
+                    )
+            except Exception:  # noqa: BLE001, S110 - diagnostic failure must not replace the transport exception
+                pass
 
 
 __all__ = ["install_mcp_protocol_print_guard", "open_mcp_stdio_errlog"]

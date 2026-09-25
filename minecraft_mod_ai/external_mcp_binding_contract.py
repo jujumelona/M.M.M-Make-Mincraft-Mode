@@ -18,6 +18,8 @@ from collections.abc import Collection, Mapping
 from functools import wraps
 from typing import Any
 
+from jsonschema import Draft202012Validator
+
 from .mcp_schema_integrity_contract import validate_input_schema
 
 _MARKER = "_mmm_external_mcp_schema_binding_v1"
@@ -28,6 +30,10 @@ _BINDINGS_ATTR = "_mmm_external_schema_bindings"
 
 class ExternalMCPSchemaBindingError(RuntimeError):
     """The provider/tool schema observed by the model is no longer executable."""
+
+
+class ExternalMCPArgumentsError(ValueError):
+    """Model arguments do not satisfy the already-bound live provider schema."""
 
 
 def _server_scope(values: Collection[str] | None) -> frozenset[str] | None:
@@ -593,6 +599,30 @@ def install(external_agent_bridge_module: Any, external_mcp_router_module: Any) 
                 allowed_server_ids=allowed,
             ):
                 arguments.pop(reserved, None)
+            provider_arguments = router._arguments_for_route(
+                dict(arguments), route["route"],
+                external_mcp_router_module.MCPRouteTarget.from_value(target),
+            )
+            errors = list(Draft202012Validator(live_schema).iter_errors(provider_arguments))
+            from .root_cause_trace import emit_root_cause
+
+            emit_root_cause(
+                "external_mcp_arguments_validated", stage=stage, operation=binding["tool"],
+                gate="provider_input_schema", result="FAIL" if errors else "PASS",
+                details={
+                    "capability": capability, "server": binding["server"],
+                    "tool": binding["tool"], "schema_sha256": binding["schema_sha256"],
+                    "schema": live_schema, "arguments": provider_arguments,
+                    "errors": [{"path": list(error.absolute_path), "message": error.message}
+                               for error in errors],
+                },
+            )
+            if errors:
+                raise ExternalMCPArgumentsError(
+                    "EXTERNAL_MCP_ARGUMENTS_INVALID: "
+                    f"{binding['server']}/{binding['tool']}: "
+                    + "; ".join(error.message for error in errors)
+                )
             return router.invoke_bound(
                 capability,
                 stage=stage,
@@ -606,6 +636,9 @@ def install(external_agent_bridge_module: Any, external_mcp_router_module: Any) 
                 disposable_runtime=disposable_runtime,
                 allowed_server_ids=allowed,
             )
+        except ExternalMCPArgumentsError:
+            # The provider/schema binding remains valid; repair arguments locally.
+            raise
         except Exception as exc:
             invalidate(self, key)
             if isinstance(exc, external_agent_bridge_module.ExternalAgentBridgeError):
@@ -617,4 +650,4 @@ def install(external_agent_bridge_module: Any, external_mcp_router_module: Any) 
     bridge_class.call = call
 
 
-__all__ = ["ExternalMCPSchemaBindingError", "install"]
+__all__ = ["ExternalMCPArgumentsError", "ExternalMCPSchemaBindingError", "install"]

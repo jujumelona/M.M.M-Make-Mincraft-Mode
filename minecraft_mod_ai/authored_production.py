@@ -970,7 +970,10 @@ def _contract_shaped_authored_design(text: str) -> bool:
             for _index, record_depth, title in records
             if record_depth == depth and not _document_context_title(title)
         )
-        if len(names) >= 3 and set(names).issubset(canonical):
+        contract_names = tuple(name for name in names if name in canonical)
+        # Supplementary prose/overview headings do not turn engineering facets
+        # into independent features. Repeated facets indicate multiple contracts.
+        if len(set(contract_names)) >= 3 and len(contract_names) == len(set(contract_names)):
             return True
     return False
 
@@ -1096,6 +1099,22 @@ def compile_authored_design(
         )
         design = {**design, "_authored_execution_manifest": manifest}
 
+    from .root_cause_trace import emit_root_cause
+
+    emit_root_cause(
+        "authored_design_lowering_selected", stage="production",
+        operation="compile_authored_production", gate="authored_execution_route", result="PASS",
+        details={
+            "policy": manifest["policy"], "existing_input": bool(effective_existing),
+            "headings": [
+                {"line": line + 1, "depth": depth, "title": title}
+                for line, depth, title in _authored_heading_records(implementation_plan.text)[1]
+            ],
+            "module_ids": [module.module_id for module in modules],
+            "source_text_sha256": manifest["source_text_sha256"],
+            "manifest": manifest,
+        },
+    )
     return complete_proposal_from_parts(
         requested_prompt=plan.requested_prompt,
         base_proposal=base,

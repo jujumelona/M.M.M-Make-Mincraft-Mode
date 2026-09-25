@@ -43,7 +43,7 @@ def _tool_name(schema: Mapping[str, Any]) -> str:
     return str(function.get("name") or "").strip() if isinstance(function, Mapping) else ""
 
 
-def _with_capability(schema: Mapping[str, Any], capability: str) -> Mapping[str, Any]:
+def _with_capability(schema: Mapping[str, Any], capability: str, state: Any) -> Mapping[str, Any]:
     projected = deepcopy(schema)
     function = projected.get("function")
     parameters = function.get("parameters") if isinstance(function, Mapping) else None
@@ -51,6 +51,31 @@ def _with_capability(schema: Mapping[str, Any], capability: str) -> Mapping[str,
     field = properties.get("capability") if isinstance(properties, Mapping) else None
     if isinstance(field, dict):
         field["enum"] = [capability]
+    provider_schema = getattr(state, "_external_mcp_provider_schema", None)
+    if (
+        _tool_name(schema) == "external_mcp_call"
+        and getattr(state, "_external_mcp_schema_capability", "") == capability
+        and isinstance(properties, dict) and isinstance(provider_schema, Mapping)
+    ):
+        nested = deepcopy(dict(provider_schema))
+
+        def relocate_refs(value: Any) -> None:
+            if isinstance(value, dict):
+                if "$id" in value:
+                    return  # References below this resource retain their own base URI.
+                ref = value.get("$ref")
+                if ref == "#":
+                    value["$ref"] = "#/properties/arguments"
+                elif isinstance(ref, str) and ref.startswith("#/"):
+                    value["$ref"] = "#/properties/arguments/" + ref[2:]
+                for child in value.values():
+                    relocate_refs(child)
+            elif isinstance(value, list):
+                for child in value:
+                    relocate_refs(child)
+
+        relocate_refs(nested)
+        properties["arguments"] = nested
     return projected
 
 
@@ -129,7 +154,7 @@ def constrain_recovery_tools(
         bound = getattr(state, "_external_mcp_schema_capability", "")
         name = "external_mcp_call" if bound == capability else "external_mcp_schema"
         schema = next((item for item in available_tools if _tool_name(item) == name), None)
-        return (_with_capability(schema, capability),) if schema is not None else ()
+        return (_with_capability(schema, capability, state),) if schema is not None else ()
     if len(tools) != 1:
         return tools
     name = _tool_name(tools[0])
@@ -137,12 +162,12 @@ def constrain_recovery_tools(
         if not bool(getattr(state, "_external_mcp_capabilities_seen", False)):
             return tools
         capability = _preferred_capability(state, repair_route)
-        return (_with_capability(tools[0], capability),) if capability else ()
+        return (_with_capability(tools[0], capability, state),) if capability else ()
     if name == "external_mcp_call":
         capability = str(
             getattr(state, "_external_mcp_schema_capability", "") or ""
         ).strip()
-        return (_with_capability(tools[0], capability),) if capability else ()
+        return (_with_capability(tools[0], capability, state),) if capability else ()
     return tools
 
 
@@ -175,6 +200,7 @@ def record_discovery(
         state._external_mcp_capabilities_seen = True
         state._external_mcp_recovery_capabilities = reviewed
         state._external_mcp_schema_capability = ""
+        state._external_mcp_provider_schema = None
         state._external_mcp_completed_capabilities = set()
         return
     if name not in {"external_mcp_schema", "external_mcp_call"}:
@@ -185,13 +211,28 @@ def record_discovery(
     available = set(getattr(state, "_external_mcp_recovery_capabilities", ()) or ())
     if capability not in available:
         return
+    if payload.get("failure_code") == "EXTERNAL_MCP_ARGUMENTS_INVALID":
+        return
     if name == "external_mcp_call" or status != "PASS":
         completed = set(getattr(state, "_external_mcp_completed_capabilities", ()) or ())
         completed.add(capability)
         state._external_mcp_completed_capabilities = completed
         state._external_mcp_schema_capability = ""
+        state._external_mcp_provider_schema = None
         return
     state._external_mcp_schema_capability = capability
+    schema = result.get("input_schema") if isinstance(result, Mapping) else None
+    state._external_mcp_provider_schema = deepcopy(dict(schema)) if isinstance(schema, Mapping) else None
+    if isinstance(state._external_mcp_provider_schema, dict):
+        # The router supplies these coordinates after model validation. They must
+        # not become required model arguments merely because the provider needs them.
+        injected = set((result.get("target_args_injected_by_router") or {}).values())
+        properties = state._external_mcp_provider_schema.get("properties", {})
+        for field in injected:
+            properties.pop(field, None)
+        required = state._external_mcp_provider_schema.get("required")
+        if isinstance(required, list):
+            state._external_mcp_provider_schema["required"] = [name for name in required if name not in injected]
 
 
 __all__ = [

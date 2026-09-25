@@ -115,3 +115,28 @@ def test_trace_serialization_failure_uses_emergency_record(tmp_path, monkeypatch
     assert records[-1]["original_event"] == "production_failure"
     assert records[-1]["original_exception_type"] == "ValueError"
     assert records[-1]["logger_exception_type"] == "TypeError"
+
+
+def test_full_trace_shows_nested_model_request_and_complete_failure(tmp_path, monkeypatch, capsys):
+    from minecraft_mod_ai.model_adapters.base import GenerationRequest
+
+    trace_path = tmp_path / "root_cause.jsonl"
+    monkeypatch.setenv("MMM_ROOT_CAUSE_TRACE_PATH", str(trace_path))
+    monkeypatch.delenv("MMM_ROOT_CAUSE_TRACE_DETAIL", raising=False)
+    content = "approved design " * 100
+    details = {"request": GenerationRequest(
+        messages=({"role": "user", "content": content},),
+        tools=({"function": {"parameters": {"properties": {"query": {"type": "string"}}}}},),
+        metadata={"api_key": "hidden-credential"},
+    ), "records": list(range(100))}
+    reason = "compiler reason " * 100
+    with trace.trace_scope("full-test"):
+        trace.emit_root_cause("full_failure", result="FAIL", reason=reason,
+                              details=details, exc=RuntimeError(reason))
+    record = _records(trace_path)[0]
+    assert record["details"]["request"]["messages"][0]["content"] == content
+    assert record["details"]["records"] == list(range(100))
+    assert record["reason"] == reason
+    assert record["exception_chain"][0]["message"] == reason
+    assert record["details"]["request"]["metadata"]["api_key"] == "<redacted>"
+    assert "hidden-credential" not in capsys.readouterr().err

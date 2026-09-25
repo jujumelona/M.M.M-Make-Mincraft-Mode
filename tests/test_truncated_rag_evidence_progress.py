@@ -89,3 +89,22 @@ def test_unforced_rejection_progress_keeps_full_rejection_payload() -> None:
         forced_evidence_tool=None,
     )
     assert first != second
+
+
+def test_different_mcp_capability_is_not_the_same_rejected_action():
+    from minecraft_mod_ai.progress_aware_tool_loop import HostRunState
+
+    state = HostRunState()
+    state._external_mcp_capabilities_seen = True
+    state._external_mcp_recovery_capabilities = ("mapping_resolution", "registry_lookup")
+    state._external_mcp_completed_capabilities = set()
+    state._external_mcp_schema_capability = "mapping_resolution"
+    rejection = [{"failure_code": "TOOL_NOT_VISIBLE", "original_tool": "apply_source_edit"}]
+    first = _model_rejection_progress_key(state, rejection, forced_evidence_tool="external_mcp_call")
+    state._external_mcp_completed_capabilities = {"mapping_resolution"}
+    state._external_mcp_schema_capability = "registry_lookup"
+    second = _model_rejection_progress_key(state, rejection, forced_evidence_tool="external_mcp_call")
+    assert first != second
+    assert not state.record_no_progress_result(first)
+    assert not state.record_no_progress_result(second)
+    assert state.record_no_progress_result(second)

@@ -8,6 +8,8 @@ import os
 import subprocess
 import uuid
 from collections.abc import Mapping, Sequence
+from dataclasses import fields, is_dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +52,16 @@ def _redacted(value: Any, seen: set[int]) -> Any:
                 str(key): "<redacted>" if _secret_key(key) else _redacted(child, seen)
                 for key, child in value.items()
             }
+        if is_dataclass(value) and not isinstance(value, type):
+            return {
+                field.name: "<redacted>" if _secret_key(field.name)
+                else _redacted(getattr(value, field.name), seen)
+                for field in fields(value)
+            }
+        if isinstance(value, Enum):
+            return _redacted(value.value, seen)
+        if isinstance(value, (set, frozenset)):
+            return [_redacted(child, seen) for child in sorted(value, key=repr)]
         if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
             return [_redacted(child, seen) for child in value]
         return str(value)

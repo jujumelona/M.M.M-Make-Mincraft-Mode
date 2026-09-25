@@ -1,11 +1,34 @@
 from __future__ import annotations
 
 import io
+import json
+import subprocess
+import sys
 
 import anyio
 import pytest
 
 from minecraft_mod_ai import agent_tool_runtime
+
+
+def test_child_stderr_is_retained_even_when_connection_initialization_fails(tmp_path, monkeypatch):
+    from minecraft_mod_ai.mcp_stdio_support import open_mcp_stdio_errlog
+
+    trace_path = tmp_path / "trace.jsonl"
+    monkeypatch.setenv("MMM_ROOT_CAUSE_TRACE_PATH", str(trace_path))
+    monkeypatch.delenv("MMM_ROOT_CAUSE_TRACE_DETAIL", raising=False)
+    with pytest.raises(RuntimeError, match="connection closed"), open_mcp_stdio_errlog() as errlog:
+        subprocess.run(
+            [sys.executable, "-c", "import sys; sys.stderr.write('original child traceback ' * 100 + ' password=private-value')"],
+            stderr=errlog, check=True,
+        )
+        raise RuntimeError("connection closed")
+    assert trace_path.exists()
+    events = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+    event = next(event for event in events if event["event"] == "mcp_child_stderr")
+    assert event["result"] == "FAIL"
+    assert event["details"]["stderr"].count("original child traceback") == 100
+    assert "private-value" not in json.dumps(events)
 
 
 class _NotebookStderr(io.StringIO):

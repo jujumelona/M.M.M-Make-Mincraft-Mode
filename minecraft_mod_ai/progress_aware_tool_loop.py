@@ -1120,6 +1120,12 @@ def _model_rejection_progress_key(
         base["model_tool_rejections"] = list(rejection_payloads)
         return base
     base["forced_evidence_tool"] = forced
+    if forced.startswith("external_mcp_"):
+        # The same wrapper can address different schema-bound provider routes.
+        # A rejection on mapping_resolution is not a rejection on registry_lookup.
+        base["external_mcp_frontier"] = recovery_state_snapshot(
+            state, getattr(state, "repair_evidence_route", None)
+        )
     base["rejection_codes"] = sorted({
         str(payload.get("failure_code") or "MODEL_TOOL_CALL_REJECTED").strip()
         for payload in rejection_payloads
@@ -1802,6 +1808,7 @@ class HostRunState:
             self.no_progress_streak = 0
             self._external_mcp_completed_capabilities = set()
             self._external_mcp_schema_capability = ""
+            self._external_mcp_provider_schema = None
             return True
 
     def next_untried_internal_tool(
@@ -2242,7 +2249,23 @@ def _generate_turn_in_scope(
     scope_factory = getattr(router, "_generation_scope", None)
     scope = scope_factory(config) if callable(scope_factory) else nullcontext()
     with scope:
-        return adapter.generate_turn(turn_request)
+        emit_root_cause(
+            "model_turn_request", stage="generation", operation="generate_turn",
+            gate="model_transport", result="START", details={"request": turn_request},
+        )
+        try:
+            response = adapter.generate_turn(turn_request)
+        except Exception as exc:
+            emit_root_cause(
+                "model_turn_failure", stage="generation", operation="generate_turn",
+                gate="model_transport", result="FAIL", reason=str(exc), exc=exc,
+            )
+            raise
+        emit_root_cause(
+            "model_turn_response", stage="generation", operation="generate_turn",
+            gate="model_transport", result="PASS", details={"response": response},
+        )
+        return response
 
 def _forced_tool_choice_name(tool_choice: Any) -> str:
     if not isinstance(tool_choice, Mapping):
@@ -3249,11 +3272,6 @@ def _normalize_initial_task_evidence_calls(
     target = str(target_path or "").replace("\\", "/").strip()
     target_symbol = target.rsplit("/", 1)[-1].rsplit(".", 1)[0] if target else ""
     target_folded = target_symbol.casefold()
-    active_authority = CURRENT_MUTATION_AUTHORITY.get()
-    bounded_authored = bool(
-        active_authority is not None
-        and active_authority.mode is MutationAuthorityMode.BOUNDED_ROOTS
-    )
     changed = False
     normalized: list[Any] = []
     for call in calls:
@@ -3271,7 +3289,7 @@ def _normalize_initial_task_evidence_calls(
             and current_query
             and target_folded in current_query.casefold()
         )
-        if not self_target and not bounded_authored:
+        if not self_target:
             normalized.append(call)
             continue
         rebound = dict(arguments)
@@ -3992,6 +4010,11 @@ def _generate_with_tools_impl(
                 "selected_tools": sorted(phase_names),
                 "forced_verifier": forced_verifier,
                 "target": ctx_before,
+                "evidence_required": require_rag,
+                "evidence_ready": baseline_ready,
+                "authoritative_java_evidence": state.has_authoritative_java_evidence,
+                "external_mcp_frontier": recovery_state_snapshot(state, state.repair_evidence_route),
+                "tool_schemas": phase_tools,
             },
         )
 
@@ -4634,11 +4657,19 @@ def _generate_with_tools_impl(
                 if is_evidence_tool(call):
                     state.record_query(call.name, call.arguments)
                     state.record_source_attempt(call.name, call.arguments)
+                provider_status = (
+                    str(result.get("status") or "").upper()
+                    if call.name.startswith("external_mcp_") and isinstance(result, Mapping) else ""
+                )
+                unavailable = provider_status in {"UNAVAILABLE", "ERROR", "FAIL", "TIMEOUT"}
                 return call, {
-                    "ok": True,
+                    "ok": not unavailable,
                     "tool": call.name,
                     **metadata,
                     "result": result,
+                    **({"failure_code": "EXTERNAL_MCP_UNAVAILABLE",
+                        "error": f"External MCP returned {provider_status}; see result.attempts"}
+                       if unavailable else {}),
                 }
             except Exception as exc:  # noqa: BLE001 - tool failures become typed recovery observations
                 if is_evidence_tool(call):

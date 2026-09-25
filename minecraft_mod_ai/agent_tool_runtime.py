@@ -5,7 +5,6 @@ import json
 import os
 import re
 import sys
-import tempfile
 import threading
 from collections.abc import Collection, Mapping, Sequence
 from contextlib import AsyncExitStack
@@ -18,7 +17,8 @@ import anyio
 
 from .external_agent_bridge import TOOL_NAMES as EXTERNAL_TOOL_NAMES
 from .external_agent_bridge import ExternalAgentBridge
-from .root_cause_trace import emit_root_cause
+from .mcp_stdio_support import open_mcp_stdio_errlog
+from .root_cause_trace import _semantic_outcome, emit_root_cause
 from .source_edit_scalar_protocol_contract import (
     SOURCE_EDIT_SCHEMA,
     materialize_model_source_edit,
@@ -447,7 +447,7 @@ class AgentToolRuntime:
                     stage=selected,
                     operation=tool_name,
                     gate="runtime_dispatch",
-                    result="PASS",
+                    result=_semantic_outcome(result),
                     details={"arguments": payload, "result": result},
                 )
                 return result
@@ -493,7 +493,11 @@ class AgentToolRuntime:
                 + _redact_text(str(exc) or "no exception message; see preceding child/transport trace")
             ) from exc
         bounded = _bounded_result(result)
-        emit_root_cause("agent_tool_call_result", stage=selected, operation=tool_name, gate="runtime_dispatch", result="PASS", details={"arguments": payload, "result": bounded})
+        emit_root_cause(
+            "agent_tool_call_result", stage=selected, operation=tool_name,
+            gate="runtime_dispatch", result=_semantic_outcome(result),
+            details={"arguments": payload, "result": result, "model_observation": bounded},
+        )
         return bounded
 
     @staticmethod
@@ -650,9 +654,7 @@ class _MCPStdioSession:
         self._stack = stack
         try:
             stack.enter_context(anyio.fail_after(self.timeout_seconds))
-            errlog = stack.enter_context(
-                tempfile.TemporaryFile(mode="w+", encoding="utf-8")  # noqa: SIM115
-            )
+            errlog = stack.enter_context(open_mcp_stdio_errlog())
             params = StdioServerParameters(
                 command=sys.executable,
                 args=["-m", "minecraft_mod_ai.mcp_server"],
@@ -972,6 +974,8 @@ def _bounded_result(result: Mapping[str, Any]) -> dict[str, Any]:
         },
         "truncated": True,
         "original_bytes": original_bytes,
+        **{key: bounded[key] for key in ("status", "ok", "success")
+           if key in bounded and isinstance(bounded[key], (str, bool))},
         "preserved_evidence": _preserved_evidence(bounded),
         "preview": preview,
         "hint": (

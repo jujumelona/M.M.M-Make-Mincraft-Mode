@@ -95,6 +95,15 @@ def test_large_observation_preserves_rag_receipt(monkeypatch) -> None:
     assert len(result["preview"].encode("utf-8")) <= 4096
 
 
+def test_large_provider_failure_retains_machine_readable_failure_status(monkeypatch):
+    monkeypatch.setenv("MMM_AGENT_OBSERVATION_BYTES", "8192")
+    result = _bounded_result({"status": "UNAVAILABLE", "ok": False,
+                              "attempts": [{"error": "nested exception " * 3000}]})
+    assert result["truncated"] is True
+    assert result["status"] == "UNAVAILABLE"
+    assert result["ok"] is False
+
+
 def test_free_text_secret_redaction_covers_auth_and_private_keys() -> None:
     private_key = (
         "-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----"

@@ -423,15 +423,27 @@ def test_approved_task_query_replaces_generated_self_search() -> None:
 
 
 def test_initial_task_query_does_not_override_non_self_model_search() -> None:
+    from minecraft_mod_ai.mutation_authority import (
+        CURRENT_MUTATION_AUTHORITY,
+        MutationAuthority,
+        MutationAuthorityMode,
+    )
+
     call = ToolCall(
         id="semantic-search",
         name="search_code_rag",
         arguments={"query": "Fabric block registration Registry.register", "limit": 5},
         raw_arguments='{"query":"Fabric block registration Registry.register","limit":5}',
     )
-    normalized = loop._normalize_initial_task_evidence_calls(
-        (call,),
-        query="approved semantic task query",
-        target_path="src/main/java/demo/AuthoredFeature002.java",
-    )
+    token = CURRENT_MUTATION_AUTHORITY.set(MutationAuthority(
+        mode=MutationAuthorityMode.BOUNDED_ROOTS, roots=("src/main/java/demo/",),
+    ))
+    try:
+        normalized = loop._normalize_initial_task_evidence_calls(
+            (call,),
+            query="approved semantic task query",
+            target_path="src/main/java/demo/AuthoredFeature002.java",
+        )
+    finally:
+        CURRENT_MUTATION_AUTHORITY.reset(token)
     assert normalized is None

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-"""Compact, source-first structured tracing for host-owned execution boundaries.
+"""Source-first structured tracing for host-owned execution boundaries.
 
 The journal is append-only and independent of model output. Boundary records contain
-small identifiers instead of serialized domain objects, while failure records point at
+boundary identifiers and complete explicit diagnostic payloads; failure records point at
 the deepest causal source location so a failing definition can be found from the log
 without repository-wide searching.
 """
@@ -162,7 +162,7 @@ def diagnostic_context(**fields: Any):
     merged = dict(parent)
     for key, value in fields.items():
         if key in _DIAGNOSTIC_KEYS and value not in (None, "", [], {}, ()):
-            merged[key] = bounded_safe(value, key=key)
+            merged[key] = _trace_safe(value, key=key)
     token = _DIAGNOSTIC_CONTEXT.set(merged)
     try:
         yield merged
@@ -231,6 +231,21 @@ def bounded_safe(value: Any, *, depth: int = 0, key: str = "") -> Any:
     except BaseException:
         rendered = f"<unprintable:{type(value).__name__}>"
     return bounded_safe(rendered, depth=depth + 1)
+
+
+def full_trace_enabled() -> bool:
+    """Full console/journal diagnostics are the default; compact is explicit."""
+    return os.environ.get("MMM_ROOT_CAUSE_TRACE_DETAIL", "full").strip().lower() != "compact"
+
+
+def _trace_safe(value: Any, *, key: str = "") -> Any:
+    if not full_trace_enabled():
+        return bounded_safe(value, key=key)
+    if key and _secret_key(key):
+        return "<redacted>"
+    from .planner_trace_artifacts import _redacted
+
+    return _redacted(value, set())
 
 
 def _scalar_identifier(value: Any) -> Any:
@@ -310,7 +325,7 @@ def _exception_diagnostics(exc: BaseException) -> dict[str, Any]:
         except BaseException:
             continue
         if value not in (None, "", [], {}, ()):
-            diagnostics[key] = bounded_safe(value, key=key)
+            diagnostics[key] = _trace_safe(value, key=key)
     try:
         frames = traceback.extract_tb(root.__traceback__) if root.__traceback__ else []
     except BaseException:
@@ -324,7 +339,7 @@ def _exception_diagnostics(exc: BaseException) -> dict[str, Any]:
         }
     diagnostics["cause_type"] = type(root).__name__
     try:
-        diagnostics["cause"] = bounded_safe(str(root))
+        diagnostics["cause"] = _trace_safe(str(root))
     except BaseException:
         diagnostics["cause"] = f"<unprintable:{type(root).__name__}>"
     return diagnostics
@@ -336,17 +351,19 @@ def exception_chain(exc: BaseException) -> list[dict[str, Any]]:
     chain: list[dict[str, Any]] = []
     seen: set[int] = set()
     pending: list[BaseException] = [exc]
-    while pending and len(chain) < 16:
+    while pending and (full_trace_enabled() or len(chain) < 16):
         current = pending.pop()
         if id(current) in seen:
             continue
         seen.add(id(current))
         try:
-            frames = traceback.extract_tb(current.__traceback__)[-20:] if current.__traceback__ else []
+            frames = traceback.extract_tb(current.__traceback__) if current.__traceback__ else []
+            if not full_trace_enabled():
+                frames = frames[-20:]
         except BaseException:
             frames = []
         try:
-            message = bounded_safe(str(current))
+            message = _trace_safe(str(current))
         except BaseException:
             message = f"<unprintable:{type(current).__name__}>"
         chain.append(
@@ -491,13 +508,13 @@ def emit_root_cause(
         if result:
             payload["result"] = result
         if reason:
-            payload["reason"] = bounded_safe(reason)
+            payload["reason"] = _trace_safe(reason)
 
         context = dict(_DIAGNOSTIC_CONTEXT.get())
         if context:
-            payload["diagnostic_context"] = bounded_safe(context)
+            payload["diagnostic_context"] = _trace_safe(context)
         if details:
-            safe_details = bounded_safe(details)
+            safe_details = _trace_safe(details)
             payload["details"] = safe_details
             from .planner_trace_artifacts import save_trace_artifact
 
@@ -524,7 +541,7 @@ def emit_root_cause(
 
         if exc is not None:
             payload["failure"] = _exception_diagnostics(exc)
-            if is_first_failure:
+            if is_first_failure or full_trace_enabled():
                 payload["exception_chain"] = exception_chain(exc)
             else:
                 payload["exception_chain_ref"] = first_failure_seq
