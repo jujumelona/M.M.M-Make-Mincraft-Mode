@@ -109,7 +109,7 @@ def _commit_success(
         cursor = connection.execute(
             """
             UPDATE tasks
-            SET state = ?, output_hash = ?, receipt_json = ?, receipt_hash = ?,
+            SET state = ?, output_hash = ?, receipt_json = ?,
                 lease_owner = NULL, lease_until = NULL, error = NULL,
                 updated_at = ?
             WHERE node_id = ? AND state = ? AND attempt = ? AND lease_owner = ?
@@ -118,7 +118,6 @@ def _commit_success(
                 WorkState.SUCCEEDED.value,
                 digest,
                 rendered,
-                digest,
                 time.time(),
                 node_id,
                 WorkState.RUNNING.value,
