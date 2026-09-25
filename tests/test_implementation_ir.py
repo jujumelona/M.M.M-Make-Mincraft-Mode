@@ -212,10 +212,10 @@ def test_invalid_graph_is_rejected_before_source_generation(fault):
 
 
 def test_pagination_termination_is_host_owned_and_rejects_no_progress():
-    first = node(refs=["R1", "R2", "R3"])
-    repeated = copy.deepcopy(first)
+    consumer = node(dependencies=["MissingService"])
+    repeated = copy.deepcopy(consumer)
     router = Decisions([
-        {"nodes": [first], "done": False},
+        {"nodes": [consumer], "done": False},
         {"nodes": [repeated], "done": False},
     ])
     with pytest.raises(ImplementationGraphError, match="PAGE_NO_PROGRESS"):
@@ -406,6 +406,7 @@ def test_relabeling_estimate_without_moving_work_is_not_decomposition():
     router = Decisions([{"nodes": [original], "done": True},
                         {"nodes": [facade, helper], "done": True},
                         {"nodes": [facade, helper], "done": True}])
+    router.implementation_output_budget = 4000
     with pytest.raises(ImplementationGraphError, match="UNCHANGED_WORK"):
         compile_with(router)
 
@@ -418,5 +419,6 @@ def test_unused_helper_cannot_disguise_same_whole_file_work():
     router = Decisions([{"nodes": [original], "done": True},
                         {"nodes": [facade, helper], "done": True},
                         {"nodes": [facade, helper], "done": True}])
+    router.implementation_output_budget = 4000
     with pytest.raises(ImplementationGraphError, match="UNUSED_SPLIT_HELPER"):
         compile_with(router)
