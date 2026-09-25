@@ -24,7 +24,9 @@ class MutationAuthorityMode(str, Enum):
 _DELETE_OPERATIONS = frozenset({"delete", "delete_file", "remove", "remove_file"})
 _DEFAULT_BOUNDED_ROOTS = (
     "src/main/java/",
+    "src/client/java/",
     "src/main/resources/",
+    "src/client/resources/",
     "src/test/java/",
     "src/gametest/",
 )
