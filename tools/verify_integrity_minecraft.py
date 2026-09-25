@@ -98,13 +98,19 @@ class _DebugTokenRouter:
         assert role == "coder"
         assert kwargs.get("tool_stage") == "generation"
         assert kwargs.get("enable_tools") is False
-        assert kwargs.get("response_format") == "text"
+        assert kwargs.get("response_format") == "json"
+        assert isinstance(kwargs.get("response_schema"), dict)
         assert "output_token_ceiling" not in kwargs
         assert self._workspace is not None
         target = self._workspace / _DEBUG_TARGET
-        if target.exists():
+        if not target.is_file():
             raise AssertionError(
-                "DebugToken fresh target unexpectedly existed before coder action"
+                "DebugToken host scaffold must exist before coder generation"
+            )
+        scaffold = target.read_text(encoding="utf-8")
+        if "MMM_AUTHORED_FEATURE_BODY" not in scaffold:
+            raise AssertionError(
+                "DebugToken host scaffold marker is missing before coder generation"
             )
         return json.dumps(
             {
