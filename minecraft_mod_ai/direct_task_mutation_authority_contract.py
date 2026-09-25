@@ -133,7 +133,7 @@ def _authored_bounded_roots(module: Any) -> tuple[str, ...]:
     package_name = str(config.get("authored_java_package") or "").strip()
     mod_id = str(config.get("authored_mod_id") or "").strip()
     if not package_name or re.fullmatch(
-        r"[A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*", package_name
+        r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*", package_name
     ) is None:
         raise DirectTaskMutationAuthorityError(
             "AUTHORED_AUTHORITY_PACKAGE_INVALID: bounded authored generation requires "
