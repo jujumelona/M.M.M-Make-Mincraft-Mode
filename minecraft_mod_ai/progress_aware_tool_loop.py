@@ -3130,11 +3130,17 @@ def _task_evidence_payload(
             if isinstance(contract, Mapping):
                 return contract
             return task
+        authored = module.get("authored_plan")
+        if isinstance(authored, Mapping):
+            return authored
         config = module.get("config")
         if isinstance(config, Mapping):
             task = config.get("evidence_task")
             if isinstance(task, Mapping):
                 return task
+            authored = config.get("authored_plan")
+            if isinstance(authored, Mapping):
+                return authored
     return None
 
 
@@ -3170,17 +3176,51 @@ def _approved_task_evidence_query(
     if task is None:
         return ""
     fragments: list[str] = []
-    for field_name in (
-        "semantic_outcome",
-        "acceptance",
-        "public_acceptance",
-        "provides",
-        "engineering_worksheet",
-        "implementation_steps",
-        "dataflow",
-    ):
-        if field_name in task:
-            _task_query_fragments(task.get(field_name), fragments)
+    authored_text = task.get("text")
+    if isinstance(authored_text, str) and authored_text.strip():
+        requested_prompt = str(task.get("requested_prompt") or "").strip()
+        if requested_prompt:
+            fragments.append(requested_prompt)
+
+        # Retrieval for a coherent authored design must cover the API-heavy facets
+        # instead of truncating the document from state_model onward. Pull a small
+        # representative body from each high-value engineering section.
+        heading = re.compile(r"^ {0,3}#{1,6}[ \t]+(.+?)\\s*$", re.MULTILINE)
+        matches = list(heading.finditer(authored_text))
+        sections: dict[str, str] = {}
+        for index, match in enumerate(matches):
+            title = re.sub(r"[ \t]+#+[ \t]*$", "", match.group(1)).strip("*_\x60 ")
+            key = re.sub(r"[\\s-]+", "_", title.casefold()).strip("_")
+            body_start = match.end()
+            body_end = matches[index + 1].start() if index + 1 < len(matches) else len(authored_text)
+            body = " ".join(authored_text[body_start:body_end].split()).strip()
+            if key and body and key not in sections:
+                sections[key] = body
+        for key in (
+            "integration",
+            "authority_and_network",
+            "persistence",
+            "resources_and_ui",
+            "state_model",
+            "algorithm",
+            "failure_and_limits",
+            "verification",
+        ):
+            body = sections.get(key)
+            if body:
+                fragments.append(f"{key}: {body[:96]}")
+    else:
+        for field_name in (
+            "semantic_outcome",
+            "acceptance",
+            "public_acceptance",
+            "provides",
+            "engineering_worksheet",
+            "implementation_steps",
+            "dataflow",
+        ):
+            if field_name in task:
+                _task_query_fragments(task.get(field_name), fragments)
     target = str(target_path or "").replace("\\", "/").strip()
     target_symbol = target.rsplit("/", 1)[-1].rsplit(".", 1)[0] if target else ""
     cleaned: list[str] = []
