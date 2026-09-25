@@ -872,8 +872,8 @@ class CustomModuleGenerator:
                 "Create or edit only files inside module.authored_write_scope. Java files stay in its generated package; assets/data stay in its mod namespace. Build files, fabric.mod.json, host state, and other namespaces are read-only.",
                 "Use the existing canonical Fabric entrypoint. Never create another ModInitializer or ClientModInitializer. Wire common/server-safe initialization into the existing entrypoint and use an existing verified client entrypoint only when the approved behavior actually needs client code.",
                 "Never reference client-only classes or @Environment(CLIENT) methods from common/server code. Side-specific code belongs in the matching source set and is invoked only from a verified matching-side caller.",
-                "Apply edits only with the exact visible tool named apply_source_edit; never invent tool aliases.",
-                "Do not return a file-plan protocol. Continue implementing across bounded tool turns until this authored fragment is complete, then return only the fixed coder summary.",
+                "Apply edits only with the exact visible tool named apply_source_edit; never invent tool aliases. In an ACT response, emit every independent apply_source_edit call needed to materialize the complete coherent design rather than stopping after one convenience file.",
+                "Do not return a file-plan protocol. Continue implementing inside this single coherent tool loop until the complete authored design is materialized, then return only the fixed coder summary.",
                 response_template_prompt("coder_summary"),
             ]
         if retry_feedback is not None:
