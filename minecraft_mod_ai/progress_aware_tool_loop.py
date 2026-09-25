@@ -3340,7 +3340,16 @@ def _generate_with_tools_impl(
         bounded_root_execution_authority
         and _authored_workspace_refresh_requested(request.messages)
     )
-    state.retrieval_target_binding_enabled = not authored_workspace_refresh
+    if bounded_root_execution_authority and implementation_requires_mutation:
+        # Coherent fresh authored generation chooses architecture inside a host-owned
+        # namespace, but it is still fresh Java implementation. Require authoritative
+        # target-version evidence before the first write rather than letting an
+        # unlocalized target silently demote the evidence obligation.
+        fresh_java_target = True
+        state.semantic_fresh_java = True
+    # Retrieval may inform API choices but must never steal file-selection authority
+    # from a bounded authored task by pinning the first search hit as its target.
+    state.retrieval_target_binding_enabled = not bounded_root_execution_authority
     compile_backed_java = bool(
         java_target
         and state.mutation_context
@@ -4980,12 +4989,18 @@ def _generate_with_tools_impl(
                 if localization_progress or evidence_progress:
                     progress = True
                     if (
-                        authored_workspace_refresh
-                        and bounded_root_execution_authority
+                        bounded_root_execution_authority
+                        and implementation_requires_mutation
                         and evidence_progress
+                        and _target_evidence_ready(
+                            state,
+                            require_rag=require_rag,
+                            fresh_java_target=fresh_java_target,
+                            compile_backed_java=compile_backed_java,
+                        )
                     ):
-                        # This refresh is evidence only; ACT retains bounded-root file choice.
-                        state.retrieval_target_binding_enabled = True
+                        # Evidence constrains API use only. File selection remains bounded
+                        # by host roots and is intentionally left to the coherent coder.
                         state.phase = LoopPhase.ACT
                     elif (
                         implementation_requires_mutation
