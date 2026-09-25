@@ -183,12 +183,30 @@ def recover_schema_rejected_verifier_repair_calls(
         candidate = json.loads(raw_arguments)
     except (TypeError, ValueError, json.JSONDecodeError):
         return None
-    if not isinstance(candidate, Mapping) or set(candidate) != {"new"}:
+    if not isinstance(candidate, Mapping):
+        return None
+    allowed = {"new", "path", "operation", "old", "count"}
+    if set(candidate) - allowed or "new" not in candidate:
         return None
 
     old_text = repair_window.get("old")
     model_new = candidate.get("new")
     current_source = getattr(context, "source_body", None)
+    target = str(getattr(context, "target_path", "") or "").replace("\\\\", "/").strip()
+    supplied_path = str(candidate.get("path") or "").replace("\\\\", "/").strip()
+    while supplied_path.startswith("./"):
+        supplied_path = supplied_path[2:]
+    if supplied_path and (not target or supplied_path != target):
+        return None
+    supplied_operation = str(candidate.get("operation") or "").strip().casefold()
+    if supplied_operation and supplied_operation not in {"replace", "replace_exact"}:
+        return None
+    supplied_count = candidate.get("count")
+    if supplied_count not in (None, 1, "1"):
+        return None
+    supplied_old = candidate.get("old")
+    if supplied_old is not None and supplied_old != old_text:
+        return None
     if not isinstance(old_text, str) or not old_text or not isinstance(model_new, str):
         return None
     local_new = normalize_model_repair_replacement(current_source, old_text, model_new)
