@@ -27,9 +27,19 @@ def compile_graph(router, **kwargs):
 def test_model_schema_rejects_the_same_java_contract_errors_as_host(field, value):
     invalid = node()
     invalid[field] = value
-    errors = list(Draft202012Validator(ir.PAGE_SCHEMA).iter_errors({"nodes": [invalid], "done": True}))
+    errors = list(Draft202012Validator(ir.PAGE_SCHEMA).iter_errors({"nodes": [invalid]}))
     assert errors, "The model schema must express the host's Java API/path contract"
     assert any(field in str(e) for e in errors)
+
+
+def test_model_schema_does_not_expose_pagination_controls():
+    assert set(ir.PAGE_SCHEMA["properties"]) == {"nodes"}
+    legacy = ir._canonicalize_schema_page({
+        "nodes": [node()],
+        "done": True,
+        "continuation": {"remaining_unit_ids": ["legacy"]},
+    })
+    assert set(legacy) == {"nodes"}
 
 
 @pytest.mark.parametrize("field,value", [("public_api", []), ("resource_path", "src/main/java/example/PlayerCredits.java")])
@@ -359,6 +369,7 @@ def test_terminal_failure_is_not_retried_on_resume():
         "mmm/implementation-ir-draft-v5",
         "mmm/implementation-ir-draft-v6",
         "mmm/implementation-ir-draft-v7",
+        "mmm/implementation-ir-draft-v8",
     ],
 )
 def test_stale_terminal_checkpoint_is_invalidated_after_ir_contract_change(stale_version):
