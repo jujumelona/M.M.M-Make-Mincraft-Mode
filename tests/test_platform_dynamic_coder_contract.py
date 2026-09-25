@@ -4,7 +4,6 @@ import json
 
 import pytest
 
-from minecraft_mod_ai import platform_resolver as resolver
 from minecraft_mod_ai import platform_selection_pipeline as selection_pipeline
 from minecraft_mod_ai import repair_engine
 from minecraft_mod_ai.custom_module_generator import (
