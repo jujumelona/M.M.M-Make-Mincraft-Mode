@@ -54,9 +54,6 @@ _FORBIDDEN_ENTRYPOINT = re.compile(
     r"\b(?:implements\s+)?(?:ModInitializer|ClientModInitializer)\b"
 )
 _BODY_MARKER = "MMM_AUTHORED_FEATURE_BODY"
-_MAX_CONTEXT_BYTES = 24 * 1024
-_MAX_LOG_BYTES = 20 * 1024
-
 
 def _sha256_text(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -97,6 +94,7 @@ def _task_local_module_contract(module: ProductionModule) -> dict[str, Any]:
 
 
 def _bounded_execution_feedback(value: Any) -> dict[str, Any] | None:
+    """Normalize and deduplicate structured diagnostics without arbitrary truncation."""
     if not isinstance(value, Mapping):
         return None
     diagnostics = value.get("diagnostics")
@@ -105,18 +103,19 @@ def _bounded_execution_feedback(value: Any) -> dict[str, Any] | None:
     ):
         return None
     rows: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
     for raw in diagnostics:
         if not isinstance(raw, Mapping):
             continue
         row = {
-            "path": str(raw.get("path") or "")[:1000],
-            "code": str(raw.get("code") or "")[:200],
-            "message": " ".join(str(raw.get("message") or "").split())[:2000],
+            "path": str(raw.get("path") or "").strip(),
+            "code": str(raw.get("code") or "").strip(),
+            "message": " ".join(str(raw.get("message") or "").split()),
         }
-        if any(row.values()):
+        key = (row["path"], row["code"], row["message"])
+        if any(row.values()) and key not in seen:
+            seen.add(key)
             rows.append(row)
-        if len(rows) >= 16:
-            break
     return {"diagnostics": rows} if rows else None
 
 
@@ -265,39 +264,39 @@ def _atomic_write(path: Path, content: str | bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _project_context(root: Path, target: Path) -> str:
+def _project_context(root: Path, target: Path, *, relevance_text: str) -> str:
+    """Return only project sources explicitly referenced by the active task/scaffold."""
     java_root = root / "src/main/java"
     if not java_root.is_dir():
         return ""
+
+    evidence = relevance_text
+    if target.is_file() and not target.is_symlink():
+        try:
+            evidence += "\n" + target.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            pass
+
     candidates = [
         path
         for path in java_root.rglob("*.java")
         if path.is_file() and not path.is_symlink() and path.resolve() != target
     ]
-    candidates.sort(
-        key=lambda path: (
-            0 if path.parent == target.parent else 1,
-            path.relative_to(root).as_posix(),
-        )
-    )
+    selected = [
+        path
+        for path in candidates
+        if re.search(rf"\b{re.escape(path.stem)}\b", evidence)
+    ]
+    selected.sort(key=lambda path: path.relative_to(root).as_posix())
+
     rendered: list[str] = []
-    used = 0
-    for path in candidates[:24]:
+    for path in selected:
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeError):
             continue
         relative = path.relative_to(root).as_posix()
-        chunk = f"\n--- {relative} ---\n{text}\n"
-        raw = chunk.encode("utf-8")
-        if used + len(raw) > _MAX_CONTEXT_BYTES:
-            remaining = _MAX_CONTEXT_BYTES - used
-            if remaining <= 0:
-                break
-            rendered.append(raw[:remaining].decode("utf-8", errors="ignore"))
-            break
-        rendered.append(chunk)
-        used += len(raw)
+        rendered.append(f"\n--- {relative} ---\n{text}\n")
     return "".join(rendered)
 
 
@@ -402,21 +401,44 @@ def _call_coder(
 
 
 def _compile_log(report: Any) -> str:
+    """Extract compiler diagnostics by structure instead of truncating raw logs."""
+    fallback = str(getattr(report, "error", "") or "")
     commands = tuple(getattr(report, "commands", ()) or ())
     if not commands:
-        return str(getattr(report, "error", "") or "")[:_MAX_LOG_BYTES]
+        return fallback
     path = Path(str(getattr(commands[-1], "log_path", "") or ""))
     if not path.is_file() or path.is_symlink():
-        return str(getattr(report, "error", "") or "")[:_MAX_LOG_BYTES]
+        return fallback
     try:
-        with path.open("rb") as stream:
-            size = path.stat().st_size
-            if size > _MAX_LOG_BYTES:
-                stream.seek(size - _MAX_LOG_BYTES)
-            data = stream.read(_MAX_LOG_BYTES)
-        return data.decode("utf-8", errors="replace")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return str(getattr(report, "error", "") or "")[:_MAX_LOG_BYTES]
+        return fallback
+
+    lines = text.splitlines()
+    header = re.compile(r"(?i)(?:\.java:\d+:\s*(?:error|warning):|^\s*(?:error|failure):)")
+    stop = re.compile(r"^\s*(?:> Task |BUILD (?:FAILED|SUCCESSFUL)|FAILURE:)")
+    blocks: list[str] = []
+    current: list[str] = []
+    for line in lines:
+        if header.search(line):
+            if current:
+                blocks.append("\n".join(current).strip())
+            current = [line]
+            continue
+        if current:
+            if stop.search(line):
+                blocks.append("\n".join(current).strip())
+                current = []
+            elif line.strip():
+                current.append(line)
+            else:
+                blocks.append("\n".join(current).strip())
+                current = []
+    if current:
+        blocks.append("\n".join(current).strip())
+
+    diagnostics = "\n\n".join(block for block in blocks if block)
+    return diagnostics or fallback or text
 
 
 def _compile_failure_measure(log: str) -> tuple[int, int]:
@@ -537,7 +559,11 @@ class CustomModuleGenerator:
         if isinstance(ir_contract, Mapping):
             context = str(module.config.get("implementation_dependency_context") or "")
         else:
-            context = _project_context(root, target)
+            context = _project_context(
+                root,
+                target,
+                relevance_text=task_text + "\n" + grounding_text + "\n" + original,
+            )
         bounded_feedback = _bounded_execution_feedback(execution_feedback)
         system = (
             "You implement exactly one host-owned Minecraft Java source file. "
@@ -687,7 +713,7 @@ class CustomModuleGenerator:
                         },
                         "touched_paths": [relative],
                         "discarded_out_of_scope_paths": [],
-                        "agent_summary": summary.strip()[:4096],
+                        "agent_summary": summary.strip(),
                         "generation_verification": {
                             "status": "PASS",
                             "mode": "gradle_compile_java",
@@ -723,7 +749,7 @@ class CustomModuleGenerator:
                 "DIRECT_CODER_COMPILE_FAILED: exact whole-file generation "
                 f"stopped after repair evidence ceased to improve for {relative}. "
                 "Last failure:\n"
-                + last_failure[-_MAX_LOG_BYTES:]
+                + last_failure
             )
 
     def ensure_generation_live_commit(
