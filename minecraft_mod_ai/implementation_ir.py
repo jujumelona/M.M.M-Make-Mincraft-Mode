@@ -24,7 +24,7 @@ MAX_PAGE_CORRECTIONS = 2
 MAX_UNIT_REQUIREMENTS = 6
 MAX_BATCH_REQUIREMENTS = 8
 MAX_BATCH_UNITS = 3
-IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v5"
+IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v6"
 
 
 class ImplementationGraphError(CustomModuleGenerationError):
@@ -822,6 +822,10 @@ def _admit_graph_page(page: dict[str, Any], *, accepted: list[dict[str, Any]],
         ordered_nodes([{**n, "depends_on": [dep for dep in n["depends_on"] if dep in known]} for n in combined])
     except ImplementationGraphError as exc:
         code = str(exc).split(":", 1)[0]
+        # Pure no-progress is deterministic host evidence, not a model-correctable
+        # schema/semantic mistake. Do not spend another LLM call replaying it.
+        if code == "IMPLEMENTATION_IR_PAGE_NO_PROGRESS":
+            raise
         raise _InvalidPage(
             [{"code": code, "node": "", "field": "nodes",
               "message": str(exc) + "; accepted nodes are host-owned and may only be extended monotonically"}],
