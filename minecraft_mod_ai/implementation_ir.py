@@ -274,7 +274,7 @@ def decompose_authored_units(text: str) -> list[dict[str, Any]]:
         return []
 
     lines = text.splitlines(keepends=False)
-    heading_pattern = re.compile(r"^ {0,3}#{1,6}[ \\t]+(.+?)\\s*$")
+    heading_pattern = re.compile(r"^ {0,3}#{1,6}[ \t]+(.+?)\s*$")
 
     sections: list[tuple[str, list[str]]] = []
     current_title = "overview"
