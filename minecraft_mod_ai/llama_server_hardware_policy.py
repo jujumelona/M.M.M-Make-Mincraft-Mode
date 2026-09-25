@@ -20,8 +20,6 @@ _TELEMETRY_TOTALS = {
     "generation_seconds": 0.0,
     "requests": 0,
 }
-_ATOMIC_OUTPUT_RECOVERY_MAX_TOKENS = 4096
-
 
 def _existing_built_server() -> str | None:
     explicit_binary = os.environ.get("MMM_LLAMA_SERVER_BIN", "").strip()
@@ -128,8 +126,6 @@ def _request_max_tokens(adapter: Any, request: Any) -> int:
             ceiling = 0
         if ceiling > 0:
             return min(configured, ceiling)
-        if metadata.get("mmm_atomic_output_recovery") is True:
-            return min(configured, _ATOMIC_OUTPUT_RECOVERY_MAX_TOKENS)
     return configured
 
 
