@@ -547,7 +547,7 @@ def test_host_and_model_use_one_node_schema(overrides):
     raw = {**node(), **overrides}
     refs = ir.source_requirements(DESIGN)
     schema = ir._page_schema({"requirements": refs, "mod_id": "test"})
-    errors = list(Draft202012Validator(schema).iter_errors({"nodes": [raw], "done": True}))
+    errors = list(Draft202012Validator(schema).iter_errors({"nodes": [raw]}))
     if errors:
         with pytest.raises(ir.ImplementationGraphError):
             ir.validate_node(raw, package="example", mod_id="test", refs=set(refs))
