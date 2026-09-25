@@ -55,6 +55,10 @@ from .technology_radar import (
 )
 
 
+from .runtime_bootstrap import bootstrap_runtime
+
+bootstrap_runtime()
+
 MinecraftModPipeline = ScalableMinecraftModPipeline
 
 __all__ = [
