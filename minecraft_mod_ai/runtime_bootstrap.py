@@ -327,7 +327,6 @@ def _install_post_bootstrap_contracts() -> None:
     from .small_model_hybrid_search_contract import install as install_small_model_hybrid_search
     from .small_model_relation_index_contract import install as install_small_model_relation_index
     from .small_model_research_extensions_contract import install as install_small_model_research_extensions
-    from .small_model_retrieval_efficiency_contract import install as install_small_model_retrieval_efficiency
     from .temporary_skill_contract import install as install_temporary_skill
     from .unified_trajectory_memory_contract import install as install_unified_trajectory_memory
 
@@ -342,7 +341,6 @@ def _install_post_bootstrap_contracts() -> None:
     )
     install_small_model_relation_index(production_tools)
     install_small_model_hybrid_search(production_tools)
-    install_small_model_retrieval_efficiency()
     install_temporary_skill(
         model_router_module=model_router,
         work_graph_module=work_graph,
