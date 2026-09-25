@@ -4,6 +4,7 @@ from pathlib import Path
 
 import minecraft_mod_ai.small_model_hybrid_search_contract as hybrid
 import minecraft_mod_ai.small_model_relation_index_contract as relation_contract
+import minecraft_mod_ai.production_tools as production_tools
 from minecraft_mod_ai.production_tools import ProductionToolService
 
 
@@ -86,7 +87,8 @@ def test_search_cache_is_bound_to_exact_index_file_identity(tmp_path: Path) -> N
     assert hybrid._search_cache_get(second_key) is None
 
 
-def test_runtime_search_exposes_snapshot_reuse_contract() -> None:
+def test_snapshot_reuse_contract_is_explicitly_installable() -> None:
+    hybrid.install(production_tools)
     assert getattr(
         ProductionToolService.search_code_rag,
         "_mmm_snapshot_search_reuse",
