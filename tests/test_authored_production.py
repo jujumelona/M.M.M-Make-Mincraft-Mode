@@ -14,26 +14,9 @@ from minecraft_mod_ai.authored_production import (
 )
 from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
 from minecraft_mod_ai.custom_module_generator import _task_local_module_contract
-from minecraft_mod_ai.direct_task_mutation_authority_contract import (
-    _CURRENT_AUTHORITY,
-    compile_direct_task_mutation_authority,
-)
-from minecraft_mod_ai.mutation_authority import MutationAuthorityMode
 from minecraft_mod_ai.planning_pipeline import PlanningPipeline
-from minecraft_mod_ai.progress_aware_tool_loop import (
-    _approved_task_evidence_query,
-    _task_authority_context,
-)
 from minecraft_mod_ai.scale_policy import ScalePolicy
-from minecraft_mod_ai.small_model_atomic_coder_execution import atomicize_coder_messages
-from minecraft_mod_ai.small_model_task_capsule_contract import (
-    _CURRENT_CAPSULE,
-    compile_task_capsule,
-    task_capsule_generation_scope,
-)
-from minecraft_mod_ai.small_model_write_scope_enforcement import (
-    generation_authority_scoped,
-)
+from minecraft_mod_ai.small_model_task_capsule_contract import compile_task_capsule
 from minecraft_mod_ai.work_graph import build_production_work_plan
 
 
