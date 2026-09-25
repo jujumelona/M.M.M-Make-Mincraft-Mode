@@ -16,11 +16,21 @@ def build_task_local_module_contract(
     config = module.config if isinstance(module.config, dict) else {}
     authored = config.get("authored_plan")
     if isinstance(authored, dict):
-        return {
+        contract = {
             "module_id": module.module_id,
             "kind": module.kind,
             "authored_plan": dict(authored),
         }
+        mode = str(config.get("authored_execution_mode") or "").strip()
+        if mode:
+            contract["authored_execution_mode"] = mode
+        if config.get("authored_bounded_scope") is True:
+            contract["authored_write_scope"] = {
+                "java_package": str(config.get("authored_java_package") or "").strip(),
+                "mod_id": str(config.get("authored_mod_id") or "").strip(),
+                "policy": "package_and_mod_namespace_only",
+            }
+        return contract
     evidence_task = config.get("evidence_task")
     if not isinstance(evidence_task, dict):
         raise error_type(
