@@ -354,6 +354,7 @@ def test_terminal_failure_is_not_retried_on_resume():
         "mmm/implementation-ir-draft-v2",
         "mmm/implementation-ir-draft-v3",
         "mmm/implementation-ir-draft-v4",
+        "mmm/implementation-ir-draft-v5",
     ],
 )
 def test_stale_terminal_checkpoint_is_invalidated_after_ir_contract_change(stale_version):
