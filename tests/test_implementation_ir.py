@@ -213,12 +213,11 @@ def test_pagination_has_explicit_completion_and_detects_repetition():
     router = Decisions([{"nodes": [node()], "done": False},
                         {"nodes": [node()], "done": False},
                         {"nodes": [node()], "done": False}])
-    # Re-emitting an already accepted owner across pages is no longer an ownership
-    # collision. It is a monotonic-extension attempt with no new work, so the host
-    # stops it as finite no-progress after one correction.
-    with pytest.raises(ImplementationGraphError, match="NO_PROGRESS"):
+    # Re-emitting an already accepted owner with no extension is deterministic host
+    # no-progress. Do not spend a model repair call on the same semantic state.
+    with pytest.raises(ImplementationGraphError, match="PAGE_NO_PROGRESS"):
         compile_with(router)
-    assert len(router.calls) == 3
+    assert len(router.calls) == 2
 
 
 @pytest.mark.parametrize("fault", ["same", "api", "lost", "helper"])
