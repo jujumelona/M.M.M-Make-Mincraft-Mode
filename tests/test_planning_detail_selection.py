@@ -4,6 +4,7 @@ from worksheet_fixtures import specification
 
 import pytest
 
+from minecraft_mod_ai.complete_planner import _design_writing_template
 from minecraft_mod_ai.planning_detail_template import (
     CONDITIONAL_WORKSHEET_SECTIONS,
     CORE_WORKSHEET_SECTIONS,
@@ -118,3 +119,17 @@ def test_default_validator_accepts_sparse_baseline_worksheet() -> None:
 def test_explicit_full_selection_still_rejects_partial_worksheet() -> None:
     with pytest.raises(ValueError, match="host-required engineering sections"):
         validate_worksheet(_core_value(), {"EVD-1"}, WORKSHEET_SECTIONS)
+
+def test_design_writing_template_does_not_split_string_descriptors_into_characters() -> None:
+    rendered = _design_writing_template(
+        {
+            "state_model": {
+                "variables": "name, owner, type, unit, default, domain",
+                "transitions": ("trigger", "guard", "next_state"),
+            }
+        }
+    )
+
+    assert "variables: name, owner, type, unit, default, domain" in rendered
+    assert "variables: n, a, m, e" not in rendered
+    assert "transitions: trigger, guard, next_state" in rendered
