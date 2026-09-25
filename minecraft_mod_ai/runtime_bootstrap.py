@@ -156,7 +156,6 @@ def _install_platform_contracts() -> None:
     )
     from .minecraft_domain_correctness_contract import install as install_minecraft_domain_correctness
     from .mod_scope_contract import install as install_mod_scope
-    from .platform_custom_coder_contract import install as install_platform_custom_coder
     from .platform_generation_contract import install as install_platform_generation
     from .platform_live_execution_contract import install as install_live_execution
     from .platform_live_rag_contract import install as install_platform_live_rag
@@ -166,7 +165,6 @@ def _install_platform_contracts() -> None:
     from .platform_technology_contract import install as install_platform_technology
     from .platform_validation_contract import install as install_platform_validation
     from .proposal_deserialization_contract import install as install_proposal_deserialization
-    from .source_patch_precondition_contract import install as install_source_patch_preconditions
     from .system_quality_contract import install as install_system_quality
 
     install_platform_runtime(
@@ -180,8 +178,6 @@ def _install_platform_contracts() -> None:
     install_platform_live_rag(retrieval_module=retrieval)
     install_platform_technology(technology_radar)
     install_mod_scope(complete_spec, complete_planner)
-    install_platform_custom_coder(custom_module_generator)
-    install_source_patch_preconditions(custom_module_generator)
     install_platform_repair(repair_engine)
     install_live_execution(complete_orchestrator)
     install_minecraft_domain_correctness()
