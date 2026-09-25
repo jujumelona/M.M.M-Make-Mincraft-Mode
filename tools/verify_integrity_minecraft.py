@@ -97,18 +97,20 @@ class _DebugTokenRouter:
         del messages
         assert role == "coder"
         assert kwargs.get("tool_stage") == "generation"
-        assert kwargs.get("enable_tools") is True
+        assert kwargs.get("enable_tools") is False
         assert kwargs.get("response_format") == "text"
+        assert "output_token_ceiling" not in kwargs
         assert self._workspace is not None
         target = self._workspace / _DEBUG_TARGET
-        target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
             raise AssertionError(
                 "DebugToken fresh target unexpectedly existed before coder action"
             )
-        target.write_text(self._source, encoding="utf-8")
         return json.dumps(
-            {"summary": "Created the exact host-owned DebugToken source."},
+            {
+                "content": self._source,
+                "summary": "Created the exact host-owned DebugToken source.",
+            },
             ensure_ascii=False,
         )
 
