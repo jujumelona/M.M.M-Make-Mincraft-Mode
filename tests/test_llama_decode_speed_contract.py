@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from minecraft_mod_ai import llama_server_autotune as autotune
 from minecraft_mod_ai import llama_server_hardware_policy as hardware_policy
+from minecraft_mod_ai import llama_server_runtime_tuning as runtime_tuning
 from minecraft_mod_ai.llama_decode_speed_contract import (
     SpeedServerVariant,
     _decode_ratio,
@@ -16,7 +19,14 @@ from minecraft_mod_ai.llama_decode_speed_contract import (
     _probe_p_min,
     _representative_benchmark_request,
     _tuning_objective,
+    install as install_decode_speed,
 )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _install_explicit_decode_speed_contract():
+    install_decode_speed(autotune, runtime_tuning, hardware_policy)
+
 
 
 def test_decode_speed_contract_is_installed() -> None:
