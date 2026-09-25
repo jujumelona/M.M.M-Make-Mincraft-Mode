@@ -76,7 +76,7 @@ def test_progress_response_raises_server_error_before_watchdog() -> None:
         response,
         0.001,
         request_id="test-server-error",
-        started_at=0.0,
+        started_at=contract.time.monotonic(),
     )
 
     with pytest.raises(LlamaSseServerError, match="context overflow"):
@@ -201,7 +201,7 @@ def test_semantic_progress_refreshes_execution_deadline(monkeypatch) -> None:
         response,
         120.0,
         request_id="test-refresh-deadline",
-        started_at=0.0,
+        started_at=contract.time.monotonic(),
     )
 
     assert list(wrapped.iter_lines())[-1] == "data: [DONE]"
