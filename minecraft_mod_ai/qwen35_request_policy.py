@@ -104,7 +104,6 @@ def _install_payload_policy(hardware_policy: Any) -> None:
         if not _policy_enabled(config):
             return result
 
-        mode = _request_sampling_mode(config, request)
         action_page = _request_is_action_page(request)
         defaults = _request_defaults(config, request)
         result.pop("chat_template_kwargs", None)
