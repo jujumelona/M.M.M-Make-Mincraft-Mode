@@ -204,3 +204,72 @@ def test_schema_rejected_repair_survives_recovery_evidence_source_rebinding():
     )
     assert recovered is not None
     assert recovered[0].arguments == {"new": ""}
+
+def test_host_authored_surface_localizes_class_modifier_not_reported_line():
+    source = (
+        "package dev.mmm;\n"
+        "public class AuthoredFeature001 {\n"
+        "    public static void initialize() {}\n"
+        "}\n"
+    )
+    diagnostic = {
+        "severity": 1,
+        "source": "host-authored-contract",
+        "code": "host:authored-surface",
+        "line": 1,
+        "message": "Host integration requires public final class AuthoredFeature001.",
+    }
+
+    window = select_verifier_repair_window(source, (diagnostic,))
+
+    assert window is not None
+    assert window["old"] == "public class AuthoredFeature001"
+    assert window["start_line"] == 2
+
+
+def test_schema_rejected_host_surface_repair_drops_redundant_host_fields():
+    target = "src/main/java/dev/mmm/AuthoredFeature001.java"
+    old_decl = "public class AuthoredFeature001"
+    source = (
+        "package dev.mmm;\n"
+        + old_decl
+        + " {\n"
+        "    public static void initialize() {}\n"
+        "}\n"
+    )
+    rejected = ToolCall(
+        id="call-rejected-host-surface",
+        name="__mmm_rejected_tool_call__",
+        arguments={
+            "failure_code": "TOOL_SCHEMA_INVALID",
+            "original_tool": "apply_source_edit",
+            "raw_arguments": json.dumps(
+                {
+                    "operation": "replace_exact",
+                    "path": target,
+                    "old": old_decl,
+                    "new": "public final class AuthoredFeature001",
+                    "count": 1,
+                }
+            ),
+            "error": "redundant host-owned fields",
+        },
+    )
+    context = SimpleNamespace(
+        source_body=source,
+        target_path=target,
+        is_new_file=False,
+        evidence_source="mutation_receipt",
+    )
+
+    recovered = recover_schema_rejected_verifier_repair_calls(
+        (rejected,),
+        phase="ACT",
+        validation_status="FAIL",
+        context=context,
+        repair_window={"old": old_decl},
+    )
+
+    assert recovered is not None
+    assert recovered[0].name == "apply_source_edit"
+    assert recovered[0].arguments == {"new": "public final class AuthoredFeature001"}
