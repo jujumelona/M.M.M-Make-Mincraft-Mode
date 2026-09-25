@@ -219,18 +219,18 @@ def select_verifier_repair_window(
             or str(diagnostic.get("source") or "").strip() == "host-authored-contract"
         ):
             message = str(diagnostic.get("message") or "")
-            expected = re.search(r"public\\s+final\\s+class\\s+([A-Za-z_$][\\w$]*)", message)
+            expected = re.search(r"public\s+final\s+class\s+([A-Za-z_$][\w$]*)", message)
             if expected is not None:
                 symbol = expected.group(1)
                 declaration = re.search(
-                    rf"public\\s+(?:final\\s+)?class\\s+{re.escape(symbol)}\\b",
+                    rf"public\s+(?:final\s+)?class\s+{re.escape(symbol)}\b",
                     source,
                 )
                 if declaration is not None:
                     old = declaration.group(0)
                     return {
-                        "start_line": source.count("\\n", 0, declaration.start()) + 1,
-                        "end_line": source.count("\\n", 0, declaration.end()) + 1,
+                        "start_line": source.count("\n", 0, declaration.start()) + 1,
+                        "end_line": source.count("\n", 0, declaration.end()) + 1,
                         "old": old,
                         "old_chars": len(old),
                         "diagnostic_index": diagnostic_index,
