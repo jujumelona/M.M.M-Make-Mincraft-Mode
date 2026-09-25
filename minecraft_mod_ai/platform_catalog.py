@@ -332,53 +332,50 @@ def _fabric_descriptor_identifies_project(root: Path) -> bool:
     )
 
 
+def _adapter_from_generated_lock(lock_file: Path) -> TargetContract:
+    raw = json.loads(lock_file.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("Generated platform lock must be an object.")
+
+    from .resolved_version_context import ResolvedVersionContext
+    from .spec import PlatformLock
+    from .target_contract import target_contract_from_mapping
+
+    lock_fields = PlatformLock.__dataclass_fields__
+    lock = PlatformLock(
+        **{name: raw[name] for name in lock_fields if name in raw}
+    )
+    lock.validate()
+    if not lock.has_full_execution_receipt():
+        raise ValueError(
+            "Generated platform lock is not a complete immutable execution receipt."
+        )
+
+    adapter = target_contract_from_mapping(
+        {name: getattr(lock, name) for name in lock_fields}
+    )
+    adapter.validate()
+    if not adapter.host_facts_json:
+        return adapter
+
+    context = adapter.version_context
+    context_id = raw.get("context_id")
+    if context_id is not None:
+        context.assert_context(str(context_id))
+    resolved = raw.get("resolved_version_context")
+    if resolved is not None:
+        if not isinstance(resolved, dict):
+            raise ValueError("Generated resolved_version_context must be an object.")
+        saved_context = ResolvedVersionContext.from_dict(resolved)
+        context.assert_context(saved_context.context_id)
+    return adapter
+
+
 def adapter_from_project(project_root: str | Path) -> TargetContract:
     root = Path(project_root).expanduser().resolve()
     lock_file = _project_platform_lock(root)
     if lock_file is not None:
-        raw = json.loads(lock_file.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict):
-            raise ValueError("Generated platform lock must be an object.")
-
-        from .resolved_version_context import ResolvedVersionContext
-        from .spec import PlatformLock
-        from .target_contract import target_contract_from_mapping
-
-        lock_fields = PlatformLock.__dataclass_fields__
-        lock = PlatformLock(
-            **{
-                name: raw[name]
-                for name in lock_fields
-                if name in raw
-            }
-        )
-        lock.validate()
-        if not lock.has_full_execution_receipt():
-            raise ValueError(
-                "Generated platform lock is not a complete immutable execution receipt."
-            )
-
-        adapter = target_contract_from_mapping(
-            {
-                name: getattr(lock, name)
-                for name in lock_fields
-            }
-        )
-        adapter.validate()
-        if adapter.host_facts_json:
-            context = adapter.version_context
-            context_id = raw.get("context_id")
-            if context_id is not None:
-                context.assert_context(str(context_id))
-            resolved = raw.get("resolved_version_context")
-            if resolved is not None:
-                if not isinstance(resolved, dict):
-                    raise ValueError(
-                        "Generated resolved_version_context must be an object."
-                    )
-                saved_context = ResolvedVersionContext.from_dict(resolved)
-                context.assert_context(saved_context.context_id)
-        return adapter
+        return _adapter_from_generated_lock(lock_file)
 
     properties = read_gradle_properties(root / "gradle.properties")
     minecraft_version = properties.get("minecraft_version", "").strip()
