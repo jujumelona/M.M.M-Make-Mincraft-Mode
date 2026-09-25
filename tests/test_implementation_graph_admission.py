@@ -229,6 +229,20 @@ def test_logged_page8_to_page9_duplicate_owner_pattern_merges_r34():
     assert by_symbol["ResourceLimitValidator"]["requirements"] == ["R31", "R34"]
 
 
+def test_accumulated_owner_requirements_raise_admission_cost():
+    small = {
+        **node(refs=["R1"]),
+        "requirements": ["R1"],
+    }
+    large = {
+        **small,
+        "requirements": [f"R{i}" for i in range(1, 15)],
+    }
+
+    assert ir.node_cost(large) > ir.node_cost(small)
+    assert ir.node_cost(large) > ir.admissible_tokens()
+
+
 def test_completed_pages_survive_failure_and_resume_without_replanning():
     first = node(refs=["R1", "R2", "R3"])
     second = node("TradeService", refs=["R4", "R5", "R6"])
