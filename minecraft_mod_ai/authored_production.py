@@ -785,13 +785,24 @@ def materialize_authored_execution_scaffold(
         return root
     if manifest.get("schema_version") != _AUTHORED_EXECUTION_SCHEMA:
         raise ValueError("AUTHORED_SCAFFOLD_SCHEMA_MISMATCH")
-    if manifest.get("policy") != "host_exact_task_queue_no_coder_file_planning":
+    policy = str(manifest.get("policy") or "")
+    if policy not in {
+        "host_exact_task_queue_no_coder_file_planning",
+        "host_bounded_coherent_authored_design",
+    }:
         raise ValueError("AUTHORED_SCAFFOLD_POLICY_MISMATCH")
 
     expected_manifest = dict(manifest)
     supplied_digest = str(expected_manifest.pop("manifest_sha256", "") or "")
     if supplied_digest != _sha256_json(expected_manifest):
         raise ValueError("AUTHORED_SCAFFOLD_MANIFEST_HASH_MISMATCH")
+
+    if policy == "host_bounded_coherent_authored_design":
+        # The canonical Fabric template is already materialized by the host. Coherent
+        # authored generation owns architecture inside bounded package/resource roots,
+        # so creating synthetic AuthoredFeatureNNN placeholders here would reintroduce
+        # the document-section-equals-class bug.
+        return root
 
     package_name = proposal.base_proposal.spec.package_name
     package_path = package_name.replace(".", "/")
@@ -940,6 +951,89 @@ def _bound_target(design: Mapping[str, Any]) -> dict[str, str]:
     return {}
 
 
+def _normalized_contract_heading(title: str) -> str:
+    return re.sub(r"[\s-]+", "_", str(title or "").strip().casefold()).strip("_")
+
+
+def _contract_shaped_authored_design(text: str) -> bool:
+    """Recognize an engineering worksheet whose headings are facets, not features."""
+
+    from .planning_detail_template import WORKSHEET_SECTIONS
+
+    lines, records = _authored_heading_records(text)
+    if not records:
+        return False
+    shallowest = min(depth for _index, depth, _title in records)
+    split_level = shallowest
+    shallow = [record for record in records if record[1] == shallowest]
+    if len(shallow) == 1 and (
+        _generic_authored_container(shallow[0][2])
+        or _document_preamble_title(shallow[0][2])
+    ):
+        split_level = _document_wrapper_split_level(lines, records, shallowest)
+
+    peers = [record for record in records if record[1] == split_level]
+    actionable = [
+        record
+        for position, record in enumerate(peers)
+        if not _heading_peer_is_context(lines, peers, position)
+    ]
+    names = tuple(_normalized_contract_heading(record[2]) for record in actionable)
+    canonical = set(WORKSHEET_SECTIONS)
+    return len(names) >= 3 and bool(names) and set(names).issubset(canonical)
+
+
+def _compile_coherent_authored_module(
+    plan: AuthoredPlan,
+    *,
+    mod_id: str,
+    package_name: str,
+    target: Mapping[str, Any],
+) -> tuple[tuple[ProductionModule, ...], dict[str, Any]]:
+    """Keep one engineering contract coherent and let the coder choose bounded files."""
+
+    raw = plan.text.encode("utf-8")
+    module_id = "authored_design"
+    main_symbol = _main_class_name(mod_id)
+    main_path = f"src/main/java/{package_name.replace('.', '/')}/{main_symbol}.java"
+    module = ProductionModule(
+        module_id=module_id,
+        kind="custom_java",
+        config={
+            "implementation": "custom",
+            "authored_plan": plan.to_dict(),
+            "authored_execution_mode": "bounded_coherent",
+            "authored_bounded_scope": True,
+            "authored_java_package": package_name,
+            "authored_mod_id": mod_id,
+            **dict(target),
+        },
+        required_gates=("project build",),
+    )
+    unit = {
+        "module_id": module_id,
+        "start_byte": 0,
+        "end_byte": len(raw),
+        "text_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
+    }
+    manifest: dict[str, Any] = {
+        "schema_version": _AUTHORED_EXECUTION_SCHEMA,
+        "source_text_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
+        "source_bytes": len(raw),
+        "unit_count": 1,
+        "policy": "host_bounded_coherent_authored_design",
+        "units": [unit],
+        "entrypoint": {
+            "owner": "host_template",
+            "path": main_path,
+            "symbol": main_symbol,
+            "feature_symbols": [],
+        },
+    }
+    manifest["manifest_sha256"] = _sha256_json(manifest)
+    return (module,), manifest
+
+
 def compile_authored_design(
     router: Any, plan: AuthoredPlan, *, existing_input_sha256: str = ""
 ) -> CompleteProposal:
@@ -982,15 +1076,26 @@ def compile_authored_design(
     design = {**design, **target}
     effective_existing = existing_input_sha256 or plan.existing_input_sha256
     if not effective_existing:
-        # Fresh authored projects have a host-owned canonical Fabric package/entrypoint.
-        # Lower the saved prose into an exact-path dependency queue now, before coder
-        # decode, so the small model never owns file planning or entrypoint architecture.
-        modules, manifest = _compile_new_authored_modules(
-            implementation_plan,
-            mod_id=base.spec.mod_id,
-            package_name=base.spec.package_name,
-            target=target,
-        )
+        if _contract_shaped_authored_design(implementation_plan.text):
+            # Planning worksheet headings describe one feature/system from different
+            # engineering angles. They are not independent runtime classes. Keep the
+            # complete contract together and let the coder materialize the necessary
+            # Java/resource architecture inside a narrow host-owned namespace.
+            modules, manifest = _compile_coherent_authored_module(
+                implementation_plan,
+                mod_id=base.spec.mod_id,
+                package_name=base.spec.package_name,
+                target=target,
+            )
+        else:
+            # Truly feature-oriented authored documents still benefit from exact host
+            # task lowering because each top-level block is an independent deliverable.
+            modules, manifest = _compile_new_authored_modules(
+                implementation_plan,
+                mod_id=base.spec.mod_id,
+                package_name=base.spec.package_name,
+                target=target,
+            )
         design = {**design, "_authored_execution_manifest": manifest}
     else:
         modules, manifest = _compile_existing_authored_modules(
