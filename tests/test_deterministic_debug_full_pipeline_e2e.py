@@ -48,19 +48,65 @@ class _DeterministicRouter:
         del kwargs
         assert role == "coder"
         prompt = str(messages[-1]["content"])
-        marker = "Current host scaffold:\n"
-        context_marker = "\n\nRelevant existing project source:"
-        assert marker in prompt
-        scaffold = prompt.split(marker, 1)[1].split(context_marker, 1)[0]
-        assert "MMM_AUTHORED_FEATURE_BODY" in scaffold
-        source = scaffold.replace(
-            "// MMM_AUTHORED_FEATURE_BODY",
-            'System.out.println("mmm deterministic fixture initialized");',
+        grounding_marker = "Host implementation grounding:\n"
+        scaffold_marker = "\n\nCurrent host scaffold:"
+        assert grounding_marker in prompt
+        grounding = json.loads(
+            prompt.split(grounding_marker, 1)[1].split(scaffold_marker, 1)[0]
+        )
+        assert grounding["artifact_kind"] == "item"
+        fact = grounding["facts"][0]
+        imports = list(dict.fromkeys(fact["required_imports"]))
+        templates = list(fact["templates"])
+        key_template = next(
+            item
+            for item in templates
+            if "resource_key_create" in item.get("symbol_usage", ())
+        )
+        register_template = next(
+            item
+            for item in templates
+            if "register_item" in item.get("symbol_usage", ())
+        )
+
+        key_body = key_template["render_body"]
+        register_body = register_template["render_body"]
+        replacements = {
+            "{{java_constant}}": "DEBUG_TOKEN",
+            "{{mod_id}}": "mmm_debug_fixture",
+            "{{registry_path}}": "debug_token",
+            "ModItemIds.DEBUG_TOKEN_KEY": "DEBUG_TOKEN_KEY",
+        }
+        for before, after in replacements.items():
+            key_body = key_body.replace(before, after)
+            register_body = register_body.replace(before, after)
+
+        source = "\n".join(
+            [
+                "package dev.mmm.debugfixture;",
+                "",
+                *(f"import {owner};" for owner in imports),
+                "",
+                "public final class DebugToken {",
+                "    private DebugToken() {}",
+                "",
+                *(
+                    "    " + line if line else ""
+                    for line in key_body.strip().splitlines()
+                ),
+                "",
+                *(
+                    "    " + line if line else ""
+                    for line in register_body.strip().splitlines()
+                ),
+                "}",
+                "",
+            ]
         )
         return json.dumps(
             {
                 "content": source,
-                "summary": "Implemented the host-owned fixture source.",
+                "summary": "Implemented the host-grounded DebugToken fixture.",
             },
             ensure_ascii=False,
             separators=(",", ":"),
