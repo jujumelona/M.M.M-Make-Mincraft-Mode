@@ -141,6 +141,108 @@ def _schema_diagnostics(page: Any, schema: Mapping[str, Any]) -> list[dict[str, 
     return diagnostics
 
 
+def _canonicalize_public_api_declaration(value: Any) -> Any:
+    """Normalize a model-emitted Java API entry to a declaration-only signature."""
+    if not isinstance(value, str):
+        return value
+    text = re.sub(r"\\s+", " ", value.strip()).rstrip(";").strip()
+    # public_api is declaration-only by contract. Models commonly emit enum/class
+    # bodies despite that contract; discard the body deterministically instead of
+    # spending another model turn repairing syntax the host can prove how to fix.
+    brace = text.find("{")
+    if brace >= 0:
+        text = text[:brace].rstrip()
+    if "}" in text:
+        text = text.split("}", 1)[0].rstrip()
+    return text.rstrip(";").strip()
+
+
+def _canonicalize_schema_page(page: Any) -> Any:
+    if not isinstance(page, dict) or not isinstance(page.get("nodes"), list):
+        return page
+    normalized = deepcopy(page)
+    for node in normalized["nodes"]:
+        if not isinstance(node, dict) or node.get("kind") != "java":
+            continue
+        public_api = node.get("public_api")
+        if isinstance(public_api, list):
+            node["public_api"] = [_canonicalize_public_api_declaration(api) for api in public_api]
+    return normalized
+
+
+def _schema_repair_scope(
+    page: Any,
+    schema: Mapping[str, Any],
+    diagnostics: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    """Return host-frozen valid siblings and the number of invalid node slots.
+
+    Scoped repair is only safe when every diagnostic belongs to a concrete node.
+    Page-shape and graph-level failures intentionally fall back to whole-page repair.
+    """
+    if not isinstance(page, dict) or not isinstance(page.get("nodes"), list):
+        return [], 0
+    nodes = page["nodes"]
+    bad_indexes: set[int] = set()
+    for diagnostic in diagnostics:
+        match = re.match(r"^nodes\\.(\\d+)(?:\\.|$)", str(diagnostic.get("field", "")))
+        if not match:
+            return [], 0
+        index = int(match.group(1))
+        if index < 0 or index >= len(nodes):
+            return [], 0
+        bad_indexes.add(index)
+    if not bad_indexes:
+        return [], 0
+    item_schema = schema["properties"]["nodes"]["items"]
+    preserve = [
+        deepcopy(node)
+        for index, node in enumerate(nodes)
+        if index not in bad_indexes
+        and isinstance(node, dict)
+        and not _schema_diagnostics(node, item_schema)
+    ]
+    return preserve, len(bad_indexes)
+
+
+def _merge_scoped_schema_repair(page: Any, feedback: Mapping[str, Any]) -> Any:
+    """Ignore model rewrites of frozen siblings and merge only corrected nodes."""
+    preserve = list(feedback.get("preserve_nodes") or [])
+    repair_count = int(feedback.get("repair_count") or 0)
+    if not preserve or repair_count <= 0:
+        return page
+    if not isinstance(page, dict) or not isinstance(page.get("nodes"), list):
+        raise _InvalidPage(
+            [{"code": "IMPLEMENTATION_IR_REPAIR_NODE_COUNT", "node": "", "field": "nodes",
+              "message": "Scoped repair must return the invalid node(s); valid siblings are host-owned."}],
+            page,
+            preserve,
+        )
+    frozen_symbols = {
+        str(node.get("symbol"))
+        for node in preserve
+        if isinstance(node, dict) and node.get("symbol")
+    }
+    repaired = [
+        deepcopy(node)
+        for node in page["nodes"]
+        if not isinstance(node, dict) or str(node.get("symbol", "")) not in frozen_symbols
+    ]
+    if len(repaired) != repair_count:
+        raise _InvalidPage(
+            [{"code": "IMPLEMENTATION_IR_REPAIR_NODE_COUNT", "node": "", "field": "nodes",
+              "message": (
+                  f"Return exactly {repair_count} corrected invalid node(s); "
+                  "the host reinserts frozen valid siblings."
+              )}],
+            page,
+            preserve,
+        )
+    merged = deepcopy(page)
+    merged["nodes"] = [deepcopy(node) for node in preserve] + repaired
+    return merged
+
+
 def source_requirements(text: str) -> dict[str, str]:
     # Stable provenance, not task boundaries. A node can cite many lines across any
     # number of sections, and a line can be implemented by multiple collaborating nodes.
@@ -292,9 +394,10 @@ def _decision(router: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]
                 "symbols prefixed with OriginalSymbolPart. Move work into those helpers. Preserve "
                 "all original requirement refs. Every replacement must be strictly smaller than "
                 "the rejected task. Dependencies outside the replacement must already exist. "
-                "When validation_feedback is supplied, return the corrected page, preserve_nodes "
-                "unchanged; fix the named fields. Never repeat the rejected page. Do not repeat "
-                "already accepted_nodes on later pages."
+                "When validation_feedback is supplied and preserve_nodes is nonempty, return ONLY "
+                "the corrected invalid node(s); the host owns and reinserts preserve_nodes, so never "
+                "rewrite or repeat them. Fix the named fields. Never repeat the rejected page. Do not "
+                "repeat already accepted_nodes on later pages."
             )}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
             tool_name=name, parameters=_page_schema(payload),
             description="Host-owned implementation graph compilation; does not mutate source.",
@@ -307,7 +410,16 @@ def _decision(router: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]
                 rejected_page = json.loads(matching[0].get("raw_arguments") or "")
             except (ValueError, TypeError):
                 pass
-        diagnostics = _schema_diagnostics(rejected_page, _page_schema(payload)) if rejected_page is not None else []
+        if rejected_page is not None:
+            # Native tool validation can reject a declaration that is mechanically
+            # repairable (for example, an enum body in public_api). Canonicalize the
+            # raw arguments before consuming a model correction turn.
+            rejected_page = _canonicalize_schema_page(rejected_page)
+            diagnostics = _schema_diagnostics(rejected_page, _page_schema(payload))
+            if not diagnostics:
+                return rejected_page
+        else:
+            diagnostics = []
         if not diagnostics:
             diagnostics = [{"code": r.get("failure_code", "TOOL_DECISION_REJECTED"),
                             "node": "", "field": "tool_call", "message": str(r.get("error", ""))}
@@ -344,41 +456,53 @@ def _validated_page(router: Any, name: str, payload: dict[str, Any], *,
             request["validation_feedback"] = state["feedback"]
         page = None
         try:
-            page = _decision(router, name, request)
+            page = _canonicalize_schema_page(_decision(router, name, request))
+            # If a prior schema rejection identified valid siblings, those siblings
+            # are host-owned. The model may return only the invalid nodes (preferred)
+            # or may redundantly rewrite siblings; either way, sibling text is ignored.
+            page = _merge_scoped_schema_repair(page, state.get("feedback") or {})
             diagnostics = _schema_diagnostics(page, schema)
             if diagnostics:
                 raise _InvalidPage(diagnostics, page)
             result = validator(page)
-            preserve = (state.get("feedback") or {}).get("preserve_nodes", [])
-            if any(node not in page["nodes"] for node in preserve):
-                raise _InvalidPage([{"code": "IMPLEMENTATION_IR_ACCEPTED_SIBLING_DRIFT",
-                                     "node": "", "field": "nodes",
-                                     "message": "Keep valid nodes from the rejected page unchanged; correct only invalid nodes."}], page, preserve)
         except _InvalidPage as exc:
             feedback = exc.feedback
             bad_page = feedback["rejected_page"]
             schema_failure = any(d["code"] == "IMPLEMENTATION_IR_SCHEMA_INVALID" for d in feedback["diagnostics"])
-            page_shape_failure = any(d["field"] == "nodes" for d in feedback["diagnostics"])
-            # Retain valid siblings in an invalid page without admitting any part of
-            # that page into the graph. No list.extend(generator) partial mutation.
-            if isinstance(bad_page, dict) and isinstance(bad_page.get("nodes"), list):
-                item_schema = schema["properties"]["nodes"]["items"]
-                if not feedback["preserve_nodes"] and schema_failure and not page_shape_failure:
-                    feedback["preserve_nodes"] = [n for n in bad_page["nodes"]
-                                                  if not _schema_diagnostics(n, item_schema)]
-            # Previously protected siblings remain protected through every correction,
-            # including a second page that is still invalid for some other reason.
-            keep_protected = schema_failure or any(
-                d["code"] == "IMPLEMENTATION_IR_ACCEPTED_SIBLING_DRIFT" for d in feedback["diagnostics"]
+            scoped_repair_failure = any(
+                d["code"] == "IMPLEMENTATION_IR_REPAIR_NODE_COUNT" for d in feedback["diagnostics"]
             )
-            # A graph-level error may prove a schema-valid sibling participates in a
-            # cycle or duplicate owner. Release provisional siblings for that correction;
-            # previously admitted pages remain frozen in the validator's accepted set.
-            protected = (state.get("feedback") or {}).get("preserve_nodes", []) if keep_protected else []
-            protected_symbols = {n["symbol"] for n in protected}
-            feedback["preserve_nodes"] = protected + [
-                n for n in feedback["preserve_nodes"] if n["symbol"] not in protected_symbols
-            ]
+            prior_feedback = state.get("feedback") or {}
+
+            if schema_failure:
+                preserve, repair_count = _schema_repair_scope(
+                    bad_page, schema, feedback["diagnostics"]
+                )
+                if preserve and repair_count:
+                    feedback["preserve_nodes"] = preserve
+                    feedback["repair_count"] = repair_count
+
+            # Once scoped schema repair starts, valid siblings remain frozen in host
+            # state through every correction. Graph-level failures intentionally do
+            # not inherit provisional siblings because those siblings may participate
+            # in the graph error.
+            keep_protected = schema_failure or scoped_repair_failure
+            if keep_protected and prior_feedback.get("preserve_nodes"):
+                protected = list(prior_feedback["preserve_nodes"])
+                protected_symbols = {
+                    n.get("symbol") for n in protected if isinstance(n, dict)
+                }
+                protected.extend(
+                    n for n in feedback.get("preserve_nodes", [])
+                    if isinstance(n, dict) and n.get("symbol") not in protected_symbols
+                )
+                feedback["preserve_nodes"] = protected
+                feedback["repair_count"] = int(
+                    prior_feedback.get("repair_count") or feedback.get("repair_count") or 0
+                )
+            elif not keep_protected:
+                feedback["preserve_nodes"] = []
+                feedback.pop("repair_count", None)
             fingerprint = digest({"page": bad_page, "diagnostics": feedback["diagnostics"] if bad_page is None else None})
             repeated = fingerprint in state["seen"]
             state["attempt"] += 1
