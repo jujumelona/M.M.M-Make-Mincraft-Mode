@@ -24,7 +24,7 @@ MAX_PAGE_CORRECTIONS = 2
 MAX_UNIT_REQUIREMENTS = 6
 MAX_BATCH_REQUIREMENTS = 8
 MAX_BATCH_UNITS = 3
-IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v4"
+IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v5"
 
 
 class ImplementationGraphError(CustomModuleGenerationError):
@@ -862,6 +862,7 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
             "refinements": 0,
             "unit_queue": deepcopy(units),
             "batch_unit_limit": MAX_BATCH_UNITS,
+            "batch_requirement_limit": MAX_BATCH_REQUIREMENTS,
         }
         if resumed is not None:
             emit_root_cause(
@@ -880,6 +881,13 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
     state["batch_unit_limit"] = max(
         1,
         min(int(state.get("batch_unit_limit", MAX_BATCH_UNITS)), MAX_BATCH_UNITS),
+    )
+    state["batch_requirement_limit"] = max(
+        1,
+        min(
+            int(state.get("batch_requirement_limit", MAX_BATCH_REQUIREMENTS)),
+            MAX_BATCH_REQUIREMENTS,
+        ),
     )
 
     def save() -> None:
@@ -929,7 +937,7 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
         batch_units, rem_after_batch = _next_active_batch(
             pending_units,
             max_batch_units=state["batch_unit_limit"],
-            max_batch_reqs=MAX_BATCH_REQUIREMENTS,
+            max_batch_reqs=state["batch_requirement_limit"],
         )
         if batch_units:
             batch_reqs = {r: all_requirements[r] for u in batch_units for r in u["requirements"] if r not in covered}
@@ -937,15 +945,27 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
             batch_reqs = {}
 
         remaining_req_list = [r for r in all_requirements if r not in covered]
-        active_reqs = (
-            batch_reqs
-            if batch_reqs
-            else (
-                all_requirements
-                if covered == all_req_keys
-                else {r: all_requirements[r] for r in remaining_req_list[:MAX_BATCH_REQUIREMENTS]}
-            )
-        )
+        if batch_reqs:
+            active_reqs = batch_reqs
+        elif covered == all_req_keys:
+            # Coverage can be complete while a forward dependency is still missing.
+            # Feed the requirements of the dependent owners first, bounded by the
+            # adaptive requirement cap, instead of resending the entire design.
+            dependency_req_ids: list[str] = []
+            seen_dependency_reqs: set[str] = set()
+            for accepted_node in nodes:
+                if not set(accepted_node["depends_on"]).intersection(missing):
+                    continue
+                for req_id in accepted_node["requirements"]:
+                    if req_id not in seen_dependency_reqs:
+                        seen_dependency_reqs.add(req_id)
+                        dependency_req_ids.append(req_id)
+            candidates = dependency_req_ids or list(all_requirements)
+            selected = candidates[: state["batch_requirement_limit"]]
+            active_reqs = {r: all_requirements[r] for r in selected}
+        else:
+            selected = remaining_req_list[: state["batch_requirement_limit"]]
+            active_reqs = {r: all_requirements[r] for r in selected}
 
         payload = {
             "current_units": [u["title"] for u in batch_units],
@@ -1009,25 +1029,37 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
                     save()
                     continue
                 elif len(active_req_items) > 1:
-                    # One unit is still too large. Replace that exact unit with two
-                    # deterministic requirement slices; with batch_unit_limit == 1
-                    # only the first slice is attempted next, guaranteeing strict
-                    # input-scope reduction.
-                    state["batch_unit_limit"] = 1
-                    mid = max(1, len(active_req_items) // 2)
-                    target_u = batch_units[0] if batch_units else {"unit_id": "unit_split", "title": "split"}
-                    sub_1 = {
-                        "unit_id": f"{target_u['unit_id']}_a",
-                        "title": f"{target_u['title']} (slice 1)",
-                        "requirements": dict(active_req_items[:mid]),
-                    }
-                    sub_2 = {
-                        "unit_id": f"{target_u['unit_id']}_b",
-                        "title": f"{target_u['title']} (slice 2)",
-                        "requirements": dict(active_req_items[mid:]),
-                    }
-                    other_u = [u for u in state["unit_queue"] if u["unit_id"] != target_u["unit_id"]]
-                    state["unit_queue"] = [sub_1, sub_2] + other_u
+                    if batch_units:
+                        # One pending authored unit is still too large. Replace that
+                        # exact unit with deterministic requirement slices; with the
+                        # unit cap at one, only the first slice is attempted next.
+                        state["batch_unit_limit"] = 1
+                        mid = max(1, len(active_req_items) // 2)
+                        target_u = batch_units[0]
+                        sub_1 = {
+                            "unit_id": f"{target_u['unit_id']}_a",
+                            "title": f"{target_u['title']} (slice 1)",
+                            "requirements": dict(active_req_items[:mid]),
+                        }
+                        sub_2 = {
+                            "unit_id": f"{target_u['unit_id']}_b",
+                            "title": f"{target_u['title']} (slice 2)",
+                            "requirements": dict(active_req_items[mid:]),
+                        }
+                        other_u = [
+                            u for u in state["unit_queue"]
+                            if u["unit_id"] != target_u["unit_id"]
+                        ]
+                        state["unit_queue"] = [sub_1, sub_2] + other_u
+                    else:
+                        # No pending authored unit remains (typically dependency
+                        # resolution after full coverage). Shrink the model-visible
+                        # requirement window itself; synthetic queue units would be
+                        # filtered out immediately as already covered.
+                        next_req_limit = max(1, len(active_req_items) // 2)
+                        if next_req_limit >= state["batch_requirement_limit"]:
+                            next_req_limit = state["batch_requirement_limit"] - 1
+                        state["batch_requirement_limit"] = max(1, next_req_limit)
                     save()
                     continue
                 else:
