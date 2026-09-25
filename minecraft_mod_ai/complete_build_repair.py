@@ -6,6 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
+from .compiler_diagnostics import compiler_log_diagnostics
 from .model_router import ModelRouter
 from .repair_guard import RepairEngine
 from .repairability import source_repair_block_reason
@@ -18,6 +19,25 @@ class BuildRepairOptions(Protocol):
     run_gametest: bool
     auto_repair: bool
     max_repair_attempts: int | None
+
+
+def _persist_build_diagnostics(
+    bundle: dict[str, Any],
+    *,
+    project_root: Path,
+) -> dict[str, Any]:
+    """Freeze pathful compiler/runtime diagnostics into the durable build receipt.
+
+    Execution feedback may run after build logs have moved or become unavailable.
+    Persist canonical diagnostics while the failed command logs are still live so a
+    runtime linkage failure remains bound to the generation owner instead of collapsing
+    to a pathless "Gradle build failed." message.
+    """
+
+    diagnostics = compiler_log_diagnostics(bundle, project_root=project_root)
+    if not diagnostics:
+        return bundle
+    return {**bundle, "diagnostics": diagnostics}
 
 
 def _attested_repair_build(repair_result: Any) -> dict[str, Any] | None:
@@ -154,7 +174,7 @@ def run_build_repair_checkpoint(
             router_factory=router_factory,
             policy=policy,
         )
-        return bundle
+        return _persist_build_diagnostics(bundle, project_root=project_root)
 
     bundle = run_named_checkpoint(
         ledger,
