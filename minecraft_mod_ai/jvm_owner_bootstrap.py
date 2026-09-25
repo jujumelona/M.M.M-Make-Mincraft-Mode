@@ -31,7 +31,6 @@ def owner_command(
         ) from exc
     if not math.isfinite(timeout_value) or timeout_value <= 0.0:
         raise OwnerRPCError("JVM owner bootstrap timeout must be a positive finite number")
-    bootstrap_timeout = max(1, int(math.ceil(timeout_value)))
     deadline = time.monotonic() + timeout_value
 
     def remaining_timeout() -> int:
