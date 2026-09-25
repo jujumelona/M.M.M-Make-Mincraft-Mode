@@ -25,7 +25,7 @@ from minecraft_mod_ai.llama_finish_reason_contract import (
 from minecraft_mod_ai.model_adapters.base import NativeToolDecisionRejected
 
 TARGET = {"minecraft_version": "1.21.1", "loader": "fabric", "mappings": "1.21.1+build.3"}
-DESIGN = "# behavior_contract\nAdd credits and purchase once.\n# state_model\nPlayerCredits owns balances.\n# verification\nReject purchases when balance is insufficient."
+DESIGN = "# implementation\nAdd credits and purchase once.\nPlayerCredits owns balances.\nReject purchases when balance is insufficient.\nPersist the balance.\nExpose the balance API."
 
 
 def node(symbol="PlayerCredits", *, refs=None, cost=1600, dependencies=(), api=None, activation=False):
@@ -167,6 +167,7 @@ def test_oversized_task_decomposes_before_any_coder_request():
     facade["obligations"] = ["Delegate storage to PlayerCreditsPartStore while retaining the balance API."]
     router = Decisions([{"nodes": [oversized], "done": True},
                         {"nodes": [helper, facade], "done": True}])
+    router.implementation_output_budget = 4000
     graph = compile_with(router)
     assert [name for name, _ in router.calls] == ["compile_implementation_graph", "decompose_implementation_node"]
     assert len(graph["nodes"]) == 2
@@ -185,6 +186,7 @@ def test_preflight_refines_multiple_levels_without_decoding_oversized_intermedia
     router = Decisions([{"nodes": [parent], "done": True},
                         {"nodes": [facade, helper], "done": True},
                         {"nodes": [helper_facade, inner], "done": True}])
+    router.implementation_output_budget = 4000
     graph = compile_with(router)
     assert [n["symbol"] for n in graph["nodes"]] == [inner["symbol"], helper["symbol"], parent["symbol"]]
     assert len(router.calls) == 3
@@ -209,12 +211,13 @@ def test_invalid_graph_is_rejected_before_source_generation(fault):
         compile_with(Decisions([{"nodes": [first, second], "done": True}] * 3))
 
 
-def test_pagination_has_explicit_completion_and_detects_repetition():
-    router = Decisions([{"nodes": [node()], "done": False},
-                        {"nodes": [node()], "done": False},
-                        {"nodes": [node()], "done": False}])
-    # Re-emitting an already accepted owner with no extension is deterministic host
-    # no-progress. Do not spend a model repair call on the same semantic state.
+def test_pagination_termination_is_host_owned_and_rejects_no_progress():
+    first = node(refs=["R1", "R2", "R3"])
+    repeated = copy.deepcopy(first)
+    router = Decisions([
+        {"nodes": [first], "done": False},
+        {"nodes": [repeated], "done": False},
+    ])
     with pytest.raises(ImplementationGraphError, match="PAGE_NO_PROGRESS"):
         compile_with(router)
     assert len(router.calls) == 2
@@ -236,6 +239,7 @@ def test_refinement_cannot_repeat_task_drop_coverage_or_break_consumers(fault):
     router = Decisions([{"nodes": [original], "done": True},
                         {"nodes": [helper, facade], "done": True},
                         {"nodes": [helper, facade], "done": True}])
+    router.implementation_output_budget = 4000
     with pytest.raises(ImplementationGraphError):
         compile_with(router)
 
