@@ -210,7 +210,8 @@ def recover_schema_rejected_verifier_repair_calls(
     if not isinstance(old_text, str) or not old_text or not isinstance(model_new, str):
         return None
     local_new = normalize_model_repair_replacement(current_source, old_text, model_new)
-    if local_new == model_new:
+    redundant_host_fields = bool(set(candidate) - {"new"})
+    if local_new == model_new and not redundant_host_fields:
         return None
     if atomic_repair_scope_error(
         old_text=old_text,
