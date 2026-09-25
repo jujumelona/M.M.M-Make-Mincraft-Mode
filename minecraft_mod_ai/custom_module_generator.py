@@ -849,7 +849,7 @@ class CustomModuleGenerator:
                 "Keep the first implementation minimal but semantically complete: implement the exact coder_execution_contract obligation and authored-unit text; do not substitute a generic placeholder, sample feature, initialization flag, or lifecycle skeleton.",
                 "Do not invent @Environment(CLIENT/SERVER) helpers or client/server lifecycle splits. Use them only when the approved unit explicitly requires side-specific behavior and exact project/API evidence identifies the matching side-specific caller; common initialize() must remain callable on both sides and must not invoke side-stripped methods.",
                 "Use workspace/RAG/MCP retrieval only when the host implementation grounding and exact project context do not contain a fact required by the approved task.",
-                "Apply real edits with the source-edit tool; target compile feedback is handled inside this same generation run before any fallback repair stage.",
+                "Apply real edits only with the exact visible tool named apply_source_edit. Never invent or rename it as source_edit, edit_file, write_file, patch, or another alias. Target compile feedback is handled inside this same generation run before any fallback repair stage.",
                 "Fill the final summary in the supplied fixed template.",
                 response_template_prompt("coder_summary"),
                 "Edits are limited to src/main/java, src/main/resources, src/test/java and src/gametest.",
