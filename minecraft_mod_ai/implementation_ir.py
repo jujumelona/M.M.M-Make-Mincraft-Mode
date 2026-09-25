@@ -24,6 +24,7 @@ MAX_PAGE_CORRECTIONS = 2
 MAX_UNIT_REQUIREMENTS = 6
 MAX_BATCH_REQUIREMENTS = 8
 MAX_BATCH_UNITS = 3
+IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v2"
 
 
 class ImplementationGraphError(CustomModuleGenerationError):
@@ -676,18 +677,38 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
     units = decompose_authored_units(text, max_requirements_per_unit=MAX_UNIT_REQUIREMENTS)
 
     request_hash = digest({"text": text, "package": package, "mod_id": mod_id, "target": target})
-    state = deepcopy(resume) if resume else {
-        "schema_version": "mmm/implementation-ir-draft-v1",
-        "request_hash": request_hash,
-        "nodes": [],
-        "page": 1,
-        "done": False,
-        "pending": None,
-        "refinements": 0,
-        "unit_queue": deepcopy(units),
-    }
-    if state.get("request_hash") != request_hash or state.get("schema_version") != "mmm/implementation-ir-draft-v1":
+    resumed = deepcopy(resume) if resume else None
+    if resumed is not None and resumed.get("request_hash") != request_hash:
         raise ImplementationGraphError("IMPLEMENTATION_IR_CHECKPOINT_DRIFT")
+
+    # A compiler-contract change can make a previously terminal repair checkpoint
+    # obsolete even though the authored request itself is identical. Preserve only
+    # checkpoints produced by this exact draft schema; stale compiler state is
+    # deterministically recompiled from the same approved authored input.
+    if resumed is not None and resumed.get("schema_version") == IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION:
+        state = resumed
+    else:
+        state = {
+            "schema_version": IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION,
+            "request_hash": request_hash,
+            "nodes": [],
+            "page": 1,
+            "done": False,
+            "pending": None,
+            "refinements": 0,
+            "unit_queue": deepcopy(units),
+        }
+        if resumed is not None:
+            emit_root_cause(
+                "implementation_graph_checkpoint_invalidated",
+                stage="production",
+                operation="compile_implementation_graph",
+                result="RECOMPILE",
+                details={
+                    "old_schema_version": resumed.get("schema_version"),
+                    "new_schema_version": IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION,
+                },
+            )
 
     if not state.get("unit_queue"):
         state["unit_queue"] = deepcopy(units)
