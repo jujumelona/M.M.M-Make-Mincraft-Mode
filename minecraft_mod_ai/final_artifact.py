@@ -870,6 +870,7 @@ def build_authored_design_coverage_receipt(
     if authored_policy not in {
         "host_exact_task_queue_no_coder_file_planning",
         "host_localize_freeze_exact_targets_before_coder",
+        "host_bounded_coherent_authored_design",
     }:
         findings.append("authored execution manifest policy is not a host-owned task policy")
     if manifest.get("source_text_sha256") != source_text_sha256:
