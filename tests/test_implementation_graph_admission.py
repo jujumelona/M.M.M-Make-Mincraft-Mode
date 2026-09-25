@@ -439,15 +439,19 @@ def test_host_and_model_use_one_node_schema(overrides):
         assert admitted["symbol"] == raw["symbol"]
 
 
-def test_valid_sibling_cannot_drift_through_two_invalid_corrections():
+def test_valid_sibling_drift_is_ignored_across_multiple_schema_corrections():
     first, second = node(), node("TradeService")
     invalid_second = {**second, "public_api": []}
     changed_first = {**first, "responsibility": "Different responsibility"}
     router = Decisions([{"nodes": [first, invalid_second], "done": True},
                         {"nodes": [changed_first, invalid_second], "done": True},
                         {"nodes": [changed_first, second], "done": True}])
-    with pytest.raises(ir.ImplementationGraphError, match="ACCEPTED_SIBLING_DRIFT"):
-        compile_graph(router)
+
+    graph = compile_graph(router)
+
+    by_symbol = {item["symbol"]: item for item in graph["nodes"]}
+    assert by_symbol[first["symbol"]]["responsibility"] == first["responsibility"]
+    assert by_symbol[second["symbol"]]["public_api"] == second["public_api"]
     assert router.calls[2][1]["validation_feedback"]["preserve_nodes"] == [first]
 
 
