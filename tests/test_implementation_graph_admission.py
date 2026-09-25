@@ -109,18 +109,81 @@ def test_later_requirements_monotonically_extend_an_accepted_owner():
     assert len(router.calls) == 2
 
 
-def test_duplicate_owner_cannot_rewrite_an_existing_api_contract():
+def test_duplicate_owner_preserves_existing_api_contract_without_repair():
     first = node(refs=["R1", "R2", "R3"], api=["public static int balance()"])
     conflicting = node(refs=["R4", "R5", "R6"], api=["public static long balance()"])
 
     router = Decisions([
         {"nodes": [first], "done": False},
         {"nodes": [conflicting], "done": True},
-        {"nodes": [conflicting], "done": True},
     ])
-    with pytest.raises(ir.ImplementationGraphError, match="DUPLICATE_CONTRACT_CONFLICT"):
-        compile_graph(router)
-    assert len(router.calls) == 3
+    graph = compile_graph(router)
+
+    assert len(router.calls) == 2
+    merged = graph["nodes"][0]
+    assert merged["public_api"] == ["public static int balance()"]
+    assert merged["requirements"] == ["R1", "R2", "R3", "R4", "R5", "R6"]
+
+
+def test_logged_packet_log_return_type_drift_is_host_frozen_without_repair():
+    requirements = {
+        "R111": "Persist packet logs.",
+        "R112": "Load persisted packet logs.",
+        "R113": "Continue authority persistence.",
+        "R114": "Continue authority persistence.",
+        "R115": "Continue authority persistence.",
+        "R116": "Continue authority persistence.",
+        "R117": "Continue authority persistence.",
+        "R118": "Continue authority persistence.",
+    }
+
+    def raw(refs, api):
+        return {
+            "symbol": "AuthorityAndNetwork_Part2_Persistence",
+            "kind": "java",
+            "resource_path": "",
+            "responsibility": "Own authority and network persistence.",
+            "requirements": list(refs),
+            "obligations": ["Persist and load packet logs."],
+            "public_api": list(api),
+            "depends_on": [],
+            "activation": False,
+            "estimated_tokens": 900,
+        }
+
+    accepted = ir.validate_node(
+        raw(
+            ["R111", "R112"],
+            ["public static PacketLog loadPacketLog(String shipId)"],
+        ),
+        package="example",
+        mod_id="test",
+        refs=set(requirements),
+    )
+
+    combined = ir._admit_graph_page(
+        {
+            "nodes": [
+                raw(
+                    ["R113", "R114", "R115", "R116", "R117", "R118"],
+                    ["public static void loadPacketLog(String shipId)"],
+                )
+            ],
+            "done": True,
+        },
+        accepted=[accepted],
+        package="example",
+        mod_id="test",
+        requirements=requirements,
+    )
+
+    assert len(combined) == 1
+    assert combined[0]["public_api"] == [
+        "public static PacketLog loadPacketLog(String shipId)"
+    ]
+    assert combined[0]["requirements"] == [
+        "R111", "R112", "R113", "R114", "R115", "R116", "R117", "R118"
+    ]
 
 
 def test_repeated_accepted_owner_is_ignored_when_same_page_adds_real_new_work():
