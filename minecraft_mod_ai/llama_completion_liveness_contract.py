@@ -174,6 +174,19 @@ def _completion_token_budget(payload: Mapping[str, Any]) -> int | None:
     return None
 
 
+def _completion_wall_timeout_seconds(payload: Mapping[str, Any]) -> float:
+    """Return a non-refreshable wall-clock ceiling for one llama completion."""
+
+    has_tools = bool(payload.get("tools"))
+    default = 600.0 if has_tools else 300.0
+    name = (
+        "MMM_LLAMA_TOOL_COMPLETION_WALL_TIMEOUT_SECONDS"
+        if has_tools
+        else "MMM_LLAMA_COMPLETION_WALL_TIMEOUT_SECONDS"
+    )
+    return _positive_env_float(name, default)
+
+
 def _semantic_idle_timeout_seconds(
     stream_module: Any,
     payload: Mapping[str, Any],
@@ -345,11 +358,13 @@ class _ProgressCheckedResponse:
         *,
         request_id: str,
         started_at: float,
+        wall_seconds: float,
     ) -> None:
         self._response = response
         self._idle_seconds = idle_seconds
         self._request_id = request_id
         self._started_at = started_at
+        self._wall_seconds = float(wall_seconds)
         self._first_progress = False
         self._semantic_events = 0
         self._last_progress_log_at = started_at
@@ -407,6 +422,12 @@ class _ProgressCheckedResponse:
         watchdog = _SemanticProgressWatchdog(self._idle_seconds)
         try:
             for raw_line in self._response.iter_lines(*args, **kwargs):
+                now = time.monotonic()
+                if now - self._started_at >= self._wall_seconds:
+                    raise LlamaSemanticProgressTimeout(
+                        "native llama-server completion exceeded the non-refreshable "
+                        f"wall-clock ceiling of {self._wall_seconds:.0f}s"
+                    )
                 parsed_error = sse_error_from_line(raw_line)
                 if parsed_error is not None:
                     status, error = parsed_error
@@ -457,11 +478,13 @@ class _ProgressCheckedStream:
         *,
         request_id: str,
         started_at: float,
+        wall_seconds: float,
     ) -> None:
         self._stream = stream
         self._idle_seconds = idle_seconds
         self._request_id = request_id
         self._started_at = started_at
+        self._wall_seconds = float(wall_seconds)
         self._checked_response: _ProgressCheckedResponse | None = None
 
     def __getattr__(self, name: str) -> Any:
@@ -499,6 +522,7 @@ class _ProgressCheckedStream:
             self._idle_seconds,
             request_id=self._request_id,
             started_at=self._started_at,
+            wall_seconds=self._wall_seconds,
         )
         self._checked_response = checked
         return checked
@@ -544,6 +568,7 @@ class _SemanticProgressClient:
             self._stream_module,
             payload,
         )
+        wall_seconds = _completion_wall_timeout_seconds(payload)
         request_id = _request_id_from_headers(kwargs.get("headers"))
         started_at = time.monotonic()
         print(
@@ -552,6 +577,7 @@ class _SemanticProgressClient:
             f" max_tokens={payload.get('max_tokens', '?')}",
             f" tools={len(payload.get('tools', ()) or ())}",
             f" idle_timeout={idle_seconds:.0f}s",
+            f" wall_timeout={wall_seconds:.0f}s",
             sep="",
             flush=True,
         )
@@ -560,6 +586,7 @@ class _SemanticProgressClient:
             idle_seconds,
             request_id=request_id,
             started_at=started_at,
+            wall_seconds=wall_seconds,
         )
 
 
