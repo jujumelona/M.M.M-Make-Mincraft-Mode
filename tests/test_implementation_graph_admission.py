@@ -67,14 +67,16 @@ def test_same_rejected_page_stops_without_a_third_identical_decode():
     assert "public_api" in str(caught.value)
 
 
-def test_premature_done_requests_only_remaining_coverage():
+def test_premature_done_is_ignored_and_only_active_work_is_sent_next():
     first = node(refs=["R1", "R2", "R3"])
     second = node("TradeService", refs=["R4", "R5", "R6"])
     router = Decisions([{"nodes": [first], "done": True}, {"nodes": [second], "done": True}])
     graph = compile_graph(router)
     assert len(graph["nodes"]) == 2
     next_page = router.calls[1][1]
-    assert next_page["remaining_requirements"] == ["R4", "R5", "R6"]
+    assert list(next_page["requirements"]) == ["R4", "R5", "R6"]
+    assert "remaining_requirements" not in next_page
+    assert "remaining_unit_ids" not in next_page
     assert next_page["accepted_nodes"][0]["symbol"] == "PlayerCredits"
 
 
