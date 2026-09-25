@@ -13,109 +13,95 @@ def _record(provider: str, query: str) -> dict[str, object]:
     }
 
 
-def test_reference_query_rows_overlap_but_providers_do_not_fan_out(monkeypatch) -> None:
-    barrier = threading.Barrier(2, timeout=2.0)
+def test_reference_providers_overlap_and_all_contribute(monkeypatch) -> None:
+    barrier = threading.Barrier(3, timeout=2.0)
     lock = threading.Lock()
     active = 0
     max_active = 0
-    github_calls: list[str] = []
 
-    monkeypatch.setattr(reference_research, "_MAX_QUERY_WORKERS", 2)
-
-    def wikipedia(query: str):
-        nonlocal active, max_active
-        with lock:
-            active += 1
-            max_active = max(max_active, active)
-        try:
-            barrier.wait()
-            return [
-                _record("wikipedia", query)
-            ], {
-                "provider": "wikipedia",
-                "status": "available",
-                "result_count": 1,
-            }
-        finally:
+    def provider(name: str):
+        def run(queries, anchors):
+            del anchors
+            nonlocal active, max_active
             with lock:
-                active -= 1
+                active += 1
+                max_active = max(max_active, active)
+            try:
+                barrier.wait()
+                query = queries[0]
+                return (
+                    [_record(name, query)],
+                    {"provider": name, "status": "available", "result_count": 1},
+                )
+            finally:
+                with lock:
+                    active -= 1
+        return run
 
-    def github(query: str):
-        github_calls.append(query)
-        return [
-            _record("github_reference", query)
-        ], {
-            "provider": "github_reference",
-            "status": "available",
-            "result_count": 1,
-        }
-
-    monkeypatch.setattr(reference_research, "_wikipedia_sources", wikipedia)
-    monkeypatch.setattr(reference_research, "_github_reference_sources", github)
+    monkeypatch.setattr(reference_research, "_wikipedia_sources", provider("wikipedia"))
+    monkeypatch.setattr(reference_research, "_wikidata_sources", provider("wikidata"))
+    monkeypatch.setattr(
+        reference_research,
+        "_github_reference_sources",
+        provider("github_reference"),
+    )
 
     payload = reference_research.retrieve_reference_grounded_evidence(["alpha", "beta"])
 
-    assert [row["query"] for row in payload["queries"]] == ["alpha", "beta"]
-    assert max_active == 2
-    assert github_calls == []
-    for query, row in zip(("alpha", "beta"), payload["queries"], strict=True):
-        assert [record["source_id"] for record in row["evidence_records"]] == [
-            f"wikipedia:{query}"
-        ]
-        assert row["provider_receipts"]["github_reference"]["status"] == (
-            "skipped_wikipedia_has_evidence"
+    assert max_active == 3
+    assert payload["queries"][0]["authored_queries"] == ["alpha", "beta"]
+    assert payload["queries"][0]["provider_policy"] == (
+        "independent_parallel_after_identity_first_expansion"
+    )
+    assert {
+        record["source_id"] for record in payload["queries"][0]["evidence_records"]
+    } == {
+        "wikipedia:alpha",
+        "wikidata:alpha",
+        "github_reference:alpha",
+    }
+
+
+def test_reference_provider_failure_does_not_suppress_other_providers(monkeypatch) -> None:
+    def fail_wikipedia(queries, anchors):
+        del queries, anchors
+        raise RuntimeError("wiki failed")
+
+    def wikidata(queries, anchors):
+        del anchors
+        return (
+            [_record("wikidata", queries[0])],
+            {"provider": "wikidata", "status": "available", "result_count": 1},
         )
-        assert row["provider_receipts"]["wikidata"]["status"] == (
-            "skipped_wikipedia_has_evidence"
+
+    def github(queries, anchors):
+        del anchors
+        return (
+            [_record("github_reference", queries[0])],
+            {
+                "provider": "github_reference",
+                "status": "available",
+                "result_count": 1,
+            },
         )
-        assert row["content_record_count"] == 1
-        assert row["retrieval_errors"] == []
-        assert row["provider_policy"] == (
-            "sequential_identity_first_then_github_empty_fallback"
-        )
 
-
-def test_reference_provider_failure_uses_sequential_github_fallback(monkeypatch) -> None:
-    calls: list[tuple[str, str]] = []
-
-    def fail_wikipedia(query: str):
-        calls.append(("wikipedia", query))
-        raise RuntimeError(f"wiki failed for {query}")
-
-    def github(query: str):
-        calls.append(("github_reference", query))
-        return [
-            _record("github_reference", query)
-        ], {
-            "provider": "github_reference",
-            "status": "available",
-            "result_count": 1,
-        }
-
-    monkeypatch.setattr(reference_research, "_MAX_PROVIDER_ATTEMPTS", 1)
     monkeypatch.setattr(reference_research, "_wikipedia_sources", fail_wikipedia)
+    monkeypatch.setattr(reference_research, "_wikidata_sources", wikidata)
     monkeypatch.setattr(reference_research, "_github_reference_sources", github)
 
     payload = reference_research.retrieve_reference_grounded_evidence(["alpha"])
     row = payload["queries"][0]
 
-    assert calls == [
-        ("wikipedia", "alpha"),
-        ("github_reference", "alpha"),
-    ]
-    assert row["provider_receipts"]["wikipedia"] == {
-        "provider": "wikipedia",
-        "status": "error",
-        "result_count": 0,
-        "attempts": 1,
+    assert row["provider_receipts"]["wikipedia"]["status"] == "error"
+    assert {
+        record["source_id"] for record in row["evidence_records"]
+    } == {
+        "wikidata:alpha",
+        "github_reference:alpha",
     }
-    assert row["provider_receipts"]["github_reference"]["status"] == "available"
-    assert [record["source_id"] for record in row["evidence_records"]] == [
-        "github_reference:alpha"
-    ]
     assert row["retrieval_errors"] == [
-        {"provider": "wikipedia", "error": "RuntimeError: wiki failed for alpha"}
+        {"provider": "wikipedia", "error": "RuntimeError: wiki failed"}
     ]
     assert row["provider_policy"] == (
-        "sequential_identity_first_then_github_empty_fallback"
+        "independent_parallel_after_identity_first_expansion"
     )
