@@ -114,6 +114,7 @@ def _install_validation_contracts() -> None:
 def _install_generation_contracts() -> None:
     from . import (
         complete_orchestrator,
+        custom_module_generator,
         extended_content_generator,
         performance_final_contract,
         project_index,
