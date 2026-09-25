@@ -327,6 +327,26 @@ class PlatformLock:
                 "Platform lock java_version must be a positive Java major version."
             )
 
+        minimum_java = minimum_java_major(self.minecraft_version)
+        if minimum_java is not None and int(self.java_version) < minimum_java:
+            raise SpecValidationError(
+                f"Minecraft {self.minecraft_version} requires Java {minimum_java}+ execution target; "
+                f"got Java {self.java_version}."
+            )
+        if not native_names:
+            yarn = self.yarn_mappings.casefold()
+            if yarn not in {"mojang", "official", "official_mojang"}:
+                mapping_match = re.match(r"^(\d+(?:\.\d+){1,2})\+", self.yarn_mappings)
+                if mapping_match and mapping_match.group(1) != self.minecraft_version:
+                    raise SpecValidationError(
+                        "Platform lock mappings coordinate disagrees with minecraft_version."
+                    )
+        api_match = re.search(r"\+(\d+(?:\.\d+){1,2})$", self.fabric_api)
+        if api_match and api_match.group(1) != self.minecraft_version:
+            raise SpecValidationError(
+                "Platform lock Fabric API coordinate disagrees with minecraft_version."
+            )
+
         extended_present = any(
             _platform_receipt_value(self, field_name, None) not in (None, "", 0)
             for field_name in _PLATFORM_EXTENDED_FIELDS
