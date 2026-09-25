@@ -8,6 +8,7 @@ multi-gigabyte models. Mandatory planning is compiler-owned and is verified dire
 preflight must never depend on a runtime planning monkey-patch.
 """
 
+import inspect
 import json
 import sys
 import threading
@@ -89,77 +90,67 @@ def _assert_authoritative_requirement_path() -> None:
 
 
 def _assert_tool_schema_contracts() -> None:
-    """Require every fail-closed schema/request boundary installed by finalization."""
+    """Verify the direct fail-closed tool/schema boundary without wrapper markers."""
 
-    from . import external_agent_bridge, external_mcp_router
     from .agent_tool_runtime import AgentToolRuntime
+    from .external_agent_bridge import (
+        TOOL_NAMES as EXTERNAL_TOOL_NAMES,
+        ExternalAgentBridge,
+    )
+    from .external_mcp_router import ExternalMCPRouter
     from .model_adapters import llama_cpp_adapter
 
-    checks = (
-        (
-            "first-party raw tools/list integrity",
-            AgentToolRuntime._list_tools_async,
-            "_mmm_raw_mcp_schema_integrity_v1",
-        ),
-        (
-            "first-party schema child-environment binding",
-            AgentToolRuntime.tool_schemas,
-            "_mmm_mcp_schema_environment_v1",
-        ),
-        (
-            "external provider schema integrity",
-            external_agent_bridge._provider_schema,
-            "_mmm_external_provider_schema_integrity_v1",
-        ),
-        (
-            "external provider pre-call integrity",
-            external_mcp_router.ExternalMCPRouter._initialized_call,
-            "_mmm_external_provider_call_integrity_v1",
-        ),
-        (
-            "external schema-to-provider execution binding",
-            external_agent_bridge.ExternalAgentBridge.call,
-            "_mmm_external_mcp_schema_binding_v1",
-        ),
-        (
-            "external same-scope schema binding serialization",
-            external_agent_bridge.ExternalAgentBridge.call,
-            "_mmm_external_mcp_scope_serialization_v1",
-        ),
-        (
-            "external model-facing bound-call schema",
-            external_agent_bridge.ExternalAgentBridge.tool_schemas,
-            "_mmm_external_mcp_bound_schema_v1",
-        ),
-        (
-            "native visible/authorized validation surface",
-            llama_cpp_adapter._request_tool_schema_map,
-            "_mmm_core_validation_surface",
-        ),
+    required_callables = (
+        ("first-party tools/list owner", AgentToolRuntime._list_tools_async),
+        ("first-party schema owner", AgentToolRuntime.tool_schemas),
+        ("external provider schema owner", ExternalAgentBridge.tool_schemas),
+        ("external provider call owner", ExternalAgentBridge.call),
+        ("external MCP router", ExternalMCPRouter.invoke),
+        ("external MCP initialized call", ExternalMCPRouter._initialized_call),
+        ("native tool schema map", llama_cpp_adapter._request_tool_schema_map),
+        ("native exact visible-tool binding", llama_cpp_adapter._exact_model_visible_tools),
     )
-    missing = [
-        label
-        for label, target, marker in checks
-        if getattr(target, marker, False) is not True
-    ]
-    router_class = external_mcp_router.ExternalMCPRouter
-    if (
-        getattr(router_class, "_mmm_external_mcp_bound_invoke_v1", False) is not True
-        or not callable(getattr(router_class, "invoke_bound", None))
-    ):
-        missing.append("exact external MCP bound-provider invocation")
+    missing = [label for label, target in required_callables if not callable(target)]
+
+    schemas = ExternalAgentBridge.tool_schemas("generation")
+    names: list[str] = []
+    for schema in schemas:
+        if not isinstance(schema, dict):
+            missing.append("external model-facing schema object")
+            continue
+        function = schema.get("function")
+        if not isinstance(function, dict):
+            missing.append("external model-facing function schema")
+            continue
+        name = str(function.get("name") or "").strip()
+        if not name:
+            missing.append("external model-facing tool name")
+            continue
+        names.append(name)
+        parameters = function.get("parameters")
+        if not isinstance(parameters, dict) or parameters.get("type") != "object":
+            missing.append(f"{name} object parameter schema")
+            continue
+        properties = parameters.get("properties")
+        if not isinstance(properties, dict):
+            missing.append(f"{name} parameter properties")
+            continue
+        for host_owned in ("minecraft_version", "loader", "mappings"):
+            raw = properties.get(host_owned)
+            if not isinstance(raw, dict) or "type" in raw:
+                missing.append(f"{name} host-owned {host_owned} binding")
+
+    if set(names) != set(EXTERNAL_TOOL_NAMES) or len(names) != len(set(names)):
+        missing.append("exact external model-facing tool set")
+
     if missing:
         raise RuntimePreflightError(
-            "final tool/schema runtime is missing fail-closed contracts: "
-            + ", ".join(missing)
+            "direct tool/schema runtime is incomplete: " + ", ".join(sorted(set(missing)))
         )
-
 
 def _assert_routing_intent_alignment() -> None:
     from . import small_model_max_agent_contract as small_model
 
-    if getattr(small_model._request_query, "_mmm_structured_terminal_intent", False) is not True:
-        raise RuntimePreflightError("small-model selector is not bound to structured terminal intent")
     selector = small_model._request_query(_large_implementation_messages())
     if "implement_module" not in selector:
         raise RuntimePreflightError("structured implementation phase was lost from routing query")
@@ -169,8 +160,12 @@ def _assert_generation_concurrency_guards() -> None:
     from .custom_module_generator import CustomModuleGenerator
     from .project_index import ProjectIndex
 
-    if getattr(CustomModuleGenerator.generate, "_mmm_instance_generation_serialized", False) is not True:
-        raise RuntimePreflightError("shared CustomModuleGenerator is missing its per-instance lock")
+    generator_source = inspect.getsource(CustomModuleGenerator.generate)
+    if "with project_write_lock(root):" not in generator_source:
+        raise RuntimePreflightError(
+            "CustomModuleGenerator does not directly own its project write lock"
+        )
+
     for method_name in (
         "update_files",
         "write_manifest",
@@ -180,20 +175,22 @@ def _assert_generation_concurrency_guards() -> None:
         "select_page",
     ):
         method = getattr(ProjectIndex, method_name)
-        if getattr(method, "_mmm_snapshot_locked", False) is not True:
+        if getattr(method, "__wrapped__", None) is None:
             raise RuntimePreflightError(
-                f"ProjectIndex.{method_name} is outside the shared snapshot lock"
+                f"ProjectIndex.{method_name} is outside the source-owned snapshot lock"
             )
 
 
 def _assert_retrieval_model_residency() -> None:
     from .model_router import ModelRouter
 
-    if getattr(ModelRouter.embed, "_mmm_resident_embedding_adapter", False) is not True:
+    embed_source = inspect.getsource(ModelRouter.embed)
+    rerank_source = inspect.getsource(ModelRouter.rerank)
+    if "_embedding_adapters" not in embed_source:
         raise RuntimePreflightError(
             "ModelRouter.embed would reconstruct the embedding adapter per RAG batch"
         )
-    if getattr(ModelRouter.rerank, "_mmm_resident_reranker_adapter", False) is not True:
+    if "_reranker_adapters" not in rerank_source:
         raise RuntimePreflightError(
             "ModelRouter.rerank would reconstruct the reranker adapter per query"
         )
@@ -221,7 +218,7 @@ def run_runtime_preflight() -> None:
         if _PREFLIGHT_DONE:
             return
         checks = (
-            ("wrapper-chain", _assert_wrapper_chain),
+            ("tool-loop-integrity", _assert_wrapper_chain),
             ("authoritative-requirements", _assert_authoritative_requirement_path),
             ("tool-schema-contracts", _assert_tool_schema_contracts),
             ("routing-intent", _assert_routing_intent_alignment),
