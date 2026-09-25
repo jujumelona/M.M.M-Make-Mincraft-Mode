@@ -3880,7 +3880,10 @@ def _generate_with_tools_impl(
             mutation_names = [name for name in phase_names if name in _MUTATION_ACT_TOOLS]
             if len(mutation_names) == 1:
                 tool_choice = {"type": "function", "function": {"name": mutation_names[0]}}
-                parallel = False
+                # Exact tasks intentionally author one host-bound mutation per turn.
+                # Coherent authored designs may need several independent files for one
+                # semantic fragment, so allow multiple calls to the same bounded writer.
+                parallel = bool(bounded_root_execution_authority)
         elif forced_verifier:
             tool_choice = {"type": "function", "function": {"name": forced_verifier}}
             parallel = False
