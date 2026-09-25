@@ -339,8 +339,8 @@ def _run_compile_backed_generation_flow(
                 else {
                     "operation": "replace_exact",
                     "path": target,
-                    "old": broken_source,
-                    "new": fixed_source,
+                    "old": "import net.minecraft.item.Item; ",
+                    "new": "",
                     "count": 1,
                 }
             )
