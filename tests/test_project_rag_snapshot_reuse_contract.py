@@ -2,10 +2,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 import minecraft_mod_ai.small_model_hybrid_search_contract as hybrid
 import minecraft_mod_ai.small_model_relation_index_contract as relation_contract
 import minecraft_mod_ai.production_tools as production_tools
 from minecraft_mod_ai.production_tools import ProductionToolService
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _install_snapshot_contracts() -> None:
+    relation_contract.install(production_tools)
+    hybrid.install(production_tools)
 
 
 def _metadata(source_commit: str) -> dict[str, str]:
@@ -88,7 +96,6 @@ def test_search_cache_is_bound_to_exact_index_file_identity(tmp_path: Path) -> N
 
 
 def test_snapshot_reuse_contract_is_explicitly_installable() -> None:
-    hybrid.install(production_tools)
     assert getattr(
         ProductionToolService.search_code_rag,
         "_mmm_snapshot_search_reuse",
