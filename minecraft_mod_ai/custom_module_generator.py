@@ -22,6 +22,10 @@ from typing import Any
 from .complete_spec import ProductionModule
 from .custom_module_errors import CustomModuleGenerationError
 from .host_grounding import custom_module_path_allowed
+from .generation_implementation_grounding import (
+    build_generation_implementation_grounding,
+    render_generation_implementation_authority_prompt,
+)
 from .model_router import ModelRouter
 from .platform_catalog import adapter_for_target, adapter_from_project
 from .project_write_lock import project_write_lock
@@ -163,6 +167,69 @@ def _safe_target(root: Path, relative: str) -> Path:
     return target
 
 
+def _host_reserved(anchor: Mapping[str, Any]) -> bool:
+    return str(anchor.get("status") or "").strip() in {
+        "host_reserved",
+        "host_owned",
+        "new",
+    }
+
+
+def _target_anchor(task: Mapping[str, Any], relative: str, symbol: str) -> Mapping[str, Any] | None:
+    anchors = task.get("owned_anchors")
+    if not isinstance(anchors, Sequence) or isinstance(
+        anchors, (str, bytes, bytearray)
+    ):
+        return None
+    locator = f"{relative}#{symbol}"
+    for anchor in anchors:
+        if isinstance(anchor, Mapping) and str(anchor.get("locator") or "").strip() == locator:
+            return anchor
+    return None
+
+
+def _package_from_java_target(relative: str) -> str:
+    prefix = "src/main/java/"
+    if not relative.startswith(prefix) or not relative.endswith(".java"):
+        raise CustomModuleGenerationError(
+            f"DIRECT_CODER_JAVA_TARGET_REQUIRED: {relative}"
+        )
+    body = relative[len(prefix):]
+    parent = PurePosixPath(body).parent
+    if str(parent) in {"", "."}:
+        return ""
+    return ".".join(parent.parts)
+
+
+def _materialize_host_scaffold(
+    target: Path,
+    *,
+    relative: str,
+    symbol: str,
+    task: Mapping[str, Any],
+) -> str:
+    anchor = _target_anchor(task, relative, symbol)
+    if anchor is None or not _host_reserved(anchor):
+        raise CustomModuleGenerationError(
+            f"DIRECT_CODER_HOST_SCAFFOLD_MISSING: {relative}"
+        )
+    if not custom_module_path_allowed(relative):
+        raise CustomModuleGenerationError(
+            f"DIRECT_CODER_TARGET_OUTSIDE_WRITE_SCOPE: {relative}"
+        )
+    package_name = _package_from_java_target(relative)
+    package_line = f"package {package_name};\n\n" if package_name else ""
+    source = (
+        package_line
+        + f"public final class {symbol} {{\n"
+        + f"    private {symbol}() {{}}\n\n"
+        + "    // MMM_AUTHORED_FEATURE_BODY\n"
+        + "}\n"
+    )
+    _atomic_write(target, source)
+    return source
+
+
 def _atomic_write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(
@@ -217,6 +284,7 @@ def _source_invariant_errors(
     *,
     symbol: str,
     expected_package: str,
+    require_initialize: bool,
 ) -> tuple[str, ...]:
     errors: list[str] = []
     if "```" in source:
@@ -231,7 +299,7 @@ def _source_invariant_errors(
         errors.append(
             f"top-level contract must be exactly `public final class {symbol}`"
         )
-    if not _INITIALIZE.search(source):
+    if require_initialize and not _INITIALIZE.search(source):
         errors.append("required `public static void initialize()` is missing")
     if _SIDE_ONLY.search(source):
         errors.append(
@@ -403,20 +471,42 @@ class CustomModuleGenerator:
 
         relative, symbol, task = _exact_target(module)
         target = _safe_target(root, relative)
-        if not target.is_file():
+        target_existed = target.is_file()
+        if target.exists() and not target_existed:
             raise CustomModuleGenerationError(
-                f"DIRECT_CODER_HOST_SCAFFOLD_MISSING: {relative}"
+                f"DIRECT_CODER_TARGET_NOT_REGULAR: {relative}"
             )
-        try:
-            original = target.read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as exc:
-            raise CustomModuleGenerationError(
-                f"Could not read host-owned source {relative}: {exc}"
-            ) from exc
+        if target_existed:
+            try:
+                original = target.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                raise CustomModuleGenerationError(
+                    f"Could not read host-owned source {relative}: {exc}"
+                ) from exc
+        else:
+            original = _materialize_host_scaffold(
+                target,
+                relative=relative,
+                symbol=symbol,
+                task=task,
+            )
 
         package_match = _PACKAGE.search(original)
         expected_package = package_match.group(1) if package_match else ""
+        require_initialize = bool(_INITIALIZE.search(original))
+        grounding = build_generation_implementation_grounding(
+            module,
+            minecraft_version=adapter.minecraft_version,
+        )
+        authority_prompt = render_generation_implementation_authority_prompt(
+            grounding
+        )
         task_text = json.dumps(task, ensure_ascii=False, sort_keys=True)
+        grounding_text = json.dumps(
+            grounding or {},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
         context = _project_context(root, target)
         bounded_feedback = _bounded_execution_feedback(execution_feedback)
         system = (
@@ -428,6 +518,7 @@ class CustomModuleGenerator:
             "public static void initialize() integration surface. Do not create "
             "another mod entrypoint. The host will compile the real project and "
             "return the exact compiler failure for repair."
+            + ("\n\n" + authority_prompt if authority_prompt else "")
         )
         initial_user = (
             f"Platform: Minecraft {adapter.minecraft_version}; "
@@ -435,6 +526,7 @@ class CustomModuleGenerator:
             f"mappings {adapter.yarn_mappings or '<none>'}.\n"
             f"Exact target: {relative}#{symbol}\n\n"
             f"Approved task:\n{task_text}\n\n"
+            f"Host implementation grounding:\n{grounding_text}\n\n"
             f"Current host scaffold:\n{original}\n\n"
             f"Relevant existing project source:\n{context or '<none>'}"
         )
@@ -497,6 +589,7 @@ class CustomModuleGenerator:
                     candidate,
                     symbol=symbol,
                     expected_package=expected_package,
+                    require_initialize=require_initialize,
                 )
                 if invariant_errors:
                     current = candidate
@@ -520,9 +613,9 @@ class CustomModuleGenerator:
                             "status": "APPLIED",
                             "operations": [
                                 {
-                                    "operation": "replace",
+                                    "operation": "replace" if target_existed else "create",
                                     "path": relative,
-                                    "before_sha256": before_sha,
+                                    "before_sha256": before_sha if target_existed else "",
                                     "after_sha256": after_sha,
                                 }
                             ],
@@ -556,7 +649,10 @@ class CustomModuleGenerator:
                     or "Gradle compileJava failed."
                 )
 
-            _atomic_write(target, original)
+            if target_existed:
+                _atomic_write(target, original)
+            else:
+                target.unlink(missing_ok=True)
             raise CustomModuleGenerationError(
                 "DIRECT_CODER_COMPILE_FAILED: exact whole-file generation "
                 f"did not compile after {attempts} attempts for {relative}. "
