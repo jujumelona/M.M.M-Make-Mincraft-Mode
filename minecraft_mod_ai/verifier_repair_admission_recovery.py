@@ -192,8 +192,8 @@ def recover_schema_rejected_verifier_repair_calls(
     old_text = repair_window.get("old")
     model_new = candidate.get("new")
     current_source = getattr(context, "source_body", None)
-    target = str(getattr(context, "target_path", "") or "").replace("\\\\", "/").strip()
-    supplied_path = str(candidate.get("path") or "").replace("\\\\", "/").strip()
+    target = str(getattr(context, "target_path", "") or "").replace("\\", "/").strip()
+    supplied_path = str(candidate.get("path") or "").replace("\\", "/").strip()
     while supplied_path.startswith("./"):
         supplied_path = supplied_path[2:]
     if supplied_path and (not target or supplied_path != target):
