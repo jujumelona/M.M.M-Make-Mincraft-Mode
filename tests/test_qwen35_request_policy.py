@@ -172,7 +172,7 @@ def test_tool_action_uses_qwen_native_non_thinking_mode() -> None:
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
 
-def test_coder_tool_action_uses_precise_sampling_with_non_thinking_template() -> None:
+def test_coder_tool_action_uses_qwen_native_non_thinking_sampling() -> None:
     _autotune_module, hardware = _install_isolated()
     adapter = SimpleNamespace(config=_config("coder"))
     tool = {"type": "function", "function": {"name": "lookup"}}
@@ -182,11 +182,11 @@ def test_coder_tool_action_uses_precise_sampling_with_non_thinking_template() ->
         _request(tools=(tool,), tool_choice="required"),
     )
 
-    assert payload["temperature"] == 0.6
-    assert payload["top_p"] == 0.95
+    assert payload["temperature"] == 0.7
+    assert payload["top_p"] == 0.8
     assert payload["top_k"] == 20
     assert payload["min_p"] == 0.0
-    assert payload["presence_penalty"] == 0.0
+    assert payload["presence_penalty"] == 1.5
     assert payload["repeat_penalty"] == 1.0
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert "reasoning_effort" not in payload
