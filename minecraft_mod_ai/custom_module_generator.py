@@ -152,6 +152,27 @@ def _exact_target(module: ProductionModule) -> tuple[str, str, dict[str, Any]]:
     return path, symbol, task
 
 
+def _resolve_generation_adapter(
+    root: Path,
+    *,
+    minecraft_version: str | None,
+    loader: str | None,
+):
+    requested_version = str(minecraft_version or "").strip()
+    requested_loader = str(loader or "").strip()
+    if requested_version and requested_loader:
+        try:
+            return adapter_for_target(requested_version, requested_loader)
+        except ValueError as exc:
+            raise CustomModuleGenerationError(str(exc)) from exc
+    try:
+        return adapter_from_project(root)
+    except ValueError as exc:
+        raise CustomModuleGenerationError(
+            "Custom generation requires one unambiguous executable platform target."
+        ) from exc
+
+
 def _safe_target(root: Path, relative: str) -> Path:
     target = (root / relative).resolve()
     try:
@@ -450,24 +471,11 @@ class CustomModuleGenerator:
                 "Custom module target must be a regular project directory."
             )
 
-        requested_version = str(minecraft_version or "").strip()
-        requested_loader = str(loader or "").strip()
-        if requested_version and requested_loader:
-            try:
-                adapter = adapter_for_target(
-                    requested_version,
-                    requested_loader,
-                )
-            except ValueError as exc:
-                raise CustomModuleGenerationError(str(exc)) from exc
-        else:
-            try:
-                adapter = adapter_from_project(root)
-            except ValueError as exc:
-                raise CustomModuleGenerationError(
-                    "Custom generation requires one unambiguous executable "
-                    "platform target."
-                ) from exc
+        adapter = _resolve_generation_adapter(
+            root,
+            minecraft_version=minecraft_version,
+            loader=loader,
+        )
 
         relative, symbol, task = _exact_target(module)
         target = _safe_target(root, relative)
