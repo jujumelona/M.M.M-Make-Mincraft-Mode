@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from collections.abc import Callable, Mapping
 from copy import deepcopy
@@ -17,14 +16,7 @@ from typing import Any
 from .custom_module_errors import CustomModuleGenerationError
 from .model_adapters.base import NativeToolDecisionRejected
 
-MAX_NODES = 128
-MAX_PAGES = 32
-MAX_REFINEMENTS = 6
-MAX_PAGE_CORRECTIONS = 2
-MAX_UNIT_REQUIREMENTS = 6
-MAX_BATCH_REQUIREMENTS = 8
-MAX_BATCH_UNITS = 3
-IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v6"
+IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v7"
 
 
 class ImplementationGraphError(CustomModuleGenerationError):
@@ -43,21 +35,13 @@ class OutputBudgetExhausted(CustomModuleGenerationError):
     """A decomposition transition; never a compiler repair request."""
 
 
-def output_token_ceiling() -> int:
-    try:
-        value = int(os.environ.get("MMM_DIRECT_CODER_OUTPUT_TOKEN_CEILING", "4096"))
-    except ValueError:
-        value = 4096
-    return max(1024, min(value, 8192))
-
-
 def digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
 _STRINGS = {"type": "array", "uniqueItems": True,
             "items": {"type": "string", "minLength": 1, "pattern": r"\S"}}
-_JAVA_SYMBOL = r"^[A-Z][A-Za-z0-9_]{0,95}$"
+_JAVA_SYMBOL = r"^[A-Z][A-Za-z0-9_]*$"
 NODE_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "required": ["symbol", "kind", "resource_path", "responsibility", "requirements",
@@ -94,7 +78,7 @@ PAGE_SCHEMA = {
     "additionalProperties": False,
     "required": ["nodes"],
     "properties": {
-        "nodes": {"type": "array", "maxItems": 4, "items": NODE_SCHEMA},
+        "nodes": {"type": "array", "items": NODE_SCHEMA},
         "done": {"type": "boolean"},
         "continuation": {
             "type": "object",
@@ -141,7 +125,7 @@ def _schema_diagnostics(page: Any, schema: Mapping[str, Any]) -> list[dict[str, 
             candidate = page["nodes"][parts[1]]
             node = str(candidate.get("symbol", "")) if isinstance(candidate, dict) else ""
         diagnostics.append({"code": "IMPLEMENTATION_IR_SCHEMA_INVALID", "node": node,
-                            "field": ".".join(map(str, parts)), "message": error.message[:1000]})
+                            "field": ".".join(map(str, parts)), "message": error.message})
     return diagnostics
 
 
