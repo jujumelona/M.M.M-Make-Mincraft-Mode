@@ -113,6 +113,7 @@ class TaskCapsule:
     reuse_action: str
     required_gates: tuple[str, ...]
     task_sha256: str
+    coder_contract: Mapping[str, Any]
     capsule_sha256: str
 
     @property
@@ -165,6 +166,7 @@ class TaskCapsule:
         }
         if self.task_sha256:
             task["task_sha256"] = self.task_sha256
+        task["coder_execution_contract"] = copy.deepcopy(dict(self.coder_contract))
         return {
             "schema_version": _SCHEMA,
             "phase": "implement_module",
@@ -403,6 +405,7 @@ def compile_task_capsule(module: Any) -> TaskCapsule | None:
         )
     )
     task_sha = str(task.get("task_sha256") or "").strip()
+    coder_contract = build_implementation_template(task)
     digest_input = {
         "task_id": task_id,
         "module_kind": "custom_java",
@@ -412,6 +415,7 @@ def compile_task_capsule(module: Any) -> TaskCapsule | None:
         "reuse_action": reuse_action,
         "required_gates": required_gates,
         "task_sha256": task_sha,
+        "coder_contract_sha256": coder_contract.get("contract_sha256"),
     }
     return TaskCapsule(
         task_id=task_id,
@@ -422,6 +426,7 @@ def compile_task_capsule(module: Any) -> TaskCapsule | None:
         reuse_action=reuse_action,
         required_gates=required_gates,
         task_sha256=task_sha,
+        coder_contract=copy.deepcopy(coder_contract),
         capsule_sha256=_sha256(digest_input),
     )
 
@@ -851,6 +856,7 @@ def _atomic_request_scope(
             reuse_action=capsule.reuse_action,
             required_gates=capsule.required_gates,
             task_sha256=capsule.task_sha256,
+            coder_contract=copy.deepcopy(capsule.coder_contract),
             capsule_sha256=_sha256(
                 {
                     "parent_capsule_sha256": capsule.capsule_sha256,
