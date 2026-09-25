@@ -358,8 +358,8 @@ def _decision(router: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]
                 "sections by state ownership and coherent responsibility. Separate state/models, "
                 "persistence, services, integration, networking, UI/resources and verification where "
                 "the design needs them. Cite every R identifier in the active requirements at least once. "
-                "Return only the nodes needed for the active unit. If remaining units exist, you may report them in "
-                "continuation.remaining_unit_ids, or set done=true when all units are complete. "
+                "Return only the nodes needed for the active requirements. The host owns continuation "
+                "and termination; do not plan page counts, remaining work, or completion. "
                 "Each Java node is one public final class with a concrete name and NONEMPTY public_api "
                 "MEMBER declaration strings (no bodies and no public class/interface/enum/record type "
                 "declarations). Represent finite states as public static final fields and supporting "
@@ -743,6 +743,24 @@ def _public_api_contract_key(declaration: str) -> tuple[Any, ...]:
     return ("raw", text)
 
 
+def _model_node_view(node: Mapping[str, Any]) -> dict[str, Any]:
+    """Compact host-owned graph state for a small planner model."""
+    return {
+        key: deepcopy(node[key])
+        for key in (
+            "symbol",
+            "kind",
+            "resource_path",
+            "responsibility",
+            "requirements",
+            "public_api",
+            "depends_on",
+            "activation",
+        )
+        if key in node
+    }
+
+
 def _merge_accepted_owner(existing: dict[str, Any], proposed: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     """Monotonically extend one already admitted owner without rewriting its contract."""
     for field in ("symbol", "kind", "resource_path", "activation", "path"):
@@ -1024,21 +1042,18 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
                 )
             return combined
 
-        remaining_req_list = [req_id for req_id in all_requirements if req_id not in covered]
         runtime_budget = admissible_tokens(router)
         payload = {
             "current_units": [active_unit["title"]] if active_unit is not None else [],
             "unit_ids": [active_unit["unit_id"]] if active_unit is not None else [],
             "requirements": active_reqs,
-            "remaining_requirements": remaining_req_list,
-            "remaining_unit_ids": [unit["unit_id"] for unit in remaining_units],
             "unresolved_dependencies": sorted(missing),
             "platform": target,
             "project_context": context,
             "package": package,
             "mod_id": mod_id,
             "page": state["page"],
-            "accepted_nodes": nodes,
+            "accepted_nodes": [_model_node_view(node) for node in nodes],
         }
         if runtime_budget is not None:
             payload["admission_tokens"] = runtime_budget
