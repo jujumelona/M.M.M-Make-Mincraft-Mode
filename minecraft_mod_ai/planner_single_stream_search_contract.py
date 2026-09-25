@@ -4,7 +4,16 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .runtime_contract_wrappers import contract_wraps, has_contract_marker
+from functools import wraps
+
+
+def has_contract_marker(value: Any, marker: str) -> bool:
+    return bool(getattr(value, marker, False))
+
+
+def contract_wraps(wrapped: Any):
+    return wraps(wrapped, updated=())
+
 
 _REPAIR_ROUTER_MARKER = "_mmm_host_evidence_repair_router"
 

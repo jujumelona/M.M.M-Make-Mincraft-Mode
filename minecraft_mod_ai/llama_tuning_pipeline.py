@@ -2,10 +2,7 @@ from __future__ import annotations
 
 """Single ownership point for native llama-server tuning composition.
 
-The individual tuning modules own one concern each, while this pipeline is the only
-place allowed to compose them. Runtime bootstrap installs exactly this pipeline,
-which makes ordering explicit and prevents cross-module re-entry or accidental
-multiple installation.
+The individual tuning modules own one concern each. This optional tuning pipeline is\ncalled explicitly and installs those concerns once in source-defined order.
 """
 
 import os
@@ -15,13 +12,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import wraps
 from typing import Any
-
-from .runtime_contract_composer import (
-    ContractStage,
-    call_shape,
-    callable_boundary,
-    compose_contract_stages,
-)
 
 _PROFILE_CONTEXT_MARKER = "_mmm_profile_context_authority"
 _RUNTIME_TYPE_OWNER_MARKER = "_mmm_runtime_tuning_type_owner"
@@ -339,97 +329,15 @@ class NativeLlamaTuningPipeline:
             TuningStage("multimodal", install_multimodal_stage),
         )
 
-    def _callable_boundaries(self):
-        """Production call shapes every tuning wrapper must continue to accept."""
-
-        return (
-            callable_boundary(
-                "autotune.server_variant",
-                self.autotune,
-                "ServerVariant",
-                call_shapes=(
-                    call_shape(
-                        3,
-                        "ubatch",
-                        "parallel",
-                        "cache_reuse",
-                        "draft_p_min",
-                    ),
-                ),
-            ),
-            callable_boundary(
-                "autotune.base_args",
-                self.autotune,
-                "_base_args",
-                call_shapes=(call_shape(4),),
-            ),
-            callable_boundary(
-                "autotune.fingerprint",
-                self.autotune,
-                "_fingerprint",
-                call_shapes=(call_shape(3),),
-            ),
-            callable_boundary(
-                "autotune.probe_server",
-                self.autotune,
-                "_probe_server",
-                call_shapes=(call_shape(2, "max_tokens", "variant"),),
-            ),
-            callable_boundary(
-                "autotune.start_server",
-                self.autotune,
-                "_start_server",
-                call_shapes=(call_shape(5),),
-            ),
-            callable_boundary(
-                "autotune.launch_selected",
-                self.autotune,
-                "_launch_selected",
-                call_shapes=(call_shape(4),),
-            ),
-            callable_boundary(
-                "autotune.benchmark",
-                self.autotune,
-                "_benchmark",
-                call_shapes=(call_shape(5),),
-            ),
-            callable_boundary(
-                "autotune.run_tuning_variant",
-                self.autotune,
-                "_mmm_run_tuning_variant",
-                call_shapes=(call_shape(5, "probe_tokens"),),
-            ),
-            callable_boundary(
-                "hardware.server_payload",
-                self.hardware_policy,
-                "_server_payload",
-                call_shapes=(call_shape(2),),
-            ),
-            callable_boundary(
-                "runtime.ubatch_candidates",
-                self.runtime_tuning,
-                "_ubatch_candidates",
-                call_shapes=(call_shape(1),),
-            ),
-        )
-
     def install(self) -> None:
         if bool(getattr(self.autotune, "_mmm_tuning_pipeline_installed", False)):
             return
 
-        receipts = compose_contract_stages(
-            owner_name="native-llama-tuning",
-            state_owner=self.autotune,
-            stages=(
-                ContractStage(stage.name, stage.install)
-                for stage in self.stages()
-            ),
-            boundaries=self._callable_boundaries(),
-        )
-        self.autotune._mmm_tuning_pipeline_stages = tuple(
-            receipt.name for receipt in receipts
-        )
-        self.autotune._mmm_tuning_pipeline_receipts = receipts
+        installed: list[str] = []
+        for stage in self.stages():
+            stage.install()
+            installed.append(stage.name)
+        self.autotune._mmm_tuning_pipeline_stages = tuple(installed)
         self.autotune._mmm_tuning_pipeline_installed = True
 
 

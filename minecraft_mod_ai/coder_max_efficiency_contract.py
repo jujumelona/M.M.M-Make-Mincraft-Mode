@@ -9,7 +9,13 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
-from .runtime_contract_wrappers import has_contract_marker, owns_contract_marker
+def has_contract_marker(value: Any, marker: str) -> bool:
+    return bool(getattr(value, marker, False))
+
+
+def owns_contract_marker(value: Any, marker: str) -> bool:
+    return bool(getattr(value, marker, False))
+
 
 _MARKER = "_mmm_coder_max_efficiency_v1"
 _RESEARCH_SINGLEFLIGHT_MARKER = "_mmm_research_initial_bundle_singleflight_v1"

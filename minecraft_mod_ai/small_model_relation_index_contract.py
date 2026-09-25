@@ -9,11 +9,20 @@ from threading import RLock
 from typing import Any
 
 from .model_adapters.base import ModelBackendError, ModelConfigurationError
-from .runtime_contract_wrappers import (
-    contract_wraps,
-    has_contract_marker,
-    owns_contract_marker,
-)
+from functools import wraps
+
+
+def has_contract_marker(value: Any, marker: str) -> bool:
+    return bool(getattr(value, marker, False))
+
+
+def owns_contract_marker(value: Any, marker: str) -> bool:
+    return bool(getattr(value, marker, False))
+
+
+def contract_wraps(wrapped: Any):
+    return wraps(wrapped, updated=())
+
 from .small_model_rag_relations import derive_relations
 
 _REUSE_LOCK = RLock()

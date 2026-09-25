@@ -9,7 +9,9 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
-from .runtime_contract_wrappers import owns_contract_marker
+def owns_contract_marker(value: Any, marker: str) -> bool:
+    return bool(getattr(value, marker, False))
+
 
 _DECISION_STORE_SCHEMA = "mmm/llama-server-autotune-store-v1"
 _DECISION_STORE_LIMIT = 32
@@ -178,8 +180,7 @@ def _tool_action_token_budget(config: Any) -> int:
 def install(autotune_module: Any, hardware_policy_module: Any) -> None:
     """Install native llama-server efficiency primitives owned by this module only.
 
-    Runtime tuning, cache-reuse tuning, streaming and concurrency are composed by
-    runtime_bootstrap instead of being imported and installed from this installer.
+    This optional installer is explicit; importing the package never installs it.
     """
     global _HARDWARE_IDENTITY_CACHE
 

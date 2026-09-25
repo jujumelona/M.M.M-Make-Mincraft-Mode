@@ -4,7 +4,13 @@ import os
 from functools import wraps
 from typing import Any
 
-from .runtime_contract_wrappers import has_contract_marker, owns_contract_marker
+def has_contract_marker(value: Any, marker: str) -> bool:
+    return bool(getattr(value, marker, False))
+
+
+def owns_contract_marker(value: Any, marker: str) -> bool:
+    return bool(getattr(value, marker, False))
+
 
 _ENSURE_MARKER = "_mmm_qwen35_bounded_cold_tuning_v2"
 _PAYLOAD_MARKER = "_mmm_qwen_native_output_policy_v7"

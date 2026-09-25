@@ -37,11 +37,10 @@ def _file_digest(module: Any) -> str:
 def _validation_modules(checkpoint_id: str) -> tuple[Any, ...]:
     """Return every module whose bytes can change one cached validation decision."""
 
-    from . import complete_orchestrator, runtime_bootstrap
+    from . import complete_orchestrator
 
     common: list[Any] = [
         sys.modules[__name__],
-        runtime_bootstrap,
         complete_orchestrator,
     ]
     if checkpoint_id == "validate-source":

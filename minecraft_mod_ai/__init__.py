@@ -1,10 +1,5 @@
 """M.M.M Make Mincraft Mode: scalable multimodal Minecraft mod production tools."""
 
-from .runtime_bootstrap import initialize_runtime
-
-
-initialize_runtime()
-
 from .api import (
     ChatReply,
     CompleteChatReply,

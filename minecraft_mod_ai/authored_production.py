@@ -1071,26 +1071,16 @@ def compile_authored_design(
     design = {**design, **target}
     effective_existing = existing_input_sha256 or plan.existing_input_sha256
     if not effective_existing:
-        if _contract_shaped_authored_design(implementation_plan.text):
-            # Planning worksheet headings describe one feature/system from different
-            # engineering angles. They are not independent runtime classes. Keep the
-            # complete contract together and let the coder materialize the necessary
-            # Java/resource architecture inside a narrow host-owned namespace.
-            modules, manifest = _compile_coherent_authored_module(
-                implementation_plan,
-                mod_id=base.spec.mod_id,
-                package_name=base.spec.package_name,
-                target=target,
-            )
-        else:
-            # Truly feature-oriented authored documents still benefit from exact host
-            # task lowering because each top-level block is an independent deliverable.
-            modules, manifest = _compile_new_authored_modules(
-                implementation_plan,
-                mod_id=base.spec.mod_id,
-                package_name=base.spec.package_name,
-                target=target,
-            )
+        # Fresh authored production always lowers to host-owned exact Java targets.
+        # The coder never chooses a file, patch span, entrypoint, or integration
+        # surface. Each task receives one complete source file and is compiled before
+        # the next task can depend on it.
+        modules, manifest = _compile_new_authored_modules(
+            implementation_plan,
+            mod_id=base.spec.mod_id,
+            package_name=base.spec.package_name,
+            target=target,
+        )
         design = {**design, "_authored_execution_manifest": manifest}
     else:
         modules, manifest = _compile_existing_authored_modules(

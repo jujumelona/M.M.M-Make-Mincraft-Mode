@@ -6,7 +6,13 @@ from functools import wraps
 from typing import Any
 
 from .custom_generation_research import _sanitized_messages
-from .runtime_contract_wrappers import has_contract_marker, owns_contract_marker
+def has_contract_marker(value: Any, marker: str) -> bool:
+    return bool(getattr(value, marker, False))
+
+
+def owns_contract_marker(value: Any, marker: str) -> bool:
+    return bool(getattr(value, marker, False))
+
 from .source_observation_context import json_size
 
 _TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_.$:/-]{1,127}")

@@ -1,582 +1,336 @@
 from __future__ import annotations
 
-from .custom_module_architecture_support import (
-    apply_authored_request as _apply_authored_request,
-    implementation_phase as _implementation_phase,
-    output_exhaustion_continuation_messages as _architecture_continuation_messages,
-    task_local_module_contract as _architecture_task_contract,
-)
-from .model_response_templates import parse_response_text, response_template_prompt
+"""Direct, whole-file custom-module generation.
+
+There is intentionally no model-facing patch protocol here. A production task owns an
+exact host-selected source file. The coder returns the complete replacement source for
+that file, the host validates immutable integration invariants, Gradle compiles the real
+project, and any repair turn receives the complete current source plus the exact compiler
+failure. No hidden old-span binding, runtime monkey patch, or repair-of-repair layer is
+involved.
+"""
 
 import hashlib
+import inspect
 import json
 import os
 import re
-import secrets
-import threading
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .coder_execution_contract import project_task_for_coder
-from .custom_module_errors import CustomModuleGenerationError
-from .generation_checkpoint import (
-    _CHECKPOINT_KEY,
-    _CHECKPOINT_SCHEMA,
-    _GenerationCheckpointLease,
-    _active_checkpoint_persistence,
-    _checkpoint_base,
-    _checkpoint_lease_scoped,
-    _checkpoint_patch_operations,
-    _collect_staged_operations,
-    _committed_patch_receipt_matches,
-    _generation_checkpoint_identity,
-    _initialize_generation_checkpoint,
-    _mutable_stage_state_sha256,
-    _persist_generation_checkpoint,
-    _prepare_generation_checkpoint,
-    _project_snapshot,
-    _remove_generation_checkpoint,
-    _stage_tree_snapshot,
-    _track_checkpoint_lease,
-    _transfer_checkpoint_lease,
-    finalize_persisted_generation_checkpoint,
-)
 from .complete_spec import ProductionModule
-from .host_grounding import (
-    build_coder_grounding,
-    custom_module_path_allowed,
-    custom_module_path_protected,
-)
-from .llama_finish_reason_contract import OUTPUT_EXHAUSTED, completion_boundary_kind
-from .model_context_budget import request_message_budget
+from .custom_module_errors import CustomModuleGenerationError
+from .host_grounding import custom_module_path_allowed
 from .model_router import ModelRouter
 from .platform_catalog import adapter_for_target, adapter_from_project
-from .project_index import ProjectIndex
-from .research_ledger import select_module_research_context
+from .project_write_lock import project_write_lock
+from .runner import GradleRunner
 from .scale_policy import ScalePolicy
-from .small_model_atomic_coder_execution import (
-    atomic_coder_call,
-    bounded_reuse_context,
+
+_SOURCE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["content", "summary"],
+    "properties": {
+        "content": {"type": "string", "minLength": 1},
+        "summary": {"type": "string"},
+    },
+}
+_LOCATOR = re.compile(r"^(?P<path>[^#]+\\.java)#(?P<symbol>[A-Za-z_$][A-Za-z0-9_$]*)$")
+_PACKAGE = re.compile(r"(?m)^\\s*package\\s+([A-Za-z_$][A-Za-z0-9_$.]*)\\s*;\\s*$")
+_PUBLIC_TYPE = re.compile(
+    r"\\bpublic\\s+final\\s+class\\s+(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)\\b"
 )
-from .small_model_task_capsule_contract import (
-    task_capsule_generation_scope,
-    task_local_module_contract_owner,
+_INITIALIZE = re.compile(
+    r"\\bpublic\\s+static\\s+void\\s+initialize\\s*\\(\\s*\\)\\s*(?:throws\\s+[^{]+)?\\{"
 )
-from .small_model_write_scope_enforcement import (
-    exact_task_operation_validator,
-    generation_authority_scoped,
+_SIDE_ONLY = re.compile(r"@Environment\\s*\\(\\s*EnvType\\.(?:CLIENT|SERVER)\\s*\\)")
+_FORBIDDEN_ENTRYPOINT = re.compile(
+    r"\\b(?:implements\\s+)?(?:ModInitializer|ClientModInitializer)\\b"
 )
-from .source_patch import SourcePatchError, TransactionalSourcePatcher
-from .source_observation_context import (
-    collect_initial_observations as _collect_initial_observations,
-    observation_context_pages as _observation_context_pages,
-)
-from .target_contract import TargetContractError, validate_target_coordinates
+_BODY_MARKER = "MMM_AUTHORED_FEATURE_BODY"
+_MAX_CONTEXT_BYTES = 24 * 1024
+_MAX_LOG_BYTES = 20 * 1024
+
+
+def _sha256_text(text: str) -> str:
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _normalize_project_path(value: Any) -> str:
+    raw = str(value or "").replace("\\\\", "/").strip()
+    candidate = PurePosixPath(raw)
+    if (
+        not raw
+        or candidate.is_absolute()
+        or raw in {".", ".."}
+        or any(part in {"", ".", ".."} for part in candidate.parts)
+    ):
+        raise CustomModuleGenerationError(
+            f"Custom module target must be a safe project-relative path: {value!r}"
+        )
+    return candidate.as_posix()
+
+
+def _task_local_module_contract(module: ProductionModule) -> dict[str, Any]:
+    config = module.config if isinstance(module.config, dict) else {}
+    task = config.get("evidence_task")
+    if isinstance(task, Mapping):
+        return dict(task)
+    obligations = config.get("implementation_obligations")
+    if not (
+        isinstance(obligations, Sequence)
+        and not isinstance(obligations, (str, bytes, bytearray))
+    ):
+        obligations = [f"Implement {module.module_id}"]
+    return {
+        "task_id": module.module_id,
+        "semantic_outcome": str(config.get("semantic_outcome") or module.module_id),
+        "implementation_obligations": list(obligations),
+        "required_gates": list(module.required_gates),
+    }
 
 
 def _bounded_execution_feedback(value: Any) -> dict[str, Any] | None:
-    """Expose only owner-bound actionable validation facts to one retrying coder."""
-
     if not isinstance(value, Mapping):
         return None
-    raw_diagnostics = value.get("diagnostics")
-    if not isinstance(raw_diagnostics, Sequence) or isinstance(
-        raw_diagnostics, (str, bytes, bytearray)
+    diagnostics = value.get("diagnostics")
+    if not isinstance(diagnostics, Sequence) or isinstance(
+        diagnostics, (str, bytes, bytearray)
     ):
         return None
-
-    diagnostics: list[dict[str, Any]] = []
-    for raw in raw_diagnostics:
+    rows: list[dict[str, str]] = []
+    for raw in diagnostics:
         if not isinstance(raw, Mapping):
             continue
-        item = {
-            "path": str(raw.get("path") or "").strip()[:1000],
-            "code": str(raw.get("code") or "").strip()[:200],
-            "source": str(raw.get("source") or "").strip()[:200],
+        row = {
+            "path": str(raw.get("path") or "")[:1000],
+            "code": str(raw.get("code") or "")[:200],
             "message": " ".join(str(raw.get("message") or "").split())[:2000],
         }
-        if not any(item.values()):
-            continue
-        diagnostics.append(item)
-        if len(diagnostics) >= 16:
+        if any(row.values()):
+            rows.append(row)
+        if len(rows) >= 16:
             break
-    if not diagnostics:
-        return None
-
-    return {
-        "schema_version": "mmm/coder-execution-feedback-v1",
-        "checkpoint_id": str(value.get("checkpoint_id") or "").strip()[:200],
-        "failure_scope": str(value.get("failure_scope") or "").strip()[:200],
-        "diagnostics": diagnostics,
-    }
+    return {"diagnostics": rows} if rows else None
 
 
-_APPROVED_REUSE_CONTEXT_SCHEMA = "mmm/approved-reuse-context-v1"
-_APPROVED_REUSE_CONTEXT_BYTES = 12 * 1024
-_CODE_IDENTIFIER = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]{2,}")
-_REUSE_BOILERPLATE = frozenset(
-    {
-        "abstract",
-        "boolean",
-        "class",
-        "default",
-        "extends",
-        "final",
-        "import",
-        "implements",
-        "interface",
-        "package",
-        "private",
-        "protected",
-        "public",
-        "record",
-        "return",
-        "static",
-        "string",
-        "super",
-        "this",
-        "throws",
-        "void",
-    }
-)
-
-
-def _owned_reuse_plan(module: ProductionModule) -> Mapping[str, Any] | None:
-    config = module.config if isinstance(module.config, dict) else {}
-    value = config.get("_owned_reuse_plan")
-    return value if isinstance(value, Mapping) else None
-
-
-def _source_donor_decisions(
-    plan: Mapping[str, Any] | None,
-) -> tuple[Mapping[str, Any], ...]:
-    if not isinstance(plan, Mapping):
-        return ()
-    raw = plan.get("capabilities")
-    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, bytearray)):
-        return ()
-    return tuple(
-        item
-        for item in raw
-        if isinstance(item, Mapping)
-        and str(item.get("mode") or "").strip().casefold()
-        in {"source_transplant", "adapt"}
-        and isinstance(item.get("donor"), Mapping)
-    )
-
-
-@bounded_reuse_context
-def _materialize_owned_reuse_context(
-    project_root: Path,
-    module: ProductionModule,
-    *,
-    byte_budget: int = _APPROVED_REUSE_CONTEXT_BYTES,
-) -> dict[str, Any] | None:
-    """Materialize selected donors and return bounded code-bearing coder context.
-
-    Retrieval/selection stays host-owned and evidence-first. The small coder receives
-    only the already-selected source slices, not the global reuse plan or another donor
-    search problem. ``read_reuse_source`` remains available for bounded pagination.
-    """
-
-    plan = _owned_reuse_plan(module)
-    decisions = _source_donor_decisions(plan)
-    if not decisions:
-        return None
-
-    from .production_tools import ProductionToolService
-    from .source_transplant import SourceTransplantError, materialize_source_slices
-
-    try:
-        materialization = materialize_source_slices(project_root, plan)
-    except (OSError, ValueError, SourceTransplantError) as exc:
-        raise CustomModuleGenerationError(
-            f"Approved reuse donor materialization failed: {type(exc).__name__}: {exc}"
-        ) from exc
-
-    donors = materialization.get("donors")
-    if (
-        not isinstance(donors, list)
-        or materialization.get("count") != len(donors)
-        or len(donors) != len(decisions)
+def _exact_target(module: ProductionModule) -> tuple[str, str, dict[str, Any]]:
+    task = _task_local_module_contract(module)
+    anchors = task.get("owned_anchors")
+    candidates: list[tuple[str, str]] = []
+    if isinstance(anchors, Sequence) and not isinstance(
+        anchors, (str, bytes, bytearray)
     ):
-        raise CustomModuleGenerationError(
-            "Approved reuse plan did not materialize every selected source donor."
-        )
-
-    effective_budget = max(1024, int(byte_budget))
-    remaining = effective_budget
-    snippets: list[dict[str, Any]] = []
-    service = ProductionToolService(workspace_root=project_root)
-    try:
-        for donor in donors:
-            files = donor.get("files") if isinstance(donor, Mapping) else None
-            if not isinstance(files, list):
-                raise CustomModuleGenerationError(
-                    "Materialized reuse donor receipt has no authorized files."
-                )
-            for file_receipt in files:
-                if not isinstance(file_receipt, Mapping) or remaining <= 0:
-                    continue
-                path = str(file_receipt.get("path") or "")
-                if not path:
-                    continue
-                chunk_limit = min(8 * 1024, remaining)
-                try:
-                    source = service.read_reuse_source(
-                        ".",
-                        path,
-                        limit_bytes=chunk_limit,
+        for anchor in anchors:
+            if not isinstance(anchor, Mapping):
+                continue
+            match = _LOCATOR.fullmatch(str(anchor.get("locator") or "").strip())
+            if match:
+                candidates.append(
+                    (
+                        _normalize_project_path(match.group("path")),
+                        match.group("symbol"),
                     )
-                except (OSError, ValueError) as exc:
-                    raise CustomModuleGenerationError(
-                        "Approved reuse source could not be read: "
-                        f"{type(exc).__name__}: {exc}"
-                    ) from exc
-                content = str(source.get("content") or "")
-                used = len(content.encode("utf-8"))
-                remaining = max(0, remaining - used)
-                snippets.append(
-                    {
-                        "repository": source.get("repository"),
-                        "commit_sha": source.get("commit_sha"),
-                        "license_id": source.get("license_id"),
-                        "capability": source.get("capability"),
-                        "path": source.get("path"),
-                        "sha256": source.get("sha256"),
-                        "offset_bytes": source.get("offset_bytes"),
-                        "next_offset_bytes": source.get("next_offset_bytes"),
-                        "eof": source.get("eof"),
-                        "symbols": list(file_receipt.get("symbols") or ()),
-                        "content": content,
-                    }
                 )
-                if remaining <= 0:
-                    break
+    unique = tuple(dict.fromkeys(candidates))
+    if len(unique) != 1:
+        raise CustomModuleGenerationError(
+            "DIRECT_CODER_EXACT_TARGET_REQUIRED: each custom Java task must own "
+            "exactly one host-selected Java file and top-level symbol."
+        )
+    path, symbol = unique[0]
+    if not path.startswith("src/main/java/"):
+        raise CustomModuleGenerationError(
+            f"DIRECT_CODER_JAVA_TARGET_REQUIRED: {path}"
+        )
+    return path, symbol, task
+
+
+def _safe_target(root: Path, relative: str) -> Path:
+    target = (root / relative).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise CustomModuleGenerationError(
+            f"Custom module target escapes the project root: {relative}"
+        ) from exc
+    if target.is_symlink():
+        raise CustomModuleGenerationError(
+            f"Custom module target may not be a symbolic link: {relative}"
+        )
+    return target
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(
+        f".{path.name}.mmm-{os.getpid()}-"
+        f"{hashlib.sha256(content.encode()).hexdigest()[:10]}.tmp"
+    )
+    try:
+        temporary.write_text(content, encoding="utf-8", newline="\\n")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _project_context(root: Path, target: Path) -> str:
+    java_root = root / "src/main/java"
+    if not java_root.is_dir():
+        return ""
+    candidates = [
+        path
+        for path in java_root.rglob("*.java")
+        if path.is_file() and not path.is_symlink() and path.resolve() != target
+    ]
+    candidates.sort(
+        key=lambda path: (
+            0 if path.parent == target.parent else 1,
+            path.relative_to(root).as_posix(),
+        )
+    )
+    rendered: list[str] = []
+    used = 0
+    for path in candidates[:24]:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        relative = path.relative_to(root).as_posix()
+        chunk = f"\\n--- {relative} ---\\n{text}\\n"
+        raw = chunk.encode("utf-8")
+        if used + len(raw) > _MAX_CONTEXT_BYTES:
+            remaining = _MAX_CONTEXT_BYTES - used
             if remaining <= 0:
                 break
-    finally:
-        service.close()
-
-    if not snippets:
-        raise CustomModuleGenerationError(
-            "Approved reuse donors materialized without any readable source context."
-        )
-    return {
-        "schema_version": _APPROVED_REUSE_CONTEXT_SCHEMA,
-        "materialization": materialization,
-        "snippets": snippets,
-        "byte_budget": effective_budget,
-        "bytes_used": effective_budget - remaining,
-        "policy": (
-            "Adapt only these host-selected, commit-pinned source slices to the exact "
-            "task target; preserve license/provenance and never edit donor files."
-        ),
-    }
+            rendered.append(raw[:remaining].decode("utf-8", errors="ignore"))
+            break
+        rendered.append(chunk)
+        used += len(raw)
+    return "".join(rendered)
 
 
-def _reuse_code_tokens(value: Any) -> tuple[str, ...]:
-    return tuple(
-        token
-        for token in _CODE_IDENTIFIER.findall(str(value or ""))
-        if token.casefold() not in _REUSE_BOILERPLATE
-    )
-
-
-def _reuse_shingles(tokens: Sequence[str], width: int = 5) -> set[tuple[str, ...]]:
-    folded = tuple(token.casefold() for token in tokens)
-    if len(folded) < width:
-        return set()
-    return {
-        folded[index : index + width]
-        for index in range(len(folded) - width + 1)
-    }
-
-
-def _verify_reuse_application(
-    context: Mapping[str, Any],
-    staged_root: Path,
-    touched_paths: Sequence[str],
-) -> dict[str, Any]:
-    """Prove that generated source actually incorporates the approved donor code."""
-
-    snippets = context.get("snippets")
-    if not isinstance(snippets, list) or not snippets:
-        raise CustomModuleGenerationError(
-            "Approved reuse context has no code snippets to verify after generation."
-        )
-    donor_tokens: list[str] = []
-    declared_symbols: set[str] = set()
-    donor_hashes: list[str] = []
-    for snippet in snippets:
-        if not isinstance(snippet, Mapping):
-            continue
-        donor_tokens.extend(_reuse_code_tokens(snippet.get("content")))
-        declared_symbols.update(
-            str(item).strip()
-            for item in snippet.get("symbols", ())
-            if str(item).strip()
-        )
-        digest = str(snippet.get("sha256") or "").strip()
-        if digest:
-            donor_hashes.append(digest)
-
-    target_tokens: list[str] = []
-    verified_paths: list[str] = []
-    for raw_path in touched_paths:
-        normalized = PurePosixPath(str(raw_path).replace("\\", "/")).as_posix()
-        target = (staged_root / normalized).resolve()
-        try:
-            target.relative_to(staged_root.resolve())
-        except ValueError:
-            continue
-        if not target.is_file() or target.is_symlink():
-            continue
-        text = target.read_text(encoding="utf-8", errors="replace")
-        target_tokens.extend(_reuse_code_tokens(text))
-        verified_paths.append(normalized)
-
-    donor_folded = {token.casefold(): token for token in donor_tokens}
-    target_folded = {token.casefold() for token in target_tokens}
-    matched_identifiers = sorted(
-        donor_folded[key]
-        for key in donor_folded.keys() & target_folded
-        if len(key) >= 4
-    )
-    matched_symbols = sorted(
-        symbol
-        for symbol in declared_symbols
-        if symbol.casefold() in target_folded
-    )
-    shingle_count = len(
-        _reuse_shingles(donor_tokens) & _reuse_shingles(target_tokens)
-    )
-    applied = bool(matched_symbols or shingle_count)
-    receipt = {
-        "schema_version": "mmm/reuse-application-receipt-v1",
-        "status": "APPLIED" if applied else "NOT_APPLIED",
-        "donor_sha256": list(dict.fromkeys(donor_hashes)),
-        "touched_paths": verified_paths,
-        "matched_declared_symbols": matched_symbols,
-        "matched_identifiers": matched_identifiers[:64],
-        "matched_token_shingles": shingle_count,
-        "policy": (
-            "At least one declared donor symbol or one five-token donor code shingle "
-            "must survive in generated source; loose identifier overlap is diagnostic only."
-        ),
-    }
-    if not applied:
-        raise CustomModuleGenerationError(
-            "REUSE_NOT_APPLIED: approved donor code was supplied, but generated changes "
-            "contain no attributable donor symbol or code structure."
-        )
-    return receipt
-
-
-@task_local_module_contract_owner
-def _task_local_module_contract(module: ProductionModule) -> dict[str, Any]:
-    return _architecture_task_contract(
-        module,
-        error_type=CustomModuleGenerationError,
-        project_task=project_task_for_coder,
-    )
-
-
-_CONTINUATION_PATH_PREVIEW = 64
-
-
-@atomic_coder_call
-def _generate_coder_text(
-    router: ModelRouter,
-    role: str,
-    messages: Sequence[Mapping[str, Any]],
-    *args: Any,
-    **kwargs: Any,
-) -> str:
-    """Single custom-generation call seam for coder-specific execution policies."""
-
-    return router.generate_text(role, messages, *args, **kwargs)
-
-
-def _receipt_required_gates(module: ProductionModule) -> list[str]:
-    """Use the same approved gate set as the active task capsule and final receipt."""
-
-    from .small_model_task_capsule_contract import current_task_required_gates
-
-    return list(
-        dict.fromkeys(
-            (
-                *tuple(module.required_gates),
-                *tuple(current_task_required_gates()),
-            )
-        )
-    )
-
-
-def _host_finalize_missing_generation_verification(
-    staged_root: Path,
+def _source_invariant_errors(
+    source: str,
     *,
-    generation_verification: dict[str, Any] | None,
-    touched_paths: Sequence[str],
-    required_gates: Sequence[str],
-) -> dict[str, Any] | None:
-    """Host-own the final downstream verification binding for generated source.
-
-    Exact-path tasks keep target_compile semantics. Authored bounded-root generation
-    is split into fragments that may touch different files, so a fragment-local JDT
-    receipt cannot certify the complete generated module. A required project-build
-    gate therefore binds the complete final touched-path set to downstream Gradle.
-    """
-
-    normalized_gates = {
-        re.sub(r"[^a-z0-9]+", "_", str(value).strip().casefold()).strip("_")
-        for value in required_gates
-        if str(value).strip()
-    }
-
-    if "project_build" in normalized_gates:
-        normalized_paths = tuple(
-            sorted(
-                {
-                    str(path).replace("\\", "/").strip()
-                    for path in touched_paths
-                    if str(path).strip()
-                }
-            )
+    symbol: str,
+    expected_package: str,
+) -> tuple[str, ...]:
+    errors: list[str] = []
+    if "```" in source:
+        errors.append("source contains Markdown code fences")
+    package_match = _PACKAGE.search(source)
+    if expected_package and (
+        package_match is None or package_match.group(1) != expected_package
+    ):
+        errors.append(f"package must remain exactly {expected_package}")
+    public = _PUBLIC_TYPE.findall(source)
+    if public != [symbol]:
+        errors.append(
+            f"top-level contract must be exactly `public final class {symbol}`"
         )
-        if not normalized_paths:
-            return None
-        touched_payload = json.dumps(
-            normalized_paths,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        return {
-            "schema_version": "mmm/generation-verification-v1",
-            "status": "DEFERRED_TO_PROJECT_BUILD",
-            "authority": "generation_tool_loop",
-            "validation_status": "DEFERRED",
-            "termination_reason": "VERIFICATION_DEFERRED_TO_PROJECT_BUILD",
-            "verifier_tool": "project_build",
-            "target_path": None,
-            "compile_backed_java": False,
-            "downstream_required_gate": "project_build",
-            "verification_scope": "project",
-            "touched_paths_sha256": "sha256:"
-            + hashlib.sha256(touched_payload).hexdigest(),
-            "touched_path_count": len(normalized_paths),
-            "generation_time_receipt": generation_verification,
-        }
-
-    if generation_verification is not None:
-        return generation_verification
-
-    java_paths = tuple(
-        dict.fromkeys(
-            str(path).replace("\\", "/").strip()
-            for path in touched_paths
-            if str(path).strip().casefold().endswith(".java")
+    if not _INITIALIZE.search(source):
+        errors.append("required `public static void initialize()` is missing")
+    if _SIDE_ONLY.search(source):
+        errors.append(
+            "common authored source may not carry @Environment(CLIENT/SERVER)"
         )
-    )
-    if "target_compile" not in normalized_gates or len(java_paths) != 1:
-        return None
-
-    target_path = java_paths[0]
-    has_gradle_model = any(
-        (staged_root / relative).is_file()
-        for relative in (
-            "gradlew",
-            "gradlew.bat",
-            "build.gradle",
-            "build.gradle.kts",
-            "settings.gradle",
-            "settings.gradle.kts",
+    if _FORBIDDEN_ENTRYPOINT.search(source):
+        errors.append(
+            "feature source may not implement or declare a Fabric mod entrypoint"
         )
-    )
-    compile_receipt: dict[str, Any]
-    if has_gradle_model:
-        from .generation_target_compile import run_generation_target_compile
-
-        try:
-            compile_receipt = run_generation_target_compile(
-                staged_root,
-                target_path=target_path,
-            )
-        except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
-            compile_receipt = {
-                "status": "UNAVAILABLE",
-                "reason": f"{type(exc).__name__}: {exc}",
-                "diagnostics": [],
-            }
-    else:
-        compile_receipt = {
-            "status": "UNAVAILABLE",
-            "reason": "staged workspace has no Gradle build model yet",
-            "diagnostics": [],
-        }
-
-    compile_status = str(compile_receipt.get("status") or "").strip().upper()
-    if compile_status == "FAIL":
-        diagnostics = compile_receipt.get("diagnostics")
-        raise CustomModuleGenerationError(
-            "GENERATION_TARGET_COMPILE_FAILED: host fallback compiler rejected "
-            f"{target_path}: {diagnostics!r}"
-        )
-
-    if compile_status == "PASS":
-        terminal_status = "PASS"
-        validation_status = "PASS"
-        termination_reason = "VERIFICATION_PASSED"
-        downstream_required_gate = None
-    else:
-        terminal_status = "DEFERRED_TO_TARGET_COMPILE"
-        validation_status = "DEFERRED"
-        termination_reason = "VERIFICATION_DEFERRED_TO_TARGET_COMPILE"
-        downstream_required_gate = "target_compile"
-
-    return {
-        "schema_version": "mmm/generation-verification-v1",
-        "status": terminal_status,
-        "authority": "generation_tool_loop",
-        "validation_status": validation_status,
-        "termination_reason": termination_reason,
-        "verifier_tool": "target_compile",
-        "target_path": target_path,
-        "compile_backed_java": True,
-        "downstream_required_gate": downstream_required_gate,
-        "verifier_origin": "custom_module_host_fallback",
-        "compile_receipt": compile_receipt,
-    }
+    if _BODY_MARKER in source:
+        errors.append("host implementation marker was not replaced")
+    return tuple(errors)
 
 
-def _coder_project_context_budget(
-    router: ModelRouter,
-    policy: ScalePolicy,
-    *,
-    fast_mode: bool,
-) -> int:
-    """Bound the first exact-source page; continuation owns additional context."""
-
-    del fast_mode  # Atomic source-page size is mode-independent.
-    hard_cap = min(max(1024, int(policy.model_context_bytes)), 4 * 1024)
-    registry = getattr(router, "registry", None)
-    resolve_role = getattr(registry, "role", None)
-    profile = str(getattr(router, "profile", "") or "").strip()
-    if not callable(resolve_role) or not profile:
-        return hard_cap
+def _response_payload(text: str) -> dict[str, str]:
+    raw = str(text or "").strip()
     try:
-        config = resolve_role(profile, "coder")
-        live_request_bytes = int(request_message_budget(config, ()))
-    except Exception:
-        return hard_cap
-    if live_request_bytes <= 0:
-        return hard_cap
-    return min(hard_cap, max(1024, live_request_bytes // 2))
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise CustomModuleGenerationError(
+            "DIRECT_CODER_INVALID_RESPONSE: coder must return one JSON object "
+            "with complete `content` and `summary` strings."
+        ) from exc
+    if not isinstance(value, Mapping):
+        raise CustomModuleGenerationError(
+            "DIRECT_CODER_INVALID_RESPONSE: coder response is not an object."
+        )
+    content = value.get("content")
+    summary = value.get("summary")
+    if not isinstance(content, str) or not content.strip():
+        raise CustomModuleGenerationError(
+            "DIRECT_CODER_INVALID_RESPONSE: complete Java `content` is required."
+        )
+    if not isinstance(summary, str):
+        summary = ""
+    return {"content": content, "summary": summary}
+
+
+def _supports_kwarg(callable_value: Any, name: str) -> bool:
+    try:
+        signature = inspect.signature(callable_value)
+    except (TypeError, ValueError):
+        return True
+    return name in signature.parameters or any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
+
+
+def _call_coder(
+    router: Any,
+    messages: Sequence[Mapping[str, str]],
+) -> dict[str, str]:
+    callback = getattr(router, "generate_text", None)
+    if not callable(callback):
+        raise CustomModuleGenerationError(
+            "DIRECT_CODER_ROUTER_REQUIRED: router has no generate_text()."
+        )
+    kwargs: dict[str, Any] = {}
+    for key, value in (
+        ("response_format", "json"),
+        ("response_schema", _SOURCE_SCHEMA),
+        ("enable_tools", False),
+    ):
+        if _supports_kwarg(callback, key):
+            kwargs[key] = value
+    text = callback("coder", messages, **kwargs)
+    return _response_payload(text)
+
+
+def _compile_log(report: Any) -> str:
+    commands = tuple(getattr(report, "commands", ()) or ())
+    if not commands:
+        return str(getattr(report, "error", "") or "")[:_MAX_LOG_BYTES]
+    path = Path(str(getattr(commands[-1], "log_path", "") or ""))
+    if not path.is_file() or path.is_symlink():
+        return str(getattr(report, "error", "") or "")[:_MAX_LOG_BYTES]
+    try:
+        with path.open("rb") as stream:
+            size = path.stat().st_size
+            if size > _MAX_LOG_BYTES:
+                stream.seek(size - _MAX_LOG_BYTES)
+            data = stream.read(_MAX_LOG_BYTES)
+        return data.decode("utf-8", errors="replace")
+    except OSError:
+        return str(getattr(report, "error", "") or "")[:_MAX_LOG_BYTES]
+
+
+def _repair_attempts() -> int:
+    raw = os.environ.get("MMM_DIRECT_CODER_REPAIR_ATTEMPTS", "4").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 4
+    return max(1, min(value, 8))
 
 
 class CustomModuleGenerator:
-    """Implement one approved module through the canonical tool-capable coder loop."""
+    """One exact task -> one complete source file -> compiler-guided repair loop."""
 
     def __init__(
         self,
@@ -584,29 +338,31 @@ class CustomModuleGenerator:
         *,
         policy: ScalePolicy | None = None,
         fast_mode: bool = False,
-        project_index: ProjectIndex | None = None,
+        project_index: Any | None = None,
         checkpoint_root: str | Path | None = None,
     ) -> None:
         self.router = router
         self.policy = policy or ScalePolicy.from_environment()
-        self.policy.validate()
-        self.fast_mode = fast_mode
-        self._cached_index: ProjectIndex | None = project_index
-        self._cached_root: Path | None = (
-            project_index.root if project_index is not None else None
+        self.fast_mode = bool(fast_mode)
+        self._cached_index = project_index
+        self._cached_root = (
+            Path(project_index.root).resolve()
+            if project_index is not None and getattr(project_index, "root", None)
+            else None
         )
         self._checkpoint_root = (
-            Path(checkpoint_root).expanduser() if checkpoint_root is not None else None
+            Path(checkpoint_root).expanduser().resolve()
+            if checkpoint_root is not None
+            else None
         )
-        self._checkpoint_cleanup_lock = threading.RLock()
-        self._checkpoint_cleanup_tokens: dict[
-            str,
-            tuple[str, Path, _GenerationCheckpointLease],
-        ] = {}
 
-    @task_capsule_generation_scope
-    @generation_authority_scoped
-    @_checkpoint_lease_scoped
+    def _cache_dir(self, root: Path) -> Path:
+        if self._checkpoint_root is not None:
+            run_root = self._checkpoint_root.parent.parent
+            if run_root != self._checkpoint_root:
+                return run_root / ".cache" / "gradle"
+        return root / ".minecraft_ai" / "gradle-cache"
+
     def generate(
         self,
         project_root: str | Path,
@@ -618,6 +374,7 @@ class CustomModuleGenerator:
         mappings: str | None = None,
         execution_feedback: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        del research_modules, mappings
         module.validate(policy=self.policy)
         root = Path(project_root).expanduser().resolve()
         if not root.is_dir() or root.is_symlink():
@@ -627,546 +384,178 @@ class CustomModuleGenerator:
 
         requested_version = str(minecraft_version or "").strip()
         requested_loader = str(loader or "").strip()
-        requested_mappings = str(mappings or "").strip()
-        if requested_version or requested_loader or requested_mappings:
-            if not requested_version or not requested_loader:
-                raise CustomModuleGenerationError(
-                    "minecraft_version and loader must be supplied together; mappings are required only when the canonical target contract says they are applicable."
-                )
+        if requested_version and requested_loader:
             try:
-                adapter = adapter_for_target(requested_version, requested_loader)
-                coordinates = validate_target_coordinates(
+                adapter = adapter_for_target(
                     requested_version,
                     requested_loader,
-                    requested_mappings,
-                    declared_mappings_applicable=adapter.mappings_applicable,
                 )
-            except (ValueError, TargetContractError) as exc:
+            except ValueError as exc:
                 raise CustomModuleGenerationError(str(exc)) from exc
-            if coordinates.mappings != str(adapter.yarn_mappings or "").strip():
-                raise CustomModuleGenerationError(
-                    "Requested mappings disagree with the executable provider target."
-                )
         else:
             try:
                 adapter = adapter_from_project(root)
             except ValueError as exc:
                 raise CustomModuleGenerationError(
-                    "Custom generation requires an explicit host target or an unambiguous "
-                    "existing project platform lock; historical defaults are disabled."
+                    "Custom generation requires one unambiguous executable "
+                    "platform target."
                 ) from exc
 
-        minecraft_version = adapter.minecraft_version
-        loader = adapter.loader
-        mappings = adapter.yarn_mappings
-        java_version = adapter.java_version
-
-        module_contract = _task_local_module_contract(module)
-        coherent_authored = (
-            str(module_contract.get("authored_execution_mode") or "").strip()
-            == "bounded_coherent"
-        )
-        retry_feedback = _bounded_execution_feedback(execution_feedback)
-        diagnostic_paths = tuple(
-            dict.fromkeys(
-                str(item.get("path") or "").strip()
-                for item in (
-                    retry_feedback.get("diagnostics", ())
-                    if isinstance(retry_feedback, Mapping)
-                    else ()
-                )
-                if isinstance(item, Mapping) and str(item.get("path") or "").strip()
-            )
-        )
-        query = json.dumps(
-            module_contract,
-            ensure_ascii=False,
-            sort_keys=True,
-        )
-        project_context_budget = _coder_project_context_budget(
-            self.router,
-            self.policy,
-            fast_mode=self.fast_mode,
-        )
-
-        research_context = select_module_research_context(
-            research_modules,
-            query=query,
-            byte_budget=min(8 * 1024, project_context_budget),
-        )
-        before = _project_snapshot(root)
-        checkpoint_identity = _generation_checkpoint_identity(
-            module_query=query,
-            minecraft_version=minecraft_version,
-            loader=loader,
-            mappings=mappings,
-            research_context=research_context,
-            router=self.router,
-        )
-        checkpoint_root, staged_root, checkpoint_resumed, checkpoint_lease = (
-            _prepare_generation_checkpoint(
-                root,
-                identity_sha256=checkpoint_identity,
-                configured_root=self._checkpoint_root,
-            )
-        )
-        _track_checkpoint_lease(checkpoint_lease)
-        if checkpoint_resumed:
-            try:
-                resumed_operations, _resumed_paths, resumed_discarded = (
-                    _collect_staged_operations(root, staged_root, before)
-                )
-                if resumed_discarded:
-                    raise CustomModuleGenerationError(
-                        "Resumable custom-module work contains out-of-scope changes."
-                    )
-                if resumed_operations:
-                    self._validate_operations(resumed_operations)
-                    self._validate_total_patch_bytes(resumed_operations)
-            except (CustomModuleGenerationError, OSError, ValueError):
-                _remove_generation_checkpoint(checkpoint_root)
-                staged_root = _initialize_generation_checkpoint(
-                    root,
-                    checkpoint_root,
-                    identity_sha256=checkpoint_identity,
-                )
-                checkpoint_resumed = False
-
-        # Initial coder grounding must describe the same checkpoint workspace used
-        # by source mutation and verification. A resumed checkpoint may differ from
-        # the live project root, so build all exact-source context from staged_root.
-        index = ProjectIndex(staged_root, policy=self.policy)
-        observation_ledger: dict[str, Any] | None = None
-        last_snapshot_error: ValueError | None = None
-        for snapshot_attempt in range(3):
-            try:
-                observation_ledger = _collect_initial_observations(
-                    index,
-                    query=query,
-                    byte_budget=project_context_budget,
-                    diagnostic_paths=diagnostic_paths,
-                )
-                break
-            except ValueError as exc:
-                if not _is_stale_project_index_error(exc):
-                    raise
-                last_snapshot_error = exc
-                index = ProjectIndex(staged_root, policy=self.policy)
-                print(
-                    "custom module: refreshed changing staged ProjectIndex snapshot",
-                    f"attempt={snapshot_attempt + 1}/3",
-                    flush=True,
-                )
-        if observation_ledger is None:
+        relative, symbol, task = _exact_target(module)
+        target = _safe_target(root, relative)
+        if not target.is_file():
             raise CustomModuleGenerationError(
-                "Staged project source kept changing while custom-module context was captured; "
-                f"last error: {last_snapshot_error}"
+                f"DIRECT_CODER_HOST_SCAFFOLD_MISSING: {relative}"
             )
-
-        observation_pages = _observation_context_pages(
-            observation_ledger,
-            query=query,
-            byte_budget=project_context_budget,
-        )
-        host_grounding = build_coder_grounding(
-            module_kind=module.kind,
-            source_observation_receipt=observation_ledger["receipt"],
-            research_context=research_context,
-            minecraft_version=minecraft_version,
-            loader=loader,
-            mappings=mappings,
-        )
-        from .generation_implementation_grounding import (
-            build_generation_implementation_grounding,
-            render_generation_implementation_authority_prompt,
-        )
-
-        implementation_grounding = build_generation_implementation_grounding(
-            module,
-            minecraft_version=minecraft_version,
-        )
-        if implementation_grounding is not None:
-            evidence_bindings = dict(host_grounding.get("evidence_bindings") or {})
-            evidence_bindings["implementation_contract"] = {
-                "receipt": {
-                    "selected_fact_count": implementation_grounding["selected_fact_count"],
-                    "grounding_sha256": implementation_grounding["grounding_sha256"],
-                    "context_id": implementation_grounding["context_id"],
-                },
-                "grounding": implementation_grounding,
-            }
-            host_grounding = {
-                **host_grounding,
-                "evidence_bindings": evidence_bindings,
-            }
-
-        approved_reuse_context = _materialize_owned_reuse_context(
-            staged_root,
-            module,
-        )
-        if approved_reuse_context is not None:
-            evidence_bindings = dict(host_grounding.get("evidence_bindings") or {})
-            evidence_bindings["approved_reuse_source"] = {
-                "request_field": "approved_reuse_context",
-                "receipt": approved_reuse_context["materialization"],
-            }
-            host_grounding = {
-                **host_grounding,
-                "evidence_bindings": evidence_bindings,
-            }
-
-        if minecraft_version:
-            os.environ["MMM_MINECRAFT_VERSION"] = str(minecraft_version).strip()
-        if loader:
-            os.environ["MMM_LOADER"] = str(loader).strip()
-        if mappings:
-            os.environ["MMM_YARN_MAPPINGS"] = str(mappings).strip()
-        if java_version:
-            os.environ["MMM_JAVA_VERSION"] = str(java_version).strip()
-
-        self.router.bind_agent_workspace(staged_root, require_fresh_evidence=True)
-        request = {
-            "phase": _implementation_phase(module_contract),
-            "task": "Implement the approved Minecraft/Fabric mod feature in the current project.",
-            "workspace_project_root": ".",
-            "target": {
-                "minecraft_version": minecraft_version,
-                "loader": loader,
-                "mappings": mappings,
-                "java": java_version,
-            },
-            "module": module_contract,
-            "project_manifest": index.manifest_receipt(),
-            "source_observation_receipt": observation_ledger["receipt"],
-            "initial_exact_source_context": observation_pages[0],
-            "research_context": research_context,
-            "host_grounding": host_grounding,
-            "checkpoint": {
-                "resumed": checkpoint_resumed,
-                "source_state_sha256": _mutable_stage_state_sha256(staged_root),
-            },
-            "execution_feedback": retry_feedback,
-            "rules": [
-                "Implement the feature directly; do not return a file-plan protocol.",
-                "Use host_grounding.evidence_bindings.implementation_contract first when present; its API symbols and admitted templates are target authority, not examples to rewrite from memory. When a grounding fact supplies required_imports, import those exact fully-qualified owners and never substitute Yarn, intermediary, neighbouring-version, or remembered package names.",
-                "When implementation_contract templates expose symbol_usage/topology_policy, preserve each template's exact receiver/member/argument topology while composing code. Do not swap registry roots, keys, identifiers, owners, receivers, or arguments between admitted templates even when Java types appear compatible.",
-                "Keep the first implementation minimal but semantically complete: implement the exact coder_execution_contract obligation and authored-unit text; do not substitute a generic placeholder, sample feature, initialization flag, or lifecycle skeleton.",
-                "Do not invent @Environment(CLIENT/SERVER) helpers or client/server lifecycle splits. Use them only when the approved unit explicitly requires side-specific behavior and exact project/API evidence identifies the matching side-specific caller; common initialize() must remain callable on both sides and must not invoke side-stripped methods.",
-                "Use workspace/RAG/MCP retrieval only when the host implementation grounding and exact project context do not contain a fact required by the approved task.",
-                "Apply real edits only with the exact visible tool named apply_source_edit. Never invent or rename it as source_edit, edit_file, write_file, patch, or another alias. Target compile feedback is handled inside this same generation run before any fallback repair stage.",
-                "Fill the final summary in the supplied fixed template.",
-                response_template_prompt("coder_summary"),
-                "Edits are limited to src/main/java, src/main/resources, src/test/java and src/gametest.",
-                "Build infrastructure, Gradle configuration and host-owned ledgers are read-only.",
-                "Do not delete files. Preserve valid source already present in a resumed checkpoint.",
-                "Use only the selected Minecraft/loader/mappings/Java target and preserve project conventions.",
-            ],
-        }
-        _apply_authored_request(request, module_contract)
-        if coherent_authored:
-            request["rules"] = [
-                "Treat authored_plan as one coherent implementation contract. Standard worksheet headings describe facets of the same system and must never become one class/file per heading.",
-                "Implement observable gameplay behavior first. State, algorithms, authority/networking, persistence, resources/UI, failure handling, reuse notes, and verification obligations must be realized where they belong in the same architecture.",
-                "Use target-version host grounding and reviewed RAG/MCP evidence before guessing Minecraft/Fabric APIs, registry owners, networking hooks, persistence hooks, or client-only APIs.",
-                "Inspect the current staged workspace before every fragment write. Preserve correct work from earlier fragments and extend it instead of restarting or replacing the architecture.",
-                "Create or edit only files inside module.authored_write_scope. Java files stay in its generated package; assets/data stay in its mod namespace. Build files, fabric.mod.json, host state, and other namespaces are read-only.",
-                "Use the existing canonical Fabric entrypoint. Never create another ModInitializer or ClientModInitializer. Wire common/server-safe initialization into the existing entrypoint and use an existing verified client entrypoint only when the approved behavior actually needs client code.",
-                "Never reference client-only classes or @Environment(CLIENT) methods from common/server code. Side-specific code belongs in the matching source set and is invoked only from a verified matching-side caller.",
-                "Apply edits only with the exact visible tool named apply_source_edit; never invent tool aliases. In an ACT response, emit every independent apply_source_edit call needed to materialize the complete coherent design rather than stopping after one convenience file.",
-                "Do not return a file-plan protocol. Continue implementing inside this single coherent tool loop until the complete authored design is materialized, then return only the fixed coder summary.",
-                response_template_prompt("coder_summary"),
-            ]
-        if retry_feedback is not None:
-            request["rules"][0:0] = [
-                "This is an owner-bound validation repair re-entry. Fix the supplied execution_feedback diagnostics in the existing owned source before making any unrelated change.",
-                "Do not ignore or delete the failing behavior to silence validation; preserve the approved semantic outcome and satisfy the exact host implementation contract.",
-            ]
-        if approved_reuse_context is not None:
-            request["approved_reuse_context"] = approved_reuse_context
-            request["rules"][2:2] = [
-                "Adapt the pinned approved_reuse_context donor snippets before attempting fresh implementation.",
-                "Donor files are read-only evidence; write only the exact task-owned target path.",
-                "The final source must retain an attributable verified donor symbol or concrete donor code structure; a fresh rewrite is not reuse.",
-            ]
-        implementation_authority_prompt = (
-            render_generation_implementation_authority_prompt(implementation_grounding)
-            if implementation_grounding is not None
-            else ""
-        )
-        coherent_authority_prompt = (
-            json.dumps(
-                {
-                    "schema_version": "mmm/coherent-authored-coder-authority-v1",
-                    "execution_mode": "bounded_coherent",
-                    "semantic_source": "user message module.authored_plan is the complete approved design",
-                    "requested_prompt": (
-                        module_contract.get("authored_plan", {}).get("requested_prompt")
-                        if isinstance(module_contract.get("authored_plan"), Mapping)
-                        else ""
-                    ),
-                    "write_scope": module_contract.get("authored_write_scope"),
-                    "architecture_invariants": [
-                        "worksheet headings are facets of one coherent system, not class/file boundaries",
-                        "implement concrete gameplay rather than generic scaffolding",
-                        "use the existing canonical Fabric entrypoint; never create a second entrypoint",
-                        "common/server code must not reference client-only classes or side-stripped methods",
-                        "target-version API facts come from reviewed host/RAG/MCP evidence, not model memory",
-                        "all writes use apply_source_edit and stay inside the host-owned namespace",
-                    ],
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            if coherent_authored
-            else ""
-        )
-        system_content = (
-            (
-                "You are the implementation coder for one approved coherent Minecraft/Fabric authored design. "
-                "authored_plan is the semantic source of truth. Its standard engineering headings are facets "
-                "of one system, not file or class boundaries. Build the actual architecture needed to realize "
-                "the gameplay inside the host-owned package/resource namespace. Inspect the existing canonical "
-                "entrypoint and staged workspace, ground target-version APIs with the reviewed evidence tools, "
-                "and implement concrete gameplay rather than placeholders or lifecycle skeletons. Keep common "
-                "and server code free of client-only references; create side-specific code only when required "
-                "and only behind an existing verified matching-side caller. Use only apply_source_edit for "
-                "writes and never invent a second entrypoint or file-plan protocol."
-            )
-            if coherent_authored
-            else (
-                "You are the implementation coder for one approved Minecraft/Fabric module. "
-                "The developer task capsule is the semantic source of truth: read its "
-                "coder_execution_contract, implementation_steps, engineering_worksheet, and exact "
-                "authored-unit text before writing code. Prefer exact host-owned implementation facts "
-                "and retrieved target-version API evidence over memory. Implement the approved behavior, "
-                "not a generic placeholder, demo, test fixture, lifecycle skeleton, or guessed client/server "
-                "split. Preserve the host-owned common initialize() surface; never make common initialization "
-                "depend on a method that Fabric can strip with @Environment. Write the smallest complete "
-                "source change that satisfies the approved task, then let the host target compiler verify it "
-                "in this same generation run. Do not invent extra entrypoints, files, lifecycle hooks, or a "
-                "second patch/file-plan protocol."
-            )
-        )
-        initial_messages = [
-            {
-                "role": "system",
-                "content": system_content,
-            },
-            *(
-                [
-                    {
-                        "role": "developer",
-                        "content": coherent_authority_prompt,
-                    }
-                ]
-                if coherent_authority_prompt
-                else []
-            ),
-            *(
-                [
-                    {
-                        "role": "developer",
-                        "content": implementation_authority_prompt,
-                    }
-                ]
-                if implementation_authority_prompt
-                else []
-            ),
-            {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
-        ]
-
-        from .progress_aware_tool_loop import (
-            clear_generation_verification_receipt,
-            current_generation_verification_receipt,
-        )
-
-        summary = ""
-        generation_verification: dict[str, Any] | None = None
-        continuation_count = 0
-        clear_generation_verification_receipt()
         try:
-            with _active_checkpoint_persistence(
-                checkpoint_root,
-                staged_root,
-                checkpoint_identity,
-            ):
-                summary = _generate_coder_text(
-                    self.router,
-                    "coder",
-                    initial_messages,
-                    response_format="text",
-                    tool_stage="generation",
-                    enable_tools=True,
-                )
-                generation_verification = current_generation_verification_receipt()
-            stage_tree_sha256, post_generation_snapshot = _stage_tree_snapshot(staged_root)
-            _persist_generation_checkpoint(
-                checkpoint_root,
-                staged_root,
-                identity_sha256=checkpoint_identity,
-                stage_tree_sha256=stage_tree_sha256,
-            )
-        except BaseException as exc:
-            try:
-                _persist_generation_checkpoint(
-                    checkpoint_root,
-                    staged_root,
-                    identity_sha256=checkpoint_identity,
-                )
-            except (OSError, ValueError) as checkpoint_exc:
-                print(
-                    "custom module: checkpoint update failed",
-                    f"module={module.module_id}",
-                    f"error={type(checkpoint_exc).__name__}",
-                    flush=True,
-                )
-
-            boundary_kind = completion_boundary_kind(exc)
-            if boundary_kind != OUTPUT_EXHAUSTED:
-                raise
-
-            progress_operations, _progress_paths, _discarded_paths = (
-                _collect_staged_operations(root, staged_root, before)
-            )
-            if progress_operations:
-                self._validate_operations(progress_operations)
-                self._validate_total_patch_bytes(progress_operations)
+            original = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
             raise CustomModuleGenerationError(
-                "ATOMIC_ACTION_OUTPUT_STALLED: the canonical progress-aware coder loop exhausted "
-                "its bounded in-state output recovery; refusing an outer continuation because it "
-                "would reset HostRunState over an already-mutated staged workspace."
+                f"Could not read host-owned source {relative}: {exc}"
             ) from exc
 
-        summary_text = _parse_coder_summary(summary)
-
-        operations, touched_paths, discarded_paths = _collect_staged_operations(
-            root,
-            staged_root,
-            before,
-            after=post_generation_snapshot,
+        package_match = _PACKAGE.search(original)
+        expected_package = package_match.group(1) if package_match else ""
+        task_text = json.dumps(task, ensure_ascii=False, sort_keys=True)
+        context = _project_context(root, target)
+        bounded_feedback = _bounded_execution_feedback(execution_feedback)
+        system = (
+            "You implement exactly one host-owned Minecraft Java source file. "
+            "Return one JSON object only: {\\\"content\\\": "
+            "\\\"<complete Java file>\\\", \\\"summary\\\": "
+            "\\\"<short summary>\\\"}. Never return a patch or diff. "
+            "Do not change the package, public final top-level class name, or "
+            "public static void initialize() integration surface. Do not create "
+            "another mod entrypoint. The host will compile the real project and "
+            "return the exact compiler failure for repair."
         )
-        if not operations:
-            discarded = ", ".join(discarded_paths[:8]) if discarded_paths else "none"
+        initial_user = (
+            f"Platform: Minecraft {adapter.minecraft_version}; "
+            f"loader {adapter.loader}; Java {adapter.java_version}; "
+            f"mappings {adapter.yarn_mappings or '<none>'}.\\n"
+            f"Exact target: {relative}#{symbol}\\n\\n"
+            f"Approved task:\\n{task_text}\\n\\n"
+            f"Current host scaffold:\\n{original}\\n\\n"
+            f"Relevant existing project source:\\n{context or '<none>'}"
+        )
+        if bounded_feedback:
+            initial_user += (
+                "\\n\\nDownstream execution feedback from the previous attempt:\\n"
+                + json.dumps(
+                    bounded_feedback,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
+
+        before_sha = _sha256_text(original)
+        current = original
+        summary = ""
+        last_failure = ""
+        attempts = _repair_attempts()
+        compiler = GradleRunner(self._cache_dir(root))
+
+        with project_write_lock(root):
+            for attempt in range(1, attempts + 1):
+                if attempt == 1:
+                    messages: list[dict[str, str]] = [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": initial_user},
+                    ]
+                else:
+                    messages = [
+                        {"role": "system", "content": system},
+                        {
+                            "role": "user",
+                            "content": (
+                                f"Repair attempt {attempt}/{attempts} for "
+                                f"{relative}#{symbol}.\\n"
+                                "Return the complete corrected Java file, "
+                                "not a patch.\\n\\n"
+                                f"Current complete source:\\n{current}\\n\\n"
+                                "Exact validation/compiler failure:\\n"
+                                f"{last_failure}"
+                            ),
+                        },
+                    ]
+
+                payload = _call_coder(self.router, messages)
+                candidate = (
+                    payload["content"]
+                    .replace("\\r\\n", "\\n")
+                    .replace("\\r", "\\n")
+                )
+                summary = payload["summary"]
+                invariant_errors = _source_invariant_errors(
+                    candidate,
+                    symbol=symbol,
+                    expected_package=expected_package,
+                )
+                if invariant_errors:
+                    current = candidate
+                    last_failure = "\\n".join(
+                        f"- {error}" for error in invariant_errors
+                    )
+                    continue
+
+                _atomic_write(target, candidate)
+                current = candidate
+                report = compiler.compile_java(root)
+                if getattr(report, "status", "") == "PASS":
+                    after_sha = _sha256_text(candidate)
+                    return {
+                        "schema_version": "mmm/custom-module-result-v3",
+                        "module_id": module.module_id,
+                        "kind": module.kind,
+                        "status": "SOURCE_GENERATED",
+                        "patch_receipt": {
+                            "schema_version": "mmm/direct-source-write-v1",
+                            "status": "APPLIED",
+                            "operations": [
+                                {
+                                    "operation": "replace",
+                                    "path": relative,
+                                    "before_sha256": before_sha,
+                                    "after_sha256": after_sha,
+                                }
+                            ],
+                            "touched_paths": [relative],
+                        },
+                        "operation_count": 1,
+                        "runtime_tests": [
+                            "Build the real project and execute the requested "
+                            "GameTest/runtime gates."
+                        ],
+                        "source_observation_receipt": {
+                            "path": relative,
+                            "sha256": before_sha,
+                        },
+                        "touched_paths": [relative],
+                        "discarded_out_of_scope_paths": [],
+                        "agent_summary": summary.strip()[:4096],
+                        "generation_verification": {
+                            "status": "PASS",
+                            "mode": "gradle_compile_java",
+                            "target_path": relative,
+                            "attempt": attempt,
+                        },
+                        "output_exhaustion_continuations": 0,
+                        "generation_checkpoint_resumed": False,
+                        "required_gates": list(module.required_gates),
+                    }
+
+                last_failure = _compile_log(report) or str(
+                    getattr(report, "error", "")
+                    or "Gradle compileJava failed."
+                )
+
+            _atomic_write(target, original)
             raise CustomModuleGenerationError(
-                "Custom-module coding agent produced no valid source/resource changes. "
-                f"Discarded out-of-scope staged paths: {discarded}."
+                "DIRECT_CODER_COMPILE_FAILED: exact whole-file generation "
+                f"did not compile after {attempts} attempts for {relative}. "
+                "Last failure:\\n"
+                + last_failure[-_MAX_LOG_BYTES:]
             )
-
-        self._validate_operations(operations)
-        self._validate_total_patch_bytes(operations)
-
-        required_gates = _receipt_required_gates(module)
-        generation_verification = _host_finalize_missing_generation_verification(
-            staged_root,
-            generation_verification=generation_verification,
-            touched_paths=touched_paths,
-            required_gates=required_gates,
-        )
-        if (
-            not isinstance(generation_verification, dict)
-            or generation_verification.get("schema_version")
-            != "mmm/generation-verification-v1"
-            or generation_verification.get("authority") != "generation_tool_loop"
-            or generation_verification.get("status")
-            not in {
-                "PASS",
-                "DEFERRED_TO_TARGET_COMPILE",
-                "DEFERRED_TO_PROJECT_BUILD",
-            }
-        ):
-            raise CustomModuleGenerationError(
-                "GENERATION_VERIFICATION_RECEIPT_MISSING: coder/tool loop and host "
-                "fallback completed without trustworthy terminal verification evidence."
-            )
-
-        from .generation_verification_contract import (
-            classify_generation_verification,
-        )
-
-        generation_binding = classify_generation_verification(
-            source_status="SOURCE_GENERATED",
-            receipt=generation_verification,
-            touched_paths=touched_paths,
-            required_gates=required_gates,
-        )
-        if int(generation_binding.get("verifier_tier", 0) or 0) <= 0:
-            raise CustomModuleGenerationError(
-                "GENERATION_VERIFICATION_RECEIPT_INVALID: terminal verifier evidence "
-                "does not bind to the generated source mutation: "
-                f"status={generation_binding.get('generation_status')}, "
-                f"target={generation_binding.get('receipt_target_path')}, "
-                f"target_matches={generation_binding.get('receipt_target_matches')}, "
-                f"semantics_valid={generation_binding.get('receipt_semantics_valid')}."
-            )
-
-        reuse_application_receipt = None
-        if approved_reuse_context is not None:
-            reuse_application_receipt = _verify_reuse_application(
-                approved_reuse_context,
-                staged_root,
-                touched_paths,
-            )
-        receipt = TransactionalSourcePatcher(root).apply(operations)
-        if self._cached_index is not None:
-            try:
-                self._cached_index.update_files(touched_paths)
-            except (OSError, ValueError):
-                self._cached_index = ProjectIndex(root, policy=self.policy)
-        else:
-            self._cached_index = ProjectIndex(root, policy=self.policy)
-        self._cached_root = root
-        self._cached_index.write_manifest()
-        checkpoint_token = self._register_generation_checkpoint_cleanup(
-            identity_sha256=checkpoint_identity,
-            checkpoint_root=checkpoint_root,
-            checkpoint_lease=checkpoint_lease,
-        )
-        result = {
-            "schema_version": "mmm/custom-module-result-v3",
-            "module_id": module.module_id,
-            "kind": module.kind,
-            "status": "SOURCE_GENERATED",
-            "patch_receipt": receipt,
-            "operation_count": len(operations),
-            "runtime_tests": [
-                "Verify approved mod functionality, compilation, and runtime behavior without crash."
-            ],
-            "source_observation_receipt": observation_ledger["receipt"],
-            "touched_paths": touched_paths,
-            "discarded_out_of_scope_paths": discarded_paths,
-            "agent_summary": summary_text.strip()[:4096],
-            "generation_verification": generation_verification,
-            "output_exhaustion_continuations": continuation_count,
-            "generation_checkpoint_resumed": checkpoint_resumed,
-            "generation_checkpoint": {
-                "schema_version": _CHECKPOINT_SCHEMA,
-                "status": "AWAITING_LIVE_COMMIT",
-                "identity_sha256": checkpoint_identity,
-                "cleanup_token": checkpoint_token,
-            },
-            "required_gates": required_gates,
-        }
-        if reuse_application_receipt is not None:
-            result["reuse_application_receipt"] = reuse_application_receipt
-        return result
-
-    def _register_generation_checkpoint_cleanup(
-        self,
-        *,
-        identity_sha256: str,
-        checkpoint_root: Path,
-        checkpoint_lease: _GenerationCheckpointLease,
-    ) -> str:
-        token = secrets.token_hex(32)
-        with self._checkpoint_cleanup_lock:
-            self._checkpoint_cleanup_tokens[token] = (
-                identity_sha256,
-                checkpoint_root,
-                checkpoint_lease,
-            )
-            _transfer_checkpoint_lease(checkpoint_lease)
-        return token
 
     def ensure_generation_live_commit(
         self,
@@ -1174,53 +563,33 @@ class CustomModuleGenerator:
         *,
         project_root: str | Path,
     ) -> bool:
-        """Guarantee the staged checkpoint delta is materialized in the canonical project."""
-
-        if not isinstance(result, dict):
+        if not isinstance(result, Mapping):
             return False
-        root = Path(project_root).expanduser().resolve()
-        if _committed_patch_receipt_matches(result, project_root=root):
-            return True
-        checkpoint = result.get("generation_checkpoint")
-        if not isinstance(checkpoint, dict):
-            return False
-        token = checkpoint.get("cleanup_token")
-        identity = checkpoint.get("identity_sha256")
+        paths = result.get("touched_paths")
+        receipt = result.get("patch_receipt")
         if (
-            checkpoint.get("schema_version") != _CHECKPOINT_SCHEMA
-            or checkpoint.get("status") != "AWAITING_LIVE_COMMIT"
-            or not isinstance(token, str)
-            or not isinstance(identity, str)
+            not isinstance(paths, Sequence)
+            or isinstance(paths, (str, bytes, bytearray))
+            or len(paths) != 1
+            or not isinstance(receipt, Mapping)
         ):
             return False
-        with self._checkpoint_cleanup_lock:
-            owned = self._checkpoint_cleanup_tokens.get(token)
-        if owned is None or owned[0] != identity:
+        operations = receipt.get("operations")
+        if not isinstance(operations, Sequence) or len(operations) != 1:
             return False
-        checkpoint_root = owned[1]
-        base_root = _checkpoint_base(checkpoint_root)
-        staged_root = checkpoint_root / "project"
-        if (
-            not base_root.is_dir()
-            or base_root.is_symlink()
-            or not staged_root.is_dir()
-            or staged_root.is_symlink()
-        ):
+        operation = operations[0]
+        if not isinstance(operation, Mapping):
             return False
+        expected = str(operation.get("after_sha256") or "")
         try:
-            operations = _checkpoint_patch_operations(base_root, staged_root)
-            if not operations:
-                return False
-            from .project_write_lock import project_write_lock
-
-            with project_write_lock(root):
-                if not _committed_patch_receipt_matches(result, project_root=root):
-                    result["patch_receipt"] = TransactionalSourcePatcher(root).apply(
-                        operations
-                    )
-        except (OSError, SourcePatchError, ValueError):
+            target = _safe_target(
+                Path(project_root).expanduser().resolve(),
+                _normalize_project_path(paths[0]),
+            )
+            content = target.read_text(encoding="utf-8")
+        except (CustomModuleGenerationError, OSError, UnicodeError):
             return False
-        return _committed_patch_receipt_matches(result, project_root=root)
+        return _sha256_text(content) == expected
 
     def finalize_committed_generation_checkpoint(
         self,
@@ -1228,189 +597,34 @@ class CustomModuleGenerator:
         *,
         project_root: str | Path,
     ) -> bool:
-        """Clean one checkpoint only after the durable work-node commit succeeded."""
-
-        root = Path(project_root).expanduser().resolve()
-        if not _committed_patch_receipt_matches(result, project_root=root):
-            return False
-        checkpoint = result.get("generation_checkpoint") if isinstance(result, dict) else None
-        if not isinstance(checkpoint, dict):
-            return True
-        if checkpoint.get("status") == "CLEANED_AFTER_LIVE_COMMIT":
-            return True
-        token = checkpoint.get("cleanup_token")
-        with self._checkpoint_cleanup_lock:
-            owned = (
-                self._checkpoint_cleanup_tokens.get(token)
-                if isinstance(token, str)
-                else None
-            )
-        if owned is not None:
-            return self.acknowledge_generation_checkpoint(result)
-        return finalize_persisted_generation_checkpoint(
+        return self.ensure_generation_live_commit(
             result,
             project_root=project_root,
-            checkpoint_root=self._checkpoint_root,
         )
 
     def acknowledge_generation_checkpoint(self, result: Any) -> bool:
-        if not isinstance(result, dict):
-            return False
-        checkpoint = result.get("generation_checkpoint")
-        if not isinstance(checkpoint, dict):
-            return False
-        if checkpoint.get("schema_version") != _CHECKPOINT_SCHEMA:
-            return False
-        if checkpoint.get("status") == "CLEANED_AFTER_LIVE_COMMIT":
-            return "cleanup_token" not in checkpoint
-        if checkpoint.get("status") != "AWAITING_LIVE_COMMIT":
-            return False
-        token = checkpoint.get("cleanup_token")
-        identity = checkpoint.get("identity_sha256")
-        if not isinstance(token, str) or not _CHECKPOINT_KEY.fullmatch(token) or not isinstance(identity, str):
-            return False
-        with self._checkpoint_cleanup_lock:
-            owned = self._checkpoint_cleanup_tokens.get(token)
-            if owned is None or owned[0] != identity:
-                checkpoint["status"] = "UNACKNOWLEDGED_AFTER_LIVE_COMMIT"
-                checkpoint.pop("cleanup_token", None)
-                return False
-            try:
-                _remove_generation_checkpoint(owned[1], owned_lease=owned[2])
-            except (CustomModuleGenerationError, OSError):
-                self._checkpoint_cleanup_tokens.pop(token, None)
-                owned[2].close()
-                checkpoint["status"] = "PRESERVED_AFTER_CLEANUP_FAILURE"
-                checkpoint.pop("cleanup_token", None)
-                return False
-            self._checkpoint_cleanup_tokens.pop(token, None)
-            owned[2].close()
-        checkpoint["status"] = "CLEANED_AFTER_LIVE_COMMIT"
-        checkpoint.pop("cleanup_token", None)
-        return True
+        return isinstance(result, Mapping)
 
     def release_generation_checkpoint(self, result: Any) -> bool:
-        return self._finish_generation_checkpoint(result, delete=False)
+        return isinstance(result, Mapping)
 
     def discard_generation_checkpoint(self, result: Any) -> bool:
-        return self._finish_generation_checkpoint(result, delete=True)
+        return isinstance(result, Mapping)
 
-    def _finish_generation_checkpoint(self, result: Any, *, delete: bool) -> bool:
-        if not isinstance(result, dict):
-            return False
-        checkpoint = result.get("generation_checkpoint")
-        if not isinstance(checkpoint, dict):
-            return False
-        if (
-            checkpoint.get("schema_version") != _CHECKPOINT_SCHEMA
-            or checkpoint.get("status") != "AWAITING_LIVE_COMMIT"
-        ):
-            return False
-        token = checkpoint.get("cleanup_token")
-        identity = checkpoint.get("identity_sha256")
-        if not isinstance(token, str) or not _CHECKPOINT_KEY.fullmatch(token) or not isinstance(identity, str):
-            checkpoint.pop("cleanup_token", None)
-            return False
-        with self._checkpoint_cleanup_lock:
-            owned = self._checkpoint_cleanup_tokens.get(token)
-            if owned is None or owned[0] != identity:
-                checkpoint["status"] = "UNOWNED_LOSER_CHECKPOINT"
-                checkpoint.pop("cleanup_token", None)
-                return False
-            self._checkpoint_cleanup_tokens.pop(token, None)
-            removed = False
-            try:
-                if delete:
-                    _remove_generation_checkpoint(owned[1])
-                    checkpoint["status"] = "DISCARDED_AFTER_OTHER_WINNER"
-                    removed = True
-                else:
-                    checkpoint["status"] = "PRESERVED_FOR_RESUME"
-                    removed = True
-            except (CustomModuleGenerationError, OSError):
-                checkpoint["status"] = "PRESERVED_AFTER_CLEANUP_FAILURE"
-            finally:
-                owned[2].close()
-                checkpoint.pop("cleanup_token", None)
-        return removed
 
-    @exact_task_operation_validator(CustomModuleGenerationError)
-    def _validate_operations(self, operations: list[dict[str, Any]]) -> None:
-        for item in operations:
-            if not isinstance(item, dict):
-                raise CustomModuleGenerationError("Patch operation must be an object.")
-            if item.get("operation") not in {"create", "replace", "edit"}:
-                raise CustomModuleGenerationError("Custom module may not delete files.")
-            path = _normalized_operation_path(item)
-            if custom_module_path_protected(path) or not _agent_mutable_path(path):
-                raise CustomModuleGenerationError(
-                    f"Custom module path is outside the source/resource scope: {path}"
-                )
+def _parse_coder_summary(text: str) -> str:
+    return _response_payload(text)["summary"]
 
-    def _validate_total_patch_bytes(self, operations: list[dict[str, Any]]) -> None:
-        size = len(json.dumps(operations, ensure_ascii=False).encode("utf-8"))
-        if size > self.policy.max_patch_bytes:
-            raise CustomModuleGenerationError(
-                "Custom module patch exceeds MMM_MAX_PATCH_BYTES; split the feature or raise explicit host policy."
-            )
+
+def _normalized_operation_path(item: Mapping[str, Any]) -> str:
+    return PurePosixPath(
+        str(item.get("path", "")).replace("\\\\", "/")
+    ).as_posix()
 
 
 _agent_mutable_path = custom_module_path_allowed
 
-
-def _output_exhaustion_continuation_messages(
-    *,
-    module: ProductionModule,
-    minecraft_version: str,
-    loader: str,
-    mappings: str,
-    java_version: int,
-    continuation_index: int,
-    state_sha256: str,
-    touched_paths: Iterable[str],
-    discarded_paths: Iterable[str],
-    source_observation_receipt: Mapping[str, Any] | None = None,
-    host_grounding: Mapping[str, Any] | None = None,
-) -> list[dict[str, str]]:
-    return _architecture_continuation_messages(
-        {
-            "module": module,
-            "minecraft_version": minecraft_version,
-            "loader": loader,
-            "mappings": mappings,
-            "java_version": java_version,
-            "continuation_index": continuation_index,
-            "state_sha256": state_sha256,
-            "touched_paths": touched_paths,
-            "discarded_paths": discarded_paths,
-            "source_observation_receipt": source_observation_receipt,
-            "host_grounding": host_grounding,
-        },
-        task_contract=_task_local_module_contract,
-        continuation_path_preview=_CONTINUATION_PATH_PREVIEW,
-    )
-
-
-def _parse_coder_summary(text: str) -> str:
-    """Parse the fixed coder-summary contract through the shared schema authority."""
-
-    try:
-        payload = parse_response_text("coder_summary", text)
-    except ValueError as exc:
-        raise CustomModuleGenerationError(str(exc)) from exc
-    summary = payload["summary"]
-    if not isinstance(summary, str):
-        raise CustomModuleGenerationError(
-            "Coder summary must be a string in the fixed JSON template."
-        )
-    return summary
-
-
-def _is_stale_project_index_error(exc: ValueError) -> bool:
-    return str(exc).startswith("Project source changed after its context index was built:")
-
-
-def _normalized_operation_path(item: dict[str, Any]) -> str:
-    return PurePosixPath(str(item.get("path", "")).replace("\\", "/")).as_posix()
-
-
+__all__ = [
+    "CustomModuleGenerationError",
+    "CustomModuleGenerator",
+]
