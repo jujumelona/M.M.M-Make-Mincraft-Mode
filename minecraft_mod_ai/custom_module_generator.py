@@ -384,6 +384,7 @@ def _call_coder(
         ("response_format", "json"),
         ("response_schema", _SOURCE_SCHEMA),
         ("enable_tools", False),
+        ("output_token_ceiling", _direct_coder_output_token_ceiling()),
     ):
         if _supports_kwarg(callback, key):
             kwargs[key] = value
@@ -407,6 +408,15 @@ def _compile_log(report: Any) -> str:
         return data.decode("utf-8", errors="replace")
     except OSError:
         return str(getattr(report, "error", "") or "")[:_MAX_LOG_BYTES]
+
+
+def _direct_coder_output_token_ceiling() -> int:
+    raw = os.environ.get("MMM_DIRECT_CODER_OUTPUT_TOKEN_CEILING", "4096").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 4096
+    return max(1024, min(value, 8192))
 
 
 def _repair_attempts() -> int:
