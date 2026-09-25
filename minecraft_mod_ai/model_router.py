@@ -222,6 +222,7 @@ class ModelRouter:
             response_schema=response_schema,
             tool_stage=tool_stage,
             enable_tools=enable_tools,
+            output_token_ceiling=output_token_ceiling,
         )
         try:
             declared_counter = getattr_static(adapter, "input_context_accounting")
@@ -244,10 +245,12 @@ class ModelRouter:
         response_schema: Mapping[str, Any] | None = None,
         tool_stage: str | None = None,
         enable_tools: bool = True,
+        output_token_ceiling: int | None = None,
     ) -> str:
         return self._generate_text_impl(
             role, messages, media_paths=media_paths, response_format=response_format,
             response_schema=response_schema, tool_stage=tool_stage, enable_tools=enable_tools,
+            output_token_ceiling=output_token_ceiling,
         )
 
     def _generate_text_impl(
@@ -260,6 +263,7 @@ class ModelRouter:
         response_schema: Mapping[str, Any] | None = None,
         tool_stage: str | None = None,
         enable_tools: bool = True,
+        output_token_ceiling: int | None = None,
     ) -> str:
         config, adapter = self._generation_adapter(role)
         stage, runtime, tools, request = self._prepare_generation_request(
@@ -394,11 +398,13 @@ class ModelRouter:
         response_schema: Mapping[str, Any] | None = None,
         tool_stage: str | None = None,
         enable_tools: bool = True,
+        output_token_ceiling: int | None = None,
     ) -> tuple[str, Any | None, tuple[Mapping[str, Any], ...], GenerationRequest]:
         return self._prepare_generation_request_impl(
             role, messages, config=config, media_paths=media_paths,
             response_format=response_format, response_schema=response_schema,
             tool_stage=tool_stage, enable_tools=enable_tools,
+            output_token_ceiling=output_token_ceiling,
         )
 
     def _prepare_generation_request_impl(
@@ -412,6 +418,7 @@ class ModelRouter:
         response_schema: Mapping[str, Any] | None = None,
         tool_stage: str | None = None,
         enable_tools: bool = True,
+        output_token_ceiling: int | None = None,
     ) -> tuple[str, Any | None, tuple[Mapping[str, Any], ...], GenerationRequest]:
         """Build the canonical model request used by every text execution policy."""
 
@@ -458,7 +465,15 @@ class ModelRouter:
             tools=tools,
             tool_choice="auto" if tools else None,
             parallel_tool_calls=True,
-            metadata={"tool_stage": stage, "role": role},
+            metadata={
+                "tool_stage": stage,
+                "role": role,
+                **(
+                    {"mmm_output_token_ceiling": max(1, int(output_token_ceiling))}
+                    if output_token_ceiling is not None
+                    else {}
+                ),
+            },
         )
         return stage, runtime, tools, request
 
