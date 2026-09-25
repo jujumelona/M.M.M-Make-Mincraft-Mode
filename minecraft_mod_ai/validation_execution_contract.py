@@ -12,12 +12,6 @@ from typing import Any
 
 from .research_validation_fingerprint_performance import content_digest
 from .runner import BuildRunnerError
-from .validation_diagnostic_contract import (
-    diagnostic_errors as _diagnostic_errors,
-)
-from .validation_diagnostic_contract import (
-    run_diagnostics as _run_jdt_diagnostics,
-)
 
 _CACHE_LOCK = threading.RLock()
 _SUCCESSFUL_BUILDS: dict[tuple[Any, ...], Any] = {}
