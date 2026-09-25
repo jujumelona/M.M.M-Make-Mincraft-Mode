@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from minecraft_mod_ai import atomic_requirement_contract
-from minecraft_mod_ai.semantic_reviewer_role_contract import _SafeReviewerRouter
+from minecraft_mod_ai.semantic_reviewer_role_contract import (
+    _SafeReviewerRouter,
+    install as install_semantic_reviewer,
+)
 
 
 def test_coverage_reviewer_uses_coder_safe_native_tool_role() -> None:
+    install_semantic_reviewer(atomic_requirement_contract)
     calls: list[tuple[str, str]] = []
     expected = {
         "supported": False,
