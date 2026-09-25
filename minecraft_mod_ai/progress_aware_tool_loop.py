@@ -568,6 +568,19 @@ def _authored_implementation_recovery(state: Any) -> bool:
         or getattr(state, "latest_verifier_errors", ())
         or ()
     )
+    # Host-authored surface failures are already localized structural repairs, not
+    # evidence that the authored implementation is still missing. Treating them as
+    # implementation recovery re-exposes whole-file rewriting and lets a small model
+    # delete host anchors such as initialize().
+    if any(
+        isinstance(item, Mapping)
+        and (
+            str(item.get("code") or "").strip() == "host:authored-surface"
+            or str(item.get("source") or "").strip() == "host-authored-contract"
+        )
+        for item in diagnostics
+    ):
+        return False
     return bool(target) and any(
         isinstance(item, Mapping)
         and _canonical_mutation_path(item.get("path", "")) == target
