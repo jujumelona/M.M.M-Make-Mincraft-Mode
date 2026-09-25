@@ -568,24 +568,31 @@ def _authored_implementation_recovery(state: Any) -> bool:
         or getattr(state, "latest_verifier_errors", ())
         or ()
     )
-    # Host-authored surface failures are already localized structural repairs, not
-    # evidence that the authored implementation is still missing. Treating them as
-    # implementation recovery re-exposes whole-file rewriting and lets a small model
-    # delete host anchors such as initialize().
-    if any(
-        isinstance(item, Mapping)
-        and (
-            str(item.get("code") or "").strip() == "host:authored-surface"
-            or str(item.get("source") or "").strip() == "host-authored-contract"
-        )
-        for item in diagnostics
-    ):
+    # Full authored implementation recovery is justified only by a trusted
+    # "still unimplemented" host diagnostic for this exact target. Surface/side
+    # diagnostics may accompany that condition, but must never trigger whole-file
+    # regeneration on their own. Compiler/model/other-path diagnostics are routed
+    # through the bounded verifier-repair path instead.
+    if not target or not diagnostics:
         return False
-    return bool(target) and any(
-        isinstance(item, Mapping)
-        and _canonical_mutation_path(item.get("path", "")) == target
-        for item in diagnostics
-    )
+    implementation_codes = {
+        "host:authored-placeholder",
+        "host:authored-empty",
+    }
+    has_implementation_diagnostic = False
+    for item in diagnostics:
+        if not isinstance(item, Mapping):
+            return False
+        if _canonical_mutation_path(item.get("path", "")) != target:
+            return False
+        if str(item.get("source") or "").strip() != "host-authored-contract":
+            return False
+        code = str(item.get("code") or "").strip()
+        if not code.startswith("host:authored-"):
+            return False
+        if code in implementation_codes:
+            has_implementation_diagnostic = True
+    return has_implementation_diagnostic
 
 
 def _bind_host_owned_existing_source_call(
