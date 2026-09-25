@@ -324,6 +324,18 @@ class _StreamingCompletionClient:
 
     def stream(self, method: str, url: str, **kwargs: Any) -> Any:
         stream_kwargs = dict(kwargs)
+        payload = stream_kwargs.get("json")
+        if (
+            isinstance(payload, Mapping)
+            and url.rstrip("/").endswith("/chat/completions")
+            and payload.get("stream") is True
+        ):
+            from .llama_completion_liveness_contract import _progress_aware_payload
+
+            stream_kwargs["json"] = _progress_aware_payload(
+                __import__(__name__, fromlist=["*"]),
+                payload,
+            )
         stream_kwargs["timeout"] = _bounded_timeout(
             stream_kwargs.get("timeout"),
             read_seconds=_stream_idle_timeout_seconds(),
@@ -354,6 +366,12 @@ class _StreamingCompletionClient:
         streamed_payload = dict(payload)
         streamed_payload["stream"] = True
         streamed_payload["stream_options"] = {"include_usage": True}
+        from .llama_completion_liveness_contract import _progress_aware_payload
+
+        streamed_payload = _progress_aware_payload(
+            __import__(__name__, fromlist=["*"]),
+            streamed_payload,
+        )
         stream_kwargs = dict(kwargs)
         stream_kwargs["json"] = streamed_payload
         read_seconds = (
@@ -500,6 +518,12 @@ def _client(server_url: str) -> Any:
                 max_keepalive_connections=8,
                 keepalive_expiry=60.0,
             ),
+        )
+        from .llama_completion_liveness_contract import _wrap_raw_client
+
+        raw_client = _wrap_raw_client(
+            raw_client,
+            __import__(__name__, fromlist=["*"]),
         )
         client = _StreamingCompletionClient(raw_client)
         _CLIENTS[origin] = client
