@@ -1142,8 +1142,6 @@ def format_trajectory_summary(trajectory: Sequence[ExecutionStepTrace]) -> str:
 
 
 _ATOMIC_OUTPUT_RECOVERY_MARKER = "MMM_ATOMIC_OUTPUT_RECOVERY_V1"
-_ATOMIC_SOURCE_EDIT_OUTPUT_TOKENS = 4096
-_VERIFIER_REPAIR_OUTPUT_TOKENS = 2048
 
 
 def _state_requires_authoritative_java_evidence(state: Any) -> bool:
@@ -2087,19 +2085,9 @@ def _retry_atomic_after_output_exhaustion(
     retry_metadata = (
         dict(request.metadata) if isinstance(request.metadata, Mapping) else {}
     )
+    # Preserve the selected Qwen3.5 runtime and its registry-owned decode budget.
+    # Recovery changes only the instruction, never the model/LoRA or max-token policy.
     retry_metadata["mmm_atomic_output_recovery"] = True
-    retry_metadata["mmm_disable_lora"] = True
-    try:
-        existing_ceiling = int(
-            retry_metadata.get("mmm_output_token_ceiling")
-            or _ATOMIC_SOURCE_EDIT_OUTPUT_TOKENS
-        )
-    except (TypeError, ValueError):
-        existing_ceiling = _ATOMIC_SOURCE_EDIT_OUTPUT_TOKENS
-    retry_metadata["mmm_output_token_ceiling"] = min(
-        max(1, existing_ceiling),
-        _ATOMIC_SOURCE_EDIT_OUTPUT_TOKENS,
-    )
     retry_request = replace(
         request,
         messages=tuple(messages),
@@ -2273,18 +2261,6 @@ def _generate_turn_with_context_recovery(
     request_metadata = (
         dict(request.metadata) if isinstance(request.metadata, Mapping) else {}
     )
-    if _forced_tool_choice_name(tool_choice) == "apply_source_edit":
-        try:
-            existing_ceiling = int(
-                request_metadata.get("mmm_output_token_ceiling")
-                or _ATOMIC_SOURCE_EDIT_OUTPUT_TOKENS
-            )
-        except (TypeError, ValueError):
-            existing_ceiling = _ATOMIC_SOURCE_EDIT_OUTPUT_TOKENS
-        request_metadata["mmm_output_token_ceiling"] = min(
-            max(1, existing_ceiling),
-            _ATOMIC_SOURCE_EDIT_OUTPUT_TOKENS,
-        )
 
     turn_request = replace(
         request,
@@ -3932,22 +3908,6 @@ def _generate_with_tools_impl(
         turn_metadata = (
             dict(request.metadata) if isinstance(request.metadata, Mapping) else {}
         )
-        if (
-            state.phase is LoopPhase.ACT and state.validation_status == "FAIL"
-            and not _authored_implementation_recovery(state)
-        ):
-            try:
-                existing_ceiling = int(
-                    turn_metadata.get("mmm_output_token_ceiling")
-                    or _VERIFIER_REPAIR_OUTPUT_TOKENS
-                )
-            except (TypeError, ValueError):
-                existing_ceiling = _VERIFIER_REPAIR_OUTPUT_TOKENS
-            turn_metadata["mmm_output_token_ceiling"] = min(
-                max(1, existing_ceiling),
-                _VERIFIER_REPAIR_OUTPUT_TOKENS,
-            )
-
         turn_request = replace(
             request,
             tools=phase_tools,
