@@ -358,7 +358,7 @@ class _ProgressCheckedResponse:
         *,
         request_id: str,
         started_at: float,
-        wall_seconds: float,
+        wall_seconds: float = 300.0,
     ) -> None:
         self._response = response
         self._idle_seconds = idle_seconds
@@ -478,7 +478,7 @@ class _ProgressCheckedStream:
         *,
         request_id: str,
         started_at: float,
-        wall_seconds: float,
+        wall_seconds: float = 300.0,
     ) -> None:
         self._stream = stream
         self._idle_seconds = idle_seconds
