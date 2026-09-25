@@ -662,6 +662,10 @@ class CustomModuleGenerator:
         java_version = adapter.java_version
 
         module_contract = _task_local_module_contract(module)
+        coherent_authored = (
+            str(module_contract.get("authored_execution_mode") or "").strip()
+            == "bounded_coherent"
+        )
         retry_feedback = _bounded_execution_feedback(execution_feedback)
         diagnostic_paths = tuple(
             dict.fromkeys(
@@ -859,6 +863,19 @@ class CustomModuleGenerator:
             ],
         }
         _apply_authored_request(request, module_contract)
+        if coherent_authored:
+            request["rules"] = [
+                "Treat authored_plan as one coherent implementation contract. Standard worksheet headings describe facets of the same system and must never become one class/file per heading.",
+                "Implement observable gameplay behavior first. State, algorithms, authority/networking, persistence, resources/UI, failure handling, reuse notes, and verification obligations must be realized where they belong in the same architecture.",
+                "Use target-version host grounding and reviewed RAG/MCP evidence before guessing Minecraft/Fabric APIs, registry owners, networking hooks, persistence hooks, or client-only APIs.",
+                "Inspect the current staged workspace before every fragment write. Preserve correct work from earlier fragments and extend it instead of restarting or replacing the architecture.",
+                "Create or edit only files inside module.authored_write_scope. Java files stay in its generated package; assets/data stay in its mod namespace. Build files, fabric.mod.json, host state, and other namespaces are read-only.",
+                "Use the existing canonical Fabric entrypoint. Never create another ModInitializer or ClientModInitializer. Wire common/server-safe initialization into the existing entrypoint and use an existing verified client entrypoint only when the approved behavior actually needs client code.",
+                "Never reference client-only classes or @Environment(CLIENT) methods from common/server code. Side-specific code belongs in the matching source set and is invoked only from a verified matching-side caller.",
+                "Apply edits only with the exact visible tool named apply_source_edit; never invent tool aliases.",
+                "Do not return a file-plan protocol. Continue implementing across bounded tool turns until this authored fragment is complete, then return only the fixed coder summary.",
+                response_template_prompt("coder_summary"),
+            ]
         if retry_feedback is not None:
             request["rules"][0:0] = [
                 "This is an owner-bound validation repair re-entry. Fix the supplied execution_feedback diagnostics in the existing owned source before making any unrelated change.",
@@ -876,22 +893,37 @@ class CustomModuleGenerator:
             if implementation_grounding is not None
             else ""
         )
+        system_content = (
+            (
+                "You are the implementation coder for one approved coherent Minecraft/Fabric authored design. "
+                "authored_plan is the semantic source of truth. Its standard engineering headings are facets "
+                "of one system, not file or class boundaries. Build the actual architecture needed to realize "
+                "the gameplay inside the host-owned package/resource namespace. Inspect the existing canonical "
+                "entrypoint and staged workspace, ground target-version APIs with the reviewed evidence tools, "
+                "and implement concrete gameplay rather than placeholders or lifecycle skeletons. Keep common "
+                "and server code free of client-only references; create side-specific code only when required "
+                "and only behind an existing verified matching-side caller. Use only apply_source_edit for "
+                "writes and never invent a second entrypoint or file-plan protocol."
+            )
+            if coherent_authored
+            else (
+                "You are the implementation coder for one approved Minecraft/Fabric module. "
+                "The developer task capsule is the semantic source of truth: read its "
+                "coder_execution_contract, implementation_steps, engineering_worksheet, and exact "
+                "authored-unit text before writing code. Prefer exact host-owned implementation facts "
+                "and retrieved target-version API evidence over memory. Implement the approved behavior, "
+                "not a generic placeholder, demo, test fixture, lifecycle skeleton, or guessed client/server "
+                "split. Preserve the host-owned common initialize() surface; never make common initialization "
+                "depend on a method that Fabric can strip with @Environment. Write the smallest complete "
+                "source change that satisfies the approved task, then let the host target compiler verify it "
+                "in this same generation run. Do not invent extra entrypoints, files, lifecycle hooks, or a "
+                "second patch/file-plan protocol."
+            )
+        )
         initial_messages = [
             {
                 "role": "system",
-                "content": (
-                    "You are the implementation coder for one approved Minecraft/Fabric module. "
-                    "The developer task capsule is the semantic source of truth: read its "
-                    "coder_execution_contract, implementation_steps, engineering_worksheet, and exact "
-                    "authored-unit text before writing code. Prefer exact host-owned implementation facts "
-                    "and retrieved target-version API evidence over memory. Implement the approved behavior, "
-                    "not a generic placeholder, demo, test fixture, lifecycle skeleton, or guessed client/server "
-                    "split. Preserve the host-owned common initialize() surface; never make common initialization "
-                    "depend on a method that Fabric can strip with @Environment. Write the smallest complete "
-                    "source change that satisfies the approved task, then let the host target compiler verify it "
-                    "in this same generation run. Do not invent extra entrypoints, files, lifecycle hooks, or a "
-                    "second patch/file-plan protocol."
-                ),
+                "content": system_content,
             },
             *(
                 [
