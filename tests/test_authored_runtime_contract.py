@@ -161,6 +161,52 @@ def test_placeholder_guard_does_not_count_as_implemented_feature(tmp_path, monke
     assert any(d["code"] == "host:authored-placeholder" for d in receipt["diagnostics"])
 
 
+@pytest.mark.parametrize("side", ["CLIENT", "SERVER"])
+def test_common_initializer_cannot_call_side_stripped_helper(tmp_path, monkeypatch, side):
+    source = tmp_path / TARGET
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        BASE.replace(
+            'System.out.println("ready");',
+            "initializeSide();",
+        ).replace(
+            "\n}",
+            f"\n@Environment(EnvType.{side}) private static void initializeSide() {{}}\n}}",
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        capsules,
+        "_CURRENT_CAPSULE",
+        SimpleNamespace(
+            get=lambda: SimpleNamespace(
+                task_id="authored_feature_001",
+                primary_path=TARGET,
+                primary_symbol="AuthoredFeature001",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        compile_tool,
+        "GradleRunner",
+        lambda *_: SimpleNamespace(
+            compile_java=lambda *_: SimpleNamespace(
+                to_dict=lambda: {"status": "PASS", "commands": []}
+            )
+        ),
+    )
+
+    receipt = compile_tool.run_generation_target_compile(tmp_path, target_path=TARGET)
+
+    assert receipt["status"] == "FAIL"
+    diagnostic = next(
+        item for item in receipt["diagnostics"]
+        if item["code"] == "host:authored-side-call"
+    )
+    assert "NoSuchMethodError" in diagnostic["message"]
+    assert f"@Environment({side})" in diagnostic["message"]
+
+
 def test_side_specific_helper_and_annotation_text_are_allowed(tmp_path, monkeypatch):
     source = tmp_path / TARGET
     source.parent.mkdir(parents=True)
