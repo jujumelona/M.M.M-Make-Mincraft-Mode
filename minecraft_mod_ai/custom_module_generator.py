@@ -893,6 +893,34 @@ class CustomModuleGenerator:
             if implementation_grounding is not None
             else ""
         )
+        coherent_authority_prompt = (
+            json.dumps(
+                {
+                    "schema_version": "mmm/coherent-authored-coder-authority-v1",
+                    "execution_mode": "bounded_coherent",
+                    "semantic_source": "user message module.authored_plan is the complete approved design",
+                    "requested_prompt": (
+                        module_contract.get("authored_plan", {}).get("requested_prompt")
+                        if isinstance(module_contract.get("authored_plan"), Mapping)
+                        else ""
+                    ),
+                    "write_scope": module_contract.get("authored_write_scope"),
+                    "architecture_invariants": [
+                        "worksheet headings are facets of one coherent system, not class/file boundaries",
+                        "implement concrete gameplay rather than generic scaffolding",
+                        "use the existing canonical Fabric entrypoint; never create a second entrypoint",
+                        "common/server code must not reference client-only classes or side-stripped methods",
+                        "target-version API facts come from reviewed host/RAG/MCP evidence, not model memory",
+                        "all writes use apply_source_edit and stay inside the host-owned namespace",
+                    ],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            if coherent_authored
+            else ""
+        )
         system_content = (
             (
                 "You are the implementation coder for one approved coherent Minecraft/Fabric authored design. "
@@ -925,6 +953,16 @@ class CustomModuleGenerator:
                 "role": "system",
                 "content": system_content,
             },
+            *(
+                [
+                    {
+                        "role": "developer",
+                        "content": coherent_authority_prompt,
+                    }
+                ]
+                if coherent_authority_prompt
+                else []
+            ),
             *(
                 [
                     {
