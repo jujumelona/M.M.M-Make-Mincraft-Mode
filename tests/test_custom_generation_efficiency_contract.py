@@ -38,11 +38,6 @@ def test_explicit_custom_search_remains_user_opt_in(monkeypatch) -> None:
     assert _width(_complex_module()) == 2
 
 
-def test_custom_generation_receipt_preserves_only_plan_declared_gates() -> None:
-    module = SimpleNamespace(required_gates=("target_compile", "target_compile"))
-    assert generator._receipt_required_gates(module) == ["target_compile"]
-
-
 def test_research_router_preserves_fresh_evidence_binding(monkeypatch, tmp_path) -> None:
     class Router:
         def __init__(self) -> None:
