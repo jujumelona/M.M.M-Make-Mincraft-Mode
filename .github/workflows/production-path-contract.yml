@@ -10,11 +10,13 @@ on:
       - 'minecraft_mod_ai/authored_production.py'
       - 'minecraft_mod_ai/runner.py'
       - 'minecraft_mod_ai/complete_orchestrator.py'
+      - 'minecraft_mod_ai/scheduler_claim_fencing_contract.py'
       - 'minecraft_mod_ai/complete_build_repair.py'
       - 'minecraft_mod_ai/final_artifact.py'
       - 'tests/test_direct_custom_module_generator.py'
       - 'tests/test_authored_direct_lowering.py'
       - 'tests/test_complete_final_validation_contract.py'
+      - 'tests/test_scheduler_claim_fencing_contract.py'
       - '.github/workflows/production-path-contract.yml'
   push:
     branches: [main]
@@ -25,11 +27,13 @@ on:
       - 'minecraft_mod_ai/authored_production.py'
       - 'minecraft_mod_ai/runner.py'
       - 'minecraft_mod_ai/complete_orchestrator.py'
+      - 'minecraft_mod_ai/scheduler_claim_fencing_contract.py'
       - 'minecraft_mod_ai/complete_build_repair.py'
       - 'minecraft_mod_ai/final_artifact.py'
       - 'tests/test_direct_custom_module_generator.py'
       - 'tests/test_authored_direct_lowering.py'
       - 'tests/test_complete_final_validation_contract.py'
+      - 'tests/test_scheduler_claim_fencing_contract.py'
       - '.github/workflows/production-path-contract.yml'
 
 permissions:
@@ -64,6 +68,7 @@ jobs:
             minecraft_mod_ai/authored_production.py \
             minecraft_mod_ai/runner.py \
             minecraft_mod_ai/complete_orchestrator.py \
+            minecraft_mod_ai/scheduler_claim_fencing_contract.py \
             minecraft_mod_ai/complete_build_repair.py \
             minecraft_mod_ai/final_artifact.py
       - name: Run direct production-path contracts
@@ -71,4 +76,5 @@ jobs:
           python -m pytest -q \
             tests/test_direct_custom_module_generator.py \
             tests/test_authored_direct_lowering.py \
-            tests/test_complete_final_validation_contract.py
+            tests/test_complete_final_validation_contract.py \
+            tests/test_scheduler_claim_fencing_contract.py
