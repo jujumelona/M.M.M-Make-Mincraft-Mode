@@ -304,6 +304,7 @@ def test_terminal_failure_is_not_retried_on_resume():
         "mmm/implementation-ir-draft-v1",
         "mmm/implementation-ir-draft-v2",
         "mmm/implementation-ir-draft-v3",
+        "mmm/implementation-ir-draft-v4",
     ],
 )
 def test_stale_terminal_checkpoint_is_invalidated_after_ir_contract_change(stale_version):
@@ -394,6 +395,49 @@ def test_output_limit_reduces_scope_and_recovers():
     assert len(calls[1]["requirements"]) <= 2
     assert "validation_feedback" not in calls[1]
     assert [n["symbol"] for n in graph["nodes"]] == ["PlayerCredits", "TradeService"]
+
+
+def test_output_limit_shrinks_requirement_window_for_missing_dependency_resolution():
+    from minecraft_mod_ai.llama_finish_reason_contract import (
+        OUTPUT_EXHAUSTED,
+        LlamaCompletionBoundaryError,
+    )
+
+    consumer = node("TradeService", dependencies=["MissingService"])
+    calls = []
+
+    class DependencyRecovery(Decisions):
+        def generate_tool_decision(self, role, messages, **kwargs):
+            payload = json.loads(messages[-1]["content"])
+            calls.append(payload)
+            if len(calls) == 1:
+                return {"nodes": [consumer], "done": False}
+            if len(payload["requirements"]) > 1:
+                raise LlamaCompletionBoundaryError(
+                    "output ceiling",
+                    kind=OUTPUT_EXHAUSTED,
+                    completion_tokens=8192,
+                    max_tokens=8192,
+                )
+            missing = node(
+                "MissingService",
+                refs=list(payload["requirements"]),
+                api=["public static void provide()"],
+            )
+            return {"nodes": [missing], "done": True}
+
+    graph = compile_graph(DependencyRecovery([]))
+
+    assert {item["symbol"] for item in graph["nodes"]} == {
+        "TradeService",
+        "MissingService",
+    }
+    recovery_sizes = [len(call["requirements"]) for call in calls[1:]]
+    assert recovery_sizes[-1] == 1
+    assert all(
+        later < earlier
+        for earlier, later in zip(recovery_sizes, recovery_sizes[1:])
+    )
 
 
 def test_executor_persists_admitted_pages_before_a_planning_transport_failure(tmp_path):
