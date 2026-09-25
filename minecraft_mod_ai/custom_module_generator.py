@@ -564,6 +564,8 @@ class CustomModuleGenerator:
                                 f"{relative}#{symbol}.\n"
                                 "Return the complete corrected Java file, "
                                 "not a patch.\n\n"
+                                f"Approved task:\n{task_text}\n\n"
+                                f"Host implementation grounding:\n{grounding_text}\n\n"
                                 f"Current complete source:\n{current}\n\n"
                                 "Exact validation/compiler failure:\n"
                                 f"{last_failure}"
