@@ -384,6 +384,7 @@ def _call_coder(
         ("response_format", "json"),
         ("response_schema", _SOURCE_SCHEMA),
         ("enable_tools", False),
+        ("tool_stage", "generation"),
     ):
         if _supports_kwarg(callback, key):
             kwargs[key] = value
