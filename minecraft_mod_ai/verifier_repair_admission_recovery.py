@@ -205,7 +205,7 @@ def recover_schema_rejected_verifier_repair_calls(
     if supplied_count not in (None, 1, "1"):
         return None
     supplied_old = candidate.get("old")
-    if supplied_old is not None and supplied_old != old_text:
+    if supplied_old is not None and supplied_old not in {old_text, current_source}:
         return None
     if not isinstance(old_text, str) or not old_text or not isinstance(model_new, str):
         return None
