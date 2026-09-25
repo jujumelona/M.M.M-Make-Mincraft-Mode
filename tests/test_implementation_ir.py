@@ -62,8 +62,8 @@ def test_graph_combines_sections_by_owner_and_orders_actual_dependencies():
     assert graph["nodes"][0]["depends_on"] == []
 
 
-def test_native_schema_rejection_canonicalizes_declaration_body_without_retry():
-    bad = node("ActorState", api=["public enum ActorState {IDLE, ACTIVE, INACTIVE, DESTROYED}"])
+def test_native_schema_rejection_canonicalizes_member_body_without_retry():
+    bad = node("PlayerCredits", api=["public static int balance() { return 1; }"])
 
     class RejectOnce:
         def __init__(self):
@@ -84,8 +84,56 @@ def test_native_schema_rejection_canonicalizes_declaration_body_without_retry():
     router = RejectOnce()
     graph = compile_with(router)
     assert len(router.calls) == 1
-    assert graph["nodes"][0]["symbol"] == "ActorState"
-    assert graph["nodes"][0]["public_api"] == ["public enum ActorState"]
+    assert graph["nodes"][0]["symbol"] == "PlayerCredits"
+    assert graph["nodes"][0]["public_api"] == ["public static int balance()"]
+
+
+def test_native_enum_rejection_repairs_only_invalid_node_and_freezes_siblings():
+    stable = node("BehaviorContract", api=["public static int original()"])
+    invalid = node("ActorState", api=[
+        "public enum ActorState {IDLE, ACTIVE, INACTIVE, DESTROYED}"
+    ])
+    drifted = copy.deepcopy(stable)
+    drifted["public_api"] = ["public static int drifted()"]
+    fixed = copy.deepcopy(invalid)
+    fixed["public_api"] = [
+        "public static final ActorState IDLE",
+        "public static final ActorState ACTIVE",
+        "public static final ActorState INACTIVE",
+        "public static final ActorState DESTROYED",
+    ]
+
+    first_page = {"nodes": [stable, invalid], "done": True}
+    second_page = {"nodes": [drifted, fixed], "done": True}
+
+    class NativeThenRepair:
+        def __init__(self):
+            self.calls = []
+
+        def generate_tool_decision(self, role, messages, **kwargs):
+            request = json.loads(messages[-1]["content"])
+            self.calls.append((kwargs["tool_name"], request))
+            if len(self.calls) == 1:
+                raise NativeToolDecisionRejected(
+                    kwargs["tool_name"],
+                    [{
+                        "original_tool": kwargs["tool_name"],
+                        "raw_arguments": json.dumps(first_page),
+                        "failure_code": "TOOL_DECISION_SCHEMA_INVALID",
+                        "error": "top-level enum declaration is not a public_api member",
+                    }],
+                )
+            return copy.deepcopy(second_page)
+
+    router = NativeThenRepair()
+    graph = compile_with(router)
+    by_symbol = {item["symbol"]: item for item in graph["nodes"]}
+    assert by_symbol["BehaviorContract"]["public_api"] == ["public static int original()"]
+    assert by_symbol["ActorState"]["public_api"] == fixed["public_api"]
+    assert len(router.calls) == 2
+    feedback = router.calls[1][1]["validation_feedback"]
+    assert feedback["preserve_nodes"] == [stable]
+    assert feedback["repair_count"] == 1
 
 
 def test_schema_repair_freezes_valid_siblings_and_merges_only_invalid_nodes():
@@ -95,7 +143,7 @@ def test_schema_repair_freezes_valid_siblings_and_merges_only_invalid_nodes():
     drifted = copy.deepcopy(stable)
     drifted["public_api"] = ["public static int drifted()"]
     fixed = copy.deepcopy(invalid)
-    fixed["public_api"] = ["public enum ActorState"]
+    fixed["public_api"] = ["public static final ActorState IDLE"]
 
     router = Decisions([
         {"nodes": [stable, invalid], "done": True},
@@ -106,12 +154,11 @@ def test_schema_repair_freezes_valid_siblings_and_merges_only_invalid_nodes():
     graph = compile_with(router)
     by_symbol = {item["symbol"]: item for item in graph["nodes"]}
     assert by_symbol["BehaviorContract"]["public_api"] == ["public static int original()"]
-    assert by_symbol["ActorState"]["public_api"] == ["public enum ActorState"]
+    assert by_symbol["ActorState"]["public_api"] == ["public static final ActorState IDLE"]
     assert len(router.calls) == 2
     feedback = router.calls[1][1]["validation_feedback"]
     assert feedback["preserve_nodes"] == [stable]
     assert feedback["repair_count"] == 1
-
 
 def test_oversized_task_decomposes_before_any_coder_request():
     oversized = node(cost=8000)
