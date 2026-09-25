@@ -31,12 +31,19 @@ from .root_cause_trace import emit_root_cause, trace_scope
 
 
 def _design_writing_template(
-    detail_records: Mapping[str, Mapping[str, Sequence[str]]],
+    detail_records: Mapping[str, Mapping[str, Sequence[str] | str]],
 ) -> str:
+    """Render worksheet concern descriptors without splitting string values."""
+
+    def render_fields(fields: Sequence[str] | str) -> str:
+        if isinstance(fields, str):
+            return fields
+        return ", ".join(str(value) for value in fields)
+
     sections: list[str] = []
     for section, records in detail_records.items():
         concerns = [
-            "- " + concern + ": " + ", ".join(fields)
+            "- " + concern + ": " + render_fields(fields)
             for concern, fields in records.items()
         ]
         sections.append("# " + section + "\n" + "\n".join(concerns))
