@@ -144,6 +144,91 @@ def test_repeated_accepted_owner_is_ignored_when_same_page_adds_real_new_work():
     assert combined[0] == accepted
 
 
+def test_logged_page8_to_page9_duplicate_owner_pattern_merges_r34():
+    requirements = {
+        "R31": "Enforce resource limits.",
+        "R32": "Cheat detection is a non-goal.",
+        "R34": "Apply the next behavior-contract requirement.",
+    }
+
+    def raw(symbol, refs, api, dependencies=()):
+        return {
+            "symbol": symbol,
+            "kind": "java",
+            "resource_path": "",
+            "responsibility": f"Own {symbol} behavior.",
+            "requirements": list(refs),
+            "obligations": [f"Implement {symbol} behavior."],
+            "public_api": list(api),
+            "depends_on": list(dependencies),
+            "activation": False,
+            "estimated_tokens": 900,
+        }
+
+    accepted_raw = [
+        raw("BehaviorContractPart6", ["R31", "R32"], ["public static final class Player"]),
+        raw(
+            "ActorFactoryPart6",
+            ["R31", "R32"],
+            ["public static Object createPlayer()"],
+            ["BehaviorContractPart6"],
+        ),
+        raw(
+            "ActorRegistryPart6",
+            ["R31", "R32"],
+            ["public static void registerActor(Object actor)"],
+            ["BehaviorContractPart6", "ActorFactoryPart6"],
+        ),
+        raw(
+            "ResourceLimitValidator",
+            ["R31"],
+            ["public static boolean validateCreditsBalance(int amount)"],
+            ["BehaviorContractPart6", "ActorRegistryPart6"],
+        ),
+    ]
+    accepted = [
+        ir.validate_node(item, package="example", mod_id="test", refs=set(requirements))
+        for item in accepted_raw
+    ]
+
+    page9 = [
+        raw("BehaviorContractPart6", ["R34"], ["public static final class Player"]),
+        raw(
+            "ActorFactoryPart6",
+            ["R34"],
+            ["public static Object createPlayer()"],
+            ["BehaviorContractPart6"],
+        ),
+        raw(
+            "ActorRegistryPart6",
+            ["R34"],
+            ["public static void registerActor(Object actor)"],
+            ["BehaviorContractPart6", "ActorFactoryPart6"],
+        ),
+        raw(
+            "ResourceLimitValidator",
+            ["R34"],
+            ["public static boolean validateCreditsBalance(int amount)"],
+            ["BehaviorContractPart6", "ActorRegistryPart6"],
+        ),
+    ]
+
+    combined = ir._admit_graph_page(
+        {"nodes": page9, "done": True},
+        accepted=accepted,
+        package="example",
+        mod_id="test",
+        requirements=requirements,
+    )
+
+    assert len(combined) == 4
+    by_symbol = {item["symbol"]: item for item in combined}
+    assert by_symbol["BehaviorContractPart6"]["requirements"] == ["R31", "R32", "R34"]
+    assert by_symbol["ActorFactoryPart6"]["requirements"] == ["R31", "R32", "R34"]
+    assert by_symbol["ActorRegistryPart6"]["requirements"] == ["R31", "R32", "R34"]
+    assert by_symbol["ResourceLimitValidator"]["requirements"] == ["R31", "R34"]
+
+
 def test_completed_pages_survive_failure_and_resume_without_replanning():
     first = node(refs=["R1", "R2", "R3"])
     second = node("TradeService", refs=["R4", "R5", "R6"])
