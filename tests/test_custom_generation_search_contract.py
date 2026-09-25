@@ -99,11 +99,12 @@ def test_strategy_router_only_augments_coder_role() -> None:
     assert base.calls[1][1] == messages
 
 
-def test_custom_generation_public_target_overrides_are_not_exposed() -> None:
+def test_direct_generation_exposes_host_target_coordinates_without_patch_arguments() -> None:
     signature = inspect.signature(CustomModuleGenerator.generate)
-    assert "minecraft_version" not in signature.parameters
-    assert "loader" not in signature.parameters
-    assert "mappings" not in signature.parameters
+    for name in ("module", "minecraft_version", "loader", "mappings", "execution_feedback"):
+        assert name in signature.parameters
+    for retired in ("operations", "patch", "old", "new", "tool_calls"):
+        assert retired not in signature.parameters
 
 
 def _generation_receipt(
