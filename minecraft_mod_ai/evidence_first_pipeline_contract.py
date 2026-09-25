@@ -10,12 +10,10 @@ ProjectIndex impact evidence.
 """
 
 import hashlib
-import inspect
 import json
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from functools import wraps
 from pathlib import Path
 from typing import Any
 
