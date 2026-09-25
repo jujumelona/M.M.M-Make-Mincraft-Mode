@@ -24,7 +24,7 @@ MAX_PAGE_CORRECTIONS = 2
 MAX_UNIT_REQUIREMENTS = 6
 MAX_BATCH_REQUIREMENTS = 8
 MAX_BATCH_UNITS = 3
-IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v2"
+IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v3"
 
 
 class ImplementationGraphError(CustomModuleGenerationError):
@@ -406,8 +406,13 @@ def _decision(router: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]
                 "the rejected task. Dependencies outside the replacement must already exist. "
                 "When validation_feedback is supplied and preserve_nodes is nonempty, return ONLY "
                 "the corrected invalid node(s); the host owns and reinserts preserve_nodes, so never "
-                "rewrite or repeat them. Fix the named fields. Never repeat the rejected page. Do not "
-                "repeat already accepted_nodes on later pages."
+                "rewrite or repeat them. Fix the named fields. Never repeat the rejected page. "
+                "Do not repeat accepted_nodes merely to restate them. If an active requirement belongs "
+                "to an already accepted owner, you MAY emit that exact symbol as a monotonic extension: "
+                "keep kind, resource_path and activation unchanged; never change an existing public API "
+                "declaration; add only new requirements, obligations, dependencies or genuinely new "
+                "member APIs. The host merges such an extension into the accepted owner. Otherwise use "
+                "a new symbol."
             )}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
             tool_name=name, parameters=_page_schema(payload),
             description="Host-owned implementation graph compilation; does not mutate source.",
@@ -640,6 +645,109 @@ def refine_node(router: Any, node: dict[str, Any], *, nodes: list[dict[str, Any]
                            pending=pending, checkpoint=checkpoint)
 
 
+
+def _stable_union(left: list[str], right: list[str]) -> list[str]:
+    result = list(left)
+    seen = set(left)
+    for value in right:
+        if value not in seen:
+            result.append(value)
+            seen.add(value)
+    return result
+
+
+def _java_parameter_types(raw: str) -> tuple[str, ...]:
+    """Best-effort Java signature normalization for host-side conflict detection."""
+    parts: list[str] = []
+    current: list[str] = []
+    generic_depth = 0
+    paren_depth = 0
+    for char in raw:
+        if char == "<":
+            generic_depth += 1
+        elif char == ">" and generic_depth:
+            generic_depth -= 1
+        elif char == "(":
+            paren_depth += 1
+        elif char == ")" and paren_depth:
+            paren_depth -= 1
+        if char == "," and generic_depth == 0 and paren_depth == 0:
+            parts.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+    if current or raw.strip():
+        parts.append("".join(current).strip())
+
+    normalized: list[str] = []
+    for part in parts:
+        value = re.sub(r"\s+", " ", part.strip())
+        value = re.sub(r"^(?:final\s+)+", "", value)
+        # Drop a conventional parameter name while retaining the complete type.
+        value = re.sub(r"\s+[A-Za-z_$][A-Za-z0-9_$]*$", "", value)
+        normalized.append(value.strip())
+    return tuple(normalized)
+
+
+def _public_api_contract_key(declaration: str) -> tuple[Any, ...]:
+    """Return the Java ownership key whose duplicate declaration cannot disagree."""
+    text = re.sub(r"\s+", " ", declaration.strip().rstrip(";"))
+    nested = re.search(
+        r"\b(class|interface|enum|record)\s+([A-Za-z_$][A-Za-z0-9_$]*)\b",
+        text,
+    )
+    if nested:
+        return ("type", nested.group(2))
+
+    call = re.search(r"([A-Za-z_$][A-Za-z0-9_$]*)\s*\((.*)\)\s*(?:throws\b.*)?$", text)
+    if call:
+        return ("call", call.group(1), _java_parameter_types(call.group(2)))
+
+    field = re.search(r"([A-Za-z_$][A-Za-z0-9_$]*)\s*$", text)
+    if field:
+        return ("field", field.group(1))
+    return ("raw", text)
+
+
+def _merge_accepted_owner(existing: dict[str, Any], proposed: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Monotonically extend one already admitted owner without rewriting its contract."""
+    for field in ("symbol", "kind", "resource_path", "activation", "path"):
+        if existing.get(field) != proposed.get(field):
+            raise ImplementationGraphError(
+                f"IMPLEMENTATION_IR_DUPLICATE_CONTRACT_CONFLICT: {existing['symbol']} changed {field}"
+            )
+
+    existing_by_key = {
+        _public_api_contract_key(api): api for api in existing["public_api"]
+    }
+    for api in proposed["public_api"]:
+        key = _public_api_contract_key(api)
+        old = existing_by_key.get(key)
+        if old is not None and old != api:
+            raise ImplementationGraphError(
+                "IMPLEMENTATION_IR_DUPLICATE_CONTRACT_CONFLICT: "
+                f"{existing['symbol']} changed public_api {old!r} -> {api!r}"
+            )
+
+    merged = deepcopy(existing)
+    merged["requirements"] = _stable_union(existing["requirements"], proposed["requirements"])
+    merged["obligations"] = _stable_union(existing["obligations"], proposed["obligations"])
+    merged["public_api"] = _stable_union(existing["public_api"], proposed["public_api"])
+    merged["depends_on"] = _stable_union(existing["depends_on"], proposed["depends_on"])
+    # The first admitted responsibility remains the owner identity. Later pages add
+    # precise requirement text through requirements[] and obligations[] instead of
+    # rewriting that identity.
+    merged["estimated_tokens"] = max(
+        int(existing["estimated_tokens"]), int(proposed["estimated_tokens"])
+    )
+
+    progressed = any(
+        merged[field] != existing[field]
+        for field in ("requirements", "obligations", "public_api", "depends_on")
+    )
+    return merged, progressed
+
+
 def _admit_graph_page(page: dict[str, Any], *, accepted: list[dict[str, Any]],
                       package: str, mod_id: str, requirements: dict[str, str]) -> list[dict[str, Any]]:
     proposed: list[dict[str, Any]] = []
@@ -654,15 +762,60 @@ def _admit_graph_page(page: dict[str, Any], *, accepted: list[dict[str, Any]],
                                 "field": f"nodes.{index}", "message": str(exc)})
     if diagnostics:
         raise _InvalidPage(diagnostics, page, valid_raw)
-    combined = accepted + proposed
+
+    # Two new nodes in the same page may never compete for one owner. Only an exact
+    # symbol already admitted by an earlier page is eligible for monotonic extension.
+    proposed_symbols = [n["symbol"].casefold() for n in proposed]
+    proposed_paths = [n["path"].casefold() for n in proposed]
+    if len(set(proposed_symbols)) != len(proposed_symbols) or len(set(proposed_paths)) != len(proposed_paths):
+        raise _InvalidPage(
+            [{"code": "IMPLEMENTATION_IR_DUPLICATE_OWNER", "node": "", "field": "nodes",
+              "message": "Two nodes in this page claim the same symbol/path owner."}],
+            page,
+        )
+
+    combined = [deepcopy(node) for node in accepted]
+    owner_index = {node["symbol"]: index for index, node in enumerate(combined)}
+    progressed = False
     try:
+        for node in proposed:
+            accepted_index = owner_index.get(node["symbol"])
+            if accepted_index is None:
+                # Case-insensitive symbol/path aliases are still distinct claims and
+                # must remain hard failures rather than being guessed as extensions.
+                if any(
+                    node["symbol"].casefold() == old["symbol"].casefold()
+                    or node["path"].casefold() == old["path"].casefold()
+                    for old in combined
+                ):
+                    raise ImplementationGraphError(
+                        f"IMPLEMENTATION_IR_DUPLICATE_OWNER: ambiguous owner alias {node['symbol']}"
+                    )
+                owner_index[node["symbol"]] = len(combined)
+                combined.append(node)
+                progressed = True
+                continue
+
+            merged, extended = _merge_accepted_owner(combined[accepted_index], node)
+            combined[accepted_index] = merged
+            progressed = progressed or extended
+
+        if proposed and not progressed:
+            raise ImplementationGraphError(
+                "IMPLEMENTATION_IR_PAGE_NO_PROGRESS: page only repeated already accepted owners"
+            )
+
         # Forward edges are legal across pages. Validate the known subgraph for cycles
         # and duplicate ownership before accepting the page, then resolve missing nodes.
         known = {n["symbol"] for n in combined}
         ordered_nodes([{**n, "depends_on": [dep for dep in n["depends_on"] if dep in known]} for n in combined])
     except ImplementationGraphError as exc:
-        raise _InvalidPage([{"code": str(exc), "node": "", "field": "nodes",
-                             "message": str(exc) + "; correct only this page, accepted nodes are frozen"}], page) from exc
+        code = str(exc).split(":", 1)[0]
+        raise _InvalidPage(
+            [{"code": code, "node": "", "field": "nodes",
+              "message": str(exc) + "; accepted nodes are host-owned and may only be extended monotonically"}],
+            page,
+        ) from exc
     return combined
 
 
