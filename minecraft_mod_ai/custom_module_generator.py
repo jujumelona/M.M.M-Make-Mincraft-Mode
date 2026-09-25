@@ -419,13 +419,14 @@ def _compile_log(report: Any) -> str:
         return str(getattr(report, "error", "") or "")[:_MAX_LOG_BYTES]
 
 
-def _repair_attempts() -> int:
-    raw = os.environ.get("MMM_DIRECT_CODER_REPAIR_ATTEMPTS", "4").strip()
-    try:
-        value = int(raw)
-    except ValueError:
-        value = 4
-    return max(1, min(value, 8))
+def _compile_failure_measure(log: str) -> tuple[int, int]:
+    """Well-founded source-repair measure; smaller is objectively closer to compile."""
+    error_lines = {
+        line.strip()
+        for line in log.splitlines()
+        if "error" in line.casefold() and line.strip()
+    }
+    return (0, len(error_lines) or 1)
 
 
 class CustomModuleGenerator:
@@ -573,11 +574,14 @@ class CustomModuleGenerator:
         current = original
         summary = ""
         last_failure = ""
-        attempts = _repair_attempts()
         compiler = GradleRunner(self._cache_dir(root))
+        attempt = 0
+        best_failure_measure: tuple[int, int] | None = None
+        seen_candidates: set[str] = set()
 
         with project_write_lock(root):
-            for attempt in range(1, attempts + 1):
+            while True:
+                attempt += 1
                 if attempt == 1:
                     messages: list[dict[str, str]] = [
                         {"role": "system", "content": system},
@@ -589,7 +593,7 @@ class CustomModuleGenerator:
                         {
                             "role": "user",
                             "content": (
-                                f"Repair attempt {attempt}/{attempts} for "
+                                f"Repair pass {attempt} for "
                                 f"{relative}#{symbol}.\n"
                                 "Return the complete corrected Java file, "
                                 "not a patch.\n\n"
@@ -610,12 +614,12 @@ class CustomModuleGenerator:
                     else:
                         target.unlink(missing_ok=True)
                     raise
-                except Exception as exc:  # noqa: BLE001 - bounded response repair, exhaustion handled above
+                except Exception as exc:  # noqa: BLE001 - output exhaustion handled above
                     last_failure = (
                         "DIRECT_CODER_RESPONSE_FAILED: "
                         f"{type(exc).__name__}: {exc}"
                     )
-                    continue
+                    break
                 candidate = (
                     payload["content"]
                     .replace("\r\n", "\n")
@@ -631,11 +635,23 @@ class CustomModuleGenerator:
                 if isinstance(ir_contract, Mapping):
                     from .implementation_graph_execution import public_api_errors
                     invariant_errors += public_api_errors(candidate, ir_contract)
+                candidate_sha = _sha256_text(candidate)
                 if invariant_errors:
                     current = candidate
                     last_failure = "\n".join(
                         f"- {error}" for error in invariant_errors
                     )
+                    measure = (1, len(set(invariant_errors)))
+                    if (
+                        candidate_sha in seen_candidates
+                        or (
+                            best_failure_measure is not None
+                            and measure >= best_failure_measure
+                        )
+                    ):
+                        break
+                    seen_candidates.add(candidate_sha)
+                    best_failure_measure = measure
                     continue
 
                 _atomic_write(target, candidate)
@@ -687,6 +703,17 @@ class CustomModuleGenerator:
                     getattr(report, "error", "")
                     or "Gradle compileJava failed."
                 )
+                measure = _compile_failure_measure(last_failure)
+                if (
+                    candidate_sha in seen_candidates
+                    or (
+                        best_failure_measure is not None
+                        and measure >= best_failure_measure
+                    )
+                ):
+                    break
+                seen_candidates.add(candidate_sha)
+                best_failure_measure = measure
 
             if target_existed:
                 _atomic_write(target, original_bytes)
@@ -694,7 +721,7 @@ class CustomModuleGenerator:
                 target.unlink(missing_ok=True)
             raise CustomModuleGenerationError(
                 "DIRECT_CODER_COMPILE_FAILED: exact whole-file generation "
-                f"did not compile after {attempts} attempts for {relative}. "
+                f"stopped after repair evidence ceased to improve for {relative}. "
                 "Last failure:\n"
                 + last_failure[-_MAX_LOG_BYTES:]
             )
