@@ -113,6 +113,8 @@ class ModelRouter:
         self._agent_tool_runtime: Any | None = None
         self._agent_workspace_root: Path | None = None
         self._agent_require_fresh_evidence = False
+        self._embedding_adapters: dict[str, EmbeddingAdapter] = {}
+        self._reranker_adapters: dict[str, RerankerAdapter] = {}
 
     def bind_agent_workspace(
         self,
@@ -567,7 +569,12 @@ class ModelRouter:
             raise ModelConfigurationError(
                 f"Role {role!r} does not expose an embedding adapter."
             )
-        return EmbeddingAdapter(config).embed(texts)
+        with self._generation_lock:
+            adapter = self._embedding_adapters.get(role)
+            if adapter is None:
+                adapter = EmbeddingAdapter(config)
+                self._embedding_adapters[role] = adapter
+        return adapter.embed(texts)
 
     def rerank(
         self,
@@ -593,7 +600,12 @@ class ModelRouter:
             and os.environ.get("MMM_RAG_ENABLE_CPU_DENSE", "").strip() != "1"
         ):
             return []
-        return RerankerAdapter(config).score(
+        with self._generation_lock:
+            adapter = self._reranker_adapters.get(role)
+            if adapter is None:
+                adapter = RerankerAdapter(config)
+                self._reranker_adapters[role] = adapter
+        return adapter.score(
             query,
             documents,
             instruction=instruction,
