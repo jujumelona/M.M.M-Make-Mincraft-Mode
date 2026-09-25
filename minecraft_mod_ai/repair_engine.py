@@ -40,6 +40,7 @@ _ALLOWED_SUFFIXES = {
     ".json",
     ".mcmeta",
     ".gradle",
+    ".kts",
     ".properties",
     ".accesswidener",
     ".mixins",
