@@ -585,13 +585,21 @@ def _authored_implementation_recovery(state: Any) -> bool:
             return False
         if _canonical_mutation_path(item.get("path", "")) != target:
             return False
-        if str(item.get("source") or "").strip() != "host-authored-contract":
-            return False
+        source = str(item.get("source") or "").strip()
         code = str(item.get("code") or "").strip()
-        if not code.startswith("host:authored-"):
-            return False
-        if code in implementation_codes:
+        if source == "host-authored-contract":
+            if not code.startswith("host:authored-"):
+                return False
+            if code in implementation_codes:
+                has_implementation_diagnostic = True
+            continue
+        if source == "javac":
+            # A fresh authored attempt can replace the scaffold marker and then
+            # fail only on real Java/API symbols. That is still implementation
+            # recovery against the trusted scaffold, not a tiny local repair.
             has_implementation_diagnostic = True
+            continue
+        return False
     return has_implementation_diagnostic
 
 
