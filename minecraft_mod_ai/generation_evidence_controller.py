@@ -89,6 +89,12 @@ def initial_evidence_required(
         return True
     if role not in {"coder", "coder_safe"} or host_grounded:
         return False
+    # Fresh Java still needs authoritative API evidence when the active
+    # router explicitly requires it. A host-authored scaffold owns gameplay shape,
+    # not Minecraft/Fabric API facts. Evidence exhaustion may fall back to the
+    # exact compile probe, but must not be silently bypassed at turn one.
+    if semantic_fresh_java_target and router_requires_fresh_evidence:
+        return True
     if (
         host_authored_scaffold
         and implementation_requires_mutation
@@ -96,8 +102,6 @@ def initial_evidence_required(
         and compile_backed_java
     ):
         return False
-    if semantic_fresh_java_target and router_requires_fresh_evidence:
-        return True
     if (
         implementation_requires_mutation
         and host_target_execution_authority
