@@ -511,6 +511,13 @@ class CustomModuleGenerator:
                 "Custom module target must be a regular project directory."
             )
 
+        bind_workspace = getattr(self.router, "bind_agent_workspace", None)
+        if callable(bind_workspace):
+            if _supports_kwarg(bind_workspace, "require_fresh_evidence"):
+                bind_workspace(root, require_fresh_evidence=True)
+            else:
+                bind_workspace(root)
+
         adapter = _resolve_generation_adapter(
             root,
             minecraft_version=minecraft_version,
