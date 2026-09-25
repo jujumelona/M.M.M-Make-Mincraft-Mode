@@ -170,7 +170,21 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     elif getattr(request, "response_format", None) == "json":
         payload["reasoning_effort"] = "none"
         payload["chat_template_kwargs"] = {"enable_thinking": False}
-    return _enforce_required_tool_sampling(payload)
+
+    payload = _enforce_required_tool_sampling(payload)
+
+    # Qwen family behavior is part of the direct request path now.  The legacy
+    # runtime bootstrap/wrapper stack is gone, so family-specific non-thinking
+    # controls and sampling must be applied here instead of by import-time mutation.
+    from .qwen_agent_family_contract import _apply_family_payload_policy
+
+    config = getattr(adapter, "config", None)
+    return _apply_family_payload_policy(
+        payload,
+        config=config,
+        role=getattr(config, "role", ""),
+        request=request,
+    )
 
 
 def _stream_delta_parts(choice: dict[str, Any]) -> tuple[str, str]:
