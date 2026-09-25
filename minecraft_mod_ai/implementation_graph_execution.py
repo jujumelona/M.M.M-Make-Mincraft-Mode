@@ -131,8 +131,9 @@ def execute_implementation_graph(generator: Any, project_root: str | Path, *,
             save()
         if any(n["path"].casefold() == request["entrypoint_path"].casefold() for n in graph["nodes"]):
             raise ImplementationGraphError("IMPLEMENTATION_IR_ENTRYPOINT_RESERVED")
+        runtime_budget = admissible_tokens(generator.router)
         emit_root_cause("implementation_graph_compiled", stage="production", result="PASS",
-                        details={"graph": graph, "output_allowance": admissible_tokens(),
+                        details={"graph": graph, "output_allowance": runtime_budget,
                                  "estimated_output_sizes": {n["symbol"]: node_cost(n) for n in graph["nodes"]}})
         completed: set[str] = set()
         try:
@@ -143,7 +144,7 @@ def execute_implementation_graph(generator: Any, project_root: str | Path, *,
                 reason = ""
                 if fingerprint in state["blocked_decodes"]:
                     reason = "OUTPUT_BUDGET_EXHAUSTED"
-                elif node_cost(node) > admissible_tokens():
+                elif runtime_budget is not None and node_cost(node) > runtime_budget:
                     reason = "preflight_output_budget"
                 if not reason:
                     if node["path"] == request["entrypoint_path"]:
