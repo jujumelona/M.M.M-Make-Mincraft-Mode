@@ -101,7 +101,6 @@ from .target_mutation_context import (
 from .verifier_repair_admission_recovery import (
     model_tool_rejection_feedback as _model_tool_rejection_feedback,
     recover_schema_rejected_host_bound_existing_calls,
-    recover_schema_rejected_verifier_repair_calls,
 )
 from .verifier_repair_frontier import reject_noop_repair, target_scoped_verifier_files
 from .verifier_repair_window import (
@@ -251,21 +250,33 @@ def _constrain_existing_repair_schema(
             "REPAIR_TOOL_SCHEMA_INVALID: apply_source_edit has no new-source schema"
         )
     old_text = repair_window.get("old") if repair_window else None
+    if not isinstance(old_text, str) or not old_text:
+        raise ModelConfigurationError(
+            "REPAIR_TOOL_SCHEMA_INVALID: verifier repair requires an exact old span"
+        )
     max_chars = repair_replacement_max_chars(old_text)
+    old_schema = {
+        "type": "string",
+        "const": old_text,
+        "description": (
+            "Exact verifier-selected text currently present in the live target. "
+            "Copy this value unchanged so the requested repair is self-describing."
+        ),
+    }
     new_schema["type"] = "string"
     new_schema["maxLength"] = max_chars
     new_schema["description"] = (
-        "Replacement text only for the verifier-selected bounded source window. "
-        f"Emit at most {max_chars} characters. Never emit the complete source file. "
-        f"The host binds operation=replace_exact and path={target_path!r}, supplies the "
-        "exact old window, and executes against the live file."
+        "Replacement text for old only. "
+        f"Emit at most {max_chars} characters and preserve unrelated source. "
+        "Never emit the complete source file unless old itself is the complete source."
     )
-    parameters["properties"] = {"new": new_schema}
-    parameters["required"] = ["new"]
+    parameters["properties"] = {"old": old_schema, "new": new_schema}
+    parameters["required"] = ["old", "new"]
     parameters["additionalProperties"] = False
     function["description"] = (
-        "Repair exactly one verifier-selected source window. Emit only replacement "
-        "text in new; operation, path, old text, count, and SHA are host-owned."
+        "Repair the exact verifier-selected source span described by old/new. "
+        f"The target path is fixed by the host to {target_path!r}; operation, path, "
+        "count, and transactional SHA remain host-owned."
     )
     return cloned
 
@@ -290,15 +301,15 @@ def _bind_existing_verifier_repair_call(
     raw_arguments = getattr(call, "arguments", None)
     if not isinstance(raw_arguments, Mapping):
         return call
+    model_old = raw_arguments.get("old")
     new_source = raw_arguments.get("new")
     old_source = repair_window.get("old")
     if not isinstance(new_source, str) or not isinstance(old_source, str) or not old_source:
         return call
-    new_source = normalize_model_repair_replacement(
-        getattr(context, "source_body", None),
-        old_source,
-        new_source,
-    )
+    if model_old != old_source:
+        raise ModelConfigurationError(
+            "REPAIR_OLD_SPAN_MISMATCH: repair must echo the exact verifier-selected old span"
+        )
     bound = {
         "operation": "replace_exact",
         "path": target,
@@ -988,11 +999,18 @@ def _forced_act_messages(
         and getattr(state, "validation_status", "") == "FAIL"
         and repair_window is not None
     ):
+        repair_request = _explicit_repair_request(state)
+        if repair_request is None:
+            raise ModelConfigurationError(
+                "VERIFIER_REPAIR_REQUEST_UNAVAILABLE: exact diagnostic/source repair context is required"
+            )
         directive = (
             f"HOST FORCED ACT: repair exactly one verifier-selected bounded source window in "
-            f"{target!r}. The host already owns the exact old text, path, count, and live SHA. "
-            "Emit only replacement text in the single visible new argument. Never regenerate the "
-            "complete file. Preserve approved behavior and do not restart generation or retrieve."
+            f"{target!r}. The repair request below is the complete source/diagnostic contract. "
+            "Call apply_source_edit exactly once with old copied verbatim from REPAIR_REQUEST.old "
+            "and new containing only its replacement. Preserve approved behavior and do not "
+            "restart generation or retrieve.\nREPAIR_REQUEST="
+            + json.dumps(repair_request, ensure_ascii=False, sort_keys=True, default=str)
         )
     elif context is not None and getattr(state, "validation_status", "") == "FAIL":
         directive = (
@@ -1462,6 +1480,61 @@ def _repair_source_window(state: Any) -> dict[str, Any] | None:
     )
 
 
+def _explicit_repair_request(state: Any) -> dict[str, Any] | None:
+    """Return the complete model-visible verifier repair contract.
+
+    The model must never be asked to repair a source span it cannot see. Mutation
+    authority remains host-owned, but diagnosis and source evidence are explicit.
+    """
+
+    if getattr(state, "validation_status", None) != "FAIL":
+        return None
+    context = getattr(state, "mutation_context", None)
+    source = getattr(context, "source_body", None)
+    window = _repair_source_window(state)
+    if (
+        context is None
+        or not isinstance(source, str)
+        or not source
+        or window is None
+        or not isinstance(window.get("old"), str)
+        or not window["old"]
+    ):
+        return None
+    diagnostics = tuple(
+        getattr(state, "repair_target_diagnostics", ())
+        or getattr(state, "latest_verifier_errors", ())
+        or ()
+    )
+    diagnostic = selected_repair_diagnostic(diagnostics, window)
+    if diagnostic is None:
+        return None
+
+    old = window["old"]
+    offset = source.find(old)
+    if offset < 0:
+        return None
+    context_radius = 4096
+    context_start = max(0, offset - context_radius)
+    context_end = min(len(source), offset + len(old) + context_radius)
+    return {
+        "schema_version": "mmm/repair-request-v1",
+        "target_path": _canonical_mutation_path(context.target_path),
+        "diagnostic": dict(diagnostic),
+        "old": old,
+        "start_line": window.get("start_line"),
+        "end_line": window.get("end_line"),
+        "source_context": source[context_start:context_end],
+        "source_context_truncated": context_start > 0 or context_end < len(source),
+        "invariants": [
+            "change only the exact old span",
+            "preserve package and primary type identity",
+            "preserve unrelated valid members and behavior",
+            "do not change target path",
+        ],
+    }
+
+
 def _repair_guidance_payload(state: Any) -> dict[str, Any] | None:
     if state.validation_status != "FAIL":
         return None
@@ -1523,6 +1596,7 @@ def _repair_guidance_payload(state: Any) -> dict[str, Any] | None:
             if isinstance(source, str)
             else None
         ),
+        "repair_request": _explicit_repair_request(state),
     }
 
 
@@ -1722,13 +1796,12 @@ class HostRunState:
             "MMM_CORE_VERIFIER_REPAIR_V5\n"
             "The verifier failure is the active repair obligation. Do not restart generation, "
             "do not search unrelated ecosystem candidates, and never write a different path. "
-            "The payload includes a host-selected bounded repair_window when verifier location "
-            "evidence can localize the defect. Any earlier host_reserved/fresh metadata is "
+            "The payload contains the exact diagnostic, exact old span and current source "
+            "context needed to repair the defect. Any earlier host_reserved/fresh metadata is "
             "pre-materialization history only. Never regenerate the complete source file. "
-            "repair_window and its single diagnostic are host-selected. Emit only replacement "
-            "text for that exact old window in new; the host binds operation=replace_exact, "
-            "path, old text, count, and optimistic-concurrency SHA. These binding fields are "
-            "host-owned. Whole-file reconstruction is forbidden. "
+            "Call apply_source_edit with old copied exactly from the repair request and new set "
+            "to its replacement. The host binds only operation/path/count/transactional SHA. "
+            "Whole-file reconstruction is forbidden unless old is the complete source. "
             "Preserve package/type identity and approved behavior. Make one materially different "
             "edit that reduces severity-1 diagnostics. "
             "An equal or worse verifier "
@@ -4098,23 +4171,6 @@ def _generate_with_tools_impl(
             verifier_relative_files=verifier_relative_files,
         )
 
-        recovered_repair_calls = recover_schema_rejected_verifier_repair_calls(
-            turn.tool_calls,
-            phase=state.phase.value,
-            validation_status=str(state.validation_status or ""),
-            context=state.mutation_context,
-            repair_window=_repair_source_window(state),
-        )
-        if recovered_repair_calls is not None:
-            turn = replace(turn, tool_calls=recovered_repair_calls)
-            emit_root_cause(
-                "verifier_repair_rejection_downprojected",
-                stage=stage,
-                operation="apply_source_edit",
-                gate="tool_admission",
-                result="PASS",
-                reason="schema-rejected whole-source repair was safely down-projected to the host-selected span",
-            )
         recovered_existing_calls = recover_schema_rejected_host_bound_existing_calls(
             turn.tool_calls,
             phase=state.phase.value,

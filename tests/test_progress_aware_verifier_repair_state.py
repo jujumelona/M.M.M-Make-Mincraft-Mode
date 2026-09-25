@@ -147,9 +147,10 @@ def test_repair_guidance_tracks_verifier_fingerprint_not_message_history():
     assert "replace_exact" in first
     assert "repair_window" in first
     assert "bounded repair_window" in first
-    assert '"current_source":' not in first
+    assert '"repair_request":' in first
+    assert '"source_context":' in first
+    assert '"old":' in first
     assert "complete corrected source body" not in first
-    assert "host-owned" in first
     assert "create_file/create" not in first
     assert state.take_verifier_repair_guidance() is None
 
@@ -215,7 +216,8 @@ def test_verifier_repair_window_is_local_and_host_binds_old_text():
         _RepairCall(
             name="apply_source_edit",
             arguments={
-                "new": window["old"].replace("RegistryWrapper", "RegistryEntry")
+                "old": window["old"],
+                "new": window["old"].replace("RegistryWrapper", "RegistryEntry"),
             },
         ),
         state,
@@ -253,8 +255,9 @@ def test_existing_verifier_repair_schema_forbids_whole_file_protocol():
         repair_window=repair_window,
     )
     parameters = projected["function"]["parameters"]
-    assert set(parameters["properties"]) == {"new"}
-    assert parameters["required"] == ["new"]
+    assert set(parameters["properties"]) == {"old", "new"}
+    assert parameters["required"] == ["old", "new"]
+    assert parameters["properties"]["old"]["const"] == repair_window["old"]
     assert parameters["properties"]["new"]["maxLength"] == 256
     description = parameters["properties"]["new"]["description"]
     assert "bounded source window" in description
@@ -1012,3 +1015,44 @@ def test_official_api_first_attempt_rebases_once_to_trusted_scaffold():
     assert not generation_compile_recovery.rebase_invalid_api_candidate(
         state, Runtime(), stage="generation", fresh_java_target=True
     )
+
+
+def test_host_authored_surface_repair_request_is_not_blind():
+    source = (
+        "package dev.mmm;\n"
+        "public class AuthoredFeature001 {\n"
+        "    public static void initialize() {}\n"
+        "}\n"
+    )
+    state = HostRunState(
+        validation_status="FAIL",
+        mutation_context=TargetMutationContext(
+            target_path="src/main/java/dev/mmm/AuthoredFeature001.java",
+            target_symbol="AuthoredFeature001",
+            source_body=source,
+            is_new_file=False,
+            evidence_source="verifier_workspace_source",
+            writable_paths=("src/main/java/dev/mmm/AuthoredFeature001.java",),
+            target_pinned=True,
+        ),
+    )
+    diagnostic = {
+        "path": "src/main/java/dev/mmm/AuthoredFeature001.java",
+        "severity": 1,
+        "source": "host-authored-contract",
+        "code": "host:authored-surface",
+        "message": "Host integration requires public final class AuthoredFeature001.",
+        "range": {
+            "start": {"line": 1, "character": 0},
+            "end": {"line": 1, "character": 31},
+        },
+    }
+    state.latest_verifier_errors = (diagnostic,)
+    state.repair_target_diagnostics = (diagnostic,)
+    state.latest_verifier_fingerprint = "fixture"
+
+    guidance = state.take_verifier_repair_guidance()
+    assert guidance is not None
+    assert "Host integration requires public final class AuthoredFeature001." in guidance
+    assert '"old": "public class AuthoredFeature001"' in guidance
+    assert "public static void initialize()" in guidance
