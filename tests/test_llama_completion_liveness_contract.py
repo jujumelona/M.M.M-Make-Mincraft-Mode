@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai import llama_completion_liveness_contract as contract
+from minecraft_mod_ai import llama_stream_efficiency_contract as stream_contract
 from minecraft_mod_ai.llama_sse_protocol import LlamaSseServerError
 from minecraft_mod_ai.model_adapters import llama_cpp_adapter
 
@@ -134,12 +135,49 @@ def test_liveness_install_has_no_reporter_or_slot_polling_dependency() -> None:
     assert not hasattr(stream_module, "_probe_native_tool_progress")
 
 
-def test_runtime_completion_transport_has_one_progress_aware_owner() -> None:
-    assert getattr(
-        llama_cpp_adapter._post_completion,
-        "_mmm_single_progress_aware_completion_owner_v1",
-        False,
+def test_runtime_client_owns_semantic_progress_without_install(monkeypatch) -> None:
+    created = []
+
+    class RawClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            created.append(self)
+
+        def stream(self, method, url, **kwargs):
+            return method, url, kwargs
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(stream_contract.httpx, "Client", RawClient)
+    stream_contract._CLIENTS.clear()
+
+    client = stream_contract._client("http://127.0.0.1:18080")
+
+    assert created
+    assert getattr(client._client, "_mmm_semantic_progress_client_v1", False) is True
+
+
+def test_stream_payload_requests_semantic_progress_without_install() -> None:
+    captured = {}
+
+    class RawClient:
+        def stream(self, method, url, **kwargs):
+            captured["method"] = method
+            captured["url"] = url
+            captured["kwargs"] = kwargs
+            return object()
+
+    client = stream_contract._StreamingCompletionClient(RawClient())
+    client.stream(
+        "POST",
+        "http://127.0.0.1:8080/chat/completions",
+        json={"stream": True, "messages": []},
     )
+
+    payload = captured["kwargs"]["json"]
+    assert payload["return_progress"] is True
+    assert payload["sse_ping_interval"] <= 30
 
 
 def test_semantic_progress_refreshes_execution_deadline(monkeypatch) -> None:
