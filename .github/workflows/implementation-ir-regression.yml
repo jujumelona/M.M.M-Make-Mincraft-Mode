@@ -1,0 +1,43 @@
+name: Implementation IR Regression
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "minecraft_mod_ai/implementation_ir.py"
+      - "minecraft_mod_ai/implementation_graph_execution.py"
+      - "tests/test_implementation_graph_admission.py"
+      - "tests/test_implementation_ir.py"
+      - ".github/workflows/implementation-ir-regression.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: implementation-ir-regression-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  implementation-ir:
+    name: Implementation IR contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: python -m pip install --prefer-binary -e '.[dev,ui]'
+      - name: Compile implementation IR boundary
+        run: python -m py_compile minecraft_mod_ai/implementation_ir.py minecraft_mod_ai/implementation_graph_execution.py
+      - name: Run implementation IR regressions
+        run: >-
+          python -m pytest -q --tb=short
+          tests/test_implementation_graph_admission.py
+          tests/test_implementation_ir.py
