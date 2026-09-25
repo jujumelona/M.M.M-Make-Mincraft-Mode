@@ -14,6 +14,7 @@ from minecraft_mod_ai.runner_parallel_validation_contract import (
     _executed_gametest_task,
     _host_gametest_contract,
     _structured_gametest_report,
+    _sync_wrapper,
     _task_from_listing,
     install,
 )
@@ -743,3 +744,142 @@ def test_generic_native_xml_without_required_pass_summary_is_not_evidence(
     )
 
     assert _structured_gametest_report(project, log, native) is None
+
+
+def test_parallel_distribution_cache_does_not_reenter_base_lock(
+    tmp_path: Path,
+) -> None:
+    held: set[Path] = set()
+
+    @contextmanager
+    def non_reentrant_lock(cache_dir: Path, *, timeout_seconds: int):
+        assert timeout_seconds >= 1
+        key = Path(cache_dir).resolve()
+        if key in held:
+            raise AssertionError(f"cache lock re-entered for {key}")
+        held.add(key)
+        try:
+            yield
+        finally:
+            held.remove(key)
+
+    class LocalGradleRunner:
+        def __init__(self, cache_dir: Path) -> None:
+            self.cache_dir = cache_dir.resolve()
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            self.command_timeout_seconds = 10
+            self.ensure_calls = 0
+
+        def _ensure_gradle(self, gradle_version: str, gradle_sha256: str) -> Path:
+            with non_reentrant_lock(self.cache_dir, timeout_seconds=1):
+                self.ensure_calls += 1
+                executable = (
+                    self.cache_dir
+                    / f"gradle-{gradle_version}"
+                    / "bin"
+                    / ("gradle.bat" if os.name == "nt" else "gradle")
+                )
+                executable.parent.mkdir(parents=True, exist_ok=True)
+                executable.write_text(gradle_sha256, encoding="utf-8")
+                return executable
+
+        def build(self, project_root: Path, *, run_gametest: bool = True):
+            del project_root, run_gametest
+            raise AssertionError("build is not part of this regression test")
+
+    runner_module = SimpleNamespace(
+        GradleRunner=LocalGradleRunner,
+        BuildRunnerError=RuntimeError,
+        BuildReport=_BuildReport,
+        CommandResult=_CommandResult,
+        adapter_from_project=lambda _root: None,
+        _exclusive_cache_lock=non_reentrant_lock,
+    )
+    install(runner_module=runner_module, validation_module=_validation_module())
+
+    runner = LocalGradleRunner(tmp_path / "cache")
+    version = "8.10.2"
+    sha256 = "a" * 64
+
+    first = runner._ensure_gradle(version, sha256)
+    second = runner._ensure_gradle(version, sha256)
+
+    assert first == second
+    assert first.is_file()
+    assert runner.ensure_calls == 1
+    assert not held
+
+
+def test_wrapper_generation_uses_distinct_lock_namespace_from_gradle_run(
+    tmp_path: Path,
+) -> None:
+    held: set[Path] = set()
+
+    @contextmanager
+    def non_reentrant_lock(cache_dir: Path, *, timeout_seconds: int):
+        assert timeout_seconds >= 1
+        key = Path(cache_dir).resolve()
+        if key in held:
+            raise AssertionError(f"cache lock re-entered for {key}")
+        held.add(key)
+        try:
+            yield
+        finally:
+            held.remove(key)
+
+    class LocalRunner:
+        def __init__(self, cache_dir: Path) -> None:
+            self.cache_dir = cache_dir.resolve()
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            self.command_timeout_seconds = 10
+
+        def _run(self, *, name, executable, arguments, cwd, env, log_path):
+            del executable, env
+            with non_reentrant_lock(self.cache_dir, timeout_seconds=1):
+                assert name == "wrapper"
+                (cwd / "gradle/wrapper").mkdir(parents=True, exist_ok=True)
+                (cwd / "gradlew").write_text("wrapper", encoding="utf-8")
+                (cwd / "gradlew.bat").write_text("wrapper", encoding="utf-8")
+                (cwd / "gradle/wrapper/gradle-wrapper.jar").write_bytes(b"jar")
+                version = arguments[arguments.index("--gradle-version") + 1]
+                sha256 = arguments[
+                    arguments.index("--gradle-distribution-sha256-sum") + 1
+                ]
+                (cwd / "gradle/wrapper/gradle-wrapper.properties").write_text(
+                    f"distributionUrl=https://example/gradle-{version}-bin.zip\n"
+                    f"distributionSha256Sum={sha256}\n",
+                    encoding="utf-8",
+                )
+                log_path.write_text("wrapper", encoding="utf-8")
+            return _CommandResult(
+                name=name,
+                command=(name,),
+                exit_code=0,
+                duration_seconds=0.01,
+                log_path=str(log_path),
+            )
+
+    runner = LocalRunner(tmp_path / "cache")
+    project = tmp_path / "project"
+    project.mkdir()
+    logs = project / ".minecraft_ai/logs"
+    logs.mkdir(parents=True)
+    runner_module = SimpleNamespace(
+        _exclusive_cache_lock=non_reentrant_lock,
+        CommandResult=_CommandResult,
+    )
+
+    result = _sync_wrapper(
+        runner,
+        runner_module=runner_module,
+        gradle=tmp_path / "gradle",
+        project_root=project,
+        environment={},
+        logs=logs,
+        version="8.10.2",
+        sha256="b" * 64,
+    )
+
+    assert result.exit_code == 0
+    assert (project / "gradle/wrapper/gradle-wrapper.properties").is_file()
+    assert not held

@@ -365,6 +365,13 @@ def _wrapper_template_dir(cache_dir: Path, version: str, sha256: str) -> Path:
     return cache_dir / f"wrapper-template-{version}-{token}"
 
 
+def _wrapper_lock_dir(cache_dir: Path, version: str, sha256: str) -> Path:
+    """Return a wrapper lock namespace distinct from Gradle's bootstrap lock."""
+
+    token = hashlib.sha256(f"{version}\0{sha256}".encode()).hexdigest()[:12]
+    return cache_dir / ".mmm-locks" / f"wrapper-{version}-{token}"
+
+
 def _wrapper_artifacts(root: Path) -> tuple[Path, ...]:
     return (
         root / "gradlew",
@@ -416,8 +423,12 @@ def _sync_wrapper(
     log_path = logs / "gradle-wrapper.log"
 
     if not _valid_wrapper_template(template, version, sha256):
+        # self._run() may acquire the Gradle shared-user-home bootstrap lock on
+        # self.cache_dir. Wrapper template serialization therefore needs its own
+        # lock namespace instead of recursively taking the same advisory lock.
+        wrapper_lock_dir = _wrapper_lock_dir(self.cache_dir, version, sha256)
         with runner_module._exclusive_cache_lock(
-            self.cache_dir,
+            wrapper_lock_dir,
             timeout_seconds=max(300, self.command_timeout_seconds * 3),
         ):
             if not _valid_wrapper_template(template, version, sha256):
@@ -495,23 +506,17 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
             ):
                 return safe_executable
 
-            with runner_module._exclusive_cache_lock(
-                self.cache_dir,
-                timeout_seconds=max(300, self.command_timeout_seconds * 3),
-            ):
-                safe_executable = _safe_regular_file(self.cache_dir, executable)
-                if safe_executable is not None and _valid_distribution_marker(
-                    marker, version, sha256
-                ):
-                    return safe_executable
-                executable = base_ensure(self, version, sha256)
-                safe_executable = _safe_regular_file(self.cache_dir, executable)
-                if safe_executable is None:
-                    raise runner_module.BuildRunnerError(
-                        "Gradle executable is missing or unsafe after extraction."
-                    )
-                _write_distribution_marker(marker, version, sha256)
-                return safe_executable
+            # base_ensure is the sole distribution-materialization authority.
+            # The production implementation already takes the distribution cache
+            # lock, so wrapping it here in the same lock self-deadlocks on POSIX.
+            executable = base_ensure(self, version, sha256)
+            safe_executable = _safe_regular_file(self.cache_dir, executable)
+            if safe_executable is None:
+                raise runner_module.BuildRunnerError(
+                    "Gradle executable is missing or unsafe after extraction."
+                )
+            _write_distribution_marker(marker, version, sha256)
+            return safe_executable
 
         target_cached_ensure._mmm_target_parallel_distribution = True
         cls._ensure_gradle = target_cached_ensure
