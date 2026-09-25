@@ -14,11 +14,21 @@ def task_local_module_contract(
     config = module.config if isinstance(module.config, dict) else {}
     authored = config.get("authored_plan")
     if isinstance(authored, dict):
-        return {
+        contract = {
             "module_id": module.module_id,
             "kind": module.kind,
             "authored_plan": dict(authored),
         }
+        mode = str(config.get("authored_execution_mode") or "").strip()
+        if mode:
+            contract["authored_execution_mode"] = mode
+        if config.get("authored_bounded_scope") is True:
+            contract["authored_write_scope"] = {
+                "java_package": str(config.get("authored_java_package") or "").strip(),
+                "mod_id": str(config.get("authored_mod_id") or "").strip(),
+                "policy": "package_and_mod_namespace_only",
+            }
+        return contract
     evidence_task = config.get("evidence_task")
     if not isinstance(evidence_task, dict):
         raise error_type(
@@ -38,6 +48,19 @@ def implementation_phase(module_contract: Mapping[str, Any]) -> str:
 
 def apply_authored_request(request: dict[str, Any], module_contract: Mapping[str, Any]) -> None:
     if "authored_plan" not in module_contract:
+        return
+    if str(module_contract.get("authored_execution_mode") or "") == "bounded_coherent":
+        request["task"] = (
+            "Implement the complete saved authored_plan as one coherent Minecraft/Fabric "
+            "system. Headings such as state_model, algorithm, integration, persistence, "
+            "resources_and_ui, failure_and_limits, reuse_assessment, and verification are "
+            "engineering facets of the same implementation, never instructions to create "
+            "one class per heading. Inspect the existing canonical Fabric entrypoint and "
+            "project conventions, then create or edit only the Java/resource files actually "
+            "needed inside the host-owned authored_write_scope. Wire the implementation into "
+            "the existing entrypoint; never create a second ModInitializer/ClientModInitializer. "
+            "Do not request a new plan, requirement JSON, cardinality decision, or coverage approval."
+        )
         return
     request["task"] = (
         "Implement the saved authored_plan in this project. The host has already localized "
