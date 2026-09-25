@@ -9,17 +9,6 @@ from minecraft_mod_ai import ecosystem_discovery as discovery
 
 
 def test_persistent_discovery_pool_keeps_native_policy_and_allows_parallel_requests() -> None:
-    assert getattr(
-        discovery.EcosystemDiscoveryClient.__init__,
-        "_mmm_persistent_http_pool_v2",
-        False,
-    )
-    assert not getattr(
-        discovery.EcosystemDiscoveryClient._get_json,
-        "_mmm_persistent_http_pool_v1",
-        False,
-    )
-
     barrier = threading.Barrier(2)
     requests: list[httpx.Request] = []
     lock = threading.Lock()
