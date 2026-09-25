@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import zipfile
 
+from minecraft_mod_ai.pipeline import MinecraftModPipeline
 from minecraft_mod_ai.spec import ModSpec
 from minecraft_mod_ai.toolchain_contract import fabric_dependency_predicates
 from minecraft_mod_ai.validator import validate_jar
