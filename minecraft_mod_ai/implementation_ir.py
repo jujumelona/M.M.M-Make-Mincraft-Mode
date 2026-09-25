@@ -24,7 +24,7 @@ MAX_PAGE_CORRECTIONS = 2
 MAX_UNIT_REQUIREMENTS = 6
 MAX_BATCH_REQUIREMENTS = 8
 MAX_BATCH_UNITS = 3
-IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v3"
+IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v4"
 
 
 class ImplementationGraphError(CustomModuleGenerationError):
@@ -861,6 +861,7 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
             "pending": None,
             "refinements": 0,
             "unit_queue": deepcopy(units),
+            "batch_unit_limit": MAX_BATCH_UNITS,
         }
         if resumed is not None:
             emit_root_cause(
@@ -876,6 +877,10 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
 
     if not state.get("unit_queue"):
         state["unit_queue"] = deepcopy(units)
+    state["batch_unit_limit"] = max(
+        1,
+        min(int(state.get("batch_unit_limit", MAX_BATCH_UNITS)), MAX_BATCH_UNITS),
+    )
 
     def save() -> None:
         if checkpoint:
@@ -923,7 +928,7 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
 
         batch_units, rem_after_batch = _next_active_batch(
             pending_units,
-            max_batch_units=MAX_BATCH_UNITS,
+            max_batch_units=state["batch_unit_limit"],
             max_batch_reqs=MAX_BATCH_REQUIREMENTS,
         )
         if batch_units:
@@ -994,12 +999,21 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
                 save()
                 active_req_items = list(payload["requirements"].items())
                 if len(batch_units) > 1:
-                    first_u = batch_units[0]
-                    other_u = [u for u in state["unit_queue"] if u["unit_id"] != first_u["unit_id"]]
-                    state["unit_queue"] = [first_u] + other_u
+                    # Reordering the same queue does not reduce the next request:
+                    # _next_active_batch would simply select the same multi-unit batch
+                    # again. Persist a strictly smaller host-owned batch cap instead.
+                    next_limit = max(1, len(batch_units) // 2)
+                    if next_limit >= state["batch_unit_limit"]:
+                        next_limit = state["batch_unit_limit"] - 1
+                    state["batch_unit_limit"] = max(1, next_limit)
                     save()
                     continue
                 elif len(active_req_items) > 1:
+                    # One unit is still too large. Replace that exact unit with two
+                    # deterministic requirement slices; with batch_unit_limit == 1
+                    # only the first slice is attempted next, guaranteeing strict
+                    # input-scope reduction.
+                    state["batch_unit_limit"] = 1
                     mid = max(1, len(active_req_items) // 2)
                     target_u = batch_units[0] if batch_units else {"unit_id": "unit_split", "title": "split"}
                     sub_1 = {
@@ -1017,6 +1031,8 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
                     save()
                     continue
                 else:
+                    # The indivisible one-requirement scope still exhausted the
+                    # bounded model output. There is no smaller semantic unit to retry.
                     raise
             raise
 
