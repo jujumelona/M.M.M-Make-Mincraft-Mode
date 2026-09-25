@@ -130,11 +130,15 @@ def test_capsule_compiles_exact_planir_main_and_test_authority() -> None:
     assert capsule.test_paths == (TEST_PATH,)
     assert capsule.required_gates == ("source_static_validation", "target_compile")
 
-    writable, creatable = tool_loop._planir_owned_anchor_sets(
-        capsule.to_host_authority_payload()
-    )
+    payload = capsule.to_host_authority_payload()
+    writable, creatable = tool_loop._planir_owned_anchor_sets(payload)
     assert writable == (JAVA_PATH, TEST_PATH)
     assert creatable == (JAVA_PATH, TEST_PATH)
+    coder_contract = payload["module"]["config"]["evidence_task"]["coder_execution_contract"]
+    assert coder_contract["implementation_steps"][0]["obligation"] == (
+        "Implement the approved resource gathering behavior in the owned source targets."
+    )
+    assert coder_contract["engineering_worksheet"]
 
 
 def test_custom_java_host_injects_target_compile_gate() -> None:
@@ -303,7 +307,9 @@ def test_fresh_host_reserved_java_target_separates_write_and_api_evidence_author
         implementation_requires_mutation=True,
         host_target_execution_authority=True,
         compile_backed_java=True,
-    ) is False
+        semantic_fresh_java_target=True,
+        host_authored_scaffold=True,
+    ) is True
     assert tool_loop.initial_evidence_required(
         role="coder",
         host_grounded=False,
