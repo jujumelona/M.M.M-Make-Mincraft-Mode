@@ -1,54 +1,33 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from minecraft_mod_ai.authored_plan import AuthoredPlan
-from minecraft_mod_ai.authored_production import compile_authored_design
+from minecraft_mod_ai.authored_production import _compile_new_authored_modules
 
 
-def _router() -> SimpleNamespace:
-    return SimpleNamespace()
+_TARGET = {
+    "minecraft_version": "1.21.11",
+    "loader": "fabric",
+    "mappings": "1.21.11+build.1",
+}
 
 
-def test_fresh_authored_design_always_lowers_to_exact_host_owned_java_tasks(
-    monkeypatch,
-) -> None:
-    target = {
-        "minecraft_version": "1.21.11",
-        "loader": "fabric",
-        "mappings": "1.21.11+build.1",
-    }
-
-    from minecraft_mod_ai import authored_production as authored
-
-    monkeypatch.setattr(
-        authored.PlanningPipeline,
-        "_bind_existing_project",
-        lambda self, design: dict(design),
-    )
-    monkeypatch.setattr(
-        authored.PlanningPipeline,
-        "_bind_platform",
-        lambda self, prompt, design, base: (
-            {**design, **target},
-            base,
-            (),
-            (),
-        ),
-    )
-
+def test_fresh_authored_design_always_lowers_to_exact_host_owned_java_tasks() -> None:
     plan = AuthoredPlan(
         "space economy",
         "# Design\n"
         "## Wallet\nPersist credits across relog.\n"
         "## Purchase\nDeduct credits exactly once.\n",
     )
-    proposal = compile_authored_design(_router(), plan)
+    modules, manifest = _compile_new_authored_modules(
+        plan,
+        mod_id="authored_test",
+        package_name="ai.minecraft.generated.authored_test",
+        target=_TARGET,
+    )
 
-    manifest = proposal.game_design["_authored_execution_manifest"]
     assert manifest["policy"] == "host_exact_task_queue_no_coder_file_planning"
-    assert len(proposal.modules) == manifest["unit_count"] == 2
-    for module, record in zip(proposal.modules, manifest["units"], strict=True):
+    assert len(modules) == manifest["unit_count"] == 2
+    for module, record in zip(modules, manifest["units"], strict=True):
         task = module.config["evidence_task"]
         anchors = task["owned_anchors"]
         assert len(anchors) == 1
@@ -58,33 +37,7 @@ def test_fresh_authored_design_always_lowers_to_exact_host_owned_java_tasks(
         assert "authored_plan" not in module.config
 
 
-def test_contract_shaped_document_is_not_routed_to_bounded_coherent_coder(
-    monkeypatch,
-) -> None:
-    target = {
-        "minecraft_version": "1.21.11",
-        "loader": "fabric",
-        "mappings": "1.21.11+build.1",
-    }
-
-    from minecraft_mod_ai import authored_production as authored
-
-    monkeypatch.setattr(
-        authored.PlanningPipeline,
-        "_bind_existing_project",
-        lambda self, design: dict(design),
-    )
-    monkeypatch.setattr(
-        authored.PlanningPipeline,
-        "_bind_platform",
-        lambda self, prompt, design, base: (
-            {**design, **target},
-            base,
-            (),
-            (),
-        ),
-    )
-
+def test_contract_shaped_document_uses_exact_task_queue_not_bounded_coherent() -> None:
     plan = AuthoredPlan(
         "feature",
         "# Design\n"
@@ -92,11 +45,17 @@ def test_contract_shaped_document_is_not_routed_to_bounded_coherent_coder(
         "## State\nPersist the feature state.\n"
         "## Failure\nReject invalid activation.\n",
     )
-    proposal = compile_authored_design(_router(), plan)
+    modules, manifest = _compile_new_authored_modules(
+        plan,
+        mod_id="authored_test",
+        package_name="ai.minecraft.generated.authored_test",
+        target=_TARGET,
+    )
 
-    assert proposal.modules
-    assert all("evidence_task" in module.config for module in proposal.modules)
+    assert modules
+    assert manifest["policy"] == "host_exact_task_queue_no_coder_file_planning"
+    assert all("evidence_task" in module.config for module in modules)
     assert all(
         module.config.get("authored_execution_mode") != "bounded_coherent"
-        for module in proposal.modules
+        for module in modules
     )

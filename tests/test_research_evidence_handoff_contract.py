@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from minecraft_mod_ai import custom_module_generator, research_ledger
+from minecraft_mod_ai import custom_module_generator, research_ledger, repair_engine
 from minecraft_mod_ai import repair_approved_reuse_context as repair_reuse
 from minecraft_mod_ai import research_coder_repair_reuse as reuse_hardener
 from minecraft_mod_ai import research_evidence_handoff_contract as contract
@@ -16,9 +16,16 @@ class _Quality:
         return {"correctness": 0.91, "maintainability": 0.87}
 
 
-def test_runtime_installs_reference_policy_on_live_coder_selector() -> None:
+def test_reference_policy_is_explicitly_installable_without_import_time_mutation() -> None:
+    original = research_ledger.select_module_research_context
+    contract.install(
+        research_ledger_module=research_ledger,
+        custom_module_generator_module=custom_module_generator,
+        repair_module=repair_engine,
+    )
     selector = research_ledger.select_module_research_context
 
+    assert selector is not original
     assert getattr(selector, contract._MARKER, False) is True
     assert custom_module_generator.select_module_research_context is selector
 

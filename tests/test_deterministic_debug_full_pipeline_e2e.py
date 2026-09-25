@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-from minecraft_mod_ai import custom_module_generator as generator
 import minecraft_mod_ai.complete_orchestrator as complete_orchestrator_module
 from minecraft_mod_ai.colab_run_modes import write_debug_example_plan
 from minecraft_mod_ai.complete_orchestrator import (
@@ -40,126 +39,38 @@ class _DeterministicRouter:
         workspace_root: str | Path,
         *,
         require_fresh_evidence: bool = False,
-    ) -> _DeterministicRouter:
+    ) -> "_DeterministicRouter":
         del require_fresh_evidence
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         return self
 
-    def generate_text(self, *args: Any, **kwargs: Any) -> str:
-        raise AssertionError(
-            "deterministic full-pipeline E2E must not invoke a live model"
+    def generate_text(self, role: str, messages: Any, **kwargs: Any) -> str:
+        del kwargs
+        assert role == "coder"
+        prompt = str(messages[-1]["content"])
+        marker = "Current host scaffold:\n"
+        context_marker = "\n\nRelevant existing project source:"
+        assert marker in prompt
+        scaffold = prompt.split(marker, 1)[1].split(context_marker, 1)[0]
+        assert "MMM_AUTHORED_FEATURE_BODY" in scaffold
+        source = scaffold.replace(
+            "// MMM_AUTHORED_FEATURE_BODY",
+            'System.out.println("mmm deterministic fixture initialized");',
         )
-
-
-def _bound_workspace(router: Any) -> Path:
-    current = router
-    seen: set[int] = set()
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        workspace = getattr(current, "workspace_root", None)
-        if workspace is not None:
-            return Path(workspace).expanduser().resolve()
-        current = getattr(current, "_router", None)
-    raise AssertionError("custom coder router was not bound to a staged workspace")
-
-
-def _deterministic_coder(
-    router: Any,
-    role: str,
-    messages: Any,
-    *args: Any,
-    **kwargs: Any,
-) -> str:
-    del args, kwargs
-    assert role == "coder"
-    authority_messages = [
-        str(message.get("content") or "")
-        for message in messages
-        if message.get("role") == "developer"
-        and "MANDATORY HOST IMPLEMENTATION AUTHORITY" in str(message.get("content") or "")
-    ]
-    assert len(authority_messages) == 1
-    authority = authority_messages[0]
-    assert "import net.minecraft.core.registries.Registries;" in authority
-    assert "import net.minecraft.core.registries.BuiltInRegistries;" in authority
-    assert "net.minecraft.resources.Registries" not in authority
-    assert "ResourceKeys" not in authority
-    request = json.loads(messages[-1]["content"])
-    grounding = request["host_grounding"]["evidence_bindings"][
-        "implementation_contract"
-    ]["grounding"]
-    assert grounding["artifact_kind"] == "item"
-    fact = grounding["facts"][0]
-    imports = list(dict.fromkeys(fact["required_imports"]))
-    templates = list(fact["templates"])
-    key_template = next(
-        item
-        for item in templates
-        if "resource_key_create" in item.get("symbol_usage", ())
-    )
-    register_template = next(
-        item
-        for item in templates
-        if "register_item" in item.get("symbol_usage", ())
-    )
-
-    key_body = key_template["render_body"]
-    register_body = register_template["render_body"]
-    replacements = {
-        "{{java_constant}}": "DEBUG_TOKEN",
-        "{{mod_id}}": "mmm_debug_fixture",
-        "{{registry_path}}": "debug_token",
-        "ModItemIds.DEBUG_TOKEN_KEY": "DEBUG_TOKEN_KEY",
-    }
-    for before, after in replacements.items():
-        key_body = key_body.replace(before, after)
-        register_body = register_body.replace(before, after)
-
-    source = "\n".join(
-        [
-            "package dev.mmm.debugfixture;",
-            "",
-            *(f"import {owner};" for owner in imports),
-            "",
-            "public final class DebugToken {",
-            "    private DebugToken() {}",
-            "",
-            *(
-                "    " + line if line else ""
-                for line in key_body.strip().splitlines()
-            ),
-            "",
-            *(
-                "    " + line if line else ""
-                for line in register_body.strip().splitlines()
-            ),
-            "}",
-            "",
-        ]
-    )
-
-    target = (
-        _bound_workspace(router)
-        / "src/main/java/dev/mmm/debugfixture/DebugToken.java"
-    )
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(source, encoding="utf-8")
-    return json.dumps(
-        {
-            "summary": (
-                "Created the host-grounded DebugToken fixture in the owned target."
-            )
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
+        return json.dumps(
+            {
+                "content": source,
+                "summary": "Implemented the host-owned fixture source.",
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
 
 
 def test_debug_fixture_runs_real_build_and_packaging_without_live_model(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(generator, "_generate_coder_text", _deterministic_coder)
     plan_path = write_debug_example_plan(
         tmp_path / "proposal.json",
         minecraft_version="1.21.8",
@@ -291,7 +202,6 @@ def test_debug_fixture_keeps_build_bundle_when_jdt_is_unavailable(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(generator, "_generate_coder_text", _deterministic_coder)
     monkeypatch.setattr(
         complete_orchestrator_module,
         "_run_release_jdt_verification",

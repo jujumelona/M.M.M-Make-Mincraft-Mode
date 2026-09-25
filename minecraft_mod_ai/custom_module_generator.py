@@ -37,17 +37,17 @@ _SOURCE_SCHEMA: dict[str, Any] = {
         "summary": {"type": "string"},
     },
 }
-_LOCATOR = re.compile(r"^(?P<path>[^#]+\\.java)#(?P<symbol>[A-Za-z_$][A-Za-z0-9_$]*)$")
-_PACKAGE = re.compile(r"(?m)^\\s*package\\s+([A-Za-z_$][A-Za-z0-9_$.]*)\\s*;\\s*$")
+_LOCATOR = re.compile(r"^(?P<path>[^#]+\.java)#(?P<symbol>[A-Za-z_$][A-Za-z0-9_$]*)$")
+_PACKAGE = re.compile(r"(?m)^\s*package\s+([A-Za-z_$][A-Za-z0-9_$.]*)\s*;\s*$")
 _PUBLIC_TYPE = re.compile(
-    r"\\bpublic\\s+final\\s+class\\s+(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)\\b"
+    r"\bpublic\s+final\s+class\s+(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)\b"
 )
 _INITIALIZE = re.compile(
-    r"\\bpublic\\s+static\\s+void\\s+initialize\\s*\\(\\s*\\)\\s*(?:throws\\s+[^{]+)?\\{"
+    r"\bpublic\s+static\s+void\s+initialize\s*\(\s*\)\s*(?:throws\s+[^{]+)?\{"
 )
-_SIDE_ONLY = re.compile(r"@Environment\\s*\\(\\s*EnvType\\.(?:CLIENT|SERVER)\\s*\\)")
+_SIDE_ONLY = re.compile(r"@Environment\s*\(\s*EnvType\.(?:CLIENT|SERVER)\s*\)")
 _FORBIDDEN_ENTRYPOINT = re.compile(
-    r"\\b(?:implements\\s+)?(?:ModInitializer|ClientModInitializer)\\b"
+    r"\b(?:implements\s+)?(?:ModInitializer|ClientModInitializer)\b"
 )
 _BODY_MARKER = "MMM_AUTHORED_FEATURE_BODY"
 _MAX_CONTEXT_BYTES = 24 * 1024
@@ -59,7 +59,7 @@ def _sha256_text(text: str) -> str:
 
 
 def _normalize_project_path(value: Any) -> str:
-    raw = str(value or "").replace("\\\\", "/").strip()
+    raw = str(value or "").replace("\\", "/").strip()
     candidate = PurePosixPath(raw)
     if (
         not raw
@@ -625,7 +625,7 @@ def _parse_coder_summary(text: str) -> str:
 
 def _normalized_operation_path(item: Mapping[str, Any]) -> str:
     return PurePosixPath(
-        str(item.get("path", "")).replace("\\\\", "/")
+        str(item.get("path", "")).replace("\\", "/")
     ).as_posix()
 
 
