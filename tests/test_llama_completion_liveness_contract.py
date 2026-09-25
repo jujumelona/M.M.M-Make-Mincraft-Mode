@@ -306,19 +306,17 @@ def test_second_protocol_disconnect_is_not_retried_forever() -> None:
 
 
 def test_active_decode_reports_periodic_semantic_progress(monkeypatch, capsys) -> None:
-    ticks = iter([0.0, 0.1, 0.2, 20.0, 20.1, 20.2, 20.3, 20.4])
-    monkeypatch.setattr(contract.time, "monotonic", lambda: next(ticks))
+    clock = [0.0]
+    monkeypatch.setattr(contract.time, "monotonic", lambda: clock[0])
     monkeypatch.setenv("MMM_LLAMA_PROGRESS_LOG_INTERVAL_SECONDS", "15")
 
-    response = SimpleNamespace(
-        iter_lines=lambda: iter(
-            [
-                'data: {"choices":[{"delta":{"content":"a"}}]}',
-                'data: {"choices":[{"delta":{"content":"b"}}]}',
-                "data: [DONE]",
-            ]
-        )
-    )
+    def lines():
+        yield 'data: {"choices":[{"delta":{"content":"a"}}]}'
+        clock[0] = 20.0
+        yield 'data: {"choices":[{"delta":{"content":"b"}}]}'
+        yield "data: [DONE]"
+
+    response = SimpleNamespace(iter_lines=lines)
     wrapped = contract._ProgressCheckedResponse(
         response,
         120.0,
@@ -335,16 +333,15 @@ def test_active_decode_reports_periodic_semantic_progress(monkeypatch, capsys) -
 
 
 def test_completion_wall_deadline_does_not_refresh_with_progress(monkeypatch) -> None:
-    ticks = iter([0.0, 10.0, 301.0, 301.1])
-    monkeypatch.setattr(contract.time, "monotonic", lambda: next(ticks))
-    response = SimpleNamespace(
-        iter_lines=lambda: iter(
-            [
-                'data: {"choices":[{"delta":{"content":"a"}}]}',
-                'data: {"choices":[{"delta":{"content":"b"}}]}',
-            ]
-        )
-    )
+    clock = [0.0]
+    monkeypatch.setattr(contract.time, "monotonic", lambda: clock[0])
+
+    def lines():
+        for at in range(0, 302, 10):
+            clock[0] = float(at)
+            yield 'data: {"choices":[{"delta":{"content":"a"}}]}'
+
+    response = SimpleNamespace(iter_lines=lines)
     wrapped = contract._ProgressCheckedResponse(
         response,
         120.0,
@@ -353,5 +350,5 @@ def test_completion_wall_deadline_does_not_refresh_with_progress(monkeypatch) ->
         wall_seconds=300.0,
     )
 
-    with pytest.raises(contract.LlamaSemanticProgressTimeout, match="wall-clock ceiling"):
+    with pytest.raises(contract.LlamaCompletionDeadlineExceeded, match="wall-clock ceiling"):
         list(wrapped.iter_lines())

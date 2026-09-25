@@ -5,7 +5,8 @@ from __future__ import annotations
 Transport keepalive activity is not model progress. The watchdog is reset only by
 prompt processing, decode/tool deltas, or terminal completion events. Lifecycle logging
 must also distinguish a real request failure from Python's normal generator close after
-the consumer has already observed ``data: [DONE]``.
+the consumer has already observed ``data: [DONE]``. A finite output budget bounds healthy
+decoding; an implicit fixed wall deadline must not override continuing semantic progress.
 """
 
 import json
@@ -30,6 +31,10 @@ _REQUEST_ID_HEADER = "X-MMM-Request-Id"
 
 class LlamaSemanticProgressTimeout(TimeoutError):
     """A live SSE connection produced no prompt/decode/tool progress in time."""
+
+
+class LlamaCompletionDeadlineExceeded(TimeoutError):
+    """A configured absolute limit expired; this is not a retryable semantic stall."""
 
 
 def _positive_env_float(name: str, default: float) -> float:
@@ -130,7 +135,7 @@ def _managed_server_state() -> str:
         pid = getattr(process, "pid", None)
         try:
             returncode = process.poll()
-        except Exception as exc:  # diagnostics must never mask the original failure
+        except Exception as exc:  # noqa: BLE001 - diagnostics must not mask the original failure
             return f"managed_pid={pid or 'unknown'} poll_error={type(exc).__name__}"
         state = (
             f"managed_pid={pid or 'unknown'} "
@@ -141,12 +146,12 @@ def _managed_server_state() -> str:
             if callable(stderr_tail):
                 try:
                     tail = str(stderr_tail(process) or "").strip()
-                except Exception:
+                except Exception:  # noqa: BLE001 - best-effort process diagnostics
                     tail = ""
                 if tail:
                     state += f" stderr_tail={tail[:4096]}"
         return state
-    except Exception as exc:  # diagnostics must never mask the original failure
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not mask the original failure
         return f"managed_state_error={type(exc).__name__}"
 
 
@@ -174,8 +179,13 @@ def _completion_token_budget(payload: Mapping[str, Any]) -> int | None:
     return None
 
 
-def _completion_wall_timeout_seconds(payload: Mapping[str, Any]) -> float:
-    """Return a non-refreshable wall-clock ceiling for one llama completion."""
+def _completion_wall_timeout_seconds(payload: Mapping[str, Any]) -> float | None:
+    """Honor explicit deadlines; finite decodes otherwise use semantic inactivity.
+
+    A healthy 8192-token plan can take longer than 300 seconds on the selected GPU.
+    Its finite output ceiling and the independent inactivity guard already bound the
+    request. Retain a wall fallback only when no finite decode budget is known.
+    """
 
     has_tools = bool(payload.get("tools"))
     default = 600.0 if has_tools else 300.0
@@ -184,7 +194,9 @@ def _completion_wall_timeout_seconds(payload: Mapping[str, Any]) -> float:
         if has_tools
         else "MMM_LLAMA_COMPLETION_WALL_TIMEOUT_SECONDS"
     )
-    return _positive_env_float(name, default)
+    if os.environ.get(name, "").strip():
+        return _positive_env_float(name, default)
+    return None if _completion_token_budget(payload) is not None else default
 
 
 def _semantic_idle_timeout_seconds(
@@ -358,13 +370,13 @@ class _ProgressCheckedResponse:
         *,
         request_id: str,
         started_at: float,
-        wall_seconds: float = 300.0,
+        wall_seconds: float | None = None,
     ) -> None:
         self._response = response
         self._idle_seconds = idle_seconds
         self._request_id = request_id
         self._started_at = started_at
-        self._wall_seconds = float(wall_seconds)
+        self._wall_seconds = float(wall_seconds) if wall_seconds is not None else None
         self._first_progress = False
         self._semantic_events = 0
         self._last_progress_log_at = started_at
@@ -419,12 +431,12 @@ class _ProgressCheckedResponse:
         )
 
     def iter_lines(self, *args: Any, **kwargs: Any):
-        watchdog = _SemanticProgressWatchdog(self._idle_seconds)
+        watchdog = _SemanticProgressWatchdog(self._idle_seconds, clock=time.monotonic)
         try:
             for raw_line in self._response.iter_lines(*args, **kwargs):
                 now = time.monotonic()
-                if now - self._started_at >= self._wall_seconds:
-                    raise LlamaSemanticProgressTimeout(
+                if self._wall_seconds is not None and now - self._started_at >= self._wall_seconds:
+                    raise LlamaCompletionDeadlineExceeded(
                         "native llama-server completion exceeded the non-refreshable "
                         f"wall-clock ceiling of {self._wall_seconds:.0f}s"
                     )
@@ -478,13 +490,13 @@ class _ProgressCheckedStream:
         *,
         request_id: str,
         started_at: float,
-        wall_seconds: float = 300.0,
+        wall_seconds: float | None = None,
     ) -> None:
         self._stream = stream
         self._idle_seconds = idle_seconds
         self._request_id = request_id
         self._started_at = started_at
-        self._wall_seconds = float(wall_seconds)
+        self._wall_seconds = float(wall_seconds) if wall_seconds is not None else None
         self._checked_response: _ProgressCheckedResponse | None = None
 
     def __getattr__(self, name: str) -> Any:
@@ -577,7 +589,7 @@ class _SemanticProgressClient:
             f" max_tokens={payload.get('max_tokens', '?')}",
             f" tools={len(payload.get('tools', ()) or ())}",
             f" idle_timeout={idle_seconds:.0f}s",
-            f" wall_timeout={wall_seconds:.0f}s",
+            f" wall_timeout={f'{wall_seconds:.0f}s' if wall_seconds is not None else 'none(output-budget+semantic-idle)'}",
             sep="",
             flush=True,
         )
@@ -742,6 +754,7 @@ def install(stream_module: Any, adapter_module: Any | None = None) -> None:
 
 
 __all__ = [
+    "LlamaCompletionDeadlineExceeded",
     "LlamaSemanticProgressTimeout",
     "_SemanticProgressWatchdog",
     "_managed_server_state",
