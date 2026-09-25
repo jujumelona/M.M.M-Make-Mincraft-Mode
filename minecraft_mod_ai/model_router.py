@@ -24,6 +24,7 @@ from .model_adapters import (
     TransformersMultimodalAdapter,
     TransformersTextAdapter,
 )
+from .model_adapters.base import NativeToolDecisionRejected
 from .model_concurrency import (
     ReentrantCapacityGate,
     ReentrantReadWriteLock,
@@ -209,6 +210,7 @@ class ModelRouter:
         response_schema: Mapping[str, Any] | None = None,
         tool_stage: str | None = None,
         enable_tools: bool = False,
+        output_token_ceiling: int | None = None,
     ) -> Any | None:
         """Return live adapter input/context token accounting without generation."""
 
@@ -383,6 +385,10 @@ class ModelRouter:
         matches = tuple(call for call in turn.tool_calls if call.name == name)
         if len(matches) == 1 and len(turn.tool_calls) == 1:
             return dict(matches[0].arguments)
+        rejections = tuple(dict(call.arguments) for call in turn.tool_calls
+                           if call.name == "__mmm_rejected_tool_call__")
+        if rejections:
+            raise NativeToolDecisionRejected(name, rejections)
         raise ModelConfigurationError(
             "Native structured decision did not return exactly one "
             f"{name!r} tool call."

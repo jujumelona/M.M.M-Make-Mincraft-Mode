@@ -107,15 +107,16 @@ def test_invalid_graph_is_rejected_before_source_generation(fault):
     else:
         first["public_api"] = []
     with pytest.raises(ImplementationGraphError):
-        compile_with(Decisions([{"nodes": [first, second], "done": True}]))
+        compile_with(Decisions([{"nodes": [first, second], "done": True}] * 3))
 
 
 def test_pagination_has_explicit_completion_and_detects_repetition():
     router = Decisions([{"nodes": [node()], "done": False},
+                        {"nodes": [node()], "done": False},
                         {"nodes": [node()], "done": False}])
     with pytest.raises(ImplementationGraphError, match="DUPLICATE_OWNER"):
         compile_with(router)
-    assert len(router.calls) == 2
+    assert len(router.calls) == 3
 
 
 @pytest.mark.parametrize("fault", ["same", "api", "lost", "helper"])
@@ -132,6 +133,7 @@ def test_refinement_cannot_repeat_task_drop_coverage_or_break_consumers(fault):
     else:
         helper["symbol"] = "Unrelated"
     router = Decisions([{"nodes": [original], "done": True},
+                        {"nodes": [helper, facade], "done": True},
                         {"nodes": [helper, facade], "done": True}])
     with pytest.raises(ImplementationGraphError):
         compile_with(router)
@@ -297,6 +299,7 @@ def test_relabeling_estimate_without_moving_work_is_not_decomposition():
     facade = node(cost=1000, dependencies=["PlayerCreditsPartStore"])
     helper = node("PlayerCreditsPartStore", cost=1000)
     router = Decisions([{"nodes": [original], "done": True},
+                        {"nodes": [facade, helper], "done": True},
                         {"nodes": [facade, helper], "done": True}])
     with pytest.raises(ImplementationGraphError, match="UNCHANGED_WORK"):
         compile_with(router)
@@ -308,6 +311,7 @@ def test_unused_helper_cannot_disguise_same_whole_file_work():
     facade["obligations"] = ["Delegate to a helper."]
     helper = node("PlayerCreditsPartStore", cost=1000)
     router = Decisions([{"nodes": [original], "done": True},
+                        {"nodes": [facade, helper], "done": True},
                         {"nodes": [facade, helper], "done": True}])
     with pytest.raises(ImplementationGraphError, match="UNUSED_SPLIT_HELPER"):
         compile_with(router)

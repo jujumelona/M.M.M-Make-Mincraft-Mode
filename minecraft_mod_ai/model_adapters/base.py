@@ -25,6 +25,17 @@ class ModelConfigurationError(ValueError):
     pass
 
 
+class NativeToolDecisionRejected(ModelConfigurationError):
+    """A native decision was rejected; retain the evidence for its owning compiler."""
+
+    def __init__(self, tool_name: str, rejections: Sequence[Mapping[str, Any]]) -> None:
+        self.tool_name = tool_name
+        self.rejections = tuple(dict(item) for item in rejections)
+        details = "; ".join(str(item.get("error") or item.get("failure_code") or "invalid call")
+                            for item in self.rejections)
+        super().__init__(f"Native structured decision {tool_name!r} rejected: {details}")
+
+
 class HardwarePreflightError(ModelBackendError):
     pass
 

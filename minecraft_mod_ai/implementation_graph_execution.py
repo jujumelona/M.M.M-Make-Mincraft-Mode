@@ -98,14 +98,26 @@ def execute_implementation_graph(generator: Any, project_root: str | Path, *,
         return dest
 
     def save() -> None:
-        state["graph_hash"] = digest(state["graph"])
+        if "graph" in state:
+            state["graph_hash"] = digest(state["graph"])
         direct._atomic_write(cache, json.dumps(state, ensure_ascii=False, indent=2))
+
+    def save_compilation(draft: dict[str, Any]) -> None:
+        state["compilation"] = draft
+        save()
+
+    def save_refinement(pending: dict[str, Any]) -> None:
+        state["refinement_pending"] = pending
+        save()
 
     with project_write_lock(root):
         if cache.is_file():
             state = json.loads(cache.read_text(encoding="utf-8"))
             if state.get("request_hash") != digest(request):
                 raise ImplementationGraphError("IMPLEMENTATION_IR_CHECKPOINT_DRIFT")
+        else:
+            state = {"request_hash": digest(request), "blocked_decodes": [], "refinements": 0}
+        if "graph" in state:
             graph = state["graph"]
             if state.get("graph_hash") != digest(graph) or graph.get("source_text") != request["text"]:
                 raise ImplementationGraphError("IMPLEMENTATION_IR_CHECKPOINT_DRIFT")
@@ -113,9 +125,10 @@ def execute_implementation_graph(generator: Any, project_root: str | Path, *,
         else:
             graph = compile_graph(generator.router, text=request["text"], package=package,
                                   mod_id=mod_id, target=target,
-                                  context=entry.read_text(encoding="utf-8"))
-            state = {"request_hash": digest(request), "graph": graph,
-                     "blocked_decodes": [], "refinements": 0}
+                                  context=entry.read_text(encoding="utf-8"),
+                                  resume=state.get("compilation"), checkpoint=save_compilation)
+            state["graph"] = graph
+            state.pop("compilation", None)
             save()
         if any(n["path"].casefold() == request["entrypoint_path"].casefold() for n in graph["nodes"]):
             raise ImplementationGraphError("IMPLEMENTATION_IR_ENTRYPOINT_RESERVED")
@@ -183,17 +196,20 @@ def execute_implementation_graph(generator: Any, project_root: str | Path, *,
                     emit_root_cause("implementation_node_decomposition", stage="production", result="START",
                                     details={"reason": reason, "symbol": node["symbol"],
                                              "node_hash": fingerprint, "same_decode_retry": False})
-                    if state["refinements"] >= MAX_REFINEMENTS:
-                        raise ImplementationGraphError("IMPLEMENTATION_IR_REFINEMENT_LIMIT")
-                    state["refinements"] += 1
-                    save()
+                    if not state.get("refinement_pending"):
+                        if state["refinements"] >= MAX_REFINEMENTS:
+                            raise ImplementationGraphError("IMPLEMENTATION_IR_REFINEMENT_LIMIT")
+                        state["refinements"] += 1
+                        save()
                     # Halve the admitted workload after an observed exhaustion. Merely
                     # lowering the model's estimate cannot make the same request eligible.
                     budget = min(admissible_tokens(), node_cost(node) // 2) if reason == "OUTPUT_BUDGET_EXHAUSTED" else admissible_tokens()
                     refined = refine_node(generator.router, node, nodes=graph["nodes"],
                                           package=package, mod_id=mod_id,
-                                          requirements=graph["requirements"], reason=reason, budget=budget)
+                                          requirements=graph["requirements"], reason=reason, budget=budget,
+                                          pending=state.get("refinement_pending"), checkpoint=save_refinement)
                     graph["nodes"] = refined
+                    state.pop("refinement_pending", None)
                     save()
 
             main = remember(request["entrypoint_path"])

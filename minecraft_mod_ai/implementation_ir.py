@@ -10,19 +10,29 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Mapping
-from pathlib import PurePosixPath
+from collections.abc import Callable, Mapping
+from copy import deepcopy
 from typing import Any
 
 from .custom_module_errors import CustomModuleGenerationError
+from .model_adapters.base import NativeToolDecisionRejected
 
 MAX_NODES = 128
 MAX_PAGES = 32
 MAX_REFINEMENTS = 6
+MAX_PAGE_CORRECTIONS = 2
 
 
 class ImplementationGraphError(CustomModuleGenerationError):
     pass
+
+
+class _InvalidPage(ImplementationGraphError):
+    def __init__(self, diagnostics: list[dict[str, Any]], page: Any,
+                 preserve_nodes: list[dict[str, Any]] | None = None) -> None:
+        self.feedback = {"diagnostics": diagnostics, "rejected_page": page,
+                         "preserve_nodes": preserve_nodes or []}
+        super().__init__("IMPLEMENTATION_IR_INVALID_PAGE: " + json.dumps(diagnostics, ensure_ascii=False))
 
 
 class OutputBudgetExhausted(CustomModuleGenerationError):
@@ -41,29 +51,73 @@ def digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
-_STRINGS = {"type": "array", "items": {"type": "string"}}
+_STRINGS = {"type": "array", "uniqueItems": True,
+            "items": {"type": "string", "minLength": 1, "pattern": r"\S"}}
+_JAVA_SYMBOL = r"^[A-Z][A-Za-z0-9_]{0,95}$"
 NODE_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "required": ["symbol", "kind", "resource_path", "responsibility", "requirements",
                  "obligations", "public_api", "depends_on", "activation", "estimated_tokens"],
     "properties": {
-        "symbol": {"type": "string"},
+        "symbol": {"type": "string", "pattern": _JAVA_SYMBOL},
         "kind": {"type": "string", "enum": ["java", "resource"]},
-        "resource_path": {"type": "string"},
-        "responsibility": {"type": "string"},
-        "requirements": _STRINGS, "obligations": _STRINGS,
+        "resource_path": {"type": "string", "description": "Java: exactly empty string, host derives its path. Resource: exact namespaced JSON resource path."},
+        "responsibility": {"type": "string", "minLength": 1, "pattern": r"\S"},
+        "requirements": {**_STRINGS, "minItems": 1}, "obligations": {**_STRINGS, "minItems": 1},
         "public_api": _STRINGS, "depends_on": _STRINGS,
         "activation": {"type": "boolean"},
         "estimated_tokens": {"type": "integer", "minimum": 1},
     },
+    "allOf": [
+        {"if": {"properties": {"kind": {"const": "java"}}},
+         "then": {"properties": {
+             "resource_path": {"const": ""},
+             "public_api": {"minItems": 1, "items": {"type": "string", "pattern": r"^[^{}]+$"}},
+         }},
+         "else": {"properties": {
+             "resource_path": {"minLength": 1, "pattern": r"^src/main/resources/(assets|data)/[^/]+/(?!.*(?:\.\.|\\)).+\.json$"},
+             "public_api": {"maxItems": 0}, "activation": {"const": False},
+         }}},
+        {"if": {"properties": {"activation": {"const": True}}},
+         "then": {"properties": {"public_api": {"contains": {"const": "public static void initialize()"}}}}},
+    ],
 }
 PAGE_SCHEMA = {
     "type": "object", "additionalProperties": False, "required": ["nodes", "done"],
     "properties": {
-        "nodes": {"type": "array", "minItems": 1, "maxItems": 4, "items": NODE_SCHEMA},
+        "nodes": {"type": "array", "maxItems": 4, "items": NODE_SCHEMA},
         "done": {"type": "boolean"},
     },
+    "allOf": [{"if": {"properties": {"nodes": {"maxItems": 0}}},
+               "then": {"properties": {"done": {"const": True}}}}],
 }
+
+
+def _page_schema(payload: Mapping[str, Any]) -> dict[str, Any]:
+    schema = deepcopy(PAGE_SCHEMA)
+    item = schema["properties"]["nodes"]["items"]
+    item["properties"]["requirements"]["items"] = {"type": "string", "enum": list(payload["requirements"])}
+    if payload.get("mod_id"):
+        namespace = re.escape(str(payload["mod_id"]))
+        item["allOf"][0]["else"]["properties"]["resource_path"]["pattern"] = (
+            rf"^src/main/resources/(assets|data)/{namespace}/(?!.*(?:\.\.|\\)).+\.json$"
+        )
+    return schema
+
+
+def _schema_diagnostics(page: Any, schema: Mapping[str, Any]) -> list[dict[str, Any]]:
+    from jsonschema.validators import validator_for
+
+    diagnostics = []
+    for error in validator_for(schema)(schema).iter_errors(page):
+        parts = list(error.absolute_path)
+        node = ""
+        if isinstance(page, dict) and len(parts) >= 2 and parts[0] == "nodes" and isinstance(parts[1], int):
+            candidate = page["nodes"][parts[1]]
+            node = str(candidate.get("symbol", "")) if isinstance(candidate, dict) else ""
+        diagnostics.append({"code": "IMPLEMENTATION_IR_SCHEMA_INVALID", "node": node,
+                            "field": ".".join(map(str, parts)), "message": error.message[:1000]})
+    return diagnostics
 
 
 def source_requirements(text: str) -> dict[str, str]:
@@ -89,82 +143,157 @@ def _decision(router: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]
     callback = getattr(router, "generate_tool_decision", None)
     if not callable(callback):
         raise ImplementationGraphError("IMPLEMENTATION_IR_NATIVE_DECISION_REQUIRED")
-    response = callback(
-        "planner",
-        [{"role": "system", "content": (
-            "Compile the approved design into an implementation DAG, without changing gameplay. "
-            "Markdown headings describe concerns, NOT Java classes. Group requirements across "
-            "sections by state ownership and coherent responsibility. Separate state/models, "
-            "persistence, services, integration, networking, UI/resources and verification where "
-            "the design needs them. Cite every R identifier at least once. Return at most four "
-            "nodes per page, then explicitly done=true. Each Java node is one public final class "
-            "with a concrete name and frozen public_api declaration strings (no bodies). Include "
-            "constructors/fields/methods used by consumers. List actual symbol dependencies, "
-            "never an artificial previous-section chain. No dependency cycles. Only integration "
-            "nodes need activation=true and public static void initialize(). Other classes may "
-            "have constructors and state without lifecycle methods. JSON resources use kind "
-            "resource and a path under the approved assets/data namespace. Java verification "
-            "nodes must contain executable tests for the selected platform. Preserve all "
-            "approved requirements, including failure handling and tests. Do not claim tests ran. "
-            "Estimate COMPLETE serialized source output tokens, not just method bodies. "
-            "Respect the host admission budget by factoring smaller collaborating types. "
-            "For decomposition return 2-4 nodes, done=true: retain the original symbol, kind, "
-            "resource_path, activation and exact public_api as a smaller facade; use helper "
-            "symbols prefixed with OriginalSymbolPart. Move work into those helpers. Preserve "
-            "all original requirement refs. Every replacement must be strictly smaller than "
-            "the rejected task. Dependencies outside the replacement must already exist."
-        )}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
-        tool_name=name, parameters=PAGE_SCHEMA,
-        description="Host-owned implementation graph compilation; does not mutate source.",
-    )
-    if not isinstance(response, dict) or type(response.get("done")) is not bool:
-        raise ImplementationGraphError("IMPLEMENTATION_IR_INVALID_PAGE")
-    nodes = response.get("nodes")
-    if not isinstance(nodes, list) or not 1 <= len(nodes) <= 4:
-        raise ImplementationGraphError("IMPLEMENTATION_IR_PAGE_LIMIT")
+    try:
+        response = callback(
+            "planner",
+            [{"role": "system", "content": (
+                "Compile the approved design into an implementation DAG, without changing gameplay. "
+                "Markdown headings describe concerns, NOT Java classes. Group requirements across "
+                "sections by state ownership and coherent responsibility. Separate state/models, "
+                "persistence, services, integration, networking, UI/resources and verification where "
+                "the design needs them. Cite every R identifier at least once. Return at most four "
+                "nodes per page, then explicitly done=true. Each Java node is one public final class "
+                "with a concrete name and NONEMPTY public_api declaration strings (no bodies). Java "
+                "resource_path must be exactly the empty string: the host derives it. Include "
+                "constructors/fields/methods used by consumers. List actual symbol dependencies, "
+                "never an artificial previous-section chain. No dependency cycles. Only integration "
+                "nodes need activation=true and public static void initialize(). Other classes may "
+                "have constructors and state without lifecycle methods. JSON resources use kind "
+                "resource and a path under the approved assets/data namespace. Java verification "
+                "nodes must contain executable tests for the selected platform. Preserve all "
+                "approved requirements, including failure handling and tests. Do not claim tests ran. "
+                "Estimate COMPLETE serialized source output tokens, not just method bodies. "
+                "Respect the host admission budget by factoring smaller collaborating types. "
+                "For decomposition return 2-4 nodes, done=true: retain the original symbol, kind, "
+                "resource_path, activation and exact public_api as a smaller facade; use helper "
+                "symbols prefixed with OriginalSymbolPart. Move work into those helpers. Preserve "
+                "all original requirement refs. Every replacement must be strictly smaller than "
+                "the rejected task. Dependencies outside the replacement must already exist. "
+                "When validation_feedback is supplied, return the corrected page, preserve_nodes "
+                "unchanged; fix the named fields. Never repeat the rejected page. Do not repeat "
+                "already accepted_nodes on later pages. Remaining requirement IDs and unresolved "
+                "dependencies must be covered before done=true."
+            )}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
+            tool_name=name, parameters=_page_schema(payload),
+            description="Host-owned implementation graph compilation; does not mutate source.",
+        )
+    except NativeToolDecisionRejected as exc:
+        matching = [r for r in exc.rejections if r.get("original_tool") == name]
+        rejected_page = None
+        if len(matching) == 1:
+            try:
+                rejected_page = json.loads(matching[0].get("raw_arguments") or "")
+            except (ValueError, TypeError):
+                pass
+        diagnostics = _schema_diagnostics(rejected_page, _page_schema(payload)) if rejected_page is not None else []
+        if not diagnostics:
+            diagnostics = [{"code": r.get("failure_code", "TOOL_DECISION_REJECTED"),
+                            "node": "", "field": "tool_call", "message": str(r.get("error", ""))}
+                           for r in exc.rejections]
+        failure = _InvalidPage(diagnostics, rejected_page)
+        failure.feedback["native_rejections"] = list(exc.rejections)
+        raise failure from exc
     return response
 
 
+def _validated_page(router: Any, name: str, payload: dict[str, Any], *,
+                    validator: Callable[[dict[str, Any]], Any],
+                    pending: dict[str, Any] | None = None,
+                    checkpoint: Callable[[dict[str, Any]], None] | None = None) -> Any:
+    """Correct a rejected decision with explicit feedback, never blind replay.
+
+    Only admission failures are correctable here. Transport, output-limit and context
+    exceptions retain their own type and cannot enter this loop.
+    """
+    from .root_cause_trace import emit_root_cause
+
+    request_hash = digest({"name": name, "payload": payload})
+    state = deepcopy(pending) if pending else {
+        "request_hash": request_hash, "attempt": 0, "seen": [], "feedback": None,
+    }
+    if state.get("request_hash") != request_hash:
+        raise ImplementationGraphError("IMPLEMENTATION_IR_CHECKPOINT_DRIFT")
+    if state.get("terminal"):
+        raise ImplementationGraphError(state["terminal"] + ": " + json.dumps(state["feedback"], ensure_ascii=False))
+    schema = _page_schema(payload)
+    while state["attempt"] <= MAX_PAGE_CORRECTIONS:
+        request = dict(payload)
+        if state["feedback"]:
+            request["validation_feedback"] = state["feedback"]
+        page = None
+        try:
+            page = _decision(router, name, request)
+            diagnostics = _schema_diagnostics(page, schema)
+            if diagnostics:
+                raise _InvalidPage(diagnostics, page)
+            result = validator(page)
+            preserve = (state.get("feedback") or {}).get("preserve_nodes", [])
+            if any(node not in page["nodes"] for node in preserve):
+                raise _InvalidPage([{"code": "IMPLEMENTATION_IR_ACCEPTED_SIBLING_DRIFT",
+                                     "node": "", "field": "nodes",
+                                     "message": "Keep valid nodes from the rejected page unchanged; correct only invalid nodes."}], page, preserve)
+        except _InvalidPage as exc:
+            feedback = exc.feedback
+            bad_page = feedback["rejected_page"]
+            schema_failure = any(d["code"] == "IMPLEMENTATION_IR_SCHEMA_INVALID" for d in feedback["diagnostics"])
+            page_shape_failure = any(d["field"] == "nodes" for d in feedback["diagnostics"])
+            # Retain valid siblings in an invalid page without admitting any part of
+            # that page into the graph. No list.extend(generator) partial mutation.
+            if isinstance(bad_page, dict) and isinstance(bad_page.get("nodes"), list):
+                item_schema = schema["properties"]["nodes"]["items"]
+                if not feedback["preserve_nodes"] and schema_failure and not page_shape_failure:
+                    feedback["preserve_nodes"] = [n for n in bad_page["nodes"]
+                                                  if not _schema_diagnostics(n, item_schema)]
+            # Previously protected siblings remain protected through every correction,
+            # including a second page that is still invalid for some other reason.
+            keep_protected = schema_failure or any(
+                d["code"] == "IMPLEMENTATION_IR_ACCEPTED_SIBLING_DRIFT" for d in feedback["diagnostics"]
+            )
+            # A graph-level error may prove a schema-valid sibling participates in a
+            # cycle or duplicate owner. Release provisional siblings for that correction;
+            # previously admitted pages remain frozen in the validator's accepted set.
+            protected = (state.get("feedback") or {}).get("preserve_nodes", []) if keep_protected else []
+            protected_symbols = {n["symbol"] for n in protected}
+            feedback["preserve_nodes"] = protected + [
+                n for n in feedback["preserve_nodes"] if n["symbol"] not in protected_symbols
+            ]
+            fingerprint = digest({"page": bad_page, "diagnostics": feedback["diagnostics"] if bad_page is None else None})
+            repeated = fingerprint in state["seen"]
+            state["attempt"] += 1
+            state["feedback"] = feedback
+            state["seen"].append(fingerprint)
+            if repeated or state["attempt"] > MAX_PAGE_CORRECTIONS:
+                state["terminal"] = "IMPLEMENTATION_IR_NO_PROGRESS" if repeated else "IMPLEMENTATION_IR_CORRECTION_LIMIT"
+            if checkpoint:
+                checkpoint(state)
+            emit_root_cause("implementation_graph_page_rejected", stage="production", operation=name,
+                            result="REJECTED", details={"page": payload.get("page"),
+                            "attempt": state["attempt"], "response_sha256": digest(bad_page),
+                            "validation_feedback": feedback, "same_response": repeated})
+            if state.get("terminal"):
+                raise ImplementationGraphError(state["terminal"] + ": " + json.dumps(feedback["diagnostics"], ensure_ascii=False)) from exc
+            continue
+        emit_root_cause("implementation_graph_page_accepted", stage="production", operation=name,
+                        result="PASS", details={"page": payload.get("page"), "response": page,
+                        "response_sha256": digest(page), "corrections": state["attempt"]})
+        return result
+    raise ImplementationGraphError("IMPLEMENTATION_IR_CORRECTION_LIMIT: " + json.dumps(state["feedback"], ensure_ascii=False))
+
+
 def validate_node(raw: Any, *, package: str, mod_id: str, refs: set[str]) -> dict[str, Any]:
-    if not isinstance(raw, dict) or set(raw) != set(NODE_SCHEMA["required"]):
-        raise ImplementationGraphError("IMPLEMENTATION_IR_INVALID_NODE")
-    node = dict(raw)
-    symbol = node["symbol"]
-    if not isinstance(symbol, str) or not re.fullmatch(r"[A-Z][A-Za-z0-9_]{0,95}", symbol):
-        raise ImplementationGraphError("IMPLEMENTATION_IR_INVALID_SYMBOL")
-    for key in ("requirements", "obligations", "public_api", "depends_on"):
-        values = node[key]
-        if not isinstance(values, list) or any(not isinstance(x, str) or not x.strip() for x in values):
-            raise ImplementationGraphError(f"IMPLEMENTATION_IR_INVALID_{key.upper()}")
-        if len(values) != len(set(values)):
-            raise ImplementationGraphError(f"IMPLEMENTATION_IR_DUPLICATE_{key.upper()}")
-    if not node["requirements"] or not set(node["requirements"]) <= refs or not node["obligations"]:
-        raise ImplementationGraphError("IMPLEMENTATION_IR_REQUIREMENT_COVERAGE")
-    if not isinstance(node["responsibility"], str) or not node["responsibility"].strip():
-        raise ImplementationGraphError("IMPLEMENTATION_IR_RESPONSIBILITY_REQUIRED")
-    if type(node["estimated_tokens"]) is not int or node["estimated_tokens"] < 1:
-        raise ImplementationGraphError("IMPLEMENTATION_IR_INVALID_ESTIMATE")
-    if type(node["activation"]) is not bool:
-        raise ImplementationGraphError("IMPLEMENTATION_IR_INVALID_ACTIVATION")
+    # The exact model-visible schema is also the host admission contract. Avoid
+    # maintaining a second set of stricter, undisclosed per-kind validation rules.
+    schema = _page_schema({"requirements": sorted(refs), "mod_id": mod_id})["properties"]["nodes"]["items"]
+    diagnostics = _schema_diagnostics(raw, schema)
+    if diagnostics:
+        raise ImplementationGraphError("IMPLEMENTATION_IR_INVALID_NODE: " + json.dumps(diagnostics, ensure_ascii=False))
+    node = deepcopy(raw)
+    node["estimated_tokens"] = int(node["estimated_tokens"])
     if node["kind"] == "java":
-        if node["resource_path"] or not node["public_api"]:
-            raise ImplementationGraphError("IMPLEMENTATION_IR_JAVA_API_REQUIRED")
-        if any("{" in api or "}" in api for api in node["public_api"]):
-            raise ImplementationGraphError("IMPLEMENTATION_IR_API_BODY_FORBIDDEN")
         node["public_api"] = [re.sub(r"\s+", " ", api.strip().rstrip(";").strip()) for api in node["public_api"]]
-        if node["activation"] and "public static void initialize()" not in node["public_api"]:
-            raise ImplementationGraphError("IMPLEMENTATION_IR_ACTIVATION_API_REQUIRED")
-        node["path"] = f"src/main/java/{package.replace('.', '/')}/{symbol}.java"
-    elif node["kind"] == "resource":
-        path = node["resource_path"]
-        if not isinstance(path, str) or "\\" in path or ".." in PurePosixPath(path).parts:
-            raise ImplementationGraphError("IMPLEMENTATION_IR_RESOURCE_PATH_INVALID")
-        prefixes = (f"src/main/resources/assets/{mod_id}/", f"src/main/resources/data/{mod_id}/")
-        if not path.startswith(prefixes) or not path.endswith(".json") or node["activation"] or node["public_api"]:
-            raise ImplementationGraphError("IMPLEMENTATION_IR_RESOURCE_SCOPE_INVALID")
-        node["path"] = path
+        node["path"] = f"src/main/java/{package.replace('.', '/')}/{node['symbol']}.java"
     else:
-        raise ImplementationGraphError("IMPLEMENTATION_IR_KIND_INVALID")
+        node["path"] = node["resource_path"]
     return node
 
 
@@ -190,74 +319,158 @@ def ordered_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def refine_node(router: Any, node: dict[str, Any], *, nodes: list[dict[str, Any]],
                 package: str, mod_id: str, requirements: dict[str, str], reason: str,
-                budget: int | None = None) -> list[dict[str, Any]]:
+                budget: int | None = None, pending: dict[str, Any] | None = None,
+                checkpoint: Callable[[dict[str, Any]], None] | None = None) -> list[dict[str, Any]]:
     budget = budget or admissible_tokens()
-    page = _decision(router, "decompose_implementation_node", {
+    payload = {
         "rejected_node": node, "reason": reason, "admission_tokens": budget,
         "requirements": {r: requirements[r] for r in node["requirements"]},
         "existing_contracts": [{k: n[k] for k in ("symbol", "public_api", "depends_on")} for n in nodes],
-    })
-    if not page["done"] or len(page["nodes"]) < 2:
-        raise ImplementationGraphError("IMPLEMENTATION_IR_DECOMPOSITION_REQUIRED")
-    children = [validate_node(n, package=package, mod_id=mod_id, refs=set(node["requirements"])) for n in page["nodes"]]
-    original = next((n for n in children if n["symbol"] == node["symbol"]), None)
-    stable = ("public_api", "kind", "resource_path", "activation")
-    if original is None or any(original[k] != node[k] for k in stable):
-        raise ImplementationGraphError("IMPLEMENTATION_IR_PUBLIC_CONTRACT_DRIFT")
-    if original["obligations"] == node["obligations"]:
-        raise ImplementationGraphError("IMPLEMENTATION_IR_DECOMPOSITION_UNCHANGED_WORK")
-    external = {n["symbol"] for n in nodes if n["symbol"] != node["symbol"]}
-    for child in children:
-        if child is not original and (not child["symbol"].startswith(node["symbol"] + "Part") or child["activation"]):
-            raise ImplementationGraphError("IMPLEMENTATION_IR_HELPER_SCOPE_INVALID")
-        if (child["symbol"] in external or node_cost(child) >= node_cost(node)
-                or (reason == "OUTPUT_BUDGET_EXHAUSTED" and node_cost(child) > budget)):
-            raise ImplementationGraphError("IMPLEMENTATION_IR_DECOMPOSITION_NO_PROGRESS")
-    if set().union(*(set(n["requirements"]) for n in children)) != set(node["requirements"]):
-        raise ImplementationGraphError("IMPLEMENTATION_IR_DECOMPOSITION_LOST_REQUIREMENTS")
-    result = [n for n in nodes if n["symbol"] != node["symbol"]] + children
-    ordered = ordered_nodes(result)
-    by_symbol = {n["symbol"]: n for n in ordered}
-    reachable = set(original["depends_on"])
-    frontier = list(reachable)
-    while frontier:
-        for dependency in by_symbol[frontier.pop()]["depends_on"]:
-            if dependency not in reachable:
-                reachable.add(dependency)
-                frontier.append(dependency)
-    if any(child is not original and child["symbol"] not in reachable for child in children):
-        raise ImplementationGraphError("IMPLEMENTATION_IR_UNUSED_SPLIT_HELPER")
-    return ordered
+        "package": package, "mod_id": mod_id,
+    }
+    def admit(page: dict[str, Any]) -> list[dict[str, Any]]:
+        try:
+            if not page["done"] or len(page["nodes"]) < 2:
+                raise ImplementationGraphError("IMPLEMENTATION_IR_DECOMPOSITION_REQUIRED")
+            children = [validate_node(n, package=package, mod_id=mod_id, refs=set(node["requirements"])) for n in page["nodes"]]
+            original = next((n for n in children if n["symbol"] == node["symbol"]), None)
+            stable = ("public_api", "kind", "resource_path", "activation")
+            if original is None or any(original[k] != node[k] for k in stable):
+                raise ImplementationGraphError("IMPLEMENTATION_IR_PUBLIC_CONTRACT_DRIFT")
+            if original["obligations"] == node["obligations"]:
+                raise ImplementationGraphError("IMPLEMENTATION_IR_DECOMPOSITION_UNCHANGED_WORK")
+            external = {n["symbol"] for n in nodes if n["symbol"] != node["symbol"]}
+            for child in children:
+                if child is not original and (not child["symbol"].startswith(node["symbol"] + "Part") or child["activation"]):
+                    raise ImplementationGraphError("IMPLEMENTATION_IR_HELPER_SCOPE_INVALID")
+                if (child["symbol"] in external or node_cost(child) >= node_cost(node)
+                        or (reason == "OUTPUT_BUDGET_EXHAUSTED" and node_cost(child) > budget)):
+                    raise ImplementationGraphError("IMPLEMENTATION_IR_DECOMPOSITION_NO_PROGRESS")
+            if set().union(*(set(n["requirements"]) for n in children)) != set(node["requirements"]):
+                raise ImplementationGraphError("IMPLEMENTATION_IR_DECOMPOSITION_LOST_REQUIREMENTS")
+            result = [n for n in nodes if n["symbol"] != node["symbol"]] + children
+            ordered = ordered_nodes(result)
+            by_symbol = {n["symbol"]: n for n in ordered}
+            reachable = set(original["depends_on"])
+            frontier = list(reachable)
+            while frontier:
+                for dependency in by_symbol[frontier.pop()]["depends_on"]:
+                    if dependency not in reachable:
+                        reachable.add(dependency)
+                        frontier.append(dependency)
+            if any(child is not original and child["symbol"] not in reachable for child in children):
+                raise ImplementationGraphError("IMPLEMENTATION_IR_UNUSED_SPLIT_HELPER")
+            return ordered
+        except ImplementationGraphError as exc:
+            raise _InvalidPage([{"code": str(exc).split(":", 1)[0], "node": node["symbol"],
+                                 "field": "nodes", "message": str(exc)}], page) from exc
+
+    return _validated_page(router, "decompose_implementation_node", payload, validator=admit,
+                           pending=pending, checkpoint=checkpoint)
+
+
+def _admit_graph_page(page: dict[str, Any], *, accepted: list[dict[str, Any]],
+                      package: str, mod_id: str, requirements: dict[str, str]) -> list[dict[str, Any]]:
+    proposed: list[dict[str, Any]] = []
+    diagnostics: list[dict[str, Any]] = []
+    valid_raw: list[dict[str, Any]] = []
+    for index, raw in enumerate(page["nodes"]):
+        try:
+            proposed.append(validate_node(raw, package=package, mod_id=mod_id, refs=set(requirements)))
+            valid_raw.append(raw)
+        except ImplementationGraphError as exc:
+            diagnostics.append({"code": str(exc).split(":", 1)[0], "node": str(raw.get("symbol", "")),
+                                "field": f"nodes.{index}", "message": str(exc)})
+    if diagnostics:
+        raise _InvalidPage(diagnostics, page, valid_raw)
+    combined = accepted + proposed
+    try:
+        # Forward edges are legal across pages. Validate the known subgraph for cycles
+        # and duplicate ownership before accepting the page, then resolve missing nodes.
+        known = {n["symbol"] for n in combined}
+        ordered_nodes([{**n, "depends_on": [dep for dep in n["depends_on"] if dep in known]} for n in combined])
+    except ImplementationGraphError as exc:
+        raise _InvalidPage([{"code": str(exc), "node": "", "field": "nodes",
+                             "message": str(exc) + "; correct only this page, accepted nodes are frozen"}], page) from exc
+    return combined
 
 
 def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
-                  target: dict[str, Any], context: str = "") -> dict[str, Any]:
+                  target: dict[str, Any], context: str = "",
+                  resume: dict[str, Any] | None = None,
+                  checkpoint: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
     requirements = source_requirements(text)
-    nodes: list[dict[str, Any]] = []
-    for page_number in range(MAX_PAGES):
-        page = _decision(router, "compile_implementation_graph", {
-            "requirements": requirements, "platform": target, "project_context": context,
+    request_hash = digest({"text": text, "package": package, "mod_id": mod_id, "target": target})
+    state = deepcopy(resume) if resume else {
+        "schema_version": "mmm/implementation-ir-draft-v1", "request_hash": request_hash,
+        "nodes": [], "page": 1, "done": False, "pending": None, "refinements": 0,
+    }
+    if state.get("request_hash") != request_hash or state.get("schema_version") != "mmm/implementation-ir-draft-v1":
+        raise ImplementationGraphError("IMPLEMENTATION_IR_CHECKPOINT_DRIFT")
+
+    def save() -> None:
+        if checkpoint:
+            checkpoint(deepcopy(state))
+
+    def save_pending(pending: dict[str, Any]) -> None:
+        state["pending"] = pending
+        save()
+
+    def admit(page: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
+        combined = _admit_graph_page(page, accepted=state["nodes"], package=package, mod_id=mod_id, requirements=requirements)
+        covered = set().union(*(set(n["requirements"]) for n in combined))
+        known = {n["symbol"] for n in combined}
+        missing = any(not set(n["depends_on"]) <= known for n in combined)
+        if not page["nodes"] and (not combined or set(requirements) != covered or missing):
+            raise _InvalidPage([{"code": "IMPLEMENTATION_IR_UNCOVERED_REQUIREMENTS", "node": "", "field": "nodes",
+                                 "message": "Add nodes for remaining requirements and unresolved dependencies before finishing."}], page)
+        return combined, page["done"]
+
+    while not state["done"] and state["page"] <= MAX_PAGES:
+        nodes = state["nodes"]
+        covered = set().union(*(set(n["requirements"]) for n in nodes))
+        known = {n["symbol"] for n in nodes}
+        missing = sorted({dep for n in nodes for dep in n["depends_on"] if dep not in known})
+        payload = {
+            "requirements": requirements, "remaining_requirements": [r for r in requirements if r not in covered],
+            "unresolved_dependencies": missing, "platform": target, "project_context": context,
             "package": package, "mod_id": mod_id, "admission_tokens": admissible_tokens(),
-            "page": page_number + 1, "accepted_nodes": nodes,
-        })
-        nodes.extend(validate_node(n, package=package, mod_id=mod_id, refs=set(requirements)) for n in page["nodes"])
-        if len({n["symbol"].casefold() for n in nodes}) != len(nodes):
-            raise ImplementationGraphError("IMPLEMENTATION_IR_DUPLICATE_OWNER")
-        if page["done"]:
-            break
-    else:
+            "page": state["page"], "accepted_nodes": nodes,
+        }
+
+        combined, done = _validated_page(router, "compile_implementation_graph", payload, validator=admit,
+                                         pending=state["pending"], checkpoint=save_pending)
+        state["nodes"] = combined
+        state["page"] += 1
+        state["pending"] = None
+        covered = set().union(*(set(n["requirements"]) for n in combined))
+        known = {n["symbol"] for n in combined}
+        all_dependencies_known = all(set(n["depends_on"]) <= known for n in combined)
+        state["done"] = done and covered == set(requirements) and all_dependencies_known
+        save()
+    if not state["done"]:
         raise ImplementationGraphError("IMPLEMENTATION_IR_PAGE_LIMIT")
-    nodes = ordered_nodes(nodes)
-    if set().union(*(set(n["requirements"]) for n in nodes)) != set(requirements):
-        raise ImplementationGraphError("IMPLEMENTATION_IR_UNCOVERED_REQUIREMENTS")
-    for _ in range(MAX_REFINEMENTS):
+    nodes = ordered_nodes(state["nodes"])
+
+    def save_refinement(pending: dict[str, Any]) -> None:
+        state["refinement_pending"] = pending
+        save()
+
+    while True:
         oversized = next((n for n in nodes if node_cost(n) > admissible_tokens()), None)
         if oversized is None:
             break
+        if not state.get("refinement_pending"):
+            if state["refinements"] >= MAX_REFINEMENTS:
+                raise ImplementationGraphError("IMPLEMENTATION_IR_REFINEMENT_LIMIT")
+            state["refinements"] += 1
+            save()
         nodes = refine_node(router, oversized, nodes=nodes, package=package, mod_id=mod_id,
-                            requirements=requirements, reason="preflight_output_budget")
-    if any(node_cost(n) > admissible_tokens() for n in nodes):
-        raise ImplementationGraphError("IMPLEMENTATION_IR_REFINEMENT_LIMIT")
+                            requirements=requirements, reason="preflight_output_budget",
+                            pending=state.get("refinement_pending"), checkpoint=save_refinement)
+        state["nodes"] = nodes
+        state.pop("refinement_pending", None)
+        save()
     return {"schema_version": "mmm/implementation-ir-v1", "source_text": text,
             "source_sha256": hashlib.sha256(text.encode()).hexdigest(),
             "requirements": requirements, "nodes": nodes}
