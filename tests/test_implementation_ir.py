@@ -22,6 +22,7 @@ from minecraft_mod_ai.llama_finish_reason_contract import (
     OUTPUT_EXHAUSTED,
     LlamaCompletionBoundaryError,
 )
+from minecraft_mod_ai.model_adapters.base import NativeToolDecisionRejected
 
 TARGET = {"minecraft_version": "1.21.1", "loader": "fabric", "mappings": "1.21.1+build.3"}
 DESIGN = "# behavior_contract\nAdd credits and purchase once.\n# state_model\nPlayerCredits owns balances.\n# verification\nReject purchases when balance is insufficient."
@@ -59,6 +60,57 @@ def test_graph_combines_sections_by_owner_and_orders_actual_dependencies():
     assert graph["source_text"] == DESIGN
     assert len(graph["nodes"]) == 2  # Three headings do not imply three files.
     assert graph["nodes"][0]["depends_on"] == []
+
+
+def test_native_schema_rejection_canonicalizes_declaration_body_without_retry():
+    bad = node("ActorState", api=["public enum ActorState {IDLE, ACTIVE, INACTIVE, DESTROYED}"])
+
+    class RejectOnce:
+        def __init__(self):
+            self.calls = []
+
+        def generate_tool_decision(self, role, messages, **kwargs):
+            self.calls.append((kwargs["tool_name"], json.loads(messages[-1]["content"])))
+            raise NativeToolDecisionRejected(
+                kwargs["tool_name"],
+                [{
+                    "original_tool": kwargs["tool_name"],
+                    "raw_arguments": json.dumps({"nodes": [bad], "done": True}),
+                    "failure_code": "TOOL_DECISION_SCHEMA_INVALID",
+                    "error": "public_api declaration contains a body",
+                }],
+            )
+
+    router = RejectOnce()
+    graph = compile_with(router)
+    assert len(router.calls) == 1
+    assert graph["nodes"][0]["symbol"] == "ActorState"
+    assert graph["nodes"][0]["public_api"] == ["public enum ActorState"]
+
+
+def test_schema_repair_freezes_valid_siblings_and_merges_only_invalid_nodes():
+    stable = node("BehaviorContract", api=["public static int original()"])
+    invalid = node("ActorState")
+    invalid["public_api"] = []
+    drifted = copy.deepcopy(stable)
+    drifted["public_api"] = ["public static int drifted()"]
+    fixed = copy.deepcopy(invalid)
+    fixed["public_api"] = ["public enum ActorState"]
+
+    router = Decisions([
+        {"nodes": [stable, invalid], "done": True},
+        # A small model may redundantly rewrite the valid sibling. The host must
+        # ignore that rewrite and merge only the corrected invalid node.
+        {"nodes": [drifted, fixed], "done": True},
+    ])
+    graph = compile_with(router)
+    by_symbol = {item["symbol"]: item for item in graph["nodes"]}
+    assert by_symbol["BehaviorContract"]["public_api"] == ["public static int original()"]
+    assert by_symbol["ActorState"]["public_api"] == ["public enum ActorState"]
+    assert len(router.calls) == 2
+    feedback = router.calls[1][1]["validation_feedback"]
+    assert feedback["preserve_nodes"] == [stable]
+    assert feedback["repair_count"] == 1
 
 
 def test_oversized_task_decomposes_before_any_coder_request():
