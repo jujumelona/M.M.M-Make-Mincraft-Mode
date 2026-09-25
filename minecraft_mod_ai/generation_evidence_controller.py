@@ -78,11 +78,11 @@ def initial_evidence_required(
 ) -> bool:
     """Decide whether mutation needs speculative pre-implementation retrieval.
 
-    A host-authored exact scaffold already carries the approved gameplay semantics and
-    a mandatory target compiler. Let the coder materialize that behavior first; only a
-    verifier-classified platform/API failure should open authoritative Java retrieval.
-    Other fresh Java tasks still honor the router's explicit pre-implementation
-    evidence policy.
+    A host-authored exact scaffold carries approved gameplay semantics, but it does
+    not establish Minecraft/Fabric API facts. Fresh Java therefore honors an explicit
+    router evidence requirement before mutation. When the router does not require fresh
+    evidence, exact host authority plus the mandatory target compiler can still admit a
+    bounded compile-first probe.
     """
 
     if authored_workspace_refresh:
