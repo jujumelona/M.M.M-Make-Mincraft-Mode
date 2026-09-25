@@ -479,7 +479,14 @@ class CustomModuleGenerator:
                         },
                     ]
 
-                payload = _call_coder(self.router, messages)
+                try:
+                    payload = _call_coder(self.router, messages)
+                except Exception as exc:
+                    last_failure = (
+                        "DIRECT_CODER_RESPONSE_FAILED: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    continue
                 candidate = (
                     payload["content"]
                     .replace("\\r\\n", "\\n")

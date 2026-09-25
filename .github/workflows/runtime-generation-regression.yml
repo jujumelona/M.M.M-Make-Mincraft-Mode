@@ -4,57 +4,31 @@ on:
   push:
     branches: [main]
     paths:
-      - "minecraft_mod_ai/agent_tool_runtime.py"
-      - "minecraft_mod_ai/model_router.py"
-      - "minecraft_mod_ai/deadline_executor.py"
-      - "minecraft_mod_ai/repair_engine.py"
-      - "minecraft_mod_ai/repair_diagnostics_contract.py"
       - "minecraft_mod_ai/custom_module_generator.py"
-      - "minecraft_mod_ai/custom_generation_search_contract.py"
-      - "minecraft_mod_ai/coder_max_efficiency_contract.py"
-      - "minecraft_mod_ai/generation_verification_contract.py"
-      - "minecraft_mod_ai/generation_target_compile.py"
-      - "minecraft_mod_ai/generation_implementation_grounding.py"
-      - "minecraft_mod_ai/compiler_diagnostics.py"
-      - "minecraft_mod_ai/execution_feedback_replan_contract.py"
-      - "minecraft_mod_ai/execution_feedback_exception_scope_contract.py"
-      - "minecraft_mod_ai/final_artifact.py"
-      - "minecraft_mod_ai/colab_run_modes.py"
-      - "minecraft_mod_ai/populate_version_artifact_rules.py"
-      - "minecraft_mod_ai/host_item_registration.py"
+      - "minecraft_mod_ai/authored_production.py"
+      - "minecraft_mod_ai/runner.py"
       - "minecraft_mod_ai/complete_orchestrator.py"
-      - "minecraft_mod_ai/evidence_first_pipeline_contract.py"
-      - "minecraft_mod_ai/platform_runtime_contract.py"
-      - "minecraft_mod_ai/resource_asset_production.py"
-      - "minecraft_mod_ai/complete_orchestrator_services.py"
-      - "minecraft_mod_ai/scheduler_parallel_safety_contract.py"
-      - "minecraft_mod_ai/parallel_result_determinism_contract.py"
-      - "minecraft_mod_ai/performance_final_contract.py"
-      - "minecraft_mod_ai/filesystem_copy.py"
-      - "tests/test_agent_tool_deadline_contract.py"
-      - "tests/test_repair_project_index_efficiency.py"
-      - "tests/test_custom_module_structural_repair_efficiency.py"
+      - "minecraft_mod_ai/complete_build_repair.py"
+      - "minecraft_mod_ai/final_artifact.py"
+      - "tests/test_direct_custom_module_generator.py"
+      - "tests/test_authored_direct_lowering.py"
+      - "tests/test_complete_final_validation_contract.py"
       - "tests/test_deterministic_debug_full_pipeline_e2e.py"
-      - "tests/test_project_context_pagination.py"
-      - "tests/test_prepared_project_resume_integrity.py"
-      - "tests/test_resource_asset_preflight_contract.py"
-      - "tests/test_production_generation_preflight.py"
-      - "tests/test_repository_grounding.py"
-      - "tests/test_required_target_compile_gate.py"
-      - "tests/test_generation_implementation_grounding.py"
-      - "tests/test_compiler_diagnostics.py"
-      - "tests/test_execution_feedback_replan_contract.py"
       - "tests/test_final_artifact_boundaries.py"
-      - "tests/test_scheduler_claim_efficiency.py"
-      - "tests/test_validation_repair_regressions.py"
-      - "tests/test_shared_gpu_scheduler_contract.py"
-      - "tests/test_runtime_efficiency_contract.py"
-      - "tests/test_runtime_hardening_regressions.py"
       - ".github/workflows/runtime-generation-regression.yml"
   pull_request:
     paths:
-      - "minecraft_mod_ai/**"
-      - "tests/**"
+      - "minecraft_mod_ai/custom_module_generator.py"
+      - "minecraft_mod_ai/authored_production.py"
+      - "minecraft_mod_ai/runner.py"
+      - "minecraft_mod_ai/complete_orchestrator.py"
+      - "minecraft_mod_ai/complete_build_repair.py"
+      - "minecraft_mod_ai/final_artifact.py"
+      - "tests/test_direct_custom_module_generator.py"
+      - "tests/test_authored_direct_lowering.py"
+      - "tests/test_complete_final_validation_contract.py"
+      - "tests/test_deterministic_debug_full_pipeline_e2e.py"
+      - "tests/test_final_artifact_boundaries.py"
       - ".github/workflows/runtime-generation-regression.yml"
   workflow_dispatch:
 
@@ -65,43 +39,26 @@ jobs:
   runtime-generation-regression:
     name: runtime-regression / ${{ matrix.test_file }}
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     strategy:
       fail-fast: false
-      max-parallel: 14
+      max-parallel: 5
       matrix:
         test_file:
-          - tests/test_agent_tool_deadline_contract.py
-          - tests/test_repair_project_index_efficiency.py
-          - tests/test_custom_module_structural_repair_efficiency.py
+          - tests/test_direct_custom_module_generator.py
+          - tests/test_authored_direct_lowering.py
+          - tests/test_complete_final_validation_contract.py
           - tests/test_deterministic_debug_full_pipeline_e2e.py
-          - tests/test_project_context_pagination.py
-          - tests/test_prepared_project_resume_integrity.py
-          - tests/test_resource_asset_preflight_contract.py
-          - tests/test_production_generation_preflight.py
-          - tests/test_repository_grounding.py
-          - tests/test_required_target_compile_gate.py
-          - tests/test_generation_implementation_grounding.py
-          - tests/test_compiler_diagnostics.py
-          - tests/test_execution_feedback_replan_contract.py
           - tests/test_final_artifact_boundaries.py
-          - tests/test_scheduler_claim_efficiency.py
-          - tests/test_validation_repair_regressions.py
-          - tests/test_shared_gpu_scheduler_contract.py
-          - tests/test_runtime_efficiency_contract.py
-          - tests/test_runtime_hardening_regressions.py
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
+        uses: actions/checkout@v6
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
-
       - name: Install test dependencies
-        run: python -m pip install -e ".[dev]"
-
+        run: python -m pip install --prefer-binary -e ".[dev]"
       - name: Run isolated regression cell
         run: python -m pytest "${{ matrix.test_file }}" -q

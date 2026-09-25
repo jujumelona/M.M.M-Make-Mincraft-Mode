@@ -5,121 +5,31 @@ on:
   pull_request:
     paths:
       - 'minecraft_mod_ai/model_adapters/**'
-      - 'minecraft_mod_ai/custom_module_generator.py'
-      - 'minecraft_mod_ai/small_model_task_capsule_contract.py'
-      - 'minecraft_mod_ai/custom_generation_research.py'
-      - 'minecraft_mod_ai/complete_orchestrator.py'
-      - 'minecraft_mod_ai/scheduler_claim_fencing_contract.py'
-      - 'minecraft_mod_ai/complete_orchestrator_services.py'
-      - 'minecraft_mod_ai/resource_asset_production.py'
-      - 'minecraft_mod_ai/final_artifact.py'
-      - 'minecraft_mod_ai/publisher.py'
-      - 'minecraft_mod_ai/mcp_tools.py'
-      - 'minecraft_mod_ai/small_model_atomic_coder_execution.py'
-      - 'minecraft_mod_ai/small_model_write_scope_enforcement.py'
-      - 'minecraft_mod_ai/platform_custom_coder_contract.py'
-      - 'minecraft_mod_ai/platform_live_execution_contract.py'
-      - 'minecraft_mod_ai/platform_runtime_contract.py'
-      - 'minecraft_mod_ai/spec.py'
-      - 'minecraft_mod_ai/fabric_official_template_provider.py'
-      - 'minecraft_mod_ai/agent_tool_runtime.py'
-      - 'minecraft_mod_ai/generation_verifier_resilience.py'
-      - 'minecraft_mod_ai/generation_implementation_grounding.py'
-      - 'minecraft_mod_ai/generation_target_compile.py'
-      - 'minecraft_mod_ai/colab_run_modes.py'
       - 'minecraft_mod_ai/model_router.py'
-      - 'minecraft_mod_ai/progress_aware_tool_loop.py'
-      - 'minecraft_mod_ai/planner.py'
-      - 'minecraft_mod_ai/routed_planner.py'
-      - 'minecraft_mod_ai/planning_pipeline.py'
-      - 'minecraft_mod_ai/runtime_finalization.py'
-      - 'minecraft_mod_ai/runtime_preflight.py'
-      - 'minecraft_mod_ai/runtime_manager.py'
-      - 'minecraft_mod_ai/tool_validation_surface_contract.py'
-      - 'tests/test_llama_cpp_native_tool_call_contract.py'
-      - 'tests/test_production_tool_call_isolation_contract.py'
-      - 'tests/test_production_path_contract.py'
-      - 'tests/conftest.py'
-      - 'tests/test_small_model_atomic_coder_execution.py'
-      - 'tests/test_generation_checkpoint_commit_lifecycle.py'
-      - 'tests/test_small_model_write_scope_enforcement.py'
-      - 'tests/test_custom_generation_efficiency_contract.py'
-      - 'tests/test_platform_dynamic_coder_contract.py'
-      - 'tests/test_platform_live_execution_contract.py'
-      - 'tests/test_platform_runtime_wrapper_contract.py'
-      - 'tests/test_platform_host_facts_namespace_contract.py'
-      - 'tests/test_runtime_visual_provenance.py'
-      - 'tests/test_playtest_acceptance_binding.py'
-      - 'tests/test_source_runtime_profile_contract.py'
-      - 'tests/test_blockbench_release_policy.py'
-      - 'tests/test_fabric_official_template_provider_contract.py'
-      - 'tests/test_debug_mode_fixture_roundtrip.py'
-      - 'tests/test_debug_mode_task_contract.py'
-      - 'tests/test_fresh_mutation_target_grounding.py'
-      - 'tests/test_generation_implementation_grounding.py'
-      - 'tests/test_required_target_compile_gate.py'
+      - 'minecraft_mod_ai/custom_module_generator.py'
+      - 'minecraft_mod_ai/authored_production.py'
+      - 'minecraft_mod_ai/runner.py'
+      - 'minecraft_mod_ai/complete_orchestrator.py'
+      - 'minecraft_mod_ai/complete_build_repair.py'
+      - 'minecraft_mod_ai/final_artifact.py'
+      - 'tests/test_direct_custom_module_generator.py'
+      - 'tests/test_authored_direct_lowering.py'
       - 'tests/test_complete_final_validation_contract.py'
-      - 'tests/test_scheduler_claim_fencing_contract.py'
       - '.github/workflows/production-path-contract.yml'
   push:
     branches: [main]
     paths:
       - 'minecraft_mod_ai/model_adapters/**'
-      - 'minecraft_mod_ai/custom_module_generator.py'
-      - 'minecraft_mod_ai/small_model_task_capsule_contract.py'
-      - 'minecraft_mod_ai/custom_generation_research.py'
-      - 'minecraft_mod_ai/complete_orchestrator.py'
-      - 'minecraft_mod_ai/scheduler_claim_fencing_contract.py'
-      - 'minecraft_mod_ai/complete_orchestrator_services.py'
-      - 'minecraft_mod_ai/resource_asset_production.py'
-      - 'minecraft_mod_ai/final_artifact.py'
-      - 'minecraft_mod_ai/publisher.py'
-      - 'minecraft_mod_ai/mcp_tools.py'
-      - 'minecraft_mod_ai/small_model_atomic_coder_execution.py'
-      - 'minecraft_mod_ai/small_model_write_scope_enforcement.py'
-      - 'minecraft_mod_ai/platform_custom_coder_contract.py'
-      - 'minecraft_mod_ai/platform_live_execution_contract.py'
-      - 'minecraft_mod_ai/platform_runtime_contract.py'
-      - 'minecraft_mod_ai/spec.py'
-      - 'minecraft_mod_ai/fabric_official_template_provider.py'
-      - 'minecraft_mod_ai/agent_tool_runtime.py'
-      - 'minecraft_mod_ai/generation_verifier_resilience.py'
-      - 'minecraft_mod_ai/generation_implementation_grounding.py'
-      - 'minecraft_mod_ai/generation_target_compile.py'
-      - 'minecraft_mod_ai/colab_run_modes.py'
       - 'minecraft_mod_ai/model_router.py'
-      - 'minecraft_mod_ai/progress_aware_tool_loop.py'
-      - 'minecraft_mod_ai/planner.py'
-      - 'minecraft_mod_ai/routed_planner.py'
-      - 'minecraft_mod_ai/planning_pipeline.py'
-      - 'minecraft_mod_ai/runtime_finalization.py'
-      - 'minecraft_mod_ai/runtime_preflight.py'
-      - 'minecraft_mod_ai/runtime_manager.py'
-      - 'minecraft_mod_ai/tool_validation_surface_contract.py'
-      - 'tests/test_llama_cpp_native_tool_call_contract.py'
-      - 'tests/test_production_tool_call_isolation_contract.py'
-      - 'tests/test_production_path_contract.py'
-      - 'tests/conftest.py'
-      - 'tests/test_small_model_atomic_coder_execution.py'
-      - 'tests/test_generation_checkpoint_commit_lifecycle.py'
-      - 'tests/test_small_model_write_scope_enforcement.py'
-      - 'tests/test_custom_generation_efficiency_contract.py'
-      - 'tests/test_platform_dynamic_coder_contract.py'
-      - 'tests/test_platform_live_execution_contract.py'
-      - 'tests/test_platform_runtime_wrapper_contract.py'
-      - 'tests/test_platform_host_facts_namespace_contract.py'
-      - 'tests/test_runtime_visual_provenance.py'
-      - 'tests/test_playtest_acceptance_binding.py'
-      - 'tests/test_source_runtime_profile_contract.py'
-      - 'tests/test_blockbench_release_policy.py'
-      - 'tests/test_fabric_official_template_provider_contract.py'
-      - 'tests/test_debug_mode_fixture_roundtrip.py'
-      - 'tests/test_debug_mode_task_contract.py'
-      - 'tests/test_fresh_mutation_target_grounding.py'
-      - 'tests/test_generation_implementation_grounding.py'
-      - 'tests/test_required_target_compile_gate.py'
+      - 'minecraft_mod_ai/custom_module_generator.py'
+      - 'minecraft_mod_ai/authored_production.py'
+      - 'minecraft_mod_ai/runner.py'
+      - 'minecraft_mod_ai/complete_orchestrator.py'
+      - 'minecraft_mod_ai/complete_build_repair.py'
+      - 'minecraft_mod_ai/final_artifact.py'
+      - 'tests/test_direct_custom_module_generator.py'
+      - 'tests/test_authored_direct_lowering.py'
       - 'tests/test_complete_final_validation_contract.py'
-      - 'tests/test_scheduler_claim_fencing_contract.py'
       - '.github/workflows/production-path-contract.yml'
 
 permissions:
@@ -140,65 +50,25 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
       - name: Install runtime and test dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
       - name: Compile production boundary modules
         run: |
           python -m py_compile \
-            minecraft_mod_ai/model_adapters/base.py \
-            minecraft_mod_ai/model_adapters/llama_cpp_adapter.py \
             minecraft_mod_ai/model_router.py \
-            minecraft_mod_ai/progress_aware_tool_loop.py \
             minecraft_mod_ai/custom_module_generator.py \
-            minecraft_mod_ai/small_model_task_capsule_contract.py \
-            minecraft_mod_ai/custom_generation_research.py \
+            minecraft_mod_ai/authored_production.py \
+            minecraft_mod_ai/runner.py \
             minecraft_mod_ai/complete_orchestrator.py \
-            minecraft_mod_ai/scheduler_claim_fencing_contract.py \
-            minecraft_mod_ai/complete_orchestrator_services.py \
-            minecraft_mod_ai/resource_asset_production.py \
-            minecraft_mod_ai/final_artifact.py \
-            minecraft_mod_ai/publisher.py \
-            minecraft_mod_ai/mcp_tools.py \
-            minecraft_mod_ai/small_model_atomic_coder_execution.py \
-            minecraft_mod_ai/small_model_write_scope_enforcement.py \
-            minecraft_mod_ai/platform_custom_coder_contract.py \
-            minecraft_mod_ai/platform_live_execution_contract.py \
-            minecraft_mod_ai/platform_runtime_contract.py \
-            minecraft_mod_ai/spec.py \
-            minecraft_mod_ai/fabric_official_template_provider.py \
-            minecraft_mod_ai/agent_tool_runtime.py \
-            minecraft_mod_ai/generation_verifier_resilience.py \
-            minecraft_mod_ai/generation_implementation_grounding.py \
-            minecraft_mod_ai/generation_target_compile.py \
-            minecraft_mod_ai/planner.py \
-            minecraft_mod_ai/routed_planner.py \
-            minecraft_mod_ai/runtime_finalization.py \
-            minecraft_mod_ai/runtime_preflight.py \
-            minecraft_mod_ai/runtime_manager.py \
-            minecraft_mod_ai/tool_validation_surface_contract.py
-      - name: Run production-path fault-injection contracts
+            minecraft_mod_ai/complete_build_repair.py \
+            minecraft_mod_ai/final_artifact.py
+      - name: Run direct production-path contracts
         run: |
           python -m pytest -q \
-            tests/test_llama_cpp_native_tool_call_contract.py \
-            tests/test_production_tool_call_isolation_contract.py \
-            tests/test_production_path_contract.py \
-            tests/test_small_model_atomic_coder_execution.py \
-            tests/test_generation_checkpoint_commit_lifecycle.py \
-            tests/test_small_model_write_scope_enforcement.py \
-            tests/test_custom_generation_efficiency_contract.py \
-            tests/test_platform_dynamic_coder_contract.py \
-            tests/test_platform_live_execution_contract.py \
-            tests/test_platform_runtime_wrapper_contract.py \
-            tests/test_platform_host_facts_namespace_contract.py \
-            tests/test_runtime_visual_provenance.py \
-            tests/test_playtest_acceptance_binding.py \
-            tests/test_source_runtime_profile_contract.py \
-            tests/test_blockbench_release_policy.py \
-            tests/test_fabric_official_template_provider_contract.py \
-            tests/test_debug_mode_fixture_roundtrip.py \
-            tests/test_debug_mode_task_contract.py \
-            tests/test_fresh_mutation_target_grounding.py \
-            tests/test_generation_implementation_grounding.py \
-            tests/test_required_target_compile_gate.py \
-            tests/test_complete_final_validation_contract.py \
-            tests/test_scheduler_claim_fencing_contract.py
+            tests/test_direct_custom_module_generator.py \
+            tests/test_authored_direct_lowering.py \
+            tests/test_complete_final_validation_contract.py

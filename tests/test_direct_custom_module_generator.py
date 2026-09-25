@@ -199,3 +199,47 @@ def test_removed_runtime_composition_files_do_not_exist() -> None:
         "runtime_composer_hardening.py",
     ):
         assert not (package / name).exists(), name
+
+
+def test_invalid_or_truncated_model_output_is_retried_as_whole_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, path, symbol = _project(tmp_path)
+    calls: list[list[dict[str, str]]] = []
+    good = (
+        "package example;\n\n"
+        "public final class AuthoredFeature001 {\n"
+        "    private AuthoredFeature001() {}\n"
+        "    public static void initialize() { System.out.println(\"ok\"); }\n"
+        "}\n"
+    )
+
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            del role, kwargs
+            calls.append(list(messages))
+            if len(calls) == 1:
+                return '{"content":"package example; public final class'
+            return json.dumps({"content": good, "summary": "recovered"})
+
+    class Runner:
+        def __init__(self, _cache):
+            pass
+
+        def compile_java(self, _root):
+            return SimpleNamespace(status="PASS", commands=(), error=None)
+
+    monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
+    monkeypatch.setattr(direct, "GradleRunner", Runner)
+
+    result = direct.CustomModuleGenerator(Router()).generate(
+        root,
+        module=_module(path, symbol),
+        minecraft_version="1.21.1",
+        loader="fabric",
+    )
+
+    assert result["status"] == "SOURCE_GENERATED"
+    assert len(calls) == 2
+    assert "DIRECT_CODER_RESPONSE_FAILED" in calls[1][-1]["content"]
+    assert (root / path).read_text(encoding="utf-8") == good

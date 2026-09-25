@@ -4,43 +4,21 @@ on:
   push:
     branches: [main]
     paths:
-      - "minecraft_mod_ai/custom_generation_search_contract.py"
-      - "minecraft_mod_ai/generation_verification_contract.py"
-      - "minecraft_mod_ai/inference_time_scaling.py"
-      - "minecraft_mod_ai/progress_aware_tool_loop.py"
       - "minecraft_mod_ai/custom_module_generator.py"
-      - "minecraft_mod_ai/coder_max_efficiency_contract.py"
-      - "minecraft_mod_ai/generation_compile_state.py"
-      - "minecraft_mod_ai/generation_target_compile.py"
-      - "minecraft_mod_ai/agent_tool_runtime.py"
-      - "minecraft_mod_ai/small_model_task_capsule_contract.py"
+      - "minecraft_mod_ai/authored_production.py"
+      - "minecraft_mod_ai/runner.py"
       - "minecraft_mod_ai/complete_orchestrator.py"
-      - "tests/test_custom_generation_search_contract.py"
-      - "tests/test_generation_verification_contract.py"
-      - "tests/test_generation_compile_state.py"
-      - "tests/test_generation_target_compile.py"
-      - "tests/test_required_target_compile_gate.py"
-      - "tests/test_small_model_task_capsule_contract.py"
+      - "tests/test_direct_custom_module_generator.py"
+      - "tests/test_authored_direct_lowering.py"
       - ".github/workflows/candidate-verifier-targeted.yml"
   pull_request:
     paths:
-      - "minecraft_mod_ai/custom_generation_search_contract.py"
-      - "minecraft_mod_ai/generation_verification_contract.py"
-      - "minecraft_mod_ai/inference_time_scaling.py"
-      - "minecraft_mod_ai/progress_aware_tool_loop.py"
       - "minecraft_mod_ai/custom_module_generator.py"
-      - "minecraft_mod_ai/coder_max_efficiency_contract.py"
-      - "minecraft_mod_ai/generation_compile_state.py"
-      - "minecraft_mod_ai/generation_target_compile.py"
-      - "minecraft_mod_ai/agent_tool_runtime.py"
-      - "minecraft_mod_ai/small_model_task_capsule_contract.py"
+      - "minecraft_mod_ai/authored_production.py"
+      - "minecraft_mod_ai/runner.py"
       - "minecraft_mod_ai/complete_orchestrator.py"
-      - "tests/test_custom_generation_search_contract.py"
-      - "tests/test_generation_verification_contract.py"
-      - "tests/test_generation_compile_state.py"
-      - "tests/test_generation_target_compile.py"
-      - "tests/test_required_target_compile_gate.py"
-      - "tests/test_small_model_task_capsule_contract.py"
+      - "tests/test_direct_custom_module_generator.py"
+      - "tests/test_authored_direct_lowering.py"
       - ".github/workflows/candidate-verifier-targeted.yml"
   workflow_dispatch:
 
@@ -53,24 +31,24 @@ jobs:
     timeout-minutes: 12
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
+        uses: actions/checkout@v6
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
-
       - name: Install targeted test dependencies
-        run: python -m pip install -e ".[dev]"
-
-      - name: Run candidate verifier regression tests
+        run: python -m pip install --prefer-binary -e ".[dev]"
+      - name: Compile direct production path
+        run: >-
+          python -m py_compile
+          minecraft_mod_ai/custom_module_generator.py
+          minecraft_mod_ai/authored_production.py
+          minecraft_mod_ai/runner.py
+          minecraft_mod_ai/complete_orchestrator.py
+      - name: Run direct generation regressions
         run: >-
           python -m pytest
-          tests/test_custom_generation_search_contract.py
-          tests/test_generation_verification_contract.py
-          tests/test_generation_compile_state.py
-          tests/test_generation_target_compile.py
-          tests/test_required_target_compile_gate.py
-          tests/test_small_model_task_capsule_contract.py
+          tests/test_direct_custom_module_generator.py
+          tests/test_authored_direct_lowering.py
           -q
