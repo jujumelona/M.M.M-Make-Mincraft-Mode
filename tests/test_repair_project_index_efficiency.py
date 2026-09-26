@@ -3,11 +3,19 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 
+import pytest
+
+from minecraft_mod_ai import repair_diagnostics_contract
 from minecraft_mod_ai.project_index import ProjectIndex as RealProjectIndex
 from minecraft_mod_ai.repair_engine import RepairEngine
 from minecraft_mod_ai.source_patch import sha256_file
 
 repair_module = importlib.import_module("minecraft_mod_ai.repair_engine")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _install_repair_diagnostics_contract() -> None:
+    repair_diagnostics_contract.install(repair_module)
 
 
 def _base_repair_function():
