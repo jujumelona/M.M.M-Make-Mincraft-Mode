@@ -3,11 +3,19 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from minecraft_mod_ai import agentic_optimization_contract as agentic
+from minecraft_mod_ai import unified_trajectory_memory_contract
 from minecraft_mod_ai.agent_capability_context import (
     build_agent_capability_context,
     filter_tool_schemas_for_role,
 )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _install_unified_memory_contract() -> None:
+    unified_trajectory_memory_contract.install()
 
 
 def _schema(name: str) -> dict[str, object]:
