@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import threading
 import time
+
+import pytest
 from types import SimpleNamespace
 
+import minecraft_mod_ai.llama_parallel_runtime_contract as parallel_contract
 import minecraft_mod_ai.model_router as router_module
 import minecraft_mod_ai.scheduler_parallel_safety_contract as scheduler_module
 from minecraft_mod_ai.llama_parallel_runtime_contract import ReentrantReadWriteLock
 from minecraft_mod_ai.model_router import ModelRouter
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _install_parallel_runtime_contract() -> None:
+    parallel_contract.install(router_module, scheduler_module)
 
 
 class _Registry:
