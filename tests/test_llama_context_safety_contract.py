@@ -5,12 +5,18 @@ import json
 import pytest
 
 from minecraft_mod_ai import model_context_budget
+import minecraft_mod_ai.llama_context_safety_contract as context_safety
 from minecraft_mod_ai.llama_context_safety_contract import (
     ContextPackingError,
     _protocol_safe_minimal_fit,
 )
 from minecraft_mod_ai.model_adapters import AdapterConfig
 from minecraft_mod_ai.source_mutation_contract import mutation_history_applied
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _install_context_safety_contract() -> None:
+    context_safety.install(model_context_budget)
 
 
 def _config(*, runtime_context: int = 32_768) -> AdapterConfig:
