@@ -17,7 +17,7 @@ from .custom_module_errors import CustomModuleGenerationError
 from .implementation_lifecycle import activation_public_api
 from .model_adapters.base import NativeToolDecisionRejected
 
-IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v10"
+IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v11"
 
 
 class ImplementationGraphError(CustomModuleGenerationError):
@@ -63,7 +63,7 @@ NODE_SCHEMA = {
              "resource_path": {"const": ""},
              "public_api": {"items": {
                  "type": "string",
-                 "pattern": r"^(?!\s*public\s+(?:final\s+)?(?:class|interface|enum|record)\b)[^{}]+$",
+                 "pattern": r"^(?!\s*(?:(?:public|protected|private|static|final|abstract)\s+)*(?:class|interface|enum|record)\b)(?!.*=\s*;?\s*$)[^{}]+$",
              }},
          }},
          "else": {"properties": {
@@ -165,7 +165,7 @@ def _canonicalize_public_api_declaration(value: Any) -> Any:
     # public_api entries are members of the host-required top-level final class.
     # A top-level class/interface/enum/record is a semantic contract error, not a
     # syntax cleanup: leave it invalid so scoped repair can replace it.
-    if re.match(r"^public\s+(?:final\s+)?(?:class|interface|enum|record)\b", text):
+    if re.match(r"^(?:(?:public|protected|private|static|final|abstract)\s+)*(?:class|interface|enum|record)\b", text):
         return text
     # Method/field bodies are mechanically removable because the declaration itself
     # remains the same member contract.
@@ -393,7 +393,15 @@ def admissible_tokens(router: Any) -> int | None:
     return value if value > 0 else None
 
 
-def _decision(router: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _decision(router: Any, name: str, payload: dict[str, Any], *,
+              state: dict[str, Any] | None = None,
+              checkpoint: Callable[[], None] | None = None) -> dict[str, Any]:
+    frontend = getattr(router, "generate_implementation_decision", None)
+    if callable(frontend):
+        return frontend(name, payload, state=state if state is not None else {},
+                        checkpoint=checkpoint or (lambda: None))
+    # Internal/adaptor-independent IR producers retain the host admission seam.
+    # Production ModelRouter always takes the small native frontend above.
     callback = getattr(router, "generate_tool_decision", None)
     if not callable(callback):
         raise ImplementationGraphError("IMPLEMENTATION_IR_NATIVE_DECISION_REQUIRED")
@@ -494,6 +502,9 @@ def _repair_measure(feedback: Mapping[str, Any]) -> tuple[int, int, int]:
         "IMPLEMENTATION_IR_REPAIR_NODE_COUNT",
     }
     schema_phase = int(any(str(item.get("code", "")) in schema_like for item in diagnostics))
+    if any(item.get("code") == "IMPLEMENTATION_IR_SCHEMA_INVALID"
+           and str(item.get("field", "")) in ("", "nodes") for item in diagnostics):
+        schema_phase = 2
     invalid_nodes: set[str] = set()
     for item in diagnostics:
         field = str(item.get("field", ""))
@@ -525,13 +536,20 @@ def _validated_page(router: Any, name: str, payload: dict[str, Any], *,
         )
     schema = _page_schema(payload)
 
+    def save_decisions() -> None:
+        if checkpoint:
+            checkpoint(deepcopy(state))
+
     while True:
         request = dict(payload)
         if state["feedback"]:
             request["validation_feedback"] = state["feedback"]
         page = None
         try:
-            page = _canonicalize_schema_page(_decision(router, name, request), payload)
+            page = _canonicalize_schema_page(_decision(
+                router, name, request, state=state.setdefault("native_decisions", {}),
+                checkpoint=save_decisions,
+            ), payload)
             page = _merge_scoped_schema_repair(page, state.get("feedback") or {})
             diagnostics = _schema_diagnostics(page, schema)
             if diagnostics:
@@ -1109,6 +1127,7 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
             "current_units": [active_unit["title"]] if active_unit is not None else [],
             "unit_ids": [active_unit["unit_id"]] if active_unit is not None else [],
             "requirements": active_reqs,
+            "unit_context": active_unit["requirements"] if active_unit is not None else active_reqs,
             "unresolved_dependencies": sorted(missing),
             "platform": target,
             "project_context": context,

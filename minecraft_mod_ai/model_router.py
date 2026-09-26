@@ -323,6 +323,12 @@ class ModelRouter:
             role, messages, tool_name=tool_name, parameters=parameters, description=description
         )
 
+    def generate_implementation_decision(self, name, payload, *, state, checkpoint):
+        """Use small native decisions; graph serialization is host-owned."""
+        from .implementation_decisions import compile_contribution
+
+        return compile_contribution(self, name, payload, state, checkpoint)
+
     def _generate_tool_decision_impl(
         self,
         role: str,
@@ -1120,9 +1126,9 @@ def _rag_nested_collection_has_evidence(item: Mapping[str, Any]) -> bool:
         child = item.get(key)
         if isinstance(child, Mapping) and _rag_semantic_content(child):
             return True
-        if isinstance(child, Sequence) and not isinstance(child, (str, bytes, bytearray)):
-            if any(_rag_semantic_content(entry) or _rag_nonempty_text(entry) for entry in child):
-                return True
+        if (isinstance(child, Sequence) and not isinstance(child, (str, bytes, bytearray))
+                and any(_rag_semantic_content(entry) or _rag_nonempty_text(entry) for entry in child)):
+            return True
     return False
 
 

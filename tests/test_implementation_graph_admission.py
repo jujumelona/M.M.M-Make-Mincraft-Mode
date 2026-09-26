@@ -242,7 +242,9 @@ def test_logged_page8_to_page9_duplicate_owner_pattern_merges_r34():
         }
 
     accepted_raw = [
-        raw("BehaviorContractPart6", ["R31", "R32"], ["public static final class Player"]),
+        # The old log's pseudo class declaration is now rejected independently.
+        # This fixture isolates monotonic owner extension with a legal member.
+        raw("BehaviorContractPart6", ["R31", "R32"], ["public static final String PLAYER_KIND"]),
         raw(
             "ActorFactoryPart6",
             ["R31", "R32"],
@@ -268,7 +270,7 @@ def test_logged_page8_to_page9_duplicate_owner_pattern_merges_r34():
     ]
 
     page9 = [
-        raw("BehaviorContractPart6", ["R34"], ["public static final class Player"]),
+        raw("BehaviorContractPart6", ["R34"], ["public static final String PLAYER_KIND"]),
         raw(
             "ActorFactoryPart6",
             ["R34"],
@@ -372,6 +374,7 @@ def test_terminal_failure_is_not_retried_on_resume():
         "mmm/implementation-ir-draft-v7",
         "mmm/implementation-ir-draft-v8",
         "mmm/implementation-ir-draft-v9",
+        "mmm/implementation-ir-draft-v10",
     ],
 )
 def test_stale_terminal_checkpoint_is_invalidated_after_ir_contract_change(stale_version):

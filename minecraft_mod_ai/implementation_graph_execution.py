@@ -17,6 +17,7 @@ from .implementation_ir import (
     node_cost,
     ordered_nodes,
     refine_node,
+    validate_node,
 )
 from .implementation_lifecycle import ACTIVATION_API, activation_call
 from .project_write_lock import project_write_lock
@@ -64,7 +65,8 @@ def _leaf_module(node: dict[str, Any], graph: dict[str, Any], request: dict[str,
                 )
             ),
         }, ensure_ascii=False), semantic_outcome=node["responsibility"],
-        depends_on=(), consumes=(), provides=(node["symbol"],),
+        depends_on=tuple("ir_" + symbol.lower() for symbol in node["depends_on"]),
+        consumes=tuple(node["depends_on"]), provides=(node["symbol"],),
         worksheet={"implementation_ir_node": node}, required_gates=("target_compile",),
         target_status="host_reserved",
     )
@@ -130,6 +132,13 @@ def execute_implementation_graph(generator: Any, project_root: str | Path, *,
             graph = state["graph"]
             if state.get("graph_hash") != digest(graph) or graph.get("source_text") != request["text"]:
                 raise ImplementationGraphError("IMPLEMENTATION_IR_CHECKPOINT_DRIFT")
+            # A valid hash is not proof that an older frontend admitted legal APIs.
+            # Recheck contracts before any cached node can create or mutate source.
+            for cached_node in graph["nodes"]:
+                admitted = validate_node({k: v for k, v in cached_node.items() if k != "path"},
+                                         package=package, mod_id=mod_id, refs=set(graph["requirements"]))
+                if admitted != cached_node:
+                    raise ImplementationGraphError("IMPLEMENTATION_IR_CHECKPOINT_DRIFT")
             graph["nodes"] = ordered_nodes(graph["nodes"])
         else:
             graph = compile_graph(generator.router, text=request["text"], package=package,

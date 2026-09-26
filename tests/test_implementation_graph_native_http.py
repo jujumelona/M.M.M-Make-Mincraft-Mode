@@ -15,29 +15,42 @@ from types import SimpleNamespace
 
 import pytest
 from jsonschema import Draft202012Validator
-from test_implementation_ir import graph_project, node
+from test_implementation_ir import graph_project
 
 from minecraft_mod_ai import custom_module_generator as direct
 from minecraft_mod_ai import llama_exact_context, llama_lora_runtime
 from minecraft_mod_ai import llama_stream_efficiency_contract as streaming
-from minecraft_mod_ai.model_adapters.base import AdapterConfig
+from minecraft_mod_ai.model_adapters.base import AdapterConfig, GenerationRequest
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
 from minecraft_mod_ai.model_router import ModelRouter
 
 
-@pytest.mark.parametrize("fault", ["public_api", "resource_path"])
+@pytest.mark.parametrize("fault", ["public_api", "estimated_tokens"])
 def test_native_graph_correction_reaches_java_execution(tmp_path, monkeypatch, fault):
     javac, java = shutil.which("javac"), shutil.which("java")
     if not javac or not java:
         pytest.skip("Java compiler/runtime unavailable")
     module, main = graph_project(tmp_path)
-    wallet = node(refs=["R1", "R2", "R3", "R4", "R5"], api=["public static int balance()", "public static boolean spend(int amount)"])
-    trade = node("TradeService", refs=["R6"], dependencies=["PlayerCredits"], activation=True,
-                 api=["public static void initialize()"])
-    invalid = {**wallet, fault: [] if fault == "public_api" else "src/main/java/example/PlayerCredits.java"}
-    # Premature done=true must request the remaining design requirement, not abort.
-    pages = [{"nodes": [invalid], "done": True}, {"nodes": [wallet], "done": True},
-             {"nodes": [trade], "done": True}]
+    module.config["implementation_graph_request"]["text"] = (
+        "# Trading\n- PlayerCredits owns balances and rejects insufficient purchases.\n"
+        "- TradeService runs one purchase at initialization and verifies the remaining balance."
+    )
+    wallet_api = ["public static int balance()", "public static boolean spend(int amount)"]
+    wallet = {"public_api": wallet_api, "activation": False, "estimated_tokens": 800}
+    invalid = {**wallet, fault: "not-an-array" if fault == "public_api" else "missing estimate"}
+    # Real HTTP/native parsing, including one malformed scalar/array. Only the
+    # invalid field is re-requested; identity and behavior never get replayed.
+    pages = [
+        {"symbol": "PlayerCredits", "kind": "java"},
+        {"state_transition": "PlayerCredits owns balances and spends once.",
+         "success_condition": "Balance is reduced by price.", "failure_condition": "Insufficient funds leave state unchanged."},
+        {"depends_on": []}, invalid, {fault: wallet[fault]},
+        {"symbol": "TradeService", "kind": "java"},
+        {"state_transition": "Register one startup purchase using PlayerCredits.",
+         "success_condition": "Remaining credits equal seven.", "failure_condition": "Unaffordable purchase keeps seven credits."},
+        {"depends_on": ["PlayerCredits"]},
+        {"public_api": [], "activation": True, "estimated_tokens": 700},
+    ]
     bodies = [
         ("package example;\npublic final class PlayerCredits { private static int credits=10; "
         "public static int balance() { return credits; } "
@@ -90,13 +103,18 @@ def test_native_graph_correction_reaches_java_execution(tmp_path, monkeypatch, f
 
     class Router(ModelRouter):
         def __init__(self):
-            self._agent_require_fresh_evidence = False
+            super().__init__()
 
         def _generation_adapter(self, role):
             return configs[role], adapters[role]
 
         def _generation_scope(self, config):
             return nullcontext()
+
+        def generate_text(self, role, messages, **kwargs):
+            # Source responses are controlled fixtures too; exercise their real
+            # HTTP transport without pretending to run live MCP/RAG research.
+            return adapters[role].generate(GenerationRequest(messages=messages))
 
     compilations = []
 
@@ -116,21 +134,25 @@ def test_native_graph_correction_reaches_java_execution(tmp_path, monkeypatch, f
     try:
         generator = direct.CustomModuleGenerator(Router())
         result = generator.generate(tmp_path, module=module)
-        assert len(requests) == 5
-        for payload in requests[:3]:
+        assert len(requests) == 11
+        for payload in requests[:len(pages)]:
             assert len(payload["tools"]) == 1
-            assert payload["tools"][0]["function"]["name"] == "compile_implementation_graph"
+            assert payload["tools"][0]["function"]["name"] != "compile_implementation_graph"
+            assert "nodes" not in payload["tools"][0]["function"]["parameters"]["properties"]
             assert payload["tool_choice"] == "required"
             assert payload["parallel_tool_calls"] is False
-        schema = requests[0]["tools"][0]["function"]["parameters"]
-        assert list(Draft202012Validator(schema).iter_errors(pages[0]))
-        assert not list(Draft202012Validator(schema).iter_errors(pages[1]))
-        correction = json.loads(next(m["content"] for m in requests[1]["messages"] if m["role"] == "user"))
-        assert fault in json.dumps(correction["validation_feedback"])
-        assert correction["validation_feedback"]["rejected_page"] == pages[0]
-        continuation = json.loads(next(m["content"] for m in requests[2]["messages"] if m["role"] == "user"))
-        assert continuation["remaining_requirements"] == ["R6"]
-        assert continuation["accepted_nodes"][0]["symbol"] == "PlayerCredits"
+        schema = requests[3]["tools"][0]["function"]["parameters"]
+        assert list(Draft202012Validator(schema).iter_errors(invalid))
+        assert not list(Draft202012Validator(schema).iter_errors(wallet))
+        repair_schema = requests[4]["tools"][0]["function"]["parameters"]
+        assert repair_schema["required"] == [fault]
+        correction = json.loads(next(m["content"] for m in requests[4]["messages"] if m["role"] == "user"))
+        assert fault in correction["correct_only"]
+        assert set(correction["accepted_fields"]) == set(wallet) - {fault}
+        continuation = json.loads(next(m["content"] for m in requests[5]["messages"] if m["role"] == "user"))
+        assert list(continuation["work_packet"]["requirements"]) == ["R3"]
+        interface_request = json.loads(next(m["content"] for m in requests[8]["messages"] if m["role"] == "user"))
+        assert interface_request["dependencies"][0]["public_api"] == wallet_api
         assert all(c.returncode == 0 for c in compilations)
         assert "TradeService.initialize();" in main.read_text()
         assert generator.ensure_generation_live_commit(result, project_root=tmp_path)
