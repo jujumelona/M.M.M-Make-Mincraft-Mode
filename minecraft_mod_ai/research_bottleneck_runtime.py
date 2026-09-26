@@ -10,7 +10,6 @@ once the owning source module absorbs it directly.
 
 import json
 import sys
-import weakref
 from functools import wraps
 from pathlib import Path
 
@@ -112,46 +111,17 @@ def _restore_complete_plan_collection_pages() -> None:
 
 
 def _restore_discovery_http_pool() -> None:
-    """Reuse one httpx pool while leaving native request policy as the sole owner."""
-    import httpx
-
+    """Require the discovery owner to provide its persistent HTTP pool natively."""
     from . import ecosystem_discovery as discovery
 
-    cls = discovery.EcosystemDiscoveryClient
-    current_init = cls.__init__
-    if getattr(current_init, "_mmm_persistent_http_pool_v2", False):
-        return
-
-    class PersistentClientTransport(httpx.BaseTransport):
-        """Route temporary native clients through one shared thread-safe client."""
-
-        def __init__(self, client: httpx.Client) -> None:
-            self._client = client
-
-        def handle_request(self, request: httpx.Request) -> httpx.Response:
-            return self._client.send(request)
-
-        def close(self) -> None:
-            # Native _get_json creates a short-lived Client per call. Its close must not
-            # tear down the shared owner; the finalizer below owns that lifecycle.
-            return None
-
-    @wraps(current_init)
-    def init(self, *args, **kwargs) -> None:
-        current_init(self, *args, **kwargs)
-        shared = httpx.Client(
-            timeout=self.timeout_seconds,
-            follow_redirects=False,
-            transport=self.transport,
+    if not getattr(
+        discovery.EcosystemDiscoveryClient.__init__,
+        "_mmm_persistent_http_pool_v2",
+        False,
+    ):
+        raise RuntimeError(
+            "EcosystemDiscoveryClient must own persistent HTTP pooling in source."
         )
-        self._mmm_http_client = shared
-        self.transport = PersistentClientTransport(shared)
-        weakref.finalize(self, shared.close)
-
-    init._mmm_persistent_http_pool_v2 = True
-    init.__wrapped__ = current_init
-    cls.__init__ = init
-
 
 def _restore_research_code_context_contracts() -> None:
     """Delegate repository-research hardening to its single narrow owner."""
