@@ -649,7 +649,7 @@ def test_progress_driven_compilation_can_cross_the_legacy_page_count():
     )
 
 
-def test_large_authored_design_uses_one_semantic_unit_per_heading_and_host_completion():
+def test_large_authored_design_uses_execution_schema_and_keeps_review_sections_as_context():
     sections = [
         "behavior_contract", "state_model", "algorithm", "integration",
         "authority_and_network", "persistence", "resources_and_ui",
@@ -663,9 +663,16 @@ def test_large_authored_design_uses_one_semantic_unit_per_heading_and_host_compl
     large_design = "\n".join(design_lines)
 
     units = ir.decompose_authored_units(large_design)
-    assert [unit["title"] for unit in units] == sections
+    expected_execution = [
+        "state_model", "behavior_contract", "algorithm", "authority_and_network",
+        "persistence", "resources_and_ui", "failure_and_limits", "integration",
+    ]
+    assert [unit["title"] for unit in units] == expected_execution
+    assert all(
+        "reuse_assessment" not in unit["title"] and "verification" not in unit["title"]
+        for unit in units
+    )
 
-    all_refs = ir.source_requirements(large_design)
     checkpoints = []
     calls = []
 
@@ -701,6 +708,7 @@ def test_large_authored_design_uses_one_semantic_unit_per_heading_and_host_compl
         checkpoint=lambda state: checkpoints.append(copy.deepcopy(state)),
     )
 
+    execution_refs = set().union(*(set(unit["requirements"]) for unit in units))
     assert len(graph["nodes"]) == len(units)
     assert len(checkpoints) >= len(units)
-    assert set().union(*(set(n["requirements"]) for n in graph["nodes"])) == set(all_refs)
+    assert set().union(*(set(n["requirements"]) for n in graph["nodes"])) == execution_refs
