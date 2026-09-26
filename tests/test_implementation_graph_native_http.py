@@ -37,8 +37,8 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
     )
     body = (
         "package example;\n"
-        "public final class AuthoredBehaviorContract {\n"
-        "  private AuthoredBehaviorContract() {}\n"
+        "public final class AuthoredUnit0 {\n"
+        "  private AuthoredUnit0() {}\n"
         "  public static void initialize() {\n"
         "    int credits = 10;\n"
         "    credits -= 3;\n"
@@ -149,10 +149,10 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
         assert len(requests) == 1
         assert not requests[0].get("tools")
         graph = result["implementation_ir"]
-        assert [node["symbol"] for node in graph["nodes"]] == ["AuthoredBehaviorContract"]
+        assert [node["symbol"] for node in graph["nodes"]] == ["AuthoredUnit0"]
         assert graph["nodes"][0]["depends_on"] == []
         assert all(c.returncode == 0 for c in compilations)
-        assert "AuthoredBehaviorContract.initialize();" in main.read_text()
+        assert "AuthoredUnit0.initialize();" in main.read_text()
         assert generator.ensure_generation_live_commit(result, project_root=tmp_path)
         probe = tmp_path / "Probe.java"
         probe.write_text(
