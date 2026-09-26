@@ -9,6 +9,11 @@ from minecraft_mod_ai import research_validation_fingerprint_performance as perf
 from minecraft_mod_ai import validation_execution_contract as validation
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _install_validation_fingerprint_contract() -> None:
+    perf.harden(validation)
+
+
 def _project(root: Path) -> tuple[Path, Path]:
     (root / "src/main/java/demo").mkdir(parents=True)
     (root / "src/main/resources").mkdir(parents=True)
