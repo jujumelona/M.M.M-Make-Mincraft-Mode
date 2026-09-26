@@ -239,7 +239,10 @@ def test_invalid_or_truncated_model_output_is_not_blindly_retried(
             loader="fabric",
         )
 
-    assert len(calls) == 1
+    assert len(calls) == 2
+    repair_prompt = calls[1][-1]["content"]
+    assert "top-level contract must be exactly" in repair_prompt
+    assert "required `public static void initialize()` is missing" in repair_prompt
     assert (root / path).read_bytes() == original
 
 
