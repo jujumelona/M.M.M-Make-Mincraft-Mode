@@ -171,7 +171,7 @@ def _project_files(spec: dict[str, object], generated: dict[str, object]) -> dic
             "pluginManagement { repositories { maven { url='https://maven.fabricmc.net/' }; "
             "gradlePluginPortal() } }\nrootProject.name='integrity-probe'\n"
         ),
-        "gradle.properties": "org.gradle.jvmargs=-Xmx2G\norg.gradle.workers.max=2\n",
+        "gradle.properties": (\n            "minecraft_version=1.20.1\\n"\n            "loader=fabric\\n"\n            "org.gradle.jvmargs=-Xmx2G\\n"\n            "org.gradle.workers.max=2\\n"\n        ),
         "build.gradle": _BUILD_GRADLE,
         "src/main/resources/fabric.mod.json": json.dumps(fabric_mod),
     }
