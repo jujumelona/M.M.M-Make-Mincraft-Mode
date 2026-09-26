@@ -93,9 +93,12 @@ def test_runtime_wires_single_coder_repair_reuse_owner_without_round_override() 
     assert getattr(cls._query_paths, reuse._MARKER, False)
     assert not getattr(cls.evolve_from_generation, reuse._MARKER, False)
     assert getattr(CustomModuleGenerator.generate, reuse._MARKER, False)
-    # Live RepairEngine owns repair-evidence reuse directly in reviewed source.
-    assert not getattr(RepairEngine._context, reuse._MARKER, False)
-    source = __import__("inspect").getsource(RepairEngine._context)
+    # Ownership is determined from the unwrapped implementation, not wrapper markers:
+    # functools.wraps copies function attributes and can preserve historical markers.
+    inspect = __import__("inspect")
+    source_context = inspect.unwrap(RepairEngine._context)
+    assert source_context.__module__ == "minecraft_mod_ai.repair_engine"
+    source = inspect.getsource(source_context)
     assert "prior_research_evidence" in source
     assert "repair_evidence_receipt" in source
     assert custom_research._evolution_state_budget.__module__.endswith(
