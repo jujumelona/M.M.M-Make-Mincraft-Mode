@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import minecraft_mod_ai.runner as runner_module
+from minecraft_mod_ai import validation_execution_contract
+from minecraft_mod_ai.runner_parallel_validation_contract import install as install_parallel_validation
 from minecraft_mod_ai.runner import GradleRunner
 
 
@@ -10,6 +12,10 @@ def test_gradle_build_does_not_hold_mmm_distribution_lock(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    install_parallel_validation(
+        runner_module=runner_module,
+        validation_module=validation_execution_contract,
+    )
     runner = GradleRunner(tmp_path / "cache")
     sentinel = runner_module.BuildReport(
         status="FAIL",
