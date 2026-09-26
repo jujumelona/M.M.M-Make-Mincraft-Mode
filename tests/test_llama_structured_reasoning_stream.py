@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from minecraft_mod_ai.llama_server_hardware_policy import (
-    _server_payload,
-    _stream_delta_parts,
-)
+import minecraft_mod_ai.llama_server_hardware_policy as hardware_policy
+from minecraft_mod_ai.llama_generation_budget import install as install_generation_budget
+
+install_generation_budget(hardware_policy)
+_server_payload = hardware_policy._server_payload
+_stream_delta_parts = hardware_policy._stream_delta_parts
 
 
 def _adapter(
