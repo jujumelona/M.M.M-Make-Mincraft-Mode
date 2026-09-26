@@ -23,102 +23,26 @@ def _response(members: str = "", initialize: str = "") -> str:
     )
 
 
-@pytest.mark.parametrize(
-    "wrapped",
-    [
-        lambda body: "Here is the implementation:\n" + body + "\nDone.",
-        lambda body: "```java\n" + body + "\n```",
-        lambda body: "\n\n" + body + "\n\n",
-    ],
-)
-def test_inert_outer_wrapper_is_ignored(wrapped) -> None:
+def test_legacy_marker_parser_still_accepts_well_formed_response() -> None:
     members, initialize = parse_concern_content(
-        wrapped(_response("private static final int COST = 10;", "")),
+        _response("private static final int COST = 10;", ""),
         section="behavior_contract",
     )
     assert members == "private static final int COST = 10;"
     assert initialize == ""
 
 
-def test_inert_inner_wrappers_and_host_marker_echo_are_normalized() -> None:
-    members, initialize = parse_concern_content(
-        _response(
-            "\n".join(
-                [
-                    "```java",
-                    "Members:",
-                    "// MMM_ATOMIC_CONCERN_COST_MEMBERS_START",
-                    "private static final int COST = 10;",
-                    "// MMM_ATOMIC_CONCERN_COST_MEMBERS_END",
-                    "```",
-                ]
-            ),
-            "// no initialization needed",
-        ),
-        section="behavior_contract",
-    )
-    assert members == "private static final int COST = 10;"
-    assert initialize == ""
-
-
-def test_marker_mentions_in_prose_do_not_break_exact_marker_line_protocol() -> None:
-    text = (
-        f"Use {MEMBERS_MARKER} then {END_MARKER} exactly.\n"
-        + _response("private static final int COST = 10;", "")
-    )
-    members, initialize = parse_concern_content(text, section="behavior_contract")
-    assert members == "private static final int COST = 10;"
-    assert initialize == ""
-
-
-def test_duplicate_exact_marker_lines_and_wrong_order_remain_fail_closed() -> None:
-    duplicated = _response("private static final int COST = 10;", "") + "\n" + END_MARKER
-    with pytest.raises(CustomModuleGenerationError, match="exactly once as a marker line"):
-        parse_concern_content(duplicated, section="behavior_contract")
-
-    out_of_order = f"{INITIALIZE_MARKER}\n{MEMBERS_MARKER}\n{END_MARKER}"
-    with pytest.raises(CustomModuleGenerationError, match="out of order"):
-        parse_concern_content(out_of_order, section="behavior_contract")
-
-
-@pytest.mark.parametrize(
-    "members",
-    [
-        "package example;",
-        "import net.minecraft.Foo;",
-        "public class Escape {}",
-        "public static void initialize() {}",
-    ],
-)
-def test_real_scope_escape_is_still_rejected(members: str) -> None:
-    with pytest.raises(CustomModuleGenerationError):
-        parse_concern_content(_response(members, ""), section="behavior_contract")
-
-
-def test_scope_words_inside_comments_and_literals_are_not_false_positives() -> None:
-    members, _ = parse_concern_content(
-        _response(
-            '// class import package are words only\n'
-            'private static final String NOTE = "class import package";',
-            "",
-        ),
-        section="behavior_contract",
-    )
-    assert "NOTE" in members
-
-
-def test_non_integration_real_initialize_code_is_still_rejected() -> None:
-    with pytest.raises(CustomModuleGenerationError, match="only integration concerns"):
-        parse_concern_content(
-            _response("", "register();"),
-            section="behavior_contract",
-        )
-
-
-def _executor(outputs: list[str]) -> AtomicConcernExecutor:
+def _executor(
+    outputs: list[str],
+    *,
+    section: str = "behavior_contract",
+    require_initialize: bool = False,
+) -> AtomicConcernExecutor:
     remaining = list(outputs)
 
     def call_coder(_messages):
+        if not remaining:
+            raise AssertionError("unexpected extra model call")
         return remaining.pop(0)
 
     return AtomicConcernExecutor(
@@ -128,19 +52,19 @@ def _executor(outputs: list[str]) -> AtomicConcernExecutor:
         symbol="Test",
         original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
         task={"task_id": "t", "semantic_outcome": "x"},
-        section="behavior_contract",
+        section=section,
         concerns=(
             {
                 "sequence": 0,
                 "identifier": "id",
-                "concern": "cost",
-                "task": "implement cost",
+                "concern": "transitions",
+                "task": "implement transitions",
                 "rules": [],
             },
         ),
         grounding={},
         dependency_source="",
-        require_initialize=False,
+        require_initialize=require_initialize,
         call_coder=call_coder,
         compile_java=lambda _root: SimpleNamespace(status="PASS"),
         compile_log=lambda _report: "",
@@ -148,18 +72,86 @@ def _executor(outputs: list[str]) -> AtomicConcernExecutor:
     )
 
 
-def test_response_contract_failure_is_repaired_locally_before_pipeline_abort() -> None:
+@pytest.mark.parametrize(
+    "output",
+    [
+        "private static final int COST = 10;",
+        "```java\nprivate static final int COST = 10;\n```",
+        f"{MEMBERS_MARKER}\nprivate static final int COST = 10;\n{END_MARKER}",
+        "// MMM_ATOMIC_CONCERN_TRANSITIONS_MEMBERS_START\n"
+        "private static final int COST = 10;\n"
+        "// MMM_ATOMIC_CONCERN_TRANSITIONS_MEMBERS_END",
+    ],
+)
+def test_executor_members_region_does_not_require_response_markers(output: str) -> None:
+    result = _executor([output]).run()
+    assert "private static final int COST = 10;" in result["source"]
+
+
+def test_integration_members_and_initialize_are_generated_as_separate_regions() -> None:
     executor = _executor(
         [
-            _response("package bad;", ""),
-            _response("private static final int COST = 10;", ""),
+            "private static void registerThing() {}",
+            "registerThing();",
+        ],
+        section="integration",
+        require_initialize=True,
+    )
+    result = executor.run()
+    assert "private static void registerThing() {}" in result["source"]
+    assert "registerThing();" in result["source"]
+
+
+def test_inert_initialize_answer_becomes_empty_region() -> None:
+    executor = _executor(
+        [
+            "private static void helper() {}",
+            "// no initialization needed",
+        ],
+        section="integration",
+        require_initialize=True,
+    )
+    result = executor.run()
+    assert "private static void helper() {}" in result["source"]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "package example;",
+        "import net.minecraft.Foo;",
+        "public class Escape {}",
+        "public static void initialize() {}",
+    ],
+)
+def test_real_member_scope_escape_is_rejected_and_regenerated(bad: str) -> None:
+    executor = _executor(
+        [
+            bad,
+            "private static final int COST = 10;",
         ]
     )
     result = executor.run()
     assert "private static final int COST = 10;" in result["source"]
 
 
-def test_repeated_same_response_violation_stops_on_no_progress() -> None:
-    executor = _executor([_response("package bad;", ""), _response("package worse;", "")])
-    with pytest.raises(CustomModuleGenerationError, match="ATOMIC_CONCERN_RESPONSE_NO_PROGRESS"):
+def test_identical_invalid_region_output_stops_on_semantic_no_progress() -> None:
+    executor = _executor(
+        [
+            "package example;",
+            "package example;",
+        ]
+    )
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match="ATOMIC_CONCERN_RESPONSE_NO_PROGRESS",
+    ):
         executor.run()
+
+
+def test_marker_mentions_are_not_required_by_executor_contract() -> None:
+    executor = _executor(
+        ["private static final String NOTE = \"no response markers required\";"]
+    )
+    result = executor.run()
+    assert "no response markers required" in result["source"]

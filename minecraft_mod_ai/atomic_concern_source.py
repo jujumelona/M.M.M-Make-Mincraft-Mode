@@ -188,6 +188,27 @@ def parse_concern_content(text: str, *, section: str) -> tuple[str, str]:
         )
     return members, initialize
 
+
+def _parse_region_content(text: str, *, response_region: str) -> str:
+    """Parse one host-selected region without requiring model-authored protocol markers."""
+    raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    exact_markers = {
+        MEMBERS_MARKER,
+        INITIALIZE_MARKER,
+        END_MARKER,
+    }
+    rows = [line for line in raw.splitlines() if line.strip() not in exact_markers]
+    value = _normalize_region_text("\n".join(rows))
+    initialize_region = response_region == "initialize"
+    if response_region not in {"members", "initialize"}:
+        raise CustomModuleGenerationError(
+            f"ATOMIC_CONCERN_RESPONSE_REGION_INVALID: {response_region!r}"
+        )
+    if initialize_region and _is_inert_empty_region(value):
+        return ""
+    _validate_region_text(value, initialize_region=initialize_region)
+    return value
+
 def _validate_concerns(concerns: Sequence[Mapping[str, Any]]) -> tuple[dict[str, Any], ...]:
     result: list[dict[str, Any]] = []
     names: set[str] = set()
@@ -356,23 +377,39 @@ def _messages(
     grounding: Mapping[str, Any],
     dependency_source: str,
     current_source: str,
+    response_region: str,
     failure: str = "",
 ) -> list[dict[str, str]]:
     name = _slug(concern.get("concern"))
+    if response_region == "members":
+        response_contract = (
+            "Return only Java class-body members for this concern. "
+            "If this concern needs no members, return an empty response. "
+            "Do not emit response markers, JSON, prose, Markdown fences, package/import/type declarations, "
+            "or initialize() lifecycle code."
+        )
+    elif response_region == "initialize":
+        response_contract = (
+            "Return only Java statements that belong inside the host-owned initialize() body for this concern. "
+            "If no initialization is needed, return an empty response. "
+            "Do not emit response markers, JSON, prose, Markdown fences, declarations, package/import/type syntax, "
+            "or initialize() itself."
+        )
+    else:
+        raise CustomModuleGenerationError(
+            f"ATOMIC_CONCERN_RESPONSE_REGION_INVALID: {response_region!r}"
+        )
     system = (
         "Implement exactly one host-selected concern inside one already-selected Java class. "
         "You do not choose files, classes, dependencies, architecture, tools, search routes, APIs, or sibling work. "
-        "Return only the following plain-text marker protocol. No JSON, prose, or Markdown fences:\n"
-        + MEMBERS_MARKER + "\n<class-body members for this concern only>\n"
-        + INITIALIZE_MARKER + "\n<initialize statements only when section=integration; otherwise empty>\n"
-        + END_MARKER + "\n"
-        "Use fully-qualified external API names when needed; do not emit import/package/type declarations. "
-        "Do not emit initialize() itself and do not restate sibling concern blocks. "
+        + response_contract + " "
+        "Use fully-qualified external API names when needed. "
         "Use only supplied host grounding and dependency source; never invent a Minecraft/Fabric API."
     )
     payload = {
-        "phase": "implement_atomic_concern",
+        "phase": "implement_atomic_concern_region",
         "section": section,
+        "response_region": response_region,
         "concern": {
             "sequence": concern.get("sequence"),
             "identifier": concern.get("identifier"),
@@ -387,8 +424,11 @@ def _messages(
         "current_host_owned_source": current_source,
         "repair_failure": failure or None,
         "scope": {
-            "members_region": _marker(name, "MEMBERS", "START"),
-            "initialize_region": _marker(name, "INIT", "START"),
+            "selected_region": _marker(
+                name,
+                "INIT" if response_region == "initialize" else "MEMBERS",
+                "START",
+            ),
             "sibling_regions_immutable": True,
             "model_tool_choice": False,
         },
@@ -440,9 +480,15 @@ class AtomicConcernExecutor:
             f"ATOMIC_CONCERN_UNKNOWN_REPAIR_SCOPE: {name}"
         )
 
-    def _apply(self, concern: Mapping[str, Any], *, failure: str = "") -> None:
+    def _generate_region(
+        self,
+        concern: Mapping[str, Any],
+        *,
+        response_region: str,
+        failure: str = "",
+    ) -> str:
         name = _slug(concern["concern"])
-        response_failures: set[str] = set()
+        seen_violations: set[tuple[str, str]] = set()
         repair_failure = failure
         while True:
             output = self.call_coder(_messages(
@@ -452,11 +498,11 @@ class AtomicConcernExecutor:
                 grounding=self.grounding,
                 dependency_source=self.dependency_source,
                 current_source=self.source,
+                response_region=response_region,
                 failure=repair_failure,
             ))
             try:
-                members, initialize = parse_concern_content(output, section=self.section)
-                break
+                return _parse_region_content(output, response_region=response_region)
             except CustomModuleGenerationError as exc:
                 reason = str(exc).split("\n", 1)[0]
                 recoverable = reason.startswith(
@@ -464,20 +510,40 @@ class AtomicConcernExecutor:
                 )
                 if not recoverable:
                     raise
-                if reason in response_failures:
+                fingerprint = hashlib.sha256(
+                    str(output or "").encode("utf-8")
+                ).hexdigest()
+                violation = (reason, fingerprint)
+                if violation in seen_violations:
                     raise CustomModuleGenerationError(
-                        f"ATOMIC_CONCERN_RESPONSE_NO_PROGRESS: {name} repeated host response violation: {reason}"
+                        f"ATOMIC_CONCERN_RESPONSE_NO_PROGRESS: {name}:{response_region} "
+                        f"repeated identical invalid output: {reason}"
                     ) from exc
-                response_failures.add(reason)
+                seen_violations.add(violation)
                 validation_failure = (
-                    "HOST RESPONSE VALIDATION FAILED BEFORE COMPILATION:\n"
+                    "HOST REGION VALIDATION FAILED BEFORE COMPILATION:\n"
                     + reason
-                    + "\nReturn the same concern again using only the required marker protocol. "
-                    "Do not emit package/import/type/lifecycle declarations."
+                    + f"\nRegenerate only the {response_region} region. "
+                    "Do not emit response markers, prose, package/import/type/lifecycle declarations."
                 )
                 repair_failure = "\n\n".join(
                     item for item in (failure, validation_failure) if item
                 )
+
+    def _apply(self, concern: Mapping[str, Any], *, failure: str = "") -> None:
+        name = _slug(concern["concern"])
+        members = self._generate_region(
+            concern,
+            response_region="members",
+            failure=failure,
+        )
+        initialize = ""
+        if self.require_initialize and str(self.section or "").strip() == "integration":
+            initialize = self._generate_region(
+                concern,
+                response_region="initialize",
+                failure=failure,
+            )
         if failure and self.state.get(name) == (members, initialize):
             raise CustomModuleGenerationError(
                 f"ATOMIC_CONCERN_REPAIR_NO_PROGRESS: {name} repeated the same bounded source."
