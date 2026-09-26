@@ -144,7 +144,7 @@ def _replace_region(source: str, *, concern: str, region: str, content: str) -> 
     start = _marker(concern, region, "START")
     end = _marker(concern, region, "END")
     pattern = re.compile(
-        rf"(?m)^(?P<indent>[ \t]*){re.escape(start)}\s*$.*?^(?P=indent){re.escape(end)}\s*$",
+        rf"(?m)^(?P<indent>[ \t]*){re.escape(start)}[ \t]*$.*?^(?P=indent){re.escape(end)}[ \t]*$",
         re.DOTALL,
     )
     match = pattern.search(source)
