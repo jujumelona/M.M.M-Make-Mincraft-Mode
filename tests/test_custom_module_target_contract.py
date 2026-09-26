@@ -12,7 +12,7 @@ from minecraft_mod_ai.custom_module_generator import (
 )
 
 
-class _ReachedProjectIndex(RuntimeError):
+class _ReachedScaffold(RuntimeError):
     pass
 
 
@@ -64,12 +64,12 @@ def test_native_26_2_blank_mappings_crosses_generation_target_gate(monkeypatch, 
     monkeypatch.setattr(custom_generation, "adapter_for_target", lambda version, loader: adapter)
 
     def stop_after_target(*_args, **_kwargs):
-        raise _ReachedProjectIndex
+        raise _ReachedScaffold
 
-    monkeypatch.setattr(custom_generation, "ProjectIndex", stop_after_target)
+    monkeypatch.setattr(custom_generation, "_materialize_host_scaffold", stop_after_target)
     generator = CustomModuleGenerator(object())
 
-    with pytest.raises(_ReachedProjectIndex):
+    with pytest.raises(_ReachedScaffold):
         generator.generate(
             tmp_path,
             module=_module(),
