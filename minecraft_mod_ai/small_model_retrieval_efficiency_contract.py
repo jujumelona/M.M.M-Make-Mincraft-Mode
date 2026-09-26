@@ -457,7 +457,8 @@ def install() -> None:
         rag_index,
     )
 
-    _install_anchor_compaction(custom_module_generator)
+    if hasattr(custom_module_generator, "_observation_context_pages"):
+        _install_anchor_compaction(custom_module_generator)
     _install_structural_repair_bypass(custom_generation_search_contract)
     _install_explicit_semantic_index_policy(production_tools)
     _install_bidirectional_relation_search(rag_index)
