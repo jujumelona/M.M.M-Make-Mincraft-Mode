@@ -43,10 +43,17 @@ def _bind_atomic_leaf_contract(
     from .authored_production import _task_sha
 
     section = section_for_symbol(str(node.get("symbol") or ""))
+    if not section:
+        raise ImplementationGraphError(
+            f"IMPLEMENTATION_IR_NONCANONICAL_LEAF: {node.get('symbol', '')}"
+        )
     concerns = list(concern_contracts(section))
-    if concerns:
-        task["implementation_obligations"] = list(node["obligations"])
-        task["task_sha256"] = _task_sha(task)
+    if not concerns:
+        raise ImplementationGraphError(
+            f"IMPLEMENTATION_IR_CONCERN_CONTRACT_MISSING: {section}"
+        )
+    task["implementation_obligations"] = list(node["obligations"])
+    task["task_sha256"] = _task_sha(task)
     return section, concerns
 
 def _leaf_module(node: dict[str, Any], graph: dict[str, Any], request: dict[str, Any]) -> ProductionModule:

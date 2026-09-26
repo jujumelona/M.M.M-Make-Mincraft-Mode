@@ -196,59 +196,50 @@ def _planned_roles(payload: Mapping[str, Any]) -> set[str]:
     return {_normalized_unit_role(value) for value in raw}
 
 
-def _host_owner_symbol(payload: dict[str, Any], packet: Mapping[str, Any]) -> str:
-    """Return a stable owner from the authored schema role, never from model naming."""
+def _required_section_contract(payload: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
     role = _unit_role(payload)
     contract = section_spec(role)
-    if contract:
-        return str(contract["symbol"])
-    unit_ids = [str(value).strip() for value in payload.get("unit_ids", []) if str(value).strip()]
-    seed = unit_ids[0] if unit_ids else next(iter(packet.get("requirements", {})), "work")
-    parts = re.findall(r"[A-Za-z0-9]+", seed)
-    suffix = "".join(part[:1].upper() + part[1:] for part in parts) or "Work"
-    if suffix[0].isdigit():
-        suffix = "Unit" + suffix
-    return "Authored" + suffix
+    if contract is None:
+        from .implementation_ir import ImplementationGraphError
+
+        raise ImplementationGraphError(
+            f"IMPLEMENTATION_IR_NONCANONICAL_UNIT: {role or '<missing>'}"
+        )
+    return role, contract
+
+
+def _host_owner_symbol(payload: Mapping[str, Any]) -> str:
+    _, contract = _required_section_contract(payload)
+    return str(contract["symbol"])
 
 
 def _role_dependencies(payload: Mapping[str, Any]) -> list[str]:
-    role = _unit_role(payload)
-    contract = section_spec(role)
-    if not contract:
-        return []
+    _, contract = _required_section_contract(payload)
     planned = _planned_roles(payload)
     result: list[str] = []
     for dependency_role in contract["depends_on"]:
         if dependency_role not in planned:
             continue
         dependency = section_spec(dependency_role)
-        if dependency:
-            result.append(str(dependency["symbol"]))
+        if dependency is None:
+            from .implementation_ir import ImplementationGraphError
+
+            raise ImplementationGraphError(
+                f"IMPLEMENTATION_IR_CANONICAL_DEPENDENCY_MISSING: {dependency_role}"
+            )
+        result.append(str(dependency["symbol"]))
     return result
 
 
 def _host_responsibility(payload: Mapping[str, Any]) -> str:
-    role = _unit_role(payload)
-    contract = section_spec(role)
-    if contract:
-        return str(contract["responsibility"])
-    units = [str(value).strip() for value in payload.get("current_units", []) if str(value).strip()]
-    return (
-        f"Implement the approved authored unit: {units[0]}"
-        if units
-        else "Implement the approved authored behavior."
-    )
+    _, contract = _required_section_contract(payload)
+    return str(contract["responsibility"])
 
 
 def _host_instruction(payload: Mapping[str, Any]) -> str:
-    role = _unit_role(payload)
-    contract = section_spec(role)
-    if contract:
-        return str(contract["instruction"])
-    return (
-        "Implement these approved requirements exactly in this bounded Java unit. "
-        "The host owns lifecycle wiring and graph structure; do not invent sibling owners."
-    )
+    _, contract = _required_section_contract(payload)
+    return str(contract["instruction"])
+
 def _host_obligation(requirements: Mapping[str, str], *, instruction: str) -> str:
     return json.dumps(
         {"source_requirements": dict(requirements), "instruction": instruction},
@@ -293,14 +284,13 @@ def _host_concern_work(
     packet: Mapping[str, Any],
     unit_requirements: Mapping[str, str],
 ) -> tuple[list[str], int]:
-    role = _unit_role(payload)
+    role, _contract = _required_section_contract(payload)
     concerns = concern_contracts(role)
     if not concerns:
-        return (
-            [_host_obligation(
-                packet["requirements"], instruction=_host_instruction(payload)
-            )],
-            _host_estimated_tokens(unit_requirements),
+        from .implementation_ir import ImplementationGraphError
+
+        raise ImplementationGraphError(
+            f"IMPLEMENTATION_IR_CONCERN_CONTRACT_MISSING: {role}"
         )
     section_instruction = _host_instruction(payload)
     obligations: list[str] = []
@@ -340,7 +330,7 @@ def compile_contribution(router: Any, name: str, payload: dict[str, Any],
         payload["requirements"], payload.get("unit_context") or payload["requirements"]
     )
     owners = {node["symbol"]: node for node in payload.get("accepted_nodes", [])}
-    symbol = _host_owner_symbol(payload, packet)
+    symbol = _host_owner_symbol(payload)
     owner = owners.get(symbol)
     unit_requirements = payload.get("unit_context") or packet["requirements"]
     responsibility = owner["responsibility"] if owner else _host_responsibility(payload)
