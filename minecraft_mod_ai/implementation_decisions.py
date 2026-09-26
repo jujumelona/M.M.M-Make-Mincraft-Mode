@@ -174,8 +174,111 @@ def _decide(router: Any, stage: str, properties: dict[str, Any], context: dict[s
             raise ImplementationGraphError(slot["terminal"])
 
 
+_SECTION_CONTRACTS: dict[str, dict[str, Any]] = {
+    "state_model": {
+        "symbol": "AuthoredStateModel",
+        "depends_on": (),
+        "responsibility": "Own the authored domain state, invariants, and state transitions.",
+        "instruction": (
+            "Implement domain state containers, invariants, and transition helpers only. "
+            "Do not perform Fabric lifecycle registration, networking, UI, or persistence."
+        ),
+    },
+    "behavior_contract": {
+        "symbol": "AuthoredBehaviorContract",
+        "depends_on": ("state_model",),
+        "responsibility": "Implement the authored player/system behavior contract.",
+        "instruction": (
+            "Implement bounded gameplay operations and precondition/failure guards over the "
+            "authored state. Do not perform Fabric lifecycle registration."
+        ),
+    },
+    "algorithm": {
+        "symbol": "AuthoredAlgorithm",
+        "depends_on": ("state_model", "behavior_contract"),
+        "responsibility": "Implement deterministic algorithms from the authored design.",
+        "instruction": (
+            "Implement deterministic calculations and algorithms only; keep Minecraft/Fabric "
+            "registration and UI/network wiring out of this unit."
+        ),
+    },
+    "authority_and_network": {
+        "symbol": "AuthoredAuthorityNetwork",
+        "depends_on": ("state_model", "behavior_contract"),
+        "responsibility": "Implement server-authoritative synchronization and network-facing rules.",
+        "instruction": (
+            "Implement only authority/synchronization/network-facing behavior required by the "
+            "approved design. Use exact host-provided platform facts; never invent API names."
+        ),
+    },
+    "persistence": {
+        "symbol": "AuthoredPersistence",
+        "depends_on": ("state_model",),
+        "responsibility": "Implement persistence boundaries for authored state.",
+        "instruction": (
+            "Implement serialization/persistence boundaries for the authored state. "
+            "Do not perform unrelated lifecycle registration."
+        ),
+    },
+    "resources_and_ui": {
+        "symbol": "AuthoredResourcesUi",
+        "depends_on": ("state_model", "behavior_contract"),
+        "responsibility": "Implement the bounded UI/resource-facing behavior in the authored design.",
+        "instruction": (
+            "Implement only UI/resource-facing coordination described by the approved design. "
+            "Do not redesign gameplay or invent unavailable platform APIs."
+        ),
+    },
+    "failure_and_limits": {
+        "symbol": "AuthoredFailureLimits",
+        "depends_on": ("state_model",),
+        "responsibility": "Implement failure handling, limits, and invariant guards.",
+        "instruction": (
+            "Implement validation, limits, and failure guards as deterministic Java logic. "
+            "Do not perform Fabric lifecycle registration."
+        ),
+    },
+    "integration": {
+        "symbol": "AuthoredIntegration",
+        "depends_on": (
+            "state_model", "behavior_contract", "algorithm", "authority_and_network",
+            "persistence", "resources_and_ui", "failure_and_limits",
+        ),
+        "responsibility": "Wire the authored runtime systems into the host-owned mod lifecycle.",
+        "instruction": (
+            "This is the integration unit. Wire already implemented authored systems into the "
+            "host-owned initialize() hook. Use only exact host-provided Minecraft/Fabric facts "
+            "and dependency source; never create another mod entrypoint."
+        ),
+    },
+}
+
+
+def _normalized_unit_role(value: Any) -> str:
+    text = re.sub(r"\s*\([^)]*\)\s*$", "", str(value or "").strip()).casefold()
+    return re.sub(r"[\s-]+", "_", text).strip("_")
+
+
+def _unit_role(payload: Mapping[str, Any]) -> str:
+    units = payload.get("current_units") or ()
+    if isinstance(units, (list, tuple)) and units:
+        return _normalized_unit_role(units[0])
+    return ""
+
+
+def _planned_roles(payload: Mapping[str, Any]) -> set[str]:
+    raw = payload.get("planned_units") or ()
+    if not isinstance(raw, (list, tuple)):
+        return set()
+    return {_normalized_unit_role(value) for value in raw}
+
+
 def _host_owner_symbol(payload: dict[str, Any], packet: Mapping[str, Any]) -> str:
-    """Return one stable Java owner per host-authored unit without model naming."""
+    """Return a stable owner from the authored schema role, never from model naming."""
+    role = _unit_role(payload)
+    contract = _SECTION_CONTRACTS.get(role)
+    if contract:
+        return str(contract["symbol"])
     unit_ids = [str(value).strip() for value in payload.get("unit_ids", []) if str(value).strip()]
     seed = unit_ids[0] if unit_ids else next(iter(packet.get("requirements", {})), "work")
     parts = re.findall(r"[A-Za-z0-9]+", seed)
@@ -185,7 +288,27 @@ def _host_owner_symbol(payload: dict[str, Any], packet: Mapping[str, Any]) -> st
     return "Authored" + suffix
 
 
+def _role_dependencies(payload: Mapping[str, Any]) -> list[str]:
+    role = _unit_role(payload)
+    contract = _SECTION_CONTRACTS.get(role)
+    if not contract:
+        return []
+    planned = _planned_roles(payload)
+    result: list[str] = []
+    for dependency_role in contract["depends_on"]:
+        if dependency_role not in planned:
+            continue
+        dependency = _SECTION_CONTRACTS.get(dependency_role)
+        if dependency:
+            result.append(str(dependency["symbol"]))
+    return result
+
+
 def _host_responsibility(payload: Mapping[str, Any]) -> str:
+    role = _unit_role(payload)
+    contract = _SECTION_CONTRACTS.get(role)
+    if contract:
+        return str(contract["responsibility"])
     units = [str(value).strip() for value in payload.get("current_units", []) if str(value).strip()]
     return (
         f"Implement the approved authored unit: {units[0]}"
@@ -194,6 +317,15 @@ def _host_responsibility(payload: Mapping[str, Any]) -> str:
     )
 
 
+def _host_instruction(payload: Mapping[str, Any]) -> str:
+    role = _unit_role(payload)
+    contract = _SECTION_CONTRACTS.get(role)
+    if contract:
+        return str(contract["instruction"])
+    return (
+        "Implement these approved requirements exactly in this bounded Java unit. "
+        "The host owns lifecycle wiring and graph structure; do not invent sibling owners."
+    )
 def _host_obligation(requirements: Mapping[str, str], *, instruction: str) -> str:
     return json.dumps(
         {"source_requirements": dict(requirements), "instruction": instruction},
@@ -261,14 +393,11 @@ def compile_contribution(router: Any, name: str, payload: dict[str, Any],
         "obligations": [
             _host_obligation(
                 packet["requirements"],
-                instruction=(
-                    "Implement these approved requirements exactly in this bounded Java unit. "
-                    "The host owns lifecycle wiring and graph structure; do not invent sibling owners."
-                ),
+                instruction=_host_instruction(payload),
             )
         ],
         "public_api": [],
-        "depends_on": [],
+        "depends_on": _role_dependencies(payload),
         "activation": True,
         "estimated_tokens": _host_estimated_tokens(unit_requirements),
     }

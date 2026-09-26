@@ -17,7 +17,7 @@ from .custom_module_errors import CustomModuleGenerationError
 from .implementation_lifecycle import activation_public_api
 from .model_adapters.base import NativeToolDecisionRejected
 
-IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v12"
+IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v13"
 
 
 class ImplementationGraphError(CustomModuleGenerationError):
@@ -299,13 +299,48 @@ def is_completion_boundary_error(exc: BaseException) -> bool:
     return "exhausted the bounded output allowance" in msg or "output_exhausted" in msg
 
 
-def decompose_authored_units(text: str) -> list[dict[str, Any]]:
-    """Create one semantic unit per authored heading.
+def _normalized_authored_section(title: str) -> str:
+    value = re.sub(r"^\s*\d+[.)]\s*", "", str(title or "").strip()).casefold()
+    value = re.sub(r"[\s-]+", "_", value)
+    return value.strip("_")
 
-    Unit size is not pre-clamped. The host keeps one coherent authored concern
-    together and later source-generation output pressure triggers deterministic
-    refinement. This keeps granularity evidence-driven instead of asking a planning
-    model to invent responsibility boundaries.
+
+_EXECUTION_SECTION_ORDER = (
+    "state_model",
+    "behavior_contract",
+    "algorithm",
+    "authority_and_network",
+    "persistence",
+    "resources_and_ui",
+    "failure_and_limits",
+    "integration",
+)
+_EXECUTION_SECTION_SET = frozenset(_EXECUTION_SECTION_ORDER)
+_CONTEXT_SECTION_SET = frozenset({
+    "overview",
+    "개요",
+    "reuse_assessment",
+    "verification",
+})
+
+
+def _document_context_section(title: str) -> bool:
+    normalized = _normalized_authored_section(title)
+    return bool(
+        normalized in _CONTEXT_SECTION_SET
+        or "design_document" in normalized
+        or "설계_문서" in normalized
+        or normalized in {"introduction", "intro", "summary", "metadata"}
+    )
+
+
+def decompose_authored_units(text: str) -> list[dict[str, Any]]:
+    """Lower the fixed authored-design schema into host-owned implementation roles.
+
+    In the canonical design format, behavior_contract/state_model/algorithm and the
+    other execution headings are implementation roles. Document title, overview,
+    reuse assessment and verification prose remain read-only context and never become
+    Java classes. Unknown/noncanonical documents retain the generic heading fallback.
     """
     req_map = source_requirements(text)
     if not req_map:
@@ -313,7 +348,6 @@ def decompose_authored_units(text: str) -> list[dict[str, Any]]:
 
     lines = text.splitlines(keepends=False)
     heading_pattern = re.compile(r"^ {0,3}#{1,6}[ \t]+(.+?)\s*$")
-
     sections: list[tuple[str, list[str]]] = []
     current_title = "overview"
     current_req_ids: list[str] = []
@@ -327,14 +361,12 @@ def decompose_authored_units(text: str) -> list[dict[str, Any]]:
             continue
         match = heading_pattern.match(line)
         if match:
-            # A document title or empty parent heading is context for the next
-            # real concern, never a standalone implementation/model request.
             if current_req_ids and has_body:
                 sections.append((current_title, current_req_ids))
                 current_req_ids = []
                 has_body = False
             title = re.sub(r"^#+[ \t]+", "", match[1])
-            current_title = re.sub(r"[ \t]+#+[ \t]*$", "", title).strip("*_` ")
+            current_title = re.sub(r"[ \t]+#+[ \t]*$", "", title).strip("*_ " + chr(96))
         else:
             has_body = True
         current_req_ids.append(req_id)
@@ -345,16 +377,49 @@ def decompose_authored_units(text: str) -> list[dict[str, Any]]:
         else:
             sections.append((current_title, current_req_ids))
 
-    return [
-        {
-            "unit_id": f"unit_{index}",
-            "title": title,
+    canonical_roles = {
+        _normalized_authored_section(title)
+        for title, _reqs in sections
+        if _normalized_authored_section(title) in _EXECUTION_SECTION_SET
+    }
+    schema_mode = len(canonical_roles) >= 3
+    if not schema_mode:
+        return [
+            {
+                "unit_id": f"unit_{index}",
+                "title": title,
+                "requirements": {req_id: req_map[req_id] for req_id in req_ids},
+                "context_requirements": {},
+            }
+            for index, (title, req_ids) in enumerate(sections)
+        ]
+
+    context_ids: list[str] = []
+    by_role: dict[str, list[str]] = {}
+    for title, req_ids in sections:
+        role = _normalized_authored_section(title)
+        if role in _EXECUTION_SECTION_SET:
+            by_role.setdefault(role, []).extend(req_ids)
+        else:
+            context_ids.extend(req_ids)
+
+    context = {
+        req_id: req_map[req_id]
+        for req_id in dict.fromkeys(context_ids)
+        if req_id in req_map
+    }
+    units: list[dict[str, Any]] = []
+    for role in _EXECUTION_SECTION_ORDER:
+        req_ids = list(dict.fromkeys(by_role.get(role, ())))
+        if not req_ids:
+            continue
+        units.append({
+            "unit_id": role,
+            "title": role,
             "requirements": {req_id: req_map[req_id] for req_id in req_ids},
-        }
-        for index, (title, req_ids) in enumerate(sections)
-    ]
-
-
+            "context_requirements": dict(context),
+        })
+    return units
 def _next_active_unit(
     pending_units: list[dict[str, Any]],
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
@@ -975,6 +1040,9 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
     all_requirements = source_requirements(text)
     all_req_keys = set(all_requirements)
     units = decompose_authored_units(text)
+    execution_req_keys = set().union(
+        *(set(unit["requirements"]) for unit in units)
+    ) if units else set(all_req_keys)
 
     request_hash = digest({"text": text, "package": package, "mod_id": mod_id, "target": target})
     resumed = deepcopy(resume) if resume else None
@@ -1030,7 +1098,7 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
             if dependency not in known
         }
 
-        if covered == all_req_keys and not missing:
+        if covered == execution_req_keys and not missing:
             state["done"] = True
             state["pending"] = None
             save()
@@ -1042,7 +1110,7 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
             for unit in state["unit_queue"]
             if not set(unit["requirements"]) <= covered
         ]
-        if covered != all_req_keys and not pending_units:
+        if covered != execution_req_keys and not pending_units:
             pending_units = [
                 deepcopy(unit)
                 for unit in units
@@ -1058,7 +1126,7 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
             active_reqs = {req_id: all_requirements[req_id] for req_id in active_req_ids}
             state["dependency_scope"] = None
         else:
-            if covered != all_req_keys:
+            if covered != execution_req_keys:
                 raise ImplementationGraphError("IMPLEMENTATION_IR_WORK_QUEUE_DRIFT")
             dependency_req_ids: list[str] = []
             seen_dependency_reqs: set[str] = set()
@@ -1108,7 +1176,7 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
                 if dependency not in new_known
             }
 
-            if covered_before != all_req_keys:
+            if covered_before != execution_req_keys:
                 gained = (new_covered - covered_before).intersection(active_req_keys)
                 if not gained:
                     raise ImplementationGraphError(
@@ -1127,7 +1195,15 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
             "current_units": [active_unit["title"]] if active_unit is not None else [],
             "unit_ids": [active_unit["unit_id"]] if active_unit is not None else [],
             "requirements": active_reqs,
-            "unit_context": active_unit["requirements"] if active_unit is not None else active_reqs,
+            "unit_context": (
+                {
+                    **active_unit.get("context_requirements", {}),
+                    **active_unit["requirements"],
+                }
+                if active_unit is not None
+                else active_reqs
+            ),
+            "planned_units": [unit["title"] for unit in units],
             "unresolved_dependencies": sorted(missing),
             "platform": target,
             "project_context": context,
@@ -1168,7 +1244,7 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
                 for dependency in node["depends_on"]
                 if dependency not in new_known
             }
-            state["done"] = new_covered == all_req_keys and not new_missing
+            state["done"] = new_covered == execution_req_keys and not new_missing
             save()
         except Exception as exc:
             if not is_completion_boundary_error(exc):

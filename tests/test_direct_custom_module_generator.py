@@ -106,8 +106,10 @@ def test_invariant_failure_repairs_from_complete_current_source(
 
     assert result["status"] == "SOURCE_GENERATED"
     assert len(calls) == 2
-    assert calls[0][1]["enable_tools"] is True
+    assert calls[0][1]["enable_tools"] is False
     assert "output_token_ceiling" not in calls[0][1]
+    assert '"model_tool_choice_required": false' in calls[0][0][-1]["content"]
+    assert '"resolved_before_first_coder_decode": true' in calls[0][0][-1]["content"]
     repair_prompt = calls[1][0][-1]["content"]
     assert bad in repair_prompt
     assert "public final class AuthoredFeature001" in repair_prompt

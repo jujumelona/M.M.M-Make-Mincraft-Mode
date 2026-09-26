@@ -160,3 +160,32 @@ def test_single_requirement_refinement_is_finite_by_strictly_decreasing_cost():
     )
     assert router.calls == []
     assert max(node["estimated_tokens"] for node in refined) == 4
+
+
+def test_canonical_design_schema_skips_context_sections_and_uses_named_owners():
+    router = NoPlanningModelRouter()
+    text = (
+        "# Stellar Odyssey Mod Design Document\n"
+        "## 개요\nOverview only.\n"
+        "# behavior_contract\n- Buy when funds are sufficient.\n"
+        "# state_model\n- Balance is stored as an integer.\n"
+        "# algorithm\n- Subtract price from balance.\n"
+        "# integration\n- Wire systems into the host lifecycle.\n"
+        "# authority_and_network\n- Server owns transactions.\n"
+        "# persistence\n- Persist balance.\n"
+        "# resources_and_ui\n- Show balance in UI.\n"
+        "# failure_and_limits\n- Reject negative balance.\n"
+        "# reuse_assessment\nNo donor is required.\n"
+        "# verification\nCompile and test.\n"
+    )
+    graph = compile_with(router, text=text)
+    symbols = [node["symbol"] for node in graph["nodes"]]
+    assert "AuthoredUnit0" not in symbols
+    assert "AuthoredStateModel" in symbols
+    assert "AuthoredBehaviorContract" in symbols
+    assert "AuthoredIntegration" in symbols
+    assert all("Overview only." not in obligation for node in graph["nodes"] for obligation in node["obligations"])
+    by_symbol = {node["symbol"]: node for node in graph["nodes"]}
+    assert by_symbol["AuthoredBehaviorContract"]["depends_on"] == ["AuthoredStateModel"]
+    assert "AuthoredStateModel" in by_symbol["AuthoredIntegration"]["depends_on"]
+    assert router.calls == []

@@ -378,6 +378,120 @@ def _supports_kwarg(callable_value: Any, name: str) -> bool:
     )
 
 
+def _dependency_source_context(root: Path, raw: str) -> str:
+    """Materialize exact host-selected dependency sources; the model chooses no lookup."""
+    try:
+        rows = json.loads(raw) if raw else []
+    except json.JSONDecodeError:
+        rows = []
+    if not isinstance(rows, list):
+        return raw
+    rendered: list[str] = []
+    budget = 64 * 1024
+    used = 0
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        path = str(row.get("path") or "").replace("\\", "/").strip()
+        if not path:
+            continue
+        try:
+            target = _safe_target(root, _normalize_project_path(path))
+            source = target.read_text(encoding="utf-8")
+        except (CustomModuleGenerationError, OSError, UnicodeError):
+            source = ""
+        block = json.dumps(
+            {
+                "symbol": row.get("symbol"),
+                "path": path,
+                "responsibility": row.get("responsibility"),
+                "public_api": row.get("public_api") or [],
+                "source": source,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        encoded = block.encode("utf-8")
+        if used + len(encoded) > budget:
+            break
+        rendered.append(block)
+        used += len(encoded)
+    return "\n".join(rendered) if rendered else raw
+
+
+def _direct_host_grounding(
+    *,
+    adapter: Any,
+    task: Mapping[str, Any],
+    ir_contract: Mapping[str, Any] | None,
+    dependency_context: str,
+    typed_grounding: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Build the complete evidence bundle before the small coder decodes."""
+    version_facts: dict[str, Any] = {}
+    try:
+        from .host_version_catalog import host_target
+
+        target = host_target(adapter.minecraft_version)
+        resolved = target.version_context
+        version_facts = {
+            "context_id": resolved.context_id,
+            "capabilities": {
+                str(key): bool(value)
+                for key, value in resolved.capabilities.items()
+                if bool(value)
+            },
+            "api_symbols": {str(key): value for key, value in resolved.api_symbols.items()},
+            "dependency_coordinates": dict(resolved.facts["dependency_coordinates"]),
+        }
+    except Exception as exc:
+        version_facts = {
+            "status": "UNAVAILABLE",
+            "reason": f"{type(exc).__name__}: {exc}",
+        }
+
+    section_role = ""
+    if isinstance(ir_contract, Mapping):
+        role_by_symbol = {
+            "AuthoredStateModel": "state_model",
+            "AuthoredBehaviorContract": "behavior_contract",
+            "AuthoredAlgorithm": "algorithm",
+            "AuthoredAuthorityNetwork": "authority_and_network",
+            "AuthoredPersistence": "persistence",
+            "AuthoredResourcesUi": "resources_and_ui",
+            "AuthoredFailureLimits": "failure_and_limits",
+            "AuthoredIntegration": "integration",
+        }
+        section_role = role_by_symbol.get(str(ir_contract.get("symbol") or ""), "")
+
+    return {
+        "schema_version": "mmm/direct-coder-host-grounding-v1",
+        "phase": "implement_module",
+        "workspace_project_root": ".",
+        "section_role": section_role,
+        "platform": {
+            "minecraft_version": str(adapter.minecraft_version),
+            "loader": str(adapter.loader),
+            "java_version": int(adapter.java_version),
+            "mappings": str(getattr(adapter, "yarn_mappings", "") or ""),
+        },
+        "task": dict(task),
+        "implementation_ir_node": dict(ir_contract) if isinstance(ir_contract, Mapping) else None,
+        "dependency_context": dependency_context,
+        "typed_implementation_grounding": (
+            dict(typed_grounding) if isinstance(typed_grounding, Mapping) else None
+        ),
+        "host_version_facts": version_facts,
+        "policy": {
+            "resolved_before_first_coder_decode": True,
+            "baseline_grounding_owned_by_host": True,
+            "writes_still_require_approved_pipeline": True,
+            "model_tool_choice_required": False,
+            "fabric_lifecycle_owned_by_host": True,
+            "invent_unlisted_platform_api": False,
+        },
+    }
+
 def _call_coder(
     router: Any,
     messages: Sequence[Mapping[str, str]],
@@ -391,7 +505,7 @@ def _call_coder(
     for key, value in (
         ("response_format", "json"),
         ("response_schema", _SOURCE_SCHEMA),
-        ("enable_tools", True),
+        ("enable_tools", False),
         ("tool_stage", "generation"),
     ):
         if _supports_kwarg(callback, key):
@@ -522,7 +636,9 @@ class CustomModuleGenerator:
         bind_workspace = getattr(self.router, "bind_agent_workspace", None)
         if callable(bind_workspace):
             if _supports_kwarg(bind_workspace, "require_fresh_evidence"):
-                bind_workspace(root, require_fresh_evidence=True)
+                # Direct coder receives a complete host-owned grounding bundle below.
+                # It must not enter the model-driven retrieve/tool-choice loop.
+                bind_workspace(root, require_fresh_evidence=False)
             else:
                 bind_workspace(root)
 
@@ -592,20 +708,30 @@ class CustomModuleGenerator:
             grounding
         )
         task_text = json.dumps(task, ensure_ascii=False, sort_keys=True)
-        grounding_text = json.dumps(
-            grounding or {},
-            ensure_ascii=False,
-            sort_keys=True,
-        )
         ir_contract = module.config.get("implementation_ir_node")
         if isinstance(ir_contract, Mapping):
-            context = str(module.config.get("implementation_dependency_context") or "")
+            raw_dependency_context = str(
+                module.config.get("implementation_dependency_context") or ""
+            )
+            context = _dependency_source_context(root, raw_dependency_context)
         else:
             context = _project_context(
                 root,
                 target,
-                relevance_text=task_text + "\n" + grounding_text + "\n" + original,
+                relevance_text=task_text + "\n" + original,
             )
+        host_grounding = _direct_host_grounding(
+            adapter=adapter,
+            task=task,
+            ir_contract=ir_contract if isinstance(ir_contract, Mapping) else None,
+            dependency_context=context,
+            typed_grounding=grounding,
+        )
+        grounding_text = json.dumps(
+            host_grounding,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
         bounded_feedback = _bounded_execution_feedback(execution_feedback)
         system = (
             "You implement exactly one host-owned Minecraft Java source file. "
@@ -614,8 +740,11 @@ class CustomModuleGenerator:
             "\"<short summary>\"}. Never return a patch or diff. "
             "Do not change the package, public final top-level class name, or "
             "declared public API (including initialize() when required). Do not create "
-            "another mod entrypoint. The host will compile the real project and "
-            "return the exact compiler failure for repair."
+            "another mod entrypoint. The host already resolved project/platform evidence; "
+            "do not search for tools or invent unlisted Minecraft/Fabric APIs. "
+            "Only the integration section may perform lifecycle/registration wiring; other "
+            "authored sections implement bounded domain logic. The host will compile the "
+            "real project and return the exact compiler failure for repair."
             + ("\n\n" + authority_prompt if authority_prompt else "")
         )
         initial_user = (
