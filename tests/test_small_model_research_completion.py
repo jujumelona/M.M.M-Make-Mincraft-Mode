@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 from minecraft_mod_ai import agentic_optimization_contract, model_router, repair_engine, temporary_skill_contract, work_graph
+from minecraft_mod_ai import active_repair_verifier_contract as active_repair
+from minecraft_mod_ai import unified_trajectory_memory_contract as trajectory_contract
 from minecraft_mod_ai import small_model_max_agent_contract as max_agent
 from minecraft_mod_ai.active_repair_verifier_contract import _ambiguous
 from minecraft_mod_ai.counterexample_verifier import _synthetic_verification
@@ -37,6 +39,12 @@ def _install_temporary_skill_contract() -> None:
         work_graph_module=work_graph,
         repair_module=repair_engine,
     )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _install_research_runtime_contracts() -> None:
+    active_repair.install(agentic_optimization_contract)
+    trajectory_contract.install()
 
 
 def _repair_task() -> dict[str, object]:
