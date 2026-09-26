@@ -108,6 +108,22 @@ class EcosystemDiscoveryClient:
         self.timeout_seconds = timeout_seconds
         self.github_token = github_token or os.environ.get('GITHUB_TOKEN', '')
         self.openverse_token = openverse_token or os.environ.get('MMM_OPENVERSE_TOKEN', '')
+        # httpx.Client is thread-safe and owns connection pooling. Keep one client for
+        # the discovery lifetime instead of rebuilding a TCP/TLS pool per API request.
+        self._http_client = httpx.Client(
+            timeout=self.timeout_seconds,
+            follow_redirects=False,
+            transport=self.transport,
+        )
+
+    def close(self) -> None:
+        self._http_client.close()
+
+    def __enter__(self) -> 'EcosystemDiscoveryClient':
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        self.close()
 
     def search(self, provider: str, query: str, *, cursor: str='', limit: int=20, minecraft_version: str | None=None, loader: str | None=None, target_profile: str='minecraft_mod') -> dict[str, Any]:
         provider = provider.strip().lower()
@@ -462,8 +478,7 @@ class EcosystemDiscoveryClient:
         elif provider == 'openverse' and self.openverse_token:
             headers['Authorization'] = f'Bearer {self.openverse_token}'
         try:
-            with httpx.Client(timeout=self.timeout_seconds, follow_redirects=False, transport=self.transport, headers=headers) as client:
-                response = client.get(url, params=params)
+            response = self._http_client.get(url, params=params, headers=headers)
         except httpx.HTTPError as exc:
             raise EcosystemDiscoveryUnavailable(f'{parsed.hostname} discovery request failed: {type(exc).__name__}.') from exc
         if response.status_code != 200:
@@ -479,6 +494,10 @@ class EcosystemDiscoveryClient:
             next_url = str(next_link.get('url') or '') if isinstance(next_link, dict) else ''
             return (payload, next_url)
         return payload
+
+# Runtime bootstrap checks this marker and must not wrap a source-owned persistent
+# HTTP pool with another compatibility client.
+EcosystemDiscoveryClient.__init__._mmm_persistent_http_pool_v2 = True  # type: ignore[attr-defined]
 
 def _serial_discover_seed_bundle(prompt: str, game_design: dict[str, Any], *, research_brief: dict[str, Any] | None=None, client: EcosystemDiscoveryClient | None=None, route_cursor: str='', route_limit: int=12) -> dict[str, Any]:
     mode = os.environ.get('MMM_ECOSYSTEM_DISCOVERY', 'auto').strip().lower()
