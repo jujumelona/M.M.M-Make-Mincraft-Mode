@@ -397,7 +397,7 @@ class CompleteProductionOrchestrator:
         module_receipts.append({'schema_version': 'mmm/resource-tuning-v1', **heap_receipt})
         execution_project_index(ProjectIndex, project_root, policy=self.policy).write_manifest()
         generated_manifest_hash = self._project_manifest_hash(project_root)
-        validation_manifest = self._project_manifest_hash(project_root)
+        validation_manifest = generated_manifest_hash
 
         def validate_source() -> dict[str, Any]:
             return run_named_checkpoint(ledger, 'validate-source', stage='validate:source', input_value=validation_checkpoint_input('validate-source', {'graph_hash': work_plan.graph_hash, 'project_manifest': validation_manifest}), action=lambda: ScalableProjectValidator(policy=self.policy).validate(project_root, spec).to_dict(), encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: cached_validation_is_reusable('validate-source', cached))
