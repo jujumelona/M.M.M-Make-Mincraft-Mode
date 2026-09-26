@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
+import minecraft_mod_ai.model_runtime_performance as runtime_performance
 from minecraft_mod_ai.model_adapters import image_diffusion as image_module
 from minecraft_mod_ai.model_adapters.embedding import EmbeddingAdapter
 from minecraft_mod_ai.model_adapters.image_diffusion import (
@@ -12,6 +15,11 @@ from minecraft_mod_ai.model_adapters.image_diffusion import (
 )
 from minecraft_mod_ai.model_adapters.reranker import RerankerAdapter
 from minecraft_mod_ai.model_router import ModelRouter
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _install_model_runtime_performance_contract() -> None:
+    runtime_performance.install()
 
 
 class _DummyPipeline:
