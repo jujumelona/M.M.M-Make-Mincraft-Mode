@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -35,14 +36,13 @@ def _marker(concern: str, region: str, edge: str) -> str:
     return f"// {_HOST_PREFIX}_{_slug(concern).upper()}_{region}_{edge}"
 
 
-def parse_concern_content(text: str, *, section: str) -> tuple[str, str]:
-    """Accept only the active concern body; sibling/class authority is never model-owned."""
+def _split_response_regions(text: str) -> tuple[str, str]:
     raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
-    for marker in (MEMBERS_MARKER, INITIALIZE_MARKER, END_MARKER):
-        if raw.count(marker) != 1:
-            raise CustomModuleGenerationError(
-                "ATOMIC_CONCERN_RESPONSE_INVALID: each host response marker must occur exactly once."
-            )
+    markers = (MEMBERS_MARKER, INITIALIZE_MARKER, END_MARKER)
+    if any(raw.count(marker) != 1 for marker in markers):
+        raise CustomModuleGenerationError(
+            "ATOMIC_CONCERN_RESPONSE_INVALID: each host response marker must occur exactly once."
+        )
     members_at = raw.index(MEMBERS_MARKER)
     init_at = raw.index(INITIALIZE_MARKER)
     end_at = raw.index(END_MARKER)
@@ -54,31 +54,34 @@ def parse_concern_content(text: str, *, section: str) -> tuple[str, str]:
         raise CustomModuleGenerationError(
             "ATOMIC_CONCERN_RESPONSE_INVALID: output outside host response markers is forbidden."
         )
-    members = raw[members_at + len(MEMBERS_MARKER):init_at].strip()
-    initialize = raw[init_at + len(INITIALIZE_MARKER):end_at].strip()
-    for value in (members, initialize):
-        if _HOST_PREFIX in value:
-            raise CustomModuleGenerationError(
-                "ATOMIC_CONCERN_RESPONSE_INVALID: host source markers are reserved."
-            )
-        if "```" in value:
-            raise CustomModuleGenerationError(
-                "ATOMIC_CONCERN_RESPONSE_INVALID: Markdown code fences are forbidden."
-            )
-    if _FORBIDDEN.search(members) or _INITIALIZE_DECL.search(members):
+    return (
+        raw[members_at + len(MEMBERS_MARKER):init_at].strip(),
+        raw[init_at + len(INITIALIZE_MARKER):end_at].strip(),
+    )
+
+
+def _validate_region_text(value: str, *, initialize_region: bool) -> None:
+    if _HOST_PREFIX in value or "```" in value:
         raise CustomModuleGenerationError(
-            "ATOMIC_CONCERN_SCOPE_ESCAPE: concern members attempted to change host-owned type/lifecycle structure."
+            "ATOMIC_CONCERN_RESPONSE_INVALID: host markers and Markdown fences are forbidden."
         )
+    if _FORBIDDEN.search(value) or _INITIALIZE_DECL.search(value):
+        region = "initialize body" if initialize_region else "concern members"
+        raise CustomModuleGenerationError(
+            f"ATOMIC_CONCERN_SCOPE_ESCAPE: {region} attempted to change host-owned type/lifecycle structure."
+        )
+
+
+def parse_concern_content(text: str, *, section: str) -> tuple[str, str]:
+    """Accept only the active concern body; sibling/class authority is never model-owned."""
+    members, initialize = _split_response_regions(text)
+    _validate_region_text(members, initialize_region=False)
+    _validate_region_text(initialize, initialize_region=True)
     if str(section or "").strip() != "integration" and initialize:
         raise CustomModuleGenerationError(
             "ATOMIC_CONCERN_SCOPE_ESCAPE: only integration concerns may add initialize() statements."
         )
-    if _FORBIDDEN.search(initialize) or _INITIALIZE_DECL.search(initialize):
-        raise CustomModuleGenerationError(
-            "ATOMIC_CONCERN_SCOPE_ESCAPE: initialize body attempted to declare host-owned lifecycle/type structure."
-        )
     return members, initialize
-
 
 def _validate_concerns(concerns: Sequence[Mapping[str, Any]]) -> tuple[dict[str, Any], ...]:
     result: list[dict[str, Any]] = []
@@ -199,6 +202,47 @@ def _failure_measure(log: str) -> int:
     return len(errors) or 1
 
 
+def _concern_authority(
+    task: Mapping[str, Any], concern: Mapping[str, Any]
+) -> dict[str, Any]:
+    name = _slug(concern.get("concern"))
+    requirement_payload: dict[str, Any] = {}
+    raw_obligations = task.get("implementation_obligations")
+    if isinstance(raw_obligations, Sequence) and not isinstance(
+        raw_obligations, (str, bytes, bytearray)
+    ):
+        for raw in raw_obligations:
+            try:
+                outer = json.loads(str(raw))
+                instruction = json.loads(str(outer.get("instruction") or "{}"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if str(instruction.get("concern") or "").strip() == name:
+                requirement_payload = {
+                    "source_requirements": dict(outer.get("source_requirements") or {}),
+                    "section_instruction": str(instruction.get("section_instruction") or ""),
+                }
+                break
+    return {
+        "task_id": str(task.get("task_id") or ""),
+        "semantic_outcome": str(task.get("semantic_outcome") or ""),
+        **requirement_payload,
+    }
+
+
+def _bounded_grounding(grounding: Mapping[str, Any]) -> dict[str, Any]:
+    direct = grounding.get("direct_host_context")
+    direct_payload = dict(direct) if isinstance(direct, Mapping) else {}
+    return {
+        "schema_version": grounding.get("schema_version"),
+        "artifact_kind": grounding.get("artifact_kind"),
+        "facts": grounding.get("facts") or [],
+        "policy": dict(grounding.get("policy") or {}),
+        "platform": dict(direct_payload.get("platform") or {}),
+        "host_version_facts": dict(direct_payload.get("host_version_facts") or {}),
+    }
+
+
 def _messages(
     *,
     section: str,
@@ -232,8 +276,8 @@ def _messages(
             "rules": concern.get("rules") or [],
             "record_schema": concern.get("record_schema") or {},
         },
-        "approved_task": dict(task),
-        "host_grounding": dict(grounding),
+        "task_authority": _concern_authority(task, concern),
+        "host_grounding": _bounded_grounding(grounding),
         "dependency_source": dependency_source,
         "current_host_owned_source": current_source,
         "repair_failure": failure or None,
@@ -249,105 +293,136 @@ def _messages(
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True)},
     ]
 
+@dataclass
+class AtomicConcernExecutor:
+    root: Path
+    target: Path
+    relative: str
+    symbol: str
+    original: str
+    task: Mapping[str, Any]
+    section: str
+    concerns: Sequence[Mapping[str, Any]]
+    grounding: Mapping[str, Any]
+    dependency_source: str
+    require_initialize: bool
+    call_coder: Callable[[Sequence[Mapping[str, str]]], Mapping[str, str]]
+    compile_java: Callable[[Path], Any]
+    compile_log: Callable[[Any], str]
+    write_source: Callable[[Path, str], None]
+    ordered: tuple[dict[str, Any], ...] = field(init=False)
+    source: str = field(init=False)
+    state: dict[str, tuple[str, str]] = field(default_factory=dict, init=False)
+    summaries: list[str] = field(default_factory=list, init=False)
+    seen_failures: set[str] = field(default_factory=set, init=False)
+    repairs: int = field(default=0, init=False)
+    best_measure: int = field(default=0, init=False)
 
-def generate_atomic_concerns(
-    *,
-    root: Path,
-    target: Path,
-    relative: str,
-    symbol: str,
-    original: str,
-    task: Mapping[str, Any],
-    section: str,
-    concerns: Sequence[Mapping[str, Any]],
-    grounding: Mapping[str, Any],
-    dependency_source: str,
-    require_initialize: bool,
-    call_coder: Callable[[Sequence[Mapping[str, str]]], Mapping[str, str]],
-    compile_java: Callable[[Path], Any],
-    compile_log: Callable[[Any], str],
-    write_source: Callable[[Path, str], None],
-) -> dict[str, Any]:
-    """Execute fixed concerns serially; repair only the compiler-localized concern."""
-    ordered = _validate_concerns(concerns)
-    source = build_concern_scaffold(
-        original, symbol=symbol, concerns=ordered, require_initialize=require_initialize
-    )
-    state: dict[str, tuple[str, str]] = {}
-    summaries: list[str] = []
-    for concern in ordered:
+    def __post_init__(self) -> None:
+        self.ordered = _validate_concerns(self.concerns)
+        self.source = build_concern_scaffold(
+            self.original,
+            symbol=self.symbol,
+            concerns=self.ordered,
+            require_initialize=self.require_initialize,
+        )
+
+    def _concern(self, name: str) -> dict[str, Any]:
+        for item in self.ordered:
+            if _slug(item["concern"]) == name:
+                return item
+        raise CustomModuleGenerationError(
+            f"ATOMIC_CONCERN_UNKNOWN_REPAIR_SCOPE: {name}"
+        )
+
+    def _apply(self, concern: Mapping[str, Any], *, failure: str = "") -> None:
         name = _slug(concern["concern"])
-        payload = call_coder(_messages(
-            section=section, concern=concern, task=task, grounding=grounding,
-            dependency_source=dependency_source, current_source=source,
+        payload = self.call_coder(_messages(
+            section=self.section,
+            concern=concern,
+            task=self.task,
+            grounding=self.grounding,
+            dependency_source=self.dependency_source,
+            current_source=self.source,
+            failure=failure,
         ))
-        members, initialize = parse_concern_content(str(payload.get("content") or ""), section=section)
-        source = _replace_region(source, concern=name, region="MEMBERS", content=members)
-        if require_initialize:
-            source = _replace_region(source, concern=name, region="INIT", content=initialize)
-        state[name] = (members, initialize)
-        summaries.append(f"{name}: {str(payload.get('summary') or '').strip()}")
-
-    write_source(target, source)
-    report = compile_java(root)
-    best_measure = _failure_measure(compile_log(report)) if getattr(report, "status", "") != "PASS" else 0
-    seen_failures: set[str] = set()
-    repairs = 0
-    while getattr(report, "status", "") != "PASS":
-        failure = compile_log(report) or str(getattr(report, "error", "") or "Gradle compileJava failed.")
-        fingerprint = hashlib.sha256(failure.encode("utf-8")).hexdigest()
-        if fingerprint in seen_failures:
-            raise CustomModuleGenerationError(
-                "ATOMIC_CONCERN_COMPILE_NO_PROGRESS: compiler diagnostics repeated.\n" + failure
-            )
-        seen_failures.add(fingerprint)
-        name = _failure_concern(source, log=failure, relative=relative)
-        if not name:
-            raise CustomModuleGenerationError(
-                "ATOMIC_CONCERN_COMPILE_UNLOCALIZED: failure is outside every active concern region.\n" + failure
-            )
-        concern = next((item for item in ordered if _slug(item["concern"]) == name), None)
-        if concern is None:
-            raise CustomModuleGenerationError(f"ATOMIC_CONCERN_UNKNOWN_REPAIR_SCOPE: {name}")
-        payload = call_coder(_messages(
-            section=section, concern=concern, task=task, grounding=grounding,
-            dependency_source=dependency_source, current_source=source, failure=failure,
-        ))
-        members, initialize = parse_concern_content(str(payload.get("content") or ""), section=section)
-        if state.get(name) == (members, initialize):
+        members, initialize = parse_concern_content(
+            str(payload.get("content") or ""), section=self.section
+        )
+        if failure and self.state.get(name) == (members, initialize):
             raise CustomModuleGenerationError(
                 f"ATOMIC_CONCERN_REPAIR_NO_PROGRESS: {name} repeated the same bounded source."
             )
-        source = _replace_region(source, concern=name, region="MEMBERS", content=members)
-        if require_initialize:
-            source = _replace_region(source, concern=name, region="INIT", content=initialize)
-        state[name] = (members, initialize)
-        summaries.append(f"{name} repair: {str(payload.get('summary') or '').strip()}")
-        repairs += 1
-        write_source(target, source)
-        report = compile_java(root)
+        self.source = _replace_region(
+            self.source, concern=name, region="MEMBERS", content=members
+        )
+        if self.require_initialize:
+            self.source = _replace_region(
+                self.source, concern=name, region="INIT", content=initialize
+            )
+        self.state[name] = (members, initialize)
+        label = f"{name} repair" if failure else name
+        self.summaries.append(f"{label}: {str(payload.get('summary') or '').strip()}")
+
+    def _compile(self) -> Any:
+        self.write_source(self.target, self.source)
+        return self.compile_java(self.root)
+
+    def _repair_once(self, report: Any) -> Any:
+        failure = self.compile_log(report) or str(
+            getattr(report, "error", "") or "Gradle compileJava failed."
+        )
+        fingerprint = hashlib.sha256(failure.encode("utf-8")).hexdigest()
+        if fingerprint in self.seen_failures:
+            raise CustomModuleGenerationError(
+                "ATOMIC_CONCERN_COMPILE_NO_PROGRESS: compiler diagnostics repeated.\n"
+                + failure
+            )
+        self.seen_failures.add(fingerprint)
+        name = _failure_concern(self.source, log=failure, relative=self.relative)
+        if not name:
+            raise CustomModuleGenerationError(
+                "ATOMIC_CONCERN_COMPILE_UNLOCALIZED: failure is outside every active concern region.\n"
+                + failure
+            )
+        self._apply(self._concern(name), failure=failure)
+        self.repairs += 1
+        next_report = self._compile()
+        self._assert_improving(next_report)
+        return next_report
+
+    def _assert_improving(self, report: Any) -> None:
+        if getattr(report, "status", "") == "PASS":
+            return
+        failure = self.compile_log(report) or str(getattr(report, "error", "") or "")
+        measure = _failure_measure(failure)
+        if measure >= self.best_measure:
+            raise CustomModuleGenerationError(
+                "ATOMIC_CONCERN_REPAIR_NO_PROGRESS: compiler error measure did not strictly decrease.\n"
+                + failure
+            )
+        self.best_measure = measure
+
+    def run(self) -> dict[str, Any]:
+        for concern in self.ordered:
+            self._apply(concern)
+        report = self._compile()
         if getattr(report, "status", "") != "PASS":
-            next_failure = compile_log(report) or str(getattr(report, "error", "") or "")
-            next_measure = _failure_measure(next_failure)
-            if next_measure >= best_measure:
-                raise CustomModuleGenerationError(
-                    "ATOMIC_CONCERN_REPAIR_NO_PROGRESS: compiler error measure did not strictly decrease.\n" + next_failure
-                )
-            best_measure = next_measure
-
-    return {
-        "source": source,
-        "summary": " | ".join(summaries),
-        "concern_count": len(ordered),
-        "repair_count": repairs,
-    }
-
+            self.best_measure = _failure_measure(self.compile_log(report))
+        while getattr(report, "status", "") != "PASS":
+            report = self._repair_once(report)
+        return {
+            "source": self.source,
+            "summary": " | ".join(self.summaries),
+            "concern_count": len(self.ordered),
+            "repair_count": self.repairs,
+        }
 
 __all__ = [
     "END_MARKER",
     "INITIALIZE_MARKER",
     "MEMBERS_MARKER",
     "build_concern_scaffold",
-    "generate_atomic_concerns",
+    "AtomicConcernExecutor",
     "parse_concern_content",
 ]
