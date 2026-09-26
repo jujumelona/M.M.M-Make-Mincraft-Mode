@@ -341,11 +341,9 @@ def test_runtime_sources_have_no_legacy_unbounded_llama_transport() -> None:
     root = Path(__file__).resolve().parents[1] / "minecraft_mod_ai"
     adapter = (root / "model_adapters" / "llama_cpp_adapter.py").read_text()
     hardware = (root / "llama_server_hardware_policy.py").read_text()
-    bootstrap = (root / "runtime_bootstrap.py").read_text()
-
     assert "_DEFAULT_COMPLETION_TIMEOUT_SECONDS = 600.0" not in adapter
     assert "read=None" not in hardware
-    assert "install_forced_tool_execution" not in bootstrap
+    assert not (root / "runtime_bootstrap.py").exists()
     assert not (root / "forced_tool_execution_contract.py").exists()
     assert "if request.tools:" in adapter
     assert "return _native_tool_completion" in adapter
