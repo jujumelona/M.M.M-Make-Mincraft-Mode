@@ -434,15 +434,16 @@ def _direct_host_grounding(
 
         target = host_target(adapter.minecraft_version)
         resolved = target.version_context
+        snapshot = resolved.to_dict()["host_facts"]
         version_facts = {
             "context_id": resolved.context_id,
             "capabilities": {
                 str(key): bool(value)
-                for key, value in resolved.capabilities.items()
+                for key, value in snapshot["capabilities"].items()
                 if bool(value)
             },
-            "api_symbols": {str(key): value for key, value in resolved.api_symbols.items()},
-            "dependency_coordinates": dict(resolved.facts["dependency_coordinates"]),
+            "api_symbols": dict(snapshot["api_symbols"]),
+            "dependency_coordinates": dict(snapshot["dependency_coordinates"]),
         }
     except Exception as exc:
         version_facts = {
