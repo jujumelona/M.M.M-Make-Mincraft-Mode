@@ -3,7 +3,13 @@ from __future__ import annotations
 from dataclasses import replace
 from types import SimpleNamespace
 
+import pytest
+
+from minecraft_mod_ai import llama_cache_reuse_efficiency_contract as cache_reuse
+from minecraft_mod_ai import llama_server_autotune as autotune
 from minecraft_mod_ai import llama_server_hardware_policy as hardware
+from minecraft_mod_ai import llama_server_runtime_tuning as runtime_tuning
+from minecraft_mod_ai import qwen_agent_family_contract as qwen_contract
 from minecraft_mod_ai.model_adapters.base import (
     GenerationRequest,
     GenerationResponse,
@@ -13,6 +19,12 @@ from minecraft_mod_ai.qwen_agent_family_contract import (
     _inject_reasoning_history,
     _remember_reasoning,
 )
+
+@pytest.fixture(scope="module", autouse=True)
+def _install_qwen_family_contracts() -> None:
+    cache_reuse.install(autotune, hardware, runtime_tuning)
+    qwen_contract.install()
+
 
 _TOOL = {
     "type": "function",
