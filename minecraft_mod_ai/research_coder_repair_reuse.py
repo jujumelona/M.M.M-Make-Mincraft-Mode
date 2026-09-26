@@ -654,7 +654,10 @@ def _install_repair_context_reuse(repair_module: Any) -> None:
     cls = repair_module.RepairEngine
     if getattr(repair_module, "__name__", "") == "minecraft_mod_ai.repair_engine":
         # The live RepairEngine composes this evidence directly in its source-owned
-        # _context implementation; runtime rebinding would violate ownership.
+        # _context implementation. Publish the ownership marker without rebinding.
+        context = cls._context
+        setattr(context, _MARKER, True)
+        context._mmm_narrow_diagnostic_repair_rag = True  # type: ignore[attr-defined]
         return
 
     current_signature = cls._signature

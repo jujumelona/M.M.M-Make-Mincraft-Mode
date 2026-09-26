@@ -23,16 +23,17 @@ def _target_values(kwargs: Mapping[str, Any], *, project_root: str | Path | None
         if not version or not loader:
             raise ValueError('Custom generation target must provide minecraft_version and loader together.')
         adapter = adapter_for_target(version, loader)
+        provider_mappings = str(adapter.yarn_mappings or "").strip()
+        requested_mappings = mappings or provider_mappings
         try:
             coordinates = validate_target_coordinates(
                 version,
                 loader,
-                mappings,
+                requested_mappings,
                 declared_mappings_applicable=adapter.mappings_applicable,
             )
         except (ValueError, TargetContractError) as exc:
             raise ValueError(str(exc)) from exc
-        provider_mappings = str(adapter.yarn_mappings or "").strip()
         if coordinates.mappings != provider_mappings:
             raise ValueError(
                 "Custom generation mappings disagree with the executable platform provider: "

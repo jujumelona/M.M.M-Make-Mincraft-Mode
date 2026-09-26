@@ -60,6 +60,28 @@ def _submit_with_copied_context(
     return pool.submit(context.run, function, *args, **kwargs)
 
 
+def _direct_host_authority(module: Any) -> bool:
+    """Return whether source generation already has exact host-owned execution authority."""
+    if str(getattr(module, "kind", "") or "") != "custom_java":
+        return False
+    config = getattr(module, "config", None)
+    if not isinstance(config, Mapping):
+        return False
+    task = config.get("evidence_task")
+    if not isinstance(task, Mapping):
+        return False
+    anchors = task.get("owned_anchors")
+    if not isinstance(anchors, (list, tuple)):
+        return False
+    locators = {
+        str(anchor.get("locator") or "").strip()
+        for anchor in anchors
+        if isinstance(anchor, Mapping)
+        and str(anchor.get("kind") or "").strip() == "symbol"
+        and str(anchor.get("locator") or "").strip()
+    }
+    return len(locators) == 1
+
 def _width(module: Any) -> int:
     mode = _mode()
     if mode == 'off':
@@ -390,6 +412,8 @@ def install(custom_module_generator_module: Any) -> None:
     @wraps(original)
     def generate_with_search(self: Any, project_root: str | Path, *args: Any, **kwargs: Any):
         module = kwargs.get('module')
+        if _direct_host_authority(module):
+            return original(self, project_root, *args, **kwargs)
         count = _width(module)
         if count <= 1:
             return _run_single_with_research(
