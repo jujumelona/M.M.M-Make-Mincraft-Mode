@@ -10,6 +10,7 @@ import pytest
 
 from minecraft_mod_ai import coder_max_efficiency_contract as coder_efficiency
 from minecraft_mod_ai import custom_generation_search_contract as custom_search
+from minecraft_mod_ai import custom_generation_research as custom_research
 from minecraft_mod_ai import progress_aware_tool_loop as tool_loop
 import minecraft_mod_ai.custom_module_generator as custom_module_generator
 from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
@@ -515,11 +516,15 @@ def test_both_parallel_search_paths_use_strict_candidate_rank_key() -> None:
     )
 
 
-def test_target_values_fail_closed_without_complete_host_target() -> None:
-    with pytest.raises(ValueError, match="mappings"):
-        custom_search._target_values(
-            {
-                "minecraft_version": "1.20.1",
-                "loader": "fabric",
-            }
-        )
+def test_target_values_fill_canonical_provider_mapping_when_caller_omits_it() -> None:
+    version, loader, mappings = custom_search._target_values(
+        {
+            "minecraft_version": "1.20.1",
+            "loader": "fabric",
+        }
+    )
+    adapter = custom_research.adapter_for_target(version, loader)
+    assert version == "1.20.1"
+    assert loader == "fabric"
+    assert mappings == adapter.yarn_mappings
+    assert mappings

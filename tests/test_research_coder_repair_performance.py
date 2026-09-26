@@ -21,6 +21,12 @@ def _install_research_performance_contracts():
     original_query_paths = cls._query_paths
     original_generate = CustomModuleGenerator.generate
     original_context = RepairEngine._context
+    source_context = original_context
+    while getattr(source_context, reuse._MARKER, False) and hasattr(
+        source_context, "__wrapped__"
+    ):
+        source_context = source_context.__wrapped__
+    RepairEngine._context = source_context
     context_performance.harden(research_code_context)
     reuse.harden()
     try:
