@@ -3,11 +3,18 @@ from __future__ import annotations
 import pytest
 
 from minecraft_mod_ai import llama_stream_efficiency_contract as stream_contract
+from minecraft_mod_ai.model_adapters import llama_cpp_adapter
 from minecraft_mod_ai.llama_completion_liveness_contract import (
+    install,
     LlamaSemanticProgressTimeout,
     _semantic_progress_from_sse_line,
     _SemanticProgressWatchdog,
 )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _install_completion_liveness() -> None:
+    install(stream_contract, llama_cpp_adapter)
 
 
 def _clock(*values: float):
