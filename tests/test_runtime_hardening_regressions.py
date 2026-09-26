@@ -9,7 +9,7 @@ import pytest
 
 import minecraft_mod_ai.custom_generation_search_contract as custom_search
 import minecraft_mod_ai.llama_server_hardware_policy as llama_hardware
-from minecraft_mod_ai.llama_generation_budget import install as install_generation_budget
+from minecraft_mod_ai import llama_generation_budget as generation_budget
 import minecraft_mod_ai.performance_final_contract as performance
 import minecraft_mod_ai.scheduler_parallel_safety_contract as safety
 from minecraft_mod_ai.config_paths import config_path
@@ -214,7 +214,16 @@ def test_bounded_section_budget_caps_paginated_qwen_section_only(monkeypatch) ->
         response_format="json",
         response_schema={
             "type": "object",
-            "properties": {"section": {"type": "string"}},
+            "properties": {
+                "section": {
+                    "type": "object",
+                    "properties": {
+                        "content": {"type": "string"},
+                    },
+                    "required": ["content"],
+                    "additionalProperties": False,
+                }
+            },
             "required": ["section"],
             "additionalProperties": False,
         },
@@ -228,7 +237,16 @@ def test_bounded_section_budget_caps_paginated_qwen_section_only(monkeypatch) ->
         tools=(),
         tool_choice=None,
     )
-    assert llama_hardware._server_payload(adapter, section)["max_tokens"] == 2048
-    assert llama_hardware._server_payload(adapter, paged)["max_tokens"] == 8192
+    section_ceiling = generation_budget.structured_response_token_ceiling(section)
+    assert section_ceiling is not None
+    section_payload = llama_hardware._server_payload(adapter, section)
+    paged_payload = llama_hardware._server_payload(adapter, paged)
 
-install_generation_budget(llama_hardware)
+    assert section_payload["max_tokens"] == min(
+        adapter.config.max_new_tokens,
+        section_ceiling[0],
+    )
+    assert paged_payload["max_tokens"] == adapter.config.max_new_tokens
+    assert section_payload["max_tokens"] < paged_payload["max_tokens"]
+
+generation_budget.install(llama_hardware)
