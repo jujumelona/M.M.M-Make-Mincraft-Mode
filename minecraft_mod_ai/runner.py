@@ -187,6 +187,16 @@ class GradleRunner:
             return None
         return match.group(1), digest
 
+    def _project_gradle_toolchain(
+        self,
+        project_root: Path,
+        adapter: object,
+    ) -> tuple[str, str]:
+        wrapper_pin = self._pinned_project_wrapper(project_root)
+        if wrapper_pin is not None:
+            return wrapper_pin
+        return str(getattr(adapter, "gradle")), str(getattr(adapter, "gradle_sha256"))
+
     def _prepare_build_context(self, project_root: Path) -> _PreparedBuild | BuildReport:
         project_root = project_root.resolve()
         if not (project_root / "build.gradle").is_file():
@@ -197,11 +207,10 @@ class GradleRunner:
             raise BuildRunnerError(
                 f"Project platform lock is missing, mixed, or unsupported: {exc}"
             ) from exc
-        gradle_version = adapter.gradle
-        gradle_sha256 = adapter.gradle_sha256
-        wrapper_pin = self._pinned_project_wrapper(project_root)
-        if wrapper_pin is not None:
-            gradle_version, gradle_sha256 = wrapper_pin
+        gradle_version, gradle_sha256 = self._project_gradle_toolchain(
+            project_root,
+            adapter,
+        )
         try:
             required_java = int(str(adapter.java_version).strip())
         except (TypeError, ValueError) as exc:
