@@ -6,6 +6,7 @@ from copy import deepcopy
 from typing import Any
 
 
+from .authored_concern_catalog import load_authored_concern_contracts
 from .authored_section_ids import (
     CONTEXT_SECTION_SET,
     DOCUMENT_SECTION_ORDER,
@@ -109,27 +110,11 @@ def section_for_symbol(symbol: str) -> str:
 
 
 def concern_contracts(section: str) -> tuple[dict[str, Any], ...]:
-    """Return fixed host-ordered concern contracts for one execution section."""
+    """Return fixed host-ordered concern contracts from the canonical YAML catalog."""
     name = str(section or "").strip()
     if name not in EXECUTION_SECTION_SET:
         return ()
-    from .task_template_catalog import load_record_template, load_template
-    manifest = load_template(f"criterion/{name}")
-    steps = manifest.get("steps")
-    if manifest.get("execution") != "sequence" or not isinstance(steps, list):
-        raise ValueError(f"AUTHORED_EXECUTION_SCHEMA: invalid criterion/{name}")
-    result: list[dict[str, Any]] = []
-    for sequence, identifier in enumerate(steps):
-        template = load_record_template(str(identifier))
-        result.append({
-            "sequence": sequence,
-            "identifier": str(identifier),
-            "concern": str(identifier).rsplit("/", 1)[-1],
-            "task": str(template.get("task") or "").strip(),
-            "rules": [str(item) for item in template.get("rules", ())],
-            "record_schema": deepcopy(template["record_schema"]),
-        })
-    return tuple(result)
+    return load_authored_concern_contracts(name)
 
 
 def concern_names(section: str) -> tuple[str, ...]:
