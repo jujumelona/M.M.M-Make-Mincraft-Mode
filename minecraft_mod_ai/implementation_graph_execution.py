@@ -36,22 +36,26 @@ def public_api_errors(source: str, node: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(errors)
 
 
+def _required_atomic_leaf_contract(symbol: str) -> tuple[str, list[dict[str, Any]]]:
+    from .authored_execution_schema import concern_contracts, section_for_symbol
+
+    section = section_for_symbol(symbol)
+    concerns = list(concern_contracts(section)) if section else []
+    if not section or not concerns:
+        raise ImplementationGraphError(
+            f"IMPLEMENTATION_IR_NONCANONICAL_LEAF: {symbol}"
+        )
+    return section, concerns
+
+
 def _bind_atomic_leaf_contract(
     task: dict[str, Any], node: Mapping[str, Any]
 ) -> tuple[str, list[dict[str, Any]]]:
-    from .authored_execution_schema import concern_contracts, section_for_symbol
     from .authored_production import _task_sha
 
-    section = section_for_symbol(str(node.get("symbol") or ""))
-    if not section:
-        raise ImplementationGraphError(
-            f"IMPLEMENTATION_IR_NONCANONICAL_LEAF: {node.get('symbol', '')}"
-        )
-    concerns = list(concern_contracts(section))
-    if not concerns:
-        raise ImplementationGraphError(
-            f"IMPLEMENTATION_IR_CONCERN_CONTRACT_MISSING: {section}"
-        )
+    section, concerns = _required_atomic_leaf_contract(
+        str(node.get("symbol") or "")
+    )
     task["implementation_obligations"] = list(node["obligations"])
     task["task_sha256"] = _task_sha(task)
     return section, concerns

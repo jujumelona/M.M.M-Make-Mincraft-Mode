@@ -897,8 +897,7 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
     """
     from .root_cause_trace import emit_root_cause
 
-    all_requirements = source_requirements(text)
-    all_req_keys = set(all_requirements)
+    all_req_keys = set(all_requirements := source_requirements(text))
     units = _compile_units(text, units)
     execution_req_keys = set().union(
         *(set(unit["requirements"]) for unit in units)

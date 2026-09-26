@@ -11,7 +11,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from .authored_execution_schema import (
+from .authored_section_ids import (
     DOCUMENT_SECTION_ORDER,
     DOCUMENT_SECTION_SET,
     EXECUTION_SECTION_ORDER,
