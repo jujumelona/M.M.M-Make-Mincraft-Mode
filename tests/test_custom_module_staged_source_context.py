@@ -5,25 +5,22 @@ import inspect
 from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
 
 
-def test_initial_coder_source_context_is_checkpoint_staged() -> None:
+def test_direct_coder_uses_source_owned_live_context_without_checkpoint_staging() -> None:
     source = inspect.getsource(CustomModuleGenerator.generate)
-    prepare = source.index("_prepare_generation_checkpoint(")
-    staged_index = source.index("ProjectIndex(staged_root, policy=self.policy)")
-    request = source.index("request = {")
 
-    assert prepare < staged_index < request
-    assert "ProjectIndex(root, policy=self.policy)" not in source[:prepare]
-    assert source.count("ProjectIndex(staged_root, policy=self.policy)") >= 2
-
-    request_source = source[staged_index:]
-    assert '"project_manifest": index.manifest_receipt()' in request_source
-    assert '"source_observation_receipt": observation_ledger["receipt"]' in request_source
-    assert '"initial_exact_source_context": observation_pages[0]' in request_source
+    assert "_prepare_generation_checkpoint(" not in source
+    assert "TransactionalSourcePatcher" not in source
+    assert "ProjectIndex(" not in source
+    assert "_project_context(" in source
+    assert "_dependency_source_context(" in source
+    assert "require_fresh_evidence=False" in source
 
 
-def test_live_project_index_cache_is_only_refreshed_after_patch_apply() -> None:
+def test_direct_coder_applies_whole_file_write_under_project_lock() -> None:
     source = inspect.getsource(CustomModuleGenerator.generate)
-    patch_apply = source.index("TransactionalSourcePatcher(root).apply(operations)")
-    live_index = source.index("ProjectIndex(root, policy=self.policy)")
+    lock = source.index("with project_write_lock(root):")
+    write = source.index("_atomic_write(target, candidate)")
 
-    assert live_index > patch_apply
+    assert lock < write
+    assert "patch or diff" in source
+    assert "complete corrected Java file" in source

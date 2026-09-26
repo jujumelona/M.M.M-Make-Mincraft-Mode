@@ -238,7 +238,7 @@ def test_in_memory_finalize_refuses_cleanup_when_live_patch_drifted(tmp_path) ->
     assert result["generation_checkpoint"]["status"] == "AWAITING_LIVE_COMMIT"
 
 
-def test_ensure_live_commit_replays_owned_checkpoint_delta(tmp_path) -> None:
+def test_ensure_live_commit_does_not_replay_retired_checkpoint_delta(tmp_path) -> None:
     import threading
     from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
     from minecraft_mod_ai.generation_checkpoint import (
@@ -260,13 +260,14 @@ def test_ensure_live_commit_replays_owned_checkpoint_delta(tmp_path) -> None:
         identity_sha256=identity,
     )
     staged_target = staged / "src/main/java/demo/Feature.java"
-    staged_target.write_text("real generated behavior\n", encoding="utf-8")
+    staged_target.write_text("retired staged behavior\n", encoding="utf-8")
 
     token = "a" * 64
     result = _checkpoint_result(project, identity)
     result["generation_checkpoint"]["cleanup_token"] = token
-    expected = _sha256(b"real generated behavior\n")
-    result["patch_receipt"]["operations"][0]["after_sha256"] = expected
+    result["patch_receipt"]["operations"][0]["after_sha256"] = _sha256(
+        b"retired staged behavior\n"
+    )
 
     generator = object.__new__(CustomModuleGenerator)
     generator._checkpoint_cleanup_lock = threading.RLock()
@@ -274,18 +275,12 @@ def test_ensure_live_commit_replays_owned_checkpoint_delta(tmp_path) -> None:
         token: (identity, checkpoint, _GenerationCheckpointLease(checkpoint))
     }
     try:
-        assert generator.ensure_generation_live_commit(
+        assert not generator.ensure_generation_live_commit(
             result,
             project_root=project,
         )
-        assert target.read_text(encoding="utf-8") == "real generated behavior\n"
-        assert result["patch_receipt"]["operations"][0]["after_sha256"] == expected
-        assert generator.finalize_committed_generation_checkpoint(
-            result,
-            project_root=project,
-        )
+        assert target.read_text(encoding="utf-8") == "stale scaffold\n"
     finally:
         owned = generator._checkpoint_cleanup_tokens.pop(token, None)
         if owned is not None:
             owned[2].close()
-
