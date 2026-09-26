@@ -16,7 +16,8 @@ from typing import Any
 from .custom_module_errors import CustomModuleGenerationError
 from .implementation_lifecycle import activation_public_api
 
-IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v15"\nIMPLEMENTATION_IR_SCHEMA_VERSION = "mmm/implementation-ir-v2"
+IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v15"
+IMPLEMENTATION_IR_SCHEMA_VERSION = "mmm/implementation-ir-v2"
 
 
 class ImplementationGraphError(CustomModuleGenerationError):
