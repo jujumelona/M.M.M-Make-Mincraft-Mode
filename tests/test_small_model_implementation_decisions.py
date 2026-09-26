@@ -214,3 +214,32 @@ def test_host_section_nodes_expand_to_fixed_concern_obligations_without_model_pl
     network = by_symbol["AuthoredAuthorityNetwork"]
     assert len(network["obligations"]) == len(concern_names("authority_and_network"))
     assert router.calls == []
+
+
+def test_ir_leaf_carries_same_fixed_concern_sequence_into_coder_contract():
+    from minecraft_mod_ai.authored_execution_schema import concern_names
+    from minecraft_mod_ai.implementation_graph_execution import _leaf_module
+
+    router = NoPlanningModelRouter()
+    text = (
+        "# state_model\nState.\n"
+        "# behavior_contract\nBehavior.\n"
+        "# algorithm\nAlgorithm.\n"
+        "# authority_and_network\nAuthority.\n"
+        "# persistence\nPersistence.\n"
+        "# resources_and_ui\nResources.\n"
+        "# failure_and_limits\nFailures.\n"
+        "# integration\nIntegration.\n"
+    )
+    graph = compile_with(router, text=text)
+    node = next(item for item in graph["nodes"] if item["symbol"] == "AuthoredStateModel")
+    request = {
+        "target": {"minecraft_version": "1.21.1", "loader": "fabric"},
+        "package": "example",
+        "mod_id": "test",
+    }
+    leaf = _leaf_module(node, graph, request)
+    concerns = leaf.config["implementation_atomic_concerns"]
+    assert [item["concern"] for item in concerns] == list(concern_names("state_model"))
+    assert leaf.config["implementation_section"] == "state_model"
+    assert len(leaf.config["evidence_task"]["implementation_obligations"]) == len(concerns)

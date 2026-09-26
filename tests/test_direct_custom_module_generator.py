@@ -304,3 +304,181 @@ def test_host_reserved_missing_target_is_materialized_and_does_not_require_initi
     assert result["patch_receipt"]["operations"][0]["operation"] == "create"
     assert "MMM_AUTHORED_FEATURE_BODY" in prompts[0]
     assert (root / path).read_text(encoding="utf-8") == source
+
+
+def _atomic_module(path: str, symbol: str) -> ProductionModule:
+    base = _module(path, symbol)
+    config = dict(base.config)
+    config["implementation_ir_node"] = {
+        "symbol": symbol,
+        "public_api": ["public static void initialize()"],
+        "activation": True,
+    }
+    config["implementation_section"] = "state_model"
+    config["implementation_dependency_context"] = "[]"
+    config["implementation_atomic_concerns"] = [
+        {
+            "sequence": 0,
+            "identifier": "feature/state_model/variables",
+            "concern": "variables",
+            "task": "Resolve variables.",
+            "rules": [],
+            "record_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+        {
+            "sequence": 1,
+            "identifier": "feature/state_model/invariants",
+            "concern": "invariants",
+            "task": "Resolve invariants.",
+            "rules": [],
+            "record_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+    ]
+    return ProductionModule(
+        module_id=base.module_id,
+        kind=base.kind,
+        config=config,
+        required_gates=base.required_gates,
+    )
+
+
+def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, path, symbol = _project(tmp_path)
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            del role
+            payload = json.loads(messages[-1]["content"])
+            concern = payload["concern"]["name"]
+            calls.append((concern, dict(kwargs)))
+            if concern == "variables":
+                content = (
+                    "<<<MMM_CONCERN_MEMBERS>>>\n"
+                    "private static int balance = 0;\n"
+                    "<<<MMM_CONCERN_INITIALIZE>>>\n"
+                    "<<<MMM_CONCERN_END>>>"
+                )
+            else:
+                content = (
+                    "<<<MMM_CONCERN_MEMBERS>>>\n"
+                    "public static boolean valid() { return balance >= 0; }\n"
+                    "<<<MMM_CONCERN_INITIALIZE>>>\n"
+                    "<<<MMM_CONCERN_END>>>"
+                )
+            return json.dumps({"content": content, "summary": concern})
+
+    class Runner:
+        def __init__(self, _cache):
+            pass
+        def compile_java(self, _root):
+            return SimpleNamespace(status="PASS", commands=(), error=None)
+
+    monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
+    monkeypatch.setattr(direct, "GradleRunner", Runner)
+    result = direct.CustomModuleGenerator(Router()).generate(
+        root, module=_atomic_module(path, symbol),
+        minecraft_version="1.21.1", loader="fabric",
+    )
+
+    source = (root / path).read_text(encoding="utf-8")
+    assert [name for name, _kwargs in calls] == ["variables", "invariants"]
+    assert all(kwargs["enable_tools"] is False for _name, kwargs in calls)
+    assert "private static int balance = 0;" in source
+    assert "public static boolean valid()" in source
+    assert "MMM_ATOMIC_CONCERN_VARIABLES_MEMBERS_START" in source
+    assert "MMM_ATOMIC_CONCERN_INVARIANTS_MEMBERS_START" in source
+    assert result["generation_verification"]["mode"] == "gradle_compile_java_atomic_concerns"
+    assert result["generation_verification"]["atomic_concern_count"] == 2
+
+
+def test_atomic_concern_compile_repair_reopens_only_localized_concern(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, path, symbol = _project(tmp_path)
+    calls: list[str] = []
+
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            del role, kwargs
+            payload = json.loads(messages[-1]["content"])
+            concern = payload["concern"]["name"]
+            calls.append(concern)
+            repairing = bool(payload.get("repair_failure"))
+            if concern == "variables":
+                member = (
+                    "private static Object value = new MissingType();"
+                    if not repairing
+                    else "private static Object value = new Object();" 
+                )
+            else:
+                member = "public static boolean valid() { return value != null; }"
+            content = (
+                "<<<MMM_CONCERN_MEMBERS>>>\n" + member + "\n"
+                "<<<MMM_CONCERN_INITIALIZE>>>\n"
+                "<<<MMM_CONCERN_END>>>"
+            )
+            return json.dumps({"content": content, "summary": concern})
+
+    class Runner:
+        def __init__(self, _cache):
+            pass
+        def compile_java(self, project_root):
+            source = (project_root / path).read_text(encoding="utf-8")
+            if "MissingType" not in source:
+                return SimpleNamespace(status="PASS", commands=(), error=None)
+            line = next(
+                index for index, text in enumerate(source.splitlines(), start=1)
+                if "MissingType" in text
+            )
+            log = project_root / ".minecraft_ai/logs/atomic.log"
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text(
+                f"{project_root / path}:{line}: error: cannot find symbol MissingType",
+                encoding="utf-8",
+            )
+            return SimpleNamespace(
+                status="FAIL",
+                commands=(SimpleNamespace(log_path=str(log)),),
+                error="compile failed",
+            )
+
+    monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
+    monkeypatch.setattr(direct, "GradleRunner", Runner)
+    result = direct.CustomModuleGenerator(Router()).generate(
+        root, module=_atomic_module(path, symbol),
+        minecraft_version="1.21.1", loader="fabric",
+    )
+
+    assert calls == ["variables", "invariants", "variables"]
+    source = (root / path).read_text(encoding="utf-8")
+    assert "MissingType" not in source
+    assert "new Object()" in source
+    assert "public static boolean valid()" in source
+    assert result["generation_verification"]["atomic_repair_count"] == 1
+
+
+def test_nonintegration_atomic_concern_cannot_write_initialize_body() -> None:
+    from minecraft_mod_ai.atomic_concern_source import parse_concern_content
+
+    content = (
+        "<<<MMM_CONCERN_MEMBERS>>>\nprivate static int x;\n"
+        "<<<MMM_CONCERN_INITIALIZE>>>\nx = 1;\n"
+        "<<<MMM_CONCERN_END>>>"
+    )
+    with pytest.raises(direct.CustomModuleGenerationError, match="only integration"):
+        parse_concern_content(content, section="state_model")
+
+
+def test_atomic_concern_cannot_redeclare_type_or_entrypoint() -> None:
+    from minecraft_mod_ai.atomic_concern_source import parse_concern_content
+
+    content = (
+        "<<<MMM_CONCERN_MEMBERS>>>\npublic class Escape {}\n"
+        "<<<MMM_CONCERN_INITIALIZE>>>\n"
+        "<<<MMM_CONCERN_END>>>"
+    )
+    with pytest.raises(direct.CustomModuleGenerationError, match="SCOPE_ESCAPE"):
+        parse_concern_content(content, section="state_model")
