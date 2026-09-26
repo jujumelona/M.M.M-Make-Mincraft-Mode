@@ -18,6 +18,7 @@ from .implementation_ir import (
     ordered_nodes,
     refine_node,
 )
+from .implementation_lifecycle import ACTIVATION_API, activation_call
 from .project_write_lock import project_write_lock
 from .root_cause_trace import emit_root_cause
 
@@ -52,7 +53,16 @@ def _leaf_module(node: dict[str, Any], graph: dict[str, Any], request: dict[str,
             "responsibility": node["responsibility"], "obligations": node["obligations"],
             "source_requirements": requirements, "public_api": node["public_api"],
             "dependencies": dependencies,
-            "rules": "Implement only this responsibility. Preserve every frozen API. Use dependency APIs; do not duplicate their state. Do not add entrypoints or sibling files.",
+            "rules": (
+                "Implement only this responsibility. Preserve every frozen API. Use dependency APIs; "
+                "do not duplicate their state. Do not add entrypoints or sibling files. "
+                + (
+                    f"The host invokes {activation_call(node['symbol'])} from the mod entrypoint. "
+                    "Implement this node's runtime registration in that hook. An onInitialize member "
+                    "is an ordinary method, not a separately registered Fabric entrypoint."
+                    if node["activation"] else ""
+                )
+            ),
         }, ensure_ascii=False), semantic_outcome=node["responsibility"],
         depends_on=(), consumes=(), provides=(node["symbol"],),
         worksheet={"implementation_ir_node": node}, required_gates=("target_compile",),
@@ -171,7 +181,7 @@ def execute_implementation_graph(generator: Any, project_root: str | Path, *,
                             if not dest.exists():
                                 source = f"package {package};\npublic final class {node['symbol']} {{\n"
                                 if node["activation"]:
-                                    source += "public static void initialize() { /* MMM_AUTHORED_FEATURE_BODY */ }\n"
+                                    source += ACTIVATION_API + " { /* MMM_AUTHORED_FEATURE_BODY */ }\n"
                                 else:
                                     source += "// MMM_AUTHORED_FEATURE_BODY\n"
                                 direct._atomic_write(dest, source + "}\n")
@@ -217,7 +227,7 @@ def execute_implementation_graph(generator: Any, project_root: str | Path, *,
 
             main = remember(request["entrypoint_path"])
             source = main.read_text(encoding="utf-8")
-            calls = "\n".join(f"        {n['symbol']}.initialize();" for n in graph["nodes"] if n["activation"])
+            calls = "\n".join(f"        {activation_call(n['symbol'])}" for n in graph["nodes"] if n["activation"])
             start, end = "// MMM_IR_ACTIVATION_START", "// MMM_IR_ACTIVATION_END"
             block = start + "\n" + calls + "\n        " + end + "\n"
             if start in source:

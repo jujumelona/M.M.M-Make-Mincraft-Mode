@@ -396,7 +396,7 @@ def _implementation_authored_plan(plan: AuthoredPlan) -> tuple[AuthoredPlan, dic
                     title = re.sub(r"[ \t]+#+[ \t]*$", "", heading[1]).strip("*_` ")
                     final_heading = re.fullmatch(
                         r"(?:behavior[ _-]+contract|행동[ _-]*계약|동작[ _-]*계약|"
-                        r"(?:.+[ \t]+)?(?:design|설계)(?:[ \t]+(?:document|문서))?)",
+                        r"(?:.+[ \t]+)?(?:design|설계)(?:[ \t]+(?:document|문서)|서)?)",
                         title, re.IGNORECASE,
                     )
                     prefix = remainder[:offset].casefold()

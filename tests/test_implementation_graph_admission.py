@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import json
 from contextlib import nullcontext
+from itertools import pairwise
 from types import SimpleNamespace
 
 import pytest
@@ -370,6 +371,7 @@ def test_terminal_failure_is_not_retried_on_resume():
         "mmm/implementation-ir-draft-v6",
         "mmm/implementation-ir-draft-v7",
         "mmm/implementation-ir-draft-v8",
+        "mmm/implementation-ir-draft-v9",
     ],
 )
 def test_stale_terminal_checkpoint_is_invalidated_after_ir_contract_change(stale_version):
@@ -505,7 +507,7 @@ def test_output_limit_shrinks_requirement_window_for_missing_dependency_resoluti
     assert recovery_sizes[-1] == 1
     assert all(
         later < earlier
-        for earlier, later in zip(recovery_sizes, recovery_sizes[1:])
+        for earlier, later in pairwise(recovery_sizes)
     )
 
 
@@ -699,4 +701,3 @@ def test_large_authored_design_uses_one_semantic_unit_per_heading_and_host_compl
     assert len(graph["nodes"]) == len(units)
     assert len(checkpoints) >= len(units)
     assert set().union(*(set(n["requirements"]) for n in graph["nodes"])) == set(all_refs)
-

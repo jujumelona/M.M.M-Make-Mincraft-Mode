@@ -6,6 +6,10 @@ on:
     paths:
       - "minecraft_mod_ai/implementation_ir.py"
       - "minecraft_mod_ai/implementation_graph_execution.py"
+      - "minecraft_mod_ai/implementation_lifecycle.py"
+      - "minecraft_mod_ai/authored_production.py"
+      - "tests/test_implementation_contract_ownership.py"
+      - "tests/test_authored_production.py"
       - "tests/test_implementation_graph_admission.py"
       - "tests/test_implementation_ir.py"
       - ".github/workflows/implementation-ir-regression.yml"
@@ -41,3 +45,5 @@ jobs:
           python -m pytest -q --tb=short
           tests/test_implementation_graph_admission.py
           tests/test_implementation_ir.py
+          tests/test_implementation_contract_ownership.py
+          tests/test_authored_production.py

@@ -14,9 +14,10 @@ from copy import deepcopy
 from typing import Any
 
 from .custom_module_errors import CustomModuleGenerationError
+from .implementation_lifecycle import activation_public_api
 from .model_adapters.base import NativeToolDecisionRejected
 
-IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v9"
+IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v10"
 
 
 class ImplementationGraphError(CustomModuleGenerationError):
@@ -53,14 +54,14 @@ NODE_SCHEMA = {
         "responsibility": {"type": "string", "minLength": 1, "pattern": r"\S"},
         "requirements": {**_STRINGS, "minItems": 1}, "obligations": {**_STRINGS, "minItems": 1},
         "public_api": _STRINGS, "depends_on": _STRINGS,
-        "activation": {"type": "boolean"},
+        "activation": {"type": "boolean", "description": "True only for runtime integration. The host adds public static void initialize() to the coder contract; do not duplicate the hook."},
         "estimated_tokens": {"type": "integer", "minimum": 1},
     },
     "allOf": [
         {"if": {"properties": {"kind": {"const": "java"}}},
          "then": {"properties": {
              "resource_path": {"const": ""},
-             "public_api": {"minItems": 1, "items": {
+             "public_api": {"items": {
                  "type": "string",
                  "pattern": r"^(?!\s*public\s+(?:final\s+)?(?:class|interface|enum|record)\b)[^{}]+$",
              }},
@@ -69,8 +70,8 @@ NODE_SCHEMA = {
              "resource_path": {"minLength": 1, "pattern": r"^src/main/resources/(assets|data)/[^/]+/(?!.*(?:\.\.|\\)).+\.json$"},
              "public_api": {"maxItems": 0}, "activation": {"const": False},
          }}},
-        {"if": {"properties": {"activation": {"const": True}}},
-         "then": {"properties": {"public_api": {"contains": {"const": "public static void initialize()"}}}}},
+        {"if": {"properties": {"kind": {"const": "java"}, "activation": {"const": False}}},
+         "then": {"properties": {"public_api": {"minItems": 1}}}},
     ],
 }
 PAGE_SCHEMA = {
@@ -94,7 +95,51 @@ def _page_schema(payload: Mapping[str, Any]) -> dict[str, Any]:
         item["allOf"][0]["else"]["properties"]["resource_path"]["pattern"] = (
             rf"^src/main/resources/(assets|data)/{namespace}/(?!.*(?:\.\.|\\)).+\.json$"
         )
+    owners = [n["symbol"] for n in payload.get("accepted_nodes", [])]
+    if owners:
+        # Existing owners only contribute deltas. Do not ask the model to reproduce
+        # frozen identity/API/state simply to attach the next authored requirement.
+        contribution = {
+            "type": "object", "additionalProperties": False,
+            "required": ["symbol", "requirements"],
+            "properties": deepcopy(item["properties"]),
+        }
+        contribution["properties"]["obligations"].pop("minItems", None)
+        java_owners = [n["symbol"] for n in payload["accepted_nodes"] if n["kind"] == "java"]
+        contribution["allOf"] = [{
+            "if": {"properties": {"symbol": {"enum": java_owners}}},
+            "then": {"properties": {
+                "kind": {"const": "java"},
+                **deepcopy(item["allOf"][0]["then"]["properties"]),
+            }},
+            "else": {"properties": {
+                "kind": {"const": "resource"},
+                **deepcopy(item["allOf"][0]["else"]["properties"]),
+            }},
+        }]
+        schema["properties"]["nodes"]["items"] = {
+            "if": {"required": ["symbol"], "properties": {"symbol": {"enum": owners}}},
+            "then": contribution, "else": item,
+        }
     return schema
+
+
+def _expand_owner_contributions(page: dict[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+    owners = {n["symbol"]: n for n in payload.get("accepted_nodes", [])}
+    expanded = deepcopy(page)
+    for index, raw in enumerate(expanded["nodes"]):
+        old = owners.get(raw["symbol"])
+        if old is None:
+            continue
+        full = {**deepcopy(old), **raw}
+        # Empty contributions do not erase obligations or APIs already held by the
+        # host. Requirements are this page's refs; admission merges prior refs later.
+        for field in ("obligations", "public_api", "depends_on"):
+            if not full[field]:
+                full[field] = deepcopy(old[field])
+        full["activation"] = old["activation"] or full["activation"]
+        expanded["nodes"][index] = full
+    return expanded
 
 
 def _schema_diagnostics(page: Any, schema: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -132,7 +177,7 @@ def _canonicalize_public_api_declaration(value: Any) -> Any:
     return text.rstrip(";").strip()
 
 
-def _canonicalize_schema_page(page: Any) -> Any:
+def _canonicalize_schema_page(page: Any, payload: Mapping[str, Any] | None = None) -> Any:
     if not isinstance(page, dict) or not isinstance(page.get("nodes"), list):
         return page
     normalized = deepcopy(page)
@@ -140,8 +185,14 @@ def _canonicalize_schema_page(page: Any) -> Any:
     # so old checkpoints/tests cannot force a model-visible pagination protocol.
     normalized.pop("done", None)
     normalized.pop("continuation", None)
+    owners = {n["symbol"]: n for n in (payload or {}).get("accepted_nodes", [])}
     for node in normalized["nodes"]:
-        if not isinstance(node, dict) or node.get("kind") != "java":
+        if not isinstance(node, dict):
+            continue
+        symbol = node.get("symbol")
+        owner = owners.get(symbol, {}) if isinstance(symbol, str) else {}
+        kind = node.get("kind", owner.get("kind"))
+        if kind != "java":
             continue
         public_api = node.get("public_api")
         if isinstance(public_api, list):
@@ -266,6 +317,7 @@ def decompose_authored_units(text: str) -> list[dict[str, Any]]:
     sections: list[tuple[str, list[str]]] = []
     current_title = "overview"
     current_req_ids: list[str] = []
+    has_body = False
 
     for idx, line in enumerate(lines, start=1):
         if not line.strip():
@@ -275,14 +327,23 @@ def decompose_authored_units(text: str) -> list[dict[str, Any]]:
             continue
         match = heading_pattern.match(line)
         if match:
-            if current_req_ids:
+            # A document title or empty parent heading is context for the next
+            # real concern, never a standalone implementation/model request.
+            if current_req_ids and has_body:
                 sections.append((current_title, current_req_ids))
                 current_req_ids = []
-            current_title = re.sub(r"[ \\t]+#+[ \\t]*$", "", match[1]).strip("*_` ")
+                has_body = False
+            title = re.sub(r"^#+[ \t]+", "", match[1])
+            current_title = re.sub(r"[ \t]+#+[ \t]*$", "", title).strip("*_` ")
+        else:
+            has_body = True
         current_req_ids.append(req_id)
 
     if current_req_ids:
-        sections.append((current_title, current_req_ids))
+        if not has_body and sections:
+            sections[-1][1].extend(current_req_ids)
+        else:
+            sections.append((current_title, current_req_ids))
 
     return [
         {
@@ -347,14 +408,16 @@ def _decision(router: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]
                 "the design needs them. Cite every R identifier in the active requirements at least once. "
                 "Return only the nodes needed for the active requirements. The host owns continuation "
                 "and termination; do not plan page counts, remaining work, or completion. "
-                "Each Java node is one public final class with a concrete name and NONEMPTY public_api "
+                "Each Java node is one public final class with a concrete name and public_api "
                 "MEMBER declaration strings (no bodies and no public class/interface/enum/record type "
                 "declarations). Represent finite states as public static final fields and supporting "
                 "methods on that class. Java resource_path must be exactly the empty string: "
                 "the host derives it. Include constructors/fields/methods used by consumers. List actual "
                 "symbol dependencies (referencing already accepted_nodes or nodes in this page), "
                 "never an artificial previous-section chain. No dependency cycles. Only integration "
-                "nodes need activation=true and public static void initialize(). Other classes may "
+                "nodes need activation=true; the host adds public static void initialize() to their "
+                "coder contract, so integration-only nodes may use public_api=[]. Other Java nodes "
+                "need nonempty public_api. Do not redeclare this host hook or add Fabric entrypoints. Other classes may "
                 "have constructors and state without lifecycle methods. JSON resources use kind "
                 "resource and a path under the approved assets/data namespace. Java verification "
                 "nodes must contain executable tests for the selected platform. Preserve all "
@@ -370,10 +433,11 @@ def _decision(router: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]
                 "the corrected invalid node(s); the host owns and reinserts preserve_nodes, so never "
                 "rewrite or repeat them. Fix the named fields. Never repeat the rejected page. "
                 "Do not repeat accepted_nodes merely to restate them. If an active requirement belongs "
-                "to an already accepted owner, you MAY emit that exact symbol as a monotonic extension: "
-                "keep kind, resource_path and activation unchanged; never change an existing public API "
-                "declaration; add only new requirements, obligations, dependencies or genuinely new "
-                "member APIs. The host merges such an extension into the accepted owner. Otherwise use "
+                "to an already accepted owner, emit only its symbol and new requirements, plus any new "
+                "obligations, dependencies or member APIs. Omit unchanged fields; the host retains them. "
+                "kind and resource_path cannot change. activation may promote false to true when later "
+                "requirements add runtime integration; it can never be disabled. Never change an existing "
+                "API declaration. The host merges contributions into the accepted owner. Otherwise use "
                 "a new symbol."
             )}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
             tool_name=name, parameters=_page_schema(payload),
@@ -395,7 +459,7 @@ def _decision(router: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]
             # page into a schema-valid page; never swallow unrelated native rejections.
             page_schema = _page_schema(payload)
             original_diagnostics = _schema_diagnostics(rejected_page, page_schema)
-            normalized_page = _canonicalize_schema_page(rejected_page)
+            normalized_page = _canonicalize_schema_page(rejected_page, payload)
             normalized_diagnostics = _schema_diagnostics(normalized_page, page_schema)
             if (
                 original_diagnostics
@@ -467,12 +531,12 @@ def _validated_page(router: Any, name: str, payload: dict[str, Any], *,
             request["validation_feedback"] = state["feedback"]
         page = None
         try:
-            page = _canonicalize_schema_page(_decision(router, name, request))
+            page = _canonicalize_schema_page(_decision(router, name, request), payload)
             page = _merge_scoped_schema_repair(page, state.get("feedback") or {})
             diagnostics = _schema_diagnostics(page, schema)
             if diagnostics:
                 raise _InvalidPage(diagnostics, page)
-            result = validator(page)
+            result = validator(_expand_owner_contributions(page, payload))
         except _InvalidPage as exc:
             feedback = exc.feedback
             bad_page = feedback["rejected_page"]
@@ -581,6 +645,10 @@ def validate_node(raw: Any, *, package: str, mod_id: str, refs: set[str]) -> dic
     node["estimated_tokens"] = int(node["estimated_tokens"])
     if node["kind"] == "java":
         node["public_api"] = [re.sub(r"\s+", " ", api.strip().rstrip(";").strip()) for api in node["public_api"]]
+        try:
+            node["public_api"] = activation_public_api(node["public_api"], active=node["activation"])
+        except ValueError as exc:
+            raise ImplementationGraphError(str(exc)) from exc
         node["path"] = f"src/main/java/{package.replace('.', '/')}/{node['symbol']}.java"
     else:
         node["path"] = node["resource_path"]
@@ -739,6 +807,8 @@ def _model_node_view(node: Mapping[str, Any]) -> dict[str, Any]:
             "kind",
             "resource_path",
             "responsibility",
+            "obligations",
+            "estimated_tokens",
             "public_api",
             "depends_on",
             "activation",
@@ -749,7 +819,7 @@ def _model_node_view(node: Mapping[str, Any]) -> dict[str, Any]:
 
 def _merge_accepted_owner(existing: dict[str, Any], proposed: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     """Monotonically extend one already admitted owner without rewriting its contract."""
-    for field in ("symbol", "kind", "resource_path", "activation", "path"):
+    for field in ("symbol", "kind", "resource_path", "path"):
         if existing.get(field) != proposed.get(field):
             raise ImplementationGraphError(
                 f"IMPLEMENTATION_IR_DUPLICATE_CONTRACT_CONFLICT: {existing['symbol']} changed {field}"
@@ -773,9 +843,14 @@ def _merge_accepted_owner(existing: dict[str, Any], proposed: dict[str, Any]) ->
         novel_api.append(api)
 
     merged = deepcopy(existing)
+    merged["activation"] = existing["activation"] or proposed["activation"]
     merged["requirements"] = _stable_union(existing["requirements"], proposed["requirements"])
     merged["obligations"] = _stable_union(existing["obligations"], proposed["obligations"])
     merged["public_api"] = existing["public_api"] + novel_api
+    try:
+        merged["public_api"] = activation_public_api(merged["public_api"], active=merged["activation"])
+    except ValueError as exc:
+        raise ImplementationGraphError(str(exc)) from exc
     merged["depends_on"] = _stable_union(existing["depends_on"], proposed["depends_on"])
     # The first admitted responsibility remains the owner identity. Later pages add
     # precise requirement text through requirements[] and obligations[] instead of
@@ -786,7 +861,7 @@ def _merge_accepted_owner(existing: dict[str, Any], proposed: dict[str, Any]) ->
 
     progressed = any(
         merged[field] != existing[field]
-        for field in ("requirements", "obligations", "public_api", "depends_on")
+        for field in ("requirements", "obligations", "public_api", "depends_on", "activation")
     )
     return merged, progressed
 
@@ -957,7 +1032,7 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
             ]
             state["unit_queue"] = deepcopy(pending_units)
 
-        active_unit, remaining_units = _next_active_unit(pending_units)
+        active_unit, _remaining_units = _next_active_unit(pending_units)
         if active_unit is not None:
             active_req_ids = [
                 req_id for req_id in active_unit["requirements"] if req_id not in covered
@@ -995,7 +1070,8 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
         missing_before = set(missing)
         active_req_keys = set(active_reqs)
 
-        def admit(page: dict[str, Any]) -> list[dict[str, Any]]:
+        def admit(page: dict[str, Any], *, covered_before=covered_before,
+                  missing_before=missing_before, active_req_keys=active_req_keys) -> list[dict[str, Any]]:
             combined = _admit_graph_page(
                 page,
                 accepted=state["nodes"],

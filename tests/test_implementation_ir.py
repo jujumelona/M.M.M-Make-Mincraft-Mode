@@ -293,20 +293,23 @@ def test_real_java_execution_after_budget_decomposition_and_api_handoff(tmp_path
     facade = copy.deepcopy(wallet)
     facade.update(estimated_tokens=1100, depends_on=[helper["symbol"]])
     facade["obligations"] = ["Delegate storage and transactions to PlayerCreditsPartStore through the frozen API."]
-    trade = node("TradeService", dependencies=["PlayerCredits"], api=["public static void initialize()"], activation=True)
+    trade = node("TradeService", dependencies=["PlayerCredits"], api=["public static int remaining()"], activation=True)
     router = Decisions([{"nodes": [wallet, trade], "done": True},
                         {"nodes": [helper, facade], "done": True}])
     decodes = []
     sources = {
         helper["symbol"]: "public static int balance() { return credits; } private static int credits=10; public static boolean spend(int amount) { if(amount<0 || credits<amount) return false; credits-=amount; return true; }",
         "PlayerCredits": "public static int balance() { return PlayerCreditsPartStore.balance(); } public static boolean spend(int amount) { return PlayerCreditsPartStore.spend(amount); }",
-        "TradeService": 'public static void initialize() { if(!PlayerCredits.spend(3) || PlayerCredits.balance()!=7 || PlayerCredits.spend(8) || PlayerCredits.balance()!=7) throw new AssertionError("transaction"); System.out.print("PASS"); }',
+        "TradeService": 'public static int remaining() { return PlayerCredits.balance(); } public static void initialize() { if(!PlayerCredits.spend(3) || remaining()!=7 || PlayerCredits.spend(8) || remaining()!=7) throw new AssertionError("transaction"); System.out.print("PASS"); }',
     }
 
     def generate_text(role, messages, **kwargs):
         prompt = messages[-1]["content"]
         symbol = next(s for s in sources if f"Exact target: src/main/java/example/{s}.java#{s}" in prompt)
         decodes.append(symbol)
+        if symbol == "TradeService":
+            assert "public static void initialize()" in prompt
+            assert "The host invokes TradeService.initialize();" in prompt
         if decodes == ["PlayerCredits"]:
             raise LlamaCompletionBoundaryError("limit", kind=OUTPUT_EXHAUSTED, completion_tokens=4096, max_tokens=4096)
         return json.dumps({"content": f"package example;\npublic final class {symbol} {{ {sources[symbol]} }}", "summary": "implemented"})
