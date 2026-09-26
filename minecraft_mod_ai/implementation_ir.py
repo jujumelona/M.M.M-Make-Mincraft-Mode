@@ -15,7 +15,6 @@ from typing import Any
 
 from .custom_module_errors import CustomModuleGenerationError
 from .implementation_lifecycle import activation_public_api
-from .model_adapters.base import NativeToolDecisionRejected
 
 IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v14"
 
@@ -299,63 +298,10 @@ def is_completion_boundary_error(exc: BaseException) -> bool:
     return "exhausted the bounded output allowance" in msg or "output_exhausted" in msg
 
 
-from .authored_execution_schema import (
-    CONTEXT_SECTION_SET as _CONTEXT_SECTION_SET,
-    DOCUMENT_SECTION_ORDER as _DOCUMENT_SECTION_ORDER,
-    DOCUMENT_SECTION_SET as _DOCUMENT_SECTION_SET,
-    EXECUTION_SECTION_ORDER as _EXECUTION_SECTION_ORDER,
-    EXECUTION_SECTION_SET as _EXECUTION_SECTION_SET,
-    REQUIRED_EXECUTION_SECTIONS as _REQUIRED_EXECUTION_SECTIONS,
-)
-
-_SECTION_ALIASES = {
-    "개요": "overview",
-    "overview": "overview",
-    "행동_계약": "behavior_contract",
-    "상태_모델": "state_model",
-    "알고리즘": "algorithm",
-    "통합": "integration",
-    "권한_및_네트워크": "authority_and_network",
-    "지속성": "persistence",
-    "자원_및_ui": "resources_and_ui",
-    "실패_및_제한": "failure_and_limits",
-    "재사용_평가": "reuse_assessment",
-    "검증": "verification",
-    "결론": "conclusion",
-}
-
-
-def _section_slug(value: str) -> str:
-    text = re.sub(r"^\s*\d+[.)]\s*", "", str(value or "").strip()).casefold()
-    text = text.strip("*_ `" + chr(96))
-    text = re.sub(r"[\s-]+", "_", text)
-    text = re.sub(r"[^0-9a-zA-Z_가-힣]+", "_", text)
-    return text.strip("_").casefold()
-
-
-def _authored_section_id(title: str) -> str:
-    """Extract the canonical authored section id from exact or localized headings."""
-    raw = re.sub(r"^\s*\d+[.)]\s*", "", str(title or "").strip())
-    for inner in reversed(re.findall(r"\(([^()]*)\)", raw)):
-        token = _section_slug(inner)
-        token = _SECTION_ALIASES.get(token, token)
-        if token in _DOCUMENT_SECTION_SET:
-            return token
-    token = _section_slug(raw)
-    token = _SECTION_ALIASES.get(token, token)
-    return token if token in _DOCUMENT_SECTION_SET else ""
-
-
-def _parse_markdown_heading(line: str) -> tuple[int, str] | None:
-    match = re.match(r"^ {0,3}(#{1,6})[ \t]+(.+?)\s*$", line)
-    if not match:
-        return None
-    title = re.sub(r"[ \t]+#+[ \t]*$", "", match.group(2)).strip("*_ `" + chr(96))
-    return len(match.group(1)), title
-
-
 def _decompose_generic_units(text: str) -> list[dict[str, Any]]:
-    """Explicit generic compiler mode. This is never selected by authored production."""
+    """Explicit generic compiler mode. Authored production never selects it."""
+    from .authored_ir_parser import parse_markdown_heading
+
     req_map = source_requirements(text)
     if not req_map:
         return []
@@ -366,7 +312,7 @@ def _decompose_generic_units(text: str) -> list[dict[str, Any]]:
         if not line.strip():
             continue
         req_id = f"R{idx}"
-        heading = _parse_markdown_heading(line)
+        heading = parse_markdown_heading(line)
         if heading is not None:
             if current:
                 sections.append((current_title, current))
@@ -387,92 +333,16 @@ def _decompose_generic_units(text: str) -> list[dict[str, Any]]:
 
 
 def decompose_authored_units(text: str) -> list[dict[str, Any]]:
-    """Strictly lower the canonical authored-design document. No fallback exists.
+    """Strict canonical authored decomposition; malformed input never falls back."""
+    from .authored_ir_parser import (
+        AuthoredDesignSchemaError,
+        decompose_canonical_authored_units,
+    )
 
-    The first recognized canonical major heading fixes the document section depth.
-    Nested headings (actors, variables, transitions, etc.) remain owned by that
-    canonical section. Text before the first recognized canonical heading is ignored
-    and can never become implementation work.
-    """
-    req_map = source_requirements(text)
-    if not req_map:
-        raise ImplementationGraphError("IMPLEMENTATION_IR_AUTHORED_DESIGN_EMPTY")
-
-    section_depth: int | None = None
-    active_section = ""
-    seen_sections: list[str] = []
-    by_section: dict[str, list[str]] = {}
-    document_index = {name: index for index, name in enumerate(_DOCUMENT_SECTION_ORDER)}
-    last_index = -1
-
-    for idx, line in enumerate(text.splitlines(), start=1):
-        if not line.strip():
-            continue
-        req_id = f"R{idx}"
-        heading = _parse_markdown_heading(line)
-        if heading is not None:
-            depth, title = heading
-            section = _authored_section_id(title)
-            if section:
-                if section_depth is None:
-                    section_depth = depth
-                elif depth != section_depth:
-                    if depth > section_depth:
-                        if active_section in _EXECUTION_SECTION_SET:
-                            by_section.setdefault(active_section, []).append(req_id)
-                        continue
-                    raise ImplementationGraphError(
-                        f"IMPLEMENTATION_IR_AUTHORED_SECTION_DEPTH: {section} uses depth {depth}, expected {section_depth}"
-                    )
-                if section in seen_sections:
-                    raise ImplementationGraphError(
-                        f"IMPLEMENTATION_IR_AUTHORED_SECTION_DUPLICATE: {section}"
-                    )
-                index = document_index[section]
-                if index <= last_index:
-                    raise ImplementationGraphError(
-                        f"IMPLEMENTATION_IR_AUTHORED_SECTION_ORDER: {section}"
-                    )
-                last_index = index
-                seen_sections.append(section)
-                active_section = section
-                if section in _EXECUTION_SECTION_SET:
-                    by_section.setdefault(section, []).append(req_id)
-                continue
-
-            if section_depth is None:
-                # Document title / planner preamble is not implementation input.
-                continue
-            if depth <= section_depth:
-                raise ImplementationGraphError(
-                    f"IMPLEMENTATION_IR_AUTHORED_UNKNOWN_SECTION: {title}"
-                )
-            if active_section in _EXECUTION_SECTION_SET:
-                by_section.setdefault(active_section, []).append(req_id)
-            continue
-
-        if active_section in _EXECUTION_SECTION_SET:
-            by_section.setdefault(active_section, []).append(req_id)
-
-    missing = [
-        section for section in _EXECUTION_SECTION_ORDER
-        if section not in by_section or not by_section[section]
-    ]
-    if missing:
-        raise ImplementationGraphError(
-            "IMPLEMENTATION_IR_AUTHORED_SECTION_MISSING: " + ", ".join(missing)
-        )
-
-    units: list[dict[str, Any]] = []
-    for role in _EXECUTION_SECTION_ORDER:
-        refs = list(dict.fromkeys(by_section[role]))
-        units.append({
-            "unit_id": role,
-            "title": role,
-            "requirements": {req: req_map[req] for req in refs},
-            "context_requirements": {},
-        })
-    return units
+    try:
+        return decompose_canonical_authored_units(text, source_requirements(text))
+    except AuthoredDesignSchemaError as exc:
+        raise ImplementationGraphError(str(exc)) from exc
 
 def _next_active_unit(
     pending_units: list[dict[str, Any]],
@@ -515,54 +385,15 @@ def admissible_tokens(router: Any) -> int | None:
 def _decision(router: Any, name: str, payload: dict[str, Any], *,
               state: dict[str, Any] | None = None,
               checkpoint: Callable[[], None] | None = None) -> dict[str, Any]:
-    """Use the single host-owned implementation lowering interface; no planner fallback."""
+    """Use the single host-owned lowering interface; no planner/tool fallback."""
     frontend = getattr(router, "generate_implementation_decision", None)
     if not callable(frontend):
         raise ImplementationGraphError("IMPLEMENTATION_IR_HOST_LOWERING_REQUIRED")
-    try:
-        return frontend(
-            name,
-            payload,
-            state=state if state is not None else {},
-            checkpoint=checkpoint or (lambda: None),
-        )
-    except NativeToolDecisionRejected as exc:
-        matching = [r for r in exc.rejections if r.get("original_tool") == name]
-        rejected_page = None
-        if len(matching) == 1:
-            try:
-                rejected_page = json.loads(matching[0].get("raw_arguments") or "")
-            except (ValueError, TypeError):
-                pass
-
-        diagnostics: list[dict[str, Any]] = []
-        if rejected_page is not None:
-            page_schema = _page_schema(payload)
-            original_diagnostics = _schema_diagnostics(rejected_page, page_schema)
-            normalized_page = _canonicalize_schema_page(rejected_page, payload)
-            normalized_diagnostics = _schema_diagnostics(normalized_page, page_schema)
-            if (
-                original_diagnostics
-                and normalized_page != rejected_page
-                and not normalized_diagnostics
-            ):
-                return normalized_page
-            rejected_page = normalized_page
-            diagnostics = normalized_diagnostics or original_diagnostics
-
-        if not diagnostics:
-            diagnostics = [
-                {
-                    "code": r.get("failure_code", "TOOL_DECISION_REJECTED"),
-                    "node": "",
-                    "field": "tool_call",
-                    "message": str(r.get("error", "")),
-                }
-                for r in exc.rejections
-            ]
-        failure = _InvalidPage(diagnostics, rejected_page)
-        failure.feedback["native_rejections"] = list(exc.rejections)
-        raise failure from exc
+    return frontend(
+        name, payload,
+        state=state if state is not None else {},
+        checkpoint=checkpoint or (lambda: None),
+    )
 
 def _repair_measure(feedback: Mapping[str, Any]) -> tuple[int, int, int]:
     """Well-founded repair measure; smaller means objectively closer to admission."""
@@ -1029,9 +860,32 @@ def _admit_graph_page(page: dict[str, Any], *, accepted: list[dict[str, Any]],
     return combined
 
 
+def _compile_units(
+    text: str, supplied: list[dict[str, Any]] | None
+) -> list[dict[str, Any]]:
+    return _decompose_generic_units(text) if supplied is None else deepcopy(supplied)
+
+
+def compile_authored_graph(router: Any, *, text: str, package: str, mod_id: str,
+                           target: dict[str, Any], context: str = "",
+                           resume: dict[str, Any] | None = None,
+                           checkpoint: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
+    """Compile canonical authored production. No generic fallback is reachable."""
+    units = decompose_authored_units(text)
+    graph = compile_graph(
+        router, text=text, package=package, mod_id=mod_id, target=target,
+        context=context, units=units, resume=resume, checkpoint=checkpoint,
+    )
+    execution_refs = set().union(*(set(unit["requirements"]) for unit in units))
+    graph["requirements"] = {
+        ref: value for ref, value in graph["requirements"].items()
+        if ref in execution_refs
+    }
+    return graph
+
 def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
                   target: dict[str, Any], context: str = "",
-                  authored_schema: bool = False,
+                  units: list[dict[str, Any]] | None = None,
                   resume: dict[str, Any] | None = None,
                   checkpoint: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
     """Compile until host-observed semantic work is complete.
@@ -1045,7 +899,7 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
 
     all_requirements = source_requirements(text)
     all_req_keys = set(all_requirements)
-    units = decompose_authored_units(text) if authored_schema else _decompose_generic_units(text)
+    units = _compile_units(text, units)
     execution_req_keys = set().union(
         *(set(unit["requirements"]) for unit in units)
     ) if units else set(all_req_keys)
