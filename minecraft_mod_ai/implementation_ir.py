@@ -519,12 +519,50 @@ def _decision(router: Any, name: str, payload: dict[str, Any], *,
     frontend = getattr(router, "generate_implementation_decision", None)
     if not callable(frontend):
         raise ImplementationGraphError("IMPLEMENTATION_IR_HOST_LOWERING_REQUIRED")
-    return frontend(
-        name,
-        payload,
-        state=state if state is not None else {},
-        checkpoint=checkpoint or (lambda: None),
-    )
+    try:
+        return frontend(
+            name,
+            payload,
+            state=state if state is not None else {},
+            checkpoint=checkpoint or (lambda: None),
+        )
+    except NativeToolDecisionRejected as exc:
+        matching = [r for r in exc.rejections if r.get("original_tool") == name]
+        rejected_page = None
+        if len(matching) == 1:
+            try:
+                rejected_page = json.loads(matching[0].get("raw_arguments") or "")
+            except (ValueError, TypeError):
+                pass
+
+        diagnostics: list[dict[str, Any]] = []
+        if rejected_page is not None:
+            page_schema = _page_schema(payload)
+            original_diagnostics = _schema_diagnostics(rejected_page, page_schema)
+            normalized_page = _canonicalize_schema_page(rejected_page, payload)
+            normalized_diagnostics = _schema_diagnostics(normalized_page, page_schema)
+            if (
+                original_diagnostics
+                and normalized_page != rejected_page
+                and not normalized_diagnostics
+            ):
+                return normalized_page
+            rejected_page = normalized_page
+            diagnostics = normalized_diagnostics or original_diagnostics
+
+        if not diagnostics:
+            diagnostics = [
+                {
+                    "code": r.get("failure_code", "TOOL_DECISION_REJECTED"),
+                    "node": "",
+                    "field": "tool_call",
+                    "message": str(r.get("error", "")),
+                }
+                for r in exc.rejections
+            ]
+        failure = _InvalidPage(diagnostics, rejected_page)
+        failure.feedback["native_rejections"] = list(exc.rejections)
+        raise failure from exc
 
 def _repair_measure(feedback: Mapping[str, Any]) -> tuple[int, int, int]:
     """Well-founded repair measure; smaller means objectively closer to admission."""
