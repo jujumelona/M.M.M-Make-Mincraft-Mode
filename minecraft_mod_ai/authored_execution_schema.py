@@ -3,6 +3,7 @@ from __future__ import annotations
 """Single host authority for authored-design execution roles and concern taxonomy."""
 
 from copy import deepcopy
+import re
 from typing import Any
 
 
@@ -106,7 +107,17 @@ def section_spec(section: str) -> dict[str, Any] | None:
 
 
 def section_for_symbol(symbol: str) -> str:
-    return _SYMBOL_TO_SECTION.get(str(symbol or "").strip(), "")
+    candidate = str(symbol or "").strip()
+    section = _SYMBOL_TO_SECTION.get(candidate, "")
+    if section:
+        return section
+    # Refinement creates host-scoped helper owners by appending PartN to a canonical
+    # authored owner. Those helpers inherit the parent's atomic concern contract.
+    for base_symbol, base_section in _SYMBOL_TO_SECTION.items():
+        suffix = candidate[len(base_symbol):] if candidate.startswith(base_symbol) else ""
+        if suffix and re.fullmatch(r"(?:Part[1-9][0-9]*)+", suffix):
+            return base_section
+    return ""
 
 
 def concern_contracts(section: str) -> tuple[dict[str, Any], ...]:

@@ -701,3 +701,45 @@ def test_large_authored_design_uses_execution_schema_and_keeps_review_sections_a
     assert len(graph["nodes"]) == len(units)
     assert len(checkpoints) >= len(units)
     assert set().union(*(set(n["requirements"]) for n in graph["nodes"])) == execution_refs
+
+
+def test_repeated_authored_concern_obligations_merge_source_provenance():
+    requirements = {"R1": "first state requirement", "R2": "second state requirement"}
+    instruction = json.dumps({
+        "concern": "variables",
+        "concern_template": "feature/state_model/variables",
+        "rules": ["Preserve supplied evidence identifiers."],
+        "section": "state_model",
+        "section_instruction": "Implement domain state containers.",
+        "task": "Resolve exactly one variables record.",
+    }, ensure_ascii=False)
+
+    def obligation(requirement_id):
+        return json.dumps({
+            "instruction": instruction,
+            "source_requirements": {
+                requirement_id: requirements[requirement_id],
+            },
+        }, ensure_ascii=False)
+
+    first = node(refs=["R1"])
+    first["obligations"] = [obligation("R1")]
+    accepted = ir.validate_node(
+        first, package="example", mod_id="test", refs=set(requirements)
+    )
+
+    second = node(refs=["R2"])
+    second["obligations"] = [obligation("R2")]
+    combined = ir._admit_graph_page(
+        {"nodes": [second]},
+        accepted=[accepted],
+        package="example",
+        mod_id="test",
+        requirements=requirements,
+    )
+
+    assert len(combined) == 1
+    assert combined[0]["requirements"] == ["R1", "R2"]
+    assert len(combined[0]["obligations"]) == 1
+    payload = json.loads(combined[0]["obligations"][0])
+    assert payload["source_requirements"] == requirements
