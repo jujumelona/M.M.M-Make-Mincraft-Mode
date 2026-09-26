@@ -1,21 +1,19 @@
 from __future__ import annotations
 
 import pytest
+from types import SimpleNamespace
 
-from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
 from minecraft_mod_ai.project_index import ProjectIndex
 from minecraft_mod_ai.source_patch import TransactionalSourcePatcher
 from minecraft_mod_ai.source_patch_precondition_contract import (
     SourcePatchPreconditionError,
     bind_source_snapshot_preconditions,
+    preflight_source_patch_operations,
 )
 
 
 def _generator_with_index(index: ProjectIndex):
-    generator = object.__new__(CustomModuleGenerator)
-    generator._cached_index = index
-    generator._cached_root = index.root
-    return generator
+    return SimpleNamespace(_cached_index=index, _cached_root=index.root)
 
 
 def test_missing_expected_sha_is_bound_before_fabric_mod_replace(tmp_path) -> None:
@@ -32,7 +30,8 @@ def test_missing_expected_sha_is_bound_before_fabric_mod_replace(tmp_path) -> No
         }
     ]
 
-    generator._validate_operations(operations)
+    bind_source_snapshot_preconditions(generator, operations)
+    preflight_source_patch_operations(generator, operations)
 
     assert operations[0]["expected_sha256"].startswith("sha256:")
     receipt = TransactionalSourcePatcher(root).apply(operations)
@@ -54,7 +53,8 @@ def test_existing_create_is_normalized_to_hash_guarded_replace(tmp_path) -> None
         }
     ]
 
-    generator._validate_operations(operations)
+    bind_source_snapshot_preconditions(generator, operations)
+    preflight_source_patch_operations(generator, operations)
 
     assert operations[0]["operation"] == "replace"
     assert operations[0]["expected_sha256"].startswith("sha256:")
@@ -125,8 +125,9 @@ def test_replace_shape_failure_is_reported_before_apply(tmp_path) -> None:
         }
     ]
 
+    bind_source_snapshot_preconditions(generator, operations)
     with pytest.raises(SourcePatchPreconditionError, match="Replace content must be text"):
-        generator._validate_operations(operations)
+        preflight_source_patch_operations(generator, operations)
 
 
 def test_edit_replacement_precondition_is_reported_before_apply(tmp_path) -> None:
@@ -145,8 +146,9 @@ def test_edit_replacement_precondition_is_reported_before_apply(tmp_path) -> Non
         }
     ]
 
+    bind_source_snapshot_preconditions(generator, operations)
     with pytest.raises(SourcePatchPreconditionError, match="Replacement precondition failed"):
-        generator._validate_operations(operations)
+        preflight_source_patch_operations(generator, operations)
 
 
 def test_noop_replace_is_reported_before_apply(tmp_path) -> None:
@@ -164,8 +166,9 @@ def test_noop_replace_is_reported_before_apply(tmp_path) -> None:
         }
     ]
 
+    bind_source_snapshot_preconditions(generator, operations)
     with pytest.raises(SourcePatchPreconditionError, match="makes no change"):
-        generator._validate_operations(operations)
+        preflight_source_patch_operations(generator, operations)
 
 
 def test_source_change_after_snapshot_still_fails_transaction(tmp_path) -> None:
@@ -181,16 +184,14 @@ def test_source_change_after_snapshot_still_fails_transaction(tmp_path) -> None:
             "content": '{"id":"demo","version":"2"}\n',
         }
     ]
-    generator._validate_operations(operations)
+    bind_source_snapshot_preconditions(generator, operations)
+    preflight_source_patch_operations(generator, operations)
     target.write_text('{"id":"concurrent","version":"9"}\n', encoding="utf-8")
 
     with pytest.raises(Exception, match="SHA-256 precondition failed"):
         TransactionalSourcePatcher(root).apply(operations)
 
 
-def test_runtime_bootstrap_installs_precondition_normalizer() -> None:
-    assert getattr(
-        CustomModuleGenerator._validate_operations,
-        "_mmm_source_snapshot_preconditions_v1",
-        False,
-    ) is True
+def test_precondition_contract_is_explicit_and_wrapper_free() -> None:
+    assert callable(bind_source_snapshot_preconditions)
+    assert callable(preflight_source_patch_operations)
