@@ -682,7 +682,14 @@ class CustomModuleGenerator:
                     else:
                         target.unlink(missing_ok=True)
                     raise
-                except Exception as exc:  # noqa: BLE001 - output exhaustion handled above
+                except Exception as exc:  # noqa: BLE001 - typed boundaries handled explicitly
+                    boundary = completion_boundary_error(exc)
+                    if boundary is not None:
+                        if target_existed:
+                            _atomic_write(target, original_bytes)
+                        else:
+                            target.unlink(missing_ok=True)
+                        raise
                     last_failure = (
                         "DIRECT_CODER_RESPONSE_FAILED: "
                         f"{type(exc).__name__}: {exc}"
