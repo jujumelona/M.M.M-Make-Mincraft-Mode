@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 
 from minecraft_mod_ai.artifact_job import ArtifactJob
@@ -57,3 +58,13 @@ def test_source_patch_reuses_process_commit_pool(tmp_path, monkeypatch):
         if source_patch._COMMIT_POOL is not None:
             source_patch._COMMIT_POOL.shutdown(wait=True)
         source_patch._COMMIT_POOL = None
+
+
+def test_project_validator_builds_json_and_java_inventory_from_one_tree_walk():
+    from minecraft_mod_ai.validator import ProjectValidator
+
+    source = inspect.getsource(ProjectValidator.validate)
+    assert source.count('root.rglob("*")') == 1
+    assert 'root.rglob("*.json")' not in source
+    assert 'root.rglob("*.mcmeta")' not in source
+    assert 'root.rglob("*.java")' not in source
