@@ -391,7 +391,7 @@ def _call_coder(
     for key, value in (
         ("response_format", "json"),
         ("response_schema", _SOURCE_SCHEMA),
-        ("enable_tools", False),
+        ("enable_tools", True),
         ("tool_stage", "generation"),
     ):
         if _supports_kwarg(callback, key):

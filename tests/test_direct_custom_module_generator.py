@@ -106,7 +106,7 @@ def test_invariant_failure_repairs_from_complete_current_source(
 
     assert result["status"] == "SOURCE_GENERATED"
     assert len(calls) == 2
-    assert calls[0][1]["enable_tools"] is False
+    assert calls[0][1]["enable_tools"] is True
     assert "output_token_ceiling" not in calls[0][1]
     repair_prompt = calls[1][0][-1]["content"]
     assert bad in repair_prompt
