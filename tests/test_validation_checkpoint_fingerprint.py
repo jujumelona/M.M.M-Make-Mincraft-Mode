@@ -35,7 +35,7 @@ def test_jdt_validation_fingerprint_includes_active_jdt_gates(
 ) -> None:
     names = _fingerprinted_module_names(monkeypatch, "validate-jdt")
     assert "minecraft_mod_ai.validation_checkpoint_policy" in names
-    assert "minecraft_mod_ai.runtime_bootstrap" in names
+    assert "minecraft_mod_ai.runtime_bootstrap" not in names
     assert "minecraft_mod_ai.complete_orchestrator" in names
     assert "minecraft_mod_ai.java_lsp" in names
     assert "minecraft_mod_ai.java_lsp_process_safety_contract" in names
