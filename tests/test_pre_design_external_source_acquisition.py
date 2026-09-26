@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import httpx
+import pytest
+
 from minecraft_mod_ai import pre_design_external_source_contract as external
 from minecraft_mod_ai import pre_design_rag_corrective as corrective
 from minecraft_mod_ai import pre_design_research_pipeline as pipeline
@@ -151,3 +154,40 @@ def test_external_metadata_without_body_never_becomes_evidence(monkeypatch) -> N
     github = row["external_rag"]["github_retrieval"]
     assert github["search_requests"] == 1
     assert github["source_requests"] == 3
+
+
+def test_github_source_body_reuses_supplied_http_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={"items": [], "total_count": 0},
+            request=request,
+        )
+
+    shared = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        headers=external._headers(),
+        follow_redirects=True,
+        timeout=20.0,
+    )
+    try:
+        monkeypatch.setattr(
+            httpx,
+            "Client",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("retrieval rebuilt httpx.Client instead of reusing the shared pool")
+            ),
+        )
+        receipt = external._retrieve_github_source_body(
+            "minecraft fabric navigation",
+            client=shared,
+        )
+    finally:
+        shared.close()
+
+    assert len(requests) == 1
+    assert receipt["provider_status"] == "available"
+    assert receipt["search_requests"] == 1
