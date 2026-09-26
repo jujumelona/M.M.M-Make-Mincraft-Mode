@@ -149,11 +149,12 @@ def test_repair_context_reuses_same_explorer_contract(tmp_path: Path) -> None:
 def test_generation_and_repair_grounding_are_source_owned() -> None:
     from minecraft_mod_ai import custom_module_generator, repair_engine
 
-    assert getattr(
-        custom_module_generator._collect_initial_observations,
-        "__mmm_repository_grounding_live_context__",
-        False,
-    )
+    assert not hasattr(custom_module_generator, "_collect_initial_observations")
+    assert inspect.getmodule(custom_module_generator._project_context) is custom_module_generator
+    generation_source = inspect.getsource(custom_module_generator.CustomModuleGenerator.generate)
+    assert "_project_context(" in generation_source
+    assert "relevance_text=" in generation_source
+
     assert inspect.getmodule(repair_engine.RepairEngine._context) is repair_engine
     assert not hasattr(repair_engine.RepairEngine._context, "__wrapped__")
     source = inspect.getsource(repair_engine.RepairEngine._context)
