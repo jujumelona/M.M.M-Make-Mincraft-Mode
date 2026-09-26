@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import pytest
+
 import minecraft_mod_ai.complete_orchestrator as orchestrator_module
-from minecraft_mod_ai import quality_evidence
-from minecraft_mod_ai.atomic_playtest_evidence_contract import _matched_acceptance_refs
+from minecraft_mod_ai import atomic_requirement_contract, quality_evidence
+from minecraft_mod_ai.atomic_playtest_evidence_contract import _matched_acceptance_refs, install
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _install_atomic_playtest_contract() -> None:
+    install(atomic_requirement_contract, quality_evidence, orchestrator_module)
 
 
 def test_only_matched_wait_for_results_count_as_atomic_evidence() -> None:
