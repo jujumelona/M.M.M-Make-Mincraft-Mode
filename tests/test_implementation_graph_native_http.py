@@ -55,7 +55,7 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
         def do_POST(self):
             payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             requests.append(payload)
-            delta = {"content": json.dumps({"content": atomic_content, "summary": "implemented"})}
+            delta = {"content": atomic_content}
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Connection", "close")
@@ -145,7 +145,7 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
         result = generator.generate(tmp_path, module=module)
         expected_requests = sum(
             len(concern_contracts(section)) for section in EXECUTION_SECTION_ORDER
-        )
+        ) + len(concern_contracts("integration"))
         assert len(requests) == expected_requests
         assert all(not request.get("tools") for request in requests)
         graph = result["implementation_ir"]
