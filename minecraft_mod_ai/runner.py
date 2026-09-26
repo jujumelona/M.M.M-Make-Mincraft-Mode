@@ -16,6 +16,7 @@ from contextvars import copy_context
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from .gradle_properties import read_gradle_properties
 from .java_lsp import JDTWorkspaceBootstrapError, _resolve_project_java_home
 from .platform_catalog import adapter_from_project
 
@@ -145,6 +146,47 @@ class GradleRunner:
             return prepared
         return self._execute_prepared_build(prepared, run_gametest=run_gametest)
 
+    @staticmethod
+    def _pinned_project_wrapper(project_root: Path) -> tuple[str, str] | None:
+        """Return a verified wrapper distribution pin without executing wrapper scripts.
+
+        MMM platform-lock projects keep the provider receipt authoritative. Existing
+        projects without that lock may carry their own exact Gradle toolchain; when the
+        wrapper URL is the official Gradle distribution and has a SHA-256 pin, reuse
+        that version through MMM's verified downloader.
+        """
+        if (project_root / ".minecraft_ai" / "platform-lock.json").is_file():
+            return None
+
+        wrapper_dir = project_root / "gradle" / "wrapper"
+        properties = wrapper_dir / "gradle-wrapper.properties"
+        wrapper_jar = wrapper_dir / "gradle-wrapper.jar"
+        launcher = project_root / ("gradlew.bat" if os.name == "nt" else "gradlew")
+        if (
+            not properties.is_file()
+            or properties.is_symlink()
+            or not wrapper_jar.is_file()
+            or wrapper_jar.is_symlink()
+            or not launcher.is_file()
+            or launcher.is_symlink()
+        ):
+            return None
+        try:
+            values = read_gradle_properties(properties)
+        except (OSError, UnicodeError, ValueError):
+            return None
+
+        url = values.get("distributionUrl", "").replace("\\:", ":")
+        match = re.fullmatch(
+            r"https://services\.gradle\.org/distributions/"
+            r"gradle-([0-9A-Za-z._-]+)-bin\.zip",
+            url,
+        )
+        digest = values.get("distributionSha256Sum", "").strip().lower()
+        if match is None or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            return None
+        return match.group(1), digest
+
     def _prepare_build_context(self, project_root: Path) -> _PreparedBuild | BuildReport:
         project_root = project_root.resolve()
         if not (project_root / "build.gradle").is_file():
@@ -157,6 +199,9 @@ class GradleRunner:
             ) from exc
         gradle_version = adapter.gradle
         gradle_sha256 = adapter.gradle_sha256
+        wrapper_pin = self._pinned_project_wrapper(project_root)
+        if wrapper_pin is not None:
+            gradle_version, gradle_sha256 = wrapper_pin
         try:
             required_java = int(str(adapter.java_version).strip())
         except (TypeError, ValueError) as exc:
