@@ -5,7 +5,6 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from .task_template_catalog import load_record_template, load_template
 
 EXECUTION_SECTION_ORDER = (
     "state_model",
@@ -117,6 +116,7 @@ def concern_contracts(section: str) -> tuple[dict[str, Any], ...]:
     name = str(section or "").strip()
     if name not in EXECUTION_SECTION_SET:
         return ()
+    from .task_template_catalog import load_record_template, load_template
     manifest = load_template(f"criterion/{name}")
     steps = manifest.get("steps")
     if manifest.get("execution") != "sequence" or not isinstance(steps, list):

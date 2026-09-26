@@ -288,6 +288,43 @@ def _requirements_for(ids: list[str], source: Mapping[str, str]) -> dict[str, st
     return {req_id: source[req_id] for req_id in ids if req_id in source}
 
 
+def _host_concern_work(
+    payload: Mapping[str, Any],
+    packet: Mapping[str, Any],
+    unit_requirements: Mapping[str, str],
+) -> tuple[list[str], int]:
+    role = _unit_role(payload)
+    concerns = concern_contracts(role)
+    if not concerns:
+        return (
+            [_host_obligation(
+                packet["requirements"], instruction=_host_instruction(payload)
+            )],
+            _host_estimated_tokens(unit_requirements),
+        )
+    section_instruction = _host_instruction(payload)
+    obligations: list[str] = []
+    for concern in concerns:
+        instruction = json.dumps(
+            {
+                "section": role,
+                "concern": concern["concern"],
+                "concern_template": concern["identifier"],
+                "task": concern["task"],
+                "rules": concern["rules"],
+                "section_instruction": section_instruction,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        obligations.append(
+            _host_obligation(packet["requirements"], instruction=instruction)
+        )
+    raw_budget = _host_estimated_tokens(unit_requirements)
+    concern_budget = max(768, (raw_budget + len(concerns) - 1) // len(concerns))
+    return obligations, concern_budget
+
+
 def compile_contribution(router: Any, name: str, payload: dict[str, Any],
                          state: dict[str, Any], checkpoint: Callable[[], None]) -> dict[str, Any]:
     """Lower authored work deterministically; no implementation-planning LLM call exists here.
@@ -307,34 +344,8 @@ def compile_contribution(router: Any, name: str, payload: dict[str, Any],
     owner = owners.get(symbol)
     unit_requirements = payload.get("unit_context") or packet["requirements"]
     responsibility = owner["responsibility"] if owner else _host_responsibility(payload)
-    role = _unit_role(payload)
-    concerns = concern_contracts(role)
-    obligations = (
-        [
-            _host_obligation(
-                packet["requirements"],
-                instruction=json.dumps(
-                    {
-                        "section": role,
-                        "concern": concern["concern"],
-                        "concern_template": concern["identifier"],
-                        "task": concern["task"],
-                        "rules": concern["rules"],
-                        "section_instruction": _host_instruction(payload),
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ),
-            )
-            for concern in concerns
-        ]
-        if concerns
-        else [
-            _host_obligation(
-                packet["requirements"],
-                instruction=_host_instruction(payload),
-            )
-        ]
+    obligations, estimated_tokens = _host_concern_work(
+        payload, packet, unit_requirements
     )
     node = {
         "symbol": symbol,
@@ -346,18 +357,9 @@ def compile_contribution(router: Any, name: str, payload: dict[str, Any],
         "public_api": [],
         "depends_on": _role_dependencies(payload),
         "activation": True,
-        "estimated_tokens": (
-            max(
-                768,
-                (_host_estimated_tokens(unit_requirements) + len(concerns) - 1)
-                // len(concerns),
-            )
-            if concerns
-            else _host_estimated_tokens(unit_requirements)
-        ),
+        "estimated_tokens": estimated_tokens,
     }
     return {"nodes": [node]}
-
 
 def _interface_errors(value: dict[str, Any], identity: dict[str, Any], owner: dict[str, Any] | None) -> dict[str, str]:
     errors = {}

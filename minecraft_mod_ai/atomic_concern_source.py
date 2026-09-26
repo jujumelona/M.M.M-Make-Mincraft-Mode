@@ -151,7 +151,7 @@ def _replace_region(source: str, *, concern: str, region: str, content: str) -> 
     if match is None:
         raise CustomModuleGenerationError(f"ATOMIC_CONCERN_MARKER_MISSING: {concern}:{region}")
     indent = match.group("indent")
-    body = ""
+    body = "\n" + indent
     if content:
         rendered = "\n".join(indent + line if line.strip() else "" for line in content.splitlines())
         body = "\n" + rendered + "\n" + indent
