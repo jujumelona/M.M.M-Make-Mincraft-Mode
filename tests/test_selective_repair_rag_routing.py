@@ -13,6 +13,10 @@ def _messages(reason: str):
     ]
 
 
+def _install_selective_contract() -> None:
+    selective.install()
+
+
 def test_compile_api_and_dependency_failures_request_retrieval() -> None:
     assert selective._needs_retrieval_repair(
         _messages("javac cannot find symbol RegistryKey")
