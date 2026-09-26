@@ -346,7 +346,7 @@ def compile_contribution(router: Any, name: str, payload: dict[str, Any],
         "public_api": [],
         "depends_on": _role_dependencies(payload),
         "activation": True,
-        "estimated_tokens": _host_estimated_tokens(unit_requirements),
+        "estimated_tokens": (\n            max(768, (_host_estimated_tokens(unit_requirements) + len(concerns) - 1) // len(concerns))\n            if concerns\n            else _host_estimated_tokens(unit_requirements)\n        ),
     }
     return {"nodes": [node]}
 
