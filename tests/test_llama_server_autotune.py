@@ -9,6 +9,8 @@ import pytest
 
 from minecraft_mod_ai import complete_orchestrator_services
 from minecraft_mod_ai import llama_server_autotune as autotune
+from minecraft_mod_ai import llama_server_hardware_policy as hardware_policy
+from minecraft_mod_ai import model_router
 from minecraft_mod_ai import llama_server_runtime_tuning as runtime_tuning
 from minecraft_mod_ai import llama_vram_parallel_policy as vram_policy
 from minecraft_mod_ai.llama_server_autotune import (
@@ -22,12 +24,27 @@ from minecraft_mod_ai.llama_server_autotune import (
     _server_binary,
     _variant_args,
 )
+from minecraft_mod_ai.llama_tuning_pipeline import install_native_llama_tuning_pipeline
+from minecraft_mod_ai.colab_gpu_handoff_contract import install as install_gpu_handoff
 from minecraft_mod_ai.llama_server_runtime_tuning import (
     _cache_reuse_candidates,
     _parallel_candidates,
     _ubatch_candidates,
 )
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _install_native_runtime_contracts() -> None:
+    install_native_llama_tuning_pipeline(
+        autotune=autotune,
+        hardware_policy=hardware_policy,
+        runtime_tuning=runtime_tuning,
+    )
+    install_gpu_handoff(
+        services_module=complete_orchestrator_services,
+        model_router_module=model_router,
+    )
 
 
 def _probe(
