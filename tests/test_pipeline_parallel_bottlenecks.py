@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 
+from minecraft_mod_ai import parallel_runtime_contract
 from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator
 from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.extended_content_generator import generate_extended_content
@@ -70,3 +71,8 @@ def test_blockbench_review_uses_dedicated_parallel_lane():
     assert 'review_pool.submit(' in source
     assert 'blockbench_receipts.append(run_named_checkpoint' not in source
     assert 'MMM_BLOCKBENCH_REVIEW_WORKERS' in source
+
+
+def test_parallel_discovery_owns_and_closes_default_http_pool():
+    source = inspect.getsource(parallel_runtime_contract._parallel_discover_seed_bundle_factory)
+    assert "with ecosystem_module.EcosystemDiscoveryClient() as discovery:" in source
