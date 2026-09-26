@@ -46,6 +46,14 @@ class Decisions:
         self.calls.append((kwargs["tool_name"], json.loads(messages[-1]["content"])))
         return copy.deepcopy(self.pages.pop(0))
 
+    def generate_implementation_decision(self, name, payload, *, state=None, checkpoint=None):
+        del state, checkpoint
+        return self.generate_tool_decision(
+            "planner",
+            [{"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
+            tool_name=name,
+        )
+
 
 def compile_with(router):
     return compile_graph(router, text=DESIGN, package="example", mod_id="test", target=TARGET)
@@ -65,9 +73,9 @@ def test_graph_combines_sections_by_owner_and_orders_actual_dependencies():
 def test_native_schema_rejection_canonicalizes_member_body_without_retry():
     bad = node("PlayerCredits", api=["public static int balance() { return 1; }"])
 
-    class RejectOnce:
+    class RejectOnce(Decisions):
         def __init__(self):
-            self.calls = []
+            super().__init__([])
 
         def generate_tool_decision(self, role, messages, **kwargs):
             self.calls.append((kwargs["tool_name"], json.loads(messages[-1]["content"])))
@@ -106,9 +114,9 @@ def test_native_enum_rejection_repairs_only_invalid_node_and_freezes_siblings():
     first_page = {"nodes": [stable, invalid], "done": True}
     second_page = {"nodes": [drifted, fixed], "done": True}
 
-    class NativeThenRepair:
+    class NativeThenRepair(Decisions):
         def __init__(self):
-            self.calls = []
+            super().__init__([])
 
         def generate_tool_decision(self, role, messages, **kwargs):
             request = json.loads(messages[-1]["content"])

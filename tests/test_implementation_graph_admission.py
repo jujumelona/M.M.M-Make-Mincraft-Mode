@@ -705,6 +705,7 @@ def test_large_authored_design_uses_execution_schema_and_keeps_review_sections_a
         package="example",
         mod_id="test",
         target=TARGET,
+        authored_schema=True,
         checkpoint=lambda state: checkpoints.append(copy.deepcopy(state)),
     )
 

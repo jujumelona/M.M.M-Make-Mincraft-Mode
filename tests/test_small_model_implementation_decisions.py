@@ -178,7 +178,7 @@ def test_canonical_design_schema_skips_context_sections_and_uses_named_owners():
         "# reuse_assessment\nNo donor is required.\n"
         "# verification\nCompile and test.\n"
     )
-    graph = compile_with(router, text=text)
+    graph = compile_with(router, text=text, authored_schema=True)
     symbols = [node["symbol"] for node in graph["nodes"]]
     assert "AuthoredUnit0" not in symbols
     assert "AuthoredStateModel" in symbols
@@ -205,7 +205,7 @@ def test_host_section_nodes_expand_to_fixed_concern_obligations_without_model_pl
         "# failure_and_limits\nFailures.\n"
         "# integration\nIntegration.\n"
     )
-    graph = compile_with(router, text=text)
+    graph = compile_with(router, text=text, authored_schema=True)
     by_symbol = {node["symbol"]: node for node in graph["nodes"]}
     state = by_symbol["AuthoredStateModel"]
     assert len(state["obligations"]) == len(concern_names("state_model"))
@@ -231,7 +231,7 @@ def test_ir_leaf_carries_same_fixed_concern_sequence_into_coder_contract():
         "# failure_and_limits\nFailures.\n"
         "# integration\nIntegration.\n"
     )
-    graph = compile_with(router, text=text)
+    graph = compile_with(router, text=text, authored_schema=True)
     node = next(item for item in graph["nodes"] if item["symbol"] == "AuthoredStateModel")
     request = {
         "target": {"minecraft_version": "1.21.1", "loader": "fabric"},
@@ -243,3 +243,67 @@ def test_ir_leaf_carries_same_fixed_concern_sequence_into_coder_contract():
     assert [item["concern"] for item in concerns] == list(concern_names("state_model"))
     assert leaf.config["implementation_section"] == "state_model"
     assert len(leaf.config["evidence_task"]["implementation_obligations"]) == len(concerns)
+
+
+def test_localized_canonical_headings_keep_nested_concerns_and_drop_preamble():
+    router = NoPlanningModelRouter()
+    text = (
+        "Thinking Process:\nThis must never become production work.\n"
+        "# 우주 모드 게임 디자인 문서\n"
+        "## 1. 개요 (Overview)\nOverview only.\n"
+        "## 2. 행동 계약 (behavior_contract)\n### actors\nPlayer and server.\n"
+        "## 3. 상태 모델 (state_model)\n### variables\nCredits and ship state.\n"
+        "## 4. 알고리즘 (algorithm)\n### steps\nValidate, mutate, persist.\n"
+        "## 5. 통합 (integration)\n### entry_points\nHost initialize hook.\n"
+        "## 6. 권한 및 네트워크 (authority_and_network)\n### packets\nServer authoritative packet.\n"
+        "## 7. 지속성 (persistence)\n### stored_state\nPersist credits.\n"
+        "## 8. 자원 및 UI (resources_and_ui)\n### displayed_state\nShow credits.\n"
+        "## 9. 실패 및 제한 (failure_and_limits)\n### invalid_inputs\nReject negative amounts.\n"
+        "## 10. 재사용 평가 (reuse_assessment)\nReview only.\n"
+        "## 11. 검증 (verification)\nTests only.\n"
+        "## 12. 결론\nSummary only.\n"
+    )
+    graph = compile_with(router, text=text, authored_schema=True)
+    symbols = [node["symbol"] for node in graph["nodes"]]
+    assert symbols == [
+        "AuthoredStateModel", "AuthoredBehaviorContract", "AuthoredAlgorithm",
+        "AuthoredAuthorityNetwork", "AuthoredPersistence", "AuthoredResourcesUi",
+        "AuthoredFailureLimits", "AuthoredIntegration",
+    ]
+    joined = " ".join(
+        obligation for node in graph["nodes"] for obligation in node["obligations"]
+    )
+    assert "Thinking Process" not in joined
+    assert "This must never become production work" not in joined
+    assert "actors" in joined
+    assert "variables" in joined
+    assert router.calls == []
+
+
+@__import__("pytest").mark.parametrize(
+    "text,code",
+    [
+        (
+            "# behavior_contract\nB\n# state_model\nS\n# algorithm\nA\n"
+            "# integration\nI\n# authority_and_network\nN\n# persistence\nP\n"
+            "# resources_and_ui\nR\n",
+            "IMPLEMENTATION_IR_AUTHORED_SECTION_MISSING",
+        ),
+        (
+            "# behavior_contract\nB\n# state_model\nS\n# state_model\nS2\n"
+            "# algorithm\nA\n# integration\nI\n# authority_and_network\nN\n"
+            "# persistence\nP\n# resources_and_ui\nR\n# failure_and_limits\nF\n",
+            "IMPLEMENTATION_IR_AUTHORED_SECTION_DUPLICATE",
+        ),
+        (
+            "# state_model\nS\n# behavior_contract\nB\n# algorithm\nA\n"
+            "# integration\nI\n# authority_and_network\nN\n# persistence\nP\n"
+            "# resources_and_ui\nR\n# failure_and_limits\nF\n",
+            "IMPLEMENTATION_IR_AUTHORED_SECTION_ORDER",
+        ),
+    ],
+)
+def test_authored_schema_has_no_generic_fallback(text, code):
+    router = NoPlanningModelRouter()
+    with __import__("pytest").raises(ir.ImplementationGraphError, match=code):
+        compile_with(router, text=text, authored_schema=True)

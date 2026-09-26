@@ -158,7 +158,7 @@ def execute_implementation_graph(generator: Any, project_root: str | Path, *,
             graph["nodes"] = ordered_nodes(graph["nodes"])
         else:
             graph = compile_graph(generator.router, text=request["text"], package=package,
-                                  mod_id=mod_id, target=target,
+                                  mod_id=mod_id, target=target, authored_schema=True,
                                   context=entry.read_text(encoding="utf-8"),
                                   resume=state.get("compilation"), checkpoint=save_compilation)
             state["graph"] = graph

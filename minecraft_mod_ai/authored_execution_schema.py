@@ -18,6 +18,26 @@ EXECUTION_SECTION_ORDER = (
 )
 EXECUTION_SECTION_SET = frozenset(EXECUTION_SECTION_ORDER)
 
+DOCUMENT_SECTION_ORDER = (
+    "overview",
+    "behavior_contract",
+    "state_model",
+    "algorithm",
+    "integration",
+    "authority_and_network",
+    "persistence",
+    "resources_and_ui",
+    "failure_and_limits",
+    "reuse_assessment",
+    "verification",
+    "conclusion",
+)
+DOCUMENT_SECTION_SET = frozenset(DOCUMENT_SECTION_ORDER)
+CONTEXT_SECTION_SET = frozenset({
+    "overview", "reuse_assessment", "verification", "conclusion",
+})
+REQUIRED_EXECUTION_SECTIONS = frozenset(EXECUTION_SECTION_ORDER)
+
 SECTION_SPECS: dict[str, dict[str, Any]] = {
     "state_model": {
         "symbol": "AuthoredStateModel",
@@ -140,8 +160,12 @@ def concern_names(section: str) -> tuple[str, ...]:
 
 
 __all__ = [
+    "CONTEXT_SECTION_SET",
+    "DOCUMENT_SECTION_ORDER",
+    "DOCUMENT_SECTION_SET",
     "EXECUTION_SECTION_ORDER",
     "EXECUTION_SECTION_SET",
+    "REQUIRED_EXECUTION_SECTIONS",
     "SECTION_SPECS",
     "concern_contracts",
     "concern_names",

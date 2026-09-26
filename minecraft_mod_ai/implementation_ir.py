@@ -17,7 +17,7 @@ from .custom_module_errors import CustomModuleGenerationError
 from .implementation_lifecycle import activation_public_api
 from .model_adapters.base import NativeToolDecisionRejected
 
-IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v13"
+IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v14"
 
 
 class ImplementationGraphError(CustomModuleGenerationError):
@@ -299,120 +299,181 @@ def is_completion_boundary_error(exc: BaseException) -> bool:
     return "exhausted the bounded output allowance" in msg or "output_exhausted" in msg
 
 
-def _normalized_authored_section(title: str) -> str:
-    value = re.sub(r"^\s*\d+[.)]\s*", "", str(title or "").strip()).casefold()
-    value = re.sub(r"[\s-]+", "_", value)
-    return value.strip("_")
-
-
 from .authored_execution_schema import (
+    CONTEXT_SECTION_SET as _CONTEXT_SECTION_SET,
+    DOCUMENT_SECTION_ORDER as _DOCUMENT_SECTION_ORDER,
+    DOCUMENT_SECTION_SET as _DOCUMENT_SECTION_SET,
     EXECUTION_SECTION_ORDER as _EXECUTION_SECTION_ORDER,
     EXECUTION_SECTION_SET as _EXECUTION_SECTION_SET,
+    REQUIRED_EXECUTION_SECTIONS as _REQUIRED_EXECUTION_SECTIONS,
 )
-_CONTEXT_SECTION_SET = frozenset({
-    "overview",
-    "개요",
-    "reuse_assessment",
-    "verification",
-})
+
+_SECTION_ALIASES = {
+    "개요": "overview",
+    "overview": "overview",
+    "행동_계약": "behavior_contract",
+    "상태_모델": "state_model",
+    "알고리즘": "algorithm",
+    "통합": "integration",
+    "권한_및_네트워크": "authority_and_network",
+    "지속성": "persistence",
+    "자원_및_ui": "resources_and_ui",
+    "실패_및_제한": "failure_and_limits",
+    "재사용_평가": "reuse_assessment",
+    "검증": "verification",
+    "결론": "conclusion",
+}
 
 
-def _document_context_section(title: str) -> bool:
-    normalized = _normalized_authored_section(title)
-    return bool(
-        normalized in _CONTEXT_SECTION_SET
-        or "design_document" in normalized
-        or "설계_문서" in normalized
-        or normalized in {"introduction", "intro", "summary", "metadata"}
-    )
+def _section_slug(value: str) -> str:
+    text = re.sub(r"^\s*\d+[.)]\s*", "", str(value or "").strip()).casefold()
+    text = text.strip("*_ `" + chr(96))
+    text = re.sub(r"[\s-]+", "_", text)
+    text = re.sub(r"[^0-9a-zA-Z_가-힣]+", "_", text)
+    return text.strip("_").casefold()
 
 
-def decompose_authored_units(text: str) -> list[dict[str, Any]]:
-    """Lower the fixed authored-design schema into host-owned implementation roles.
+def _authored_section_id(title: str) -> str:
+    """Extract the canonical authored section id from exact or localized headings."""
+    raw = re.sub(r"^\s*\d+[.)]\s*", "", str(title or "").strip())
+    for inner in reversed(re.findall(r"\(([^()]*)\)", raw)):
+        token = _section_slug(inner)
+        token = _SECTION_ALIASES.get(token, token)
+        if token in _DOCUMENT_SECTION_SET:
+            return token
+    token = _section_slug(raw)
+    token = _SECTION_ALIASES.get(token, token)
+    return token if token in _DOCUMENT_SECTION_SET else ""
 
-    In the canonical design format, behavior_contract/state_model/algorithm and the
-    other execution headings are implementation roles. Document title, overview,
-    reuse assessment and verification prose remain read-only context and never become
-    Java classes. Unknown/noncanonical documents retain the generic heading fallback.
-    """
+
+def _parse_markdown_heading(line: str) -> tuple[int, str] | None:
+    match = re.match(r"^ {0,3}(#{1,6})[ \t]+(.+?)\s*$", line)
+    if not match:
+        return None
+    title = re.sub(r"[ \t]+#+[ \t]*$", "", match.group(2)).strip("*_ `" + chr(96))
+    return len(match.group(1)), title
+
+
+def _decompose_generic_units(text: str) -> list[dict[str, Any]]:
+    """Explicit generic compiler mode. This is never selected by authored production."""
     req_map = source_requirements(text)
     if not req_map:
         return []
-
-    lines = text.splitlines(keepends=False)
-    heading_pattern = re.compile(r"^ {0,3}#{1,6}[ \t]+(.+?)\s*$")
     sections: list[tuple[str, list[str]]] = []
-    current_title = "overview"
-    current_req_ids: list[str] = []
-    has_body = False
-
-    for idx, line in enumerate(lines, start=1):
+    current_title = "generic"
+    current: list[str] = []
+    for idx, line in enumerate(text.splitlines(), start=1):
         if not line.strip():
             continue
         req_id = f"R{idx}"
-        if req_id not in req_map:
+        heading = _parse_markdown_heading(line)
+        if heading is not None:
+            if current:
+                sections.append((current_title, current))
+                current = []
+            current_title = heading[1]
+        current.append(req_id)
+    if current:
+        sections.append((current_title, current))
+    return [
+        {
+            "unit_id": f"generic_{index}",
+            "title": title,
+            "requirements": {req: req_map[req] for req in refs},
+            "context_requirements": {},
+        }
+        for index, (title, refs) in enumerate(sections)
+    ]
+
+
+def decompose_authored_units(text: str) -> list[dict[str, Any]]:
+    """Strictly lower the canonical authored-design document. No fallback exists.
+
+    The first recognized canonical major heading fixes the document section depth.
+    Nested headings (actors, variables, transitions, etc.) remain owned by that
+    canonical section. Text before the first recognized canonical heading is ignored
+    and can never become implementation work.
+    """
+    req_map = source_requirements(text)
+    if not req_map:
+        raise ImplementationGraphError("IMPLEMENTATION_IR_AUTHORED_DESIGN_EMPTY")
+
+    section_depth: int | None = None
+    active_section = ""
+    seen_sections: list[str] = []
+    by_section: dict[str, list[str]] = {}
+    document_index = {name: index for index, name in enumerate(_DOCUMENT_SECTION_ORDER)}
+    last_index = -1
+
+    for idx, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
             continue
-        match = heading_pattern.match(line)
-        if match:
-            if current_req_ids and has_body:
-                sections.append((current_title, current_req_ids))
-                current_req_ids = []
-                has_body = False
-            title = re.sub(r"^#+[ \t]+", "", match[1])
-            current_title = re.sub(r"[ \t]+#+[ \t]*$", "", title).strip("*_ " + chr(96))
-        else:
-            has_body = True
-        current_req_ids.append(req_id)
+        req_id = f"R{idx}"
+        heading = _parse_markdown_heading(line)
+        if heading is not None:
+            depth, title = heading
+            section = _authored_section_id(title)
+            if section:
+                if section_depth is None:
+                    section_depth = depth
+                elif depth != section_depth:
+                    if depth > section_depth:
+                        if active_section in _EXECUTION_SECTION_SET:
+                            by_section.setdefault(active_section, []).append(req_id)
+                        continue
+                    raise ImplementationGraphError(
+                        f"IMPLEMENTATION_IR_AUTHORED_SECTION_DEPTH: {section} uses depth {depth}, expected {section_depth}"
+                    )
+                if section in seen_sections:
+                    raise ImplementationGraphError(
+                        f"IMPLEMENTATION_IR_AUTHORED_SECTION_DUPLICATE: {section}"
+                    )
+                index = document_index[section]
+                if index <= last_index:
+                    raise ImplementationGraphError(
+                        f"IMPLEMENTATION_IR_AUTHORED_SECTION_ORDER: {section}"
+                    )
+                last_index = index
+                seen_sections.append(section)
+                active_section = section
+                if section in _EXECUTION_SECTION_SET:
+                    by_section.setdefault(section, []).append(req_id)
+                continue
 
-    if current_req_ids:
-        if not has_body and sections:
-            sections[-1][1].extend(current_req_ids)
-        else:
-            sections.append((current_title, current_req_ids))
+            if section_depth is None:
+                # Document title / planner preamble is not implementation input.
+                continue
+            if depth <= section_depth:
+                raise ImplementationGraphError(
+                    f"IMPLEMENTATION_IR_AUTHORED_UNKNOWN_SECTION: {title}"
+                )
+            if active_section in _EXECUTION_SECTION_SET:
+                by_section.setdefault(active_section, []).append(req_id)
+            continue
 
-    canonical_roles = {
-        _normalized_authored_section(title)
-        for title, _reqs in sections
-        if _normalized_authored_section(title) in _EXECUTION_SECTION_SET
-    }
-    schema_mode = len(canonical_roles) >= 3
-    if not schema_mode:
-        return [
-            {
-                "unit_id": f"unit_{index}",
-                "title": title,
-                "requirements": {req_id: req_map[req_id] for req_id in req_ids},
-                "context_requirements": {},
-            }
-            for index, (title, req_ids) in enumerate(sections)
-        ]
+        if active_section in _EXECUTION_SECTION_SET:
+            by_section.setdefault(active_section, []).append(req_id)
 
-    context_ids: list[str] = []
-    by_role: dict[str, list[str]] = {}
-    for title, req_ids in sections:
-        role = _normalized_authored_section(title)
-        if role in _EXECUTION_SECTION_SET:
-            by_role.setdefault(role, []).extend(req_ids)
-        else:
-            context_ids.extend(req_ids)
+    missing = [
+        section for section in _EXECUTION_SECTION_ORDER
+        if section not in by_section or not by_section[section]
+    ]
+    if missing:
+        raise ImplementationGraphError(
+            "IMPLEMENTATION_IR_AUTHORED_SECTION_MISSING: " + ", ".join(missing)
+        )
 
-    context = {
-        req_id: req_map[req_id]
-        for req_id in dict.fromkeys(context_ids)
-        if req_id in req_map
-    }
     units: list[dict[str, Any]] = []
     for role in _EXECUTION_SECTION_ORDER:
-        req_ids = list(dict.fromkeys(by_role.get(role, ())))
-        if not req_ids:
-            continue
+        refs = list(dict.fromkeys(by_section[role]))
         units.append({
             "unit_id": role,
             "title": role,
-            "requirements": {req_id: req_map[req_id] for req_id in req_ids},
-            "context_requirements": dict(context),
+            "requirements": {req: req_map[req] for req in refs},
+            "context_requirements": {},
         })
     return units
+
 def _next_active_unit(
     pending_units: list[dict[str, Any]],
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
@@ -454,103 +515,16 @@ def admissible_tokens(router: Any) -> int | None:
 def _decision(router: Any, name: str, payload: dict[str, Any], *,
               state: dict[str, Any] | None = None,
               checkpoint: Callable[[], None] | None = None) -> dict[str, Any]:
+    """Use the single host-owned implementation lowering interface; no planner fallback."""
     frontend = getattr(router, "generate_implementation_decision", None)
-    if callable(frontend):
-        return frontend(name, payload, state=state if state is not None else {},
-                        checkpoint=checkpoint or (lambda: None))
-    # Internal/adaptor-independent IR producers retain the host admission seam.
-    # Production ModelRouter always takes the small native frontend above.
-    callback = getattr(router, "generate_tool_decision", None)
-    if not callable(callback):
-        raise ImplementationGraphError("IMPLEMENTATION_IR_NATIVE_DECISION_REQUIRED")
-    try:
-        response = callback(
-            "planner",
-            [{"role": "system", "content": (
-                "Compile the approved design into an implementation DAG, without changing gameplay. "
-                "Markdown headings describe concerns, NOT Java classes. Group requirements across "
-                "sections by state ownership and coherent responsibility. Separate state/models, "
-                "persistence, services, integration, networking, UI/resources and verification where "
-                "the design needs them. Cite every R identifier in the active requirements at least once. "
-                "Return only the nodes needed for the active requirements. The host owns continuation "
-                "and termination; do not plan page counts, remaining work, or completion. "
-                "Each Java node is one public final class with a concrete name and public_api "
-                "MEMBER declaration strings (no bodies and no public class/interface/enum/record type "
-                "declarations). Represent finite states as public static final fields and supporting "
-                "methods on that class. Java resource_path must be exactly the empty string: "
-                "the host derives it. Include constructors/fields/methods used by consumers. List actual "
-                "symbol dependencies (referencing already accepted_nodes or nodes in this page), "
-                "never an artificial previous-section chain. No dependency cycles. Only integration "
-                "nodes need activation=true; the host adds public static void initialize() to their "
-                "coder contract, so integration-only nodes may use public_api=[]. Other Java nodes "
-                "need nonempty public_api. Do not redeclare this host hook or add Fabric entrypoints. Other classes may "
-                "have constructors and state without lifecycle methods. JSON resources use kind "
-                "resource and a path under the approved assets/data namespace. Java verification "
-                "nodes must contain executable tests for the selected platform. Preserve all "
-                "approved requirements, including failure handling and tests. Do not claim tests ran. "
-                "Estimate COMPLETE serialized source output tokens, not just method bodies. "
-                "Respect the host admission budget by factoring smaller collaborating types. "
-                "For decomposition return the original facade plus one or more helper nodes: retain the original symbol, kind, "
-                "resource_path, activation and exact public_api as a smaller facade; use helper "
-                "symbols prefixed with OriginalSymbolPart. Move work into those helpers. Preserve "
-                "all original requirement refs. Every replacement must be strictly smaller than "
-                "the rejected task. Dependencies outside the replacement must already exist. "
-                "When validation_feedback is supplied and preserve_nodes is nonempty, return ONLY "
-                "the corrected invalid node(s); the host owns and reinserts preserve_nodes, so never "
-                "rewrite or repeat them. Fix the named fields. Never repeat the rejected page. "
-                "Do not repeat accepted_nodes merely to restate them. If an active requirement belongs "
-                "to an already accepted owner, emit only its symbol and new requirements, plus any new "
-                "obligations, dependencies or member APIs. Omit unchanged fields; the host retains them. "
-                "kind and resource_path cannot change. activation may promote false to true when later "
-                "requirements add runtime integration; it can never be disabled. Never change an existing "
-                "API declaration. The host merges contributions into the accepted owner. Otherwise use "
-                "a new symbol."
-            )}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
-            tool_name=name, parameters=_page_schema(payload),
-            description="Host-owned implementation graph compilation; does not mutate source.",
-        )
-    except NativeToolDecisionRejected as exc:
-        matching = [r for r in exc.rejections if r.get("original_tool") == name]
-        rejected_page = None
-        if len(matching) == 1:
-            try:
-                rejected_page = json.loads(matching[0].get("raw_arguments") or "")
-            except (ValueError, TypeError):
-                pass
-
-        diagnostics: list[dict[str, Any]] = []
-        if rejected_page is not None:
-            # Native tool validation can reject mechanically repairable member syntax.
-            # Accept host normalization only when it actually changed a schema-invalid
-            # page into a schema-valid page; never swallow unrelated native rejections.
-            page_schema = _page_schema(payload)
-            original_diagnostics = _schema_diagnostics(rejected_page, page_schema)
-            normalized_page = _canonicalize_schema_page(rejected_page, payload)
-            normalized_diagnostics = _schema_diagnostics(normalized_page, page_schema)
-            if (
-                original_diagnostics
-                and normalized_page != rejected_page
-                and not normalized_diagnostics
-            ):
-                return normalized_page
-            rejected_page = normalized_page
-            diagnostics = normalized_diagnostics or original_diagnostics
-
-        if not diagnostics:
-            diagnostics = [
-                {
-                    "code": r.get("failure_code", "TOOL_DECISION_REJECTED"),
-                    "node": "",
-                    "field": "tool_call",
-                    "message": str(r.get("error", "")),
-                }
-                for r in exc.rejections
-            ]
-        failure = _InvalidPage(diagnostics, rejected_page)
-        failure.feedback["native_rejections"] = list(exc.rejections)
-        raise failure from exc
-    return response
-
+    if not callable(frontend):
+        raise ImplementationGraphError("IMPLEMENTATION_IR_HOST_LOWERING_REQUIRED")
+    return frontend(
+        name,
+        payload,
+        state=state if state is not None else {},
+        checkpoint=checkpoint or (lambda: None),
+    )
 
 def _repair_measure(feedback: Mapping[str, Any]) -> tuple[int, int, int]:
     """Well-founded repair measure; smaller means objectively closer to admission."""
@@ -1019,6 +993,7 @@ def _admit_graph_page(page: dict[str, Any], *, accepted: list[dict[str, Any]],
 
 def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
                   target: dict[str, Any], context: str = "",
+                  authored_schema: bool = False,
                   resume: dict[str, Any] | None = None,
                   checkpoint: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
     """Compile until host-observed semantic work is complete.
@@ -1032,7 +1007,7 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
 
     all_requirements = source_requirements(text)
     all_req_keys = set(all_requirements)
-    units = decompose_authored_units(text)
+    units = decompose_authored_units(text) if authored_schema else _decompose_generic_units(text)
     execution_req_keys = set().union(
         *(set(unit["requirements"]) for unit in units)
     ) if units else set(all_req_keys)
