@@ -203,8 +203,14 @@ def _decode_readme(payload: Mapping[str, Any]) -> str:
     return text
 
 
-def _retrieve_github_source_body(query: str) -> dict[str, Any]:
+def _retrieve_github_source_body(
+    query: str,
+    *,
+    client: Any = None,
+) -> dict[str, Any]:
     """Search GitHub and return at most one verified README body for *query*."""
+
+    from contextlib import nullcontext
 
     import httpx
 
@@ -222,8 +228,13 @@ def _retrieve_github_source_body(query: str) -> dict[str, Any]:
         max_repository_candidates=_MAX_REPOSITORIES_PER_QUERY,
     )
 
+    client_scope = (
+        nullcontext(client)
+        if client is not None
+        else httpx.Client(timeout=20.0, follow_redirects=True, headers=headers)
+    )
     try:
-        with httpx.Client(timeout=20.0, follow_redirects=True, headers=headers) as client:
+        with client_scope as client:
             search_requests += 1
             response = client.get(
                 f"{_GITHUB_API}/search/repositories",
@@ -433,6 +444,9 @@ def _retrieve_github_source_body(query: str) -> dict[str, Any]:
     }
 
 
+_retrieve_github_source_body._mmm_shared_http_client = True  # type: ignore[attr-defined]
+
+
 def _stable_queries(value: Any) -> list[str]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
         return []
@@ -558,15 +572,27 @@ def _retrieve_selected_source_receipts(selected_order: Sequence[str]) -> dict[st
         query_count=len(queries),
         max_workers=workers,
     )
-    with ThreadPoolExecutor(
+    import httpx
+
+    retriever = _retrieve_github_source_body
+    with httpx.Client(
+        timeout=20.0,
+        follow_redirects=True,
+        headers=_headers(),
+    ) as shared_client, ThreadPoolExecutor(
         max_workers=workers,
         thread_name_prefix="mmm-predesign-source",
     ) as executor:
+        def retrieve(query: str) -> dict[str, Any]:
+            if getattr(retriever, "_mmm_shared_http_client", False):
+                return retriever(query, client=shared_client)
+            return retriever(query)
+
         for offset in range(0, len(queries), workers):
             batch = queries[offset : offset + workers]
             for query in batch:
                 _emit_source_trace("external_query_selected", query=query, reason="approved_parallel_batch")
-            batch_receipts = list(executor.map(_retrieve_github_source_body, batch))
+            batch_receipts = list(executor.map(retrieve, batch))
             rate_limit_index: int | None = None
             for index, (query, raw_receipt) in enumerate(zip(batch, batch_receipts)):
                 if rate_limit_index is not None:
