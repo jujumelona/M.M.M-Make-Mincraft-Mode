@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from minecraft_mod_ai import llama_cache_reuse_efficiency_contract as cache_contract
 from minecraft_mod_ai import llama_server_autotune as autotune
 from minecraft_mod_ai import llama_server_hardware_policy as hardware
