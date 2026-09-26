@@ -9,6 +9,7 @@ import pytest
 
 import minecraft_mod_ai.custom_generation_search_contract as custom_search
 import minecraft_mod_ai.llama_server_hardware_policy as llama_hardware
+from minecraft_mod_ai.llama_generation_budget import install as install_generation_budget
 import minecraft_mod_ai.performance_final_contract as performance
 import minecraft_mod_ai.scheduler_parallel_safety_contract as safety
 from minecraft_mod_ai.config_paths import config_path
@@ -229,3 +230,5 @@ def test_bounded_section_budget_caps_paginated_qwen_section_only(monkeypatch) ->
     )
     assert llama_hardware._server_payload(adapter, section)["max_tokens"] == 2048
     assert llama_hardware._server_payload(adapter, paged)["max_tokens"] == 8192
+
+install_generation_budget(llama_hardware)
