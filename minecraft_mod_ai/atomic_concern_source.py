@@ -50,10 +50,10 @@ def _split_response_regions(text: str) -> tuple[str, str]:
         raise CustomModuleGenerationError(
             "ATOMIC_CONCERN_RESPONSE_INVALID: host response markers are out of order."
         )
-    if raw[:members_at].strip() or raw[end_at + len(END_MARKER):].strip():
-        raise CustomModuleGenerationError(
-            "ATOMIC_CONCERN_RESPONSE_INVALID: output outside host response markers is forbidden."
-        )
+    # Prefix/suffix text is never materialized into source. Small models may wrap
+    # the marker protocol in prose or an outer Markdown fence; ignore that inert
+    # envelope while keeping marker cardinality/order and both executable regions
+    # fail-closed below.
     return (
         raw[members_at + len(MEMBERS_MARKER):init_at].strip(),
         raw[init_at + len(INITIALIZE_MARKER):end_at].strip(),

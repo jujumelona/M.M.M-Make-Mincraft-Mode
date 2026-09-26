@@ -96,6 +96,9 @@ jobs:
                   "tests/test_authored_heading_contract.py",
                   "tests/test_authored_production.py",
               ),
+              "minecraft_mod_ai/atomic_concern_source.py": (
+                  "tests/test_atomic_concern_response_contract.py",
+              ),
           }
           targeted_sources: set[str] = set()
           for source_path, candidates in targeted_source_tests.items():
