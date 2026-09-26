@@ -254,11 +254,13 @@ def install() -> None:
     writes occur before the shared content primitive.
     """
 
-    from . import extended_content_generator
+    from . import complete_orchestrator, extended_content_generator, scalable_generator
     from .generator import FabricProjectGenerator, GenerationError
     from .scalable_generator import ScalableFabricProjectGenerator
 
-    _install_extended_content_guard(extended_content_generator)
+    guarded = _install_extended_content_guard(extended_content_generator)
+    complete_orchestrator.generate_extended_content = guarded
+    scalable_generator.generate_extended_content = guarded
     _install_generate_guard(FabricProjectGenerator, error_type=GenerationError)
     _install_generate_guard(ScalableFabricProjectGenerator, error_type=GenerationError)
 
