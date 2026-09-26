@@ -789,32 +789,44 @@ def bounded_reuse_context(func: Any) -> Any:
 
 
 def install(*, custom_module_generator_module: Any, model_router_module: Any) -> None:
-    """Compatibility installer for external stubs; production ownership is source-defined."""
+    """Install only compatibility seams that still exist on the supplied module.
+
+    The production whole-file coder no longer exposes the legacy text-call,
+    observation-page, or donor-materialization helpers.  Do not recreate those
+    retired surfaces merely to support a wrapper.
+    """
 
     del model_router_module
-    if not getattr(custom_module_generator_module._generate_coder_text, _MARKER, False):
-        custom_module_generator_module._generate_coder_text = atomic_coder_call(
-            custom_module_generator_module._generate_coder_text
-        )
-    if not getattr(custom_module_generator_module._collect_initial_observations, _MARKER, False):
-        custom_module_generator_module._collect_initial_observations = bounded_initial_observations(
-            custom_module_generator_module._collect_initial_observations,
-            generator_module=custom_module_generator_module,
-        )
-    if not getattr(custom_module_generator_module._materialize_owned_reuse_context, _MARKER, False):
-        custom_module_generator_module._materialize_owned_reuse_context = bounded_reuse_context(
-            custom_module_generator_module._materialize_owned_reuse_context
-        )
+    wrappers = (
+        ("_generate_coder_text", atomic_coder_call),
+        (
+            "_collect_initial_observations",
+            lambda current: bounded_initial_observations(
+                current,
+                generator_module=custom_module_generator_module,
+            ),
+        ),
+        ("_materialize_owned_reuse_context", bounded_reuse_context),
+    )
+    for name, wrapper in wrappers:
+        current = getattr(custom_module_generator_module, name, None)
+        if current is None or getattr(current, _MARKER, False):
+            continue
+        setattr(custom_module_generator_module, name, wrapper(current))
 
 
 def assert_installed(*, custom_module_generator_module: Any, model_router_module: Any) -> None:
     del model_router_module
-    checks = (
-        getattr(custom_module_generator_module._generate_coder_text, _MARKER, False),
-        getattr(custom_module_generator_module._collect_initial_observations, _MARKER, False),
-        getattr(custom_module_generator_module._materialize_owned_reuse_context, _MARKER, False),
-    )
-    if not all(checks):
+    existing = [
+        getattr(custom_module_generator_module, name)
+        for name in (
+            "_generate_coder_text",
+            "_collect_initial_observations",
+            "_materialize_owned_reuse_context",
+        )
+        if hasattr(custom_module_generator_module, name)
+    ]
+    if not all(getattr(value, _MARKER, False) for value in existing):
         raise RuntimeError("Small-model atomic coder execution contract is not active.")
 
 
