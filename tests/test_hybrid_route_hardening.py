@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from minecraft_mod_ai.hybrid_route_hardening import (
+    harden_code_search_routes,
     classify_code_evidence_need,
     portfolio_policy,
     route_query,
@@ -39,6 +40,7 @@ def test_api_and_procedural_routes_keep_retrieval_non_authoritative() -> None:
 def test_runtime_installs_fine_grained_search_after_hybrid_engine() -> None:
     from minecraft_mod_ai.production_tools import ProductionToolService
 
+    harden_code_search_routes()
     assert getattr(
         ProductionToolService.search_code_rag,
         "__mmm_research_fine_grained_code_route_v1__",
