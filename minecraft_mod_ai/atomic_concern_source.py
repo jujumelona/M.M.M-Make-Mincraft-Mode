@@ -36,13 +36,13 @@ def _marker(concern: str, region: str, edge: str) -> str:
     return f"// {_HOST_PREFIX}_{_slug(concern).upper()}_{region}_{edge}"
 
 
-_FENCE_LINE = re.compile(r"^\\s*```(?:[A-Za-z0-9_+.\\-]+)?\\s*$", re.IGNORECASE)
+_FENCE_LINE = re.compile(r"^\s*```(?:[A-Za-z0-9_+.\-]+)?\s*$", re.IGNORECASE)
 _HOST_MARKER_LINE = re.compile(
-    r"^\\s*//\\s*MMM_ATOMIC_CONCERN_[A-Z0-9_]+_(?:MEMBERS|INIT)_(?:START|END)\\s*$",
+    r"^\s*//\s*MMM_ATOMIC_CONCERN_[A-Z0-9_]+_(?:MEMBERS|INIT)_(?:START|END)\s*$",
     re.IGNORECASE,
 )
 _REGION_LABEL_LINE = re.compile(
-    r"^\\s*(?:members?|member code|initialize(?: body)?|initialization|java)\\s*:?\\s*$",
+    r"^\s*(?:members?|member code|initialize(?: body)?|initialization|java)\s*:?\s*$",
     re.IGNORECASE,
 )
 
@@ -141,7 +141,7 @@ def _is_inert_empty_region(value: str) -> bool:
     stripped = str(value or "").strip()
     if not stripped:
         return True
-    without_block_comments = re.sub(r"/\\*.*?\\*/", "", stripped, flags=re.DOTALL)
+    without_block_comments = re.sub(r"/\*.*?\*/", "", stripped, flags=re.DOTALL)
     without_comments = "\n".join(
         line for line in without_block_comments.splitlines()
         if not line.lstrip().startswith("//")
