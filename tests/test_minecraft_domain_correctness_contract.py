@@ -11,6 +11,11 @@ import pytest
 from minecraft_mod_ai import minecraft_domain_correctness_contract as contract
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _install_minecraft_domain_contract() -> None:
+    contract.install()
+
+
 class _ExtendedContentError(RuntimeError):
     pass
 
