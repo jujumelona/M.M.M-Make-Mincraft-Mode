@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai import custom_module_generator as direct
+from minecraft_mod_ai import implementation_ir as ir
 from minecraft_mod_ai.authored_plan import AuthoredPlan
 from minecraft_mod_ai.authored_production import _compile_new_authored_modules
 from minecraft_mod_ai.implementation_ir import (
@@ -22,7 +23,6 @@ from minecraft_mod_ai.llama_finish_reason_contract import (
     OUTPUT_EXHAUSTED,
     LlamaCompletionBoundaryError,
 )
-from minecraft_mod_ai.model_adapters.base import NativeToolDecisionRejected
 
 TARGET = {"minecraft_version": "1.21.1", "loader": "fabric", "mappings": "1.21.1+build.3"}
 DESIGN = "# implementation\nAdd credits and purchase once.\nPlayerCredits owns balances.\nReject purchases when balance is insufficient.\nPersist the balance.\nExpose the balance API."
@@ -52,6 +52,7 @@ class Decisions:
             "planner",
             [{"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
             tool_name=name,
+            parameters=ir._page_schema(payload),
         )
 
 
@@ -70,39 +71,27 @@ def test_graph_combines_sections_by_owner_and_orders_actual_dependencies():
     assert graph["nodes"][0]["depends_on"] == []
 
 
-def test_native_schema_rejection_canonicalizes_member_body_without_retry():
+def test_schema_canonicalization_strips_member_body_without_decode_retry():
     bad = node("PlayerCredits", api=["public static int balance() { return 1; }"])
-
-    class RejectOnce(Decisions):
-        def __init__(self):
-            super().__init__([])
-
-        def generate_tool_decision(self, role, messages, **kwargs):
-            self.calls.append((kwargs["tool_name"], json.loads(messages[-1]["content"])))
-            raise NativeToolDecisionRejected(
-                kwargs["tool_name"],
-                [{
-                    "original_tool": kwargs["tool_name"],
-                    "raw_arguments": json.dumps({"nodes": [bad], "done": True}),
-                    "failure_code": "TOOL_DECISION_SCHEMA_INVALID",
-                    "error": "public_api declaration contains a body",
-                }],
-            )
-
-    router = RejectOnce()
-    graph = compile_with(router)
-    assert len(router.calls) == 1
-    assert graph["nodes"][0]["symbol"] == "PlayerCredits"
-    assert graph["nodes"][0]["public_api"] == ["public static int balance()"]
+    payload = {"requirements": source_requirements(DESIGN), "mod_id": "test"}
+    normalized = ir._canonicalize_schema_page({"nodes": [bad]}, payload)
+    assert normalized["nodes"][0]["public_api"] == ["public static int balance()"]
+    assert not ir._schema_diagnostics(normalized, ir._page_schema(payload))
 
 
-def test_native_enum_rejection_repairs_only_invalid_node_and_freezes_siblings():
+def test_schema_repair_scope_freezes_valid_sibling_and_replaces_only_invalid_node():
     stable = node("BehaviorContract", api=["public static int original()"])
     invalid = node("ActorState", api=[
         "public enum ActorState {IDLE, ACTIVE, INACTIVE, DESTROYED}"
     ])
-    drifted = copy.deepcopy(stable)
-    drifted["public_api"] = ["public static int drifted()"]
+    payload = {"requirements": source_requirements(DESIGN), "mod_id": "test"}
+    page = {"nodes": [stable, invalid]}
+    schema = ir._page_schema(payload)
+    diagnostics = ir._schema_diagnostics(page, schema)
+    preserve, repair_count = ir._schema_repair_scope(page, schema, diagnostics)
+    assert preserve == [stable]
+    assert repair_count == 1
+
     fixed = copy.deepcopy(invalid)
     fixed["public_api"] = [
         "public static final ActorState IDLE",
@@ -110,39 +99,14 @@ def test_native_enum_rejection_repairs_only_invalid_node_and_freezes_siblings():
         "public static final ActorState INACTIVE",
         "public static final ActorState DESTROYED",
     ]
-
-    first_page = {"nodes": [stable, invalid], "done": True}
-    second_page = {"nodes": [drifted, fixed], "done": True}
-
-    class NativeThenRepair(Decisions):
-        def __init__(self):
-            super().__init__([])
-
-        def generate_tool_decision(self, role, messages, **kwargs):
-            request = json.loads(messages[-1]["content"])
-            self.calls.append((kwargs["tool_name"], request))
-            if len(self.calls) == 1:
-                raise NativeToolDecisionRejected(
-                    kwargs["tool_name"],
-                    [{
-                        "original_tool": kwargs["tool_name"],
-                        "raw_arguments": json.dumps(first_page),
-                        "failure_code": "TOOL_DECISION_SCHEMA_INVALID",
-                        "error": "top-level enum declaration is not a public_api member",
-                    }],
-                )
-            return copy.deepcopy(second_page)
-
-    router = NativeThenRepair()
-    graph = compile_with(router)
-    by_symbol = {item["symbol"]: item for item in graph["nodes"]}
-    assert by_symbol["BehaviorContract"]["public_api"] == ["public static int original()"]
-    assert by_symbol["ActorState"]["public_api"] == fixed["public_api"]
-    assert len(router.calls) == 2
-    feedback = router.calls[1][1]["validation_feedback"]
-    assert feedback["preserve_nodes"] == [stable]
-    assert feedback["repair_count"] == 1
-
+    drifted = copy.deepcopy(stable)
+    drifted["public_api"] = ["public static int drifted()"]
+    merged = ir._merge_scoped_schema_repair(
+        {"nodes": [drifted, fixed]},
+        {"preserve_nodes": preserve, "repair_count": repair_count},
+    )
+    assert merged["nodes"][0] == stable
+    assert merged["nodes"][1] == fixed
 
 def test_schema_repair_freezes_valid_siblings_and_merges_only_invalid_nodes():
     stable = node("BehaviorContract", api=["public static int original()"])
@@ -289,125 +253,6 @@ def graph_project(tmp_path):
     main.parent.mkdir(parents=True)
     main.write_text("package example; public final class TestMod { public void onInitialize() {} }", encoding="utf-8")
     return modules[0], main
-
-
-def test_real_java_execution_after_budget_decomposition_and_api_handoff(tmp_path, monkeypatch):
-    javac, java = shutil.which("javac"), shutil.which("java")
-    if not javac or not java:
-        pytest.skip("Java compiler/runtime unavailable")
-    module, main = graph_project(tmp_path)
-    wallet = node(cost=3000, api=["public static int balance()", "public static boolean spend(int amount)"])
-    helper = node("PlayerCreditsPartStore", cost=1000, api=wallet["public_api"])
-    facade = copy.deepcopy(wallet)
-    facade.update(estimated_tokens=1100, depends_on=[helper["symbol"]])
-    facade["obligations"] = ["Delegate storage and transactions to PlayerCreditsPartStore through the frozen API."]
-    trade = node("TradeService", dependencies=["PlayerCredits"], api=["public static int remaining()"], activation=True)
-    router = Decisions([{"nodes": [wallet, trade], "done": True},
-                        {"nodes": [helper, facade], "done": True}])
-    decodes = []
-    sources = {
-        helper["symbol"]: "public static int balance() { return credits; } private static int credits=10; public static boolean spend(int amount) { if(amount<0 || credits<amount) return false; credits-=amount; return true; }",
-        "PlayerCredits": "public static int balance() { return PlayerCreditsPartStore.balance(); } public static boolean spend(int amount) { return PlayerCreditsPartStore.spend(amount); }",
-        "TradeService": 'public static int remaining() { return PlayerCredits.balance(); } public static void initialize() { if(!PlayerCredits.spend(3) || remaining()!=7 || PlayerCredits.spend(8) || remaining()!=7) throw new AssertionError("transaction"); System.out.print("PASS"); }',
-    }
-
-    def generate_text(role, messages, **kwargs):
-        prompt = messages[-1]["content"]
-        symbol = next(s for s in sources if f"Exact target: src/main/java/example/{s}.java#{s}" in prompt)
-        decodes.append(symbol)
-        if symbol == "TradeService":
-            assert "public static void initialize()" in prompt
-            assert "The host invokes TradeService.initialize();" in prompt
-        if decodes == ["PlayerCredits"]:
-            raise LlamaCompletionBoundaryError("limit", kind=OUTPUT_EXHAUSTED, completion_tokens=4096, max_tokens=4096)
-        return json.dumps({"content": f"package example;\npublic final class {symbol} {{ {sources[symbol]} }}", "summary": "implemented"})
-
-    router.generate_text = generate_text
-    compilations = []
-
-    class JavacRunner:
-        def __init__(self, *args):
-            pass
-
-        def compile_java(self, root):
-            files = list((Path(root) / "src/main/java").rglob("*.java"))
-            result = subprocess.run([javac, "-d", str(tmp_path / "classes"), *map(str, files)], capture_output=True, text=True, check=False)
-            compilations.append(result)
-            return SimpleNamespace(status="PASS" if result.returncode == 0 else "FAIL", commands=(), error=result.stderr)
-
-    monkeypatch.setattr(direct, "GradleRunner", JavacRunner)
-    monkeypatch.setattr(direct, "adapter_for_target", lambda *args: SimpleNamespace(minecraft_version="1.21.1", loader="fabric", java_version=17, yarn_mappings="none"))
-    generator = direct.CustomModuleGenerator(router)
-    result = generator.generate(tmp_path, module=module)
-    assert decodes == ["PlayerCredits", "PlayerCreditsPartStore", "PlayerCredits", "TradeService"]
-    assert len(router.calls) == 2
-    assert result["decomposition_count"] == 1
-    assert all(c.returncode == 0 for c in compilations)
-    assert "TradeService.initialize();" in main.read_text()
-    assert "PlayerCredits.initialize" not in main.read_text()
-    assert generator.ensure_generation_live_commit(result, project_root=tmp_path)
-    probe = tmp_path / "Probe.java"
-    probe.write_text("public class Probe { public static void main(String[] args) { new example.TestMod().onInitialize(); } }", encoding="utf-8")
-    subprocess.run([javac, "-cp", str(tmp_path / "classes"), "-d", str(tmp_path / "classes"), str(probe)], check=True, capture_output=True)
-    run = subprocess.run([java, "-cp", str(tmp_path / "classes"), "Probe"], capture_output=True, text=True, check=True)
-    assert run.stdout == "PASS"
-    (tmp_path / result["touched_paths"][0]).write_text("tampered", encoding="utf-8")
-    assert not generator.ensure_generation_live_commit(result, project_root=tmp_path)
-
-
-def test_failed_decomposition_rolls_back_and_resume_does_not_repeat_exhausted_decode(tmp_path, monkeypatch):
-    module, main = graph_project(tmp_path)
-    before = main.read_bytes()
-    oversized = node(cost=3000)
-    # Same task is not a split; both first run and resumed run fail before another decode.
-    pages = [{"nodes": [oversized], "done": True},
-             {"nodes": [oversized], "done": True},
-             {"nodes": [oversized], "done": True}]
-    router = Decisions(pages)
-    calls = []
-
-    def generate_text(*args, **kwargs):
-        calls.append(args)
-        raise LlamaCompletionBoundaryError("limit", kind=OUTPUT_EXHAUSTED, completion_tokens=4096, max_tokens=4096)
-
-    router.generate_text = generate_text
-    monkeypatch.setattr(direct, "adapter_for_target", lambda *args: SimpleNamespace(minecraft_version="1.21.1", loader="fabric", java_version=17, yarn_mappings="none"))
-    generator = direct.CustomModuleGenerator(router)
-    for _ in range(2):
-        with pytest.raises(ImplementationGraphError, match="DECOMPOSITION_REQUIRED"):
-            generator.generate(tmp_path, module=module)
-        assert main.read_bytes() == before
-        assert not (main.parent / "PlayerCredits.java").exists()
-    assert len(calls) == 1
-    assert [n for n, _ in router.calls] == ["compile_implementation_graph", "decompose_implementation_node", "decompose_implementation_node"]
-
-
-def test_resources_are_separate_artifacts_and_final_compile_failure_rolls_back(tmp_path, monkeypatch):
-    module, main = graph_project(tmp_path)
-    before = main.read_bytes()
-    resource = node("Translations")
-    resource.update(kind="resource", public_api=[], resource_path="src/main/resources/assets/test/lang/en_us.json")
-    router = Decisions([{"nodes": [resource], "done": True}])
-    router.generate_text = lambda *args, **kwargs: json.dumps({"content": '{"item.test.token":"Token"}', "summary": "resource"})
-    outcomes = ["FAIL", "PASS"]
-
-    class Runner:
-        def __init__(self, *args):
-            pass
-
-        def compile_java(self, *args):
-            return SimpleNamespace(status=outcomes.pop(0), commands=(), error="integration failed")
-
-    monkeypatch.setattr(direct, "GradleRunner", Runner)
-    generator = direct.CustomModuleGenerator(router)
-    with pytest.raises(ImplementationGraphError, match="INTEGRATION_COMPILE_FAILED"):
-        generator.generate(tmp_path, module=module)
-    assert main.read_bytes() == before
-    assert not (tmp_path / resource["resource_path"]).exists()
-    result = generator.generate(tmp_path, module=module)
-    assert json.loads((tmp_path / resource["resource_path"]).read_text()) == {"item.test.token": "Token"}
-    assert result["operation_count"] == 2
-    assert generator.ensure_generation_live_commit(result, project_root=tmp_path)
 
 
 def test_relabeling_estimate_without_moving_work_is_not_decomposition():

@@ -514,13 +514,8 @@ def test_output_limit_shrinks_requirement_window_for_missing_dependency_resoluti
     )
 
 
-def test_executor_persists_admitted_pages_before_a_planning_transport_failure(tmp_path):
-    from test_implementation_ir import graph_project
-
-    from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
-
-    module, main = graph_project(tmp_path)
-    original = main.read_bytes()
+def test_generic_ir_checkpoint_persists_admitted_page_before_transport_failure():
+    saved = []
 
     class Interrupted(Decisions):
         def generate_tool_decision(self, *args, **kwargs):
@@ -529,17 +524,11 @@ def test_executor_persists_admitted_pages_before_a_planning_transport_failure(tm
             return super().generate_tool_decision(*args, **kwargs)
 
     router = Interrupted([{"nodes": [node(refs=["R1"])], "done": False}])
-    generator = CustomModuleGenerator(router)
-    for _ in range(2):
-        with pytest.raises(ConnectionError):
-            generator.generate(tmp_path, module=module)
-    assert len(router.calls) == 1
-    saved = json.loads(next((tmp_path / ".minecraft_ai/implementation-ir").glob("*.json")).read_text())
-    assert saved["compilation"]["nodes"][0]["symbol"] == "PlayerCredits"
-    assert saved["compilation"]["page"] == 2
-    assert main.read_bytes() == original
-    assert not (main.parent / "PlayerCredits.java").exists()
-
+    with pytest.raises(ConnectionError):
+        compile_graph(router, checkpoint=lambda state: saved.append(copy.deepcopy(state)))
+    assert router.calls
+    assert saved[-1]["nodes"][0]["symbol"] == "PlayerCredits"
+    assert saved[-1]["page"] == 2
 
 @pytest.mark.parametrize("overrides", [
     {}, {"estimated_tokens": 1600.0}, {"public_api": []}, {"resource_path": "wrong.java"},

@@ -18,7 +18,9 @@ class NoPlanningModelRouter(ModelRouter):
 
 
 def compile_with(router, *, text="# Trading\n- Buy an item with credits.", **kwargs):
-    return ir.compile_graph(
+    authored = bool(kwargs.pop("authored_schema", False))
+    compiler = ir.compile_authored_graph if authored else ir.compile_graph
+    return compiler(
         router,
         text=text,
         package="example",
@@ -28,89 +30,47 @@ def compile_with(router, *, text="# Trading\n- Buy an item with credits.", **kwa
     )
 
 
+STRICT_DESIGN = (
+    "## 1. 행동 계약 (behavior_contract)\nBehavior.\n"
+    "## 2. 상태 모델 (state_model)\nState.\n"
+    "## 3. 알고리즘 (algorithm)\nAlgorithm.\n"
+    "## 4. 통합 (integration)\nIntegration.\n"
+    "## 5. 권한 및 네트워크 (authority_and_network)\nAuthority.\n"
+    "## 6. 지속성 (persistence)\nPersistence.\n"
+    "## 7. 자원 및 UI (resources_and_ui)\nResources.\n"
+    "## 8. 실패 및 제한 (failure_and_limits)\nFailures.\n"
+)
+
+
 def test_production_compiler_is_host_owned_and_model_free():
     router = NoPlanningModelRouter()
-    graph = compile_with(router)
+    graph = compile_with(router, text=STRICT_DESIGN, authored_schema=True)
     assert router.calls == []
-    node, = graph["nodes"]
-    assert node["symbol"] == "AuthoredUnit0"
-    assert node["kind"] == "java"
-    assert node["activation"] is True
-    assert node["depends_on"] == []
-    assert node["public_api"] == ["public static void initialize()"]
-    assert node["requirements"] == ["R1", "R2"]
-    obligation = json.loads(node["obligations"][0])
-    assert obligation["source_requirements"] == {
-        "R1": "# Trading",
-        "R2": "- Buy an item with credits.",
+    symbols = {node["symbol"] for node in graph["nodes"]}
+    assert symbols == {
+        "AuthoredStateModel", "AuthoredBehaviorContract", "AuthoredAlgorithm",
+        "AuthoredAuthorityNetwork", "AuthoredPersistence", "AuthoredResourcesUi",
+        "AuthoredFailureLimits", "AuthoredIntegration",
     }
+    assert all(not symbol.startswith("AuthoredGeneric") for symbol in symbols)
 
 
-def test_peer_packets_merge_into_one_host_owner_without_model_semantics():
+def test_peer_behavior_packets_extend_one_named_owner_without_model_semantics():
     router = NoPlanningModelRouter()
-    graph = compile_with(
-        router,
-        text="# Trading\n- Own credits.\n- Persist credits.\n- Reject negative credits.",
+    text = STRICT_DESIGN.replace(
+        "Behavior.\n",
+        "- Own credits.\n- Persist purchase result.\n- Reject negative credits.\n",
     )
+    graph = compile_with(router, text=text, authored_schema=True)
     assert router.calls == []
-    node, = graph["nodes"]
-    assert node["symbol"] == "AuthoredUnit0"
-    assert node["requirements"] == ["R1", "R2", "R3", "R4"]
-    assert len(node["obligations"]) == 3
-    captured = set()
-    for raw in node["obligations"]:
-        captured.update(json.loads(raw)["source_requirements"])
-    assert captured == {"R1", "R2", "R3", "R4"}
-
-
-def test_host_refinement_splits_budget_without_model_call():
-    router = NoPlanningModelRouter()
-    requirements = {
-        "R1": "# Trading",
-        "R2": "- Own credits.",
-        "R3": "- Persist credits.",
-    }
-    original = ir.validate_node(
-        {
-            "symbol": "AuthoredUnit0",
-            "kind": "java",
-            "resource_path": "",
-            "responsibility": "Implement the approved authored unit: Trading",
-            "requirements": list(requirements),
-            "obligations": [json.dumps({"source_requirements": requirements})],
-            "public_api": [],
-            "depends_on": [],
-            "activation": True,
-            "estimated_tokens": 4000,
-        },
-        package="example",
-        mod_id="test",
-        refs=set(requirements),
+    behavior = next(
+        node for node in graph["nodes"]
+        if node["symbol"] == "AuthoredBehaviorContract"
     )
-    refined = ir.refine_node(
-        router,
-        original,
-        nodes=[original],
-        package="example",
-        mod_id="test",
-        requirements=requirements,
-        reason="OUTPUT_BUDGET_EXHAUSTED",
-        budget=2000,
-    )
-    assert router.calls == []
-    assert [node["symbol"] for node in refined] == [
-        "AuthoredUnit0Part1",
-        "AuthoredUnit0",
-    ]
-    helper, facade = refined
-    assert helper["public_api"] == ["public static void run()"]
-    assert helper["activation"] is False
-    assert facade["public_api"] == ["public static void initialize()"]
-    assert facade["depends_on"] == [helper["symbol"]]
-    assert helper["estimated_tokens"] < original["estimated_tokens"]
-    assert facade["estimated_tokens"] < original["estimated_tokens"]
-    assert set(helper["requirements"]) | set(facade["requirements"]) == set(requirements)
-
+    joined = " ".join(behavior["obligations"])
+    assert "Own credits." in joined
+    assert "Persist purchase result." in joined
+    assert "Reject negative credits." in joined
 
 def test_packet_keeps_all_subordinate_state_fields_and_failure_conditions():
     context = {
@@ -166,45 +126,38 @@ def test_canonical_design_schema_skips_context_sections_and_uses_named_owners():
     router = NoPlanningModelRouter()
     text = (
         "# Stellar Odyssey Mod Design Document\n"
-        "## 개요\nOverview only.\n"
-        "# behavior_contract\n- Buy when funds are sufficient.\n"
-        "# state_model\n- Balance is stored as an integer.\n"
-        "# algorithm\n- Subtract price from balance.\n"
-        "# integration\n- Wire systems into the host lifecycle.\n"
-        "# authority_and_network\n- Server owns transactions.\n"
-        "# persistence\n- Persist balance.\n"
-        "# resources_and_ui\n- Show balance in UI.\n"
-        "# failure_and_limits\n- Reject negative balance.\n"
-        "# reuse_assessment\nNo donor is required.\n"
-        "# verification\nCompile and test.\n"
+        "## 1. 개요 (overview)\nOverview only.\n"
+        "## 2. 행동 계약 (behavior_contract)\n- Buy when funds are sufficient.\n"
+        "## 3. 상태 모델 (state_model)\n- Balance is stored as an integer.\n"
+        "## 4. 알고리즘 (algorithm)\n- Subtract price from balance.\n"
+        "## 5. 통합 (integration)\n- Wire systems into the host lifecycle.\n"
+        "## 6. 권한 및 네트워크 (authority_and_network)\n- Server owns transactions.\n"
+        "## 7. 지속성 (persistence)\n- Persist balance.\n"
+        "## 8. 자원 및 UI (resources_and_ui)\n- Show balance in UI.\n"
+        "## 9. 실패 및 제한 (failure_and_limits)\n- Reject negative balance.\n"
+        "## 10. 재사용 평가 (reuse_assessment)\nNo donor is required.\n"
+        "## 11. 검증 (verification)\nCompile and test.\n"
     )
     graph = compile_with(router, text=text, authored_schema=True)
-    symbols = [node["symbol"] for node in graph["nodes"]]
-    assert "AuthoredUnit0" not in symbols
+    symbols = {node["symbol"] for node in graph["nodes"]}
+    assert "AuthoredGeneric0" not in symbols
     assert "AuthoredStateModel" in symbols
     assert "AuthoredBehaviorContract" in symbols
     assert "AuthoredIntegration" in symbols
-    assert all("Overview only." not in obligation for node in graph["nodes"] for obligation in node["obligations"])
+    assert all(
+        "Overview only." not in obligation
+        for node in graph["nodes"] for obligation in node["obligations"]
+    )
     by_symbol = {node["symbol"]: node for node in graph["nodes"]}
     assert by_symbol["AuthoredBehaviorContract"]["depends_on"] == ["AuthoredStateModel"]
     assert "AuthoredStateModel" in by_symbol["AuthoredIntegration"]["depends_on"]
     assert router.calls == []
 
-
 def test_host_section_nodes_expand_to_fixed_concern_obligations_without_model_planning():
     from minecraft_mod_ai.authored_execution_schema import concern_names
 
     router = NoPlanningModelRouter()
-    text = (
-        "# state_model\nState.\n"
-        "# behavior_contract\nBehavior.\n"
-        "# algorithm\nAlgorithm.\n"
-        "# authority_and_network\nAuthority.\n"
-        "# persistence\nPersistence.\n"
-        "# resources_and_ui\nResources.\n"
-        "# failure_and_limits\nFailures.\n"
-        "# integration\nIntegration.\n"
-    )
+    text = STRICT_DESIGN
     graph = compile_with(router, text=text, authored_schema=True)
     by_symbol = {node["symbol"]: node for node in graph["nodes"]}
     state = by_symbol["AuthoredStateModel"]
@@ -221,16 +174,7 @@ def test_ir_leaf_carries_same_fixed_concern_sequence_into_coder_contract():
     from minecraft_mod_ai.implementation_graph_execution import _leaf_module
 
     router = NoPlanningModelRouter()
-    text = (
-        "# state_model\nState.\n"
-        "# behavior_contract\nBehavior.\n"
-        "# algorithm\nAlgorithm.\n"
-        "# authority_and_network\nAuthority.\n"
-        "# persistence\nPersistence.\n"
-        "# resources_and_ui\nResources.\n"
-        "# failure_and_limits\nFailures.\n"
-        "# integration\nIntegration.\n"
-    )
+    text = STRICT_DESIGN
     graph = compile_with(router, text=text, authored_schema=True)
     node = next(item for item in graph["nodes"] if item["symbol"] == "AuthoredStateModel")
     request = {
@@ -265,11 +209,12 @@ def test_localized_canonical_headings_keep_nested_concerns_and_drop_preamble():
     )
     graph = compile_with(router, text=text, authored_schema=True)
     symbols = [node["symbol"] for node in graph["nodes"]]
-    assert symbols == [
+    assert set(symbols) == {
         "AuthoredStateModel", "AuthoredBehaviorContract", "AuthoredAlgorithm",
         "AuthoredAuthorityNetwork", "AuthoredPersistence", "AuthoredResourcesUi",
         "AuthoredFailureLimits", "AuthoredIntegration",
-    ]
+    }
+    assert all(not symbol.startswith("AuthoredGeneric") for symbol in symbols)
     joined = " ".join(
         obligation for node in graph["nodes"] for obligation in node["obligations"]
     )

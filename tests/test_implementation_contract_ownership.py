@@ -17,20 +17,32 @@ def test_logged_korean_design_title_projects_exact_final_document():
     prefix = "Thinking Process:\n\n1. **Analyze the Request:**\n   Draft a space mod.\n\n"
     design = (
         "# 아스트라크래프트: 우주 프론티어 (AstraCraft: Space Frontier) 모드 설계서\n\n"
-        "## # behavior_contract\n우주선을 조립하고 발사한다.\n"
-        "## # state_model\n서버가 연료 상태를 소유한다.\n"
+        "## 1. 행동 계약 (behavior_contract)\n우주선을 조립하고 발사한다.\n"
+        "## 2. 상태 모델 (state_model)\n서버가 연료 상태를 소유한다.\n"
+        "## 3. 알고리즘 (algorithm)\n연료를 검증한 뒤 발사 상태를 갱신한다.\n"
+        "## 4. 통합 (integration)\n호스트 초기화 훅에서 시스템을 연결한다.\n"
+        "## 5. 권한 및 네트워크 (authority_and_network)\n서버가 발사 결정을 소유한다.\n"
+        "## 6. 지속성 (persistence)\n연료 상태를 저장한다.\n"
+        "## 7. 자원 및 UI (resources_and_ui)\n연료 상태를 UI에 표시한다.\n"
+        "## 8. 실패 및 제한 (failure_and_limits)\n연료 부족 시 발사를 거부한다.\n"
+        "## 9. 재사용 평가 (reuse_assessment)\n직접 재사용 없음.\n"
+        "## 10. 검증 (verification)\n성공/거부 경로를 검증한다.\n"
+        "## 11. 결론\n설계 요약.\n"
     )
     plan = AuthoredPlan(requested_prompt="우주 모드", text=prefix + design)
     projected, provenance = _implementation_authored_plan(plan)
     assert projected.text == design
     assert provenance["source_plan"] == plan.to_dict()
     assert provenance["stripped_prefix_bytes"] == len(prefix.encode())
-    assert all("Thinking Process" not in v for v in ir.source_requirements(projected.text).values())
+    assert all(
+        "Thinking Process" not in value
+        for value in ir.source_requirements(projected.text).values()
+    )
     units = ir.decompose_authored_units(projected.text)
-    assert len(units) == 2
-    assert units[0]["title"] == "behavior_contract"
-    assert next(iter(units[0]["requirements"].values())) == design.splitlines()[0]
-
+    assert [unit["title"] for unit in units] == [
+        "state_model", "behavior_contract", "algorithm", "authority_and_network",
+        "persistence", "resources_and_ui", "failure_and_limits", "integration",
+    ]
 
 def test_activation_api_is_host_derived_before_coder_contract_freezes():
     raw = node("VerificationTests", activation=True, api=[
