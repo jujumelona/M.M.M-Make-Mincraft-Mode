@@ -348,6 +348,11 @@ def _response_payload(text: str) -> dict[str, str]:
         raise CustomModuleGenerationError(
             "DIRECT_CODER_INVALID_RESPONSE: coder response is not an object."
         )
+    if set(value) != {"content", "summary"}:
+        raise CustomModuleGenerationError(
+            "DIRECT_CODER_INVALID_RESPONSE: response must contain exactly "
+            "`content` and `summary`."
+        )
     content = value.get("content")
     summary = value.get("summary")
     if not isinstance(content, str) or not content.strip():
@@ -355,7 +360,9 @@ def _response_payload(text: str) -> dict[str, str]:
             "DIRECT_CODER_INVALID_RESPONSE: complete Java `content` is required."
         )
     if not isinstance(summary, str):
-        summary = ""
+        raise CustomModuleGenerationError(
+            "DIRECT_CODER_INVALID_RESPONSE: `summary` must be a string."
+        )
     return {"content": content, "summary": summary}
 
 
