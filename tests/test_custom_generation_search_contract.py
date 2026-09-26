@@ -16,8 +16,14 @@ from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _install_custom_search_contract() -> None:
+def _install_custom_search_contract():
+    cls = custom_module_generator.CustomModuleGenerator
+    original_generate = cls.generate
     custom_search.install(custom_module_generator)
+    try:
+        yield
+    finally:
+        cls.generate = original_generate
 
 
 @dataclass

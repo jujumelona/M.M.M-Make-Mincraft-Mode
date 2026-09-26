@@ -15,9 +15,21 @@ from minecraft_mod_ai.repair_engine import RepairEngine
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _install_research_performance_contracts() -> None:
+def _install_research_performance_contracts():
+    cls = research_code_context.ResearchCodeContext
+    original_evolve = cls.evolve_from_generation
+    original_query_paths = cls._query_paths
+    original_generate = CustomModuleGenerator.generate
+    original_context = RepairEngine._context
     context_performance.harden(research_code_context)
     reuse.harden()
+    try:
+        yield
+    finally:
+        cls.evolve_from_generation = original_evolve
+        cls._query_paths = original_query_paths
+        CustomModuleGenerator.generate = original_generate
+        RepairEngine._context = original_context
 
 
 def _unit(path: str, package: str, *, imports=(), types=()):
@@ -75,8 +87,11 @@ def test_runtime_wires_single_coder_repair_reuse_owner_without_round_override() 
     assert getattr(cls._query_paths, reuse._MARKER, False)
     assert not getattr(cls.evolve_from_generation, reuse._MARKER, False)
     assert getattr(CustomModuleGenerator.generate, reuse._MARKER, False)
-    assert getattr(RepairEngine._context, reuse._MARKER, False)
-    assert getattr(RepairEngine._context, "_mmm_narrow_diagnostic_repair_rag", False)
+    # Live RepairEngine owns repair-evidence reuse directly in reviewed source.
+    assert not getattr(RepairEngine._context, reuse._MARKER, False)
+    source = __import__("inspect").getsource(RepairEngine._context)
+    assert "prior_research_evidence" in source
+    assert "repair_evidence_receipt" in source
     assert custom_research._evolution_state_budget.__module__.endswith(
         "custom_generation_research"
     )
