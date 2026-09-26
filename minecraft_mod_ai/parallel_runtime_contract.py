@@ -315,88 +315,88 @@ def _parallel_discover_seed_bundle_factory(
                 route_limit=route_limit,
             )
 
-        discovery = ecosystem_module.EcosystemDiscoveryClient()
-        _query, routes = _discovery_routes(
-            ecosystem_module,
-            prompt,
-            game_design,
-            research_brief,
-            discovery,
-        )
-        minecraft_version, loader = _discovery_target(research_brief)
-        route_receipt = ecosystem_module._sha256_text(
-            ecosystem_module.canonical_json(
-                {
-                    "routes": routes,
-                    "minecraft_version": minecraft_version or "unresolved",
-                    "loader": loader or "unresolved",
-                }
-            )
-        )
-        route_offset = ecosystem_module._decode_seed_route_cursor(
-            route_cursor,
-            route_sha256=route_receipt,
-            route_limit=route_limit,
-        )
-        selected_routes = routes[route_offset : route_offset + route_limit]
-        workers = _env_workers("MMM_DISCOVERY_WORKERS", 8, maximum=32)
-        if len(selected_routes) <= 1 or workers <= 1:
-            return original_discover(
+        with ecosystem_module.EcosystemDiscoveryClient() as discovery:
+            _query, routes = _discovery_routes(
+                ecosystem_module,
                 prompt,
                 game_design,
-                research_brief=research_brief,
-                client=discovery,
-                route_cursor=route_cursor,
+                research_brief,
+                discovery,
+            )
+            minecraft_version, loader = _discovery_target(research_brief)
+            route_receipt = ecosystem_module._sha256_text(
+                ecosystem_module.canonical_json(
+                    {
+                        "routes": routes,
+                        "minecraft_version": minecraft_version or "unresolved",
+                        "loader": loader or "unresolved",
+                    }
+                )
+            )
+            route_offset = ecosystem_module._decode_seed_route_cursor(
+                route_cursor,
+                route_sha256=route_receipt,
                 route_limit=route_limit,
             )
-
-        pool = ThreadPoolExecutor(
-            max_workers=min(workers, len(selected_routes)),
-            thread_name_prefix="mmm_discovery",
-        )
-        futures: dict[tuple[Any, ...], Future[dict[str, Any]]] = {}
-        try:
-            for route in selected_routes:
-                provider = route["provider"]
-                provider_query = route["query"]
-                if provider == "openverse_images":
-                    provider_query += " visual reference texture architecture objects"
-                target_profile = str(route.get("target_profile", "minecraft_mod"))
-                target_version = minecraft_version if target_profile == "minecraft_mod" else None
-                target_loader = loader if target_profile == "minecraft_mod" else None
-                key = _discovery_key(
-                    provider,
-                    provider_query,
-                    limit=10,
-                    minecraft_version=target_version,
-                    loader=target_loader,
-                    target_profile=target_profile,
-                )
-                if key in futures:
-                    continue
-                futures[key] = pool.submit(
-                    discovery.search,
-                    provider,
-                    provider_query,
-                    limit=10,
-                    minecraft_version=target_version,
-                    loader=target_loader,
-                    target_profile=target_profile,
+            selected_routes = routes[route_offset : route_offset + route_limit]
+            workers = _env_workers("MMM_DISCOVERY_WORKERS", 8, maximum=32)
+            if len(selected_routes) <= 1 or workers <= 1:
+                return original_discover(
+                    prompt,
+                    game_design,
+                    research_brief=research_brief,
+                    client=discovery,
+                    route_cursor=route_cursor,
+                    route_limit=route_limit,
                 )
 
-            prefetched = _PrefetchedDiscoveryClient(discovery, futures)
-            return original_discover(
-                prompt,
-                game_design,
-                research_brief=research_brief,
-                client=prefetched,
-                route_cursor=route_cursor,
-                route_limit=route_limit,
+            pool = ThreadPoolExecutor(
+                max_workers=min(workers, len(selected_routes)),
+                thread_name_prefix="mmm_discovery",
             )
-        finally:
-            for future in futures.values():
-                future.cancel()
-            pool.shutdown(wait=False, cancel_futures=True)
+            futures: dict[tuple[Any, ...], Future[dict[str, Any]]] = {}
+            try:
+                for route in selected_routes:
+                    provider = route["provider"]
+                    provider_query = route["query"]
+                    if provider == "openverse_images":
+                        provider_query += " visual reference texture architecture objects"
+                    target_profile = str(route.get("target_profile", "minecraft_mod"))
+                    target_version = minecraft_version if target_profile == "minecraft_mod" else None
+                    target_loader = loader if target_profile == "minecraft_mod" else None
+                    key = _discovery_key(
+                        provider,
+                        provider_query,
+                        limit=10,
+                        minecraft_version=target_version,
+                        loader=target_loader,
+                        target_profile=target_profile,
+                    )
+                    if key in futures:
+                        continue
+                    futures[key] = pool.submit(
+                        discovery.search,
+                        provider,
+                        provider_query,
+                        limit=10,
+                        minecraft_version=target_version,
+                        loader=target_loader,
+                        target_profile=target_profile,
+                    )
+
+                prefetched = _PrefetchedDiscoveryClient(discovery, futures)
+                return original_discover(
+                    prompt,
+                    game_design,
+                    research_brief=research_brief,
+                    client=prefetched,
+                    route_cursor=route_cursor,
+                    route_limit=route_limit,
+                )
+            finally:
+                for future in futures.values():
+                    future.cancel()
+                pool.shutdown(wait=False, cancel_futures=True)
 
     discover_seed_bundle_parallel._mmm_parallel_routes = True
     return discover_seed_bundle_parallel
