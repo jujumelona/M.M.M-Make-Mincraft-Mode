@@ -84,7 +84,7 @@ def test_invariant_failure_repairs_from_complete_current_source(
         def generate_text(self, role, messages, **kwargs):
             calls.append((list(messages), dict(kwargs)))
             content = bad if len(calls) == 1 else good
-            return json.dumps({"content": content, "summary": "implemented"})
+            return content
 
     class Runner:
         def __init__(self, _cache):
@@ -107,6 +107,8 @@ def test_invariant_failure_repairs_from_complete_current_source(
     assert result["status"] == "SOURCE_GENERATED"
     assert len(calls) == 2
     assert calls[0][1]["enable_tools"] is False
+    assert calls[0][1]["response_format"] == "text"
+    assert "response_schema" not in calls[0][1]
     assert "output_token_ceiling" not in calls[0][1]
     assert '"model_tool_choice_required": false' in calls[0][0][-1]["content"]
     assert '"resolved_before_first_coder_decode": true' in calls[0][0][-1]["content"]
@@ -141,7 +143,7 @@ def test_compiler_failure_repairs_from_complete_source_and_exact_log(
             del role, kwargs
             calls.append(list(messages))
             content = first if len(calls) == 1 else second
-            return json.dumps({"content": content, "summary": "implemented"})
+            return content
 
     class Runner:
         attempts = 0
@@ -217,7 +219,7 @@ def test_invalid_or_truncated_model_output_is_not_blindly_retried(
         def generate_text(self, role, messages, **kwargs):
             del role, kwargs
             calls.append(list(messages))
-            return '{"content":"package example; public final class'
+            return "not valid Java source"
 
     class Runner:
         def __init__(self, _cache):
@@ -281,7 +283,7 @@ def test_host_reserved_missing_target_is_materialized_and_does_not_require_initi
         def generate_text(self, role, messages, **kwargs):
             del role, kwargs
             prompts.append(messages[-1]["content"])
-            return json.dumps({"content": source, "summary": "created"})
+            return source
 
     class Runner:
         def __init__(self, _cache):
@@ -368,7 +370,7 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
                     "<<<MMM_CONCERN_INITIALIZE>>>\n"
                     "<<<MMM_CONCERN_END>>>"
                 )
-            return json.dumps({"content": content, "summary": concern})
+            return content
 
     class Runner:
         def __init__(self, _cache):
@@ -386,6 +388,8 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
     source = (root / path).read_text(encoding="utf-8")
     assert [name for name, _kwargs in calls] == ["variables", "invariants"]
     assert all(kwargs["enable_tools"] is False for _name, kwargs in calls)
+    assert all(kwargs["response_format"] == "text" for _name, kwargs in calls)
+    assert all("response_schema" not in kwargs for _name, kwargs in calls)
     assert "private static int balance = 0;" in source
     assert "public static boolean valid()" in source
     assert "MMM_ATOMIC_CONCERN_VARIABLES_MEMBERS_START" in source
@@ -420,7 +424,7 @@ def test_atomic_concern_compile_repair_reopens_only_localized_concern(
                 "<<<MMM_CONCERN_INITIALIZE>>>\n"
                 "<<<MMM_CONCERN_END>>>"
             )
-            return json.dumps({"content": content, "summary": concern})
+            return content
 
     class Runner:
         def __init__(self, _cache):
