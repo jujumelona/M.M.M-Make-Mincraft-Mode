@@ -31,6 +31,7 @@ from .platform_catalog import adapter_for_target, adapter_from_project
 from .project_write_lock import project_write_lock
 from .runner import GradleRunner
 from .scale_policy import ScalePolicy
+from .target_contract import TargetContractError, validate_target_coordinates
 
 _SOURCE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -510,7 +511,7 @@ class CustomModuleGenerator:
             return execute_implementation_graph(
                 self, project_root, module=module, execution_feedback=execution_feedback,
             )
-        del research_modules, mappings
+        del research_modules
         module.validate(policy=self.policy)
         root = Path(project_root).expanduser().resolve()
         if not root.is_dir() or root.is_symlink():
@@ -530,6 +531,32 @@ class CustomModuleGenerator:
             minecraft_version=minecraft_version,
             loader=loader,
         )
+        requested_mappings = (
+            str(getattr(adapter, "yarn_mappings", "") or "")
+            if mappings is None
+            else str(mappings).strip()
+        )
+        try:
+            coordinates = validate_target_coordinates(
+                adapter.minecraft_version,
+                adapter.loader,
+                requested_mappings,
+                declared_mappings_applicable=getattr(
+                    adapter, "mappings_applicable", None
+                ),
+            )
+        except TargetContractError as exc:
+            raise CustomModuleGenerationError(str(exc)) from exc
+        adapter_mapping = str(getattr(adapter, "yarn_mappings", "") or "")
+        if (
+            coordinates.mappings_applicable
+            and adapter_mapping
+            and coordinates.mappings != adapter_mapping
+        ):
+            raise CustomModuleGenerationError(
+                "TARGET_MAPPINGS_ALIAS: requested mappings disagree with the "
+                "resolved executable platform target."
+            )
 
         relative, symbol, task = _exact_target(module)
         target = _safe_target(root, relative)
