@@ -6,7 +6,12 @@ from types import MethodType, SimpleNamespace
 import pytest
 
 from minecraft_mod_ai import extended_content_generator
+import minecraft_mod_ai.java_lsp as java_lsp_module
+import minecraft_mod_ai.repair_engine as repair_module
+import minecraft_mod_ai.runner as runner_module
+import minecraft_mod_ai.runner_parallel_validation_contract as parallel_validation
 from minecraft_mod_ai import validation_execution_contract as validation
+import minecraft_mod_ai.extended_registration_contract as registration_contract
 from minecraft_mod_ai.extended_registration_contract import _replace_registration_method
 from minecraft_mod_ai.java_lsp import JavaLanguageService
 from minecraft_mod_ai.repair_engine import RepairEngine
@@ -16,6 +21,16 @@ from minecraft_mod_ai.validation_execution_contract import (
     gametest_resource_errors,
     project_build_fingerprint,
 )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _install_validation_runtime_contracts() -> None:
+    validation.install(runner_module, java_lsp_module, repair_module)
+    parallel_validation.install(
+        runner_module=runner_module,
+        validation_module=validation,
+    )
+    registration_contract.install(extended_content_generator)
 
 
 def _project(root: Path, mod_id: str = "example_mod") -> Path:
