@@ -34,15 +34,6 @@ from .runner import GradleRunner
 from .scale_policy import ScalePolicy
 from .target_contract import TargetContractError, validate_target_coordinates
 
-_SOURCE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": ["content", "summary"],
-    "properties": {
-        "content": {"type": "string", "minLength": 1},
-        "summary": {"type": "string"},
-    },
-}
 _LOCATOR = re.compile(r"^(?P<path>[^#]+\.java)#(?P<symbol>[A-Za-z_$][A-Za-z0-9_$]*)$")
 _PACKAGE = re.compile(r"(?m)^\s*package\s+([A-Za-z_$][A-Za-z0-9_$.]*)\s*;\s*$")
 _PUBLIC_TYPE = re.compile(
@@ -337,36 +328,13 @@ def _source_invariant_errors(
     return tuple(errors)
 
 
-def _response_payload(text: str) -> dict[str, str]:
-    raw = str(text or "").strip()
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError as exc:
+def _plain_coder_output(text: str) -> str:
+    raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not raw:
         raise CustomModuleGenerationError(
-            "DIRECT_CODER_INVALID_RESPONSE: coder must return one JSON object "
-            "with complete `content` and `summary` strings."
-        ) from exc
-    if not isinstance(value, Mapping):
-        raise CustomModuleGenerationError(
-            "DIRECT_CODER_INVALID_RESPONSE: coder response is not an object."
+            "DIRECT_CODER_EMPTY_RESPONSE: coder returned no source text."
         )
-    if set(value) != {"content", "summary"}:
-        raise CustomModuleGenerationError(
-            "DIRECT_CODER_INVALID_RESPONSE: response must contain exactly "
-            "`content` and `summary`."
-        )
-    content = value.get("content")
-    summary = value.get("summary")
-    if not isinstance(content, str) or not content.strip():
-        raise CustomModuleGenerationError(
-            "DIRECT_CODER_INVALID_RESPONSE: complete Java `content` is required."
-        )
-    if not isinstance(summary, str):
-        raise CustomModuleGenerationError(
-            "DIRECT_CODER_INVALID_RESPONSE: `summary` must be a string."
-        )
-    return {"content": content, "summary": summary}
-
+    return raw + "\n"
 
 def _supports_kwarg(callable_value: Any, name: str) -> bool:
     try:
@@ -504,7 +472,7 @@ def _direct_host_grounding(
 def _call_coder(
     router: Any,
     messages: Sequence[Mapping[str, str]],
-) -> dict[str, str]:
+) -> str:
     callback = getattr(router, "generate_text", None)
     if not callable(callback):
         raise CustomModuleGenerationError(
@@ -512,8 +480,7 @@ def _call_coder(
         )
     kwargs: dict[str, Any] = {}
     for key, value in (
-        ("response_format", "json"),
-        ("response_schema", _SOURCE_SCHEMA),
+        ("response_format", "text"),
         ("enable_tools", False),
         ("tool_stage", "generation"),
     ):
@@ -529,8 +496,7 @@ def _call_coder(
                 f"completion_tokens={boundary.completion_tokens}, max_tokens={boundary.max_tokens}"
             ) from exc
         raise
-    return _response_payload(text)
-
+    return _plain_coder_output(text)
 
 def _compile_log(report: Any) -> str:
     """Extract compiler diagnostics by structure instead of truncating raw logs."""
@@ -876,9 +842,8 @@ class CustomModuleGenerator:
         bounded_feedback = _bounded_execution_feedback(execution_feedback)
         system = (
             "You implement exactly one host-owned Minecraft Java source file. "
-            "Return one JSON object only: {\"content\": "
-            "\"<complete Java file>\", \"summary\": "
-            "\"<short summary>\"}. Never return a patch or diff. "
+            "Return only the complete Java source text. "
+            "No JSON, no prose, no Markdown fences, no patch or diff. "
             "Do not change the package, public final top-level class name, or "
             "declared public API (including initialize() when required). Do not create "
             "another mod entrypoint. The host already resolved project/platform evidence; "
@@ -975,12 +940,8 @@ class CustomModuleGenerator:
                         f"{type(exc).__name__}: {exc}"
                     )
                     break
-                candidate = (
-                    payload["content"]
-                    .replace("\r\n", "\n")
-                    .replace("\r", "\n")
-                )
-                summary = payload["summary"]
+                candidate = payload.replace("\r\n", "\n").replace("\r", "\n")
+                summary = f"host-validated source for {relative}#{symbol}"
                 invariant_errors = _source_invariant_errors(
                     candidate,
                     symbol=symbol,
@@ -1137,10 +1098,6 @@ class CustomModuleGenerator:
 
     def discard_generation_checkpoint(self, result: Any) -> bool:
         return isinstance(result, Mapping)
-
-
-def _parse_coder_summary(text: str) -> str:
-    return _response_payload(text)["summary"]
 
 
 def _normalized_operation_path(item: Mapping[str, Any]) -> str:

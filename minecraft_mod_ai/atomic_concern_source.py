@@ -257,7 +257,7 @@ def _messages(
     system = (
         "Implement exactly one host-selected concern inside one already-selected Java class. "
         "You do not choose files, classes, dependencies, architecture, tools, search routes, APIs, or sibling work. "
-        "Return the normal JSON content/summary envelope. content must contain exactly:\n"
+        "Return only the following plain-text marker protocol. No JSON, prose, or Markdown fences:\n"
         + MEMBERS_MARKER + "\n<class-body members for this concern only>\n"
         + INITIALIZE_MARKER + "\n<initialize statements only when section=integration; otherwise empty>\n"
         + END_MARKER + "\n"
@@ -306,7 +306,7 @@ class AtomicConcernExecutor:
     grounding: Mapping[str, Any]
     dependency_source: str
     require_initialize: bool
-    call_coder: Callable[[Sequence[Mapping[str, str]]], Mapping[str, str]]
+    call_coder: Callable[[Sequence[Mapping[str, str]]], str]
     compile_java: Callable[[Path], Any]
     compile_log: Callable[[Any], str]
     write_source: Callable[[Path, str], None]
@@ -337,7 +337,7 @@ class AtomicConcernExecutor:
 
     def _apply(self, concern: Mapping[str, Any], *, failure: str = "") -> None:
         name = _slug(concern["concern"])
-        payload = self.call_coder(_messages(
+        output = self.call_coder(_messages(
             section=self.section,
             concern=concern,
             task=self.task,
@@ -346,9 +346,7 @@ class AtomicConcernExecutor:
             current_source=self.source,
             failure=failure,
         ))
-        members, initialize = parse_concern_content(
-            str(payload.get("content") or ""), section=self.section
-        )
+        members, initialize = parse_concern_content(output, section=self.section)
         if failure and self.state.get(name) == (members, initialize):
             raise CustomModuleGenerationError(
                 f"ATOMIC_CONCERN_REPAIR_NO_PROGRESS: {name} repeated the same bounded source."
@@ -362,7 +360,7 @@ class AtomicConcernExecutor:
             )
         self.state[name] = (members, initialize)
         label = f"{name} repair" if failure else name
-        self.summaries.append(f"{label}: {str(payload.get('summary') or '').strip()}")
+        self.summaries.append(label)
 
     def _compile(self) -> Any:
         self.write_source(self.target, self.source)
