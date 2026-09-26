@@ -1,6 +1,6 @@
 """Reproducible real Fabric 1.20.1 item-registration compile/GameTest probe.
 
-Downloads the official Gradle 8.6 wrapper and dependencies. Evidence covers this
+Downloads the official Gradle 8.7 wrapper and dependencies. Evidence covers this
 single probe, not all canonical leaves or the complete supported version matrix.
 """
 from __future__ import annotations
@@ -249,7 +249,7 @@ def _download_gradle_wrapper_component(project: Path, name: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         return
-    url = "https://raw.githubusercontent.com/gradle/gradle/v8.6.0/" + name
+    url = "https://raw.githubusercontent.com/gradle/gradle/v8.7.0/" + name
     with urlopen(url, timeout=60) as response:
         path.write_bytes(response.read())
 
@@ -259,12 +259,12 @@ def _ensure_gradle_wrapper(project: Path) -> None:
     with ThreadPoolExecutor(max_workers=len(names)) as executor:
         tuple(executor.map(lambda name: _download_gradle_wrapper_component(project, name), names))
     with urlopen(
-        "https://services.gradle.org/distributions/gradle-8.6-bin.zip.sha256",
+        "https://services.gradle.org/distributions/gradle-8.7-bin.zip.sha256",
         timeout=60,
     ) as response:
         checksum = response.read().decode().strip()
     (project / "gradle/wrapper/gradle-wrapper.properties").write_text(
-        "distributionUrl=https\\://services.gradle.org/distributions/gradle-8.6-bin.zip\n"
+        "distributionUrl=https\\://services.gradle.org/distributions/gradle-8.7-bin.zip\n"
         + "distributionSha256Sum="
         + checksum
         + "\n",
@@ -293,7 +293,7 @@ def _run_real_fabric_evidence(
         "fabric_loader": "0.15.11",
         "fabric_api": "0.92.2+1.20.1",
         "fabric_loom": "1.6.12",
-        "gradle": "8.6",
+        "gradle": "8.7",
         "loader": "fabric",
     }
     expected = binding_expectations(
@@ -386,8 +386,8 @@ def main() -> None:
     root = _parse_output_root()
     project = root / "project"
     spec, generated = _materialize_project(project, bootstrap_integrity())
-    module, debug_result, debug_target = _run_debug_token_generation(root, project)
     _ensure_gradle_wrapper(project)
+    module, debug_result, debug_target = _run_debug_token_generation(root, project)
     evidence_id, evidence_record = _run_real_fabric_evidence(
         root,
         project,
