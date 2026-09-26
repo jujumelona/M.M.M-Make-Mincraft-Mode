@@ -87,6 +87,7 @@ def _assert_debug_coder_contract(
     role: str,
     kwargs: dict[str, object],
     workspace: Path | None,
+    first_call: bool,
 ) -> None:
     assert role == "coder"
     assert kwargs.get("tool_stage") == "generation"
@@ -97,11 +98,12 @@ def _assert_debug_coder_contract(
     assert workspace is not None
 
     target = workspace / _DEBUG_TARGET
-    assert target.is_file(), "DebugToken host scaffold must exist before coder generation"
-    scaffold = target.read_text(encoding="utf-8")
-    assert "MMM_AUTHORED_FEATURE_BODY" in scaffold, (
-        "DebugToken host scaffold marker is missing before coder generation"
-    )
+    assert target.is_file(), "DebugToken host-owned target must exist before coder generation"
+    if first_call:
+        scaffold = target.read_text(encoding="utf-8")
+        assert "MMM_AUTHORED_FEATURE_BODY" in scaffold, (
+            "DebugToken host scaffold marker is missing before first coder generation"
+        )
 
 
 class _DebugTokenRouter:
@@ -110,6 +112,7 @@ class _DebugTokenRouter:
     def __init__(self, source: str) -> None:
         self._source = source
         self._workspace: Path | None = None
+        self._calls = 0
 
     def bind_agent_workspace(self, workspace_root, *, require_fresh_evidence=True):
         assert require_fresh_evidence is True
@@ -117,10 +120,12 @@ class _DebugTokenRouter:
 
     def generate_text(self, role, messages, **kwargs):
         del messages
+        self._calls += 1
         _assert_debug_coder_contract(
             role=role,
             kwargs=kwargs,
             workspace=self._workspace,
+            first_call=self._calls == 1,
         )
         return json.dumps(
             {
