@@ -16,7 +16,7 @@ from typing import Any
 from .custom_module_errors import CustomModuleGenerationError
 from .implementation_lifecycle import activation_public_api
 
-IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v14"
+IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v15"\nIMPLEMENTATION_IR_SCHEMA_VERSION = "mmm/implementation-ir-v2"
 
 
 class ImplementationGraphError(CustomModuleGenerationError):
@@ -1278,7 +1278,7 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
             save()
 
     return {
-        "schema_version": "mmm/implementation-ir-v1",
+        "schema_version": IMPLEMENTATION_IR_SCHEMA_VERSION,
         "source_text": text,
         "source_sha256": hashlib.sha256(text.encode()).hexdigest(),
         "requirements": all_requirements,

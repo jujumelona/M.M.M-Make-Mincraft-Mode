@@ -10,6 +10,7 @@ from typing import Any
 from .complete_spec import ProductionModule
 from .implementation_ir import (
     ImplementationGraphError,
+    IMPLEMENTATION_IR_SCHEMA_VERSION,
     OutputBudgetExhausted,
     admissible_tokens,
     compile_authored_graph,
@@ -155,6 +156,21 @@ def execute_implementation_graph(generator: Any, project_root: str | Path, *,
                 raise ImplementationGraphError("IMPLEMENTATION_IR_CHECKPOINT_DRIFT")
         else:
             state = {"request_hash": digest(request), "blocked_decodes": [], "refinements": 0}
+        cached_graph = state.get("graph")
+        if (
+            isinstance(cached_graph, Mapping)
+            and cached_graph.get("schema_version") != IMPLEMENTATION_IR_SCHEMA_VERSION
+        ):
+            # Admission semantics changed. Never resume a previously admitted graph
+            # whose obligation cardinality/leaf contract was produced by older code.
+            state.pop("graph", None)
+            state.pop("graph_hash", None)
+            state.pop("compilation", None)
+            state.pop("refinement_pending", None)
+            state["blocked_decodes"] = []
+            state["refinements"] = 0
+            save()
+
         if "graph" in state:
             graph = state["graph"]
             if state.get("graph_hash") != digest(graph) or graph.get("source_text") != request["text"]:

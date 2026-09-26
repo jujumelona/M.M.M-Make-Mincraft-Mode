@@ -278,3 +278,8 @@ def test_unused_helper_cannot_disguise_same_whole_file_work():
     router.implementation_output_budget = 4000
     with pytest.raises(ImplementationGraphError, match="UNUSED_SPLIT_HELPER"):
         compile_with(router)
+
+
+def test_graph_schema_version_tracks_admission_semantics():
+    graph = compile_with(Decisions([{"nodes": [node()], "done": True}]))
+    assert graph["schema_version"] == ir.IMPLEMENTATION_IR_SCHEMA_VERSION
