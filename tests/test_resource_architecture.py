@@ -134,10 +134,13 @@ def test_asset_prompt_fragment_consumes_resolved_authorities() -> None:
 
 
 def test_resume_cache_binds_only_to_canonical_asset_producer() -> None:
+    from minecraft_mod_ai import asset_resume_efficiency_contract
     from minecraft_mod_ai import (
         complete_orchestrator_services,
         resource_asset_production,
     )
+
+    asset_resume_efficiency_contract.install(resource_asset_production)
 
     assert getattr(
         resource_asset_production.generate_assets,
