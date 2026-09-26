@@ -36,36 +36,137 @@ def _marker(concern: str, region: str, edge: str) -> str:
     return f"// {_HOST_PREFIX}_{_slug(concern).upper()}_{region}_{edge}"
 
 
+_FENCE_LINE = re.compile(r"^\\s*```(?:[A-Za-z0-9_+.\\-]+)?\\s*$", re.IGNORECASE)
+_HOST_MARKER_LINE = re.compile(
+    r"^\\s*//\\s*MMM_ATOMIC_CONCERN_[A-Z0-9_]+_(?:MEMBERS|INIT)_(?:START|END)\\s*$",
+    re.IGNORECASE,
+)
+_REGION_LABEL_LINE = re.compile(
+    r"^\\s*(?:members?|member code|initialize(?: body)?|initialization|java)\\s*:?\\s*$",
+    re.IGNORECASE,
+)
+
+
 def _split_response_regions(text: str) -> tuple[str, str]:
     raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
-    markers = (MEMBERS_MARKER, INITIALIZE_MARKER, END_MARKER)
-    if any(raw.count(marker) != 1 for marker in markers):
+    lines = raw.split("\n")
+    marker_positions: dict[str, list[int]] = {
+        marker: [index for index, line in enumerate(lines) if line.strip() == marker]
+        for marker in (MEMBERS_MARKER, INITIALIZE_MARKER, END_MARKER)
+    }
+    if any(len(marker_positions[marker]) != 1 for marker in marker_positions):
         raise CustomModuleGenerationError(
-            "ATOMIC_CONCERN_RESPONSE_INVALID: each host response marker must occur exactly once."
+            "ATOMIC_CONCERN_RESPONSE_INVALID: each host response marker must occur exactly once as a marker line."
         )
-    members_at = raw.index(MEMBERS_MARKER)
-    init_at = raw.index(INITIALIZE_MARKER)
-    end_at = raw.index(END_MARKER)
-    if not members_at <= init_at <= end_at:
+    members_at = marker_positions[MEMBERS_MARKER][0]
+    init_at = marker_positions[INITIALIZE_MARKER][0]
+    end_at = marker_positions[END_MARKER][0]
+    if not members_at < init_at < end_at:
         raise CustomModuleGenerationError(
             "ATOMIC_CONCERN_RESPONSE_INVALID: host response markers are out of order."
         )
-    # Prefix/suffix text is never materialized into source. Small models may wrap
-    # the marker protocol in prose or an outer Markdown fence; ignore that inert
-    # envelope while keeping marker cardinality/order and both executable regions
-    # fail-closed below.
     return (
-        raw[members_at + len(MEMBERS_MARKER):init_at].strip(),
-        raw[init_at + len(INITIALIZE_MARKER):end_at].strip(),
+        "\n".join(lines[members_at + 1:init_at]).strip(),
+        "\n".join(lines[init_at + 1:end_at]).strip(),
     )
 
 
+def _normalize_region_text(value: str) -> str:
+    rows: list[str] = []
+    for line in str(value or "").splitlines():
+        if _FENCE_LINE.fullmatch(line):
+            continue
+        if _HOST_MARKER_LINE.fullmatch(line):
+            continue
+        if _REGION_LABEL_LINE.fullmatch(line):
+            continue
+        rows.append(line)
+    return "\n".join(rows).strip()
+
+
+def _structure_scan(value: str) -> str:
+    """Blank comments/literals so scope checks only inspect executable Java structure."""
+    text = str(value or "")
+    chars = list(text)
+    length = len(text)
+    index = 0
+
+    def blank(start: int, end: int) -> None:
+        for pos in range(start, min(end, length)):
+            if chars[pos] != "\n":
+                chars[pos] = " "
+
+    while index < length:
+        if text.startswith("//", index):
+            end = text.find("\n", index + 2)
+            if end < 0:
+                end = length
+            blank(index, end)
+            index = end
+            continue
+        if text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            end = length if end < 0 else end + 2
+            blank(index, end)
+            index = end
+            continue
+        if text.startswith('"""', index):
+            end = text.find('"""', index + 3)
+            end = length if end < 0 else end + 3
+            blank(index, end)
+            index = end
+            continue
+        if text[index] in {'"', "'"}:
+            quote = text[index]
+            end = index + 1
+            escaped = False
+            while end < length:
+                char = text[end]
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == quote:
+                    end += 1
+                    break
+                end += 1
+            blank(index, end)
+            index = end
+            continue
+        index += 1
+    return "".join(chars)
+
+
+def _is_inert_empty_region(value: str) -> bool:
+    stripped = str(value or "").strip()
+    if not stripped:
+        return True
+    without_block_comments = re.sub(r"/\\*.*?\\*/", "", stripped, flags=re.DOTALL)
+    without_comments = "\n".join(
+        line for line in without_block_comments.splitlines()
+        if not line.lstrip().startswith("//")
+    ).strip()
+    token = without_comments.casefold().rstrip(";").strip()
+    return token in {
+        "",
+        "none",
+        "n/a",
+        "na",
+        "empty",
+        "<empty>",
+        "not applicable",
+        "no initialization",
+        "no initialization needed",
+    }
+
+
 def _validate_region_text(value: str, *, initialize_region: bool) -> None:
-    if _HOST_PREFIX in value or "```" in value:
+    scan = _structure_scan(value)
+    if _HOST_PREFIX in scan or "```" in scan:
         raise CustomModuleGenerationError(
-            "ATOMIC_CONCERN_RESPONSE_INVALID: host markers and Markdown fences are forbidden."
+            "ATOMIC_CONCERN_RESPONSE_INVALID: executable region contains host-marker syntax or Markdown fences."
         )
-    if _FORBIDDEN.search(value) or _INITIALIZE_DECL.search(value):
+    if _FORBIDDEN.search(scan) or _INITIALIZE_DECL.search(scan):
         region = "initialize body" if initialize_region else "concern members"
         raise CustomModuleGenerationError(
             f"ATOMIC_CONCERN_SCOPE_ESCAPE: {region} attempted to change host-owned type/lifecycle structure."
@@ -73,8 +174,12 @@ def _validate_region_text(value: str, *, initialize_region: bool) -> None:
 
 
 def parse_concern_content(text: str, *, section: str) -> tuple[str, str]:
-    """Accept only the active concern body; sibling/class authority is never model-owned."""
+    """Normalize inert model wrappers, then validate only executable concern content."""
     members, initialize = _split_response_regions(text)
+    members = _normalize_region_text(members)
+    initialize = _normalize_region_text(initialize)
+    if str(section or "").strip() != "integration" and _is_inert_empty_region(initialize):
+        initialize = ""
     _validate_region_text(members, initialize_region=False)
     _validate_region_text(initialize, initialize_region=True)
     if str(section or "").strip() != "integration" and initialize:
@@ -337,16 +442,42 @@ class AtomicConcernExecutor:
 
     def _apply(self, concern: Mapping[str, Any], *, failure: str = "") -> None:
         name = _slug(concern["concern"])
-        output = self.call_coder(_messages(
-            section=self.section,
-            concern=concern,
-            task=self.task,
-            grounding=self.grounding,
-            dependency_source=self.dependency_source,
-            current_source=self.source,
-            failure=failure,
-        ))
-        members, initialize = parse_concern_content(output, section=self.section)
+        response_failures: set[str] = set()
+        repair_failure = failure
+        while True:
+            output = self.call_coder(_messages(
+                section=self.section,
+                concern=concern,
+                task=self.task,
+                grounding=self.grounding,
+                dependency_source=self.dependency_source,
+                current_source=self.source,
+                failure=repair_failure,
+            ))
+            try:
+                members, initialize = parse_concern_content(output, section=self.section)
+                break
+            except CustomModuleGenerationError as exc:
+                reason = str(exc).split("\n", 1)[0]
+                recoverable = reason.startswith(
+                    ("ATOMIC_CONCERN_RESPONSE_INVALID:", "ATOMIC_CONCERN_SCOPE_ESCAPE:")
+                )
+                if not recoverable:
+                    raise
+                if reason in response_failures:
+                    raise CustomModuleGenerationError(
+                        f"ATOMIC_CONCERN_RESPONSE_NO_PROGRESS: {name} repeated host response violation: {reason}"
+                    ) from exc
+                response_failures.add(reason)
+                validation_failure = (
+                    "HOST RESPONSE VALIDATION FAILED BEFORE COMPILATION:\n"
+                    + reason
+                    + "\nReturn the same concern again using only the required marker protocol. "
+                    "Do not emit package/import/type/lifecycle declarations."
+                )
+                repair_failure = "\n\n".join(
+                    item for item in (failure, validation_failure) if item
+                )
         if failure and self.state.get(name) == (members, initialize):
             raise CustomModuleGenerationError(
                 f"ATOMIC_CONCERN_REPAIR_NO_PROGRESS: {name} repeated the same bounded source."
