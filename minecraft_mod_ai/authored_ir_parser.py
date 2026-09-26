@@ -67,6 +67,43 @@ def parse_markdown_heading(line: str) -> tuple[int, str] | None:
     return len(match.group(1)), title
 
 
+def _legacy_canonical_section_depth(text: str) -> int | None:
+    """Recognize only the old planner template shape; never relax generic depth rules."""
+
+    records: list[tuple[int, int, str, str]] = []
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        heading = parse_markdown_heading(line)
+        if heading is None:
+            continue
+        depth, title = heading
+        records.append((line_number, depth, title, authored_section_id(title)))
+
+    canonical = [record for record in records if record[3]]
+    if len(canonical) < 2:
+        return None
+    first_line, first_depth, _first_title, first_section = canonical[0]
+    if first_section != "overview" or first_depth <= 1:
+        return None
+
+    wrapper_depth = first_depth - 1
+    has_document_wrapper = any(
+        line_number < first_line
+        and depth == wrapper_depth
+        and not section
+        for line_number, depth, _title, section in records
+    )
+    if not has_document_wrapper:
+        return None
+
+    trailing = canonical[1:]
+    if not trailing or any(
+        depth != wrapper_depth
+        for _line, depth, _title, _section in trailing
+    ):
+        return None
+    return first_depth
+
+
 def _append_ref(
     by_section: dict[str, list[str]], active: str, req_id: str
 ) -> None:
@@ -140,6 +177,7 @@ def _collect_section_refs(text: str) -> dict[str, list[str]]:
     seen_sections: list[str] = []
     by_section: dict[str, list[str]] = {}
     last_index = -1
+    legacy_section_depth = _legacy_canonical_section_depth(text)
     for idx, line in enumerate(text.splitlines(), start=1):
         if not line.strip():
             continue
@@ -148,6 +186,12 @@ def _collect_section_refs(text: str) -> dict[str, list[str]]:
         if heading is None:
             _append_ref(by_section, active_section, req_id)
             continue
+        if (
+            legacy_section_depth is not None
+            and heading[0] == legacy_section_depth - 1
+            and authored_section_id(heading[1])
+        ):
+            heading = (legacy_section_depth, heading[1])
         section_depth, active_section, last_index = _handle_heading(
             heading,
             section_depth=section_depth,

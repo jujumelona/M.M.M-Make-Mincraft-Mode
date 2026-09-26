@@ -46,7 +46,7 @@ def _design_writing_template(
             "- " + concern + ": " + render_fields(fields)
             for concern, fields in records.items()
         ]
-        sections.append("# " + section + "\n" + "\n".join(concerns))
+        sections.append("## " + section + "\n" + "\n".join(concerns))
     return "\n".join(sections)
 
 
@@ -144,10 +144,14 @@ class CompleteGameDesignPlanner:
                             "Explain how the systems connect using concrete examples. "
                             "Your choices are authored design and need no proof or approval. "
                             "Describe desired platform behavior without claiming unresearched "
-                            "API symbols are verified. Fill this writing template in one response, "
-                            "choosing your own level of detail and leaving irrelevant parts aside:\n"
+                            "API symbols are verified. Fill this writing template in one response. "
+                            "Use every canonical template section heading exactly once and keep the "
+                            "sections in the shown order. Keep canonical section headings at Markdown "
+                            "level 2 (`##`); you may add one document title at level 1 (`#`) and use "
+                            "deeper headings only inside a canonical section. For an inapplicable "
+                            "section, say so concretely instead of removing the section:\n"
                             + template
-                            + "\nThese existing template sections and fields are writing guidance, "
+                            + "\nThe concern fields inside each canonical section are writing guidance, "
                             "not required output keys. Verification sections describe future tests "
                             "of the implementation; they do not judge your plan. "
                             "Finish the design in this response."
