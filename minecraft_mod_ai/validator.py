@@ -88,9 +88,13 @@ class ProjectValidator:
             complete,
         )
 
+        json_inputs: list[Path] = []
+        java_files: list[Path] = []
         for path in sorted(root.rglob("*")):
             checks += 1
             relative = self._rel(root, path)
+            if path.name.endswith((".json", ".mcmeta")):
+                json_inputs.append(path)
             if path.is_symlink():
                 findings.append(
                     Finding("SYMLINK", "error", relative, "Symlinks are not allowed.")
@@ -109,7 +113,10 @@ class ProjectValidator:
                 )
                 continue
             try:
-                if path.is_file() and path.stat().st_size > self.policy.max_single_file_bytes:
+                is_file = path.is_file()
+                if is_file and path.name.endswith(".java"):
+                    java_files.append(path)
+                if is_file and path.stat().st_size > self.policy.max_single_file_bytes:
                     findings.append(
                         Finding(
                             "FILE_TOO_LARGE",
@@ -128,15 +135,10 @@ class ProjectValidator:
                     )
                 )
 
-        for path in sorted({*root.rglob("*.json"), *root.rglob("*.mcmeta")}):
+        for path in json_inputs:
             checks += 1
             self._load_json(path, findings, root)
 
-        java_files = sorted(
-            path
-            for path in root.rglob("*.java")
-            if path.is_file() and not path.is_symlink()
-        )
         checks += 1
         if not java_files:
             findings.append(
