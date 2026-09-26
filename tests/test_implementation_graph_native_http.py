@@ -18,6 +18,7 @@ import pytest
 from test_implementation_ir import graph_project
 
 from minecraft_mod_ai import custom_module_generator as direct
+from minecraft_mod_ai.authored_execution_schema import EXECUTION_SECTION_ORDER, concern_contracts
 from minecraft_mod_ai import llama_exact_context, llama_lora_runtime
 from minecraft_mod_ai import llama_stream_efficiency_contract as streaming
 from minecraft_mod_ai.model_adapters.base import AdapterConfig, GenerationRequest
@@ -31,23 +32,19 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
         pytest.skip("Java compiler/runtime unavailable")
     module, main = graph_project(tmp_path)
     module.config["implementation_graph_request"]["text"] = (
-        "# Trading\n"
-        "- Own ten credits and spend three credits exactly once at initialization.\n"
-        "- Reject an unaffordable eight-credit purchase without changing the remaining seven credits."
+        "## 1. 행동 계약 (behavior_contract)\nBehavior.\n"
+        "## 2. 상태 모델 (state_model)\nState.\n"
+        "## 3. 알고리즘 (algorithm)\nAlgorithm.\n"
+        "## 4. 통합 (integration)\nIntegration.\n"
+        "## 5. 권한 및 네트워크 (authority_and_network)\nAuthority.\n"
+        "## 6. 지속성 (persistence)\nPersistence.\n"
+        "## 7. 자원 및 UI (resources_and_ui)\nResources.\n"
+        "## 8. 실패 및 제한 (failure_and_limits)\nFailures.\n"
     )
-    body = (
-        "package example;\n"
-        "public final class AuthoredUnit0 {\n"
-        "  private AuthoredUnit0() {}\n"
-        "  public static void initialize() {\n"
-        "    int credits = 10;\n"
-        "    credits -= 3;\n"
-        "    if (credits != 7) throw new AssertionError(\"spend\");\n"
-        "    if (credits >= 8) throw new AssertionError(\"insufficient\");\n"
-        "    if (credits != 7) throw new AssertionError(\"mutation\");\n"
-        "    System.out.print(\"PASS\");\n"
-        "  }\n"
-        "}\n"
+    atomic_content = (
+        "<<<MMM_CONCERN_MEMBERS>>>\n"
+        "<<<MMM_CONCERN_INITIALIZE>>>\n"
+        "<<<MMM_CONCERN_END>>>"
     )
     requests = []
 
@@ -58,7 +55,7 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
         def do_POST(self):
             payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             requests.append(payload)
-            delta = {"content": json.dumps({"content": body, "summary": "implemented"})}
+            delta = {"content": json.dumps({"content": atomic_content, "summary": "implemented"})}
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Connection", "close")
@@ -146,13 +143,24 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
     try:
         generator = direct.CustomModuleGenerator(Router())
         result = generator.generate(tmp_path, module=module)
-        assert len(requests) == 1
-        assert not requests[0].get("tools")
+        expected_requests = sum(
+            len(concern_contracts(section)) for section in EXECUTION_SECTION_ORDER
+        )
+        assert len(requests) == expected_requests
+        assert all(not request.get("tools") for request in requests)
         graph = result["implementation_ir"]
-        assert [node["symbol"] for node in graph["nodes"]] == ["AuthoredUnit0"]
-        assert graph["nodes"][0]["depends_on"] == []
+        symbols = {node["symbol"] for node in graph["nodes"]}
+        assert symbols == {
+            "AuthoredStateModel", "AuthoredBehaviorContract", "AuthoredAlgorithm",
+            "AuthoredAuthorityNetwork", "AuthoredPersistence", "AuthoredResourcesUi",
+            "AuthoredFailureLimits", "AuthoredIntegration",
+        }
+        assert all(
+            not node["symbol"].startswith("AuthoredGeneric")
+            for node in graph["nodes"]
+        )
         assert all(c.returncode == 0 for c in compilations)
-        assert "AuthoredUnit0.initialize();" in main.read_text()
+        assert "AuthoredIntegration.initialize();" in main.read_text()
         assert generator.ensure_generation_live_commit(result, project_root=tmp_path)
         probe = tmp_path / "Probe.java"
         probe.write_text(
@@ -177,7 +185,7 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
             capture_output=True,
             text=True,
         )
-        assert run.stdout == "PASS"
+        assert run.stdout == ""
     finally:
         server.shutdown()
         server.server_close()
