@@ -82,6 +82,20 @@ public final class DebugToken {
 """
 
 
+def _assert_initial_debug_scaffold(
+    workspace: Path,
+    *,
+    first_call: bool,
+) -> None:
+    if not first_call:
+        return
+    target = workspace / _DEBUG_TARGET
+    scaffold = target.read_text(encoding="utf-8")
+    assert "MMM_AUTHORED_FEATURE_BODY" in scaffold, (
+        "DebugToken host scaffold marker is missing before first coder generation"
+    )
+
+
 def _assert_debug_coder_contract(
     *,
     role: str,
@@ -99,11 +113,7 @@ def _assert_debug_coder_contract(
 
     target = workspace / _DEBUG_TARGET
     assert target.is_file(), "DebugToken host-owned target must exist before coder generation"
-    if first_call:
-        scaffold = target.read_text(encoding="utf-8")
-        assert "MMM_AUTHORED_FEATURE_BODY" in scaffold, (
-            "DebugToken host scaffold marker is missing before first coder generation"
-        )
+    _assert_initial_debug_scaffold(workspace, first_call=first_call)
 
 
 class _DebugTokenRouter:
