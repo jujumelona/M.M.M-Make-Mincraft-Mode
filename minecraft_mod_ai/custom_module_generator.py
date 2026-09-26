@@ -14,6 +14,7 @@ import json
 import os
 import re
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -582,6 +583,137 @@ def _compile_failure_measure(log: str) -> tuple[int, int]:
     return (0, len(error_lines) or 1)
 
 
+@dataclass(frozen=True)
+class _AtomicGenerationContext:
+    root: Path
+    module: ProductionModule
+    target: Path
+    relative: str
+    symbol: str
+    task: Mapping[str, Any]
+    original: str
+    original_bytes: bytes | None
+    target_existed: bool
+    expected_package: str
+    require_initialize: bool
+    ir_contract: Mapping[str, Any]
+    host_grounding: Mapping[str, Any]
+    dependency_context: str
+    compiler: Any
+    before_sha: str
+    section: str
+    concerns: tuple[dict[str, Any], ...]
+
+
+def _atomic_ir_plan(
+    module: ProductionModule, ir_contract: Any
+) -> tuple[str, tuple[dict[str, Any], ...]] | None:
+    if not isinstance(ir_contract, Mapping):
+        return None
+    section = str(module.config.get("implementation_section") or "").strip()
+    raw = module.config.get("implementation_atomic_concerns")
+    if not section or not isinstance(raw, Sequence) or isinstance(
+        raw, (str, bytes, bytearray)
+    ):
+        return None
+    concerns = tuple(dict(item) for item in raw if isinstance(item, Mapping))
+    return (section, concerns) if concerns else None
+
+
+def _atomic_result_receipt(
+    context: _AtomicGenerationContext, atomic: Mapping[str, Any], candidate: str
+) -> dict[str, Any]:
+    after_sha = _sha256_text(candidate)
+    return {
+        "schema_version": "mmm/custom-module-result-v3",
+        "module_id": context.module.module_id,
+        "kind": context.module.kind,
+        "status": "SOURCE_GENERATED",
+        "patch_receipt": {
+            "schema_version": "mmm/direct-source-write-v1",
+            "status": "APPLIED",
+            "operations": [{
+                "operation": "replace" if context.target_existed else "create",
+                "path": context.relative,
+                "before_sha256": context.before_sha if context.target_existed else "",
+                "after_sha256": after_sha,
+            }],
+            "touched_paths": [context.relative],
+        },
+        "operation_count": 1,
+        "runtime_tests": [
+            "Build the real project and execute the requested GameTest/runtime gates."
+        ],
+        "source_observation_receipt": {
+            "path": context.relative,
+            "sha256": context.before_sha,
+        },
+        "touched_paths": [context.relative],
+        "discarded_out_of_scope_paths": [],
+        "agent_summary": str(atomic["summary"]).strip(),
+        "generation_verification": {
+            "status": "PASS",
+            "mode": "gradle_compile_java_atomic_concerns",
+            "target_path": context.relative,
+            "atomic_concern_count": int(atomic["concern_count"]),
+            "atomic_repair_count": int(atomic["repair_count"]),
+        },
+        "output_exhaustion_continuations": 0,
+        "generation_checkpoint_resumed": False,
+        "required_gates": list(context.module.required_gates),
+    }
+
+
+def _restore_atomic_target(context: _AtomicGenerationContext) -> None:
+    if context.target_existed and context.original_bytes is not None:
+        _atomic_write(context.target, context.original_bytes)
+    else:
+        context.target.unlink(missing_ok=True)
+
+
+def _run_atomic_ir_generation(
+    generator: Any, context: _AtomicGenerationContext
+) -> dict[str, Any]:
+    from .atomic_concern_source import AtomicConcernExecutor
+    from .implementation_graph_execution import public_api_errors
+
+    executor = AtomicConcernExecutor(
+        root=context.root,
+        target=context.target,
+        relative=context.relative,
+        symbol=context.symbol,
+        original=context.original,
+        task=context.task,
+        section=context.section,
+        concerns=context.concerns,
+        grounding=context.host_grounding,
+        dependency_source=context.dependency_context,
+        require_initialize=context.require_initialize,
+        call_coder=lambda messages: _call_coder(generator.router, messages),
+        compile_java=context.compiler.compile_java,
+        compile_log=_compile_log,
+        write_source=lambda path, source: _atomic_write(path, source),
+    )
+    with project_write_lock(context.root):
+        try:
+            atomic = executor.run()
+            candidate = str(atomic["source"])
+            errors = _source_invariant_errors(
+                candidate,
+                symbol=context.symbol,
+                expected_package=context.expected_package,
+                require_initialize=context.require_initialize,
+            )
+            errors += public_api_errors(candidate, context.ir_contract)
+            if errors:
+                raise CustomModuleGenerationError(
+                    "ATOMIC_CONCERN_FINAL_CONTRACT_FAILED: " + "; ".join(errors)
+                )
+            return _atomic_result_receipt(context, atomic, candidate)
+        except BaseException:
+            _restore_atomic_target(context)
+            raise
+
 class CustomModuleGenerator:
     """One exact task -> one complete source file -> compiler-guided repair loop."""
 
@@ -685,6 +817,7 @@ class CustomModuleGenerator:
         relative, symbol, task = _exact_target(module)
         target = _safe_target(root, relative)
         target_existed = target.is_file()
+        original_bytes: bytes | None = None
         if target.exists() and not target_existed:
             raise CustomModuleGenerationError(
                 f"DIRECT_CODER_TARGET_NOT_REGULAR: {relative}"
@@ -781,98 +914,15 @@ class CustomModuleGenerator:
         last_failure = ""
         compiler = GradleRunner(self._cache_dir(root))
 
-        atomic_concerns = module.config.get("implementation_atomic_concerns")
-        section = str(module.config.get("implementation_section") or "").strip()
-        if (
-            isinstance(ir_contract, Mapping)
-            and section
-            and isinstance(atomic_concerns, Sequence)
-            and not isinstance(atomic_concerns, (str, bytes, bytearray))
-            and atomic_concerns
-        ):
-            from .atomic_concern_source import generate_atomic_concerns
-            from .implementation_graph_execution import public_api_errors
-
-            with project_write_lock(root):
-                try:
-                    atomic = generate_atomic_concerns(
-                        root=root,
-                        target=target,
-                        relative=relative,
-                        symbol=symbol,
-                        original=original,
-                        task=task,
-                        section=section,
-                        concerns=tuple(
-                            dict(item) for item in atomic_concerns if isinstance(item, Mapping)
-                        ),
-                        grounding=host_grounding,
-                        dependency_source=context,
-                        require_initialize=require_initialize,
-                        call_coder=lambda messages: _call_coder(self.router, messages),
-                        compile_java=compiler.compile_java,
-                        compile_log=_compile_log,
-                        write_source=lambda path, source: _atomic_write(path, source),
-                    )
-                    candidate = str(atomic["source"])
-                    invariant_errors = _source_invariant_errors(
-                        candidate,
-                        symbol=symbol,
-                        expected_package=expected_package,
-                        require_initialize=require_initialize,
-                    )
-                    invariant_errors += public_api_errors(candidate, ir_contract)
-                    if invariant_errors:
-                        raise CustomModuleGenerationError(
-                            "ATOMIC_CONCERN_FINAL_CONTRACT_FAILED: "
-                            + "; ".join(invariant_errors)
-                        )
-                    after_sha = _sha256_text(candidate)
-                    return {
-                        "schema_version": "mmm/custom-module-result-v3",
-                        "module_id": module.module_id,
-                        "kind": module.kind,
-                        "status": "SOURCE_GENERATED",
-                        "patch_receipt": {
-                            "schema_version": "mmm/direct-source-write-v1",
-                            "status": "APPLIED",
-                            "operations": [{
-                                "operation": "replace" if target_existed else "create",
-                                "path": relative,
-                                "before_sha256": before_sha if target_existed else "",
-                                "after_sha256": after_sha,
-                            }],
-                            "touched_paths": [relative],
-                        },
-                        "operation_count": 1,
-                        "runtime_tests": [
-                            "Build the real project and execute the requested GameTest/runtime gates."
-                        ],
-                        "source_observation_receipt": {
-                            "path": relative,
-                            "sha256": before_sha,
-                        },
-                        "touched_paths": [relative],
-                        "discarded_out_of_scope_paths": [],
-                        "agent_summary": str(atomic["summary"]).strip(),
-                        "generation_verification": {
-                            "status": "PASS",
-                            "mode": "gradle_compile_java_atomic_concerns",
-                            "target_path": relative,
-                            "atomic_concern_count": int(atomic["concern_count"]),
-                            "atomic_repair_count": int(atomic["repair_count"]),
-                        },
-                        "output_exhaustion_continuations": 0,
-                        "generation_checkpoint_resumed": False,
-                        "required_gates": list(module.required_gates),
-                    }
-                except BaseException:
-                    if target_existed:
-                        _atomic_write(target, original_bytes)
-                    else:
-                        target.unlink(missing_ok=True)
-                    raise
-
+        atomic_plan = _atomic_ir_plan(module, ir_contract)
+        if atomic_plan is not None:
+            section, concerns = atomic_plan
+            context_state = _AtomicGenerationContext(
+                root, module, target, relative, symbol, task, original, original_bytes,
+                target_existed, expected_package, require_initialize, dict(ir_contract),
+                host_grounding, context, compiler, before_sha, section, concerns,
+            )
+            return _run_atomic_ir_generation(self, context_state)
         attempt = 0
         best_failure_measure: tuple[int, int] | None = None
         seen_candidates: set[str] = set()
