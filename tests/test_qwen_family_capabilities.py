@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai import llama_server_hardware_policy
+from minecraft_mod_ai.llama_generation_budget import install as install_generation_budget
 from minecraft_mod_ai.config_paths import config_path
 from minecraft_mod_ai.model_adapters.base import GenerationRequest
 from minecraft_mod_ai.model_context_budget import effective_context_tokens
@@ -15,6 +16,8 @@ from minecraft_mod_ai.qwen_agent_family_contract import (
 )
 from minecraft_mod_ai.qwen_family_capabilities import qwen_family_capabilities
 
+
+install_generation_budget(llama_server_hardware_policy)
 
 REGISTRY_PATH = config_path("model_registry.yaml")
 
