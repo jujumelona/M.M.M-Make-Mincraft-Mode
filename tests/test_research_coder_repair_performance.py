@@ -22,9 +22,9 @@ def _install_research_performance_contracts():
     original_generate = CustomModuleGenerator.generate
     original_context = RepairEngine._context
     source_context = original_context
-    while getattr(source_context, reuse._MARKER, False) and hasattr(
-        source_context, "__wrapped__"
-    ):
+    seen_contexts: set[int] = set()
+    while hasattr(source_context, "__wrapped__") and id(source_context) not in seen_contexts:
+        seen_contexts.add(id(source_context))
         source_context = source_context.__wrapped__
     RepairEngine._context = source_context
     context_performance.harden(research_code_context)
