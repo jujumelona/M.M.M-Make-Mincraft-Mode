@@ -12,14 +12,6 @@ from collections.abc import Callable, Mapping
 from copy import deepcopy
 from typing import Any
 
-from jsonschema import Draft202012Validator
-
-from .model_adapters.base import NativeToolDecisionRejected
-
-_TEXT = {"type": "string", "minLength": 1, "pattern": r"\S"}
-_SYMBOL = {"type": "string", "pattern": r"^[A-Z][A-Za-z0-9_]*$"}
-_LIST = {"type": "array", "uniqueItems": True, "items": _TEXT}
-
 
 def work_packet(requirements: Mapping[str, str], context: Mapping[str, str]) -> dict[str, Any]:
     """Take one authored responsibility block with every subordinate condition.
@@ -72,106 +64,6 @@ def work_packet(requirements: Mapping[str, str], context: Mapping[str, str]) -> 
                     "context": dict(context)}
     first = next(iter(requirements))
     return {"requirements": {first: requirements[first]}, "context": dict(context)}
-
-
-def member_error(declarations: list[str]) -> str:
-    """Reject pseudo-Java before freezing a contract (not a Java type checker)."""
-    for text in declarations:
-        if re.match(r"\s*(?:(?:public|protected|private|static|final|abstract)\s+)*(?:class|interface|enum|record)\b", text):
-            return "Supply member declarations only; class/enum/type definitions are host-owned."
-        if '{' in text or '}' in text or re.search(r"=\s*;?\s*$", text):
-            return "Supply complete member signatures without bodies or incomplete field initializers."
-        if not re.search(r"\b[A-Za-z_$][\w$]*\s*(?:\([^{}]*\)(?:\s+throws\s+.+)?|(?:=.+)?)\s*;?$", text):
-            return "Supply a Java field, constructor or method signature."
-    return ""
-
-
-def _schema(properties: dict[str, Any]) -> dict[str, Any]:
-    return {"type": "object", "properties": properties,
-            "required": list(properties), "additionalProperties": False}
-
-
-def _decide(router: Any, stage: str, properties: dict[str, Any], context: dict[str, Any],
-            ledger: dict[str, Any], save: Callable[[], None],
-            validate: Callable[[dict[str, Any]], dict[str, str]] | None = None) -> dict[str, Any]:
-    from .implementation_ir import ImplementationGraphError, digest
-    from .root_cause_trace import emit_root_cause
-
-    slot = ledger.setdefault(stage, {"values": {}, "failures": 0})
-    if slot.get("terminal"):
-        raise ImplementationGraphError(slot["terminal"])
-    if slot.get("done"):
-        return deepcopy(slot["values"])
-    while True:
-        missing = {key: value for key, value in properties.items() if key not in slot["values"]}
-        schema = _schema(missing)
-        request = {**context, "accepted_fields": slot["values"]}
-        if slot.get("errors"):
-            request["correct_only"] = slot["errors"]
-        try:
-            value = router._generate_tool_decision_impl(
-                "planner",
-                [{"role": "system", "content": (
-                    "Resolve only this one implementation decision for the approved work packet. "
-                    "Keep state ownership and dependency APIs consistent with the supplied contracts. "
-                    "The host owns the mod entrypoint; generated Java owners are helper classes, "
-                    "not additional Fabric entrypoints. "
-                    "Return only the fields of the required native tool. Never output nodes, a graph, "
-                    "requirement IDs, wrappers, or JSON embedded inside strings. Accepted fields are "
-                    "host-owned. Do not restate them. Do not claim code or tests ran."
-                )}, {"role": "user", "content": json.dumps(request, ensure_ascii=False)}],
-                tool_name=stage, parameters=schema,
-                description="One host-selected implementation decision; no source mutation.",
-            )
-        except NativeToolDecisionRejected as exc:
-            matching = [r for r in exc.rejections if r.get("original_tool") == stage]
-            value = None
-            if len(matching) == 1:
-                try:
-                    value = json.loads(matching[0].get("raw_arguments") or "")
-                except (TypeError, ValueError):
-                    pass
-            # Only schema-invalid arguments may enter field repair. Never turn an
-            # unrelated native rejection into a successful decision.
-            if value is not None and not list(Draft202012Validator(schema).iter_errors(value)):
-                raise
-        errors: dict[str, str] = {}
-        before = len(slot["values"])
-        if isinstance(value, dict):
-            for key, field in missing.items():
-                if key not in value:
-                    errors[key] = "Required field missing."
-                elif list(Draft202012Validator(field).iter_errors(value[key])):
-                    errors[key] = "Expected " + json.dumps(field, ensure_ascii=False)
-                else:
-                    slot["values"][key] = value[key]
-            if set(value) - set(properties):
-                errors["response"] = "Unexpected fields; return only the requested fields."
-        else:
-            errors["response"] = "Expected the tool's argument object, not a string or graph array."
-        if validate and all(key in slot["values"] for key in properties):
-            semantic = validate(slot["values"])
-            for key, message in semantic.items():
-                slot["values"].pop(key, None)
-                errors[key] = message
-        if not errors and all(key in slot["values"] for key in properties):
-            slot["done"] = True
-            save()
-            emit_root_cause("implementation_decision_accepted", stage="production", result="PASS",
-                            operation=stage, details={"decision": slot["values"], "work_packet": context.get("work_packet")})
-            return deepcopy(slot["values"])
-        # Progress is accepted, independently valid fields, never fewer error
-        # messages. One corrective request is allowed; then progress is mandatory.
-        slot["failures"] += 1
-        slot["errors"] = errors
-        if slot["failures"] > 1 and len(slot["values"]) <= before:
-            slot["terminal"] = f"IMPLEMENTATION_DECISION_NO_PROGRESS: {stage}: {json.dumps(errors)}"
-        save()
-        emit_root_cause("implementation_decision_rejected", stage="production", result="REJECTED",
-                        operation=stage, details={"errors": errors, "accepted_fields": sorted(slot["values"]),
-                                                 "response_sha256": digest(value)})
-        if slot.get("terminal"):
-            raise ImplementationGraphError(slot["terminal"])
 
 
 from .authored_execution_schema import concern_contracts, section_spec
@@ -350,30 +242,6 @@ def compile_contribution(router: Any, name: str, payload: dict[str, Any],
         "estimated_tokens": estimated_tokens,
     }
     return {"nodes": [node]}
-
-def _interface_errors(value: dict[str, Any], identity: dict[str, Any], owner: dict[str, Any] | None) -> dict[str, str]:
-    errors = {}
-    if identity["kind"] == "java":
-        error = member_error(value["public_api"])
-        if error:
-            errors["public_api"] = error
-        elif not value["public_api"] and not value["activation"] and not owner:
-            errors["public_api"] = "New inactive Java owner needs at least one concrete member API."
-    return errors
-
-
-def _dependency_errors(dependencies: list[str], symbol: str, owners: dict[str, Any]) -> dict[str, str]:
-    pending = list(dependencies)
-    visited: set[str] = set()
-    while pending:
-        dependency = pending.pop()
-        if dependency == symbol:
-            return {"depends_on": "This dependency creates a cycle back to the selected owner; consume shared state without reverse ownership."}
-        if dependency not in visited:
-            visited.add(dependency)
-            pending.extend(owners.get(dependency, {}).get("depends_on", []))
-    return {}
-
 
 def decompose_contribution(router: Any, payload: dict[str, Any], state: dict[str, Any],
                            checkpoint: Callable[[], None]) -> dict[str, Any]:
