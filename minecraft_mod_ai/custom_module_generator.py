@@ -427,7 +427,7 @@ def _direct_host_grounding(
     dependency_context: str,
     typed_grounding: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Build the complete evidence bundle before the small coder decodes."""
+    """Build complete host evidence while preserving the established typed contract."""
     version_facts: dict[str, Any] = {}
     try:
         from .host_version_catalog import host_target
@@ -465,8 +465,8 @@ def _direct_host_grounding(
         }
         section_role = role_by_symbol.get(str(ir_contract.get("symbol") or ""), "")
 
-    return {
-        "schema_version": "mmm/direct-coder-host-grounding-v1",
+    direct_context = {
+        "schema_version": "mmm/direct-coder-host-context-v1",
         "phase": "implement_module",
         "workspace_project_root": ".",
         "section_role": section_role,
@@ -479,18 +479,25 @@ def _direct_host_grounding(
         "task": dict(task),
         "implementation_ir_node": dict(ir_contract) if isinstance(ir_contract, Mapping) else None,
         "dependency_context": dependency_context,
-        "typed_implementation_grounding": (
-            dict(typed_grounding) if isinstance(typed_grounding, Mapping) else None
-        ),
         "host_version_facts": version_facts,
-        "policy": {
-            "resolved_before_first_coder_decode": True,
-            "baseline_grounding_owned_by_host": True,
-            "writes_still_require_approved_pipeline": True,
-            "model_tool_choice_required": False,
-            "fabric_lifecycle_owned_by_host": True,
-            "invent_unlisted_platform_api": False,
-        },
+    }
+    legacy = dict(typed_grounding) if isinstance(typed_grounding, Mapping) else {}
+    prior_policy = legacy.get("policy")
+    merged_policy = dict(prior_policy) if isinstance(prior_policy, Mapping) else {}
+    merged_policy.update({
+        "resolved_before_first_coder_decode": True,
+        "baseline_grounding_owned_by_host": True,
+        "writes_still_require_approved_pipeline": True,
+        "model_tool_choice_required": False,
+        "fabric_lifecycle_owned_by_host": True,
+        "invent_unlisted_platform_api": False,
+    })
+    # Keep artifact_kind/facts and every established typed-grounding key at the top
+    # level so deterministic renderers and model prompts consume one stable contract.
+    return {
+        **legacy,
+        "direct_host_context": direct_context,
+        "policy": merged_policy,
     }
 
 def _call_coder(
