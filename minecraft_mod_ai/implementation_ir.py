@@ -305,17 +305,10 @@ def _normalized_authored_section(title: str) -> str:
     return value.strip("_")
 
 
-_EXECUTION_SECTION_ORDER = (
-    "state_model",
-    "behavior_contract",
-    "algorithm",
-    "authority_and_network",
-    "persistence",
-    "resources_and_ui",
-    "failure_and_limits",
-    "integration",
+from .authored_execution_schema import (
+    EXECUTION_SECTION_ORDER as _EXECUTION_SECTION_ORDER,
+    EXECUTION_SECTION_SET as _EXECUTION_SECTION_SET,
 )
-_EXECUTION_SECTION_SET = frozenset(_EXECUTION_SECTION_ORDER)
 _CONTEXT_SECTION_SET = frozenset({
     "overview",
     "개요",

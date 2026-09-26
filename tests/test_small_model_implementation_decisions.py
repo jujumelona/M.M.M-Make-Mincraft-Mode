@@ -189,3 +189,28 @@ def test_canonical_design_schema_skips_context_sections_and_uses_named_owners():
     assert by_symbol["AuthoredBehaviorContract"]["depends_on"] == ["AuthoredStateModel"]
     assert "AuthoredStateModel" in by_symbol["AuthoredIntegration"]["depends_on"]
     assert router.calls == []
+
+
+def test_host_section_nodes_expand_to_fixed_concern_obligations_without_model_planning():
+    from minecraft_mod_ai.authored_execution_schema import concern_names
+
+    router = NoPlanningModelRouter()
+    text = (
+        "# state_model\nState.\n"
+        "# behavior_contract\nBehavior.\n"
+        "# algorithm\nAlgorithm.\n"
+        "# authority_and_network\nAuthority.\n"
+        "# persistence\nPersistence.\n"
+        "# resources_and_ui\nResources.\n"
+        "# failure_and_limits\nFailures.\n"
+        "# integration\nIntegration.\n"
+    )
+    graph = compile_with(router, text=text)
+    by_symbol = {node["symbol"]: node for node in graph["nodes"]}
+    state = by_symbol["AuthoredStateModel"]
+    assert len(state["obligations"]) == len(concern_names("state_model"))
+    joined = " ".join(state["obligations"])
+    assert all(name in joined for name in concern_names("state_model"))
+    network = by_symbol["AuthoredAuthorityNetwork"]
+    assert len(network["obligations"]) == len(concern_names("authority_and_network"))
+    assert router.calls == []

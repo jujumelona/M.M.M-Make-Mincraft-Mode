@@ -174,84 +174,7 @@ def _decide(router: Any, stage: str, properties: dict[str, Any], context: dict[s
             raise ImplementationGraphError(slot["terminal"])
 
 
-_SECTION_CONTRACTS: dict[str, dict[str, Any]] = {
-    "state_model": {
-        "symbol": "AuthoredStateModel",
-        "depends_on": (),
-        "responsibility": "Own the authored domain state, invariants, and state transitions.",
-        "instruction": (
-            "Implement domain state containers, invariants, and transition helpers only. "
-            "Do not perform Fabric lifecycle registration, networking, UI, or persistence."
-        ),
-    },
-    "behavior_contract": {
-        "symbol": "AuthoredBehaviorContract",
-        "depends_on": ("state_model",),
-        "responsibility": "Implement the authored player/system behavior contract.",
-        "instruction": (
-            "Implement bounded gameplay operations and precondition/failure guards over the "
-            "authored state. Do not perform Fabric lifecycle registration."
-        ),
-    },
-    "algorithm": {
-        "symbol": "AuthoredAlgorithm",
-        "depends_on": ("state_model", "behavior_contract"),
-        "responsibility": "Implement deterministic algorithms from the authored design.",
-        "instruction": (
-            "Implement deterministic calculations and algorithms only; keep Minecraft/Fabric "
-            "registration and UI/network wiring out of this unit."
-        ),
-    },
-    "authority_and_network": {
-        "symbol": "AuthoredAuthorityNetwork",
-        "depends_on": ("state_model", "behavior_contract"),
-        "responsibility": "Implement server-authoritative synchronization and network-facing rules.",
-        "instruction": (
-            "Implement only authority/synchronization/network-facing behavior required by the "
-            "approved design. Use exact host-provided platform facts; never invent API names."
-        ),
-    },
-    "persistence": {
-        "symbol": "AuthoredPersistence",
-        "depends_on": ("state_model",),
-        "responsibility": "Implement persistence boundaries for authored state.",
-        "instruction": (
-            "Implement serialization/persistence boundaries for the authored state. "
-            "Do not perform unrelated lifecycle registration."
-        ),
-    },
-    "resources_and_ui": {
-        "symbol": "AuthoredResourcesUi",
-        "depends_on": ("state_model", "behavior_contract"),
-        "responsibility": "Implement the bounded UI/resource-facing behavior in the authored design.",
-        "instruction": (
-            "Implement only UI/resource-facing coordination described by the approved design. "
-            "Do not redesign gameplay or invent unavailable platform APIs."
-        ),
-    },
-    "failure_and_limits": {
-        "symbol": "AuthoredFailureLimits",
-        "depends_on": ("state_model",),
-        "responsibility": "Implement failure handling, limits, and invariant guards.",
-        "instruction": (
-            "Implement validation, limits, and failure guards as deterministic Java logic. "
-            "Do not perform Fabric lifecycle registration."
-        ),
-    },
-    "integration": {
-        "symbol": "AuthoredIntegration",
-        "depends_on": (
-            "state_model", "behavior_contract", "algorithm", "authority_and_network",
-            "persistence", "resources_and_ui", "failure_and_limits",
-        ),
-        "responsibility": "Wire the authored runtime systems into the host-owned mod lifecycle.",
-        "instruction": (
-            "This is the integration unit. Wire already implemented authored systems into the "
-            "host-owned initialize() hook. Use only exact host-provided Minecraft/Fabric facts "
-            "and dependency source; never create another mod entrypoint."
-        ),
-    },
-}
+from .authored_execution_schema import concern_contracts, section_spec
 
 
 def _normalized_unit_role(value: Any) -> str:
@@ -276,7 +199,7 @@ def _planned_roles(payload: Mapping[str, Any]) -> set[str]:
 def _host_owner_symbol(payload: dict[str, Any], packet: Mapping[str, Any]) -> str:
     """Return a stable owner from the authored schema role, never from model naming."""
     role = _unit_role(payload)
-    contract = _SECTION_CONTRACTS.get(role)
+    contract = section_spec(role)
     if contract:
         return str(contract["symbol"])
     unit_ids = [str(value).strip() for value in payload.get("unit_ids", []) if str(value).strip()]
@@ -290,7 +213,7 @@ def _host_owner_symbol(payload: dict[str, Any], packet: Mapping[str, Any]) -> st
 
 def _role_dependencies(payload: Mapping[str, Any]) -> list[str]:
     role = _unit_role(payload)
-    contract = _SECTION_CONTRACTS.get(role)
+    contract = section_spec(role)
     if not contract:
         return []
     planned = _planned_roles(payload)
@@ -298,7 +221,7 @@ def _role_dependencies(payload: Mapping[str, Any]) -> list[str]:
     for dependency_role in contract["depends_on"]:
         if dependency_role not in planned:
             continue
-        dependency = _SECTION_CONTRACTS.get(dependency_role)
+        dependency = section_spec(dependency_role)
         if dependency:
             result.append(str(dependency["symbol"]))
     return result
@@ -306,7 +229,7 @@ def _role_dependencies(payload: Mapping[str, Any]) -> list[str]:
 
 def _host_responsibility(payload: Mapping[str, Any]) -> str:
     role = _unit_role(payload)
-    contract = _SECTION_CONTRACTS.get(role)
+    contract = section_spec(role)
     if contract:
         return str(contract["responsibility"])
     units = [str(value).strip() for value in payload.get("current_units", []) if str(value).strip()]
@@ -319,7 +242,7 @@ def _host_responsibility(payload: Mapping[str, Any]) -> str:
 
 def _host_instruction(payload: Mapping[str, Any]) -> str:
     role = _unit_role(payload)
-    contract = _SECTION_CONTRACTS.get(role)
+    contract = section_spec(role)
     if contract:
         return str(contract["instruction"])
     return (
@@ -384,18 +307,42 @@ def compile_contribution(router: Any, name: str, payload: dict[str, Any],
     owner = owners.get(symbol)
     unit_requirements = payload.get("unit_context") or packet["requirements"]
     responsibility = owner["responsibility"] if owner else _host_responsibility(payload)
+    role = _unit_role(payload)
+    concerns = concern_contracts(role)
+    obligations = (
+        [
+            _host_obligation(
+                packet["requirements"],
+                instruction=json.dumps(
+                    {
+                        "section": role,
+                        "concern": concern["concern"],
+                        "concern_template": concern["identifier"],
+                        "task": concern["task"],
+                        "rules": concern["rules"],
+                        "section_instruction": _host_instruction(payload),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+            )
+            for concern in concerns
+        ]
+        if concerns
+        else [
+            _host_obligation(
+                packet["requirements"],
+                instruction=_host_instruction(payload),
+            )
+        ]
+    )
     node = {
         "symbol": symbol,
         "kind": "java",
         "resource_path": "",
         "responsibility": responsibility,
         "requirements": list(packet["requirements"]),
-        "obligations": [
-            _host_obligation(
-                packet["requirements"],
-                instruction=_host_instruction(payload),
-            )
-        ],
+        "obligations": obligations,
         "public_api": [],
         "depends_on": _role_dependencies(payload),
         "activation": True,
