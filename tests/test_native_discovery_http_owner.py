@@ -8,7 +8,9 @@ import pytest
 from minecraft_mod_ai import ecosystem_discovery as discovery
 
 
-def test_persistent_discovery_pool_keeps_native_policy_and_allows_parallel_requests() -> None:
+def test_persistent_discovery_pool_keeps_native_policy_and_allows_parallel_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     barrier = threading.Barrier(2)
     requests: list[httpx.Request] = []
     lock = threading.Lock()
@@ -28,6 +30,12 @@ def test_persistent_discovery_pool_keeps_native_policy_and_allows_parallel_reque
         github_token="test-token",
     )
     errors: list[BaseException] = []
+    pooled_client = client._http_client
+
+    def unexpected_client_construction(*_args, **_kwargs):
+        raise AssertionError("discovery request rebuilt httpx.Client instead of reusing its pool")
+
+    monkeypatch.setattr(discovery.httpx, "Client", unexpected_client_construction)
 
     def fetch(query: str) -> None:
         try:
@@ -49,6 +57,7 @@ def test_persistent_discovery_pool_keeps_native_policy_and_allows_parallel_reque
         thread.join(timeout=3)
 
     assert errors == []
+    assert client._http_client is pooled_client
     assert len(requests) == 2
     assert all(request.headers["X-GitHub-Api-Version"] == "2022-11-28" for request in requests)
     assert all(request.headers["Authorization"] == "Bearer test-token" for request in requests)
