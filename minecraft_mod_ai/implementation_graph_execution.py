@@ -37,7 +37,8 @@ def public_api_errors(source: str, node: Mapping[str, Any]) -> tuple[str, ...]:
 
 
 def _leaf_module(node: dict[str, Any], graph: dict[str, Any], request: dict[str, Any]) -> ProductionModule:
-    from .authored_production import _exact_authored_task
+    from .authored_execution_schema import concern_contracts, section_for_symbol
+    from .authored_production import _exact_authored_task, _task_sha
 
     by_symbol = {n["symbol"]: n for n in graph["nodes"]}
     dependencies = []
@@ -70,10 +71,19 @@ def _leaf_module(node: dict[str, Any], graph: dict[str, Any], request: dict[str,
         worksheet={"implementation_ir_node": node}, required_gates=("target_compile",),
         target_status="host_reserved",
     )
+    section = section_for_symbol(node["symbol"])
+    atomic_concerns = list(concern_contracts(section))
+    if atomic_concerns:
+        # Preserve the graph node as architecture authority while exposing one
+        # host-owned coder step per fixed concern in the canonical execution template.
+        task["implementation_obligations"] = list(node["obligations"])
+        task["task_sha256"] = _task_sha(task)
     return ProductionModule(
         module_id="ir_" + node["symbol"].lower(), kind="custom_java",
         config={"implementation": "custom", "evidence_task": task,
                 "implementation_ir_node": node,
+                "implementation_section": section,
+                "implementation_atomic_concerns": atomic_concerns,
                 "implementation_dependency_context": json.dumps(dependencies, ensure_ascii=False),
                 **request["target"]}, required_gates=("target_compile",),
     )
