@@ -11,7 +11,13 @@ import pytest
 from minecraft_mod_ai import coder_max_efficiency_contract as coder_efficiency
 from minecraft_mod_ai import custom_generation_search_contract as custom_search
 from minecraft_mod_ai import progress_aware_tool_loop as tool_loop
+import minecraft_mod_ai.custom_module_generator as custom_module_generator
 from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _install_custom_search_contract() -> None:
+    custom_search.install(custom_module_generator)
 
 
 @dataclass
