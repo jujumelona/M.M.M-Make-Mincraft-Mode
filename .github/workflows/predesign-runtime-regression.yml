@@ -1,7 +1,7 @@
 name: Planning RAG Runtime Regression
 
 on:
-  push:
+  pull_request:
     branches:
       - main
     paths:

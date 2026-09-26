@@ -88,10 +88,30 @@ jobs:
               if path.startswith("tests/test_") and path.endswith(".py") and (root / path).is_file()
           }
 
+          targeted_source_tests = {
+              "minecraft_mod_ai/authored_ir_parser.py": (
+                  "tests/test_authored_heading_contract.py",
+              ),
+              "minecraft_mod_ai/complete_planner.py": (
+                  "tests/test_authored_heading_contract.py",
+                  "tests/test_authored_production.py",
+              ),
+          }
+          targeted_sources: set[str] = set()
+          for source_path, candidates in targeted_source_tests.items():
+              if source_path not in changed:
+                  continue
+              targeted_sources.add(source_path)
+              for candidate in candidates:
+                  if (root / candidate).is_file():
+                      selected_tests.add(candidate)
+
           source_modules: set[str] = set()
           source_stems: set[str] = set()
           narrow_complete_orchestrator_receipt_change = False
           for path in python_files:
+              if path in targeted_sources:
+                  continue
               p = Path(path)
               if p.as_posix() == "minecraft_mod_ai/complete_orchestrator.py":
                   diff_text = subprocess.check_output(

@@ -101,3 +101,21 @@ def test_depth_compatibility_is_limited_to_exact_legacy_planner_shape() -> None:
         match="IMPLEMENTATION_IR_AUTHORED_SECTION_DEPTH",
     ):
         decompose_authored_units(malformed)
+
+def test_fresh_canonical_h2_layout_is_accepted_without_legacy_migration() -> None:
+    sections = (
+        "behavior_contract",
+        "state_model",
+        "algorithm",
+        "integration",
+        "authority_and_network",
+        "persistence",
+        "resources_and_ui",
+        "failure_and_limits",
+    )
+    text = "\n".join(f"## {section}\n{section} details." for section in sections)
+
+    units = decompose_authored_units(text)
+
+    assert {unit["unit_id"] for unit in units} == set(sections)
+
