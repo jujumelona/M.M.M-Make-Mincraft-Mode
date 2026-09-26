@@ -1,8 +1,8 @@
-"""Compile authored prose into a bounded implementation DAG, never heading slots.
+"""Compile authored prose into bounded host-owned implementation units.
 
-The model supplies semantic responsibility boundaries. The host owns paths, coverage,
-dependency order, output admission and finite refinement. This does not rewrite or
-judge the saved gameplay design.
+The host owns responsibility boundaries, paths, lifecycle, requirement coverage,
+dependency topology, output admission and finite refinement. The text model is used
+later for bounded source generation, not for implementation-graph planning.
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from .custom_module_errors import CustomModuleGenerationError
 from .implementation_lifecycle import activation_public_api
 from .model_adapters.base import NativeToolDecisionRejected
 
-IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v11"
+IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v12"
 
 
 class ImplementationGraphError(CustomModuleGenerationError):
@@ -302,10 +302,10 @@ def is_completion_boundary_error(exc: BaseException) -> bool:
 def decompose_authored_units(text: str) -> list[dict[str, Any]]:
     """Create one semantic unit per authored heading.
 
-    Unit size is not pre-clamped. A small model first sees one coherent authored
-    concern; typed output exhaustion recursively bisects only that unit until the
-    runtime can serve it. This keeps granularity evidence-driven instead of encoding
-    a guessed requirement count.
+    Unit size is not pre-clamped. The host keeps one coherent authored concern
+    together and later source-generation output pressure triggers deterministic
+    refinement. This keeps granularity evidence-driven instead of asking a planning
+    model to invent responsibility boundaries.
     """
     req_map = source_requirements(text)
     if not req_map:
@@ -369,9 +369,9 @@ def node_cost(node: Mapping[str, Any]) -> int:
 
 
 def admissible_tokens(router: Any) -> int | None:
-    """Return the planner runtime tool budget when the router exposes it.
+    """Return the coder runtime output budget when the router exposes it.
 
-    Production ModelRouter uses the same tool-action budget as llama generation.
+    Production ModelRouter uses the coder's bounded generation budget.
     Alternate routers may expose implementation_output_budget explicitly. If no
     runtime budget is knowable, skip speculative preflight sizing and let typed
     output exhaustion drive recursive decomposition.
@@ -385,7 +385,7 @@ def admissible_tokens(router: Any) -> int | None:
     if registry is None or profile is None:
         return None
     try:
-        config = registry.role(profile, "planner")
+        config = registry.role(profile, "coder")
         from .model_context_budget import tool_action_token_budget
         value = int(tool_action_token_budget(config))
     except (AttributeError, TypeError, ValueError):
@@ -817,7 +817,7 @@ def _public_api_contract_key(declaration: str) -> tuple[Any, ...]:
 
 
 def _model_node_view(node: Mapping[str, Any]) -> dict[str, Any]:
-    """Compact host-owned graph state for a small planner model."""
+    """Compact host-owned graph state for deterministic lowering and checkpoints."""
     return {
         key: deepcopy(node[key])
         for key in (

@@ -324,7 +324,7 @@ class ModelRouter:
         )
 
     def generate_implementation_decision(self, name, payload, *, state, checkpoint):
-        """Use small native decisions; graph serialization is host-owned."""
+        """Use host-owned lowering; the text model is reserved for bounded source generation."""
         from .implementation_decisions import compile_contribution
 
         return compile_contribution(self, name, payload, state, checkpoint)

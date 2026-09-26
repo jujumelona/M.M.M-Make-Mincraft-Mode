@@ -1,7 +1,8 @@
-"""Small native decisions assembled into an implementation contribution by the host.
+"""Host-owned lowering of approved authored work into bounded implementation units.
 
-The model never serializes a graph, requirement IDs, checkpoint state or accepted
-owners. Each successful decision is durable before the next one is requested.
+Production does not ask the local text model to design owners, dependencies, behavior
+summaries, APIs, resource paths, or helper graphs. The model is reserved for later,
+bounded source-generation tasks after the host has fixed the work unit and contract.
 """
 from __future__ import annotations
 
@@ -173,72 +174,104 @@ def _decide(router: Any, stage: str, properties: dict[str, Any], context: dict[s
             raise ImplementationGraphError(slot["terminal"])
 
 
+def _host_owner_symbol(payload: dict[str, Any], packet: Mapping[str, Any]) -> str:
+    """Return one stable Java owner per host-authored unit without model naming."""
+    unit_ids = [str(value).strip() for value in payload.get("unit_ids", []) if str(value).strip()]
+    seed = unit_ids[0] if unit_ids else next(iter(packet.get("requirements", {})), "work")
+    parts = re.findall(r"[A-Za-z0-9]+", seed)
+    suffix = "".join(part[:1].upper() + part[1:] for part in parts) or "Work"
+    if suffix[0].isdigit():
+        suffix = "Unit" + suffix
+    return "Authored" + suffix
+
+
+def _host_responsibility(payload: Mapping[str, Any]) -> str:
+    units = [str(value).strip() for value in payload.get("current_units", []) if str(value).strip()]
+    return (
+        f"Implement the approved authored unit: {units[0]}"
+        if units
+        else "Implement the approved authored behavior."
+    )
+
+
+def _host_obligation(requirements: Mapping[str, str], *, instruction: str) -> str:
+    return json.dumps(
+        {"source_requirements": dict(requirements), "instruction": instruction},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _host_estimated_tokens(requirements: Mapping[str, str]) -> int:
+    """Conservative deterministic source allowance; never a model-authored estimate."""
+    encoded = "\n".join(str(value) for value in requirements.values()).encode("utf-8")
+    return max(768, 512 + len(encoded))
+
+
+def _unique_helper_symbol(original: Mapping[str, Any], contracts: list[dict[str, Any]]) -> str:
+    occupied = {str(item.get("symbol", "")) for item in contracts}
+    index = 1
+    while True:
+        candidate = f"{original['symbol']}Part{index}"
+        if candidate not in occupied:
+            return candidate
+        index += 1
+
+
+def _split_requirement_ids(requirements: list[str]) -> tuple[list[str], list[str]]:
+    if not requirements:
+        return [], []
+    if len(requirements) == 1:
+        # Provenance IDs are indivisible. The strictly decreasing source budget is
+        # the well-founded measure, so repeated output pressure still terminates.
+        return list(requirements), list(requirements)
+    midpoint = max(1, len(requirements) // 2)
+    return requirements[:midpoint], requirements[midpoint:]
+
+
+def _requirements_for(ids: list[str], source: Mapping[str, str]) -> dict[str, str]:
+    return {req_id: source[req_id] for req_id in ids if req_id in source}
+
+
 def compile_contribution(router: Any, name: str, payload: dict[str, Any],
                          state: dict[str, Any], checkpoint: Callable[[], None]) -> dict[str, Any]:
-    """Native small-model frontend; output is the private host IR, not model JSON."""
-    from .implementation_ir import ImplementationGraphError
+    """Lower authored work deterministically; no implementation-planning LLM call exists here.
 
+    The text model is reserved for the later bounded source-generation task. The host
+    owns owner naming, lifecycle, graph shape, requirement provenance and dependency
+    topology so a malformed planning/tool response cannot block production.
+    """
     if name == "decompose_implementation_node":
         return decompose_contribution(router, payload, state, checkpoint)
-    owners = {n["symbol"]: n for n in payload.get("accepted_nodes", [])}
-    unresolved = payload.get("unresolved_dependencies", [])
-    resolving = not payload.get("unit_ids") and bool(unresolved)
-    packet = work_packet(payload["requirements"], payload.get("unit_context") or payload["requirements"])
-    context = {"work_packet": packet, "platform": payload["platform"], "package": payload["package"],
-               "mod_id": payload["mod_id"], "project_context": payload.get("project_context", ""),
-               "owner_catalog": [{"symbol": n["symbol"], "kind": n["kind"],
-                                  "responsibility": n["responsibility"]} for n in owners.values()]}
-    if resolving:
-        identity = {"symbol": unresolved[0], "kind": "java"}
-        context["consumers"] = [n for n in owners.values() if unresolved[0] in n["depends_on"]]
-    else:
-        identity = _decide(router, "select_implementation_owner", {
-            "symbol": {**_SYMBOL, "description": "Reuse the existing state owner when appropriate; otherwise name one new owner."},
-            "kind": {"type": "string", "enum": ["java", "resource"]},
-        }, context, state, checkpoint,
-            lambda v: {"kind": "Existing owner kind cannot change."}
-            if v["symbol"] in owners and owners[v["symbol"]]["kind"] != v["kind"] else {})
-    owner = owners.get(identity["symbol"])
-    context.pop("owner_catalog", None)
-    context["owner"] = owner or identity
-    behavior = _decide(router, "define_implementation_behavior", {
-        "state_transition": {**_TEXT, "description": "One responsibility: named state owner, input/trigger and resulting state/effect; delegate separate state to dependencies."},
-        "success_condition": {**_TEXT, "description": "Observable success for this work packet."},
-        "failure_condition": {**_TEXT, "description": "Rejection/failure behavior and what state must remain unchanged; say explicitly if no failure applies."},
-    }, context, state, checkpoint)
-    context["behavior"] = behavior
-    dependency_schema = {"type": "array", "uniqueItems": True, "items": _SYMBOL,
-                         "description": "Actual state/API owners consumed by this work. No artificial ordering edges."}
-    if resolving:
-        dependency_schema["items"] = {"type": "string", "enum": list(owners)}
-    dependency_choice = _decide(router, "select_implementation_dependencies", {
-        "depends_on": dependency_schema,
-    }, {**context, "owner_catalog": [{"symbol": n["symbol"], "responsibility": n["responsibility"]}
-                                      for n in owners.values()]}, state, checkpoint,
-        lambda v: _dependency_errors(v["depends_on"], identity["symbol"], owners))
-    context["dependencies"] = [owners[s] for s in dependency_choice["depends_on"] if s in owners]
-    context["unresolved_dependencies"] = [s for s in dependency_choice["depends_on"] if s not in owners]
-    properties = {
-        "public_api": {**_LIST, "description": "Only new Java member signatures, no type declarations or bodies. Existing signatures need not be repeated. Empty for resources."},
-        "activation": {"type": "boolean", "description": "Does this owner need runtime event registration? Host supplies initialize()."},
-        "estimated_tokens": {"type": "integer", "minimum": 1, "description": "Complete serialized source estimate for this owner after this contribution."},
+
+    packet = work_packet(
+        payload["requirements"], payload.get("unit_context") or payload["requirements"]
+    )
+    owners = {node["symbol"]: node for node in payload.get("accepted_nodes", [])}
+    symbol = _host_owner_symbol(payload, packet)
+    owner = owners.get(symbol)
+    unit_requirements = payload.get("unit_context") or packet["requirements"]
+    responsibility = owner["responsibility"] if owner else _host_responsibility(payload)
+    node = {
+        "symbol": symbol,
+        "kind": "java",
+        "resource_path": "",
+        "responsibility": responsibility,
+        "requirements": list(packet["requirements"]),
+        "obligations": [
+            _host_obligation(
+                packet["requirements"],
+                instruction=(
+                    "Implement these approved requirements exactly in this bounded Java unit. "
+                    "The host owns lifecycle wiring and graph structure; do not invent sibling owners."
+                ),
+            )
+        ],
+        "public_api": [],
+        "depends_on": [],
+        "activation": True,
+        "estimated_tokens": _host_estimated_tokens(unit_requirements),
     }
-    if identity["kind"] == "resource":
-        properties["public_api"] = {"type": "array", "maxItems": 0}
-        properties["activation"] = {"const": False}
-    interface = _decide(router, "define_implementation_interface", properties, context, state, checkpoint,
-                        lambda v: _interface_errors(v, identity, owner))
-    path = owner["resource_path"] if owner else ""
-    if identity["kind"] == "resource" and not owner:
-        path = _decide(router, "locate_implementation_resource", {
-            "resource_path": {"type": "string", "pattern": rf"^src/main/resources/(assets|data)/{re.escape(payload['mod_id'])}/(?!.*(?:\.\.|\\)).+\.json$"},
-        }, context, state, checkpoint)["resource_path"]
-    node = {**identity, **interface, **dependency_choice, "resource_path": path,
-            "responsibility": owner["responsibility"] if owner else behavior["state_transition"],
-            "requirements": list(packet["requirements"]),
-            "obligations": [json.dumps(behavior, ensure_ascii=False)]}
-    if resolving and node["symbol"] in node["depends_on"]:
-        raise ImplementationGraphError("IMPLEMENTATION_IR_DEPENDENCY_CYCLE")
     return {"nodes": [node]}
 
 
@@ -268,41 +301,73 @@ def _dependency_errors(dependencies: list[str], symbol: str, owners: dict[str, A
 
 def decompose_contribution(router: Any, payload: dict[str, Any], state: dict[str, Any],
                            checkpoint: Callable[[], None]) -> dict[str, Any]:
-    """Extract one helper while the host retains the original facade and APIs."""
-    original = payload["rejected_node"]
+    """Deterministically split one host-owned Java unit after observed output pressure."""
     from .implementation_ir import ImplementationGraphError
+
+    original = payload["rejected_node"]
     if original["kind"] != "java":
-        raise ImplementationGraphError("IMPLEMENTATION_IR_RESOURCE_SPLIT_REQUIRES_RESOURCE_COMPOSITION")
-    context = {"work_packet": {"requirements": payload["requirements"]}, "owner": original,
-               "dependencies": payload["existing_contracts"], "reason": payload["reason"],
-               "instruction": "Extract one coherent state/responsibility into one helper. The host retains the original facade and all of its APIs."}
-    identity = _decide(router, "select_implementation_helper", {
-        "symbol": {"type": "string", "pattern": "^" + re.escape(original["symbol"]) + r"Part[A-Za-z0-9_]+$"},
-    }, context, state, checkpoint)
-    behavior = _decide(router, "define_helper_behavior", {
-        "state_transition": _TEXT, "success_condition": _TEXT, "failure_condition": _TEXT,
-        "facade_work": {**_TEXT, "description": "Work retained by the facade, including delegation through helper APIs."},
-    }, context, state, checkpoint)
-    limit = original["estimated_tokens"] - 1
-    if payload.get("admission_tokens"):
-        limit = min(limit, payload["admission_tokens"])
+        raise ImplementationGraphError(
+            "IMPLEMENTATION_IR_RESOURCE_SPLIT_REQUIRES_RESOURCE_COMPOSITION"
+        )
+    allowed_host_apis = {"public static void initialize()", "public static void run()"}
+    if any(api not in allowed_host_apis for api in original["public_api"]):
+        raise ImplementationGraphError("IMPLEMENTATION_IR_HOST_SPLIT_UNSUPPORTED_API")
+
+    original_cost = int(original["estimated_tokens"])
+    limit = original_cost - 1
+    budget = payload.get("admission_tokens")
+    if budget is not None:
+        try:
+            budget_value = int(budget)
+        except (TypeError, ValueError):
+            budget_value = 0
+        if budget_value > 0:
+            limit = min(limit, budget_value)
     if limit < 1:
         raise ImplementationGraphError("IMPLEMENTATION_IR_DECOMPOSITION_NO_PROGRESS")
-    allowed = [n["symbol"] for n in payload["existing_contracts"] if n["symbol"] != original["symbol"]]
-    dependency_schema = {"type": "array", "uniqueItems": True, "items": {"type": "string", "enum": allowed}} if allowed else {"type": "array", "maxItems": 0}
-    interface = _decide(router, "define_helper_interface", {
-        "public_api": {**_LIST, "minItems": 1},
-        "depends_on": dependency_schema,
-        "estimated_tokens": {"type": "integer", "minimum": 1, "maximum": limit},
-        "facade_estimated_tokens": {"type": "integer", "minimum": 1, "maximum": limit},
-    }, {**context, "helper": identity, "behavior": behavior}, state, checkpoint,
-        lambda v: {"public_api": member_error(v["public_api"])} if member_error(v["public_api"]) else {})
+
+    helper_symbol = _unique_helper_symbol(
+        original, list(payload.get("existing_contracts", []))
+    )
+    left_ids, right_ids = _split_requirement_ids(list(original["requirements"]))
+    source_requirements = payload.get("requirements") or {}
+    left_requirements = _requirements_for(left_ids, source_requirements)
+    right_requirements = _requirements_for(right_ids, source_requirements)
+    child_cost = max(1, min(limit, max(1, original_cost // 2)))
+
     facade = deepcopy(original)
     facade.pop("path", None)
-    facade["depends_on"] = list(dict.fromkeys([*original["depends_on"], identity["symbol"]]))
-    facade["obligations"] = [behavior["facade_work"]]
-    facade["estimated_tokens"] = interface.pop("facade_estimated_tokens")
-    helper = {**identity, **interface, "kind": "java", "resource_path": "", "activation": False,
-              "requirements": original["requirements"], "responsibility": behavior["state_transition"],
-              "obligations": [json.dumps({k: v for k, v in behavior.items() if k != "facade_work"}, ensure_ascii=False)]}
+    facade["requirements"] = left_ids
+    facade["depends_on"] = list(
+        dict.fromkeys([*original["depends_on"], helper_symbol])
+    )
+    facade["estimated_tokens"] = child_cost
+    entry_method = "initialize" if original["activation"] else "run"
+    facade["obligations"] = [
+        _host_obligation(
+            left_requirements,
+            instruction=(
+                f"Implement the retained requirements and invoke {helper_symbol}.run() from "
+                f"{entry_method}() so the delegated requirements remain active."
+            ),
+        )
+    ]
+
+    helper = {
+        "symbol": helper_symbol,
+        "kind": "java",
+        "resource_path": "",
+        "responsibility": f"Delegated bounded part of {original['symbol']}",
+        "requirements": right_ids,
+        "obligations": [
+            _host_obligation(
+                right_requirements,
+                instruction="Implement only this delegated requirement subset in run().",
+            )
+        ],
+        "public_api": ["public static void run()"],
+        "depends_on": list(original["depends_on"]),
+        "activation": False,
+        "estimated_tokens": child_cost,
+    }
     return {"nodes": [facade, helper]}

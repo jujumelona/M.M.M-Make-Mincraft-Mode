@@ -1,6 +1,7 @@
-"""Exercise admission correction over real HTTP/native parsing, then javac/java.
+"""Exercise host-owned implementation lowering over real coder HTTP, then javac/java.
 
-The server replays controlled responses; this is not a live-model or Fabric test.
+The server replays one controlled source response; implementation planning itself must
+perform zero model requests.
 """
 from __future__ import annotations
 
@@ -14,7 +15,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from jsonschema import Draft202012Validator
 from test_implementation_ir import graph_project
 
 from minecraft_mod_ai import custom_module_generator as direct
@@ -25,40 +25,30 @@ from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
 from minecraft_mod_ai.model_router import ModelRouter
 
 
-@pytest.mark.parametrize("fault", ["public_api", "estimated_tokens"])
-def test_native_graph_correction_reaches_java_execution(tmp_path, monkeypatch, fault):
+def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkeypatch):
     javac, java = shutil.which("javac"), shutil.which("java")
     if not javac or not java:
         pytest.skip("Java compiler/runtime unavailable")
     module, main = graph_project(tmp_path)
     module.config["implementation_graph_request"]["text"] = (
-        "# Trading\n- PlayerCredits owns balances and rejects insufficient purchases.\n"
-        "- TradeService runs one purchase at initialization and verifies the remaining balance."
+        "# Trading\n"
+        "- Own ten credits and spend three credits exactly once at initialization.\n"
+        "- Reject an unaffordable eight-credit purchase without changing the remaining seven credits."
     )
-    wallet_api = ["public static int balance()", "public static boolean spend(int amount)"]
-    wallet = {"public_api": wallet_api, "activation": False, "estimated_tokens": 800}
-    invalid = {**wallet, fault: "not-an-array" if fault == "public_api" else "missing estimate"}
-    # Real HTTP/native parsing, including one malformed scalar/array. Only the
-    # invalid field is re-requested; identity and behavior never get replayed.
-    pages = [
-        {"symbol": "PlayerCredits", "kind": "java"},
-        {"state_transition": "PlayerCredits owns balances and spends once.",
-         "success_condition": "Balance is reduced by price.", "failure_condition": "Insufficient funds leave state unchanged."},
-        {"depends_on": []}, invalid, {fault: wallet[fault]},
-        {"symbol": "TradeService", "kind": "java"},
-        {"state_transition": "Register one startup purchase using PlayerCredits.",
-         "success_condition": "Remaining credits equal seven.", "failure_condition": "Unaffordable purchase keeps seven credits."},
-        {"depends_on": ["PlayerCredits"]},
-        {"public_api": [], "activation": True, "estimated_tokens": 700},
-    ]
-    bodies = [
-        ("package example;\npublic final class PlayerCredits { private static int credits=10; "
-        "public static int balance() { return credits; } "
-        "public static boolean spend(int amount) { if(amount<0 || credits<amount) return false; credits-=amount; return true; } }"),
-        ('package example;\npublic final class TradeService { public static void initialize() { '
-        'if(!PlayerCredits.spend(3) || PlayerCredits.balance()!=7 || PlayerCredits.spend(8) || PlayerCredits.balance()!=7) '
-        'throw new AssertionError("transaction"); System.out.print("PASS"); } }'),
-    ]
+    body = (
+        "package example;\n"
+        "public final class AuthoredUnit0 {\n"
+        "  private AuthoredUnit0() {}\n"
+        "  public static void initialize() {\n"
+        "    int credits = 10;\n"
+        "    credits -= 3;\n"
+        "    if (credits != 7) throw new AssertionError(\"spend\");\n"
+        "    if (credits >= 8) throw new AssertionError(\"insufficient\");\n"
+        "    if (credits != 7) throw new AssertionError(\"mutation\");\n"
+        "    System.out.print(\"PASS\");\n"
+        "  }\n"
+        "}\n"
+    )
     requests = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -67,21 +57,16 @@ def test_native_graph_correction_reaches_java_execution(tmp_path, monkeypatch, f
 
         def do_POST(self):
             payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            index = len(requests)
             requests.append(payload)
-            if index < len(pages):
-                name = payload["tools"][0]["function"]["name"]
-                delta = {"tool_calls": [{"index": 0, "id": f"graph_{index}", "type": "function",
-                                         "function": {"name": name, "arguments": json.dumps(pages[index])}}]}
-                finish = "tool_calls"
-            else:
-                delta = {"content": json.dumps({"content": bodies[index - len(pages)], "summary": "implemented"})}
-                finish = "stop"
+            delta = {"content": json.dumps({"content": body, "summary": "implemented"})}
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Connection", "close")
             self.end_headers()
-            for event in ({"choices": [{"delta": delta}]}, {"choices": [{"delta": {}, "finish_reason": finish}]}):
+            for event in (
+                {"choices": [{"delta": delta}]},
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+            ):
                 self.wfile.write(("data: " + json.dumps(event) + "\n\n").encode())
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
@@ -90,15 +75,23 @@ def test_native_graph_correction_reaches_java_execution(tmp_path, monkeypatch, f
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     endpoint = f"http://127.0.0.1:{server.server_port}/v1"
-    configs = {role: AdapterConfig(role=role, adapter="llama_cpp", model_id="replayed-native",
-                                    max_new_tokens=8192 if role == "planner" else 4096)
-               for role in ("planner", "coder")}
+    configs = {
+        role: AdapterConfig(
+            role=role,
+            adapter="llama_cpp",
+            model_id="replayed-native",
+            max_new_tokens=4096,
+        )
+        for role in ("planner", "coder")
+    }
     adapters = {role: LlamaCppAdapter(config) for role, config in configs.items()}
     for adapter in adapters.values():
         monkeypatch.setattr(adapter, "_server_url", lambda request: endpoint)
-    # No local model/GPU: substitute capacity/LoRA discovery only, retaining production
-    # payloads, HTTP streaming, native schema validation, router and executor.
-    monkeypatch.setattr(llama_exact_context, "capacity_safe_payload", lambda url, payload, **kwargs: payload)
+    monkeypatch.setattr(
+        llama_exact_context,
+        "capacity_safe_payload",
+        lambda url, payload, **kwargs: payload,
+    )
     monkeypatch.setattr(llama_lora_runtime, "apply_request_lora", lambda *args: None)
 
     class Router(ModelRouter):
@@ -112,9 +105,11 @@ def test_native_graph_correction_reaches_java_execution(tmp_path, monkeypatch, f
             return nullcontext()
 
         def generate_text(self, role, messages, **kwargs):
-            # Source responses are controlled fixtures too; exercise their real
-            # HTTP transport without pretending to run live MCP/RAG research.
+            assert role == "coder"
             return adapters[role].generate(GenerationRequest(messages=messages))
+
+        def _generate_tool_decision_impl(self, role, messages, **kwargs):
+            raise AssertionError("host graph lowering must not call planner tool decisions")
 
     compilations = []
 
@@ -124,42 +119,64 @@ def test_native_graph_correction_reaches_java_execution(tmp_path, monkeypatch, f
 
         def compile_java(self, root):
             files = list((Path(root) / "src/main/java").rglob("*.java"))
-            result = subprocess.run([javac, "-d", str(tmp_path / "classes"), *map(str, files)], capture_output=True, text=True, check=False)
+            result = subprocess.run(
+                [javac, "-d", str(tmp_path / "classes"), *map(str, files)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
             compilations.append(result)
-            return SimpleNamespace(status="PASS" if result.returncode == 0 else "FAIL", commands=(), error=result.stderr)
+            return SimpleNamespace(
+                status="PASS" if result.returncode == 0 else "FAIL",
+                commands=(),
+                error=result.stderr,
+            )
 
     monkeypatch.setattr(direct, "GradleRunner", JavacRunner)
-    monkeypatch.setattr(direct, "adapter_for_target", lambda *args: SimpleNamespace(
-        minecraft_version="1.21.1", loader="fabric", java_version=17, yarn_mappings="none"))
+    monkeypatch.setattr(
+        direct,
+        "adapter_for_target",
+        lambda *args: SimpleNamespace(
+            minecraft_version="1.21.1",
+            loader="fabric",
+            java_version=17,
+            yarn_mappings="none",
+        ),
+    )
     try:
         generator = direct.CustomModuleGenerator(Router())
         result = generator.generate(tmp_path, module=module)
-        assert len(requests) == 11
-        for payload in requests[:len(pages)]:
-            assert len(payload["tools"]) == 1
-            assert payload["tools"][0]["function"]["name"] != "compile_implementation_graph"
-            assert "nodes" not in payload["tools"][0]["function"]["parameters"]["properties"]
-            assert payload["tool_choice"] == "required"
-            assert payload["parallel_tool_calls"] is False
-        schema = requests[3]["tools"][0]["function"]["parameters"]
-        assert list(Draft202012Validator(schema).iter_errors(invalid))
-        assert not list(Draft202012Validator(schema).iter_errors(wallet))
-        repair_schema = requests[4]["tools"][0]["function"]["parameters"]
-        assert repair_schema["required"] == [fault]
-        correction = json.loads(next(m["content"] for m in requests[4]["messages"] if m["role"] == "user"))
-        assert fault in correction["correct_only"]
-        assert set(correction["accepted_fields"]) == set(wallet) - {fault}
-        continuation = json.loads(next(m["content"] for m in requests[5]["messages"] if m["role"] == "user"))
-        assert list(continuation["work_packet"]["requirements"]) == ["R3"]
-        interface_request = json.loads(next(m["content"] for m in requests[8]["messages"] if m["role"] == "user"))
-        assert interface_request["dependencies"][0]["public_api"] == wallet_api
+        assert len(requests) == 1
+        assert not requests[0].get("tools")
+        graph = result["implementation_ir"]
+        assert [node["symbol"] for node in graph["nodes"]] == ["AuthoredUnit0"]
+        assert graph["nodes"][0]["depends_on"] == []
         assert all(c.returncode == 0 for c in compilations)
-        assert "TradeService.initialize();" in main.read_text()
+        assert "AuthoredUnit0.initialize();" in main.read_text()
         assert generator.ensure_generation_live_commit(result, project_root=tmp_path)
         probe = tmp_path / "Probe.java"
-        probe.write_text("public class Probe { public static void main(String[] args) { new example.TestMod().onInitialize(); } }")
-        subprocess.run([javac, "-cp", str(tmp_path / "classes"), "-d", str(tmp_path / "classes"), str(probe)], check=True, capture_output=True)
-        run = subprocess.run([java, "-cp", str(tmp_path / "classes"), "Probe"], check=True, capture_output=True, text=True)
+        probe.write_text(
+            "public class Probe { public static void main(String[] args) { "
+            "new example.TestMod().onInitialize(); } }"
+        )
+        subprocess.run(
+            [
+                javac,
+                "-cp",
+                str(tmp_path / "classes"),
+                "-d",
+                str(tmp_path / "classes"),
+                str(probe),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        run = subprocess.run(
+            [java, "-cp", str(tmp_path / "classes"), "Probe"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
         assert run.stdout == "PASS"
     finally:
         server.shutdown()
