@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -78,8 +77,8 @@ class _Router:
 
     def generate_text(self, role, messages, **kwargs):
         assert role == "coder"
-        assert kwargs["response_format"] == "json"
-        assert isinstance(kwargs["response_schema"], dict)
+        assert kwargs["response_format"] == "text"
+        assert "response_schema" not in kwargs
         assert kwargs["enable_tools"] is False
         assert kwargs["tool_stage"] == "generation"
         self.calls.append(([dict(message) for message in messages], dict(kwargs)))
@@ -123,7 +122,7 @@ def _generate(tmp_path: Path, router: _Router, *, name: str = "Generated"):
 
 def test_direct_coder_returns_whole_file_and_host_writes_it(tmp_path: Path) -> None:
     router = _Router([
-        json.dumps({"content": _source(), "summary": "implemented"})
+        _source()
     ])
     root, result = _generate(tmp_path, router)
 
@@ -147,8 +146,8 @@ def test_compiler_failure_repair_uses_exact_failure_then_passes(tmp_path: Path) 
         SimpleNamespace(status="PASS", commands=(), error=None),
     ]
     router = _Router([
-        json.dumps({"content": _source(value=1), "summary": "first"}),
-        json.dumps({"content": _source(value=2), "summary": "fixed"}),
+        _source(value=1),
+        _source(value=2),
     ])
 
     root, result = _generate(tmp_path, router)
@@ -165,8 +164,8 @@ def test_non_improving_invariant_repair_stops_without_blind_retries(
     broken_one = "package example; public final class Wrong {}"
     broken_two = "package example; public final class StillWrong {}"
     router = _Router([
-        json.dumps({"content": broken_one, "summary": "bad"}),
-        json.dumps({"content": broken_two, "summary": "still bad"}),
+        broken_one,
+        broken_two,
     ])
 
     with pytest.raises(CustomModuleGenerationError, match="ceased to improve"):
