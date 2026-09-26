@@ -139,38 +139,26 @@ def _distinct_messages(*, step_count: int = 3):
     return tuple(messages)
 
 
-def test_production_atomic_seams_are_source_owned_and_install_is_noop() -> None:
+def test_production_whole_file_coder_does_not_recreate_retired_atomic_seams() -> None:
     from minecraft_mod_ai import custom_module_generator, model_router
     from minecraft_mod_ai.small_model_atomic_coder_execution import (
         assert_installed,
         install,
     )
 
-    before = (
-        custom_module_generator._generate_coder_text,
-        custom_module_generator._collect_initial_observations,
-        custom_module_generator._materialize_owned_reuse_context,
+    retired = (
+        "_generate_coder_text",
+        "_collect_initial_observations",
+        "_materialize_owned_reuse_context",
     )
-    assert all(
-        getattr(item, "_mmm_small_model_atomic_coder", False)
-        for item in before
-    )
-    assert getattr(
-        custom_module_generator._collect_initial_observations,
-        "__mmm_repository_grounding_live_context__",
-        False,
-    )
+    assert all(not hasattr(custom_module_generator, name) for name in retired)
 
     install(
         custom_module_generator_module=custom_module_generator,
         model_router_module=model_router,
     )
-    after = (
-        custom_module_generator._generate_coder_text,
-        custom_module_generator._collect_initial_observations,
-        custom_module_generator._materialize_owned_reuse_context,
-    )
-    assert after == before
+
+    assert all(not hasattr(custom_module_generator, name) for name in retired)
     assert_installed(
         custom_module_generator_module=custom_module_generator,
         model_router_module=model_router,
@@ -368,130 +356,6 @@ def test_atomic_summary_aggregation_preserves_response_template():
     assert "atomic step 3/3" in summary
 
 
-def test_atomic_summary_aggregation_preserves_host_summary_in_production_text_mode():
-    from types import SimpleNamespace
-
-    from minecraft_mod_ai.custom_module_generator import _parse_coder_summary
-    from minecraft_mod_ai.small_model_atomic_coder_execution import install
-
-    class Router:
-        def generate_text(self, role, messages, **kwargs):
-            assert kwargs["response_format"] == "text"
-            assert kwargs.get("response_schema") is None
-            assert kwargs["tool_stage"] == "generation"
-            assert kwargs["enable_tools"] is True
-            return json.dumps({
-                "summary": "Applied the approved source mutation and passed generation-time host verification."
-            })
-
-    custom = SimpleNamespace(
-        _coder_project_context_budget=lambda *a, **k: 4096,
-        _generate_coder_text=(
-            lambda router, role, messages, *args, **kwargs:
-            router.generate_text(role, messages, *args, **kwargs)
-        ),
-        _collect_initial_observations=lambda *a, **k: {},
-        _materialize_owned_reuse_context=lambda *a, **k: {},
-    )
-    install(
-        custom_module_generator_module=custom,
-        model_router_module=SimpleNamespace(ModelRouter=Router),
-    )
-    result = custom._generate_coder_text(Router(),
-        "coder",
-        _distinct_messages(step_count=3),
-        response_format="text",
-        tool_stage="generation",
-        enable_tools=True,
-    )
-    summary = _parse_coder_summary(result)
-    assert summary.count(
-        "Applied the approved source mutation and passed generation-time host verification."
-    ) == 1
-    assert "atomic steps 1-3/3" in summary
-    assert len(summary) <= 256
-
-
-def test_atomic_summary_aggregation_truncates_distinct_contract_summaries_to_schema_limit():
-    from types import SimpleNamespace
-
-    from minecraft_mod_ai.custom_module_generator import _parse_coder_summary
-    from minecraft_mod_ai.small_model_atomic_coder_execution import install
-
-    class Router:
-        calls = 0
-
-        def generate_text(self, role, messages, **kwargs):
-            self.calls += 1
-            return json.dumps({
-                "summary": f"step-{self.calls}-" + ("x" * 220)
-            })
-
-    custom = SimpleNamespace(
-        _coder_project_context_budget=lambda *a, **k: 4096,
-        _generate_coder_text=(
-            lambda router, role, messages, *args, **kwargs:
-            router.generate_text(role, messages, *args, **kwargs)
-        ),
-        _collect_initial_observations=lambda *a, **k: {},
-        _materialize_owned_reuse_context=lambda *a, **k: {},
-    )
-    install(
-        custom_module_generator_module=custom,
-        model_router_module=SimpleNamespace(ModelRouter=Router),
-    )
-    result = custom._generate_coder_text(Router(),
-        "coder",
-        _distinct_messages(step_count=3),
-        response_format="text",
-        tool_stage="generation",
-        enable_tools=True,
-    )
-    summary = _parse_coder_summary(result)
-    assert len(summary) <= 256
-    assert summary.endswith("…")
-
-
-def test_atomic_summary_aggregation_rejects_mixed_summary_transport():
-    from types import SimpleNamespace
-
-    from minecraft_mod_ai.small_model_atomic_coder_execution import (
-        AtomicCoderContractError,
-        install,
-    )
-
-    class Router:
-        calls = 0
-
-        def generate_text(self, role, messages, **kwargs):
-            self.calls += 1
-            if self.calls == 2:
-                return "free text"
-            return json.dumps({"summary": "host summary"})
-
-    custom = SimpleNamespace(
-        _coder_project_context_budget=lambda *a, **k: 4096,
-        _generate_coder_text=(
-            lambda router, role, messages, *args, **kwargs:
-            router.generate_text(role, messages, *args, **kwargs)
-        ),
-        _collect_initial_observations=lambda *a, **k: {},
-        _materialize_owned_reuse_context=lambda *a, **k: {},
-    )
-    install(
-        custom_module_generator_module=custom,
-        model_router_module=SimpleNamespace(ModelRouter=Router),
-    )
-    with pytest.raises(AtomicCoderContractError, match="CODER_SUMMARY_TRANSPORT_MIXED"):
-        custom._generate_coder_text(Router(),
-            "coder",
-            _distinct_messages(step_count=3),
-            response_format="text",
-            tool_stage="generation",
-            enable_tools=True,
-        )
-
-
 def _two_target_capsule() -> TaskCapsule:
     anchors = (
         TaskAnchor(
@@ -594,55 +458,9 @@ def test_atomic_step_capsule_rejects_target_outside_parent_task() -> None:
 
 
 
-def test_bounded_initial_observations_use_source_observation_owner_helpers() -> None:
+def test_direct_coder_no_longer_exports_legacy_observation_pager() -> None:
     from minecraft_mod_ai import custom_module_generator
 
-    class Index:
-        calls = 0
+    assert not hasattr(custom_module_generator, "_collect_initial_observations")
+    assert not hasattr(custom_module_generator, "_observation_context_pages")
 
-        def select_page(
-            self,
-            *,
-            query: str,
-            diagnostic_paths,
-            byte_budget: int,
-            cursor: str,
-        ):
-            self.calls += 1
-            assert query == "Feature"
-            assert tuple(diagnostic_paths) == ()
-            assert byte_budget == 4096
-            assert cursor == ""
-            content = "public final class Feature {}"
-            return {
-                "page_index": 0,
-                "project_sha256": "sha256:" + "a" * 64,
-                "query_sha256": "sha256:" + "b" * 64,
-                "start_position": 0,
-                "start_offset": 0,
-                "next_cursor": "unused-because-bootstrap-is-single-page",
-                "complete": False,
-                "files": [
-                    {
-                        "path": "src/main/java/demo/Feature.java",
-                        "sha256": "sha256:" + "c" * 64,
-                        "content_start_bytes": 0,
-                        "content_end_bytes": len(content.encode("utf-8")),
-                        "content": content,
-                    }
-                ],
-            }
-
-    index = Index()
-    ledger = custom_module_generator._collect_initial_observations(
-        index,
-        query="Feature",
-        byte_budget=4096,
-    )
-
-    assert index.calls == 1
-    assert ledger["receipt"]["source_page_count"] == 1
-    assert ledger["receipt"]["observation_count"] == 1
-    assert ledger["receipt"]["policy"]["initial_page_only"] is True
-    assert ledger["records"][0]["path"] == "src/main/java/demo/Feature.java"
-    assert ledger["records"][0]["text"] == "public final class Feature {}"
