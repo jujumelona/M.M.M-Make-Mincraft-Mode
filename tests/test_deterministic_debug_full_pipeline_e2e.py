@@ -103,14 +103,7 @@ class _DeterministicRouter:
                 "",
             ]
         )
-        return json.dumps(
-            {
-                "content": source,
-                "summary": "Implemented the host-grounded DebugToken fixture.",
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
+        return source
 
 
 def test_debug_fixture_runs_real_build_and_packaging_without_live_model(
