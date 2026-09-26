@@ -14,6 +14,12 @@ from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
 from minecraft_mod_ai.repair_engine import RepairEngine
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _install_research_performance_contracts() -> None:
+    context_performance.harden(research_code_context)
+    reuse.harden()
+
+
 def _unit(path: str, package: str, *, imports=(), types=()):
     return SimpleNamespace(
         path=path,
