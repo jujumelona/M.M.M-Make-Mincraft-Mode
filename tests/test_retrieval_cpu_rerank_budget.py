@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 from minecraft_mod_ai import model_router
 
 
@@ -23,6 +25,8 @@ class _RouterLike:
     def __init__(self, device: str) -> None:
         self.profile = "test"
         self.registry = _Registry(device)
+        self._generation_lock = threading.RLock()
+        self._reranker_adapters = {}
 
 
 def _install_sentinel(monkeypatch):

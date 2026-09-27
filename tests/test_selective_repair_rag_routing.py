@@ -41,11 +41,12 @@ def test_host_only_failures_do_not_request_retrieval() -> None:
     )
 
 
-def test_runtime_research_router_exposes_selective_repair_contract() -> None:
+def test_selective_repair_contract_is_explicitly_installable() -> None:
     from minecraft_mod_ai.custom_generation_search_contract import (
         _ResearchEvidenceRouter,
     )
 
+    _install_selective_contract()
     assert getattr(
         _ResearchEvidenceRouter.generate_text,
         "_mmm_selective_repair_rag",

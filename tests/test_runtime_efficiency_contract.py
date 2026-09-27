@@ -36,7 +36,7 @@ def _node(node_id: str, resource_class: str) -> WorkNode:
     )
 
 
-def test_stdlib_executor_is_not_globally_patched(monkeypatch) -> None:
+def test_stdlib_executor_and_base_scheduler_are_not_globally_patched(monkeypatch) -> None:
     monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "3")
     assert not getattr(
         concurrent.futures.ThreadPoolExecutor,
@@ -48,7 +48,9 @@ def test_stdlib_executor_is_not_globally_patched(monkeypatch) -> None:
         thread_name_prefix="llm",
     ) as pool:
         assert pool._max_workers == 1
-    assert safety._capacities()["llm"] == 3
+    # Package import is mutation-free. Native llama runtime composition may install
+    # dynamic slot admission explicitly; the source-owned scheduler default remains 1.
+    assert safety._capacities()["llm"] == 1
 
 
 def test_generation_scheduler_uses_owner_capacities_and_event_wait() -> None:
@@ -131,7 +133,7 @@ def test_fluid_without_deterministic_generator_uses_llm_custom_lane() -> None:
 
 
 def test_shared_gpu_allows_llm_read_sharing_but_blocks_image(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
+    monkeypatch.setitem(safety._RESOURCE_CAPACITIES, "llm", 2)
     plan = WorkGraphPlan(
         schema_version="mmm/production-work-graph-v1",
         proposal_hash="sha256:max-efficiency",
@@ -189,12 +191,26 @@ def test_reused_sqlite_connection_rejects_stale_checkpoint_completion(tmp_path) 
     assert ledger.cached_checkpoint("compile", input_hash="sha256:current") is None
 
 
-def test_parallel_custom_search_has_one_runtime_owner() -> None:
+def test_direct_host_authority_does_not_require_import_time_search_wrappers() -> None:
     generate = CustomModuleGenerator.generate
-    assert getattr(generate, "_mmm_parallel_custom_search", False)
-    assert getattr(generate, "_mmm_custom_verifier_search", False)
-    assert getattr(generate, "_mmm_research_generation_search", False)
-    assert not getattr(custom_search._width, "_mmm_context_single_candidate", False)
+    assert not getattr(generate, "_mmm_parallel_custom_search", False)
+    assert not getattr(generate, "_mmm_custom_verifier_search", False)
+    assert not getattr(generate, "_mmm_research_generation_search", False)
+    owned = ProductionModule(
+        module_id="owned",
+        kind="custom_java",
+        config={
+            "evidence_task": {
+                "owned_anchors": [
+                    {
+                        "kind": "symbol",
+                        "locator": "src/main/java/demo/Owned.java#Owned",
+                    }
+                ]
+            }
+        },
+    )
+    assert custom_search._direct_host_authority(owned) is True
     assert custom_search._active_native_slots() >= 1
 
 
