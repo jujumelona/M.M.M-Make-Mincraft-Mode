@@ -3,8 +3,8 @@ from __future__ import annotations
 """Strict parser for the canonical authored design document.
 
 This module never falls back to generic implementation units. It only recognizes
-the fixed authored document section ids and keeps nested concern headings inside
-their owning canonical section.
+the fixed authored document section ids, lowers only roles actually present in the
+approved document, and keeps nested concern headings inside their owning section.
 """
 
 import re
@@ -210,13 +210,13 @@ def decompose_canonical_authored_units(
     if not requirements:
         raise AuthoredDesignSchemaError("IMPLEMENTATION_IR_AUTHORED_DESIGN_EMPTY")
     by_section = _collect_section_refs(text)
-    missing = [
-        section for section in EXECUTION_SECTION_ORDER
-        if not by_section.get(section)
+    planned_roles = [
+        role for role in EXECUTION_SECTION_ORDER
+        if by_section.get(role)
     ]
-    if missing:
+    if not planned_roles:
         raise AuthoredDesignSchemaError(
-            "IMPLEMENTATION_IR_AUTHORED_SECTION_MISSING: " + ", ".join(missing)
+            "IMPLEMENTATION_IR_AUTHORED_EXECUTION_EMPTY"
         )
     return [
         {
@@ -228,7 +228,7 @@ def decompose_canonical_authored_units(
             },
             "context_requirements": {},
         }
-        for role in EXECUTION_SECTION_ORDER
+        for role in planned_roles
     ]
 
 

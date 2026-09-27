@@ -282,14 +282,14 @@ def test_graph_schema_version_tracks_admission_semantics():
     assert graph["schema_version"] == ir.IMPLEMENTATION_IR_SCHEMA_VERSION
 
 
-def test_malformed_saved_design_reaches_canonical_graph_and_leaf_contracts():
+def test_partial_saved_design_reaches_only_present_canonical_leaf_contracts():
     from minecraft_mod_ai.implementation_decisions import compile_contribution
     from minecraft_mod_ai.implementation_graph_execution import (
         _leaf_module,
         _normalize_implementation_graph_request,
     )
 
-    malformed = (
+    authored = (
         "## behavior_contract\nTrade ore for credits.\n"
         "## state_model\nStore credits.\n"
         "## algorithm\nCalculate price.\n"
@@ -314,14 +314,13 @@ def test_malformed_saved_design_reaches_canonical_graph_and_leaf_contracts():
 
     request = _normalize_implementation_graph_request(
         {
-            "text": malformed,
+            "text": authored,
             "target": TARGET,
             "package": "example",
             "mod_id": "test",
         }
     )
-    assert "## authority_and_network" in request["text"]
-    assert "## persistence" in request["text"]
+    assert request["text"] == authored
 
     graph = compile_authored_graph(
         HostLowering(),
@@ -335,8 +334,6 @@ def test_malformed_saved_design_reaches_canonical_graph_and_leaf_contracts():
         "AuthoredStateModel",
         "AuthoredBehaviorContract",
         "AuthoredAlgorithm",
-        "AuthoredAuthorityNetwork",
-        "AuthoredPersistence",
         "AuthoredResourcesUi",
         "AuthoredFailureLimits",
         "AuthoredIntegration",
@@ -349,8 +346,6 @@ def test_malformed_saved_design_reaches_canonical_graph_and_leaf_contracts():
         "state_model",
         "behavior_contract",
         "algorithm",
-        "authority_and_network",
-        "persistence",
         "resources_and_ui",
         "failure_and_limits",
         "integration",

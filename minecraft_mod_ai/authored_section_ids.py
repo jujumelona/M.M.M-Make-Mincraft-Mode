@@ -42,7 +42,11 @@ DOCUMENT_SECTION_SET = frozenset(DOCUMENT_SECTION_ORDER)
 CONTEXT_SECTION_SET = frozenset({
     "overview", "reuse_assessment", "verification", "conclusion",
 })
-REQUIRED_EXECUTION_SECTIONS = frozenset(EXECUTION_SECTION_ORDER)
+# No individual engineering role is universally required. Authored production lowers
+# only the execution roles that the approved document actually contains. This matches
+# sparse planning applicability and prevents omitted optional roles from becoming
+# synthetic code-generation work.
+REQUIRED_EXECUTION_SECTIONS = frozenset()
 
 __all__ = [
     "AUTHORING_SECTION_ORDER",

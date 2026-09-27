@@ -122,7 +122,7 @@ def test_fresh_canonical_h2_layout_is_accepted_without_legacy_migration() -> Non
 
 
 
-def test_planner_preserves_raw_text_and_execution_view_repairs_missing_sections() -> None:
+def test_planner_preserves_raw_text_and_omits_absent_optional_execution_work() -> None:
     raw = (
         "## behavior_contract\nTrade ore for credits.\n"
         "## state_model\nStore credits and ship state.\n"
@@ -142,22 +142,20 @@ def test_planner_preserves_raw_text_and_execution_view_repairs_missing_sections(
     assert plan.text == raw
 
     normalized, report = normalize_authored_document(plan.text)
-    assert report is not None
+    assert normalized == raw
+    assert report is None
     units = decompose_authored_units(normalized)
-    assert {unit["unit_id"] for unit in units} == {
+    unit_ids = {unit["unit_id"] for unit in units}
+    assert unit_ids == {
         "state_model",
         "behavior_contract",
         "algorithm",
-        "authority_and_network",
-        "persistence",
         "resources_and_ui",
         "failure_and_limits",
         "integration",
     }
-    assert normalized.index("## integration") < normalized.index("## authority_and_network")
-    assert normalized.index("## authority_and_network") < normalized.index("## persistence")
-    assert normalized.index("## persistence") < normalized.index("## resources_and_ui")
-    assert "Trade ore for credits." in normalized
+    assert "authority_and_network" not in unit_ids
+    assert "persistence" not in unit_ids
 
 
 def test_canonicalizer_repairs_duplicate_order_and_unknown_peer_headings() -> None:
@@ -180,6 +178,8 @@ def test_canonicalizer_repairs_duplicate_order_and_unknown_peer_headings() -> No
         "authority_and_network", "persistence"
     }
     assert normalized.count("## behavior_contract\n") == 1
+    assert "## authority_and_network\n" not in normalized
+    assert "## persistence\n" not in normalized
     assert "### custom_notes\nKeep this note." in normalized
     decompose_authored_units(normalized)
 

@@ -225,15 +225,33 @@ def test_localized_canonical_headings_keep_nested_concerns_and_drop_preamble():
     assert router.calls == []
 
 
+def test_authored_schema_omits_absent_optional_role_without_synthetic_work():
+    router = NoPlanningModelRouter()
+    text = (
+        "# behavior_contract\nB\n# state_model\nS\n# algorithm\nA\n"
+        "# integration\nI\n# authority_and_network\nN\n# persistence\nP\n"
+        "# resources_and_ui\nR\n"
+    )
+
+    graph = compile_with(router, text=text, authored_schema=True)
+
+    symbols = {node["symbol"] for node in graph["nodes"]}
+    assert "AuthoredFailureLimits" not in symbols
+    assert symbols == {
+        "AuthoredStateModel",
+        "AuthoredBehaviorContract",
+        "AuthoredAlgorithm",
+        "AuthoredAuthorityNetwork",
+        "AuthoredPersistence",
+        "AuthoredResourcesUi",
+        "AuthoredIntegration",
+    }
+    assert router.calls == []
+
+
 @__import__("pytest").mark.parametrize(
     "text,code",
     [
-        (
-            "# behavior_contract\nB\n# state_model\nS\n# algorithm\nA\n"
-            "# integration\nI\n# authority_and_network\nN\n# persistence\nP\n"
-            "# resources_and_ui\nR\n",
-            "IMPLEMENTATION_IR_AUTHORED_SECTION_MISSING",
-        ),
         (
             "# behavior_contract\nB\n# state_model\nS\n# state_model\nS2\n"
             "# algorithm\nA\n# integration\nI\n# authority_and_network\nN\n"

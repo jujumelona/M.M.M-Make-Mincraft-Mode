@@ -5,8 +5,8 @@ from __future__ import annotations
 The planner may write free Markdown, but production must never depend on the model
 remembering a heading protocol. This module projects malformed/legacy prose into the
 same canonical execution vocabulary consumed by authored_ir_parser. The projection is
-deterministic, preserves authored section bodies, and fills a missing execution role
-with an explicit no-additional-work contract instead of inventing gameplay.
+deterministic, preserves authored section bodies, and never manufactures omitted
+optional execution roles. Explicit nested role contracts are promoted when present.
 """
 
 import hashlib
@@ -120,10 +120,13 @@ def _section_bodies(
 
 def _strict_ready(text: str) -> bool:
     try:
-        decompose_canonical_authored_units(text, _source_requirements(text))
+        units = decompose_canonical_authored_units(
+            text, _source_requirements(text)
+        )
     except AuthoredDesignSchemaError:
         return False
-    return True
+    planned = {str(unit["unit_id"]) for unit in units}
+    return not _nested_execution_labels(text, planned)
 
 
 _NESTED_SECTION_BULLET = re.compile(
@@ -145,6 +148,28 @@ def _nested_section_label(label: str) -> str:
         (section for section in EXECUTION_SECTION_ORDER if slug.startswith(section + "_")),
         "",
     )
+
+
+def _nested_execution_labels(
+    source: str, existing: set[str]
+) -> set[str]:
+    found: set[str] = set()
+    fence = ""
+    for line in str(source or "").splitlines(keepends=True):
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if marker:
+            if not fence:
+                fence = marker[1]
+            elif marker[1][0] == fence[0] and len(marker[1]) >= len(fence):
+                fence = ""
+            continue
+        if fence:
+            continue
+        match = _NESTED_SECTION_BULLET.match(line)
+        section = _nested_section_label(match["label"]) if match else ""
+        if section and section not in existing:
+            found.add(section)
+    return found
 
 
 def _nested_block_end(lines: list[str], start: int, base_indent: int) -> int:
@@ -211,14 +236,6 @@ def _promote_nested_execution_sections(
     return [section for section in EXECUTION_SECTION_ORDER if section in promoted]
 
 
-def _missing_body(section: str) -> str:
-    return (
-        f"No additional standalone requirements were authored for {section}. "
-        "Preserve the behavior and constraints defined by the other canonical sections; "
-        "do not invent extra gameplay solely to populate this section."
-    )
-
-
 def _missing_execution_sections(bodies: dict[str, list[str]]) -> list[str]:
     return [
         section
@@ -238,9 +255,9 @@ def _render_canonical_document(
             for chunk in bodies.get(section, ())
             if chunk.strip()
         ]
-        if not chunks and section not in EXECUTION_SECTION_SET:
+        if not chunks:
             continue
-        body = "\n\n".join(chunks).strip() or _missing_body(section)
+        body = "\n\n".join(chunks).strip()
         parts.append(f"## {section}\n{body}".rstrip())
     return "\n\n".join(parts).rstrip() + "\n"
 
