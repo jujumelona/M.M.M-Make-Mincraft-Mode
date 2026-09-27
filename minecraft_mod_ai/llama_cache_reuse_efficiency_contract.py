@@ -163,6 +163,7 @@ def install(
                     value = int(raw)
                 except ValueError:
                     value = 0
+                payload["cache_prompt"] = True
                 payload["n_cache_reuse"] = max(0, min(8192, value))
             return payload
 

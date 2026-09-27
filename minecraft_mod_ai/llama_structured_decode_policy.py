@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from functools import wraps
 from typing import Any
@@ -9,18 +8,6 @@ from .llama_schema_transport import project_llama_transport_schema
 
 _MARKER = "_mmm_server_constrained_structured_decode_v3"
 _VALIDATION_MARKER = "_mmm_structured_generation_validation_v3"
-
-
-def _bounded_section_output_tokens(adapter: Any) -> int:
-    configured = max(1, int(getattr(adapter.config, "max_new_tokens", 1) or 1))
-    raw = os.environ.get("MMM_LLAMA_BOUNDED_SECTION_MAX_TOKENS", "").strip()
-    try:
-        requested = int(raw) if raw else 2048
-    except ValueError:
-        requested = 2048
-    if requested <= 0:
-        requested = 2048
-    return min(configured, requested)
 
 
 def _is_qwen35(adapter: Any) -> bool:
@@ -140,11 +127,9 @@ def bind_structured_decode_policy(hardware_module: Any) -> None:
             result.pop("thinking_budget_tokens", None)
 
         if bounded_section:
-            current_max = max(1, int(result.get("max_tokens", 1) or 1))
-            result["max_tokens"] = min(
-                current_max,
-                _bounded_section_output_tokens(adapter),
-            )
+            # The schema-derived decode ceiling is owned by llama_generation_budget.
+            # This layer only prevents a reasoning prefix from consuming a structured
+            # page; it must not silently re-cap max_tokens after the budget owner.
             result["thinking_budget_tokens"] = 0
         return result
 

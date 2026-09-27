@@ -213,6 +213,13 @@ def structured_response_token_ceiling(request: Any) -> tuple[int, dict[str, int]
     return max(1024, int(ceiling)), metrics
 
 
+def _atomic_output_recovery_requested(request: Any) -> bool:
+    metadata = getattr(request, "metadata", {})
+    return isinstance(metadata, Mapping) and bool(
+        metadata.get("mmm_atomic_output_recovery", False)
+    )
+
+
 def _request_output_ceiling(request: Any) -> int | None:
     metadata = getattr(request, "metadata", {})
     if not isinstance(metadata, Mapping):
@@ -238,6 +245,17 @@ def install(hardware_module: Any) -> None:
             raw_payload, config=adapter.config,
             structured_output=getattr(request, "response_format", None) == "json",
         )
+        if _atomic_output_recovery_requested(request) and getattr(request, "tools", ()):
+            try:
+                configured_recovery_page = int(raw_payload.get("max_tokens", 0) or 0)
+            except (TypeError, ValueError):
+                configured_recovery_page = 0
+            if configured_recovery_page > 0:
+                bounded["max_tokens"] = max(
+                    max(1, int(bounded.get("max_tokens", 1) or 1)),
+                    configured_recovery_page,
+                )
+
         request_ceiling = _request_output_ceiling(request)
         if request_ceiling is not None:
             bounded["max_tokens"] = min(

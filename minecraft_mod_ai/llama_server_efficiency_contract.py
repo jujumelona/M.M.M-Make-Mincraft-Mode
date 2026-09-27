@@ -200,15 +200,16 @@ def install(autotune_module: Any, hardware_policy_module: Any) -> None:
 
         @wraps(current_payload)
         def payload_with_prompt_cache(adapter: Any, request: Any) -> dict[str, Any]:
+            # Output-budget ownership belongs to generation_output_budget /
+            # llama_generation_budget. This efficiency wrapper may enable prompt-cache
+            # reuse, but must never overwrite max_tokens after the canonical budget
+            # owner has selected it.
             payload = dict(current_payload(adapter, request))
-            if getattr(request, "tools", ()):
-                payload["max_tokens"] = _tool_action_token_budget(
-                    getattr(adapter, "config", None)
-                )
             payload["cache_prompt"] = True
             return payload
 
         payload_with_prompt_cache._mmm_prompt_cache_reuse = True  # type: ignore[attr-defined]
+        payload_with_prompt_cache._mmm_preserves_generation_budget = True  # type: ignore[attr-defined]
         payload_with_prompt_cache._mmm_bounded_tool_action_decode = True  # type: ignore[attr-defined]
         hardware_policy_module._server_payload = payload_with_prompt_cache
 
