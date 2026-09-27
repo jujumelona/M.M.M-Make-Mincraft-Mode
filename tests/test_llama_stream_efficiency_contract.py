@@ -4,6 +4,10 @@ import threading
 from types import SimpleNamespace
 
 from minecraft_mod_ai import llama_stream_efficiency_contract as contract
+from minecraft_mod_ai.llama_sse_protocol import (
+    LlamaNativeResponseFormatError,
+    is_recoverable_native_format_error,
+)
 
 
 class _Response:
