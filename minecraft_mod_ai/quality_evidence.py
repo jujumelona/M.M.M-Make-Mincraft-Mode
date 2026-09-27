@@ -122,9 +122,9 @@ def _integrated_build_command_passed(command: Mapping[str, Any]) -> bool:
     if not _command_passed(command):
         return False
     name = str(command.get('name') or '')
-    if name in {'build', 'clean_build'}:
+    if name == 'build':
         return True
-    if name != 'incremental_build':
+    if name not in {'clean_build', 'incremental_build'}:
         return False
     argv = command.get('command')
     return (

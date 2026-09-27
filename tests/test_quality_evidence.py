@@ -259,7 +259,7 @@ def test_baseline_receipts_are_objective_stable_and_evaluator_compatible(
         key: value["evidence_refs"] for key, value in second.items()
     }
     report = evaluate_quality_contract(compiled.contract, first, PROPOSAL_HASH)
-    assert report["overall_status"] == "PASS"
+    assert report["overall_status"] == "PASS", report
 
 
 @pytest.mark.parametrize(
