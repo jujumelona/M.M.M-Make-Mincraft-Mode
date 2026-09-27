@@ -18,6 +18,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from .acceptance_contracts import is_public_acceptance as _is_public_acceptance
+from .module_identity import logical_module_id
 
 # Runtime composition verifies this exact canonical binding. Keep a static use here so
 # linting and the runtime boundary enforce the same ownership contract.
@@ -638,8 +639,12 @@ def _ownership_context(game_design: Mapping[str, Any]) -> dict[str, Any]:
     namespace = namespaces[0] if namespaces else f"generated.{_slug(mod_id)}"
     language = str(source.get("language") or "java")
     extension = "kt" if language == "kotlin" else "java"
+    owner_raw_module_id = str(
+        source.get("module_id") or resource.get("module_id") or ":"
+    )
+    owner_metadata = source if source else resource
     return {
-        "module_id": str(source.get("module_id") or resource.get("module_id") or ":"),
+        "module_id": logical_module_id(owner_raw_module_id, owner_metadata),
         "source_set": str(source.get("source_set") or "main"),
         "source_root": str(source.get("path") or f"src/main/{language}"),
         "resource_root": str(resource.get("path") or "src/main/resources"),
@@ -648,7 +653,7 @@ def _ownership_context(game_design: Mapping[str, Any]) -> dict[str, Any]:
         "mod_id": _slug(mod_id),
         "extension": extension,
         "topology_module_ids": [
-            str(item.get("module_id") or "")
+            logical_module_id(str(item.get("module_id") or ""), item)
             for item in topology_modules
             if str(item.get("module_id") or "")
         ],
