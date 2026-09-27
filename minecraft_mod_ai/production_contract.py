@@ -62,7 +62,8 @@ def compile_production_contract(requested_prompt: str, game_design: Mapping[str,
     design_snapshot = _json_copy(bound_game_design(game_design), 'game_design')
     research_snapshot = None if research_brief is None else _json_copy(research_brief, 'research_brief')
     raw_modules = [_normalize_module(value) for value in modules]
-    raw_assets = [_normalize_asset(value) for value in assets]
+    explicit_assets = [_normalize_asset(value) for value in assets]
+    raw_assets = list(explicit_assets)
     from .resource_contracts import derive_module_asset_specs
     raw_assets.extend(
         _normalize_asset(value)
@@ -111,7 +112,7 @@ def compile_production_contract(requested_prompt: str, game_design: Mapping[str,
     )
     if not implementation_catalog:
         raise ProductionContractError('production contract requires at least one implementation')
-    active_dimensions, activation_reasons = _infer_dimensions(requested_prompt=requested_prompt, game_design=design_snapshot, research_brief=research_snapshot, modules=[item for item in normalized_modules if not (item['kind'] == 'integration' and isinstance(item.get('config'), Mapping) and item['config'].get('integration_type') == 'mmm_research_shard')], assets=normalized_assets)
+    active_dimensions, activation_reasons = _infer_dimensions(requested_prompt=requested_prompt, game_design=design_snapshot, research_brief=research_snapshot, modules=[item for item in normalized_modules if not (item['kind'] == 'integration' and isinstance(item.get('config'), Mapping) and item['config'].get('integration_type') == 'mmm_research_shard')], assets=explicit_assets)
     acceptance_catalog: list[dict[str, str]] = []
     used_acceptance_statements: set[str] = set()
     for index, statement in enumerate(input_acceptance):
