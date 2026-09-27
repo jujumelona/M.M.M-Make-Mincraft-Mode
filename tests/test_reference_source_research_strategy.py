@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import threading
-
-from minecraft_mod_ai import deadline_executor
 from minecraft_mod_ai import reference_source_research as reference
 
 
