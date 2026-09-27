@@ -41,6 +41,10 @@ ALLOWED_ADAPTERS = frozenset(
         "reranker",
     }
 )
+
+_LOCAL_GPU_TEXT_ADAPTERS = frozenset({
+    "llama_cpp", "vllm", "transformers_text", "transformers_multimodal"
+})
 SUPPORTED_SCHEMAS = frozenset({"mmm/model-registry-v1", "mmm/model-registry-v2"})
 _REGISTRY_CACHE_LOCK = threading.RLock()
 _REGISTRY_SOURCE_CACHE: dict[tuple[str, str], tuple[str, dict[str, Any]]] = {}
@@ -252,7 +256,11 @@ class ModelRegistry:
             min_free_vram_mb=_nonnegative_int(
                 raw.get("min_free_vram_mb", 0), f"{role}.min_free_vram_mb"
             ),
-            exclusive_gpu=bool(raw.get("exclusive_gpu", False)),
+            exclusive_gpu=(
+                True
+                if provider == "local" and adapter in _LOCAL_GPU_TEXT_ADAPTERS
+                else bool(raw.get("exclusive_gpu", False))
+            ),
             cpu_offload=bool(raw.get("cpu_offload", False)),
             base_url=base_url,
             api_key=api_key,

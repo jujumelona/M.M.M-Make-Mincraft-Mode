@@ -307,36 +307,82 @@ class DurableWorkLedger:
         receipt_hash = self._receipt_hash(receipt_json)
         digest = output_hash or receipt_hash
         with self._connect() as connection:
-            row = connection.execute('SELECT state FROM tasks WHERE node_id = ?', (node_id,)).fetchone()
+            row = connection.execute(
+                'SELECT state, output_hash, receipt_json, receipt_hash FROM tasks WHERE node_id = ?',
+                (node_id,),
+            ).fetchone()
             if row is None:
                 raise WorkGraphError(f'Unknown work node: {node_id}')
-            if row[0] not in {WorkState.RUNNING.value, WorkState.SUCCEEDED.value}:
-                raise WorkGraphError(f'Work node {node_id} is not running: {row[0]}')
-            connection.execute('\n                UPDATE tasks\n                SET state = ?, output_hash = ?, receipt_json = ?, receipt_hash = ?,\n                    lease_owner = NULL, lease_until = NULL, error = NULL,\n                    updated_at = ?\n                WHERE node_id = ?\n                ', (WorkState.SUCCEEDED.value, digest, receipt_json, receipt_hash, time.time(), node_id))
+            state = str(row[0])
+            if state == WorkState.SUCCEEDED.value:
+                if (
+                    str(row[1] or '') == digest
+                    and str(row[2] or '') == receipt_json
+                    and str(row[3] or '') == receipt_hash
+                ):
+                    connection.commit()
+                    return self.task(node_id)
+                raise WorkGraphError(
+                    f'Work node {node_id} already succeeded with a different receipt.'
+                )
+            if state != WorkState.RUNNING.value:
+                raise WorkGraphError(
+                    f'Work node {node_id} cannot succeed from state {state}.'
+                )
+            cursor = connection.execute('\n                UPDATE tasks\n                SET state = ?, output_hash = ?, receipt_json = ?, receipt_hash = ?,\n                    lease_owner = NULL, lease_until = NULL, error = NULL,\n                    updated_at = ?\n                WHERE node_id = ? AND state = ?\n                ', (
+                    WorkState.SUCCEEDED.value,
+                    digest,
+                    receipt_json,
+                    receipt_hash,
+                    time.time(),
+                    node_id,
+                    WorkState.RUNNING.value,
+                ))
+            if cursor.rowcount != 1:
+                connection.rollback()
+                raise WorkGraphError(f'Work node changed while succeeding: {node_id}')
             connection.commit()
         return self.task(node_id)
 
+    succeed._mmm_fenced_transition = True  # type: ignore[attr-defined]
+
     def fail(self, node_id: str, error: str, *, input_required: bool=False) -> dict[str, Any]:
-        state = WorkState.INPUT_REQUIRED if input_required else WorkState.FAILED
+        target = WorkState.INPUT_REQUIRED if input_required else WorkState.FAILED
         with self._connect() as connection:
-            cursor = connection.execute('\n                UPDATE tasks\n                SET state = ?, error = ?, lease_owner = NULL,\n                    lease_until = NULL, updated_at = ?\n                WHERE node_id = ? AND state != ?\n                ', (
-                    state.value,
+            row = connection.execute(
+                'SELECT state FROM tasks WHERE node_id = ?',
+                (node_id,),
+            ).fetchone()
+            if row is None:
+                raise WorkGraphError(f'Unknown work node: {node_id}')
+            source_state = str(row[0])
+            if source_state == WorkState.CANCELLED.value:
+                connection.commit()
+                return self.task(node_id)
+            if input_required and source_state == WorkState.INPUT_REQUIRED.value:
+                connection.commit()
+                return self.task(node_id)
+            allowed = {WorkState.RUNNING.value}
+            if input_required:
+                allowed.add(WorkState.PENDING.value)
+            if source_state not in allowed:
+                raise WorkGraphError(
+                    f'Work node {node_id} cannot fail from state {source_state}.'
+                )
+            cursor = connection.execute('\n                UPDATE tasks\n                SET state = ?, error = ?, lease_owner = NULL,\n                    lease_until = NULL, updated_at = ?\n                WHERE node_id = ? AND state = ?\n                ', (
+                    target.value,
                     error[:16384],
                     time.time(),
                     node_id,
-                    WorkState.CANCELLED.value,
+                    source_state,
                 ))
-            if cursor.rowcount == 0:
-                row = connection.execute(
-                    'SELECT state FROM tasks WHERE node_id = ?',
-                    (node_id,),
-                ).fetchone()
-                if row is None:
-                    raise WorkGraphError(f'Unknown work node: {node_id}')
-                if row[0] != WorkState.CANCELLED.value:
-                    raise WorkGraphError(f'Work node {node_id} changed while failing: {row[0]}')
+            if cursor.rowcount != 1:
+                connection.rollback()
+                raise WorkGraphError(f'Work node changed while failing: {node_id}')
             connection.commit()
         return self.task(node_id)
+
+    fail._mmm_fenced_transition = True  # type: ignore[attr-defined]
 
     def retry(self, node_id: str) -> dict[str, Any]:
         with self._connect() as connection:
@@ -415,9 +461,45 @@ class DurableWorkLedger:
             row = connection.execute('\n                SELECT input_hash, state FROM checkpoints\n                WHERE checkpoint_id = ?\n                ', (checkpoint_id,)).fetchone()
             if row is None:
                 connection.execute('\n                    INSERT INTO checkpoints(\n                        checkpoint_id, stage, input_hash, state, attempt, updated_at\n                    ) VALUES (?, ?, ?, ?, 1, ?)\n                    ', (checkpoint_id, stage, input_hash, WorkState.RUNNING.value, time.time()))
-            else:
-                connection.execute('\n                    UPDATE checkpoints\n                    SET stage = ?, input_hash = ?, state = ?,\n                        attempt = attempt + 1, receipt_json = NULL,\n                        receipt_hash = NULL, output_hash = NULL, error = NULL, updated_at = ?\n                    WHERE checkpoint_id = ?\n                    ', (stage, input_hash, WorkState.RUNNING.value, time.time(), checkpoint_id))
+                connection.commit()
+                return
+            old_hash, old_state = str(row[0]), str(row[1])
+            if old_hash == input_hash:
+                if old_state == WorkState.SUCCEEDED.value:
+                    connection.rollback()
+                    raise WorkGraphError(
+                        f'Checkpoint already succeeded for this input: {checkpoint_id}'
+                    )
+                if old_state == WorkState.RUNNING.value:
+                    connection.rollback()
+                    raise WorkGraphError(
+                        f'Checkpoint is already running: {checkpoint_id}'
+                    )
+                if old_state == WorkState.CANCELLED.value:
+                    connection.rollback()
+                    raise WorkGraphError(
+                        f'Checkpoint is cancelled and requires explicit retry: {checkpoint_id}'
+                    )
+            elif old_state == WorkState.RUNNING.value:
+                connection.rollback()
+                raise WorkGraphError(
+                    f'Checkpoint input changed while another attempt is running: {checkpoint_id}'
+                )
+            cursor = connection.execute('\n                UPDATE checkpoints\n                SET stage = ?, input_hash = ?, state = ?,\n                    attempt = attempt + 1, receipt_json = NULL,\n                    receipt_hash = NULL, output_hash = NULL, error = NULL, updated_at = ?\n                WHERE checkpoint_id = ? AND state = ? AND input_hash = ?\n                ', (
+                    stage,
+                    input_hash,
+                    WorkState.RUNNING.value,
+                    time.time(),
+                    checkpoint_id,
+                    old_state,
+                    old_hash,
+                ))
+            if cursor.rowcount != 1:
+                connection.rollback()
+                raise WorkGraphError(f'Checkpoint changed while starting: {checkpoint_id}')
             connection.commit()
+
+    begin_checkpoint._mmm_fenced_transition = True  # type: ignore[attr-defined]
 
     def succeed_checkpoint(self, checkpoint_id: str, *, input_hash: str, receipt: dict[str, Any]) -> None:
         rendered = canonical_json(receipt)
@@ -431,8 +513,82 @@ class DurableWorkLedger:
 
     def fail_checkpoint(self, checkpoint_id: str, *, input_hash: str, error: str) -> None:
         with self._connect() as connection:
-            connection.execute('\n                UPDATE checkpoints\n                SET state = ?, error = ?, updated_at = ?\n                WHERE checkpoint_id = ? AND input_hash = ? AND state != ?\n                ', (WorkState.FAILED.value, error[:16384], time.time(), checkpoint_id, input_hash, WorkState.CANCELLED.value))
+            row = connection.execute(
+                'SELECT input_hash, state FROM checkpoints WHERE checkpoint_id = ?',
+                (checkpoint_id,),
+            ).fetchone()
+            if row is None:
+                raise WorkGraphError(f'Unknown checkpoint: {checkpoint_id}')
+            if str(row[0]) != input_hash:
+                raise WorkGraphError(
+                    f'Checkpoint input changed while running: {checkpoint_id}'
+                )
+            state = str(row[1])
+            if state == WorkState.CANCELLED.value:
+                connection.commit()
+                return
+            if state != WorkState.RUNNING.value:
+                raise WorkGraphError(
+                    f'Checkpoint {checkpoint_id} cannot fail from state {state}.'
+                )
+            cursor = connection.execute('\n                UPDATE checkpoints\n                SET state = ?, error = ?, updated_at = ?\n                WHERE checkpoint_id = ? AND input_hash = ? AND state = ?\n                ', (
+                    WorkState.FAILED.value,
+                    error[:16384],
+                    time.time(),
+                    checkpoint_id,
+                    input_hash,
+                    WorkState.RUNNING.value,
+                ))
+            if cursor.rowcount != 1:
+                connection.rollback()
+                raise WorkGraphError(f'Checkpoint changed while failing: {checkpoint_id}')
             connection.commit()
+
+    fail_checkpoint._mmm_fenced_transition = True  # type: ignore[attr-defined]
+
+
+    def invalidate_checkpoint(
+        self,
+        checkpoint_id: str,
+        *,
+        input_hash: str,
+        reason: str='cached checkpoint output failed validation',
+    ) -> bool:
+        with self._connect() as connection:
+            connection.execute('BEGIN IMMEDIATE')
+            row = connection.execute(
+                'SELECT input_hash, state FROM checkpoints WHERE checkpoint_id = ?',
+                (checkpoint_id,),
+            ).fetchone()
+            if row is None:
+                connection.rollback()
+                raise WorkGraphError(f'Unknown checkpoint: {checkpoint_id}')
+            if str(row[0]) != input_hash:
+                connection.rollback()
+                return False
+            if str(row[1]) != WorkState.SUCCEEDED.value:
+                connection.commit()
+                return False
+            cursor = connection.execute(
+                'UPDATE checkpoints SET state = ?, receipt_json = NULL, '
+                'receipt_hash = NULL, output_hash = NULL, error = ?, updated_at = ? '
+                'WHERE checkpoint_id = ? AND input_hash = ? AND state = ?',
+                (
+                    WorkState.FAILED.value,
+                    reason[:16384],
+                    time.time(),
+                    checkpoint_id,
+                    input_hash,
+                    WorkState.SUCCEEDED.value,
+                ),
+            )
+            if cursor.rowcount != 1:
+                connection.rollback()
+                raise WorkGraphError(
+                    f'Checkpoint changed while invalidating: {checkpoint_id}'
+                )
+            connection.commit()
+            return True
 
     def task(self, node_id: str) -> dict[str, Any]:
         with self._connect() as connection:

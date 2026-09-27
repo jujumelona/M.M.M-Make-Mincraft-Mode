@@ -17,7 +17,6 @@ on:
       - 'minecraft_mod_ai/performance_final_tuning.py'
       - 'minecraft_mod_ai/performance_final_contract.py'
       - 'minecraft_mod_ai/__init__.py'
-      - 'minecraft_mod_ai/runtime_bootstrap.py'
       - 'tools/verify_integrity_minecraft.py'
       - 'tests/test_implementation_ir.py'
       - 'tests/test_llama_*.py'

@@ -76,12 +76,3 @@ __all__ = [
 
 __version__ = "0.8.0"
 
-
-# Install the still-live cross-cutting runtime contracts once, after the public modules
-# above are imported. The previous bootstrap file was removed while several contract
-# modules remained installer-owned, leaving production and isolated test processes with
-# different behavior.
-from .runtime_bootstrap import initialize_runtime as _initialize_runtime
-
-_initialize_runtime()
-del _initialize_runtime
