@@ -77,6 +77,23 @@ _TYPE_DECL = re.compile(
     r"(?P<kind>class|interface|enum|record)\b"
 )
 _INITIALIZE_DECL = re.compile(r"\bpublic\s+static\s+void\s+initialize\s*\(")
+_MODEL_PROSE_LINE = re.compile(
+    r"(?mi)^\s*(?:"
+    r"the user\b|i\s+(?:need|should|will|must|can|am|want)\b|"
+    r"let me\b|looking at\b|since this\b|we\s+(?:need|should|will|must|can)\b|"
+    r"here(?:'s| is)\b|(?:first|next|finally),?\b|"
+    r"\d+[.)]\s+\S|[-*]\s+\*\*"
+    r")"
+)
+
+
+def _contains_non_java_narrative(scan: str) -> bool:
+    return (
+        "`" in scan
+        or "**" in scan
+        or _MODEL_PROSE_LINE.search(scan) is not None
+    )
+
 
 
 
@@ -245,6 +262,7 @@ def _validate_region_text(value: str, *, initialize_region: bool) -> None:
         )
     if (
         not _brace_balanced_region(scan)
+        or _contains_non_java_narrative(scan)
         or _FORBIDDEN.search(scan)
         or _INITIALIZE_DECL.search(scan)
         or _has_forbidden_type_declaration(scan, initialize_region=initialize_region)
@@ -470,7 +488,8 @@ def _messages(
             "If this concern needs no members, return an empty response. "
             "Do not emit response markers, JSON, prose, Markdown fences, package/import declarations, "
             "another top-level type, or initialize() lifecycle code. "
-            "Private nested helper class/interface/enum/record declarations are allowed when this concern needs them."
+            "Private nested helper class/interface/enum/record declarations are allowed when this concern needs them. "
+            "Emit executable Java only; do not include analysis, reasoning, plans, or Markdown commentary."
         )
     elif response_region == "initialize":
         response_contract = (
@@ -663,7 +682,8 @@ class AtomicConcernExecutor:
                     + reason
                     + f"\nRegenerate only the {response_region} region. "
                     "Do not emit response markers, prose, package/import/top-level/lifecycle declarations. "
-                    "Private nested helper types are allowed in members regions."
+                    "Private nested helper types are allowed in members regions. "
+                    "Emit executable Java only; no analysis, reasoning, plans, or Markdown commentary."
                 )
                 repair_failure = "\n\n".join(
                     item for item in (failure, validation_failure) if item

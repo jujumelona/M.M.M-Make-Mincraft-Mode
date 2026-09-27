@@ -250,3 +250,46 @@ def test_initialize_region_rejects_even_private_local_type_declarations() -> Non
     result = executor.run()
     assert "helper();" in result["source"]
     assert "LocalEscape" not in result["source"]
+
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        (
+            'The user wants me to implement the "variables" concern in the '
+            '`AuthoredStateModel` class.\nprivate static final int COST = 10;'
+        ),
+        "I need to add members that define the state variables.\nprivate static final int COST = 10;",
+        "- **credits**: owner: PlayerData, type: long\nprivate static final int COST = 10;",
+        "1. Define the transition schema\nprivate static final int COST = 10;",
+    ],
+)
+def test_reasoning_or_markdown_is_rejected_before_compile(bad: str) -> None:
+    executor = _executor([bad, "private static final int COST = 10;"])
+    result = executor.run()
+    assert "private static final int COST = 10;" in result["source"]
+    assert "The user" not in result["source"]
+    assert "I need" not in result["source"]
+
+
+def test_atomic_coder_can_force_non_thinking_transport() -> None:
+    captured: dict[str, object] = {}
+
+    class _Router:
+        def generate_text(self, role, messages, **kwargs):
+            captured["role"] = role
+            captured["messages"] = messages
+            captured.update(kwargs)
+            return "private static final int COST = 10;"
+
+    result = _call_coder(
+        _Router(),
+        ({"role": "user", "content": "atomic Java only"},),
+        output_token_ceiling=1536,
+        force_non_thinking=True,
+    )
+
+    assert result == "private static final int COST = 10;\n"
+    assert captured["force_non_thinking"] is True
+    assert captured["output_token_ceiling"] == 1536

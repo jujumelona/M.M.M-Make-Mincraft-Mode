@@ -484,6 +484,7 @@ def _call_coder(
     messages: Sequence[Mapping[str, str]],
     *,
     output_token_ceiling: int | None = None,
+    force_non_thinking: bool = False,
 ) -> str:
     callback = getattr(router, "generate_text", None)
     if not callable(callback):
@@ -502,6 +503,8 @@ def _call_coder(
         callback, "output_token_ceiling"
     ):
         kwargs["output_token_ceiling"] = max(1, int(output_token_ceiling))
+    if force_non_thinking and _supports_kwarg(callback, "force_non_thinking"):
+        kwargs["force_non_thinking"] = True
     native_format_replays = 0
     while True:
         try:
@@ -691,6 +694,7 @@ def _run_atomic_ir_generation(
             generator.router,
             messages,
             output_token_ceiling=atomic_output_ceiling,
+            force_non_thinking=True,
         ),
         compile_java=context.compiler.compile_java,
         compile_log=_compile_log,

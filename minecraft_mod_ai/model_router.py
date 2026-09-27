@@ -250,11 +250,13 @@ class ModelRouter:
         tool_stage: str | None = None,
         enable_tools: bool = True,
         output_token_ceiling: int | None = None,
+        force_non_thinking: bool = False,
     ) -> str:
         return self._generate_text_impl(
             role, messages, media_paths=media_paths, response_format=response_format,
             response_schema=response_schema, tool_stage=tool_stage, enable_tools=enable_tools,
             output_token_ceiling=output_token_ceiling,
+            force_non_thinking=force_non_thinking,
         )
 
     def _generate_text_impl(
@@ -268,6 +270,7 @@ class ModelRouter:
         tool_stage: str | None = None,
         enable_tools: bool = True,
         output_token_ceiling: int | None = None,
+        force_non_thinking: bool = False,
     ) -> str:
         config, adapter = self._generation_adapter(role)
         stage, runtime, tools, request = self._prepare_generation_request(
@@ -280,6 +283,7 @@ class ModelRouter:
             tool_stage=tool_stage,
             enable_tools=enable_tools,
             output_token_ceiling=output_token_ceiling,
+            force_non_thinking=force_non_thinking,
         )
         if (
             self._agent_require_fresh_evidence
@@ -414,12 +418,14 @@ class ModelRouter:
         tool_stage: str | None = None,
         enable_tools: bool = True,
         output_token_ceiling: int | None = None,
+        force_non_thinking: bool = False,
     ) -> tuple[str, Any | None, tuple[Mapping[str, Any], ...], GenerationRequest]:
         return self._prepare_generation_request_impl(
             role, messages, config=config, media_paths=media_paths,
             response_format=response_format, response_schema=response_schema,
             tool_stage=tool_stage, enable_tools=enable_tools,
             output_token_ceiling=output_token_ceiling,
+            force_non_thinking=force_non_thinking,
         )
 
     def _prepare_generation_request_impl(
@@ -434,6 +440,7 @@ class ModelRouter:
         tool_stage: str | None = None,
         enable_tools: bool = True,
         output_token_ceiling: int | None = None,
+        force_non_thinking: bool = False,
     ) -> tuple[str, Any | None, tuple[Mapping[str, Any], ...], GenerationRequest]:
         """Build the canonical model request used by every text execution policy."""
 
@@ -486,6 +493,11 @@ class ModelRouter:
                 **(
                     {"mmm_output_token_ceiling": max(1, int(output_token_ceiling))}
                     if output_token_ceiling is not None
+                    else {}
+                ),
+                **(
+                    {"mmm_force_non_thinking": True}
+                    if force_non_thinking
                     else {}
                 ),
             },
