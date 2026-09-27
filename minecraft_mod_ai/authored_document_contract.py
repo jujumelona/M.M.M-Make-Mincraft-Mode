@@ -132,6 +132,91 @@ def _strict_ready(text: str) -> bool:
     )
 
 
+_NESTED_SECTION_BULLET = re.compile(
+    r"^(?P<indent>[ \\t]*)[-*+]\\s+"
+    r"(?P<label>[0-9A-Za-z_가-힣-]+)\\s*:\\s*(?P<tail>.*?)\\s*(?:\\r?\\n)?$"
+)
+_ANY_BULLET = re.compile(r"^(?P<indent>[ \\t]*)[-*+]\\s+")
+
+
+def _indent_width(value: str) -> int:
+    return len(value.expandtabs(4))
+
+
+def _nested_section_label(label: str) -> str:
+    slug = re.sub(r"[^0-9A-Za-z_가-힣]+", "_", str(label or "").strip()).strip("_").casefold()
+    if slug in EXECUTION_SECTION_SET:
+        return slug
+    return next(
+        (section for section in EXECUTION_SECTION_ORDER if slug.startswith(section + "_")),
+        "",
+    )
+
+
+def _nested_block_end(lines: list[str], start: int, base_indent: int) -> int:
+    for position in range(start + 1, len(lines)):
+        line = lines[position]
+        if parse_markdown_heading(line.rstrip("\r\n")) is not None:
+            return position
+        bullet = _ANY_BULLET.match(line)
+        if bullet and _indent_width(bullet["indent"]) <= base_indent:
+            return position
+    return len(lines)
+
+
+def _nested_block_body(lines: list[str], start: int, match: re.Match[str]) -> tuple[str, int]:
+    end = _nested_block_end(lines, start, _indent_width(match["indent"]))
+    tail = str(match["tail"] or "").strip()
+    body = "".join(lines[start + 1 : end]).strip("\r\n")
+    if tail:
+        body = tail + ("\n" + body if body else "")
+    return body, end
+
+
+def _promote_nested_execution_sections(
+    source: str,
+    bodies: dict[str, list[str]],
+) -> list[str]:
+    missing_at_source = {
+        section
+        for section in EXECUTION_SECTION_ORDER
+        if not any(chunk.strip() for chunk in bodies.get(section, ()))
+    }
+    if not missing_at_source:
+        return []
+
+    lines = str(source or "").splitlines(keepends=True)
+    promoted: dict[str, list[str]] = {}
+    fence = ""
+    position = 0
+    while position < len(lines):
+        line = lines[position]
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if marker:
+            if not fence:
+                fence = marker[1]
+            elif marker[1][0] == fence[0] and len(marker[1]) >= len(fence):
+                fence = ""
+            position += 1
+            continue
+        if fence:
+            position += 1
+            continue
+        match = _NESTED_SECTION_BULLET.match(line)
+        section = _nested_section_label(match["label"]) if match else ""
+        if not match or section not in missing_at_source:
+            position += 1
+            continue
+        body, end = _nested_block_body(lines, position, match)
+        if body:
+            promoted.setdefault(section, []).append(body)
+        position = max(position + 1, end)
+
+    for section, chunks in promoted.items():
+        bodies.setdefault(section, []).extend(chunks)
+    return [section for section in EXECUTION_SECTION_ORDER if section in promoted]
+
+
 def _missing_body(section: str) -> str:
     return (
         f"No additional standalone requirements were authored for {section}. "
@@ -181,6 +266,7 @@ def _normalization_report(
     *,
     missing: list[str],
     duplicates: list[str],
+    promoted: list[str],
 ) -> dict[str, Any]:
     source_bytes = source.encode("utf-8")
     normalized_bytes = normalized.encode("utf-8")
@@ -193,6 +279,7 @@ def _normalization_report(
         "normalized_bytes": len(normalized_bytes),
         "missing_execution_sections": missing,
         "merged_duplicate_sections": duplicates,
+        "promoted_nested_sections": promoted,
     }
 
 
@@ -206,6 +293,7 @@ def normalize_authored_document(
         return source, None
 
     preamble, bodies, counts = _section_bodies(source)
+    promoted = _promote_nested_execution_sections(source, bodies)
     missing = _missing_execution_sections(bodies)
     duplicates = sorted(section for section, count in counts.items() if count > 1)
     normalized = _render_canonical_document(preamble, bodies)
@@ -215,6 +303,7 @@ def normalize_authored_document(
         normalized,
         missing=missing,
         duplicates=duplicates,
+        promoted=promoted,
     )
 
 

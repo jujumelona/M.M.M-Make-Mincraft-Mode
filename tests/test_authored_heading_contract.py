@@ -186,3 +186,44 @@ def test_canonicalizer_preserves_already_valid_document_bytes() -> None:
 
     assert normalized == text
     assert report is None
+
+
+def test_canonicalizer_promotes_nested_execution_contracts_without_losing_semantics() -> None:
+    malformed = (
+        "## behavior_contract\nTrade ore.\n"
+        "## state_model\nCredits and ship state.\n"
+        "## algorithm\nCalculate prices.\n"
+        "## integration\n"
+        "- authority_and_network:\n"
+        "  - Server authoritatively validates trade requests.\n"
+        "  - Client to server packets carry requested trade actions.\n"
+        "- integration_status:\n"
+        "  - Register runtime hooks.\n"
+        "## resources_and_ui\nTrade screen.\n"
+        "## failure_and_limits\nReject bad requests.\n"
+        "## verification\n"
+        "- persistence_cases:\n"
+        "  - Logout and login restores credits and ship state from saved data.\n"
+        "- runtime_cases:\n"
+        "  - Exercise normal gameplay.\n"
+    )
+
+    normalized, report = normalize_authored_document(malformed)
+
+    assert report is not None
+    assert report["promoted_nested_sections"] == [
+        "authority_and_network",
+        "persistence",
+    ]
+    assert "authority_and_network" not in report["missing_execution_sections"]
+    assert "persistence" not in report["missing_execution_sections"]
+    authority_start = normalized.index("## authority_and_network")
+    persistence_start = normalized.index("## persistence")
+    resources_start = normalized.index("## resources_and_ui")
+    assert "Server authoritatively validates trade requests." in normalized[
+        authority_start:persistence_start
+    ]
+    assert "Logout and login restores credits and ship state from saved data." in normalized[
+        persistence_start:resources_start
+    ]
+    decompose_authored_units(normalized)

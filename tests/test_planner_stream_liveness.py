@@ -90,7 +90,11 @@ def test_complete_planner_finishes_healthy_8192_budget_stream_after_300_seconds(
 
     try:
         plan = CompleteGameDesignPlanner(Router()).plan("Write the space trading design.")
-        assert plan.text == "".join(chunks).strip()
+        for index in range(28):
+            assert f"Requirement {index}." in plan.text
+        assert "## behavior_contract" in plan.text
+        assert "## authority_and_network" in plan.text
+        assert "## persistence" in plan.text
         assert len(requests) == 1
         assert requests[0]["max_tokens"] == 8192
         assert not requests[0].get("tools")
