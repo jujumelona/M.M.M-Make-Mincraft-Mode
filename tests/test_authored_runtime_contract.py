@@ -324,6 +324,9 @@ public final class AuthoredFeature001 {
                     "mappings": "1.21.1+build.3",
                     "java_version": "21",
                 },
+                "implementation_obligations": [
+                    "Implement the approved initialize() behavior and mining-range rule in AuthoredFeature001."
+                ],
                 "owned_anchors": [anchor],
                 "production_bindings": [
                     {

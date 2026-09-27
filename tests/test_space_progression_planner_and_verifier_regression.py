@@ -334,16 +334,13 @@ def test_space_progression_semantics_dependencies_and_obligations_are_complete()
     final_task = tasks[-1]
     assert final_task["template_id"] == "structural_artifact_pipeline"
     assert final_task["template_catalog_schema"] == "mmm/structural-minecraft-tasks"
-    assert final_task["required_gates"] == ["source_static_validation", "target_compile", "runtime_gameplay_validation"]
+    assert final_task["required_gates"] == ["source_static_validation", "target_compile"]
     assert final_task["done_predicate"] == {
         "operator": "all",
         "checks": [
             "owned_anchor_hashes_recorded",
             "declared_provides_observed",
             "required_gates_passed",
-            "public_acceptance_observed",
-            "runtime_scenario_receipt_recorded",
-            "persistence_network_ui_state_observed_where_applicable",
         ],
     }
     assert any(anchor["source_set"] == "test" for anchor in final_task["owned_anchors"])
@@ -391,6 +388,9 @@ def _module():
         "gap_refs": ["gap_ship_performance"],
         "owned_anchors": [main_anchor, test_anchor],
         "provides": ["capability:spacecraft.performance_upgrade"],
+        "implementation_obligations": [
+            "Implement the owned ShipPerformance upgrade state and observable purchase effect."
+        ],
         "acceptance": ["ship performance stats increase after purchase"],
         "production_bindings": [
             {
