@@ -590,13 +590,49 @@ class DurableWorkLedger:
             connection.commit()
             return True
 
+    @classmethod
+    def _task_receipt_is_valid(cls, row: Sequence[Any]) -> bool:
+        if str(row[4]) != WorkState.SUCCEEDED.value:
+            return True
+        receipt_json = row[9]
+        receipt_hash = row[10]
+        digest = cls._verified_receipt_digest(receipt_json)
+        if digest is None:
+            return False
+        if receipt_hash:
+            return str(receipt_hash) == digest
+        return str(row[8] or '') == digest
+
+    @classmethod
+    def _promote_legacy_task_receipt(
+        cls,
+        connection: sqlite3.Connection,
+        row: Sequence[Any],
+    ) -> None:
+        if str(row[4]) != WorkState.SUCCEEDED.value or row[10]:
+            return
+        digest = cls._verified_receipt_digest(row[9])
+        if digest is not None and str(row[8] or '') == digest:
+            connection.execute(
+                'UPDATE tasks SET receipt_hash = ? WHERE node_id = ?',
+                (digest, row[0]),
+            )
+
     def task(self, node_id: str) -> dict[str, Any]:
         with self._connect() as connection:
-            row = connection.execute('\n                SELECT node_id, stage, input_hash, payload_json, state,\n                       attempt, lease_owner, lease_until, output_hash,\n                       receipt_json, error, updated_at\n                FROM tasks WHERE node_id = ?\n                ', (node_id,)).fetchone()
+            row = connection.execute('\n                SELECT node_id, stage, input_hash, payload_json, state,\n                       attempt, lease_owner, lease_until, output_hash,\n                       receipt_json, receipt_hash, error, updated_at\n                FROM tasks WHERE node_id = ?\n                ', (node_id,)).fetchone()
             if row is None:
                 raise WorkGraphError(f'Unknown work node: {node_id}')
+            if str(row[4]) == WorkState.SUCCEEDED.value:
+                if not self._task_receipt_is_valid(row):
+                    self._invalidate_many(connection, [node_id])
+                    connection.commit()
+                    row = connection.execute('\n                        SELECT node_id, stage, input_hash, payload_json, state,\n                               attempt, lease_owner, lease_until, output_hash,\n                               receipt_json, receipt_hash, error, updated_at\n                        FROM tasks WHERE node_id = ?\n                        ', (node_id,)).fetchone()
+                else:
+                    self._promote_legacy_task_receipt(connection, row)
+                    connection.commit()
             dependencies = [value[0] for value in connection.execute('\n                    SELECT dependency_id FROM edges\n                    WHERE node_id = ? ORDER BY dependency_id\n                    ', (node_id,))]
-        return {'node_id': row[0], 'stage': row[1], 'input_hash': row[2], 'payload': json.loads(row[3]), 'state': row[4], 'attempt': row[5], 'lease_owner': row[6], 'lease_until': row[7], 'output_hash': row[8], 'receipt': json.loads(row[9]) if row[9] else None, 'error': row[10], 'updated_at': row[11], 'dependencies': dependencies}
+        return {'node_id': row[0], 'stage': row[1], 'input_hash': row[2], 'payload': json.loads(row[3]), 'state': row[4], 'attempt': row[5], 'lease_owner': row[6], 'lease_until': row[7], 'output_hash': row[8], 'receipt': json.loads(row[9]) if row[9] else None, 'error': row[11], 'updated_at': row[12], 'dependencies': dependencies}
 
     def tasks(self, *, cursor: str='', limit: int=100, state: WorkState | None=None) -> dict[str, Any]:
         if not 1 <= limit <= 1000:

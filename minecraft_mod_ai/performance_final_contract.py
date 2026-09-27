@@ -25,7 +25,10 @@ _SNAPSHOT_WAVE_LOCK = threading.RLock()
 _SNAPSHOT_WAVES: dict[Path, dict[str, Any]] = {}
 _CAPTURE = threading.local()
 _SKIP_STAGE_SUFFIXES = {'.class', '.jar', '.ogg', '.png', '.wav', '.mp3', '.zip'}
-_SKIP_STAGE_DIRS = {'.gradle', 'build', 'logs', 'run'}
+_SKIP_STAGE_DIRS = {
+    '.git', '.gradle', '.cache', '.minecraft_ai',
+    'build', 'logs', 'node_modules', 'run',
+}
 _MISSING = object()
 
 class StagedCommitConflict(RuntimeError):
@@ -507,7 +510,7 @@ def _three_way_merge(relative: str, *, base_text: str, staged_text: str, live_te
             live = json.loads(live_text)
             merged = _merge_json_value(base, staged, live, path=relative)
             return json.dumps(merged, ensure_ascii=False, indent=2, sort_keys=True) + '\n'
-        except (json.JSONDecodeError, StagedCommitConflict):
+        except json.JSONDecodeError:
             pass
     return _merge_text_lines(relative, base_text=base_text, staged_text=staged_text, live_text=live_text)
 
