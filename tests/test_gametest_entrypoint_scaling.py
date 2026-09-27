@@ -87,7 +87,7 @@ def test_hardener_removes_obsolete_generated_tests_when_catalog_is_empty(
         "package ai.minecraft.scale.gametest;\n",
         encoding="utf-8",
     )
-    metadata_path = project / "src/main/resources/fabric.mod.json"
+    metadata_path = project / "src/gametest/resources/fabric.mod.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     metadata["entrypoints"]["fabric-gametest"].extend(
         [

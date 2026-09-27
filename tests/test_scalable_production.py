@@ -85,7 +85,7 @@ def test_scalable_generator_shards_bootstrap_content_and_gametests(
     assert "ITEM_0129" not in main_java.read_text(encoding="utf-8")
 
     metadata = json.loads(
-        (project / "src/main/resources/fabric.mod.json").read_text(encoding="utf-8")
+        (project / "src/gametest/resources/fabric.mod.json").read_text(encoding="utf-8")
     )
     scale_tests = [
         value

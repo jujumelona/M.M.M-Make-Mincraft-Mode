@@ -63,7 +63,7 @@ def test_257_contents_generate_in_deterministic_shards(
     assert "scale_item_256" not in root_text
 
     metadata = json.loads(
-        (root / "src/main/resources/fabric.mod.json").read_text(
+        (root / "src/gametest/resources/fabric.mod.json").read_text(
             encoding="utf-8"
         )
     )
