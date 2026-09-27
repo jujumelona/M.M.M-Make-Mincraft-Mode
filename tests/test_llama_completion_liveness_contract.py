@@ -88,8 +88,8 @@ def test_progress_response_raises_server_error_before_watchdog() -> None:
 
 
 def test_progress_checked_response_classifies_native_peg_error() -> None:
-    response = _Response(
-        iter(
+    response = SimpleNamespace(
+        iter_lines=lambda: iter(
             [
                 'data: {"error":{"code":500,"type":"server_error","message":'
                 '"The model produced output that does not match the expected '
