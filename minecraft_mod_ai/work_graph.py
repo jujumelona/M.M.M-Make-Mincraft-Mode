@@ -840,6 +840,10 @@ def run_named_checkpoint(ledger: DurableWorkLedger, checkpoint_id: str, *, stage
         decoded = decode(cached)
         if validate_cached is None or validate_cached(decoded):
             return decoded
+        ledger.invalidate_checkpoint(
+            checkpoint_id,
+            input_hash=input_hash,
+        )
     ledger.begin_checkpoint(checkpoint_id, stage=stage, input_hash=input_hash)
     try:
         value = action()
