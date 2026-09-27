@@ -494,13 +494,44 @@ def _member_declaration_symbols(value: str) -> dict[str, str]:
 
 _JAVA_LANG_SIMPLE_TYPES = frozenset(
     {
-        "Appendable", "AutoCloseable", "Boolean", "Byte", "Character", "CharSequence",
-        "Class", "ClassLoader", "Cloneable", "Comparable", "Deprecated", "Double",
-        "Enum", "Error", "Exception", "Float", "FunctionalInterface", "IllegalArgumentException",
-        "IllegalStateException", "Integer", "Iterable", "Long", "Math", "Number",
-        "Object", "Override", "Record", "Runnable", "RuntimeException", "Short",
-        "String", "StringBuffer", "StringBuilder", "SuppressWarnings", "System",
-        "Thread", "Throwable", "Void",
+        "Appendable",
+        "AutoCloseable",
+        "Boolean",
+        "Byte",
+        "Character",
+        "CharSequence",
+        "Class",
+        "ClassLoader",
+        "Cloneable",
+        "Comparable",
+        "Deprecated",
+        "Double",
+        "Enum",
+        "Error",
+        "Exception",
+        "Float",
+        "FunctionalInterface",
+        "IllegalArgumentException",
+        "IllegalStateException",
+        "Integer",
+        "Iterable",
+        "Long",
+        "Math",
+        "Number",
+        "Object",
+        "Override",
+        "Record",
+        "Runnable",
+        "RuntimeException",
+        "Short",
+        "String",
+        "StringBuffer",
+        "StringBuilder",
+        "SuppressWarnings",
+        "System",
+        "Thread",
+        "Throwable",
+        "Void",
     }
 )
 
@@ -519,7 +550,13 @@ def _unresolved_simple_type_names(
     allowed: Sequence[str] = (),
 ) -> tuple[str, ...]:
     scan = _structure_scan(value)
-    allowed_names = set(allowed) | _JAVA_LANG_SIMPLE_TYPES | _declared_type_names(value)
+    local_symbols = _member_declaration_symbols(value)
+    local_identifiers = {
+        display
+        for key, display in local_symbols.items()
+        if key.startswith(("type:", "field:"))
+    }
+    allowed_names = set(allowed) | _JAVA_LANG_SIMPLE_TYPES | local_identifiers
     unresolved: set[str] = set()
     for match in re.finditer(r"\b[A-Z][A-Za-z0-9_$]*\b", scan):
         name = match.group(0)
@@ -709,6 +746,21 @@ def _failure_concern(source: str, *, log: str, relative: str) -> str:
         if concern:
             return concern
     return ""
+
+
+def _compiler_diagnostic_fingerprint(log: str) -> str:
+    diagnostics: list[str] = []
+    for raw in str(log or "").splitlines():
+        stripped = raw.strip()
+        if " error:" in raw:
+            diagnostics.append("error:" + raw.split(" error:", 1)[1].strip())
+            continue
+        if stripped.startswith(
+            ("symbol:", "location:", "required:", "found:", "reason:")
+        ):
+            diagnostics.append(stripped)
+    payload = "\n".join(diagnostics) if diagnostics else str(log or "")
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _failure_measure(log: str) -> int:
@@ -1041,8 +1093,12 @@ class AtomicConcernExecutor:
         for concern_name, (members, _initialize) in self.state.items():
             if concern_name == exclude:
                 continue
-            names.update(_declared_type_names(members))
-        names.update(_declared_type_names(self.dependency_source))
+            for key, display in _member_declaration_symbols(members).items():
+                if key.startswith(("type:", "field:")):
+                    names.add(display)
+        for key, display in _member_declaration_symbols(self.dependency_source).items():
+            if key.startswith(("type:", "field:")):
+                names.add(display)
         return tuple(sorted(names))
 
     def _generate_region(
@@ -1227,12 +1283,11 @@ class AtomicConcernExecutor:
         self.write_source(self.target, self.source)
         return self.compile_java(self.root)
 
-
     def _repair_once(self, report: Any) -> Any:
         failure = self.compile_log(report) or str(
             getattr(report, "error", "") or "Gradle compileJava failed."
         )
-        fingerprint = hashlib.sha256(failure.encode("utf-8")).hexdigest()
+        fingerprint = _compiler_diagnostic_fingerprint(failure)
         if fingerprint in self.seen_failures:
             raise CustomModuleGenerationError(
                 "ATOMIC_CONCERN_COMPILE_NO_PROGRESS: compiler diagnostics repeated.\n"
@@ -1249,7 +1304,6 @@ class AtomicConcernExecutor:
         self.repairs += 1
         return self._compile()
 
-
     def run(self) -> dict[str, Any]:
         repair_limit = _compile_repair_limit()
         for concern in self.ordered:
@@ -1263,10 +1317,15 @@ class AtomicConcernExecutor:
                     failure = self.compile_log(report) or str(
                         getattr(report, "error", "") or "Gradle compileJava failed."
                     )
+                    failing_name = _failure_concern(
+                        self.source,
+                        log=failure,
+                        relative=self.relative,
+                    ) or name
                     raise CustomModuleGenerationError(
                         "ATOMIC_CONCERN_COMPILE_RETRY_EXHAUSTED: "
-                        f"{name} remained uncompilable after {repair_limit} bounded "
-                        "compiler-driven repairs.\n" + failure
+                        f"{failing_name} remained uncompilable after {repair_limit} "
+                        "bounded compiler-driven repairs.\n" + failure
                     )
                 report = self._repair_once(report)
                 concern_repairs += 1

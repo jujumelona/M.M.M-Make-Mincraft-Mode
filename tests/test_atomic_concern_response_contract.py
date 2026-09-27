@@ -295,7 +295,6 @@ def test_atomic_coder_can_force_non_thinking_transport() -> None:
     assert captured["output_token_ceiling"] == 1536
 
 
-
 def test_atomic_region_uses_required_structured_tool_not_free_text() -> None:
     captured: dict[str, object] = {}
 
@@ -377,7 +376,6 @@ def test_atomic_structured_tool_rejects_extra_fields() -> None:
         )
 
 
-
 def _multi_executor(
     outputs: list[str],
     *,
@@ -416,7 +414,6 @@ def _multi_executor(
         write_source=lambda _path, _source: None,
     )
     return executor, compile_calls
-
 
 
 def test_sibling_symbol_collision_is_rehomed_before_compile() -> None:
@@ -538,7 +535,6 @@ def test_method_overloads_with_different_parameter_types_do_not_collide() -> Non
     assert "update(String value)" in result["source"]
 
 
-
 def test_static_initializer_does_not_create_fake_symbol_owner() -> None:
     from minecraft_mod_ai.atomic_concern_source import _member_declaration_symbols
 
@@ -562,7 +558,6 @@ def test_generic_method_erasure_collision_is_rehomed_by_host() -> None:
 
     assert compile_calls["count"] == len(concerns)
     assert result["source"].count("private static void update(") == 1
-
 
 
 def test_state_model_later_concerns_rehome_variables_overreach() -> None:
@@ -591,7 +586,6 @@ def test_state_model_later_concerns_rehome_variables_overreach() -> None:
     assert result["source"].count("FROM_STATE_LOCKED") == 1
     assert result["source"].count("INVARIANT_PLAYER_CREDITS_MIN_COST") == 1
     assert "playerCredits" in result["source"]
-
 
 
 def test_private_static_initializer_is_normalized_before_compile() -> None:
@@ -625,7 +619,6 @@ def test_visibility_instance_initializer_is_rejected_before_compile() -> None:
 
     assert "private {" not in result["source"]
     assert "private static final int COST = 10;" in result["source"]
-
 
 
 def test_unresolved_domain_type_is_rejected_before_compile() -> None:
@@ -750,3 +743,90 @@ def test_equal_error_count_with_changed_diagnostics_can_keep_repairing() -> None
     assert compile_calls["count"] == 3
     assert result["repair_count"] == 2
     assert "VALUE = 1" in result["source"]
+
+
+def test_repeated_compiler_diagnostics_ignore_line_number_churn() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _compiler_diagnostic_fingerprint
+
+    first = (
+        "/tmp/Test.java:10: error: cannot find symbol\n"
+        "  symbol: class MissingType\n"
+        "  location: class Test\n"
+    )
+    second = (
+        "/tmp/Test.java:27: error: cannot find symbol\n"
+        "  symbol: class MissingType\n"
+        "  location: class Test\n"
+    )
+
+    assert _compiler_diagnostic_fingerprint(first) == _compiler_diagnostic_fingerprint(second)
+
+
+def test_compile_repairs_have_hard_per_concern_bound(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_ATOMIC_CONCERN_COMPILE_REPAIRS", "2")
+    remaining = [
+        "private static int VALUE = missingA();",
+        "private static int VALUE = missingB();",
+        "private static int VALUE = missingC();",
+    ]
+    state: dict[str, str] = {"source": ""}
+    compile_calls = {"count": 0}
+
+    def call_coder(_messages):
+        if not remaining:
+            raise AssertionError("unexpected extra model call")
+        return remaining.pop(0)
+
+    def write_source(_path, source):
+        state["source"] = source
+
+    def compile_java(_root):
+        compile_calls["count"] += 1
+        rows = state["source"].splitlines()
+        marker = next(
+            index for index, row in enumerate(rows)
+            if "MMM_ATOMIC_CONCERN_TRANSITIONS_MEMBERS_START" in row
+        )
+        line_number = marker + 2
+        missing = chr(ord("A") + compile_calls["count"] - 1)
+        return SimpleNamespace(
+            status="FAIL",
+            log=(
+                f"/tmp/Test.java:{line_number}: error: cannot find symbol\n"
+                f"  symbol: method missing{missing}()\n"
+            ),
+        )
+
+    executor = AtomicConcernExecutor(
+        root=Path("."),
+        target=Path("/tmp/Test.java"),
+        relative="/tmp/Test.java",
+        symbol="Test",
+        original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
+        task={"task_id": "t", "semantic_outcome": "x"},
+        section="state_model",
+        concerns=(
+            {
+                "sequence": 0,
+                "identifier": "id",
+                "concern": "transitions",
+                "task": "implement transitions",
+                "rules": [],
+            },
+        ),
+        grounding={},
+        dependency_source="",
+        require_initialize=False,
+        call_coder=call_coder,
+        compile_java=compile_java,
+        compile_log=lambda report: getattr(report, "log", ""),
+        write_source=write_source,
+    )
+
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match="ATOMIC_CONCERN_COMPILE_RETRY_EXHAUSTED",
+    ):
+        executor.run()
+
+    assert compile_calls["count"] == 3
