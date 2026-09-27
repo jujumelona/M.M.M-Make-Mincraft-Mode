@@ -1799,7 +1799,7 @@ class HostRunState:
             "context needed to repair the defect. Any earlier host_reserved/fresh metadata is "
             "pre-materialization history only. Never regenerate the complete source file. "
             "Call apply_source_edit with old copied exactly from the repair request and new set "
-            "to its replacement. The host binds only operation/path/count/transactional SHA. "
+            "to its replacement; host binds operation=replace_exact, path, count and transactional SHA. "
             "Whole-file reconstruction is forbidden unless old is the complete source. "
             "Preserve package/type identity and approved behavior. Make one materially different "
             "edit that reduces severity-1 diagnostics. "

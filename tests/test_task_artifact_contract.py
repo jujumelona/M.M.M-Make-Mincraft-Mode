@@ -79,13 +79,13 @@ def test_design_choices_and_implementation_obligations_have_separate_provenance(
     # A derived implementation branch is not a user-authored or evidence-selected
     # design alternative. Selection claims require an explicit comparative receipt.
     assert resolution["selected_design_alternatives"] == []
-    assert resolution["derived_architecture_decisions"]
-    assert all(
-        item["provenance_role"] == "derived_architecture_decision"
-        for item in resolution["derived_architecture_decisions"]
-    )
+    assert "derived_architecture_decisions" not in resolution
     assert all(
         item["provenance_role"] == "implementation_obligation"
+        for item in resolution["implementation_obligations"]
+    )
+    assert all(
+        item["architecture_owner"] == "host"
         for item in resolution["implementation_obligations"]
     )
 

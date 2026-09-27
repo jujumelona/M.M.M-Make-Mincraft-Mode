@@ -120,11 +120,14 @@ def test_existing_verifier_repair_schema_is_host_bound_to_new_source_only() -> N
         state,
     )
     parameters = tools[0]["function"]["parameters"]
-    assert parameters["required"] == ["new"]
+    assert parameters["required"] == ["old", "new"]
     assert parameters["additionalProperties"] is False
-    assert set(parameters["properties"]) == {"new"}
+    assert set(parameters["properties"]) == {"old", "new"}
+    old = parameters["properties"]["old"]
+    assert old["const"] == "Missing"
+    assert "verifier-selected" in old["description"]
 
-    # Operation/path authority stays host-owned; the global validation schema remains broad.
+    # Operation/path/count authority stays host-owned; the global validation schema remains broad.
     canonical = SOURCE_EDIT_SCHEMA["properties"]["operation"]["enum"]
     assert "replace_exact" in canonical
     assert "create_file" in canonical

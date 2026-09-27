@@ -60,7 +60,7 @@ def test_repair_model_returns_inert_patch_proposals_without_source_tools() -> No
     assert operations[0]["operation"] == "create"
     assert len(router.calls) == 1
     role, messages, kwargs = router.calls[0]
-    assert role == "coder"
+    assert role == "coder_safe"
     assert kwargs["response_format"] == "json"
     assert kwargs["enable_tools"] is False
     assert "tool_stage" not in kwargs
