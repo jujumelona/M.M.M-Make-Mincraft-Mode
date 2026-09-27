@@ -142,6 +142,9 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
         "messages": [dict(message) for message in request.messages],
         "max_tokens": _request_max_tokens(adapter, request),
         "temperature": 0.0,
+        # llama.cpp owns a stable prompt-prefix cache. Reuse is a request invariant,
+        # not an import-time tuning wrapper, so every direct/native request carries it.
+        "cache_prompt": True,
     }
     tools = getattr(request, "tools", ()) or ()
     if tools:
@@ -186,6 +189,9 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
         request=request,
     )
 
+
+
+_server_payload._mmm_prompt_cache_reuse = True
 
 def _stream_delta_parts(choice: dict[str, Any]) -> tuple[str, str]:
     reasoning = ""
@@ -278,7 +284,10 @@ def _metrics_snapshot(httpx_module: Any, server_url: str) -> dict[str, float] | 
 
 
 def _slot_snapshot(httpx_module: Any, server_url: str) -> dict[str, int] | None:
-    """Read current native slot counters; no prompt/generated text is requested."""
+    """Read optional slot counters without adding requests to the default hot path."""
+
+    if not _auxiliary_native_telemetry_enabled():
+        return None
 
     try:
         response = httpx_module.get(
