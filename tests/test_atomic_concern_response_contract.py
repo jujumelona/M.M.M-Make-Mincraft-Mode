@@ -209,3 +209,44 @@ def test_direct_coder_forwards_atomic_output_token_ceiling() -> None:
 def test_atomic_concern_output_budget_honors_explicit_override(monkeypatch) -> None:
     monkeypatch.setenv("MMM_ATOMIC_CONCERN_OUTPUT_TOKENS", "1536")
     assert _atomic_concern_output_token_ceiling() == 1536
+
+
+def test_private_nested_helper_types_are_valid_class_body_members() -> None:
+    output = (
+        "private enum ShipState { INITIAL, READY_TO_LAUNCH }\n"
+        "private record CreditState(long credits) {}\n"
+        "private static final class Snapshot {}"
+    )
+    result = _executor([output]).run()
+    assert "private enum ShipState" in result["source"]
+    assert "private record CreditState" in result["source"]
+    assert "private static final class Snapshot" in result["source"]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "class PackageVisibleEscape {}",
+        "protected static class ProtectedEscape {}",
+        "} private static final int ESCAPED = 1; {",
+    ],
+)
+def test_non_private_or_brace_escape_member_structure_is_rejected(bad: str) -> None:
+    executor = _executor([bad, "private static final int COST = 10;"])
+    result = executor.run()
+    assert "private static final int COST = 10;" in result["source"]
+
+
+def test_initialize_region_rejects_even_private_local_type_declarations() -> None:
+    executor = _executor(
+        [
+            "private static void helper() {}",
+            "private class LocalEscape {}",
+            "helper();",
+        ],
+        section="integration",
+        require_initialize=True,
+    )
+    result = executor.run()
+    assert "helper();" in result["source"]
+    assert "LocalEscape" not in result["source"]

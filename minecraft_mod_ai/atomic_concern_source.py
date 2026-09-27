@@ -68,11 +68,16 @@ def _trace_region_generation(
 _HOST_PREFIX = "MMM_ATOMIC_CONCERN"
 _PACKAGE = re.compile(r"(?m)^\s*package\s+([A-Za-z_$][A-Za-z0-9_$.]*)\s*;\s*$")
 _FORBIDDEN = re.compile(
-    r"\b(?:package|import)\s+|\b(?:public\s+)?(?:class|interface|enum|record)\b"
-    r"|\b(?:ModInitializer|ClientModInitializer|DedicatedServerModInitializer)\b"
-    r"|\bonInitialize(?:Client|Server)?\b"
+    r"\\b(?:package|import)\\s+"
+    r"|\\b(?:ModInitializer|ClientModInitializer|DedicatedServerModInitializer)\\b"
+    r"|\\bonInitialize(?:Client|Server)?\\b"
 )
-_INITIALIZE_DECL = re.compile(r"\bpublic\s+static\s+void\s+initialize\s*\(")
+_TYPE_DECL = re.compile(
+    r"(?m)^\\s*(?P<modifiers>(?:(?:public|protected|private|static|final|abstract|sealed|non-sealed)\\s+)*)"
+    r"(?P<kind>class|interface|enum|record)\\b"
+)
+_INITIALIZE_DECL = re.compile(r"\\bpublic\\s+static\\s+void\\s+initialize\\s*\\(")
+
 
 
 def _slug(value: Any) -> str:
@@ -210,17 +215,45 @@ def _is_inert_empty_region(value: str) -> bool:
     }
 
 
+def _brace_balanced_region(scan: str) -> bool:
+    depth = 0
+    for char in scan:
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0
+
+
+def _has_forbidden_type_declaration(scan: str, *, initialize_region: bool) -> bool:
+    for match in _TYPE_DECL.finditer(scan):
+        if initialize_region:
+            return True
+        modifiers = set(str(match.group("modifiers") or "").split())
+        if "private" not in modifiers:
+            return True
+    return False
+
+
 def _validate_region_text(value: str, *, initialize_region: bool) -> None:
     scan = _structure_scan(value)
     if _HOST_PREFIX in scan or "```" in scan:
         raise CustomModuleGenerationError(
             "ATOMIC_CONCERN_RESPONSE_INVALID: executable region contains host-marker syntax or Markdown fences."
         )
-    if _FORBIDDEN.search(scan) or _INITIALIZE_DECL.search(scan):
+    if (
+        not _brace_balanced_region(scan)
+        or _FORBIDDEN.search(scan)
+        or _INITIALIZE_DECL.search(scan)
+        or _has_forbidden_type_declaration(scan, initialize_region=initialize_region)
+    ):
         region = "initialize body" if initialize_region else "concern members"
         raise CustomModuleGenerationError(
             f"ATOMIC_CONCERN_SCOPE_ESCAPE: {region} attempted to change host-owned type/lifecycle structure."
         )
+
 
 
 def parse_concern_content(text: str, *, section: str) -> tuple[str, str]:
@@ -435,8 +468,9 @@ def _messages(
         response_contract = (
             "Return only Java class-body members for this concern. "
             "If this concern needs no members, return an empty response. "
-            "Do not emit response markers, JSON, prose, Markdown fences, package/import/type declarations, "
-            "or initialize() lifecycle code."
+            "Do not emit response markers, JSON, prose, Markdown fences, package/import declarations, "
+            "another top-level type, or initialize() lifecycle code. "
+            "Private nested helper class/interface/enum/record declarations are allowed when this concern needs them."
         )
     elif response_region == "initialize":
         response_contract = (
@@ -628,7 +662,8 @@ class AtomicConcernExecutor:
                     "HOST REGION VALIDATION FAILED BEFORE COMPILATION:\n"
                     + reason
                     + f"\nRegenerate only the {response_region} region. "
-                    "Do not emit response markers, prose, package/import/type/lifecycle declarations."
+                    "Do not emit response markers, prose, package/import/top-level/lifecycle declarations. "
+                    "Private nested helper types are allowed in members regions."
                 )
                 repair_failure = "\n\n".join(
                     item for item in (failure, validation_failure) if item
