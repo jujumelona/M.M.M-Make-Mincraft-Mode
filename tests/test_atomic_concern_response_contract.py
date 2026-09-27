@@ -14,7 +14,6 @@ from minecraft_mod_ai.atomic_concern_source import (
 )
 from minecraft_mod_ai.custom_module_errors import CustomModuleGenerationError
 from minecraft_mod_ai.custom_module_generator import (
-    _atomic_concern_output_token_ceiling,
     _call_coder,
 )
 
@@ -178,11 +177,6 @@ def test_distinct_invalid_region_outputs_stop_at_bounded_attempt_limit(monkeypat
         executor.run()
 
 
-def test_atomic_concern_output_budget_defaults_to_bounded_page(monkeypatch) -> None:
-    monkeypatch.delenv("MMM_ATOMIC_CONCERN_OUTPUT_TOKENS", raising=False)
-    assert _atomic_concern_output_token_ceiling() == 2048
-
-
 def test_direct_coder_forwards_atomic_output_token_ceiling() -> None:
     captured: dict[str, object] = {}
 
@@ -204,11 +198,6 @@ def test_direct_coder_forwards_atomic_output_token_ceiling() -> None:
     assert captured["enable_tools"] is False
     assert captured["tool_stage"] == "generation"
     assert captured["output_token_ceiling"] == 1536
-
-
-def test_atomic_concern_output_budget_honors_explicit_override(monkeypatch) -> None:
-    monkeypatch.setenv("MMM_ATOMIC_CONCERN_OUTPUT_TOKENS", "1536")
-    assert _atomic_concern_output_token_ceiling() == 1536
 
 
 def test_private_nested_helper_types_are_valid_class_body_members() -> None:
@@ -1255,3 +1244,52 @@ def test_atomic_native_tool_call_does_not_force_legacy_2048_ceiling() -> None:
 
     assert rendered == "int value;"
     assert "output_token_ceiling" not in captured
+
+
+def test_record_methods_are_not_arbitrarily_capped_by_tool_schema() -> None:
+    from jsonschema import Draft202012Validator
+    from minecraft_mod_ai.custom_module_generator import _ATOMIC_MEMBERS_PARAMETERS
+
+    decision = {
+        "records": [
+            {
+                "name": "VariablesRecord",
+                "components": [
+                    {"type": "String", "name": "name"},
+                    {"type": "String", "name": "owner"},
+                    {"type": "String", "name": "type"},
+                    {"type": "String", "name": "unit"},
+                    {"type": "String", "name": "default"},
+                    {"type": "String", "name": "domain"},
+                ],
+                "methods": [
+                    {
+                        "return_type": "String",
+                        "name": f"getter{index}",
+                        "body": ["return name"],
+                    }
+                    for index in range(8)
+                ],
+            }
+        ]
+    }
+
+    Draft202012Validator(_ATOMIC_MEMBERS_PARAMETERS).validate(decision)
+
+
+def test_atomic_member_schema_accepts_model_modifier_noise_for_host_filtering() -> None:
+    from jsonschema import Draft202012Validator
+    from minecraft_mod_ai.custom_module_generator import _ATOMIC_MEMBERS_PARAMETERS
+
+    Draft202012Validator(_ATOMIC_MEMBERS_PARAMETERS).validate(
+        {
+            "fields": [
+                {
+                    "modifiers": ["private", "static", "model_extra_modifier"],
+                    "type": "int",
+                    "name": "value",
+                    "initializer": "1",
+                }
+            ]
+        }
+    )

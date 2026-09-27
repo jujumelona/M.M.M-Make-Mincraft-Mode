@@ -466,19 +466,6 @@ def _direct_host_grounding(
         "policy": merged_policy,
     }
 
-def _atomic_concern_output_token_ceiling() -> int:
-    """Keep small-model concern decodes bounded without shrinking planner budgets."""
-
-    raw = os.environ.get("MMM_ATOMIC_CONCERN_OUTPUT_TOKENS", "").strip()
-    if not raw:
-        return 2048
-    try:
-        value = int(raw)
-    except ValueError:
-        return 2048
-    return max(256, value)
-
-
 _ATOMIC_JAVA_REGION_TOOL = "emit_java_structure"
 _JAVA_IDENTIFIER_PATTERN = r"^[A-Za-z_$][A-Za-z0-9_$]*$"
 _ATOMIC_MODIFIER_VALUES = [
