@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from .implementation_fact import ImplementationFact
 
 from . import production_contract
+from .acceptance_contracts import canonical_public_acceptance
 from .authored_plan import AuthoredPlan
 from .complete_spec import (
     AssetRequest,
@@ -242,12 +243,14 @@ class CompleteGameDesignPlanner:
         modules, assets, acceptance_tests = self._expand_batches(
             batches,
             evidence_mode=True,
-            evidence_acceptance_tests=tuple(
-                str(check)
-                for binding in evidence_plan["acceptance_release_bindings"]
-                if isinstance(binding, Mapping)
-                for check in binding.get("acceptance", ())
-                if str(check).strip()
+            evidence_acceptance_tests=canonical_public_acceptance(
+                [
+                    str(check)
+                    for binding in evidence_plan["acceptance_release_bindings"]
+                    if isinstance(binding, Mapping)
+                    for check in binding.get("acceptance", ())
+                    if str(check).strip()
+                ]
             ),
         )
 
