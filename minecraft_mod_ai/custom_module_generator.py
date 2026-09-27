@@ -479,22 +479,453 @@ def _atomic_concern_output_token_ceiling() -> int:
     return max(256, value)
 
 
-_ATOMIC_JAVA_REGION_TOOL = "emit_java_region"
-_ATOMIC_JAVA_REGION_PARAMETERS: dict[str, Any] = {
+_ATOMIC_JAVA_REGION_TOOL = "emit_java_structure"
+_JAVA_IDENTIFIER_PATTERN = r"^[A-Za-z_$][A-Za-z0-9_$]*$"
+_ATOMIC_MODIFIER_VALUES = [
+    "public",
+    "protected",
+    "private",
+    "static",
+    "final",
+    "synchronized",
+    "volatile",
+    "transient",
+    "abstract",
+]
+_ATOMIC_PARAMETER_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "java": {
-            "type": "string",
-            "description": (
-                "Only the Java source text for the host-selected atomic region. "
-                "No prose, reasoning, Markdown, response markers, package/import lines, "
-                "or outer lifecycle/type declarations."
-            ),
-        }
+        "type": {"type": "string", "minLength": 1},
+        "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
     },
-    "required": ["java"],
+    "required": ["type", "name"],
     "additionalProperties": False,
 }
+_ATOMIC_FIELD_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "modifiers": {
+            "type": "array",
+            "items": {"type": "string", "enum": _ATOMIC_MODIFIER_VALUES},
+            "uniqueItems": True,
+        },
+        "type": {"type": "string", "minLength": 1},
+        "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
+        "initializer": {"type": "string"},
+    },
+    "required": ["modifiers", "type", "name", "initializer"],
+    "additionalProperties": False,
+}
+_ATOMIC_METHOD_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "modifiers": {
+            "type": "array",
+            "items": {"type": "string", "enum": _ATOMIC_MODIFIER_VALUES},
+            "uniqueItems": True,
+        },
+        "return_type": {"type": "string", "minLength": 1},
+        "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
+        "parameters": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA},
+        "throws": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "body": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["modifiers", "return_type", "name", "parameters", "throws", "body"],
+    "additionalProperties": False,
+}
+_ATOMIC_CONSTRUCTOR_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "parameters": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA},
+        "throws": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "body": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["parameters", "throws", "body"],
+    "additionalProperties": False,
+}
+_ATOMIC_RECORD_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "modifiers": {
+            "type": "array",
+            "items": {"type": "string", "enum": _ATOMIC_MODIFIER_VALUES},
+            "uniqueItems": True,
+        },
+        "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
+        "components": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA},
+        "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA},
+    },
+    "required": ["modifiers", "name", "components", "methods"],
+    "additionalProperties": False,
+}
+_ATOMIC_ENUM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "modifiers": {
+            "type": "array",
+            "items": {"type": "string", "enum": _ATOMIC_MODIFIER_VALUES},
+            "uniqueItems": True,
+        },
+        "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
+        "constants": {
+            "type": "array",
+            "items": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
+            "minItems": 1,
+            "uniqueItems": True,
+        },
+    },
+    "required": ["modifiers", "name", "constants"],
+    "additionalProperties": False,
+}
+_ATOMIC_CLASS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "modifiers": {
+            "type": "array",
+            "items": {"type": "string", "enum": _ATOMIC_MODIFIER_VALUES},
+            "uniqueItems": True,
+        },
+        "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
+        "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA},
+        "constructors": {"type": "array", "items": _ATOMIC_CONSTRUCTOR_SCHEMA},
+        "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA},
+    },
+    "required": ["modifiers", "name", "fields", "constructors", "methods"],
+    "additionalProperties": False,
+}
+_ATOMIC_MEMBERS_PARAMETERS: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "records": {"type": "array", "items": _ATOMIC_RECORD_SCHEMA},
+        "enums": {"type": "array", "items": _ATOMIC_ENUM_SCHEMA},
+        "classes": {"type": "array", "items": _ATOMIC_CLASS_SCHEMA},
+        "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA},
+        "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA},
+        "static_initializers": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "body": {"type": "array", "items": {"type": "string"}}
+                },
+                "required": ["body"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": [
+        "records",
+        "enums",
+        "classes",
+        "fields",
+        "methods",
+        "static_initializers",
+    ],
+    "additionalProperties": False,
+}
+_ATOMIC_INITIALIZE_PARAMETERS: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "statements": {"type": "array", "items": {"type": "string"}}
+    },
+    "required": ["statements"],
+    "additionalProperties": False,
+}
+
+_COMMON_JAVA_NAMES = {
+    "ArrayDeque": "java.util.ArrayDeque",
+    "ArrayList": "java.util.ArrayList",
+    "Collection": "java.util.Collection",
+    "Collections": "java.util.Collections",
+    "Comparator": "java.util.Comparator",
+    "Deque": "java.util.Deque",
+    "HashMap": "java.util.HashMap",
+    "HashSet": "java.util.HashSet",
+    "LinkedHashMap": "java.util.LinkedHashMap",
+    "LinkedHashSet": "java.util.LinkedHashSet",
+    "List": "java.util.List",
+    "Map": "java.util.Map",
+    "Objects": "java.util.Objects",
+    "Optional": "java.util.Optional",
+    "Queue": "java.util.Queue",
+    "Set": "java.util.Set",
+    "UUID": "java.util.UUID",
+    "ConcurrentHashMap": "java.util.concurrent.ConcurrentHashMap",
+    "AtomicBoolean": "java.util.concurrent.atomic.AtomicBoolean",
+    "AtomicInteger": "java.util.concurrent.atomic.AtomicInteger",
+    "AtomicLong": "java.util.concurrent.atomic.AtomicLong",
+}
+_IDENTIFIER_TOKEN = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
+
+
+def _atomic_request_payload(messages: Sequence[Mapping[str, str]]) -> dict[str, Any]:
+    for message in reversed(messages):
+        if str(message.get("role") or "") != "user":
+            continue
+        try:
+            value = json.loads(str(message.get("content") or ""))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if isinstance(value, Mapping):
+            return dict(value)
+    return {}
+
+
+def _qualify_common_java_names(value: str) -> str:
+    """Qualify common JDK collection/concurrency names outside strings/comments."""
+
+    source = str(value or "")
+    out: list[str] = []
+    index = 0
+    quote = ""
+    line_comment = False
+    block_comment = False
+    while index < len(source):
+        ch = source[index]
+        nxt = source[index + 1] if index + 1 < len(source) else ""
+        if line_comment:
+            out.append(ch)
+            if ch == "\n":
+                line_comment = False
+            index += 1
+            continue
+        if block_comment:
+            out.append(ch)
+            if ch == "*" and nxt == "/":
+                out.append(nxt)
+                index += 2
+                block_comment = False
+            else:
+                index += 1
+            continue
+        if quote:
+            out.append(ch)
+            if ch == "\\" and index + 1 < len(source):
+                out.append(source[index + 1])
+                index += 2
+                continue
+            if ch == quote:
+                quote = ""
+            index += 1
+            continue
+        if ch in {'"', "'"}:
+            quote = ch
+            out.append(ch)
+            index += 1
+            continue
+        if ch == "/" and nxt == "/":
+            out.extend((ch, nxt))
+            index += 2
+            line_comment = True
+            continue
+        if ch == "/" and nxt == "*":
+            out.extend((ch, nxt))
+            index += 2
+            block_comment = True
+            continue
+        match = _IDENTIFIER_TOKEN.match(source, index)
+        if match is None:
+            out.append(ch)
+            index += 1
+            continue
+        token = match.group(0)
+        previous = source[:index].rstrip()
+        if token in _COMMON_JAVA_NAMES and not previous.endswith("."):
+            out.append(_COMMON_JAVA_NAMES[token])
+        else:
+            out.append(token)
+        index = match.end()
+    return "".join(out)
+
+
+def _java_modifiers(raw: Any, *, kind: str) -> str:
+    allowed = {
+        "field": ("public", "protected", "private", "static", "final", "volatile", "transient"),
+        "method": ("public", "protected", "private", "static", "final", "synchronized"),
+        "class": ("public", "protected", "private", "static", "final", "abstract"),
+        "record": ("public", "protected", "private", "static"),
+        "enum": ("public", "protected", "private", "static"),
+    }[kind]
+    requested = {str(item) for item in raw if str(item) in allowed}
+    return " ".join(item for item in allowed if item in requested)
+
+
+def _java_parameters(raw: Any) -> str:
+    result: list[str] = []
+    for item in raw if isinstance(raw, Sequence) else ():
+        if not isinstance(item, Mapping):
+            continue
+        java_type = _qualify_common_java_names(str(item.get("type") or "").strip())
+        name = str(item.get("name") or "").strip()
+        result.append(f"{java_type} {name}")
+    return ", ".join(result)
+
+
+def _java_body_lines(raw: Any, *, indent: str) -> list[str]:
+    rows: list[str] = []
+    for item in raw if isinstance(raw, Sequence) else ():
+        text = _qualify_common_java_names(str(item or "").strip())
+        if not text:
+            continue
+        if (
+            "\n" not in text
+            and not text.endswith((";", "{", "}", ":"))
+            and not text.startswith(("//", "/*", "*"))
+        ):
+            text += ";"
+        for row in text.splitlines():
+            rows.append(indent + row.rstrip())
+    return rows
+
+
+def _render_method(item: Mapping[str, Any], *, indent: str = "") -> str:
+    modifiers = _java_modifiers(item.get("modifiers") or [], kind="method")
+    prefix = (modifiers + " ") if modifiers else ""
+    return_type = _qualify_common_java_names(str(item.get("return_type") or "").strip())
+    name = str(item.get("name") or "").strip()
+    params = _java_parameters(item.get("parameters") or [])
+    throws = [
+        _qualify_common_java_names(str(value).strip())
+        for value in item.get("throws") or []
+        if str(value).strip()
+    ]
+    header = f"{indent}{prefix}{return_type} {name}({params})"
+    if throws:
+        header += " throws " + ", ".join(throws)
+    body = _java_body_lines(item.get("body") or [], indent=indent + "    ")
+    return "\n".join([header + " {", *body, indent + "}"])
+
+
+def _render_field(item: Mapping[str, Any], *, indent: str = "") -> str:
+    modifiers = _java_modifiers(item.get("modifiers") or [], kind="field")
+    prefix = (modifiers + " ") if modifiers else ""
+    java_type = _qualify_common_java_names(str(item.get("type") or "").strip())
+    name = str(item.get("name") or "").strip()
+    initializer = _qualify_common_java_names(str(item.get("initializer") or "").strip())
+    suffix = f" = {initializer}" if initializer else ""
+    return f"{indent}{prefix}{java_type} {name}{suffix};"
+
+
+def _render_record(item: Mapping[str, Any]) -> str:
+    modifiers = _java_modifiers(item.get("modifiers") or [], kind="record")
+    prefix = (modifiers + " ") if modifiers else ""
+    name = str(item.get("name") or "").strip()
+    components = _java_parameters(item.get("components") or [])
+    methods = [
+        _render_method(method, indent="    ")
+        for method in item.get("methods") or []
+        if isinstance(method, Mapping)
+    ]
+    if not methods:
+        return f"{prefix}record {name}({components}) {{}}"
+    return "\n".join([f"{prefix}record {name}({components}) {{", *methods, "}"])
+
+
+def _render_enum(item: Mapping[str, Any]) -> str:
+    modifiers = _java_modifiers(item.get("modifiers") or [], kind="enum")
+    prefix = (modifiers + " ") if modifiers else ""
+    name = str(item.get("name") or "").strip()
+    constants = ", ".join(str(value) for value in item.get("constants") or [])
+    return f"{prefix}enum {name} {{ {constants} }}"
+
+
+def _render_nested_class(item: Mapping[str, Any]) -> str:
+    modifiers = _java_modifiers(item.get("modifiers") or [], kind="class")
+    prefix = (modifiers + " ") if modifiers else ""
+    name = str(item.get("name") or "").strip()
+    rows = [f"{prefix}class {name} {{"]
+    rows.extend(
+        _render_field(field, indent="    ")
+        for field in item.get("fields") or []
+        if isinstance(field, Mapping)
+    )
+    for constructor in item.get("constructors") or []:
+        if not isinstance(constructor, Mapping):
+            continue
+        params = _java_parameters(constructor.get("parameters") or [])
+        throws = [
+            _qualify_common_java_names(str(value).strip())
+            for value in constructor.get("throws") or []
+            if str(value).strip()
+        ]
+        header = f"    {name}({params})"
+        if throws:
+            header += " throws " + ", ".join(throws)
+        rows.append(header + " {")
+        rows.extend(_java_body_lines(constructor.get("body") or [], indent="        "))
+        rows.append("    }")
+    rows.extend(
+        _render_method(method, indent="    ")
+        for method in item.get("methods") or []
+        if isinstance(method, Mapping)
+    )
+    rows.append("}")
+    return "\n".join(rows)
+
+
+def _render_atomic_java_structure(
+    decision: Mapping[str, Any],
+    *,
+    response_region: str,
+) -> str:
+    if response_region == "initialize":
+        if set(decision) != {"statements"}:
+            raise CustomModuleGenerationError(
+                "ATOMIC_CONCERN_RESPONSE_INVALID: initialize structure must contain only statements."
+            )
+        return "\n".join(_java_body_lines(decision.get("statements") or [], indent="")).strip()
+
+    expected = {
+        "records",
+        "enums",
+        "classes",
+        "fields",
+        "methods",
+        "static_initializers",
+    }
+    if set(decision) != expected:
+        raise CustomModuleGenerationError(
+            "ATOMIC_CONCERN_RESPONSE_INVALID: member structure has unexpected fields."
+        )
+    rows: list[str] = []
+    rows.extend(
+        _render_record(item)
+        for item in decision.get("records") or []
+        if isinstance(item, Mapping)
+    )
+    rows.extend(
+        _render_enum(item)
+        for item in decision.get("enums") or []
+        if isinstance(item, Mapping)
+    )
+    rows.extend(
+        _render_nested_class(item)
+        for item in decision.get("classes") or []
+        if isinstance(item, Mapping)
+    )
+    rows.extend(
+        _render_field(item)
+        for item in decision.get("fields") or []
+        if isinstance(item, Mapping)
+    )
+    rows.extend(
+        _render_method(item)
+        for item in decision.get("methods") or []
+        if isinstance(item, Mapping)
+    )
+    for initializer in decision.get("static_initializers") or []:
+        if not isinstance(initializer, Mapping):
+            continue
+        rows.append(
+            "\n".join(
+                [
+                    "static {",
+                    *_java_body_lines(initializer.get("body") or [], indent="    "),
+                    "}",
+                ]
+            )
+        )
+    return "\n\n".join(row for row in rows if row.strip()).strip()
 
 
 def _call_atomic_java_region(
@@ -508,12 +939,20 @@ def _call_atomic_java_region(
         raise CustomModuleGenerationError(
             "ATOMIC_STRUCTURED_CODER_REQUIRED: router has no generate_tool_decision()."
         )
+    payload = _atomic_request_payload(messages)
+    response_region = str(payload.get("response_region") or "members").strip()
+    parameters = (
+        _ATOMIC_INITIALIZE_PARAMETERS
+        if response_region == "initialize"
+        else _ATOMIC_MEMBERS_PARAMETERS
+    )
     kwargs: dict[str, Any] = {
         "tool_name": _ATOMIC_JAVA_REGION_TOOL,
-        "parameters": _ATOMIC_JAVA_REGION_PARAMETERS,
+        "parameters": parameters,
         "description": (
-            "Emit exactly one host-selected Java region. Put executable Java only in "
-            "the java argument. An empty string is valid when the region needs no code."
+            "Describe the selected Java region as structured components only. "
+            "The host renders Java syntax. Never return raw Java source, prose, Markdown, "
+            "imports, package declarations, or an outer class."
         ),
     }
     if output_token_ceiling is not None and _supports_kwarg(
@@ -527,21 +966,18 @@ def _call_atomic_java_region(
 
         if isinstance(exc, NativeToolDecisionRejected):
             raise CustomModuleGenerationError(
-                "ATOMIC_CONCERN_RESPONSE_INVALID: required emit_java_region "
+                "ATOMIC_CONCERN_RESPONSE_INVALID: required emit_java_structure "
                 f"tool call was rejected: {exc}"
             ) from exc
         raise
     if not isinstance(decision, Mapping):
         raise CustomModuleGenerationError(
-            "ATOMIC_CONCERN_RESPONSE_INVALID: emit_java_region returned a non-object."
+            "ATOMIC_CONCERN_RESPONSE_INVALID: emit_java_structure returned a non-object."
         )
-    if set(decision) != {"java"} or not isinstance(decision.get("java"), str):
-        raise CustomModuleGenerationError(
-            "ATOMIC_CONCERN_RESPONSE_INVALID: emit_java_region must return exactly "
-            "one string field named java."
-        )
-    return str(decision["java"]).replace("\r\n", "\n").replace("\r", "\n").strip()
-
+    return _render_atomic_java_structure(
+        decision,
+        response_region=response_region,
+    )
 
 def _call_coder(
     router: Any,

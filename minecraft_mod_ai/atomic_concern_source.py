@@ -1033,22 +1033,20 @@ def _messages(
     name = _slug(concern.get("concern"))
     if response_region == "members":
         response_contract = (
-            "Call emit_java_region exactly once. Put only Java class-body members for this concern "
-            "in its java argument. If this concern needs no members, set java to the empty string. "
-            "Do not place response markers, prose, Markdown, package/import declarations, another "
-            "top-level type, or initialize() lifecycle code in java. Private nested helper "
-            "class/interface/enum/record declarations are allowed when this concern needs them. "
-            "A class initializer must be written only as static { ... }; never prefix it with "
-            "public, protected, or private. Every non-java.lang type introduced by this concern "
-            "must either be fully-qualified or declared as a private nested helper type in this "
-            "same region; for example use java.util.List, not bare List."
+            "Call emit_java_structure exactly once. Do not write a Java region string. "
+            "Describe this concern using the tool's records, enums, classes, fields, methods, "
+            "and static_initializers arrays. The host owns Java syntax and renders those parts. "
+            "Every concern-owned domain type you reference must be declared in records/enums/classes "
+            "in the same tool call unless it already exists in available_sibling_symbols or dependency_api. "
+            "For JDK collection/concurrency types you may use simple names such as List/Map/Set; "
+            "the host qualifies them. Keep each method body short and concern-local."
         )
     elif response_region == "initialize":
         response_contract = (
-            "Call emit_java_region exactly once. Put only Java statements that belong inside the "
-            "host-owned initialize() body in its java argument. If no initialization is needed, "
-            "set java to the empty string. Do not place response markers, prose, Markdown, "
-            "declarations, package/import/type syntax, or initialize() itself in java."
+            "Call emit_java_structure exactly once with only its statements array. "
+            "Each entry is one statement or one complete block that belongs inside the host-owned "
+            "initialize() body. The host owns initialize() syntax. Use an empty statements array "
+            "when no initialization is required."
         )
     else:
         raise CustomModuleGenerationError(
@@ -1090,6 +1088,44 @@ def _messages(
             sibling_concerns=sibling_concerns,
         ),
         "repair_failure": failure or None,
+        "generation_recipe": {
+            "first_pass_goal": "produce compile-ready structured Java components in one call",
+            "declare_local_domain_types_first": True,
+            "jdk_simple_names_host_qualified": [
+                "List",
+                "Map",
+                "Set",
+                "Optional",
+                "UUID",
+                "ArrayList",
+                "HashMap",
+                "HashSet",
+                "ConcurrentHashMap",
+                "AtomicBoolean",
+                "AtomicInteger",
+                "AtomicLong",
+            ],
+            "no_raw_top_level_java": True,
+            "preferred_shape": (
+                "fields_and_local_types"
+                if name in {"variables", "inputs", "outputs", "stored_state", "payloads"}
+                else "methods_and_constants"
+                if name in {
+                    "transitions",
+                    "invariants",
+                    "updates",
+                    "cleanup",
+                    "concurrency",
+                    "preconditions",
+                    "success_postconditions",
+                    "rejection_postconditions",
+                    "security_checks",
+                    "synchronization",
+                    "bounds",
+                }
+                else "smallest_components_that_satisfy_this_concern"
+            ),
+        },
         "scope": {
             "selected_region": _marker(
                 name,
@@ -1097,7 +1133,7 @@ def _messages(
                 "START",
             ),
             "sibling_regions_immutable": True,
-            "required_output_tool": "emit_java_region",
+            "required_output_tool": "emit_java_structure",
             "model_tool_choice": False,
             "sibling_concerns_out_of_scope": list(sibling_concerns),
             "scope_rule": (
@@ -1300,17 +1336,6 @@ class AtomicConcernExecutor:
                     output,
                     response_region=response_region,
                 )
-                unresolved_types = _unresolved_simple_type_names(
-                    parsed,
-                    allowed=self._known_simple_types(exclude=name),
-                )
-                if unresolved_types:
-                    raise CustomModuleGenerationError(
-                        "ATOMIC_CONCERN_UNRESOLVED_TYPES: "
-                        + ", ".join(unresolved_types)
-                        + ". Use fully-qualified external/JDK types or declare a private "
-                        "nested helper type in this concern."
-                    )
             except CustomModuleGenerationError as exc:
                 reason = str(exc).split("\n", 1)[0]
                 recoverable = reason.startswith(
@@ -1318,7 +1343,6 @@ class AtomicConcernExecutor:
                         "ATOMIC_CONCERN_RESPONSE_INVALID:",
                         "ATOMIC_CONCERN_SCOPE_ESCAPE:",
                         "ATOMIC_CONCERN_SYMBOL_COLLISION:",
-                        "ATOMIC_CONCERN_UNRESOLVED_TYPES:",
                     )
                 )
                 if not recoverable:
@@ -1378,8 +1402,6 @@ class AtomicConcernExecutor:
                     + f"\nRegenerate only the {response_region} region. "
                     "Do not emit response markers, prose, package/import/top-level/lifecycle declarations. "
                     "Private nested helper types are allowed in members regions. "
-                    "Resolve every listed type locally: fully-qualify external/JDK types and declare "
-                    "private nested helper types for concern-owned domain types. "
                     "Implement only this concern; do not add declarations for sibling concerns. "
                     "The host will reconcile declarations emitted earlier by another concern. "
                     "Emit executable Java only; no analysis, reasoning, plans, or Markdown commentary."

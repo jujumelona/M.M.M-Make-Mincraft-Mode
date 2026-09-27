@@ -295,6 +295,7 @@ def test_atomic_coder_can_force_non_thinking_transport() -> None:
     assert captured["output_token_ceiling"] == 1536
 
 
+
 def test_atomic_region_uses_required_structured_tool_not_free_text() -> None:
     captured: dict[str, object] = {}
 
@@ -318,44 +319,56 @@ def test_atomic_region_uses_required_structured_tool_not_free_text() -> None:
             captured["parameters"] = parameters
             captured["description"] = description
             captured["output_token_ceiling"] = output_token_ceiling
-            return {"java": "private static final int COST = 10;"}
+            return {
+                "records": [],
+                "enums": [],
+                "classes": [],
+                "fields": [
+                    {
+                        "modifiers": ["private", "static", "final"],
+                        "type": "int",
+                        "name": "COST",
+                        "initializer": "10",
+                    }
+                ],
+                "methods": [],
+                "static_initializers": [],
+            }
 
     result = _call_coder(
         _Router(),
-        ({"role": "user", "content": "one atomic region"},),
+        (
+            {"role": "system", "content": "structured only"},
+            {"role": "user", "content": '{"response_region":"members"}'},
+        ),
         output_token_ceiling=1536,
         structured_java_region=True,
     )
 
     assert result == "private static final int COST = 10;"
     assert captured["role"] == "coder"
-    assert captured["tool_name"] == "emit_java_region"
+    assert captured["tool_name"] == "emit_java_structure"
     assert captured["output_token_ceiling"] == 1536
-    assert captured["parameters"] == {
-        "type": "object",
-        "properties": {
-            "java": {
-                "type": "string",
-                "description": (
-                    "Only the Java source text for the host-selected atomic region. "
-                    "No prose, reasoning, Markdown, response markers, package/import lines, "
-                    "or outer lifecycle/type declarations."
-                ),
-            }
-        },
-        "required": ["java"],
-        "additionalProperties": False,
-    }
 
 
 def test_atomic_structured_tool_allows_intentional_empty_region() -> None:
     class _Router:
         def generate_tool_decision(self, role, messages, **kwargs):
-            return {"java": ""}
+            return {
+                "records": [],
+                "enums": [],
+                "classes": [],
+                "fields": [],
+                "methods": [],
+                "static_initializers": [],
+            }
 
     assert _call_coder(
         _Router(),
-        ({"role": "user", "content": "no initialization required"},),
+        (
+            {"role": "system", "content": "structured only"},
+            {"role": "user", "content": '{"response_region":"members"}'},
+        ),
         structured_java_region=True,
     ) == ""
 
@@ -363,18 +376,28 @@ def test_atomic_structured_tool_allows_intentional_empty_region() -> None:
 def test_atomic_structured_tool_rejects_extra_fields() -> None:
     class _Router:
         def generate_tool_decision(self, role, messages, **kwargs):
-            return {"java": "private int x;", "reasoning": "I decided..."}
+            return {
+                "records": [],
+                "enums": [],
+                "classes": [],
+                "fields": [],
+                "methods": [],
+                "static_initializers": [],
+                "reasoning": "I decided...",
+            }
 
     with pytest.raises(
         CustomModuleGenerationError,
-        match="emit_java_region must return exactly",
+        match="member structure has unexpected fields",
     ):
         _call_coder(
             _Router(),
-            ({"role": "user", "content": "one region"},),
+            (
+                {"role": "system", "content": "structured only"},
+                {"role": "user", "content": '{"response_region":"members"}'},
+            ),
             structured_java_region=True,
         )
-
 
 def _multi_executor(
     outputs: list[str],
@@ -621,41 +644,64 @@ def test_visibility_instance_initializer_is_rejected_before_compile() -> None:
     assert "private static final int COST = 10;" in result["source"]
 
 
-def test_unresolved_domain_type_is_rejected_before_compile() -> None:
-    executor = _executor(
-        [
-            "private static final StateVariable CREDITS = new StateVariable();",
-            (
-                "private record StateVariable() {}\n"
-                "private static final StateVariable CREDITS = new StateVariable();"
-            ),
-        ],
-        section="state_model",
+
+def test_structured_tool_declares_domain_type_and_field_together() -> None:
+    from minecraft_mod_ai.custom_module_generator import _render_atomic_java_structure
+
+    rendered = _render_atomic_java_structure(
+        {
+            "records": [
+                {
+                    "modifiers": ["private"],
+                    "name": "StateVariable",
+                    "components": [{"type": "String", "name": "name"}],
+                    "methods": [],
+                }
+            ],
+            "enums": [],
+            "classes": [],
+            "fields": [
+                {
+                    "modifiers": ["private", "static", "final"],
+                    "type": "StateVariable",
+                    "name": "CREDITS",
+                    "initializer": 'new StateVariable("credits")',
+                }
+            ],
+            "methods": [],
+            "static_initializers": [],
+        },
+        response_region="members",
     )
 
-    result = executor.run()
-
-    assert "private record StateVariable()" in result["source"]
-    assert result["repair_count"] == 0
+    assert "private record StateVariable(String name) {}" in rendered
+    assert "private static final StateVariable CREDITS" in rendered
 
 
-def test_unqualified_java_util_type_is_rejected_before_compile() -> None:
-    executor = _executor(
-        [
-            "private static final List<String> VALUES = List.of();",
-            (
-                "private static final java.util.List<String> VALUES = "
-                "java.util.List.of();"
-            ),
-        ],
-        section="state_model",
+def test_structured_tool_host_qualifies_common_jdk_types() -> None:
+    from minecraft_mod_ai.custom_module_generator import _render_atomic_java_structure
+
+    rendered = _render_atomic_java_structure(
+        {
+            "records": [],
+            "enums": [],
+            "classes": [],
+            "fields": [
+                {
+                    "modifiers": ["private", "static", "final"],
+                    "type": "List<String>",
+                    "name": "VALUES",
+                    "initializer": "List.of()",
+                }
+            ],
+            "methods": [],
+            "static_initializers": [],
+        },
+        response_region="members",
     )
 
-    result = executor.run()
-
-    assert "java.util.List<String>" in result["source"]
-    assert "private static final List<String>" not in result["source"]
-
+    assert "java.util.List<String>" in rendered
+    assert "java.util.List.of()" in rendered
 
 def test_previous_concern_nested_type_is_available_to_next_concern() -> None:
     concerns = (
@@ -935,3 +981,35 @@ def test_dependency_context_exposes_api_without_source_body() -> None:
     ]
     assert "SECRET" not in json.dumps(compact)
     assert _dependency_declared_identifiers(raw) == ("AuthoredBehaviorContract",)
+
+
+
+def test_structured_tool_cannot_emit_visibility_on_static_initializer() -> None:
+    from minecraft_mod_ai.custom_module_generator import _render_atomic_java_structure
+
+    rendered = _render_atomic_java_structure(
+        {
+            "records": [],
+            "enums": [],
+            "classes": [],
+            "fields": [],
+            "methods": [],
+            "static_initializers": [{"body": ["initializeSomething()"]}],
+        },
+        response_region="members",
+    )
+
+    assert "private static {" not in rendered
+    assert rendered == "static {\n    initializeSomething();\n}"
+
+
+def test_structured_tool_renders_initialize_statements_without_lifecycle_declaration() -> None:
+    from minecraft_mod_ai.custom_module_generator import _render_atomic_java_structure
+
+    rendered = _render_atomic_java_structure(
+        {"statements": ["registerDefaults()"]},
+        response_region="initialize",
+    )
+
+    assert rendered == "registerDefaults();"
+    assert "initialize()" not in rendered
