@@ -27,6 +27,7 @@ def initialize_runtime() -> None:
             extended_content_generator,
             external_mcp_router,
             mcp_transport_pool,
+            model_registry,
             performance_final_contract,
             project_index,
             research_rag_performance,
@@ -34,6 +35,7 @@ def initialize_runtime() -> None:
         )
         from .custom_generation_search_contract import install as install_custom_search
         from .extended_registration_contract import install as install_extended_registration
+        from .gpu_resource_contract import install as install_gpu_resource
         from .mcp_child_trace_contract import install as install_mcp_child_trace
         from .performance_final_contract import install as install_performance_contract
         from .performance_final_tuning import install as install_performance_tuning
@@ -47,6 +49,10 @@ def initialize_runtime() -> None:
         from .small_model_retrieval_efficiency_contract import (
             install as install_selective_retrieval,
         )
+
+        # Local text-model roles share the physical GPU and must participate in the
+        # scheduler's exclusive-GPU accounting regardless of registry defaults.
+        install_gpu_resource(model_registry)
 
         # Transport/session ownership first: child tracing changes only the session
         # factory while the hot-path contract owns the non-blocking execute method.
