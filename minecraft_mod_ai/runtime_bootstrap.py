@@ -29,9 +29,12 @@ def initialize_runtime() -> None:
             mcp_transport_pool,
             performance_final_contract,
             project_index,
+            quality_evidence,
             research_rag_performance,
             source_patch,
+            validation_execution_contract,
         )
+        from .clean_room_verification_contract import install as install_clean_room
         from .custom_generation_search_contract import install as install_custom_search
         from .extended_registration_contract import install as install_extended_registration
         from .mcp_child_trace_contract import install as install_mcp_child_trace
@@ -59,6 +62,11 @@ def initialize_runtime() -> None:
         install_project_index_manifest(project_index)
         install_performance_tuning(performance_final_contract)
         install_project_manifest_hash(complete_orchestrator, project_index)
+        install_clean_room(
+            complete_orchestrator,
+            quality_evidence,
+            validation_execution_contract,
+        )
         install_performance_contract(
             complete_orchestrator,
             custom_module_generator,
