@@ -225,6 +225,33 @@ def _compact_anchor(record: dict[str, Any], query_terms: set[str]) -> dict[str, 
     }
 
 
+def _finalize_observation_pages(
+    pages: list[dict[str, Any]],
+    anchors: list[dict[str, Any]],
+    query_terms: set[str],
+    byte_budget: int,
+) -> tuple[dict[str, Any], ...]:
+    page_count = len(pages)
+    compact_refs = [_compact_anchor(record, query_terms) for record in anchors]
+    compact_ref_bytes = json_size(compact_refs) if compact_refs else 0
+    for index, page in enumerate(pages):
+        page["page_count"] = page_count
+        page["complete"] = index == page_count - 1
+        policy = dict(page.get("policy") or {})
+        policy["global_anchor_source_payload"] = "first_page_only"
+        page["policy"] = policy
+        page["global_anchor_payload"] = "exact_source" if index == 0 else "compact_refs"
+        page["global_anchor_ref_bytes"] = compact_ref_bytes
+        if index:
+            page["global_anchors"] = compact_refs
+        if json_size(page) > byte_budget:
+            raise CustomModuleGenerationError(
+                "Host source-observation context page exceeded its byte budget "
+                "after finalization."
+            )
+    return tuple(pages)
+
+
 def observation_context_pages(
     ledger: dict[str, Any],
     *,
@@ -337,27 +364,7 @@ def observation_context_pages(
         if cursor >= len(remaining):
             break
 
-    page_count = len(pages)
-    compact_refs = [_compact_anchor(record, query_terms) for record in anchors]
-    compact_ref_bytes = json_size(compact_refs) if compact_refs else 0
-    for index, page in enumerate(pages):
-        page["page_count"] = page_count
-        page["complete"] = index == page_count - 1
-        policy = dict(page.get("policy") or {})
-        policy["global_anchor_source_payload"] = "first_page_only"
-        page["policy"] = policy
-        page["global_anchor_payload"] = (
-            "exact_source" if index == 0 else "compact_refs"
-        )
-        page["global_anchor_ref_bytes"] = compact_ref_bytes
-        if index > 0:
-            page["global_anchors"] = compact_refs
-        if json_size(page) > byte_budget:
-            raise CustomModuleGenerationError(
-                "Host source-observation context page exceeded its byte budget "
-                "after finalization."
-            )
-    return tuple(pages)
+    return _finalize_observation_pages(pages, anchors, query_terms, byte_budget)
 
 
 def observation_page_payload(

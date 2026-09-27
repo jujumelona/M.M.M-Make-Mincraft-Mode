@@ -635,14 +635,11 @@ def _ownership_context(game_design: Mapping[str, Any]) -> dict[str, Any]:
             ),
             "generated_mod",
         )
-    namespaces = _strings(inventory.get("namespaces"))
-    namespace = namespaces[0] if namespaces else f"generated.{_slug(mod_id)}"
+    namespace = (_strings(inventory.get("namespaces")) or (f"generated.{_slug(mod_id)}",))[0]
     language = str(source.get("language") or "java")
     extension = "kt" if language == "kotlin" else "java"
-    owner_raw_module_id = str(
-        source.get("module_id") or resource.get("module_id") or ":"
-    )
-    owner_metadata = source if source else resource
+    owner_metadata = source or resource
+    owner_raw_module_id = str(owner_metadata.get("module_id") or ":")
     return {
         "module_id": logical_module_id(owner_raw_module_id, owner_metadata),
         "source_set": str(source.get("source_set") or "main"),

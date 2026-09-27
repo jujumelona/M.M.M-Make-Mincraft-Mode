@@ -15,6 +15,8 @@ from functools import partial
 
 from .acceptance_contracts import (
     CANONICAL_ACCEPTANCE_OWNER,
+    public_acceptance_values,
+    validate_acceptance_catalog,
     validate_runtime_public_acceptance,
 )
 
@@ -60,10 +62,6 @@ def _derived_assets(
     return [_normalize_asset(value) for value in derive_module_asset_specs(
         modules, existing_asset_ids=[item["asset_id"] for item in assets]
     )]
-
-
-def _public_acceptance_values(contract: Mapping[str, Any]) -> list[str]:
-    return [item['statement'] for item in contract.get('acceptance_catalog', []) if isinstance(item, Mapping) and item.get('visibility') == 'public' and isinstance(item.get('statement'), str)]
 
 
 def compile_production_contract(requested_prompt: str, game_design: Mapping[str, Any], research_brief: Mapping[str, Any] | Sequence[Any] | None=None, modules: Sequence[ProductionModule | Mapping[str, Any]]=(), assets: Sequence[AssetRequest | Mapping[str, Any]]=(), acceptance_tests: Sequence[str]=(), evidence_plan: Mapping[str, Any] | None=None) -> ProductionContractCompilation:
@@ -215,7 +213,7 @@ def compile_production_contract(requested_prompt: str, game_design: Mapping[str,
         group_ref = 'coverage:' + requirement_ref
         requirement['coverage_group_ref'] = group_ref
         coverage_groups.append({'group_ref': group_ref, 'requirement_ref': requirement_ref, 'implementation_catalog_ref': 'catalog:implementations', 'implementation_refs': direct_implementations, 'acceptance_catalog_ref': 'catalog:acceptance', 'acceptance_refs': [requirement_acceptance[requirement_ref], *matched_input_tests], 'quality_dimension_refs': quality_refs, 'evidence_route_refs': ['evidence:' + value.removeprefix('quality:') for value in quality_refs]})
-    acceptance_tuple = tuple(_public_acceptance_values({'acceptance_catalog': acceptance_catalog}))
+    acceptance_tuple = tuple(public_acceptance_values(acceptance_catalog))
     source_bindings = {'game_design_sha256': _canonical_sha256(design_snapshot), 'research_brief_sha256': '' if research_snapshot is None else _canonical_sha256(research_snapshot), 'module_input_sha256': _canonical_sha256(normalized_modules), 'asset_input_sha256': _canonical_sha256(normalized_assets), 'evidence_plan_sha256': '' if normalized_evidence_plan is None else str(normalized_evidence_plan['plan_sha256'])}
     contract: dict[str, Any] = {'schema_version': CONTRACT_SCHEMA, 'requested_prompt': requested_prompt, 'source_bindings': source_bindings, 'requirement_catalog': requirements, 'implementation_catalog': implementation_catalog, 'acceptance_catalog': acceptance_catalog, 'quality_dimension_catalog': quality_catalog, 'evidence_route_catalog': evidence_routes, 'coverage_groups': coverage_groups, 'completion_policy': _json_copy(_COMPLETION_POLICY, 'completion_policy'), 'catalog_stats': {'requirements': len(requirements), 'implementations': len(implementation_catalog), 'acceptance_tests': len(acceptance_catalog), 'quality_dimensions': len(quality_catalog), 'coverage_groups': len(coverage_groups), 'max_direct_implementation_refs_per_group': max((len(item['implementation_refs']) for item in coverage_groups), default=0)}, 'contract_sha256': ''}
     contract['contract_sha256'] = _hash_without_field(contract, 'contract_sha256')
@@ -435,34 +433,11 @@ def validate_production_contract(
                     'asset implementation hash does not match the current proposal: '
                     + asset['asset_id']
                 )
-    acceptance_refs: set[str] = set()
-    catalog_acceptance: list[str] = []
-    for item in acceptances:
-        _require_exact_keys(item, {'acceptance_ref', 'origin', 'visibility', 'statement'}, 'acceptance entry')
-        ref = _nonempty_string(item['acceptance_ref'], 'acceptance_ref')
-        if ref in acceptance_refs:
-            raise ProductionContractError(f'duplicate acceptance ref: {ref}')
-        acceptance_refs.add(ref)
-        if item['origin'] not in {'input', 'quality', 'requirement'}:
-            raise ProductionContractError(f'invalid acceptance origin: {ref}')
-        if item['visibility'] not in {'public', 'internal'}:
-            raise ProductionContractError(f'invalid acceptance visibility: {ref}')
-        if item['origin'] == 'quality' and item['visibility'] != 'internal':
-            raise ProductionContractError(f'quality acceptance must remain internal: {ref}')
-        if item['origin'] != 'quality' and item['visibility'] != 'public':
-            raise ProductionContractError(f'non-quality acceptance must be public: {ref}')
-        if item['origin'] == 'quality' and not ref.startswith('acceptance:quality:'):
-            raise ProductionContractError(f'invalid quality acceptance ref: {ref}')
-        if item['origin'] == 'requirement' and not ref.startswith('acceptance:'):
-            raise ProductionContractError(f'invalid requirement acceptance ref: {ref}')
-        statement = _nonempty_string(item['statement'], 'acceptance statement')
-        if item['visibility'] == 'public':
-            _validate_public_acceptance(statement)
-            catalog_acceptance.append(statement)
-    external_acceptance = list(acceptance_tests)
-    if catalog_acceptance != external_acceptance:
-        raise ProductionContractError('acceptance catalog does not match proposal acceptance tests')
-    _require_unique(external_acceptance, 'acceptance test')
+    acceptance_refs = validate_acceptance_catalog(
+        acceptances,
+        acceptance_tests,
+        error_type=ProductionContractError,
+    )
     dimension_refs: set[str] = set()
     dimension_ids: list[str] = []
     route_for_dimension: dict[str, str] = {}
@@ -580,7 +555,7 @@ def validate_production_contract(
 
 def quality_contract_summary(contract: Mapping[str, Any]) -> str:
     module_ids = [item['implementation_id'] for item in contract.get('implementation_catalog', []) if isinstance(item, Mapping) and item.get('source_kind') == 'module']
-    tests = _public_acceptance_values(contract)
+    tests = public_acceptance_values(contract.get('acceptance_catalog', []))
     validate_production_contract(contract, module_ids, tests)
     stats = contract['catalog_stats']
     dimensions = ', '.join(item['title'] for item in contract['quality_dimension_catalog'])
@@ -588,7 +563,7 @@ def quality_contract_summary(contract: Mapping[str, Any]) -> str:
 
 def evaluate_quality_contract(contract: Mapping[str, Any], evidence: Mapping[str, Any] | Sequence[Mapping[str, Any]], proposal_hash: str, previous: Mapping[str, Any] | None=None) -> dict[str, Any]:
     module_ids = [item['implementation_id'] for item in contract.get('implementation_catalog', []) if isinstance(item, Mapping) and item.get('source_kind') == 'module']
-    acceptance = _public_acceptance_values(contract)
+    acceptance = public_acceptance_values(contract.get('acceptance_catalog', []))
     validate_production_contract(contract, module_ids, acceptance)
     if not isinstance(proposal_hash, str) or not _SHA256.fullmatch(proposal_hash):
         raise ProductionContractError('proposal_hash must be a canonical SHA-256')

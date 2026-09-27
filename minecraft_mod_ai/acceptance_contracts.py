@@ -20,7 +20,7 @@ evidence but are deliberately capped below behavioral proof.
 """
 
 import hashlib
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -150,6 +150,68 @@ def canonical_public_acceptance(
         if text not in result:
             result.append(text)
     return tuple(result)
+
+
+def public_acceptance_values(catalog: Any) -> list[str]:
+    """Project only public acceptance statements from a production catalog."""
+
+    if not isinstance(catalog, Sequence) or isinstance(catalog, (str, bytes, bytearray)):
+        return []
+    return [
+        str(item["statement"])
+        for item in catalog
+        if (
+            isinstance(item, Mapping)
+            and item.get("visibility") == "public"
+            and isinstance(item.get("statement"), str)
+        )
+    ]
+
+
+def validate_acceptance_catalog(
+    catalog: Any,
+    acceptance_tests: Iterable[str],
+    *,
+    error_type: type[Exception] = AcceptanceContractError,
+) -> set[str]:
+    """Validate production acceptance entries under the canonical public boundary."""
+
+    if not isinstance(catalog, list):
+        raise error_type("acceptance must be a list")
+    refs: set[str] = set()
+    public: list[str] = []
+    expected_keys = {"acceptance_ref", "origin", "visibility", "statement"}
+    for item in catalog:
+        if not isinstance(item, Mapping) or set(item) != expected_keys:
+            raise error_type("acceptance entry has unexpected fields")
+        ref = _nonempty_public_text(item.get("acceptance_ref"), error_type=error_type)
+        if ref in refs:
+            raise error_type(f"duplicate acceptance ref: {ref}")
+        refs.add(ref)
+        origin = item.get("origin")
+        visibility = item.get("visibility")
+        if origin not in {"input", "quality", "requirement"}:
+            raise error_type(f"invalid acceptance origin: {ref}")
+        if visibility not in {"public", "internal"}:
+            raise error_type(f"invalid acceptance visibility: {ref}")
+        if (origin == "quality") != (visibility == "internal"):
+            label = "quality acceptance" if origin == "quality" else "non-quality acceptance"
+            raise error_type(f"{label} has invalid visibility: {ref}")
+        if origin == "quality" and not ref.startswith("acceptance:quality:"):
+            raise error_type(f"invalid quality acceptance ref: {ref}")
+        if origin == "requirement" and not ref.startswith("acceptance:"):
+            raise error_type(f"invalid requirement acceptance ref: {ref}")
+        statement = _nonempty_public_text(item.get("statement"), error_type=error_type)
+        if visibility == "public":
+            validate_runtime_public_acceptance(statement, error_type=error_type)
+            public.append(statement)
+
+    external = list(acceptance_tests)
+    if public != external:
+        raise error_type("acceptance catalog does not match proposal acceptance tests")
+    if len(external) != len(set(external)):
+        raise error_type("duplicate acceptance test")
+    return refs
 
 
 def approved_requirements(

@@ -502,6 +502,11 @@ def _semantic_lsh_ready(connection: sqlite3.Connection) -> bool:
     return stale is None
 
 
+def _require_semantic_lsh_ready(connection: sqlite3.Connection) -> None:
+    if not _semantic_lsh_ready(connection):
+        raise RuntimeError("semantic LSH side index is not ready")
+
+
 def _hamming_neighborhood(signature: int, bits: int, radius: int) -> list[int]:
     values = {int(signature)}
     if radius >= 1:
@@ -520,8 +525,7 @@ def _lsh_candidate_rows(
     target: int,
     cap: int,
 ) -> list[sqlite3.Row]:
-    if not _semantic_lsh_ready(connection):
-        raise RuntimeError("semantic LSH side index is not ready")
+    _require_semantic_lsh_ready(connection)
     signatures = _signatures([query_vector])
     if not signatures:
         return []
