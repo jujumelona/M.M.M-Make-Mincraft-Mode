@@ -54,7 +54,15 @@ def compile_quality_evidence(contract: Mapping[str, Any], proposal_hash: str, *,
     evidence, but wall time is intentionally excluded from the ID.
     """
     module_ids = [str(item['implementation_id']) for item in contract.get('implementation_catalog', []) if isinstance(item, Mapping) and item.get('source_kind') == 'module']
-    acceptance_tests = [str(item['statement']) for item in contract.get('acceptance_catalog', []) if isinstance(item, Mapping) and isinstance(item.get('statement'), str)]
+    acceptance_tests = [
+        str(item['statement'])
+        for item in contract.get('acceptance_catalog', [])
+        if (
+            isinstance(item, Mapping)
+            and item.get('visibility') == 'public'
+            and isinstance(item.get('statement'), str)
+        )
+    ]
     validate_production_contract(contract, module_ids, acceptance_tests)
     if not isinstance(proposal_hash, str) or not re.fullmatch('sha256:[0-9a-f]{64}', proposal_hash):
         raise ProductionContractError('proposal_hash must be a canonical SHA-256')
