@@ -900,3 +900,38 @@ def test_compiler_failure_sent_to_model_is_concern_local_and_bounded() -> None:
     assert "missingOther" not in compact
     assert "gradle stack noise" not in compact
     assert len(compact) < 6000
+
+
+def test_dependency_context_exposes_api_without_source_body() -> None:
+    import json
+
+    from minecraft_mod_ai.atomic_concern_source import (
+        _dependency_api_context,
+        _dependency_declared_identifiers,
+    )
+
+    raw = json.dumps(
+        {
+            "symbol": "AuthoredBehaviorContract",
+            "path": "src/main/java/example/AuthoredBehaviorContract.java",
+            "responsibility": "behavior contract",
+            "public_api": ["public static boolean canLaunch()"],
+            "source": (
+                "package example; public final class AuthoredBehaviorContract { "
+                "private static final String SECRET = \"do-not-send\"; }"
+            ),
+        }
+    )
+
+    compact = _dependency_api_context(raw)
+
+    assert compact == [
+        {
+            "symbol": "AuthoredBehaviorContract",
+            "path": "src/main/java/example/AuthoredBehaviorContract.java",
+            "responsibility": "behavior contract",
+            "public_api": ["public static boolean canLaunch()"],
+        }
+    ]
+    assert "SECRET" not in json.dumps(compact)
+    assert _dependency_declared_identifiers(raw) == ("AuthoredBehaviorContract",)

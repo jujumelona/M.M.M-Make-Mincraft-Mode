@@ -941,6 +941,51 @@ def _bounded_grounding(grounding: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _dependency_context_rows(raw: str) -> tuple[dict[str, Any], ...]:
+    rows: list[dict[str, Any]] = []
+    for line in str(raw or "").splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, Mapping):
+            rows.append(dict(value))
+    return tuple(rows)
+
+
+def _dependency_api_context(raw: str, *, max_chars: int = 12000) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    used = 0
+    for row in _dependency_context_rows(raw):
+        compact = {
+            "symbol": str(row.get("symbol") or ""),
+            "path": str(row.get("path") or ""),
+            "responsibility": str(row.get("responsibility") or ""),
+            "public_api": list(row.get("public_api") or []),
+        }
+        encoded = json.dumps(
+            compact,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        if used + len(encoded) > max_chars:
+            break
+        result.append(compact)
+        used += len(encoded)
+    return result
+
+
+def _dependency_declared_identifiers(raw: str) -> tuple[str, ...]:
+    names: set[str] = set()
+    for row in _dependency_context_rows(raw):
+        symbol = str(row.get("symbol") or "").strip()
+        if symbol:
+            names.add(symbol)
+    return tuple(sorted(names))
+
+
 def _region_content(source: str, *, concern: str, region: str) -> str:
     start = _marker(concern, region, "START")
     end = _marker(concern, region, "END")
@@ -1018,7 +1063,7 @@ def _messages(
         "available_sibling_symbols is reference-only context. Do not infer or implement "
         "sibling concerns from symbol names. "
         "Use fully-qualified external API names when needed. "
-        "Use only supplied host grounding and dependency source; never invent a Minecraft/Fabric API."
+        "Use only supplied host grounding and dependency_api; never invent a Minecraft/Fabric API."
     )
     payload = {
         "phase": "implement_atomic_concern_region",
@@ -1034,7 +1079,7 @@ def _messages(
         },
         "task_authority": _concern_authority(task, concern),
         "host_grounding": _bounded_grounding(grounding),
-        "dependency_source": dependency_source,
+        "dependency_api": _dependency_api_context(dependency_source),
         "current_selected_region_source": _region_content(
             current_source,
             concern=name,
@@ -1207,9 +1252,7 @@ class AtomicConcernExecutor:
             for key, display in _member_declaration_symbols(members).items():
                 if key.startswith(("type:", "field:")):
                     names.add(display)
-        for key, display in _member_declaration_symbols(self.dependency_source).items():
-            if key.startswith(("type:", "field:")):
-                names.add(display)
+        names.update(_dependency_declared_identifiers(self.dependency_source))
         return tuple(sorted(names))
 
     def _generate_region(
