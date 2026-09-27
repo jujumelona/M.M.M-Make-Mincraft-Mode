@@ -63,6 +63,14 @@ def compile_production_contract(requested_prompt: str, game_design: Mapping[str,
     research_snapshot = None if research_brief is None else _json_copy(research_brief, 'research_brief')
     raw_modules = [_normalize_module(value) for value in modules]
     raw_assets = [_normalize_asset(value) for value in assets]
+    from .resource_contracts import derive_module_asset_specs
+    raw_assets.extend(
+        _normalize_asset(value)
+        for value in derive_module_asset_specs(
+            raw_modules,
+            existing_asset_ids=[item["asset_id"] for item in raw_assets],
+        )
+    )
     normalized_modules: list[dict[str, Any]] = []
     seen_mids: set[str] = set()
     for module in raw_modules:

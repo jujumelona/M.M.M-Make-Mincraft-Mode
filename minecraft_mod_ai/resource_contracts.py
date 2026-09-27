@@ -276,16 +276,24 @@ def derive_module_asset_specs(modules: Sequence[Any], *, existing_asset_ids: Seq
     existing = set(existing_asset_ids)
     rows: list[dict[str, Any]] = []
     for module in modules:
-        render_kind = _MODULE_RENDER_KIND.get(str(module.kind))
-        if not render_kind:
+        if isinstance(module, Mapping):
+            module_kind = str(module.get("kind", ""))
+            module_id = str(module.get("module_id", ""))
+            raw_config = module.get("config")
+        else:
+            module_kind = str(getattr(module, "kind", ""))
+            module_id = str(getattr(module, "module_id", ""))
+            raw_config = getattr(module, "config", None)
+        render_kind = _MODULE_RENDER_KIND.get(module_kind)
+        if not render_kind or not module_id:
             continue
         asset_kind = "block" if render_kind.startswith("block.") else "item"
-        asset_id = f"texture_{asset_kind}_{module.module_id}"
+        asset_id = f"texture_{asset_kind}_{module_id}"
         if asset_id in existing:
             continue
-        config = module.config if isinstance(module.config, Mapping) else {}
-        display = str(config.get("visual_description") or config.get("display_name_en") or config.get("name") or module.module_id.replace("_", " ")).strip()
-        parts = [display, str(module.kind)]
+        config = raw_config if isinstance(raw_config, Mapping) else {}
+        display = str(config.get("visual_description") or config.get("display_name_en") or config.get("name") or module_id.replace("_", " ")).strip()
+        parts = [display, module_kind]
         if config.get("material"):
             parts.append(str(config["material"]))
         color = config.get("color") or config.get("main_color")
@@ -295,13 +303,13 @@ def derive_module_asset_specs(modules: Sequence[Any], *, existing_asset_ids: Seq
         if isinstance(motifs, Sequence) and not isinstance(motifs, (str, bytes)):
             parts.extend(str(item) for item in motifs if str(item).strip())
         variant_count = 1
-        if module.kind == "crop":
+        if module_kind == "crop":
             variant_count = config.get("growth_stages", config.get("stage_count"))
             if type(variant_count) is not int or not 1 <= variant_count <= 256:
                 raise ValueError("HOST crop stage cardinality must be explicit.")
         from .resource_visual_spec import resolve_visual_spec
         visual = resolve_visual_spec(config.get("visual_spec"), ", ".join(parts))
-        rows.append({"asset_id": asset_id, "kind": asset_kind, "visual_description": ", ".join(parts), "visual_spec": visual.to_dict(), "render_kind": render_kind, "subject_id": module.module_id, "owner_module_id": module.module_id, "container": "mod", "variant_count": variant_count})
+        rows.append({"asset_id": asset_id, "kind": asset_kind, "visual_description": ", ".join(parts), "visual_spec": visual.to_dict(), "render_kind": render_kind, "subject_id": module_id, "owner_module_id": module_id, "container": "mod", "variant_count": variant_count})
         existing.add(asset_id)
     return tuple(rows)
 
