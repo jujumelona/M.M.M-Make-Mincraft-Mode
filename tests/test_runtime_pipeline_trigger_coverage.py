@@ -14,6 +14,7 @@ DEEP_SOFTWARE_GATE_PATHS = (
     "tools/verify_integrity_minecraft.py",
     "tests/test_implementation_ir.py",
     "minecraft_mod_ai/performance_final_tuning.py",
+    "minecraft_mod_ai/performance_final_contract.py",
 )
 PUSH_GATES = (
     ".github/workflows/main-ci.yml",

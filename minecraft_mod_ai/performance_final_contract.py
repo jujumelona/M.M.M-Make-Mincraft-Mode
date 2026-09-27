@@ -187,7 +187,9 @@ def _clone_snapshot_tree(source_root: Path, *, parent: Path, prefix: str) -> Pat
                 ignored.add(name)
                 continue
             if path.is_file() and path.suffix.lower() in _SKIP_STAGE_SUFFIXES:
-                ignored.add(name)
+                relative = path.relative_to(source_root).as_posix()
+                if relative != "gradle/wrapper/gradle-wrapper.jar":
+                    ignored.add(name)
         return ignored
     try:
         shutil.copytree(source_root, stage, copy_function=_reflink_or_copy, ignore=ignore)
