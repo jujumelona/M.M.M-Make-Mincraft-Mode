@@ -41,14 +41,15 @@ def test_gemma_never_pays_for_impossible_mtp_server_reloads(monkeypatch) -> None
     assert any(value.spec_type.startswith("ngram-") for value in variants)
 
 
-def test_fast_mode_avoids_speculative_cold_reload_candidates(monkeypatch) -> None:
+def test_fast_mode_does_not_bypass_mtp_correctness_candidates(monkeypatch) -> None:
     monkeypatch.setenv("MMM_LLAMA_AUTOTUNE_SEARCH", "fast")
     config = _config(
         "unsloth/Qwen3.5-9B-MTP-GGUF",
         gguf_filename="Qwen3.5-9B-UD-Q4_K_XL.gguf",
     )
     variants = _candidate_variants_for_config(autotune, config)
-    assert [value.spec_type for value in variants] == ["none"]
+    assert variants[0].spec_type == "none"
+    assert any(value.spec_type == "draft-mtp" for value in variants[1:])
 
 
 def test_explicit_model_metadata_overrides_name_heuristic() -> None:

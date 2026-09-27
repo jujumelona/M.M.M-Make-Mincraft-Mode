@@ -58,6 +58,7 @@ MODULE_KINDS = frozenset(
     }
 )
 ASSET_KINDS = frozenset({"item", "block", "entity", "gui", "environment", "icon"})
+IMPLEMENTATION_KINDS = MODULE_KINDS
 
 
 class CompleteProposalStatus(str, Enum):

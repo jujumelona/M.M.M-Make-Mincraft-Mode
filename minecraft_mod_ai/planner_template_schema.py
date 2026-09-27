@@ -18,17 +18,7 @@ MODEL_TASK_DETAIL_KEYS = frozenset(
     {"implementation_notes", "api_usage", "validation_notes", "asset_notes"}
 )
 
-MODULE_KINDS = frozenset(
-    {
-        "item", "block", "tool", "weapon", "armor", "food", "crop", "fluid",
-        "machine", "recipe", "effect", "enchantment", "entity", "boss", "npc",
-        "quest", "class", "skill", "economy", "shop", "gui", "networking", "party",
-        "guild", "command", "structure", "biome", "dimension", "world_event",
-        "advancement", "loot", "integration", "custom_java",
-    }
-)
-ASSET_KINDS = frozenset({"item", "block", "entity", "gui", "environment", "icon"})
-
+from .complete_spec import ASSET_KINDS, MODULE_KINDS
 PRODUCTION_PAGE_TEMPLATE: dict[str, Any] = {
     "modules": [
         {

@@ -11,6 +11,7 @@ import pytest
 from minecraft_mod_ai import llama_server_autotune as autotune
 from minecraft_mod_ai import llama_server_runtime_tuning as runtime_tuning
 from minecraft_mod_ai import qwen_runtime_transport_contract as contract
+from minecraft_mod_ai.llama_tuning_pipeline import NativeLlamaTuningPipeline
 
 
 def _config(
@@ -64,7 +65,15 @@ def _tool_response(*, call_id: str, arguments: str) -> dict:
     }
 
 
-def test_runtime_tuning_owns_extended_server_variant_after_bootstrap() -> None:
+def test_runtime_tuning_type_ownership_is_explicitly_composed(monkeypatch) -> None:
+    original = autotune.ServerVariant
+    monkeypatch.setattr(autotune, "ServerVariant", original)
+    pipeline = NativeLlamaTuningPipeline(
+        autotune=autotune,
+        hardware_policy=SimpleNamespace(),
+        runtime_tuning=runtime_tuning,
+    )
+    pipeline._install_runtime_type_ownership()
     assert autotune.ServerVariant is runtime_tuning.ServerVariant
     variant = runtime_tuning.ServerVariant(
         "mtp-2|ub1024|p2|cr64",
@@ -218,7 +227,7 @@ def test_only_initial_speculation_candidates_get_tool_calibration() -> None:
     )
 
 
-def test_qwen_mtp_skips_unsupported_parallel_refinement() -> None:
+def test_qwen_mtp_skips_unsupported_parallel_refinement(monkeypatch) -> None:
     selected = runtime_tuning.ServerVariant(
         "mtp-2|ub512",
         "draft-mtp",
@@ -227,12 +236,19 @@ def test_qwen_mtp_skips_unsupported_parallel_refinement() -> None:
     )
     calls: list[object] = []
 
-    def run_variant(*args: object, **kwargs: object) -> object:
+    def base_stage(*args: object, **kwargs: object) -> object:
         calls.append((args, kwargs))
         raise AssertionError("Qwen MTP parallel refinement must not launch")
 
+    monkeypatch.setattr(runtime_tuning, "_run_parallel_stage", base_stage)
+
+    fake = SimpleNamespace(
+        _launch_selected=lambda *_args, **_kwargs: "http://127.0.0.1:8910/v1",
+        _fingerprint=lambda *_args, **_kwargs: "base",
+    )
+    contract._install_mtp_single_slot_policy(fake)
     result = runtime_tuning._run_parallel_stage(
-        run_variant,
+        lambda *_args, **_kwargs: None,
         binary="llama-server",
         model_path="/tmp/model.gguf",
         config=_config("unsloth/Qwen3.6-27B-MTP-GGUF"),
@@ -251,7 +267,6 @@ def test_qwen_mtp_skips_unsupported_parallel_refinement() -> None:
     assert p1_probe is None
     assert probes == ()
     assert calls == []
-
 
 def test_qwen_mtp_final_launch_forces_one_slot_and_restores_operator_env(
     monkeypatch,
@@ -501,30 +516,11 @@ def test_model_name_without_registry_contract_is_not_qwen_runtime() -> None:
     assert contract._family(config) is None
 
 
-def test_runtime_installs_zero_reload_tool_calibration_and_single_slot_mtp() -> None:
-    assert autotune.ServerVariant is runtime_tuning.ServerVariant
-    assert getattr(
-        autotune._benchmark,
-        "_mmm_qwen_tool_calibration_benchmark_v1",
-        False,
+def test_runtime_pipeline_explicitly_owns_qwen_transport_stage() -> None:
+    pipeline = NativeLlamaTuningPipeline(
+        autotune=autotune,
+        hardware_policy=SimpleNamespace(),
+        runtime_tuning=runtime_tuning,
     )
-    assert getattr(
-        autotune._mmm_run_tuning_variant,
-        "_mmm_qwen_tool_calibration_context_v2",
-        False,
-    )
-    assert getattr(
-        autotune._probe_server,
-        "_mmm_qwen_tool_calibration_probe_v2",
-        False,
-    )
-    assert getattr(
-        runtime_tuning._run_parallel_stage,
-        "_mmm_qwen_mtp_single_slot_stage_v1",
-        False,
-    )
-    assert getattr(
-        autotune._launch_selected,
-        "_mmm_qwen_mtp_single_slot_launch_v1",
-        False,
-    )
+    assert "qwen-transport" in [stage.name for stage in pipeline.stages()]
+    assert callable(contract.install)
