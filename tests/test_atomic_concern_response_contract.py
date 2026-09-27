@@ -1019,7 +1019,7 @@ def test_structured_members_accept_omitted_empty_categories() -> None:
         response_region="members",
     )
 
-    assert rendered == "int techLevel = 1;"
+    assert rendered == "static int techLevel = 1;"
 
 
 def test_nested_type_visibility_is_host_owned() -> None:
@@ -1244,7 +1244,7 @@ def test_atomic_native_tool_call_does_not_force_legacy_2048_ceiling() -> None:
         output_token_ceiling=None,
     )
 
-    assert rendered == "int value;"
+    assert rendered == "static int value;"
     assert "output_token_ceiling" not in captured
 
 
@@ -1797,3 +1797,29 @@ def test_compiler_repair_cannot_expand_nested_type_structure() -> None:
     assert compile_calls["count"] == 2
     assert "class AuthoredStateModel" not in result["source"]
     assert "private static int value = 1;" in result["source"]
+
+
+def test_noncanonical_record_constructor_must_delegate() -> None:
+    from minecraft_mod_ai.custom_module_generator import _render_atomic_java_structure
+
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match="must delegate to the canonical constructor",
+    ):
+        _render_atomic_java_structure(
+            {
+                "records": [
+                    {
+                        "name": "PlayerData",
+                        "components": [{"type": "int", "name": "credits"}],
+                        "constructors": [
+                            {
+                                "parameters": [],
+                                "body": ["credits = 0"],
+                            }
+                        ],
+                    }
+                ]
+            },
+            response_region="members",
+        )

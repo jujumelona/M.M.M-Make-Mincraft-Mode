@@ -1216,7 +1216,7 @@ def _render_record_constructor(
 ) -> str:
     component_pairs = _parameter_pairs(components)
     parameter_pairs = _parameter_pairs(constructor.get("parameters") or [])
-    canonical = not parameter_pairs or parameter_pairs == component_pairs
+    canonical = parameter_pairs == component_pairs
     if canonical:
         component_names = {
             str(name)
@@ -1233,6 +1233,16 @@ def _render_record_constructor(
             [f"{indent}private {record_name} {{", *body, indent + "}"]
         )
 
+    raw_body = [
+        str(value or "").strip()
+        for value in constructor.get("body") or []
+        if str(value or "").strip()
+    ]
+    if not raw_body or not raw_body[0].startswith("this("):
+        raise CustomModuleGenerationError(
+            "ATOMIC_CONCERN_RESPONSE_INVALID: a non-canonical record constructor "
+            "must delegate to the canonical constructor with this(...)."
+        )
     params = _java_parameters(
         constructor.get("parameters") or [],
         renames=renames,
