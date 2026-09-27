@@ -118,15 +118,17 @@ def _section_bodies(
     return preamble, bodies, counts
 
 
-def _strict_ready(text: str) -> bool:
+def _canonical_planned_roles(text: str) -> set[str]:
     try:
-        units = decompose_canonical_authored_units(
-            text, _source_requirements(text)
-        )
+        units = decompose_canonical_authored_units(text, _source_requirements(text))
     except AuthoredDesignSchemaError:
-        return False
-    planned = {str(unit["unit_id"]) for unit in units}
-    return not _nested_execution_labels(text, planned)
+        return set()
+    return {str(unit["unit_id"]) for unit in units}
+
+
+def _strict_ready(text: str) -> bool:
+    planned = _canonical_planned_roles(text)
+    return bool(planned) and not _nested_execution_labels(text, planned)
 
 
 _NESTED_SECTION_BULLET = re.compile(

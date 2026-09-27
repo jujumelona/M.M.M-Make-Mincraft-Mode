@@ -133,45 +133,73 @@ def _implementations(proposal: Any) -> dict[str, str]:
 def _acceptances(proposal: Any) -> dict[str, str]:
     return {f'acceptance:{index:08d}': str(text) for index, text in enumerate(getattr(proposal, 'acceptance_tests', ()))}
 
-def _evidence_dimensions(proposal: Any, atom: Mapping[str, Any]) -> list[str]:
-    """Derive objective verifier routes as part of the atomic IR itself."""
-
-    text = str(atom.get('text', ''))
-    lowered = ' ' + text.casefold() + ' '
-    refs = [str(value) for value in atom.get('implementation_refs', ())]
+def _implementation_evidence_routes(
+    proposal: Any, refs: list[str]
+) -> tuple[set[str], bool]:
     module_kinds = {
         f'implementation:module:{item.module_id}': str(item.kind).casefold()
         for item in getattr(proposal, 'modules', ())
     }
-    routes: set[str] = set()
-    has_module = False
-    for ref in refs:
-        if ref.startswith('implementation:asset:'):
-            routes.add('visual_3d')
-            continue
-        if not ref.startswith('implementation:module:'):
-            continue
-        has_module = True
+    routes = {
+        'visual_3d'
+        for ref in refs
+        if ref.startswith('implementation:asset:')
+    }
+    module_refs = [
+        ref for ref in refs if ref.startswith('implementation:module:')
+    ]
+    for ref in module_refs:
         kind = module_kinds.get(ref, '')
-        if kind in _MULTIPLAYER_KINDS:
-            routes.add('multiplayer')
-        if kind in _VISUAL_KINDS:
-            routes.add('visual_3d')
+        routes.update(
+            route
+            for route, kinds in (
+                ('multiplayer', _MULTIPLAYER_KINDS),
+                ('visual_3d', _VISUAL_KINDS),
+            )
+            if kind in kinds
+        )
+    return routes, bool(module_refs)
 
-    if any(term in lowered for term in _PERFORMANCE_TERMS):
-        routes.add('performance')
-    if any(term in lowered for term in _RESEARCH_TERMS):
-        routes.add('research')
-    if any(term in lowered for term in _BUILD_TERMS):
-        routes.add('build')
 
+def _text_evidence_routes(lowered: str) -> set[str]:
+    groups = (
+        ('performance', _PERFORMANCE_TERMS),
+        ('research', _RESEARCH_TERMS),
+        ('build', _BUILD_TERMS),
+    )
+    return {
+        route
+        for route, terms in groups
+        if any(term in lowered for term in terms)
+    }
+
+
+def _runtime_evidence_required(routes: set[str], has_module: bool) -> bool:
     infrastructure_only = bool(routes) and routes <= {'research', 'build'}
-    visual_asset_only = bool(routes) and routes <= {'visual_3d'} and not has_module
-    if (has_module and not infrastructure_only) or not routes:
+    return (has_module and not infrastructure_only) or not routes
+
+
+def _evidence_dimensions(proposal: Any, atom: Mapping[str, Any]) -> list[str]:
+    """Derive objective verifier routes as part of the atomic IR itself."""
+
+    refs = [str(value) for value in atom.get('implementation_refs', ())]
+    routes, has_module = _implementation_evidence_routes(proposal, refs)
+    routes.update(_text_evidence_routes(' ' + str(atom.get('text', '')).casefold() + ' '))
+    if _runtime_evidence_required(routes, has_module):
         routes.add('runtime')
-    elif visual_asset_only:
-        routes.discard('runtime')
     return [value for value in _EVIDENCE_DIMENSION_ORDER if value in routes]
+
+
+def _route_atoms(proposal: Any, atoms: list[dict[str, Any]]) -> None:
+    for atom in atoms:
+        atom['evidence_dimensions'] = _evidence_dimensions(proposal, atom)
+
+
+def _validate_evidence_dimensions(proposal: Any, atom: Mapping[str, Any]) -> None:
+    dimensions = atom.get('evidence_dimensions')
+    expected = _evidence_dimensions(proposal, atom)
+    if not isinstance(dimensions, list) or dimensions != expected:
+        raise AtomicRequirementError('Atomic requirement evidence routing drifted.')
 
 def _rank(text: str, catalog: Mapping[str, str], limit: int) -> list[tuple[float, str]]:
     ranked = sorted(((_score(text, descriptor), ref) for ref, descriptor in catalog.items()), key=lambda item: (-item[0], item[1]))
@@ -318,8 +346,7 @@ def semantic_review(router: Any, proposal: Any, ir: dict[str, Any]) -> dict[str,
             atom['status'] = 'UNSUPPORTED'
         atom['coverage_origin'] = 'semantic_reviewer_native_tool'
     ordered = [atoms[item['atom_id']] for item in ir['atoms']]
-    for atom in ordered:
-        atom['evidence_dimensions'] = _evidence_dimensions(proposal, atom)
+    _route_atoms(proposal, ordered)
     missing = [item['atom_id'] for item in ordered if item['status'] != 'COVERED']
     updated = {**ir, 'atoms': ordered, 'unresolved_atom_ids': missing, 'ir_sha256': ''}
     updated['ir_sha256'] = _hash_without(updated, 'ir_sha256')
@@ -359,13 +386,7 @@ def validate_ir(proposal: Any) -> dict[str, Any]:
             raise AtomicRequirementError('Atomic requirement uses an unknown implementation ref.')
         if not set(atom['acceptance_refs']) <= acceptance_refs:
             raise AtomicRequirementError('Atomic requirement uses an unknown acceptance ref.')
-        dimensions = atom.get('evidence_dimensions')
-        if (
-            not isinstance(dimensions, list)
-            or dimensions != _evidence_dimensions(proposal, atom)
-            or any(value not in _EVIDENCE_DIMENSION_ORDER for value in dimensions)
-        ):
-            raise AtomicRequirementError('Atomic requirement evidence routing drifted.')
+        _validate_evidence_dimensions(proposal, atom)
     return ir
 
 def install(complete_planner_module: Any, orchestrator_module: Any) -> None:

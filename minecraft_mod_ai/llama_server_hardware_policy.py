@@ -283,12 +283,7 @@ def _metrics_snapshot(httpx_module: Any, server_url: str) -> dict[str, float] | 
         return None
 
 
-def _slot_snapshot(httpx_module: Any, server_url: str) -> dict[str, int] | None:
-    """Read optional slot counters without adding requests to the default hot path."""
-
-    if not _auxiliary_native_telemetry_enabled():
-        return None
-
+def _slot_snapshot_enabled(httpx_module: Any, server_url: str) -> dict[str, int] | None:
     try:
         response = httpx_module.get(
             f"{_server_origin(server_url)}/slots",
@@ -330,6 +325,15 @@ def _slot_snapshot(httpx_module: Any, server_url: str) -> dict[str, int] | None:
         )
         return None
 
+
+def _slot_snapshot(httpx_module: Any, server_url: str) -> dict[str, int] | None:
+    """Read optional slot counters without adding requests to the default hot path."""
+
+    return (
+        _slot_snapshot_enabled(httpx_module, server_url)
+        if _auxiliary_native_telemetry_enabled()
+        else None
+    )
 
 def _telemetry_totals() -> dict[str, float]:
     with _TELEMETRY_LOCK:
