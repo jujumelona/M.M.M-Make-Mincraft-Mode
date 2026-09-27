@@ -2,6 +2,22 @@ name: CI
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'minecraft_mod_ai/llama_*.py'
+      - 'minecraft_mod_ai/qwen*.py'
+      - 'minecraft_mod_ai/generation_output_budget.py'
+      - 'minecraft_mod_ai/model_context_budget.py'
+      - 'minecraft_mod_ai/model_output_atomicity_contract.py'
+      - 'minecraft_mod_ai/progress_aware_tool_loop.py'
+      - 'minecraft_mod_ai/small_model_atomic_coder_execution.py'
+      - 'minecraft_mod_ai/model_adapters/**'
+      - 'minecraft_mod_ai/model_router.py'
+      - 'tests/test_llama_*.py'
+      - 'tests/test_qwen*.py'
+      - '.github/workflows/main-ci.yml'
+      - 'tests/test_runtime_pipeline_trigger_coverage.py'
   pull_request:
 
 permissions:

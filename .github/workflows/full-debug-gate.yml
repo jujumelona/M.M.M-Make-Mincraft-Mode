@@ -3,7 +3,7 @@ name: Full Debug Gate
 on:
   workflow_dispatch:
   workflow_run:
-    workflows: [CI, Windows Debug, Workflow Lint, Audit Runtime Bottleneck Candidates, Cumulative Regression Guard, Production Kill Gates, JVM Owner Contract]
+    workflows: [CI, Partial CI, Windows Debug, Workflow Lint, Audit Runtime Bottleneck Candidates, Cumulative Regression Guard, Production Kill Gates, JVM Owner Contract, Runtime Generation Regression, Deterministic Debug Full E2E, Production Path Contract, Candidate Verifier Targeted, Real Model Colab E2E]
     types: [completed]
 
 permissions:
