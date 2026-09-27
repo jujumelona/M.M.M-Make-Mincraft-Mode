@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-import json
-import threading
 from functools import wraps
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
-from .extended_record_cache import (
-    _RECORD_CACHE,
-    _RECORD_CACHE_LIMIT,
-    _RECORD_CACHE_LOCK,
-)
+from . import extended_record_cache as _record_cache
 from .project_write_lock import project_write_lock
+
+# Compatibility aliases for callers/tests that previously inspected this contract.
+_RECORD_CACHE = _record_cache._RECORD_CACHE
+_RECORD_CACHE_LIMIT = _record_cache._RECORD_CACHE_LIMIT
+_RECORD_CACHE_LOCK = _record_cache._RECORD_CACHE_LOCK
 
 
 def _render_static_registration(root_name: str | None) -> str:
