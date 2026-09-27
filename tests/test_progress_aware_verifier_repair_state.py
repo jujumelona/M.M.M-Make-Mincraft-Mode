@@ -902,8 +902,8 @@ def test_byte_identical_verifier_repair_is_rejected_before_runtime():
             ToolCall(
                 id="noop",
                 name="apply_source_edit",
-                arguments={"new": old},
-                raw_arguments='{"new":"import demo.Missing;\\n"}',
+                arguments={"old": old, "new": old},
+                raw_arguments='{"old":"import demo.Missing;\\n","new":"import demo.Missing;\\n"}',
             ),
         )
     )

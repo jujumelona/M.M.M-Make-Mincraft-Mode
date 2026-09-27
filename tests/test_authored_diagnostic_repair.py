@@ -363,7 +363,8 @@ def test_authored_repair_fixed_point_stops_non_improving_rewrite_loop(
                 } == {"apply_source_edit"}
                 model_repairs += 1
                 name = "apply_source_edit"
-                arguments = {"new": "MISSING_C"}
+                old = request.tools[0]["function"]["parameters"]["properties"]["old"]["const"]
+                arguments = {"old": old, "new": "MISSING_C"}
             return GenerationResponse(
                 tool_calls=(
                     ToolCall(
