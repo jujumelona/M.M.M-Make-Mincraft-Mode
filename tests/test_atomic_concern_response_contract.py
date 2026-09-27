@@ -885,9 +885,11 @@ def test_atomic_prompt_uses_selected_region_not_whole_host_source() -> None:
     payload = __import__("json").loads(captured[1][-1]["content"])
     assert "current_host_owned_source" not in payload
     assert payload["current_selected_region_source"] == ""
-    assert payload["available_sibling_symbols"] == [
+    assert payload["available_sibling_api"] == [
         {
+            "declaration": "private static int playerCredits;",
             "kind": "field",
+            "mutable": True,
             "owner_concern": "variables",
             "symbol": "playerCredits",
         }
