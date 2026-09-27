@@ -14,6 +14,7 @@ from minecraft_mod_ai import llama_completion_liveness_contract as liveness
 from minecraft_mod_ai import (
     llama_exact_context,
     llama_lora_runtime,
+    llama_server_autotune,
     llama_server_hardware_policy,
 )
 from minecraft_mod_ai import llama_stream_efficiency_contract as streaming
@@ -63,6 +64,11 @@ def test_complete_planner_finishes_healthy_8192_budget_stream_after_300_seconds(
     config = AdapterConfig(role="planner", adapter="llama_cpp", model_id="replayed-planner", max_new_tokens=8192)
     adapter = LlamaCppAdapter(config)
     monkeypatch.setattr(adapter, "_server_url", lambda request: endpoint)
+    monkeypatch.setattr(
+        llama_server_autotune,
+        "ensure_tuned_server",
+        lambda _config, _request: endpoint,
+    )
     monkeypatch.setattr(llama_exact_context, "capacity_safe_payload", lambda url, payload, **kwargs: payload)
     monkeypatch.setattr(llama_lora_runtime, "apply_request_lora", lambda *args: None)
     monkeypatch.setattr(llama_server_hardware_policy, "_server_payload", lambda adapter, request: {

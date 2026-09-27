@@ -7,7 +7,8 @@ import pytest
 
 from minecraft_mod_ai import llama_stream_efficiency_contract as stream_runtime
 from minecraft_mod_ai.llama_server_hardware_policy import _strict_server_generate
-from minecraft_mod_ai.llama_sse_protocol import LlamaNativeResponseFormatError
+from minecraft_mod_ai.llama_sse_protocol import is_recoverable_native_format_error
+from minecraft_mod_ai.model_adapters.base import ModelBackendError
 
 
 class _Adapter:
@@ -45,10 +46,11 @@ class _Client:
         self.response = response
         self.captured = captured
 
-    def stream(self, method, url, *, json):
+    def stream(self, method, url, *, json, timeout=None):
         self.captured["method"] = method
         self.captured["url"] = url
         self.captured["json"] = json
+        self.captured["timeout"] = timeout
         return self.response
 
 
@@ -131,5 +133,7 @@ def test_detailed_stream_classifies_peg_native_sse_error(monkeypatch) -> None:
         response_format="text",
     )
 
-    with pytest.raises(LlamaNativeResponseFormatError, match="peg-native format"):
+    with pytest.raises(ModelBackendError, match="peg-native format") as caught:
         _strict_server_generate(adapter, request, "http://127.0.0.1:8910/v1")
+
+    assert is_recoverable_native_format_error(caught.value)

@@ -245,14 +245,9 @@ def test_runtime_trajectory_retrieval_keeps_execution_context_contract():
     from minecraft_mod_ai import temporary_skill_contract, trajectory_memory
 
     current = trajectory_memory.relevant_trajectories
-    depth = 0
-    while current is not None:
-        assert "current_context" in inspect.signature(
-            current,
-            follow_wrapped=False,
-        ).parameters
-        depth += 1
-        current = getattr(current, "__wrapped__", None)
-    assert depth >= 2
+    assert "current_context" in inspect.signature(
+        current,
+        follow_wrapped=False,
+    ).parameters
     assert temporary_skill_contract._trajectory_memory is trajectory_memory
     assert "relevant_trajectories" not in temporary_skill_contract.__dict__

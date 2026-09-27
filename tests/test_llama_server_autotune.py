@@ -73,13 +73,13 @@ def _probe(
 
 def test_server_runtime_tuning_contract_is_installed() -> None:
     assert getattr(LlamaCppAdapter.generate, "_mmm_explicit_server_strict", False)
-    assert getattr(_server_binary, "_mmm_native_bootstrap", False)
-    assert getattr(_base_args, "_mmm_auto_gpu_layers", False)
-    assert getattr(_base_args, "_mmm_single_decode_slot", False)
-    assert getattr(_base_args, "_mmm_load_mode_auto", False)
-    assert getattr(_variant_args, "_mmm_auto_draft_layers", False)
-    assert getattr(_variant_args, "_mmm_ngram_speculation", False)
-    assert getattr(_probe_server, "_mmm_compact_decode_probe", False)
+    assert getattr(autotune._server_binary, "_mmm_native_bootstrap", False)
+    assert getattr(autotune._base_args, "_mmm_auto_gpu_layers", False)
+    assert getattr(autotune._base_args, "_mmm_single_decode_slot", False)
+    assert getattr(autotune._base_args, "_mmm_load_mode_auto", False)
+    assert getattr(autotune._variant_args, "_mmm_auto_draft_layers", False)
+    assert getattr(autotune._variant_args, "_mmm_ngram_speculation", False)
+    assert getattr(autotune._probe_server, "_mmm_compact_decode_probe", False)
     assert getattr(autotune._benchmark, "_mmm_staged_runtime_tuning", False)
     assert getattr(autotune._benchmark, "_mmm_single_server_cache_stage", False)
     assert getattr(autotune._fingerprint, "_mmm_stable_model_signature", False)
@@ -94,7 +94,7 @@ def test_server_runtime_tuning_contract_is_installed() -> None:
     )
 
 
-def test_default_fast_search_uses_only_safe_baseline_variant(monkeypatch) -> None:
+def test_default_variant_search_keeps_baseline_and_mtp_widths(monkeypatch) -> None:
     for name in (
         "MMM_LLAMA_AUTOTUNE_SEARCH",
         "MMM_LLAMA_MTP_WIDTHS",
@@ -104,9 +104,13 @@ def test_default_fast_search_uses_only_safe_baseline_variant(monkeypatch) -> Non
     ):
         monkeypatch.delenv(name, raising=False)
     values = _candidate_variants()
-    assert len(values) == 1
     assert values[0].spec_type == "none"
     assert values[0].draft_n_max == 0
+    assert [(value.spec_type, value.draft_n_max) for value in values[1:]] == [
+        ("draft-mtp", 1),
+        ("draft-mtp", 2),
+        ("draft-mtp", 3),
+    ]
 
 
 def test_default_fast_search_removes_reload_heavy_candidates(monkeypatch) -> None:
@@ -122,8 +126,8 @@ def test_default_fast_search_removes_reload_heavy_candidates(monkeypatch) -> Non
         "MMM_LLAMA_TUNING_OBJECTIVE",
     ):
         monkeypatch.delenv(name, raising=False)
-    assert _ubatch_candidates(autotune) == (512,)
-    assert _cache_reuse_candidates() == ()
+    assert _ubatch_candidates(autotune) == (512, 1024, 2048)
+    assert _cache_reuse_candidates() == (0, 64, 256)
     assert _parallel_candidates() == (1,)
 
 

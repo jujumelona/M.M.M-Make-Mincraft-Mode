@@ -123,7 +123,7 @@ def test_native_tool_request_keeps_tools_visible_and_schema_host_side() -> None:
     assert payload["min_p"] == 0.0
     assert payload["presence_penalty"] == 1.5
     assert payload["repeat_penalty"] == 1.0
-    assert payload["max_tokens"] == 4096
+    assert payload["max_tokens"] == 8192
 
 
 def test_text_request_does_not_force_reasoning_policy() -> None:
