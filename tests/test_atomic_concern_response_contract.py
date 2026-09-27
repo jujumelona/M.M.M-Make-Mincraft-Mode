@@ -1520,3 +1520,67 @@ def test_state_model_followup_receives_exact_host_lowered_variable_api() -> None
     assert credits["mutable"] is True
     assert "double player_credits" in credits["declaration"]
     assert "player_credits >= 0.0" in result["source"]
+
+
+def test_concern_authority_keeps_repeated_same_concern_rows() -> None:
+    import json
+
+    from minecraft_mod_ai.atomic_concern_source import _concern_authority
+
+    obligation = json.dumps(
+        {
+            "instruction": json.dumps({"concern": "transitions"}),
+            "source_requirements": {
+                "R12": "## state_model",
+                "R13": "- variables: name(player_credits) type(double) default(0.0)",
+                "R14": "- transitions: from_state(shipping_lock) trigger(purchase_action) guard(sufficient_funds) to_state(ship_ready)",
+                "R15": "- transitions: from_state(space_travel) trigger(dock_event) guard(fuel_level_zero) to_state(portal_entry)",
+                "R16": "- invariants: player_credits cannot be negative",
+            },
+        }
+    )
+
+    authority = _concern_authority(
+        {
+            "task_id": "state",
+            "implementation_obligations": [obligation],
+        },
+        {"concern": "transitions"},
+    )
+
+    assert authority["source_requirements"] == {
+        "R12": "## state_model",
+        "R14": "- transitions: from_state(shipping_lock) trigger(purchase_action) guard(sufficient_funds) to_state(ship_ready)",
+        "R15": "- transitions: from_state(space_travel) trigger(dock_event) guard(fuel_level_zero) to_state(portal_entry)",
+    }
+
+
+def test_state_variable_contract_keeps_repeated_variable_rows() -> None:
+    import json
+
+    from minecraft_mod_ai.atomic_concern_source import _state_variable_contract
+
+    obligation = json.dumps(
+        {
+            "instruction": json.dumps({"concern": "variables"}),
+            "source_requirements": {
+                "R12": "## state_model",
+                "R13": "- variables: name(player_credits) type(double) default(0.0)",
+                "R14": "- variables: name(fuel_reserve) type(int) default(100)",
+                "R15": "- transitions: from_state(ground) trigger(launch) to_state(space)",
+            },
+        }
+    )
+
+    contract = _state_variable_contract(
+        {
+            "task_id": "state",
+            "implementation_obligations": [obligation],
+        },
+        {"concern": "variables"},
+    )
+
+    assert [(row["name"], row["java_type"], row["default_literal"]) for row in contract] == [
+        ("player_credits", "double", "0.0"),
+        ("fuel_reserve", "int", "100"),
+    ]

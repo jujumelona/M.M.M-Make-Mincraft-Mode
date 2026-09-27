@@ -848,6 +848,17 @@ def _requirement_sort_key(item: tuple[str, Any]) -> tuple[int, str]:
     return (int(match.group(1)) if match else 10**9, key)
 
 
+def _requirement_concern_label(value: str) -> str:
+    text = str(value or "")
+    if not text.startswith("- ") or ":" not in text:
+        return ""
+    label = text[2:].split(":", 1)[0].strip()
+    try:
+        return _slug(label)
+    except CustomModuleGenerationError:
+        return ""
+
+
 def _concern_source_requirements(
     raw: Mapping[str, Any],
     *,
@@ -863,16 +874,9 @@ def _concern_source_requirements(
     target = _slug(concern)
     anchor = -1
     for index, (_key, value) in enumerate(ordered):
-        stripped = value.strip()
-        if not stripped.startswith("- ") or ":" not in stripped:
-            continue
-        label = stripped[2:].split(":", 1)[0].strip()
-        try:
-            if _slug(label) == target:
-                anchor = index
-                break
-        except CustomModuleGenerationError:
-            continue
+        if _requirement_concern_label(value) == target:
+            anchor = index
+            break
 
     headings = [
         (key, value)
@@ -893,11 +897,16 @@ def _concern_source_requirements(
 
     selected.append(ordered[anchor])
     for key, value in ordered[anchor + 1:]:
-        if value.startswith("## ") or value.startswith("- "):
+        if value.startswith("## "):
+            break
+        sibling_label = _requirement_concern_label(value)
+        if sibling_label:
+            if sibling_label == target:
+                selected.append((key, value))
+                continue
             break
         selected.append((key, value))
     return dict(selected)
-
 
 def _concern_authority(
     task: Mapping[str, Any], concern: Mapping[str, Any]
