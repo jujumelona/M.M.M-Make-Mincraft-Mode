@@ -1216,6 +1216,8 @@ def _messages(
         )
     system = (
         "Implement exactly one host-selected concern inside one already-selected Java class. "
+        "Planning record schemas, planning task labels, and concern cardinality are host-owned "
+        "metadata and are deliberately not exposed as Java source shapes. "
         "You do not choose files, classes, dependencies, architecture, tools, search routes, APIs, or sibling work. "
         + response_contract + " "
         "The task_authority source requirements are already host-sliced to this concern; "
@@ -1236,9 +1238,10 @@ def _messages(
             "sequence": concern.get("sequence"),
             "identifier": concern.get("identifier"),
             "name": name,
-            "task": concern.get("task"),
-            "rules": concern.get("rules") or [],
-            "record_schema": concern.get("record_schema") or {},
+            "implementation_goal": (
+                f"Implement only the {name} semantics stated in "
+                "task_authority.source_requirements inside the selected Java class."
+            ),
         },
         "task_authority": _concern_authority(task, concern),
         "state_variable_contract": (

@@ -1584,3 +1584,53 @@ def test_state_variable_contract_keeps_repeated_variable_rows() -> None:
         ("player_credits", "double", "0.0"),
         ("fuel_reserve", "int", "100"),
     ]
+
+
+def test_atomic_prompt_hides_planning_record_schema_from_coder() -> None:
+    captured = []
+    executor = AtomicConcernExecutor(
+        root=Path("."),
+        target=Path("src/main/java/example/Test.java"),
+        relative="src/main/java/example/Test.java",
+        symbol="Test",
+        original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
+        task={"task_id": "t", "semantic_outcome": "x"},
+        section="behavior_contract",
+        concerns=(
+            {
+                "sequence": 0,
+                "identifier": "id",
+                "concern": "inputs",
+                "task": "Resolve exactly one inputs record for the supplied feature.",
+                "rules": ["Author the requested gameplay record."],
+                "record_schema": {
+                    "name": "string",
+                    "type": "string",
+                    "default": "string",
+                },
+            },
+        ),
+        grounding={},
+        dependency_source="",
+        require_initialize=False,
+        call_coder=lambda messages: (
+            captured.append(messages)
+            or "private static final String INPUT = \"construct_ship\";"
+        ),
+        compile_java=lambda _root: SimpleNamespace(status="PASS"),
+        compile_log=lambda _report: "",
+        write_source=lambda _path, _source: None,
+    )
+
+    executor.run()
+
+    payload = __import__("json").loads(captured[0][-1]["content"])
+    assert set(payload["concern"]) == {
+        "sequence",
+        "identifier",
+        "name",
+        "implementation_goal",
+    }
+    assert "record_schema" not in payload["concern"]
+    assert "Resolve exactly one inputs record" not in captured[0][-1]["content"]
+    assert "Author the requested gameplay record" not in captured[0][-1]["content"]
