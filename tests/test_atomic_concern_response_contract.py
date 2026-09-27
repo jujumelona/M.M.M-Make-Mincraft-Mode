@@ -375,3 +375,121 @@ def test_atomic_structured_tool_rejects_extra_fields() -> None:
             ({"role": "user", "content": "one region"},),
             structured_java_region=True,
         )
+
+
+
+def _multi_executor(
+    outputs: list[str],
+    *,
+    concerns: tuple[dict[str, object], ...],
+    captured_messages: list[list[dict[str, str]]] | None = None,
+) -> tuple[AtomicConcernExecutor, dict[str, int]]:
+    remaining = list(outputs)
+    compile_calls = {"count": 0}
+
+    def call_coder(messages):
+        if captured_messages is not None:
+            captured_messages.append(list(messages))
+        if not remaining:
+            raise AssertionError("unexpected extra model call")
+        return remaining.pop(0)
+
+    def compile_java(_root):
+        compile_calls["count"] += 1
+        return SimpleNamespace(status="PASS")
+
+    executor = AtomicConcernExecutor(
+        root=Path("."),
+        target=Path("src/main/java/example/Test.java"),
+        relative="src/main/java/example/Test.java",
+        symbol="Test",
+        original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
+        task={"task_id": "t", "semantic_outcome": "x"},
+        section="state_model",
+        concerns=concerns,
+        grounding={},
+        dependency_source="",
+        require_initialize=False,
+        call_coder=call_coder,
+        compile_java=compile_java,
+        compile_log=lambda _report: "",
+        write_source=lambda _path, _source: None,
+    )
+    return executor, compile_calls
+
+
+def test_sibling_symbol_collision_is_rejected_before_compile() -> None:
+    concerns = (
+        {"sequence": 0, "identifier": "a", "concern": "transactions", "task": "transaction state", "rules": []},
+        {"sequence": 1, "identifier": "b", "concern": "concurrency", "task": "concurrency guard", "rules": []},
+    )
+    executor, compile_calls = _multi_executor(
+        [
+            (
+                "private static boolean isTransactionInFlight;\n"
+                "private static void beginTransaction() {}\n"
+                "private static void endTransaction() {}"
+            ),
+            (
+                "private static boolean isTransactionInFlight;\n"
+                "private static void beginTransaction() {}\n"
+                "private static void endTransaction() {}"
+            ),
+            "",
+        ],
+        concerns=concerns,
+    )
+
+    result = executor.run()
+
+    assert compile_calls["count"] == 1
+    assert result["repair_count"] == 0
+    assert result["source"].count("isTransactionInFlight") == 1
+    assert result["source"].count("beginTransaction()") == 1
+    assert result["source"].count("endTransaction()") == 1
+
+
+def test_next_concern_receives_host_symbol_ownership_table() -> None:
+    concerns = (
+        {"sequence": 0, "identifier": "a", "concern": "transactions", "task": "transaction state", "rules": []},
+        {"sequence": 1, "identifier": "b", "concern": "concurrency", "task": "concurrency guard", "rules": []},
+    )
+    captured: list[list[dict[str, str]]] = []
+    executor, _compile_calls = _multi_executor(
+        [
+            (
+                "private static boolean isTransactionInFlight;\n"
+                "private static void beginTransaction() {}"
+            ),
+            "",
+        ],
+        concerns=concerns,
+        captured_messages=captured,
+    )
+
+    executor.run()
+
+    payload = __import__("json").loads(captured[1][-1]["content"])
+    owners = payload["scope"]["existing_symbol_owners"]
+    assert {"kind": "field", "symbol": "isTransactionInFlight", "owner_concern": "transactions"} in owners
+    assert {"kind": "method", "symbol": "beginTransaction()", "owner_concern": "transactions"} in owners
+
+
+def test_method_overloads_with_different_parameter_types_do_not_collide() -> None:
+    concerns = (
+        {"sequence": 0, "identifier": "a", "concern": "first", "task": "first overload", "rules": []},
+        {"sequence": 1, "identifier": "b", "concern": "second", "task": "second overload", "rules": []},
+    )
+    executor, compile_calls = _multi_executor(
+        [
+            "private static void update(int value) {}",
+            "private static void update(String value) {}",
+        ],
+        concerns=concerns,
+    )
+
+    result = executor.run()
+
+    assert compile_calls["count"] == 1
+    assert "update(int)" in result["source"]
+    assert "update(String)" in result["source"]

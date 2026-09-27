@@ -254,6 +254,204 @@ def _has_forbidden_type_declaration(scan: str, *, initialize_region: bool) -> bo
     return False
 
 
+_JAVA_IDENTIFIER = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
+_JAVA_MODIFIERS = frozenset(
+    {
+        "public", "protected", "private", "static", "final", "abstract",
+        "synchronized", "native", "strictfp", "transient", "volatile",
+        "default", "sealed", "non-sealed",
+    }
+)
+
+
+def _split_top_level(value: str, delimiter: str) -> list[str]:
+    parts: list[str] = []
+    start = 0
+    paren = bracket = brace = angle = 0
+    for index, char in enumerate(value):
+        if char == "(":
+            paren += 1
+        elif char == ")":
+            paren = max(0, paren - 1)
+        elif char == "[":
+            bracket += 1
+        elif char == "]":
+            bracket = max(0, bracket - 1)
+        elif char == "{":
+            brace += 1
+        elif char == "}":
+            brace = max(0, brace - 1)
+        elif char == "<" and paren == 0 and brace == 0:
+            angle += 1
+        elif char == ">" and paren == 0 and brace == 0 and angle:
+            angle -= 1
+        elif (
+            char == delimiter
+            and paren == 0
+            and bracket == 0
+            and brace == 0
+            and angle == 0
+        ):
+            parts.append(value[start:index])
+            start = index + 1
+    parts.append(value[start:])
+    return parts
+
+
+def _top_level_member_chunks(value: str) -> tuple[str, ...]:
+    scan = _structure_scan(value)
+    chunks: list[str] = []
+    start = 0
+    brace = paren = bracket = 0
+    for index, char in enumerate(scan):
+        if char == "(":
+            paren += 1
+        elif char == ")":
+            paren = max(0, paren - 1)
+        elif char == "[":
+            bracket += 1
+        elif char == "]":
+            bracket = max(0, bracket - 1)
+        elif char == "{":
+            brace += 1
+        elif char == "}":
+            if brace:
+                brace -= 1
+                if brace == 0 and paren == 0 and bracket == 0:
+                    chunk = scan[start:index + 1].strip()
+                    if chunk:
+                        chunks.append(chunk)
+                    start = index + 1
+        elif char == ";" and brace == 0 and paren == 0 and bracket == 0:
+            chunk = scan[start:index + 1].strip()
+            if chunk:
+                chunks.append(chunk)
+            start = index + 1
+    tail = scan[start:].strip()
+    if tail:
+        chunks.append(tail)
+    return tuple(chunks)
+
+
+def _top_level_assignment_index(value: str) -> int:
+    paren = bracket = brace = angle = 0
+    for index, char in enumerate(value):
+        if char == "(":
+            paren += 1
+        elif char == ")":
+            paren = max(0, paren - 1)
+        elif char == "[":
+            bracket += 1
+        elif char == "]":
+            bracket = max(0, bracket - 1)
+        elif char == "{":
+            brace += 1
+        elif char == "}":
+            brace = max(0, brace - 1)
+        elif char == "<" and paren == 0 and brace == 0:
+            angle += 1
+        elif char == ">" and paren == 0 and brace == 0 and angle:
+            angle -= 1
+        elif (
+            char == "="
+            and paren == 0
+            and bracket == 0
+            and brace == 0
+            and angle == 0
+        ):
+            prev = value[index - 1] if index else ""
+            nxt = value[index + 1] if index + 1 < len(value) else ""
+            if prev not in "=!<>" and nxt != "=":
+                return index
+    return -1
+
+
+def _parameter_type_signature(raw: str) -> str:
+    text = re.sub(r"@\w+(?:\s*\([^)]*\))?\s*", " ", str(raw or ""))
+    tokens = [token for token in text.strip().split() if token and token != "final"]
+    if not tokens:
+        return ""
+    # The final identifier is the parameter name. Preserve array suffixes attached to it.
+    name = tokens[-1]
+    suffix = ""
+    while name.endswith("[]"):
+        suffix += "[]"
+        name = name[:-2]
+    if _JAVA_IDENTIFIER.fullmatch(name):
+        tokens = tokens[:-1]
+    return re.sub(r"\s+", "", " ".join(tokens)) + suffix
+
+
+def _member_declaration_symbols(value: str) -> dict[str, str]:
+    """Return compiler-relevant class-body declaration keys for one concern region."""
+
+    symbols: dict[str, str] = {}
+    for chunk in _top_level_member_chunks(value):
+        flat = re.sub(r"\s+", " ", chunk).strip()
+        if not flat:
+            continue
+
+        type_match = re.search(
+            r"\b(?:class|interface|enum|record)\s+([A-Za-z_$][A-Za-z0-9_$]*)\b",
+            flat,
+        )
+        if type_match:
+            name = type_match.group(1)
+            symbols[f"type:{name}"] = name
+            continue
+
+        header = flat
+        brace_at = header.find("{")
+        if brace_at >= 0:
+            header = header[:brace_at].strip()
+        header = header.rstrip(";").strip()
+
+        method_matches = list(
+            re.finditer(
+                r"\b([A-Za-z_$][A-Za-z0-9_$]*)\s*\(([^()]*)\)\s*(?:throws\s+[^{};]+)?$",
+                header,
+            )
+        )
+        if method_matches:
+            method = method_matches[-1]
+            assignment = _top_level_assignment_index(header)
+            if assignment < 0 or assignment > method.start():
+                name = method.group(1)
+                params = ",".join(
+                    _parameter_type_signature(part)
+                    for part in _split_top_level(method.group(2), ",")
+                    if part.strip()
+                )
+                display = f"{name}({params})"
+                symbols[f"method:{display}"] = display
+                continue
+
+        declaration = chunk.rstrip().rstrip(";").strip()
+        for declarator in _split_top_level(declaration, ","):
+            left = declarator
+            assignment = _top_level_assignment_index(left)
+            if assignment >= 0:
+                left = left[:assignment]
+            identifiers = _JAVA_IDENTIFIER.findall(left)
+            while identifiers and identifiers[0] in _JAVA_MODIFIERS:
+                identifiers.pop(0)
+            if not identifiers:
+                continue
+            name = identifiers[-1]
+            if name in {"return", "throw", "new", "this", "super"}:
+                continue
+            symbols[f"field:{name}"] = name
+    return symbols
+
+
+def _symbol_owner_payload(owners: Mapping[str, str]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for key, owner in sorted(owners.items()):
+        kind, _, display = key.partition(":")
+        rows.append({"kind": kind, "symbol": display, "owner_concern": owner})
+    return rows
+
+
 def _validate_region_text(value: str, *, initialize_region: bool) -> None:
     scan = _structure_scan(value)
     if _HOST_PREFIX in scan or "```" in scan:
@@ -480,6 +678,7 @@ def _messages(
     current_source: str,
     response_region: str,
     failure: str = "",
+    symbol_owners: Mapping[str, str] | None = None,
 ) -> list[dict[str, str]]:
     name = _slug(concern.get("concern"))
     if response_region == "members":
@@ -534,6 +733,12 @@ def _messages(
             "sibling_regions_immutable": True,
             "required_output_tool": "emit_java_region",
             "model_tool_choice": False,
+            "existing_symbol_owners": _symbol_owner_payload(symbol_owners or {}),
+            "symbol_rule": (
+                "You may reference existing sibling symbols but must not redeclare them. "
+                "If the required behavior is already implemented by an existing symbol, "
+                "return an empty java region instead of duplicating it."
+            ),
         },
     }
     return [
@@ -583,6 +788,25 @@ class AtomicConcernExecutor:
             f"ATOMIC_CONCERN_UNKNOWN_REPAIR_SCOPE: {name}"
         )
 
+    def _sibling_symbol_owners(self, *, exclude: str) -> dict[str, str]:
+        owners: dict[str, str] = {}
+        for concern_name, (members, _initialize) in self.state.items():
+            if concern_name == exclude:
+                continue
+            for key in _member_declaration_symbols(members):
+                owners.setdefault(key, concern_name)
+        return owners
+
+    def _symbol_collisions(self, *, concern: str, members: str) -> tuple[str, ...]:
+        owners = self._sibling_symbol_owners(exclude=concern)
+        collisions: list[str] = []
+        for key, display in _member_declaration_symbols(members).items():
+            owner = owners.get(key)
+            if owner:
+                kind, _, _ = key.partition(":")
+                collisions.append(f"{kind} {display} is owned by concern {owner}")
+        return tuple(sorted(set(collisions)))
+
     def _generate_region(
         self,
         concern: Mapping[str, Any],
@@ -616,6 +840,7 @@ class AtomicConcernExecutor:
                     current_source=self.source,
                     response_region=response_region,
                     failure=repair_failure,
+                    symbol_owners=self._sibling_symbol_owners(exclude=name),
                 ))
                 output_text = str(output or "")
                 output_sha = hashlib.sha256(output_text.encode("utf-8")).hexdigest()
@@ -623,10 +848,24 @@ class AtomicConcernExecutor:
                     output,
                     response_region=response_region,
                 )
+                if response_region == "members":
+                    collisions = self._symbol_collisions(
+                        concern=name,
+                        members=parsed,
+                    )
+                    if collisions:
+                        raise CustomModuleGenerationError(
+                            "ATOMIC_CONCERN_SYMBOL_COLLISION: "
+                            + "; ".join(collisions)
+                        )
             except CustomModuleGenerationError as exc:
                 reason = str(exc).split("\n", 1)[0]
                 recoverable = reason.startswith(
-                    ("ATOMIC_CONCERN_RESPONSE_INVALID:", "ATOMIC_CONCERN_SCOPE_ESCAPE:")
+                    (
+                        "ATOMIC_CONCERN_RESPONSE_INVALID:",
+                        "ATOMIC_CONCERN_SCOPE_ESCAPE:",
+                        "ATOMIC_CONCERN_SYMBOL_COLLISION:",
+                    )
                 )
                 if not recoverable:
                     _trace_region_generation(
@@ -685,6 +924,8 @@ class AtomicConcernExecutor:
                     + f"\nRegenerate only the {response_region} region. "
                     "Do not emit response markers, prose, package/import/top-level/lifecycle declarations. "
                     "Private nested helper types are allowed in members regions. "
+                    "Never redeclare a field, method signature, or nested type owned by another concern; "
+                    "reuse it or return an empty region when it already implements this concern. "
                     "Emit executable Java only; no analysis, reasoning, plans, or Markdown commentary."
                 )
                 repair_failure = "\n\n".join(
