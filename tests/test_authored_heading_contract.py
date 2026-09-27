@@ -122,23 +122,28 @@ def test_fresh_canonical_h2_layout_is_accepted_without_legacy_migration() -> Non
 
 
 
-def test_planner_canonicalizes_missing_execution_sections_before_saving() -> None:
+def test_planner_preserves_raw_text_and_execution_view_repairs_missing_sections() -> None:
+    raw = (
+        "## behavior_contract\nTrade ore for credits.\n"
+        "## state_model\nStore credits and ship state.\n"
+        "## algorithm\nCalculate prices.\n"
+        "## integration\nWire gameplay.\n"
+        "## resources_and_ui\nRender the trade UI.\n"
+        "## failure_and_limits\nReject invalid trades.\n"
+        "## reuse_assessment\nReference only.\n"
+        "## verification\nExercise trades.\n"
+    )
+
     class Router:
         def generate_text(self, *_args, **_kwargs):
-            return (
-                "## behavior_contract\nTrade ore for credits.\n"
-                "## state_model\nStore credits and ship state.\n"
-                "## algorithm\nCalculate prices.\n"
-                "## integration\nWire gameplay.\n"
-                "## resources_and_ui\nRender the trade UI.\n"
-                "## failure_and_limits\nReject invalid trades.\n"
-                "## reuse_assessment\nReference only.\n"
-                "## verification\nExercise trades.\n"
-            )
+            return raw
 
     plan = CompleteGameDesignPlanner(Router()).plan("space mod")
+    assert plan.text == raw
 
-    units = decompose_authored_units(plan.text)
+    normalized, report = normalize_authored_document(plan.text)
+    assert report is not None
+    units = decompose_authored_units(normalized)
     assert {unit["unit_id"] for unit in units} == {
         "state_model",
         "behavior_contract",
@@ -149,10 +154,10 @@ def test_planner_canonicalizes_missing_execution_sections_before_saving() -> Non
         "failure_and_limits",
         "integration",
     }
-    assert plan.text.index("## integration") < plan.text.index("## authority_and_network")
-    assert plan.text.index("## authority_and_network") < plan.text.index("## persistence")
-    assert plan.text.index("## persistence") < plan.text.index("## resources_and_ui")
-    assert "Trade ore for credits." in plan.text
+    assert normalized.index("## integration") < normalized.index("## authority_and_network")
+    assert normalized.index("## authority_and_network") < normalized.index("## persistence")
+    assert normalized.index("## persistence") < normalized.index("## resources_and_ui")
+    assert "Trade ore for credits." in normalized
 
 
 def test_canonicalizer_repairs_duplicate_order_and_unknown_peer_headings() -> None:

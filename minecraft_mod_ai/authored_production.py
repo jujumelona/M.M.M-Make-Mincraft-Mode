@@ -991,8 +991,21 @@ def compile_authored_design(
     router: Any, plan: AuthoredPlan, *, existing_input_sha256: str = ""
 ) -> CompleteProposal:
     implementation_plan, source_projection = _implementation_authored_plan(plan)
+    from .authored_document_contract import normalize_authored_document
+
+    normalized_text, normalization = normalize_authored_document(implementation_plan.text)
+    execution_plan = (
+        implementation_plan
+        if normalization is None
+        else AuthoredPlan(
+            requested_prompt=implementation_plan.requested_prompt,
+            text=normalized_text,
+            existing_input_sha256=implementation_plan.existing_input_sha256,
+            media_paths=implementation_plan.media_paths,
+        )
+    )
     # These are host project coordinates, not inferred gameplay or placeholder content.
-    mod_id = "authored_" + implementation_plan.calculate_hash()[:12]
+    mod_id = "authored_" + execution_plan.calculate_hash()[:12]
     acceptance = (
         "Implement the behaviors in the saved authored design and exercise them in Minecraft.",
         "Build the project and verify that the mod loads and runs without errors.",
@@ -1016,6 +1029,9 @@ def compile_authored_design(
     design = {"authored_plan": implementation_plan.to_dict()}
     if source_projection is not None:
         design["_authored_source_projection"] = source_projection
+    if normalization is not None:
+        design["_authored_document_normalization"] = normalization
+        design["_authored_execution_plan"] = execution_plan.to_dict()
     # Bind the actual build toolchain and existing project only. Never enter prepare(),
     # requirement extraction, design validation, or the old PlanIR compiler.
     binding = PlanningPipeline(router)
@@ -1032,7 +1048,7 @@ def compile_authored_design(
         # Reserve semantic graph compilation in the actual production context.
         # No document section is assumed to be a class or executable source unit.
         modules, manifest = _compile_new_authored_modules(
-            implementation_plan,
+            execution_plan,
             mod_id=base.spec.mod_id,
             package_name=base.spec.package_name,
             target=target,
@@ -1040,7 +1056,7 @@ def compile_authored_design(
         design = {**design, "_authored_execution_manifest": manifest}
     else:
         modules, manifest = _compile_existing_authored_modules(
-            implementation_plan,
+            execution_plan,
             target=target,
         )
         design = {**design, "_authored_execution_manifest": manifest}
@@ -1054,7 +1070,7 @@ def compile_authored_design(
             "policy": manifest["policy"], "existing_input": bool(effective_existing),
             "headings": [
                 {"line": line + 1, "depth": depth, "title": title}
-                for line, depth, title in _authored_heading_records(implementation_plan.text)[1]
+                for line, depth, title in _authored_heading_records(execution_plan.text)[1]
             ],
             "module_ids": [module.module_id for module in modules],
             "source_text_sha256": manifest["source_text_sha256"],
