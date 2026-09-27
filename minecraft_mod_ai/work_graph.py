@@ -242,7 +242,7 @@ class DurableWorkLedger:
                 connection.execute('\n                    UPDATE tasks\n                    SET stage = (\n                            SELECT desired.stage FROM desired_tasks AS desired\n                            WHERE desired.node_id = tasks.node_id\n                        ),\n                        input_hash = (\n                            SELECT desired.input_hash FROM desired_tasks AS desired\n                            WHERE desired.node_id = tasks.node_id\n                        ),\n                        payload_json = (\n                            SELECT desired.payload_json FROM desired_tasks AS desired\n                            WHERE desired.node_id = tasks.node_id\n                        )\n                    WHERE EXISTS (\n                        SELECT 1 FROM desired_tasks AS desired\n                        WHERE desired.node_id = tasks.node_id\n                    )\n                    ')
                 connection.execute('\n                    INSERT INTO edges(node_id, dependency_id)\n                    SELECT node_id, dependency_id FROM desired_edges\n                    ')
                 connection.execute('\n                    CREATE TEMP TABLE affected_nodes AS\n                    WITH RECURSIVE affected(node_id) AS (\n                        SELECT node_id FROM changed_nodes\n                        UNION\n                        SELECT edges.node_id\n                        FROM edges JOIN affected\n                          ON edges.dependency_id = affected.node_id\n                    )\n                    SELECT node_id FROM affected\n                    ')
-                connection.execute('\n                    UPDATE tasks\n                    SET state = ?, output_hash = NULL, receipt_json = NULL,\n                        error = NULL, lease_owner = NULL, lease_until = NULL,\n                        updated_at = ?\n                    WHERE EXISTS (\n                        SELECT 1 FROM affected_nodes\n                        WHERE affected_nodes.node_id = tasks.node_id\n                    )\n                    ', (WorkState.PENDING.value, now))
+                connection.execute('\n                    UPDATE tasks\n                    SET state = ?, output_hash = NULL, receipt_json = NULL,\n                        receipt_hash = NULL, error = NULL, lease_owner = NULL, lease_until = NULL,\n                        updated_at = ?\n                    WHERE EXISTS (\n                        SELECT 1 FROM affected_nodes\n                        WHERE affected_nodes.node_id = tasks.node_id\n                    )\n                    ', (WorkState.PENDING.value, now))
                 connection.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES ('graph_hash', ?)", (plan.graph_hash,))
                 connection.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES ('module_count', ?)", (str(plan.module_count),))
         finally:
@@ -304,14 +304,15 @@ class DurableWorkLedger:
 
     def succeed(self, node_id: str, receipt: dict[str, Any], *, output_hash: str='') -> dict[str, Any]:
         receipt_json = canonical_json(receipt)
-        digest = output_hash or 'sha256:' + hashlib.sha256(receipt_json.encode('utf-8')).hexdigest()
+        receipt_hash = self._receipt_hash(receipt_json)
+        digest = output_hash or receipt_hash
         with self._connect() as connection:
             row = connection.execute('SELECT state FROM tasks WHERE node_id = ?', (node_id,)).fetchone()
             if row is None:
                 raise WorkGraphError(f'Unknown work node: {node_id}')
             if row[0] not in {WorkState.RUNNING.value, WorkState.SUCCEEDED.value}:
                 raise WorkGraphError(f'Work node {node_id} is not running: {row[0]}')
-            connection.execute('\n                UPDATE tasks\n                SET state = ?, output_hash = ?, receipt_json = ?,\n                    lease_owner = NULL, lease_until = NULL, error = NULL,\n                    updated_at = ?\n                WHERE node_id = ?\n                ', (WorkState.SUCCEEDED.value, digest, receipt_json, time.time(), node_id))
+            connection.execute('\n                UPDATE tasks\n                SET state = ?, output_hash = ?, receipt_json = ?, receipt_hash = ?,\n                    lease_owner = NULL, lease_until = NULL, error = NULL,\n                    updated_at = ?\n                WHERE node_id = ?\n                ', (WorkState.SUCCEEDED.value, digest, receipt_json, receipt_hash, time.time(), node_id))
             connection.commit()
         return self.task(node_id)
 
@@ -415,14 +416,15 @@ class DurableWorkLedger:
             if row is None:
                 connection.execute('\n                    INSERT INTO checkpoints(\n                        checkpoint_id, stage, input_hash, state, attempt, updated_at\n                    ) VALUES (?, ?, ?, ?, 1, ?)\n                    ', (checkpoint_id, stage, input_hash, WorkState.RUNNING.value, time.time()))
             else:
-                connection.execute('\n                    UPDATE checkpoints\n                    SET stage = ?, input_hash = ?, state = ?,\n                        attempt = attempt + 1, receipt_json = NULL,\n                        output_hash = NULL, error = NULL, updated_at = ?\n                    WHERE checkpoint_id = ?\n                    ', (stage, input_hash, WorkState.RUNNING.value, time.time(), checkpoint_id))
+                connection.execute('\n                    UPDATE checkpoints\n                    SET stage = ?, input_hash = ?, state = ?,\n                        attempt = attempt + 1, receipt_json = NULL,\n                        receipt_hash = NULL, output_hash = NULL, error = NULL, updated_at = ?\n                    WHERE checkpoint_id = ?\n                    ', (stage, input_hash, WorkState.RUNNING.value, time.time(), checkpoint_id))
             connection.commit()
 
     def succeed_checkpoint(self, checkpoint_id: str, *, input_hash: str, receipt: dict[str, Any]) -> None:
         rendered = canonical_json(receipt)
-        output_hash = 'sha256:' + hashlib.sha256(rendered.encode('utf-8')).hexdigest()
+        receipt_hash = self._receipt_hash(rendered)
+        output_hash = receipt_hash
         with self._connect() as connection:
-            cursor = connection.execute('\n                UPDATE checkpoints\n                SET state = ?, receipt_json = ?, output_hash = ?,\n                    error = NULL, updated_at = ?\n                WHERE checkpoint_id = ? AND input_hash = ? AND state = ?\n                ', (WorkState.SUCCEEDED.value, rendered, output_hash, time.time(), checkpoint_id, input_hash, WorkState.RUNNING.value))
+            cursor = connection.execute('\n                UPDATE checkpoints\n                SET state = ?, receipt_json = ?, receipt_hash = ?, output_hash = ?,\n                    error = NULL, updated_at = ?\n                WHERE checkpoint_id = ? AND input_hash = ? AND state = ?\n                ', (WorkState.SUCCEEDED.value, rendered, receipt_hash, output_hash, time.time(), checkpoint_id, input_hash, WorkState.RUNNING.value))
             if cursor.rowcount == 0:
                 raise WorkGraphError(f'Checkpoint changed while running: {checkpoint_id}')
             connection.commit()
@@ -509,7 +511,8 @@ class DurableWorkLedger:
 
     def _initialize(self) -> None:
         with self._connect() as connection:
-            connection.executescript('\n                CREATE TABLE IF NOT EXISTS metadata(\n                    key TEXT PRIMARY KEY,\n                    value TEXT NOT NULL\n                );\n                CREATE TABLE IF NOT EXISTS tasks(\n                    node_id TEXT PRIMARY KEY,\n                    stage TEXT NOT NULL,\n                    input_hash TEXT NOT NULL,\n                    payload_json TEXT NOT NULL,\n                    state TEXT NOT NULL,\n                    attempt INTEGER NOT NULL DEFAULT 0,\n                    lease_owner TEXT,\n                    lease_until REAL,\n                    output_hash TEXT,\n                    receipt_json TEXT,\n                    error TEXT,\n                    updated_at REAL NOT NULL\n                );\n                CREATE TABLE IF NOT EXISTS edges(\n                    node_id TEXT NOT NULL REFERENCES tasks(node_id)\n                        ON DELETE CASCADE,\n                    dependency_id TEXT NOT NULL REFERENCES tasks(node_id)\n                        ON DELETE CASCADE,\n                    PRIMARY KEY(node_id, dependency_id)\n                );\n                CREATE INDEX IF NOT EXISTS tasks_state_stage\n                    ON tasks(state, stage, node_id);\n                CREATE INDEX IF NOT EXISTS edges_dependency\n                    ON edges(dependency_id, node_id);\n                CREATE TABLE IF NOT EXISTS checkpoints(\n                    checkpoint_id TEXT PRIMARY KEY,\n                    stage TEXT NOT NULL,\n                    input_hash TEXT NOT NULL,\n                    state TEXT NOT NULL,\n                    attempt INTEGER NOT NULL DEFAULT 0,\n                    output_hash TEXT,\n                    receipt_json TEXT,\n                    error TEXT,\n                    updated_at REAL NOT NULL\n                );\n                CREATE INDEX IF NOT EXISTS checkpoints_state_stage\n                    ON checkpoints(state, stage, checkpoint_id);\n                ')
+            connection.executescript('\n                CREATE TABLE IF NOT EXISTS metadata(\n                    key TEXT PRIMARY KEY,\n                    value TEXT NOT NULL\n                );\n                CREATE TABLE IF NOT EXISTS tasks(\n                    node_id TEXT PRIMARY KEY,\n                    stage TEXT NOT NULL,\n                    input_hash TEXT NOT NULL,\n                    payload_json TEXT NOT NULL,\n                    state TEXT NOT NULL,\n                    attempt INTEGER NOT NULL DEFAULT 0,\n                    lease_owner TEXT,\n                    lease_until REAL,\n                    output_hash TEXT,\n                    receipt_json TEXT,\n                    receipt_hash TEXT,\n                    error TEXT,\n                    updated_at REAL NOT NULL\n                );\n                CREATE TABLE IF NOT EXISTS edges(\n                    node_id TEXT NOT NULL REFERENCES tasks(node_id)\n                        ON DELETE CASCADE,\n                    dependency_id TEXT NOT NULL REFERENCES tasks(node_id)\n                        ON DELETE CASCADE,\n                    PRIMARY KEY(node_id, dependency_id)\n                );\n                CREATE INDEX IF NOT EXISTS tasks_state_stage\n                    ON tasks(state, stage, node_id);\n                CREATE INDEX IF NOT EXISTS edges_dependency\n                    ON edges(dependency_id, node_id);\n                CREATE TABLE IF NOT EXISTS checkpoints(\n                    checkpoint_id TEXT PRIMARY KEY,\n                    stage TEXT NOT NULL,\n                    input_hash TEXT NOT NULL,\n                    state TEXT NOT NULL,\n                    attempt INTEGER NOT NULL DEFAULT 0,\n                    output_hash TEXT,\n                    receipt_json TEXT,\n                    receipt_hash TEXT,\n                    error TEXT,\n                    updated_at REAL NOT NULL\n                );\n                CREATE INDEX IF NOT EXISTS checkpoints_state_stage\n                    ON checkpoints(state, stage, checkpoint_id);\n                ')
+            self._ensure_receipt_hash_columns(connection)
             stored_schema = self._meta(connection, 'schema_version')
             stored_proposal = self._meta(connection, 'proposal_hash')
             if stored_schema and stored_schema != self.schema_version:
@@ -520,7 +523,95 @@ class DurableWorkLedger:
             connection.execute('INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)', ('proposal_hash', self.proposal_hash))
             if self.graph_hash:
                 connection.execute('INSERT OR IGNORE INTO metadata(key, value) VALUES (?, ?)', ('graph_hash', self.graph_hash))
+            self._verify_stored_receipts(connection)
             connection.commit()
+
+    @staticmethod
+    def _receipt_hash(receipt_json: str) -> str:
+        try:
+            payload = json.loads(receipt_json)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise WorkGraphError('Stored work receipt is not valid JSON.') from exc
+        canonical = canonical_json(payload)
+        return 'sha256:' + hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+    @staticmethod
+    def _ensure_receipt_hash_columns(connection: sqlite3.Connection) -> None:
+        for table in ('tasks', 'checkpoints'):
+            columns = {
+                str(row[1])
+                for row in connection.execute(f'PRAGMA table_info({table})')
+            }
+            if 'receipt_hash' not in columns:
+                connection.execute(f'ALTER TABLE {table} ADD COLUMN receipt_hash TEXT')
+
+    @classmethod
+    def _verified_receipt_digest(cls, receipt_json: str | None) -> str | None:
+        if not receipt_json:
+            return None
+        try:
+            return cls._receipt_hash(receipt_json)
+        except WorkGraphError:
+            return None
+
+    @classmethod
+    def _verify_stored_receipts(cls, connection: sqlite3.Connection) -> None:
+        corrupt_tasks: list[str] = []
+        task_rows = tuple(
+            connection.execute(
+                'SELECT node_id, output_hash, receipt_json, receipt_hash '
+                'FROM tasks WHERE state = ?',
+                (WorkState.SUCCEEDED.value,),
+            )
+        )
+        for node_id, output_hash, receipt_json, receipt_hash in task_rows:
+            digest = cls._verified_receipt_digest(receipt_json)
+            if digest is None:
+                corrupt_tasks.append(str(node_id))
+            elif receipt_hash:
+                if str(receipt_hash) != digest:
+                    corrupt_tasks.append(str(node_id))
+            elif str(output_hash or '') == digest:
+                connection.execute(
+                    'UPDATE tasks SET receipt_hash = ? WHERE node_id = ?',
+                    (digest, node_id),
+                )
+            else:
+                corrupt_tasks.append(str(node_id))
+        if corrupt_tasks:
+            cls._invalidate_many(connection, corrupt_tasks)
+
+        checkpoint_rows = tuple(
+            connection.execute(
+                'SELECT checkpoint_id, output_hash, receipt_json, receipt_hash '
+                'FROM checkpoints WHERE state = ?',
+                (WorkState.SUCCEEDED.value,),
+            )
+        )
+        for checkpoint_id, output_hash, receipt_json, receipt_hash in checkpoint_rows:
+            digest = cls._verified_receipt_digest(receipt_json)
+            valid = digest is not None and (
+                str(receipt_hash) == digest
+                if receipt_hash
+                else str(output_hash or '') == digest
+            )
+            if not valid:
+                connection.execute(
+                    'UPDATE checkpoints SET state = ?, output_hash = NULL, '
+                    'receipt_json = NULL, receipt_hash = NULL, error = ?, updated_at = ? '
+                    'WHERE checkpoint_id = ?',
+                    (
+                        WorkState.FAILED.value,
+                        'Stored checkpoint receipt failed integrity verification.',
+                        time.time(),
+                        checkpoint_id,
+                    ),
+                )
+            elif not receipt_hash:
+                connection.execute(
+                    'UPDATE checkpoints SET receipt_hash = ? WHERE checkpoint_id = ?',
+                    (digest, checkpoint_id),
+                )
 
     def _connect(self) -> sqlite3.Connection:
         local = getattr(self, '_mmm_sqlite_local', None)
@@ -567,7 +658,7 @@ class DurableWorkLedger:
         if not affected:
             return ()
         update_placeholders = ','.join('?' for _ in affected)
-        connection.execute(f'\n            UPDATE tasks\n            SET state = ?, output_hash = NULL, receipt_json = NULL,\n                error = NULL, lease_owner = NULL, lease_until = NULL,\n                updated_at = ?\n            WHERE node_id IN ({update_placeholders})\n            ', (WorkState.PENDING.value, time.time(), *affected))
+        connection.execute(f'\n            UPDATE tasks\n            SET state = ?, output_hash = NULL, receipt_json = NULL,\n                receipt_hash = NULL, error = NULL, lease_owner = NULL, lease_until = NULL,\n                updated_at = ?\n            WHERE node_id IN ({update_placeholders})\n            ', (WorkState.PENDING.value, time.time(), *affected))
         return affected
 T = TypeVar('T')
 
