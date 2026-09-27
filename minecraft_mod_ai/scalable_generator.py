@@ -103,7 +103,7 @@ class ScalableFabricProjectGenerator:
         unit_prefix = root_class_name + "Unit"
         root_entrypoint = f"{spec.package_name}.{root_class_name}"
         files[
-            f"src/main/java/{package_path}/{root_class_name}.java"
+            f"src/gametest/java/{package_path}/{root_class_name}.java"
         ] = discovered_gametest_root_java(
             package_name=spec.package_name,
             mod_id=spec.mod_id,
@@ -115,7 +115,7 @@ class ScalableFabricProjectGenerator:
             index = offset // self.policy.java_shard_size
             class_name = f"{unit_prefix}{index:04d}"
             relative = (
-                "src/main/java/"
+                "src/gametest/java/"
                 + package_path
                 + f"/{class_name}.java"
             )
@@ -126,7 +126,8 @@ class ScalableFabricProjectGenerator:
             )
         write_text_files(info, files, replace_existing=True)
 
-        metadata = json.loads(info.fabric_mod_json.read_text(encoding="utf-8"))
+        metadata_path = root / "src/gametest/resources/fabric.mod.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         entrypoints = metadata.setdefault("entrypoints", {})
         if not isinstance(entrypoints, dict):
             raise ValueError("fabric.mod.json entrypoints must be an object")
@@ -158,8 +159,8 @@ class ScalableFabricProjectGenerator:
                 [
                     {
                         "operation": "replace",
-                        "path": "src/main/resources/fabric.mod.json",
-                        "expected_sha256": sha256_file(info.fabric_mod_json),
+                        "path": "src/gametest/resources/fabric.mod.json",
+                        "expected_sha256": sha256_file(metadata_path),
                         "content": json.dumps(
                             metadata,
                             ensure_ascii=False,

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from minecraft_mod_ai import generator
+from minecraft_mod_ai import generator, texture_equivalence_cache as texture_cache
 
 
 def test_texture_cache_preserves_exact_original_bytes() -> None:
     cached = generator.make_texture_png
     original = cached.__wrapped__
-    with generator._TEXTURE_CACHE_LOCK:
-        generator._TEXTURE_CACHE.clear()
+    with texture_cache._TEXTURE_CACHE_LOCK:
+        texture_cache._TEXTURE_CACHE.clear()
 
     for kind in ("item", "block", "entity"):
         for size in (16, 64):
@@ -28,7 +28,7 @@ def test_many_seed_names_collapse_to_at_most_fourteen_exact_patterns() -> None:
     ]
 
     with generator._TEXTURE_CACHE_LOCK:
-        keys = list(generator._TEXTURE_CACHE)
+        keys = list(texture_cache._TEXTURE_CACHE)
     assert len(keys) <= 14
     assert len(set(outputs)) <= 14
 

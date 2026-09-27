@@ -146,5 +146,5 @@ def test_atomic_coder_retries_one_exhausted_native_format_failure() -> None:
         ({"role": "user", "content": "Return one member region."},),
     )
 
-    assert result == "private static final int COST = 10;"
+    assert result == "private static final int COST = 10;\n"
     assert router.calls == 2

@@ -157,6 +157,8 @@ def _repair_candidate_count(self: Any, evidence: Mapping[str, Any], memory: Sequ
     width = _env_int('MMM_REPAIR_SEARCH_WIDTH', 2, maximum=3)
     if mode == 'on':
         return width
+    if _env_int('MMM_LLAMA_ACTIVE_PARALLEL', 1, maximum=8) <= 1:
+        return 1
     errors = diagnostic_errors(_diagnostic_receipt(evidence.get('diagnostics')))
     signature = self._signature(dict(evidence))
     counts = getattr(self, '_mmm_signature_counts', None)

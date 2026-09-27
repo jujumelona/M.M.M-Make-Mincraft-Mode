@@ -7,6 +7,7 @@ import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
+from .fabric_official_template_provider import _install_host_gametest_contract
 from .platform_catalog import adapter_for_lock_values
 from .spec import BossSpec, ContentKind, ContentSpec, ModSpec
 from .toolchain_contract import fabric_dependency_predicates
@@ -115,9 +116,17 @@ class FabricProjectGenerator:
             self._write_boss(root, spec, main_class, spec.boss)
         self._write_tags(root, spec)
         self._write_contract(root, spec)
+        _install_host_gametest_contract(root, spec, adapter)
+        files = tuple(
+            sorted(
+                path.resolve()
+                for path in root.rglob("*")
+                if path.is_file() and not path.is_symlink()
+            )
+        )
         return GeneratedProject(
             root=root,
-            files=tuple(sorted(self._written)),
+            files=files,
             main_class=f"{spec.package_name}.{main_class}",
         )
 
@@ -985,7 +994,7 @@ public final class GeneratedContent {{
                         "reason": "This item/block is registry content, not an automatic world edit.",
                     },
                     "tests": [
-                        f"src/main/java/{spec.package_name.replace('.', '/')}/{_java_class_name(spec.mod_id)}GameTests.java",
+                        f"src/gametest/java/{spec.package_name.replace('.', '/')}/{_java_class_name(spec.mod_id)}GameTests.java",
                         f"src/test/java/{spec.package_name.replace('.', '/')}/GeneratedContractTest.java",
                     ],
                     "documentation": ["README.md"],

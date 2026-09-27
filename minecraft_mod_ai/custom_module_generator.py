@@ -124,12 +124,9 @@ def _exact_target(module: ProductionModule) -> tuple[str, str, dict[str, Any]]:
                 continue
             match = _LOCATOR.fullmatch(str(anchor.get("locator") or "").strip())
             if match:
-                candidates.append(
-                    (
-                        _normalize_project_path(match.group("path")),
-                        match.group("symbol"),
-                    )
-                )
+                path = _normalize_project_path(match.group("path"))
+                if path.startswith("src/main/java/"):
+                    candidates.append((path, match.group("symbol")))
     unique = tuple(dict.fromkeys(candidates))
     if len(unique) != 1:
         raise CustomModuleGenerationError(

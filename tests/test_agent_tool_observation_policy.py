@@ -67,10 +67,10 @@ def test_mcp_mirrored_json_enters_transcript_once() -> None:
     assert result["parsed_text"] is None
 
 
-def test_default_observation_page_is_small_for_local_agent_context(monkeypatch) -> None:
+def test_default_observation_page_is_bounded_for_local_agent_context(monkeypatch) -> None:
     monkeypatch.delenv("MMM_AGENT_OBSERVATION_BYTES", raising=False)
 
-    assert _result_byte_limit() == 16 * 1024
+    assert _result_byte_limit() == 48 * 1024
 
 
 def test_large_observation_preserves_rag_receipt(monkeypatch) -> None:
