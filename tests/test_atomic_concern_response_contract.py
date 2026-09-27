@@ -554,7 +554,6 @@ def test_generic_method_erasure_collision_is_rehomed_by_host() -> None:
         [
             "private static void update(java.util.List<String> value) {}",
             "private static void update(java.util.List<Integer> value) {}",
-            "",
         ],
         concerns=concerns,
     )
