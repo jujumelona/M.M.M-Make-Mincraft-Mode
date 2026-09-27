@@ -68,15 +68,15 @@ def _trace_region_generation(
 _HOST_PREFIX = "MMM_ATOMIC_CONCERN"
 _PACKAGE = re.compile(r"(?m)^\s*package\s+([A-Za-z_$][A-Za-z0-9_$.]*)\s*;\s*$")
 _FORBIDDEN = re.compile(
-    r"\\b(?:package|import)\\s+"
-    r"|\\b(?:ModInitializer|ClientModInitializer|DedicatedServerModInitializer)\\b"
-    r"|\\bonInitialize(?:Client|Server)?\\b"
+    r"\b(?:package|import)\s+"
+    r"|\b(?:ModInitializer|ClientModInitializer|DedicatedServerModInitializer)\b"
+    r"|\bonInitialize(?:Client|Server)?\b"
 )
 _TYPE_DECL = re.compile(
-    r"(?m)^\\s*(?P<modifiers>(?:(?:public|protected|private|static|final|abstract|sealed|non-sealed)\\s+)*)"
-    r"(?P<kind>class|interface|enum|record)\\b"
+    r"(?m)^\s*(?P<modifiers>(?:(?:public|protected|private|static|final|abstract|sealed|non-sealed)\s+)*)"
+    r"(?P<kind>class|interface|enum|record)\b"
 )
-_INITIALIZE_DECL = re.compile(r"\\bpublic\\s+static\\s+void\\s+initialize\\s*\\(")
+_INITIALIZE_DECL = re.compile(r"\bpublic\s+static\s+void\s+initialize\s*\(")
 
 
 
