@@ -9,6 +9,14 @@ CRITICAL_RUNTIME_PATHS = (
     "minecraft_mod_ai/generation_output_budget.py",
     "minecraft_mod_ai/model_context_budget.py",
     "minecraft_mod_ai/model_output_atomicity_contract.py",
+    "minecraft_mod_ai/acceptance_contracts.py",
+    "minecraft_mod_ai/quality_evidence.py",
+    "minecraft_mod_ai/evidence_first_planning.py",
+    "minecraft_mod_ai/research_rag_performance.py",
+    "minecraft_mod_ai/source_observation_context.py",
+    "minecraft_mod_ai/generator.py",
+    "minecraft_mod_ai/texture_equivalence_cache.py",
+    "minecraft_mod_ai/extended_registration_contract.py",
 )
 DEEP_SOFTWARE_GATE_PATHS = (
     "tools/verify_integrity_minecraft.py",
