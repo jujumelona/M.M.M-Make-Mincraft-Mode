@@ -73,37 +73,32 @@ class _Adapter:
 
     def generate_turn(self, request):
         self.requests.append(request)
-        index = len(self.requests)
+        if len(self.requests) != 1:
+            raise AssertionError(
+                "trusted verifier PASS must terminate in the host without another model turn"
+            )
         names = [item["function"]["name"] for item in request.tools]
-        if index == 1:
-            assert names == ["apply_source_edit"]
-            return GenerationResponse(
-                tool_calls=(
-                    ToolCall(
-                        id="mutate_1",
-                        name="apply_source_edit",
-                        arguments={
+        assert names == ["apply_source_edit"]
+        return GenerationResponse(
+            tool_calls=(
+                ToolCall(
+                    id="mutate_1",
+                    name="apply_source_edit",
+                    arguments={
+                        "path": "src/main/java/Example.java",
+                        "operation": "create_file",
+                        "content": "public final class Example {}",
+                    },
+                    raw_arguments=json.dumps(
+                        {
                             "path": "src/main/java/Example.java",
                             "operation": "create_file",
                             "content": "public final class Example {}",
-                        },
-                        raw_arguments=json.dumps(
-                            {
-                                "path": "src/main/java/Example.java",
-                                "operation": "create_file",
-                                "content": "public final class Example {}",
-                            }
-                        ),
+                        }
                     ),
-                )
+                ),
             )
-        if index == 2:
-            # Generation verification is host-owned. After the verifier passes, the
-            # next model turn is terminal and has no tool surface.
-            assert request.tools == ()
-            assert request.tool_choice is None
-            return GenerationResponse(content="verified implementation complete")
-        raise AssertionError("verifier was invoked again after a trusted PASS")
+        )
 
 
 def test_verifier_pass_finalizes_without_repeating_verifier(monkeypatch) -> None:
@@ -158,11 +153,11 @@ def test_verifier_pass_finalizes_without_repeating_verifier(monkeypatch) -> None
         [{"role": "user", "content": json.dumps(request)}],
     )
 
-    assert result == "verified implementation complete"
+    payload = json.loads(result)
+    assert "summary" in payload
+    assert "passed generation-time host verification" in payload["summary"]
     assert [name for _, name, _ in runtime.calls] == [
         "apply_source_edit",
         "java_diagnostics",
     ]
-    assert len(adapter.requests) == 2
-    final_instruction = str(adapter.requests[-1].messages[-1]["content"])
-    assert "verification passed" in final_instruction.casefold()
+    assert len(adapter.requests) == 1
