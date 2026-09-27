@@ -491,5 +491,32 @@ def test_method_overloads_with_different_parameter_types_do_not_collide() -> Non
     result = executor.run()
 
     assert compile_calls["count"] == 1
-    assert "update(int)" in result["source"]
-    assert "update(String)" in result["source"]
+    assert "update(int value)" in result["source"]
+    assert "update(String value)" in result["source"]
+
+
+
+def test_static_initializer_does_not_create_fake_symbol_owner() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _member_declaration_symbols
+
+    assert _member_declaration_symbols("static { initializeSomething(); }") == {}
+
+
+def test_generic_method_erasure_collision_is_rejected() -> None:
+    concerns = (
+        {"sequence": 0, "identifier": "a", "concern": "first", "task": "first generic method", "rules": []},
+        {"sequence": 1, "identifier": "b", "concern": "second", "task": "second generic method", "rules": []},
+    )
+    executor, compile_calls = _multi_executor(
+        [
+            "private static void update(java.util.List<String> value) {}",
+            "private static void update(java.util.List<Integer> value) {}",
+            "",
+        ],
+        concerns=concerns,
+    )
+
+    result = executor.run()
+
+    assert compile_calls["count"] == 1
+    assert result["source"].count("private static void update(") == 1

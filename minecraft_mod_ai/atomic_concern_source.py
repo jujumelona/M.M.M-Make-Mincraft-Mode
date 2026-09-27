@@ -366,6 +366,21 @@ def _top_level_assignment_index(value: str) -> int:
     return -1
 
 
+def _erase_generic_arguments(value: str) -> str:
+    result: list[str] = []
+    depth = 0
+    for char in str(value or ""):
+        if char == "<":
+            depth += 1
+            continue
+        if char == ">" and depth:
+            depth -= 1
+            continue
+        if depth == 0:
+            result.append(char)
+    return "".join(result)
+
+
 def _parameter_type_signature(raw: str) -> str:
     text = re.sub(r"@\w+(?:\s*\([^)]*\))?\s*", " ", str(raw or ""))
     tokens = [token for token in text.strip().split() if token and token != "final"]
@@ -379,7 +394,8 @@ def _parameter_type_signature(raw: str) -> str:
         name = name[:-2]
     if _JAVA_IDENTIFIER.fullmatch(name):
         tokens = tokens[:-1]
-    return re.sub(r"\s+", "", " ".join(tokens)) + suffix
+    normalized = re.sub(r"\s+", "", " ".join(tokens)) + suffix
+    return _erase_generic_arguments(normalized)
 
 
 def _member_declaration_symbols(value: str) -> dict[str, str]:
@@ -405,6 +421,8 @@ def _member_declaration_symbols(value: str) -> dict[str, str]:
         if brace_at >= 0:
             header = header[:brace_at].strip()
         header = header.rstrip(";").strip()
+        if header in {"", "static"}:
+            continue
 
         method_matches = list(
             re.finditer(
