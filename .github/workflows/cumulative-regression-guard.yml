@@ -14,6 +14,7 @@ on:
       - 'minecraft_mod_ai/small_model_atomic_coder_execution.py'
       - 'minecraft_mod_ai/model_adapters/**'
       - 'minecraft_mod_ai/model_router.py'
+      - 'minecraft_mod_ai/performance_final_tuning.py'
       - 'minecraft_mod_ai/__init__.py'
       - 'minecraft_mod_ai/runtime_bootstrap.py'
       - 'tools/verify_integrity_minecraft.py'
