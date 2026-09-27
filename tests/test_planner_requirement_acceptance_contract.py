@@ -9,18 +9,22 @@ from minecraft_mod_ai.reuse_planner import decompose_capability_graph
 from tests.planning_authority_fixtures import request_catalog
 
 
-def test_prompt_only_unknown_requirement_is_one_opaque_provisional() -> None:
-    graph = decompose_capability_graph("Add seasonal rune banking.")
-    provisional = [node for node in graph.nodes if node.startswith("provisional:")]
-    assert len(provisional) == 1
-    assert not any(part in provisional[0] for part in ("primary", "state", "logic"))
-    source_map = dict(graph.sources)
-    assert source_map[provisional[0]] == "prompt_resolution.provisional_opaque"
+def test_prompt_only_unknown_requirement_fails_closed_without_catalog() -> None:
+    import pytest
+
+    with pytest.raises(
+        ValueError,
+        match="approved request catalog or explicit module kinds",
+    ):
+        decompose_capability_graph("Add seasonal rune banking.")
 
 
-def test_authoritative_design_does_not_gain_opaque_prompt_noise() -> None:
-    design = {"capabilities": [f"system.feature_{index}" for index in range(96)]}
-    graph = decompose_capability_graph("Implement the declared systems.", design=design)
+def test_explicit_module_kinds_do_not_gain_prompt_noise() -> None:
+    capabilities = [f"system.feature_{index}" for index in range(96)]
+    graph = decompose_capability_graph(
+        "Implement the declared systems.",
+        module_kinds=capabilities,
+    )
     assert len(graph.nodes) == 96
     assert not any(node.startswith("provisional:") for node in graph.nodes)
 
@@ -84,6 +88,15 @@ def test_task_acceptance_keeps_internal_checks_for_dag_validation() -> None:
     tasks = _compile_tasks(gaps, reuse, target, branches, ownership)
     assert tasks
     assert all(task["acceptance"] for task in tasks)
-    assert all(any("declared provides" in item.casefold() for item in task["acceptance"]) for task in tasks)
-    assert all(public_acceptance not in task["acceptance"] for task in tasks)
-    assert public_acceptance in tasks[-1].get("public_acceptance", [])
+    assert all(
+        any("declared provides" in item.casefold() for item in task["acceptance"])
+        for task in tasks
+    )
+    terminal = [
+        task
+        for task in tasks
+        if "capability:economy.trade" in task["provides"]
+    ]
+    assert len(terminal) == 1
+    assert public_acceptance in terminal[0]["acceptance"]
+    assert all("public_acceptance" not in task for task in tasks)
