@@ -190,6 +190,41 @@ def split_observation_records(
     return result
 
 
+_ANCHOR_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_.$:/-]{1,127}")
+_ANCHOR_WORDS = frozenset(
+    {"api", "contract", "dependency", "implements", "interface", "register", "required", "schema"}
+)
+
+
+def _compact_anchor(record: dict[str, Any], query_terms: set[str]) -> dict[str, Any]:
+    text = str(record.get("text", ""))
+    tokens = list(dict.fromkeys(_ANCHOR_TOKEN.findall(text)))
+    selected: list[str] = []
+    for token in tokens:
+        lowered = token.casefold()
+        if (
+            lowered in query_terms
+            or lowered in _ANCHOR_WORDS
+            or "_" in token
+            or any(character.isupper() for character in token[1:])
+        ):
+            selected.append(token)
+        if len(selected) >= 16:
+            break
+    if not selected:
+        selected = tokens[:8]
+    return {
+        "observation_id": str(record.get("observation_id", "")),
+        "path": str(record.get("path", "")),
+        "sha256": str(record.get("sha256", "")),
+        "content_start_bytes": int(record.get("content_start_bytes", 0) or 0),
+        "content_end_bytes": int(record.get("content_end_bytes", 0) or 0),
+        "source_page_index": int(record.get("source_page_index", 0) or 0),
+        "kind": "exact_source_anchor_ref",
+        "text": "anchor-ref symbols: " + " ".join(selected),
+    }
+
+
 def observation_context_pages(
     ledger: dict[str, Any],
     *,
@@ -303,9 +338,20 @@ def observation_context_pages(
             break
 
     page_count = len(pages)
+    compact_refs = [_compact_anchor(record, query_terms) for record in anchors]
+    compact_ref_bytes = json_size(compact_refs) if compact_refs else 0
     for index, page in enumerate(pages):
         page["page_count"] = page_count
         page["complete"] = index == page_count - 1
+        policy = dict(page.get("policy") or {})
+        policy["global_anchor_source_payload"] = "first_page_only"
+        page["policy"] = policy
+        page["global_anchor_payload"] = (
+            "exact_source" if index == 0 else "compact_refs"
+        )
+        page["global_anchor_ref_bytes"] = compact_ref_bytes
+        if index > 0:
+            page["global_anchors"] = compact_refs
         if json_size(page) > byte_budget:
             raise CustomModuleGenerationError(
                 "Host source-observation context page exceeded its byte budget "

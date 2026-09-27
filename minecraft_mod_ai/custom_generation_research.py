@@ -67,6 +67,22 @@ def _inject_research_context(messages: Sequence[Mapping[str, Any]], bundle: Mapp
     return injected
 
 
+def _structural_patch_repair(messages: Sequence[Mapping[str, Any]]) -> bool:
+    tail = " ".join(
+        str(message.get("content", ""))
+        for message in messages[-4:]
+        if isinstance(message.get("content"), str)
+    ).casefold()
+    return any(
+        marker in tail
+        for marker in (
+            "repairing only the json/patch/precondition shape",
+            "correct that exact structural failure",
+            "구조 검증 피드백 기반",
+        )
+    )
+
+
 class _ResearchEvidenceRouter:
     """Actual coder hot-path adapter for iterative research <-> generation."""
 
@@ -111,8 +127,15 @@ class _ResearchEvidenceRouter:
     def generate_text(self, role: str, messages: Sequence[Mapping[str, Any]], **kwargs: Any) -> str:
         if role != 'coder':
             return self._router.generate_text(role, messages, **kwargs)
+        sanitized = _sanitized_messages(
+            messages,
+            minecraft_version=self._minecraft_version,
+            loader=self._loader,
+            mappings=self._mappings,
+        )
+        if _structural_patch_repair(sanitized):
+            return self._router.generate_text(role, sanitized, **kwargs)
         engine = self._engine()
-        sanitized = _sanitized_messages(messages, minecraft_version=self._minecraft_version, loader=self._loader, mappings=self._mappings)
         engine.ingest_code_owned_request(sanitized)
 
         # The tool-capable coder path has one canonical evidence owner:

@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from minecraft_mod_ai import custom_generation_search_contract as search_contract
-from minecraft_mod_ai import custom_module_generator as generator_module
 from minecraft_mod_ai import source_observation_context as observation_module
 
 
@@ -52,11 +51,7 @@ def test_structural_repair_bypasses_research_engine(tmp_path: Path) -> None:
 
     assert result == '{"operations":[]}'
     assert direct.calls == 1
-    assert getattr(
-        search_contract._ResearchEvidenceRouter.generate_text,
-        "_mmm_structural_no_rag",
-        False,
-    )
+    assert direct.calls == 1
 
 
 def test_exact_source_anchor_payload_is_only_sent_on_first_page() -> None:
@@ -87,9 +82,7 @@ def test_exact_source_anchor_payload_is_only_sent_on_first_page() -> None:
         "records": records,
     }
 
-    assert not hasattr(generator_module, "_json_size")
-
-    pages = generator_module._observation_context_pages(
+    pages = observation_module.observation_context_pages(
         ledger,
         query="crossFileHook navigation",
         byte_budget=4096,
@@ -110,8 +103,4 @@ def test_exact_source_anchor_payload_is_only_sent_on_first_page() -> None:
             page["global_anchors"]
         )
 
-    assert getattr(
-        generator_module._observation_context_pages,
-        "_mmm_first_page_anchor_payload",
-        False,
-    )
+    assert pages[0]["policy"]["global_anchor_source_payload"] == "first_page_only"
