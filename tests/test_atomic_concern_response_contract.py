@@ -13,6 +13,10 @@ from minecraft_mod_ai.atomic_concern_source import (
     parse_concern_content,
 )
 from minecraft_mod_ai.custom_module_errors import CustomModuleGenerationError
+from minecraft_mod_ai.custom_module_generator import (
+    _atomic_concern_output_token_ceiling,
+    _call_coder,
+)
 
 
 def _response(members: str = "", initialize: str = "") -> str:
@@ -155,3 +159,48 @@ def test_marker_mentions_are_not_required_by_executor_contract() -> None:
     )
     result = executor.run()
     assert "no response markers required" in result["source"]
+
+
+def test_distinct_invalid_region_outputs_stop_at_bounded_attempt_limit(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_ATOMIC_CONCERN_REGION_ATTEMPTS", "3")
+    executor = _executor(
+        [
+            "package first;",
+            "package second;",
+            "package third;",
+            "private static final int SHOULD_NOT_BE_REACHED = 1;",
+        ]
+    )
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match="ATOMIC_CONCERN_RESPONSE_RETRY_EXHAUSTED",
+    ):
+        executor.run()
+
+
+def test_atomic_concern_output_budget_defaults_to_bounded_page(monkeypatch) -> None:
+    monkeypatch.delenv("MMM_ATOMIC_CONCERN_OUTPUT_TOKENS", raising=False)
+    assert _atomic_concern_output_token_ceiling() == 2048
+
+
+def test_direct_coder_forwards_atomic_output_token_ceiling() -> None:
+    captured: dict[str, object] = {}
+
+    class _Router:
+        def generate_text(self, role, messages, **kwargs):
+            captured["role"] = role
+            captured["messages"] = messages
+            captured.update(kwargs)
+            return "private static final int COST = 10;"
+
+    result = _call_coder(
+        _Router(),
+        ({"role": "user", "content": "bounded concern"},),
+        output_token_ceiling=1536,
+    )
+
+    assert result == "private static final int COST = 10;\n"
+    assert captured["role"] == "coder"
+    assert captured["enable_tools"] is False
+    assert captured["tool_stage"] == "generation"
+    assert captured["output_token_ceiling"] == 1536
