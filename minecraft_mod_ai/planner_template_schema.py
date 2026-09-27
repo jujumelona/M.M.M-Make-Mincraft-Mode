@@ -4,6 +4,7 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .complete_spec import ASSET_KINDS, MODULE_KINDS
 from .implementation_template_contract import build_implementation_template
 
 MODULE_KEYS = frozenset({"module_id", "kind", "config", "depends_on", "required_gates"})
@@ -18,7 +19,6 @@ MODEL_TASK_DETAIL_KEYS = frozenset(
     {"implementation_notes", "api_usage", "validation_notes", "asset_notes"}
 )
 
-from .complete_spec import ASSET_KINDS, MODULE_KINDS
 PRODUCTION_PAGE_TEMPLATE: dict[str, Any] = {
     "modules": [
         {
