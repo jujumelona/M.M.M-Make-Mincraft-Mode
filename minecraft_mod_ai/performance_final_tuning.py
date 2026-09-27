@@ -87,8 +87,18 @@ def install(performance_module: Any) -> None:
                         raise performance_module.StagedCommitConflict(
                             f"Staging refused project symlink: {source}"
                         )
+                    relative_file = (relative_dir / name).as_posix()
+                    build_tool_identity = (
+                        relative_file in {
+                            "gradlew",
+                            "gradlew.bat",
+                            "gradle/wrapper/gradle-wrapper.jar",
+                            "gradle/wrapper/gradle-wrapper.properties",
+                        }
+                    )
                     if (
-                        source.suffix.lower() not in _STAGE_TEXT_SUFFIXES
+                        not build_tool_identity
+                        and source.suffix.lower() not in _STAGE_TEXT_SUFFIXES
                         and name not in _STAGE_TEXT_NAMES
                     ):
                         continue
