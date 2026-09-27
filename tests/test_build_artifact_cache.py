@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import MethodType, SimpleNamespace
 
+import pytest
+
 from minecraft_mod_ai import runner as runner_module
 from minecraft_mod_ai import runner_parallel_validation_contract as parallel
 from minecraft_mod_ai import validation_execution_contract as validation
@@ -11,6 +13,15 @@ from minecraft_mod_ai.runner_parallel_validation_contract import (
     _passing_gametest_xml,
     _safe_regular_file,
 )
+
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _install_parallel_validation_contract() -> None:
+    parallel.install(
+        runner_module=runner_module,
+        validation_module=validation,
+    )
 
 
 def _project(root: Path) -> Path:

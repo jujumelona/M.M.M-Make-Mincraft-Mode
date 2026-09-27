@@ -5,6 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import minecraft_mod_ai.runner as runner_module
+from minecraft_mod_ai import validation_execution_contract as validation
+from minecraft_mod_ai import runner_parallel_validation_contract as parallel
 from minecraft_mod_ai.runner import CommandResult, GradleRunner
 
 
@@ -176,6 +178,10 @@ def test_build_hot_path_is_incremental_and_skips_current_wrapper(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    parallel.install(
+        runner_module=runner_module,
+        validation_module=validation,
+    )
     project = tmp_path / "project"
     project.mkdir()
     (project / "build.gradle").write_text("plugins {}\n", encoding="utf-8")
