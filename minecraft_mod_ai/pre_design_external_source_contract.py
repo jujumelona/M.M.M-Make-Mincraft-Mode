@@ -12,10 +12,13 @@ import hashlib
 import json
 import os
 import re
+from contextlib import nullcontext
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from typing import Any
+
+import httpx
 
 _INSTALLED = False
 _DEFAULT_MAX_QUERIES = 20
@@ -209,10 +212,6 @@ def _retrieve_github_source_body(
     client: Any = None,
 ) -> dict[str, Any]:
     """Search GitHub and return at most one verified README body for *query*."""
-
-    from contextlib import nullcontext
-
-    import httpx
 
     search_requests = 0
     source_requests = 0
@@ -572,8 +571,6 @@ def _retrieve_selected_source_receipts(selected_order: Sequence[str]) -> dict[st
         query_count=len(queries),
         max_workers=workers,
     )
-    import httpx
-
     retriever = _retrieve_github_source_body
     with httpx.Client(
         timeout=20.0,
