@@ -582,7 +582,15 @@ def validate_production_contract(
 
 def quality_contract_summary(contract: Mapping[str, Any]) -> str:
     module_ids = [item['implementation_id'] for item in contract.get('implementation_catalog', []) if isinstance(item, Mapping) and item.get('source_kind') == 'module']
-    tests = [item['statement'] for item in contract.get('acceptance_catalog', []) if isinstance(item, Mapping) and isinstance(item.get('statement'), str)]
+    tests = [
+        item['statement']
+        for item in contract.get('acceptance_catalog', [])
+        if (
+            isinstance(item, Mapping)
+            and item.get('visibility') == 'public'
+            and isinstance(item.get('statement'), str)
+        )
+    ]
     validate_production_contract(contract, module_ids, tests)
     stats = contract['catalog_stats']
     dimensions = ', '.join(item['title'] for item in contract['quality_dimension_catalog'])
@@ -590,7 +598,15 @@ def quality_contract_summary(contract: Mapping[str, Any]) -> str:
 
 def evaluate_quality_contract(contract: Mapping[str, Any], evidence: Mapping[str, Any] | Sequence[Mapping[str, Any]], proposal_hash: str, previous: Mapping[str, Any] | None=None) -> dict[str, Any]:
     module_ids = [item['implementation_id'] for item in contract.get('implementation_catalog', []) if isinstance(item, Mapping) and item.get('source_kind') == 'module']
-    acceptance = [item['statement'] for item in contract.get('acceptance_catalog', []) if isinstance(item, Mapping) and isinstance(item.get('statement'), str)]
+    acceptance = [
+        item['statement']
+        for item in contract.get('acceptance_catalog', [])
+        if (
+            isinstance(item, Mapping)
+            and item.get('visibility') == 'public'
+            and isinstance(item.get('statement'), str)
+        )
+    ]
     validate_production_contract(contract, module_ids, acceptance)
     if not isinstance(proposal_hash, str) or not _SHA256.fullmatch(proposal_hash):
         raise ProductionContractError('proposal_hash must be a canonical SHA-256')
