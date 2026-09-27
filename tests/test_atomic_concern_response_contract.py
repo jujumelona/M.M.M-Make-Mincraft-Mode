@@ -1099,39 +1099,43 @@ def test_parameter_schema_tolerates_small_model_metadata_noise() -> None:
     Draft202012Validator(_ATOMIC_MEMBERS_PARAMETERS).validate(decision)
 
 
-def test_invariants_use_small_methods_and_constants_schema() -> None:
+def test_member_tool_schema_has_no_arbitrary_cardinality_or_length_caps() -> None:
+    from minecraft_mod_ai.custom_module_generator import _ATOMIC_MEMBERS_PARAMETERS
+
+    def walk(value):
+        if isinstance(value, dict):
+            assert "maxItems" not in value
+            assert "maxLength" not in value
+            for child in value.values():
+                walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+
+    walk(_ATOMIC_MEMBERS_PARAMETERS)
+
+
+def test_preferred_shape_is_guidance_not_schema_restriction() -> None:
     from minecraft_mod_ai.custom_module_generator import (
+        _ATOMIC_MEMBERS_PARAMETERS,
         _atomic_parameters_for_request,
-        _ATOMIC_METHODS_AND_CONSTANTS_PARAMETERS,
     )
 
-    parameters, shape = _atomic_parameters_for_request(
-        {"generation_recipe": {"preferred_shape": "methods_and_constants"}},
-        response_region="members",
-    )
-
-    assert shape == "methods_and_constants"
-    assert parameters is _ATOMIC_METHODS_AND_CONSTANTS_PARAMETERS
-    assert set(parameters["properties"]) == {"fields", "methods"}
-    assert parameters["properties"]["methods"]["maxItems"] == 4
-    assert parameters["properties"]["fields"]["maxItems"] == 8
-
-
-def test_variables_use_small_fields_and_types_schema() -> None:
-    from minecraft_mod_ai.custom_module_generator import (
-        _atomic_parameters_for_request,
-        _ATOMIC_FIELDS_AND_TYPES_PARAMETERS,
-    )
-
-    parameters, shape = _atomic_parameters_for_request(
-        {"generation_recipe": {"preferred_shape": "fields_and_local_types"}},
-        response_region="members",
-    )
-
-    assert shape == "fields_and_local_types"
-    assert parameters is _ATOMIC_FIELDS_AND_TYPES_PARAMETERS
-    assert set(parameters["properties"]) == {"records", "enums", "fields"}
-
+    for preferred in ("fields_and_local_types", "methods_and_constants"):
+        parameters, shape = _atomic_parameters_for_request(
+            {"generation_recipe": {"preferred_shape": preferred}},
+            response_region="members",
+        )
+        assert shape == preferred
+        assert parameters is _ATOMIC_MEMBERS_PARAMETERS
+        assert set(parameters["properties"]) == {
+            "records",
+            "enums",
+            "classes",
+            "fields",
+            "methods",
+            "static_initializers",
+        }
 
 def test_structured_output_exhaustion_becomes_bounded_concern_failure() -> None:
     from minecraft_mod_ai.custom_module_generator import _call_atomic_java_region
@@ -1169,3 +1173,85 @@ def test_structured_output_exhaustion_becomes_bounded_concern_failure() -> None:
             ),
             output_token_ceiling=2048,
         )
+
+
+def test_java_reserved_identifiers_are_canonicalized_consistently() -> None:
+    from minecraft_mod_ai.custom_module_generator import _render_atomic_java_structure
+
+    rendered = _render_atomic_java_structure(
+        {
+            "records": [
+                {
+                    "name": "VariablesRecord",
+                    "components": [
+                        {"type": "String", "name": "name"},
+                        {"type": "String", "name": "default"},
+                    ],
+                    "methods": [
+                        {
+                            "return_type": "String",
+                            "name": "getDefault",
+                            "body": ["return default"],
+                        }
+                    ],
+                }
+            ]
+        },
+        response_region="members",
+    )
+
+    assert "String default" not in rendered
+    assert "String $mmm$default" in rendered
+    assert "return $mmm$default;" in rendered
+
+
+def test_java_keyword_rewrite_does_not_break_switch_default_label() -> None:
+    from minecraft_mod_ai.custom_module_generator import _render_atomic_java_structure
+
+    rendered = _render_atomic_java_structure(
+        {
+            "fields": [{"type": "int", "name": "default", "initializer": "1"}],
+            "methods": [
+                {
+                    "return_type": "int",
+                    "name": "pick",
+                    "parameters": [{"type": "int", "name": "value"}],
+                    "body": [
+                        "switch (value) {",
+                        "default:",
+                        "return default",
+                        "}",
+                    ],
+                }
+            ],
+        },
+        response_region="members",
+    )
+
+    assert "int $mmm$default = 1;" in rendered
+    assert "default:" in rendered
+    assert "return $mmm$default;" in rendered
+
+
+def test_atomic_native_tool_call_does_not_force_legacy_2048_ceiling() -> None:
+    from minecraft_mod_ai.custom_module_generator import _call_atomic_java_region
+
+    captured = {}
+
+    class _Router:
+        def generate_tool_decision(self, role, messages, **kwargs):
+            del role, messages
+            captured.update(kwargs)
+            return {"fields": [{"type": "int", "name": "value"}]}
+
+    rendered = _call_atomic_java_region(
+        _Router(),
+        (
+            {"role": "system", "content": "structured only"},
+            {"role": "user", "content": '{"response_region":"members"}'},
+        ),
+        output_token_ceiling=None,
+    )
+
+    assert rendered == "int value;"
+    assert "output_token_ceiling" not in captured

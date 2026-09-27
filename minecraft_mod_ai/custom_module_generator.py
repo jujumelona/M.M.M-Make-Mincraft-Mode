@@ -498,7 +498,6 @@ _ATOMIC_PARAMETER_SCHEMA: dict[str, Any] = {
         "type": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 240,
             "description": (
                 "Java type. Use a primitive/java.lang type, a type declared in this same "
                 "structured call, a supplied sibling/dependency type, or a fully-qualified "
@@ -506,7 +505,14 @@ _ATOMIC_PARAMETER_SCHEMA: dict[str, Any] = {
                 "host qualifies them."
             ),
         },
-        "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
+        "name": {
+            "type": "string",
+            "pattern": _JAVA_IDENTIFIER_PATTERN,
+            "description": (
+                "Semantic identifier. Java reserved words are accepted here because the host "
+                "canonicalizes them consistently before rendering."
+            ),
+        },
     },
     "required": ["type", "name"],
     "additionalProperties": True,
@@ -516,26 +522,21 @@ _ATOMIC_FIELD_SCHEMA: dict[str, Any] = {
     "properties": {
         "modifiers": {
             "type": "array",
-            "items": {"type": "string", "enum": _ATOMIC_MODIFIER_VALUES},
+            "items": {"type": "string"},
             "uniqueItems": True,
         },
         "type": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 240,
             "description": (
-                "Java field type. Do not invent a domain type without declaring it in "
-                "records/enums/classes in this same call."
+                "Java field type. Concern-owned domain types may be declared in the same "
+                "records/enums/classes payload."
             ),
         },
         "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
         "initializer": {
             "type": "string",
-            "maxLength": 800,
-            "description": (
-                "Initializer expression only, without trailing semicolon. Reference only "
-                "symbols declared in this call or supplied by the host."
-            ),
+            "description": "Initializer expression only, without a trailing semicolon.",
         },
     },
     "required": ["type", "name"],
@@ -546,32 +547,21 @@ _ATOMIC_METHOD_SCHEMA: dict[str, Any] = {
     "properties": {
         "modifiers": {
             "type": "array",
-            "items": {"type": "string", "enum": _ATOMIC_MODIFIER_VALUES},
+            "items": {"type": "string"},
             "uniqueItems": True,
         },
-        "return_type": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 240,
-            "description": (
-                "Java return type. Use void, primitive/java.lang, a locally declared type, "
-                "a supplied dependency type, or a fully-qualified external type."
-            ),
-        },
+        "return_type": {"type": "string", "minLength": 1},
         "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
-        "parameters": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA, "maxItems": 6},
-        "throws": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 160}, "maxItems": 3},
+        "parameters": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA},
+        "throws": {"type": "array", "items": {"type": "string", "minLength": 1}},
         "body": {
             "type": "array",
             "items": {
                 "type": "string",
-                "maxLength": 800,
                 "description": (
-                    "One Java statement or one complete control-flow block inside this method. "
-                    "Do not declare package/import/outer types. Reference only known symbols."
+                    "One Java statement or one complete control-flow block inside this method."
                 ),
             },
-            "maxItems": 10,
         },
     },
     "required": ["return_type", "name"],
@@ -580,9 +570,9 @@ _ATOMIC_METHOD_SCHEMA: dict[str, Any] = {
 _ATOMIC_CONSTRUCTOR_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "parameters": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA, "maxItems": 6},
-        "throws": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 160}, "maxItems": 3},
-        "body": {"type": "array", "items": {"type": "string", "maxLength": 800}, "maxItems": 10},
+        "parameters": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA},
+        "throws": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "body": {"type": "array", "items": {"type": "string"}},
     },
     "required": [],
     "additionalProperties": True,
@@ -590,14 +580,10 @@ _ATOMIC_CONSTRUCTOR_SCHEMA: dict[str, Any] = {
 _ATOMIC_RECORD_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "modifiers": {
-            "type": "array",
-            "items": {"type": "string", "enum": _ATOMIC_MODIFIER_VALUES},
-            "uniqueItems": True,
-        },
+        "modifiers": {"type": "array", "items": {"type": "string"}, "uniqueItems": True},
         "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
-        "components": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA, "maxItems": 8},
-        "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA, "maxItems": 2},
+        "components": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA},
+        "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA},
     },
     "required": ["name"],
     "additionalProperties": True,
@@ -605,16 +591,11 @@ _ATOMIC_RECORD_SCHEMA: dict[str, Any] = {
 _ATOMIC_ENUM_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "modifiers": {
-            "type": "array",
-            "items": {"type": "string", "enum": _ATOMIC_MODIFIER_VALUES},
-            "uniqueItems": True,
-        },
+        "modifiers": {"type": "array", "items": {"type": "string"}, "uniqueItems": True},
         "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
         "constants": {
             "type": "array",
             "items": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
-            "minItems": 1,
             "uniqueItems": True,
         },
     },
@@ -624,15 +605,11 @@ _ATOMIC_ENUM_SCHEMA: dict[str, Any] = {
 _ATOMIC_CLASS_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "modifiers": {
-            "type": "array",
-            "items": {"type": "string", "enum": _ATOMIC_MODIFIER_VALUES},
-            "uniqueItems": True,
-        },
+        "modifiers": {"type": "array", "items": {"type": "string"}, "uniqueItems": True},
         "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
-        "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA, "maxItems": 8},
-        "constructors": {"type": "array", "items": _ATOMIC_CONSTRUCTOR_SCHEMA, "maxItems": 2},
-        "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA, "maxItems": 4},
+        "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA},
+        "constructors": {"type": "array", "items": _ATOMIC_CONSTRUCTOR_SCHEMA},
+        "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA},
     },
     "required": ["name"],
     "additionalProperties": True,
@@ -640,62 +617,29 @@ _ATOMIC_CLASS_SCHEMA: dict[str, Any] = {
 _ATOMIC_MEMBERS_PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "records": {"type": "array", "items": _ATOMIC_RECORD_SCHEMA, "maxItems": 6},
-        "enums": {"type": "array", "items": _ATOMIC_ENUM_SCHEMA, "maxItems": 4},
-        "classes": {"type": "array", "items": _ATOMIC_CLASS_SCHEMA, "maxItems": 2},
-        "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA, "maxItems": 12},
-        "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA, "maxItems": 4},
+        "records": {"type": "array", "items": _ATOMIC_RECORD_SCHEMA},
+        "enums": {"type": "array", "items": _ATOMIC_ENUM_SCHEMA},
+        "classes": {"type": "array", "items": _ATOMIC_CLASS_SCHEMA},
+        "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA},
+        "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA},
         "static_initializers": {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {
-                    "body": {
-                        "type": "array",
-                        "items": {"type": "string", "maxLength": 800},
-                        "maxItems": 10,
-                    }
-                },
+                "properties": {"body": {"type": "array", "items": {"type": "string"}}},
                 "required": [],
                 "additionalProperties": True,
             },
         },
     },
     "required": [],
-    "additionalProperties": False,
+    "additionalProperties": True,
 }
 _ATOMIC_INITIALIZE_PARAMETERS: dict[str, Any] = {
     "type": "object",
-    "properties": {
-        "statements": {
-            "type": "array",
-            "items": {"type": "string", "maxLength": 800},
-            "maxItems": 12,
-        }
-    },
+    "properties": {"statements": {"type": "array", "items": {"type": "string"}}},
     "required": [],
-    "additionalProperties": False,
-}
-
-
-_ATOMIC_FIELDS_AND_TYPES_PARAMETERS: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "records": {"type": "array", "items": _ATOMIC_RECORD_SCHEMA, "maxItems": 6},
-        "enums": {"type": "array", "items": _ATOMIC_ENUM_SCHEMA, "maxItems": 4},
-        "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA, "maxItems": 12},
-    },
-    "required": [],
-    "additionalProperties": False,
-}
-_ATOMIC_METHODS_AND_CONSTANTS_PARAMETERS: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA, "maxItems": 8},
-        "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA, "maxItems": 4},
-    },
-    "required": [],
-    "additionalProperties": False,
+    "additionalProperties": True,
 }
 
 
@@ -706,17 +650,14 @@ def _atomic_parameters_for_request(
 ) -> tuple[dict[str, Any], str]:
     if response_region == "initialize":
         return _ATOMIC_INITIALIZE_PARAMETERS, "initialize_statements"
-
     recipe = payload.get("generation_recipe")
     preferred = (
         str(recipe.get("preferred_shape") or "").strip()
         if isinstance(recipe, Mapping)
         else ""
     )
-    if preferred == "fields_and_local_types":
-        return _ATOMIC_FIELDS_AND_TYPES_PARAMETERS, preferred
-    if preferred == "methods_and_constants":
-        return _ATOMIC_METHODS_AND_CONSTANTS_PARAMETERS, preferred
+    # Preferred shape is guidance only. The native tool schema remains capable of
+    # expressing any valid concern-local helper needed by the model.
     return _ATOMIC_MEMBERS_PARAMETERS, preferred or "smallest_components"
 
 
@@ -744,6 +685,224 @@ _COMMON_JAVA_NAMES = {
     "AtomicLong": "java.util.concurrent.atomic.AtomicLong",
 }
 _IDENTIFIER_TOKEN = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
+
+_JAVA_RESERVED_IDENTIFIERS = frozenset(
+    {
+        "_",
+        "abstract",
+        "assert",
+        "boolean",
+        "break",
+        "byte",
+        "case",
+        "catch",
+        "char",
+        "class",
+        "const",
+        "continue",
+        "default",
+        "do",
+        "double",
+        "else",
+        "enum",
+        "exports",
+        "extends",
+        "false",
+        "final",
+        "finally",
+        "float",
+        "for",
+        "goto",
+        "if",
+        "implements",
+        "import",
+        "instanceof",
+        "int",
+        "interface",
+        "long",
+        "module",
+        "native",
+        "new",
+        "non-sealed",
+        "null",
+        "open",
+        "opens",
+        "package",
+        "permits",
+        "private",
+        "protected",
+        "provides",
+        "public",
+        "record",
+        "requires",
+        "return",
+        "sealed",
+        "short",
+        "static",
+        "strictfp",
+        "super",
+        "switch",
+        "synchronized",
+        "this",
+        "throw",
+        "throws",
+        "to",
+        "transient",
+        "transitive",
+        "true",
+        "try",
+        "uses",
+        "var",
+        "void",
+        "volatile",
+        "when",
+        "while",
+        "with",
+        "yield",
+    }
+)
+
+
+def _canonical_java_identifier(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "$mmm$unnamed"
+    cleaned = re.sub(r"[^A-Za-z0-9_$]", "_", raw)
+    if not cleaned or cleaned[0].isdigit():
+        cleaned = "$mmm$" + cleaned
+    if cleaned in _JAVA_RESERVED_IDENTIFIERS:
+        cleaned = "$mmm$" + cleaned.replace("-", "_")
+    return cleaned
+
+
+def _java_identifier_renames(decision: Mapping[str, Any]) -> dict[str, str]:
+    """Build one deterministic spelling map for model-declared Java identifiers."""
+
+    names: set[str] = set()
+
+    def add(raw: Any) -> None:
+        value = str(raw or "").strip()
+        if value:
+            names.add(value)
+
+    def visit_parameters(raw: Any) -> None:
+        for item in raw if isinstance(raw, Sequence) else ():
+            if isinstance(item, Mapping):
+                add(item.get("name"))
+
+    def visit_methods(raw: Any) -> None:
+        for item in raw if isinstance(raw, Sequence) else ():
+            if not isinstance(item, Mapping):
+                continue
+            add(item.get("name"))
+            visit_parameters(item.get("parameters") or [])
+
+    for item in decision.get("records") or []:
+        if isinstance(item, Mapping):
+            add(item.get("name"))
+            visit_parameters(item.get("components") or [])
+            visit_methods(item.get("methods") or [])
+    for item in decision.get("enums") or []:
+        if isinstance(item, Mapping):
+            add(item.get("name"))
+            for constant in item.get("constants") or []:
+                add(constant)
+    for item in decision.get("classes") or []:
+        if not isinstance(item, Mapping):
+            continue
+        add(item.get("name"))
+        for field in item.get("fields") or []:
+            if isinstance(field, Mapping):
+                add(field.get("name"))
+        for constructor in item.get("constructors") or []:
+            if isinstance(constructor, Mapping):
+                visit_parameters(constructor.get("parameters") or [])
+        visit_methods(item.get("methods") or [])
+    for field in decision.get("fields") or []:
+        if isinstance(field, Mapping):
+            add(field.get("name"))
+    visit_methods(decision.get("methods") or [])
+
+    renames: dict[str, str] = {}
+    for raw in sorted(names):
+        canonical = _canonical_java_identifier(raw)
+        if canonical != raw:
+            renames[raw] = canonical
+    return renames
+
+
+def _rewrite_java_identifiers(value: Any, renames: Mapping[str, str]) -> str:
+    """Rewrite declared identifier spellings outside literals/comments."""
+
+    source = str(value or "")
+    if not renames:
+        return source
+    out: list[str] = []
+    index = 0
+    quote = ""
+    line_comment = False
+    block_comment = False
+    while index < len(source):
+        ch = source[index]
+        nxt = source[index + 1] if index + 1 < len(source) else ""
+        if line_comment:
+            out.append(ch)
+            if ch == "\n":
+                line_comment = False
+            index += 1
+            continue
+        if block_comment:
+            out.append(ch)
+            if ch == "*" and nxt == "/":
+                out.append(nxt)
+                index += 2
+                block_comment = False
+            else:
+                index += 1
+            continue
+        if quote:
+            out.append(ch)
+            if ch == "\\" and index + 1 < len(source):
+                out.append(source[index + 1])
+                index += 2
+                continue
+            if ch == quote:
+                quote = ""
+            index += 1
+            continue
+        if ch in {'"', "'"}:
+            quote = ch
+            out.append(ch)
+            index += 1
+            continue
+        if ch == "/" and nxt == "/":
+            out.extend((ch, nxt))
+            index += 2
+            line_comment = True
+            continue
+        if ch == "/" and nxt == "*":
+            out.extend((ch, nxt))
+            index += 2
+            block_comment = True
+            continue
+        match = _IDENTIFIER_TOKEN.match(source, index)
+        if match is None:
+            out.append(ch)
+            index += 1
+            continue
+        token = match.group(0)
+        replacement = renames.get(token)
+        if replacement is not None:
+            # Preserve Java's switch keyword when a semantic field/component happened
+            # to use the same source word "default".
+            tail = source[match.end():].lstrip()
+            if token == "default" and tail.startswith((':', '->')):
+                replacement = None
+        out.append(replacement if replacement is not None else token)
+        index = match.end()
+    return "".join(out)
+
+
 
 
 def _atomic_request_payload(messages: Sequence[Mapping[str, str]]) -> dict[str, Any]:
@@ -838,21 +997,34 @@ def _java_modifiers(raw: Any, *, kind: str) -> str:
     return " ".join(item for item in allowed if item in requested)
 
 
-def _java_parameters(raw: Any) -> str:
+
+def _java_parameters(raw: Any, *, renames: Mapping[str, str] | None = None) -> str:
+    active = renames or {}
     result: list[str] = []
     for item in raw if isinstance(raw, Sequence) else ():
         if not isinstance(item, Mapping):
             continue
-        java_type = _qualify_common_java_names(str(item.get("type") or "").strip())
-        name = str(item.get("name") or "").strip()
+        java_type = _qualify_common_java_names(
+            _rewrite_java_identifiers(str(item.get("type") or "").strip(), active)
+        )
+        raw_name = str(item.get("name") or "").strip()
+        name = active.get(raw_name, _canonical_java_identifier(raw_name))
         result.append(f"{java_type} {name}")
     return ", ".join(result)
 
 
-def _java_body_lines(raw: Any, *, indent: str) -> list[str]:
+def _java_body_lines(
+    raw: Any,
+    *,
+    indent: str,
+    renames: Mapping[str, str] | None = None,
+) -> list[str]:
+    active = renames or {}
     rows: list[str] = []
     for item in raw if isinstance(raw, Sequence) else ():
-        text = _qualify_common_java_names(str(item or "").strip())
+        text = _qualify_common_java_names(
+            _rewrite_java_identifiers(str(item or "").strip(), active)
+        )
         if not text:
             continue
         if (
@@ -866,40 +1038,72 @@ def _java_body_lines(raw: Any, *, indent: str) -> list[str]:
     return rows
 
 
-def _render_method(item: Mapping[str, Any], *, indent: str = "") -> str:
+def _render_method(
+    item: Mapping[str, Any],
+    *,
+    indent: str = "",
+    renames: Mapping[str, str] | None = None,
+) -> str:
+    active = renames or {}
     modifiers = _java_modifiers(item.get("modifiers") or [], kind="method")
     prefix = (modifiers + " ") if modifiers else ""
-    return_type = _qualify_common_java_names(str(item.get("return_type") or "").strip())
-    name = str(item.get("name") or "").strip()
-    params = _java_parameters(item.get("parameters") or [])
+    return_type = _qualify_common_java_names(
+        _rewrite_java_identifiers(str(item.get("return_type") or "").strip(), active)
+    )
+    raw_name = str(item.get("name") or "").strip()
+    name = active.get(raw_name, _canonical_java_identifier(raw_name))
+    params = _java_parameters(item.get("parameters") or [], renames=active)
     throws = [
-        _qualify_common_java_names(str(value).strip())
+        _qualify_common_java_names(
+            _rewrite_java_identifiers(str(value).strip(), active)
+        )
         for value in item.get("throws") or []
         if str(value).strip()
     ]
     header = f"{indent}{prefix}{return_type} {name}({params})"
     if throws:
         header += " throws " + ", ".join(throws)
-    body = _java_body_lines(item.get("body") or [], indent=indent + "    ")
+    body = _java_body_lines(
+        item.get("body") or [],
+        indent=indent + "    ",
+        renames=active,
+    )
     return "\n".join([header + " {", *body, indent + "}"])
 
 
-def _render_field(item: Mapping[str, Any], *, indent: str = "") -> str:
+def _render_field(
+    item: Mapping[str, Any],
+    *,
+    indent: str = "",
+    renames: Mapping[str, str] | None = None,
+) -> str:
+    active = renames or {}
     modifiers = _java_modifiers(item.get("modifiers") or [], kind="field")
     prefix = (modifiers + " ") if modifiers else ""
-    java_type = _qualify_common_java_names(str(item.get("type") or "").strip())
-    name = str(item.get("name") or "").strip()
-    initializer = _qualify_common_java_names(str(item.get("initializer") or "").strip())
+    java_type = _qualify_common_java_names(
+        _rewrite_java_identifiers(str(item.get("type") or "").strip(), active)
+    )
+    raw_name = str(item.get("name") or "").strip()
+    name = active.get(raw_name, _canonical_java_identifier(raw_name))
+    initializer = _qualify_common_java_names(
+        _rewrite_java_identifiers(str(item.get("initializer") or "").strip(), active)
+    )
     suffix = f" = {initializer}" if initializer else ""
     return f"{indent}{prefix}{java_type} {name}{suffix};"
 
 
-def _render_record(item: Mapping[str, Any]) -> str:
+def _render_record(
+    item: Mapping[str, Any],
+    *,
+    renames: Mapping[str, str] | None = None,
+) -> str:
+    active = renames or {}
     prefix = "private "
-    name = str(item.get("name") or "").strip()
-    components = _java_parameters(item.get("components") or [])
+    raw_name = str(item.get("name") or "").strip()
+    name = active.get(raw_name, _canonical_java_identifier(raw_name))
+    components = _java_parameters(item.get("components") or [], renames=active)
     methods = [
-        _render_method(method, indent="    ")
+        _render_method(method, indent="    ", renames=active)
         for method in item.get("methods") or []
         if isinstance(method, Mapping)
     ]
@@ -908,28 +1112,45 @@ def _render_record(item: Mapping[str, Any]) -> str:
     return "\n".join([f"{prefix}record {name}({components}) {{", *methods, "}"])
 
 
-def _render_enum(item: Mapping[str, Any]) -> str:
+def _render_enum(
+    item: Mapping[str, Any],
+    *,
+    renames: Mapping[str, str] | None = None,
+) -> str:
+    active = renames or {}
     prefix = "private "
-    name = str(item.get("name") or "").strip()
-    constants = ", ".join(str(value) for value in item.get("constants") or [])
+    raw_name = str(item.get("name") or "").strip()
+    name = active.get(raw_name, _canonical_java_identifier(raw_name))
+    constants = ", ".join(
+        active.get(str(value), _canonical_java_identifier(value))
+        for value in item.get("constants") or []
+    )
     return f"{prefix}enum {name} {{ {constants} }}"
 
 
-def _render_nested_class(item: Mapping[str, Any]) -> str:
+def _render_nested_class(
+    item: Mapping[str, Any],
+    *,
+    renames: Mapping[str, str] | None = None,
+) -> str:
+    active = renames or {}
     prefix = "private static "
-    name = str(item.get("name") or "").strip()
+    raw_name = str(item.get("name") or "").strip()
+    name = active.get(raw_name, _canonical_java_identifier(raw_name))
     rows = [f"{prefix}class {name} {{"]
     rows.extend(
-        _render_field(field, indent="    ")
+        _render_field(field, indent="    ", renames=active)
         for field in item.get("fields") or []
         if isinstance(field, Mapping)
     )
     for constructor in item.get("constructors") or []:
         if not isinstance(constructor, Mapping):
             continue
-        params = _java_parameters(constructor.get("parameters") or [])
+        params = _java_parameters(constructor.get("parameters") or [], renames=active)
         throws = [
-            _qualify_common_java_names(str(value).strip())
+            _qualify_common_java_names(
+                _rewrite_java_identifiers(str(value).strip(), active)
+            )
             for value in constructor.get("throws") or []
             if str(value).strip()
         ]
@@ -937,10 +1158,16 @@ def _render_nested_class(item: Mapping[str, Any]) -> str:
         if throws:
             header += " throws " + ", ".join(throws)
         rows.append(header + " {")
-        rows.extend(_java_body_lines(constructor.get("body") or [], indent="        "))
+        rows.extend(
+            _java_body_lines(
+                constructor.get("body") or [],
+                indent="        ",
+                renames=active,
+            )
+        )
         rows.append("    }")
     rows.extend(
-        _render_method(method, indent="    ")
+        _render_method(method, indent="    ", renames=active)
         for method in item.get("methods") or []
         if isinstance(method, Mapping)
     )
@@ -954,51 +1181,34 @@ def _render_atomic_java_structure(
     response_region: str,
 ) -> str:
     if response_region == "initialize":
-        unknown = set(decision) - {"statements"}
-        if unknown:
-            raise CustomModuleGenerationError(
-                "ATOMIC_CONCERN_RESPONSE_INVALID: initialize structure has unexpected fields: "
-                + ", ".join(sorted(unknown))
-            )
-        return "\n".join(_java_body_lines(decision.get("statements") or [], indent="")).strip()
+        return "\n".join(
+            _java_body_lines(decision.get("statements") or [], indent="")
+        ).strip()
 
-    expected = {
-        "records",
-        "enums",
-        "classes",
-        "fields",
-        "methods",
-        "static_initializers",
-    }
-    unknown = set(decision) - expected
-    if unknown:
-        raise CustomModuleGenerationError(
-            "ATOMIC_CONCERN_RESPONSE_INVALID: member structure has unexpected fields: "
-            + ", ".join(sorted(unknown))
-        )
+    renames = _java_identifier_renames(decision)
     rows: list[str] = []
     rows.extend(
-        _render_record(item)
+        _render_record(item, renames=renames)
         for item in decision.get("records") or []
         if isinstance(item, Mapping)
     )
     rows.extend(
-        _render_enum(item)
+        _render_enum(item, renames=renames)
         for item in decision.get("enums") or []
         if isinstance(item, Mapping)
     )
     rows.extend(
-        _render_nested_class(item)
+        _render_nested_class(item, renames=renames)
         for item in decision.get("classes") or []
         if isinstance(item, Mapping)
     )
     rows.extend(
-        _render_field(item)
+        _render_field(item, renames=renames)
         for item in decision.get("fields") or []
         if isinstance(item, Mapping)
     )
     rows.extend(
-        _render_method(item)
+        _render_method(item, renames=renames)
         for item in decision.get("methods") or []
         if isinstance(item, Mapping)
     )
@@ -1009,13 +1219,16 @@ def _render_atomic_java_structure(
             "\n".join(
                 [
                     "static {",
-                    *_java_body_lines(initializer.get("body") or [], indent="    "),
+                    *_java_body_lines(
+                        initializer.get("body") or [],
+                        indent="    ",
+                        renames=renames,
+                    ),
                     "}",
                 ]
             )
         )
     return "\n\n".join(row for row in rows if row.strip()).strip()
-
 
 def _call_atomic_java_region(
     router: Any,
@@ -1051,9 +1264,10 @@ def _call_atomic_java_region(
         "parameters": parameters,
         "description": (
             f"Generate concern {concern_name or '<selected>'} correctly on the first pass "
-            f"using structured Java components only. Preferred shape: "
-            f"{schema_shape}. Keep the call minimal; do not generate optional helper "
-            "components unless this concern directly requires them. "
+            f"using the model's native required tool call with structured Java components. "
+            f"Preferred shape: {schema_shape}. This is guidance, not a restriction: include "
+            "any concern-local helper records/enums/classes/fields/methods that are actually "
+            "needed for correct Java. "
             "Declare every concern-owned helper/domain type in this same call before "
             "referencing it. Omit categories you do not need; do not emit empty arrays just "
             "to satisfy the schema. The host renders Java syntax and qualifies common JDK "
@@ -1299,7 +1513,6 @@ def _run_atomic_ir_generation(
     from .atomic_concern_source import AtomicConcernExecutor
     from .implementation_graph_execution import public_api_errors
 
-    atomic_output_ceiling = _atomic_concern_output_token_ceiling()
     executor = AtomicConcernExecutor(
         root=context.root,
         target=context.target,
@@ -1315,7 +1528,6 @@ def _run_atomic_ir_generation(
         call_coder=lambda messages: _call_coder(
             generator.router,
             messages,
-            output_token_ceiling=atomic_output_ceiling,
             structured_java_region=True,
         ),
         compile_java=context.compiler.compile_java,
