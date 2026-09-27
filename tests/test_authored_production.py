@@ -251,7 +251,6 @@ def test_fresh_authored_document_sections_are_provenance_not_source_units():
     assert "AuthoredFeature" not in json.dumps(manifest)
 
 
-
 def test_nested_authored_behavior_reaches_ir_without_loss():
     text = "# Trading\n## Trigger\nTrade for 10 credits.\n## State\nPersist credits.\n# Travel\nSpend 20 credits.\n## Failure\nKeep balance unchanged."
     proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(AuthoredPlan("Fabric 1.21.11 mod", text))
@@ -577,3 +576,62 @@ def test_worksheet_with_supplementary_section_is_not_split_into_feature_classes(
         "## 추가 설명\nPreserve this custom design note.\n"
     )
     assert _contract_shaped_authored_design(text)
+
+
+def test_orphan_reasoning_close_before_canonical_design_is_projected() -> None:
+    prefix = (
+        "## behavior_contract\n"
+        "... list ...\n"
+        "## state_model\n"
+        "... list ...\n"
+        "etc.\n\n"
+        "I need to make sure I use these exact headers.\n"
+        "Okay, ready to write.\n"
+        "</think>\n\n"
+    )
+    design = (
+        "# 우주 제국 (Space Frontier) 모드 디자인 문서\n\n"
+        "## behavior_contract\nBuild ships.\n"
+        "## state_model\nPersist credits.\n"
+        "## algorithm\nCalculate launch requirements.\n"
+        "## integration\nBind server events.\n"
+        "## authority_and_network\nServer validates actions.\n"
+        "## persistence\nSave player state.\n"
+        "## resources_and_ui\nRender trade UI.\n"
+        "## failure_and_limits\nReject invalid launch.\n"
+        "## reuse_assessment\nReuse host APIs.\n"
+        "## verification\nCompile and test.\n"
+    )
+    plan = AuthoredPlan("space mod", prefix + design)
+
+    projected, provenance = _implementation_authored_plan(plan)
+
+    assert projected.text == design
+    assert provenance is not None
+    assert provenance["stripped_prefix_bytes"] == len(prefix.encode("utf-8"))
+
+
+def test_inline_or_fenced_reasoning_close_is_preserved() -> None:
+    inline = (
+        "# Manual\n"
+        "The literal token </think> is shown to players.\n"
+        "## behavior_contract\nBuild ships.\n"
+        "## state_model\nPersist credits.\n"
+        "## algorithm\nCalculate launch requirements.\n"
+        "## integration\nBind server events.\n"
+    )
+    fenced = (
+        "```text\n"
+        "</think>\n"
+        "```\n"
+        "## behavior_contract\nBuild ships.\n"
+        "## state_model\nPersist credits.\n"
+        "## algorithm\nCalculate launch requirements.\n"
+        "## integration\nBind server events.\n"
+    )
+
+    for source in (inline, fenced):
+        plan = AuthoredPlan("space mod", source)
+        projected, provenance = _implementation_authored_plan(plan)
+        assert projected is plan
+        assert provenance is None

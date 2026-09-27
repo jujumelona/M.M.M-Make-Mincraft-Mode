@@ -355,6 +355,62 @@ def _authored_block_implementation_text(block: str, section: str) -> str:
     return block
 
 
+def _orphan_reasoning_close_projection_start(text: str) -> int:
+    """Recover a final authored suffix after a standalone leaked reasoning close tag.
+
+    Some model transports can drop the opening <think>/<analysis> token while preserving
+    the closing token and the final answer. Only treat that as an envelope when the close
+    tag is a standalone line outside Markdown fences and the suffix contains a substantial
+    canonical authored contract. This keeps quoted/inline tags in user-authored prose intact.
+    """
+
+    from .authored_ir_parser import authored_section_id
+
+    lines = str(text or "").splitlines(keepends=True)
+    fence = ""
+    offset = 0
+    candidates: list[int] = []
+    for line in lines:
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if fence:
+            if (
+                marker
+                and marker[1][0] == fence[0]
+                and len(marker[1]) >= len(fence)
+                and not line[marker.end():].strip()
+            ):
+                fence = ""
+            offset += len(line)
+            continue
+        if marker:
+            fence = marker[1]
+            offset += len(line)
+            continue
+        if re.fullmatch(r"\s*</(?:think|analysis)>\s*(?:\r?\n)?", line, re.IGNORECASE):
+            candidates.append(offset + len(line))
+        offset += len(line)
+
+    for raw_start in reversed(candidates):
+        start = raw_start
+        while start < len(text) and text[start] in " \t\r\n":
+            start += 1
+        suffix = text[start:]
+        if not suffix:
+            continue
+        sections = [
+            authored_section_id(title)
+            for _line, _depth, title in _authored_heading_records(suffix)[1]
+        ]
+        canonical = [section for section in sections if section]
+        distinct = tuple(dict.fromkeys(canonical))
+        if (
+            len(distinct) >= 4
+            and "behavior_contract" in distinct
+            and "state_model" in distinct
+        ):
+            return start
+    return 0
+
 def _implementation_authored_plan(plan: AuthoredPlan) -> tuple[AuthoredPlan, dict[str, Any] | None]:
     """Project a delimited final design without interpreting or rewriting its content.
 
@@ -408,6 +464,8 @@ def _implementation_authored_plan(plan: AuthoredPlan) -> tuple[AuthoredPlan, dic
                         start += offset
                         break
             offset += len(line)
+    if not start:
+        start = _orphan_reasoning_close_projection_start(text)
     if not start or not text[start:].strip():
         return plan, None
     prefix = text[:start]
