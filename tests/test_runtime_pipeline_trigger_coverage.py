@@ -3,12 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CRITICAL_RUNTIME_PATHS = (
+MODEL_RUNTIME_PATHS = (
     "minecraft_mod_ai/llama_*.py",
     "minecraft_mod_ai/qwen*.py",
     "minecraft_mod_ai/generation_output_budget.py",
     "minecraft_mod_ai/model_context_budget.py",
     "minecraft_mod_ai/model_output_atomicity_contract.py",
+)
+SOURCE_OWNED_RUNTIME_PATHS = (
     "minecraft_mod_ai/acceptance_contracts.py",
     "minecraft_mod_ai/quality_evidence.py",
     "minecraft_mod_ai/evidence_first_planning.py",
@@ -19,6 +21,7 @@ CRITICAL_RUNTIME_PATHS = (
     "minecraft_mod_ai/extended_registration_contract.py",
 )
 DEEP_SOFTWARE_GATE_PATHS = (
+    *SOURCE_OWNED_RUNTIME_PATHS,
     "tools/verify_integrity_minecraft.py",
     "tests/test_implementation_ir.py",
     "minecraft_mod_ai/performance_final_tuning.py",
@@ -43,16 +46,16 @@ def _text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_critical_runtime_changes_reach_end_to_end_gates() -> None:
+def test_model_runtime_changes_reach_real_model_and_software_gates() -> None:
     for workflow in PUSH_GATES:
         text = _text(workflow)
         assert "push:" in text, workflow
         assert "branches: [main]" in text, workflow
-        for path in CRITICAL_RUNTIME_PATHS:
+        for path in MODEL_RUNTIME_PATHS:
             assert path in text, f"{workflow} missing {path}"
 
 
-def test_integrity_and_ir_changes_reenter_deep_software_gates() -> None:
+def test_source_owned_and_integrity_changes_reenter_deep_software_gates() -> None:
     for workflow in SOFTWARE_GATES:
         text = _text(workflow)
         for path in DEEP_SOFTWARE_GATE_PATHS:
