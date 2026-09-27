@@ -492,6 +492,43 @@ def _member_declaration_symbols(value: str) -> dict[str, str]:
     return symbols
 
 
+
+def _member_type_kinds(value: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for chunk in _top_level_member_chunks(value):
+        flat = re.sub(r"\s+", " ", _structure_scan(chunk)).strip()
+        match = re.search(
+            r"\b(class|interface|enum|record)\s+([A-Za-z_$][A-Za-z0-9_$]*)\b",
+            flat,
+        )
+        if match:
+            result[match.group(2)] = match.group(1)
+    return result
+
+
+def _repair_type_structure_error(previous: str, candidate: str) -> str:
+    before = _member_type_kinds(previous)
+    after = _member_type_kinds(candidate)
+    added = sorted(set(after) - set(before))
+    changed = sorted(
+        name
+        for name in set(before) & set(after)
+        if before[name] != after[name]
+    )
+    if not added and not changed:
+        return ""
+    parts: list[str] = []
+    if added:
+        parts.append("new nested types=" + ",".join(added))
+    if changed:
+        parts.append(
+            "changed nested type kinds="
+            + ",".join(
+                f"{name}:{before[name]}->{after[name]}" for name in changed
+            )
+        )
+    return "; ".join(parts)
+
 _JAVA_LANG_SIMPLE_TYPES = frozenset(
     {
         "Appendable",
@@ -1189,13 +1226,15 @@ def _messages(
     response_region: str,
     failure: str = "",
     sibling_concerns: Sequence[str] = (),
+    host_symbol: str = "",
 ) -> list[dict[str, str]]:
     name = _slug(concern.get("concern"))
     if response_region == "members":
         response_contract = (
             "Call emit_java_structure exactly once. Do not write a Java region string. "
-            "Describe this concern using the tool's records, enums, classes, fields, methods, "
-            "and static_initializers arrays. The host owns Java syntax and renders those parts. "
+            "Use only the structured categories exposed by the required tool schema for this "
+            "concern. The host owns Java syntax and renders those parts. Logic concerns are "
+            "intentionally denied nested-type categories; do not work around that restriction. "
             "Every concern-owned domain type you reference must be declared in records/enums/classes "
             "in the same tool call unless it already exists in available_sibling_api or dependency_api. "
             "If this concern needs state not present in available_sibling_api, declare the minimal "
@@ -1237,6 +1276,7 @@ def _messages(
         "phase": "implement_atomic_concern_region",
         "section": section,
         "response_region": response_region,
+        "host_selected_class": str(host_symbol or "").strip(),
         "concern": {
             "sequence": concern.get("sequence"),
             "identifier": concern.get("identifier"),
@@ -1299,6 +1339,7 @@ def _messages(
                 if name in {
                     "transitions",
                     "invariants",
+                    "initialization",
                     "updates",
                     "cleanup",
                     "concurrency",
@@ -1326,6 +1367,12 @@ def _messages(
                 "Implement only the selected concern and only the lines in "
                 "task_authority.source_requirements. Do not pre-implement sibling concerns. "
                 "The host owns declaration deduplication and sibling bookkeeping."
+            ),
+            "repair_structure_rule": (
+                "Compiler repair may remove or edit existing nested types but must not add, "
+                "rename, or change the kind of nested types."
+                if failure
+                else None
             ),
         },
     }
@@ -1541,6 +1588,7 @@ class AtomicConcernExecutor:
                         for item in self.ordered
                         if _slug(item["concern"]) != name
                     ),
+                    host_symbol=self.symbol,
                 ))
                 output_text = str(output or "")
                 output_sha = hashlib.sha256(output_text.encode("utf-8")).hexdigest()
@@ -1548,12 +1596,28 @@ class AtomicConcernExecutor:
                     output,
                     response_region=response_region,
                 )
+                if failure and response_region == "members":
+                    previous_region = _region_content(
+                        self.source,
+                        concern=name,
+                        region="MEMBERS",
+                    )
+                    structure_error = _repair_type_structure_error(
+                        previous_region,
+                        parsed,
+                    )
+                    if structure_error:
+                        raise CustomModuleGenerationError(
+                            "ATOMIC_CONCERN_REPAIR_STRUCTURE_ESCAPE: "
+                            + structure_error
+                        )
             except CustomModuleGenerationError as exc:
                 reason = str(exc).split("\n", 1)[0]
                 recoverable = reason.startswith(
                     (
                         "ATOMIC_CONCERN_RESPONSE_INVALID:",
                         "ATOMIC_CONCERN_SCOPE_ESCAPE:",
+                        "ATOMIC_CONCERN_REPAIR_STRUCTURE_ESCAPE:",
                         "ATOMIC_CONCERN_SYMBOL_COLLISION:",
                         "ATOMIC_CONCERN_OUTPUT_EXHAUSTED:",
                     )
@@ -1614,7 +1678,8 @@ class AtomicConcernExecutor:
                     + reason
                     + f"\nRegenerate only the {response_region} region. "
                     "Do not emit response markers, prose, package/import/top-level/lifecycle declarations. "
-                    "Private nested helper types are allowed in members regions. "
+                    "Do not introduce, rename, or change the kind of nested types during compiler repair. "
+                    "Fix fields, method signatures, modifiers, expressions, and method bodies in place. "
                     "Implement only this concern; do not add declarations for sibling concerns. "
                     "The host will reconcile declarations emitted earlier by another concern. "
                     "Emit executable Java only; no analysis, reasoning, plans, or Markdown commentary."

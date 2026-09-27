@@ -624,6 +624,28 @@ _ATOMIC_MEMBERS_PARAMETERS: dict[str, Any] = {
     "required": [],
     "additionalProperties": True,
 }
+_ATOMIC_LOGIC_MEMBERS_PARAMETERS: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA},
+        "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA},
+        "static_initializers": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"body": {"type": "array", "items": {"type": "string"}}},
+                "required": [],
+                "additionalProperties": True,
+            },
+        },
+    },
+    "required": [],
+    "additionalProperties": False,
+}
+_ATOMIC_TYPE_OWNING_CONCERNS = frozenset(
+    {"variables", "inputs", "outputs", "stored_state", "payloads"}
+)
+
 _ATOMIC_INITIALIZE_PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {"statements": {"type": "array", "items": {"type": "string"}}},
@@ -645,8 +667,17 @@ def _atomic_parameters_for_request(
         if isinstance(recipe, Mapping)
         else ""
     )
-    # Preferred shape is guidance only. The native tool schema remains capable of
-    # expressing any valid concern-local helper needed by the model.
+    concern = payload.get("concern")
+    concern_name = (
+        str(concern.get("name") or "").strip()
+        if isinstance(concern, Mapping)
+        else ""
+    )
+    if concern_name and concern_name not in _ATOMIC_TYPE_OWNING_CONCERNS:
+        return (
+            _ATOMIC_LOGIC_MEMBERS_PARAMETERS,
+            preferred or "logic_fields_methods_only",
+        )
     return _ATOMIC_MEMBERS_PARAMETERS, preferred or "smallest_components"
 
 
@@ -1081,20 +1112,56 @@ def _render_field(
     return f"{indent}{prefix}{java_type} {name}{suffix};"
 
 
+def _erase_java_generic_arguments(value: str) -> str:
+    result: list[str] = []
+    depth = 0
+    for char in str(value or ""):
+        if char == "<":
+            depth += 1
+            continue
+        if char == ">" and depth:
+            depth -= 1
+            continue
+        if depth == 0:
+            result.append(char)
+    return "".join(result)
+
+
+def _constructor_signature(item: Mapping[str, Any]) -> tuple[str, ...]:
+    result: list[str] = []
+    for parameter in item.get("parameters") or []:
+        if not isinstance(parameter, Mapping):
+            continue
+        java_type = re.sub(
+            r"\s+",
+            "",
+            str(parameter.get("type") or "").strip(),
+        )
+        result.append(_erase_java_generic_arguments(java_type))
+    return tuple(result)
+
+
 def _constructor_entries(item: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    result = [
+    candidates: list[Mapping[str, Any]] = [
         value
         for value in item.get("constructors") or []
         if isinstance(value, Mapping)
     ]
-    result.extend(
+    candidates.extend(
         value
         for value in item.get("methods") or []
         if isinstance(value, Mapping)
         and str(value.get("name") or "").strip() == "<init>"
     )
+    result: list[Mapping[str, Any]] = []
+    seen: set[tuple[str, ...]] = set()
+    for value in candidates:
+        signature = _constructor_signature(value)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        result.append(value)
     return result
-
 
 def _ordinary_method_entries(item: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     return [
@@ -1291,16 +1358,68 @@ def _render_nested_class(
     rows.append("}")
     return "\n".join(rows)
 
+def _validate_atomic_type_namespace(
+    decision: Mapping[str, Any],
+    *,
+    reserved_type_names: Sequence[str] = (),
+) -> None:
+    reserved = {
+        _canonical_java_identifier(value)
+        for value in reserved_type_names
+        if str(value or "").strip()
+    }
+    seen: dict[str, str] = {}
+    for category, kind in (
+        ("records", "record"),
+        ("enums", "enum"),
+        ("classes", "class"),
+    ):
+        for item in decision.get(category) or []:
+            if not isinstance(item, Mapping):
+                continue
+            name = _canonical_java_identifier(item.get("name"))
+            if name in reserved:
+                raise CustomModuleGenerationError(
+                    "ATOMIC_CONCERN_SCOPE_ESCAPE: nested type "
+                    f"{name!r} collides with the host-selected outer class."
+                )
+            previous = seen.get(name)
+            if previous is not None:
+                raise CustomModuleGenerationError(
+                    "ATOMIC_CONCERN_RESPONSE_INVALID: duplicate nested type "
+                    f"{name!r} emitted as both {previous} and {kind}."
+                )
+            seen[name] = kind
+
+
+def _force_outer_static(item: Mapping[str, Any]) -> dict[str, Any]:
+    result = dict(item)
+    modifiers = [
+        str(value)
+        for value in result.get("modifiers") or []
+        if str(value).strip()
+    ]
+    if "static" not in modifiers:
+        modifiers.append("static")
+    result["modifiers"] = modifiers
+    return result
+
+
 def _render_atomic_java_structure(
     decision: Mapping[str, Any],
     *,
     response_region: str,
+    host_symbol: str = "",
 ) -> str:
     if response_region == "initialize":
         return "\n".join(
             _java_body_lines(decision.get("statements") or [], indent="")
         ).strip()
 
+    _validate_atomic_type_namespace(
+        decision,
+        reserved_type_names=(host_symbol,) if host_symbol else (),
+    )
     renames = _java_identifier_renames(decision)
     rows: list[str] = []
     rows.extend(
@@ -1319,7 +1438,7 @@ def _render_atomic_java_structure(
         if isinstance(item, Mapping)
     )
     rows.extend(
-        _render_field(item, renames=renames)
+        _render_field(_force_outer_static(item), renames=renames)
         for item in decision.get("fields") or []
         if isinstance(item, Mapping)
     )
@@ -1335,7 +1454,7 @@ def _render_atomic_java_structure(
             "structured record/class; outer-class construction is host-owned."
         )
     rows.extend(
-        _render_method(item, renames=renames)
+        _render_method(_force_outer_static(item), renames=renames)
         for item in decision.get("methods") or []
         if isinstance(item, Mapping)
     )
@@ -1392,11 +1511,10 @@ def _call_atomic_java_region(
         "description": (
             f"Generate concern {concern_name or '<selected>'} correctly on the first pass "
             f"using the model's native required tool call with structured Java components. "
-            f"Preferred shape: {schema_shape}. This is guidance, not a restriction: include "
-            "any concern-local helper records/enums/classes/fields/methods that are actually "
-            "needed for correct Java. "
-            "Declare every concern-owned helper/domain type in this same call before "
-            "referencing it. For record/class construction, use constructors when available; "
+            f"Allowed shape: {schema_shape}. The supplied native tool schema is authoritative; "
+            "never invent categories that the schema does not expose. "
+            "When nested types are allowed, declare every concern-owned helper/domain type in "
+            "this same call before referencing it. For record/class construction, use constructors when available; "
             "a nested method named <init> is also accepted and normalized by the host. "
             "Treat available_sibling_api declarations in the user payload as authoritative: "
             "use exact sibling types/symbols and never mutate final sibling fields. "
@@ -1436,6 +1554,7 @@ def _call_atomic_java_region(
     return _render_atomic_java_structure(
         decision,
         response_region=response_region,
+        host_symbol=str(payload.get("host_selected_class") or "").strip(),
     )
 
 def _call_coder(

@@ -1634,3 +1634,166 @@ def test_atomic_prompt_hides_planning_record_schema_from_coder() -> None:
     assert "record_schema" not in payload["concern"]
     assert "Resolve exactly one inputs record" not in captured[0][-1]["content"]
     assert "Author the requested gameplay record" not in captured[0][-1]["content"]
+
+
+def test_logic_concerns_cannot_emit_nested_types() -> None:
+    from jsonschema import Draft202012Validator
+    from minecraft_mod_ai.custom_module_generator import (
+        _ATOMIC_LOGIC_MEMBERS_PARAMETERS,
+        _atomic_parameters_for_request,
+    )
+
+    parameters, _shape = _atomic_parameters_for_request(
+        {
+            "concern": {"name": "initialization"},
+            "generation_recipe": {"preferred_shape": "methods_and_constants"},
+        },
+        response_region="members",
+    )
+
+    assert parameters is _ATOMIC_LOGIC_MEMBERS_PARAMETERS
+    assert set(parameters["properties"]) == {
+        "fields",
+        "methods",
+        "static_initializers",
+    }
+    with pytest.raises(Exception):
+        Draft202012Validator(parameters).validate(
+            {"classes": [{"name": "Initializer"}]}
+        )
+
+
+def test_type_owning_concern_keeps_nested_type_schema() -> None:
+    from minecraft_mod_ai.custom_module_generator import (
+        _ATOMIC_MEMBERS_PARAMETERS,
+        _atomic_parameters_for_request,
+    )
+
+    parameters, _shape = _atomic_parameters_for_request(
+        {"concern": {"name": "variables"}},
+        response_region="members",
+    )
+
+    assert parameters is _ATOMIC_MEMBERS_PARAMETERS
+    assert {"records", "enums", "classes"} <= set(parameters["properties"])
+
+
+def test_duplicate_constructor_shapes_are_deduplicated_by_host() -> None:
+    from minecraft_mod_ai.custom_module_generator import _render_atomic_java_structure
+
+    rendered = _render_atomic_java_structure(
+        {
+            "classes": [
+                {
+                    "name": "PlayerData",
+                    "constructors": [{"parameters": [], "body": []}],
+                    "methods": [
+                        {
+                            "return_type": "void",
+                            "name": "<init>",
+                            "parameters": [],
+                            "body": [],
+                        }
+                    ],
+                }
+            ]
+        },
+        response_region="members",
+    )
+
+    assert rendered.count("PlayerData() {") == 1
+
+
+def test_nested_type_cannot_shadow_host_selected_outer_class() -> None:
+    from minecraft_mod_ai.custom_module_generator import _render_atomic_java_structure
+
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match="collides with the host-selected outer class",
+    ):
+        _render_atomic_java_structure(
+            {"classes": [{"name": "AuthoredStateModel"}]},
+            response_region="members",
+            host_symbol="AuthoredStateModel",
+        )
+
+
+def test_outer_atomic_fields_and_methods_are_forced_static() -> None:
+    from minecraft_mod_ai.custom_module_generator import _render_atomic_java_structure
+
+    rendered = _render_atomic_java_structure(
+        {
+            "fields": [{"type": "int", "name": "credits"}],
+            "methods": [
+                {
+                    "return_type": "int",
+                    "name": "credits",
+                    "body": ["return credits"],
+                }
+            ],
+        },
+        response_region="members",
+    )
+
+    assert "static int credits;" in rendered
+    assert "static int credits()" in rendered
+
+
+def test_compiler_repair_cannot_expand_nested_type_structure() -> None:
+    compile_calls = {"count": 0}
+    outputs = iter(
+        [
+            "private static int value = missing();",
+            (
+                "private static int value = 1;\n"
+                "private static class AuthoredStateModel {}"
+            ),
+            "private static int value = 1;",
+        ]
+    )
+
+    def call_coder(_messages):
+        return next(outputs)
+
+    def compile_java(_root):
+        compile_calls["count"] += 1
+        if compile_calls["count"] == 1:
+            return SimpleNamespace(status="FAIL")
+        return SimpleNamespace(status="PASS")
+
+    executor = AtomicConcernExecutor(
+        root=Path("."),
+        target=Path("src/main/java/example/Test.java"),
+        relative="src/main/java/example/Test.java",
+        symbol="Test",
+        original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
+        task={"task_id": "t", "semantic_outcome": "x"},
+        section="state_model",
+        concerns=(
+            {
+                "sequence": 0,
+                "identifier": "id",
+                "concern": "transitions",
+                "task": "transitions",
+                "rules": [],
+            },
+        ),
+        grounding={},
+        dependency_source="",
+        require_initialize=False,
+        call_coder=call_coder,
+        compile_java=compile_java,
+        compile_log=lambda _report: (
+            "/tmp/Test.java:5: error: cannot find symbol\n"
+            "private static int value = missing();\n"
+            "                           ^\n"
+            "  symbol: method missing()\n"
+        ),
+        write_source=lambda _path, _source: None,
+    )
+
+    result = executor.run()
+
+    assert compile_calls["count"] == 2
+    assert "class AuthoredStateModel" not in result["source"]
+    assert "private static int value = 1;" in result["source"]
