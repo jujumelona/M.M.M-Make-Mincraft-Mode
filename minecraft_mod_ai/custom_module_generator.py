@@ -498,6 +498,7 @@ _ATOMIC_PARAMETER_SCHEMA: dict[str, Any] = {
         "type": {
             "type": "string",
             "minLength": 1,
+            "maxLength": 240,
             "description": (
                 "Java type. Use a primitive/java.lang type, a type declared in this same "
                 "structured call, a supplied sibling/dependency type, or a fully-qualified "
@@ -521,6 +522,7 @@ _ATOMIC_FIELD_SCHEMA: dict[str, Any] = {
         "type": {
             "type": "string",
             "minLength": 1,
+            "maxLength": 240,
             "description": (
                 "Java field type. Do not invent a domain type without declaring it in "
                 "records/enums/classes in this same call."
@@ -529,6 +531,7 @@ _ATOMIC_FIELD_SCHEMA: dict[str, Any] = {
         "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
         "initializer": {
             "type": "string",
+            "maxLength": 800,
             "description": (
                 "Initializer expression only, without trailing semicolon. Reference only "
                 "symbols declared in this call or supplied by the host."
@@ -549,23 +552,26 @@ _ATOMIC_METHOD_SCHEMA: dict[str, Any] = {
         "return_type": {
             "type": "string",
             "minLength": 1,
+            "maxLength": 240,
             "description": (
                 "Java return type. Use void, primitive/java.lang, a locally declared type, "
                 "a supplied dependency type, or a fully-qualified external type."
             ),
         },
         "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
-        "parameters": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA},
-        "throws": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "parameters": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA, "maxItems": 6},
+        "throws": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 160}, "maxItems": 3},
         "body": {
             "type": "array",
             "items": {
                 "type": "string",
+                "maxLength": 800,
                 "description": (
                     "One Java statement or one complete control-flow block inside this method. "
                     "Do not declare package/import/outer types. Reference only known symbols."
                 ),
             },
+            "maxItems": 10,
         },
     },
     "required": ["return_type", "name"],
@@ -574,9 +580,9 @@ _ATOMIC_METHOD_SCHEMA: dict[str, Any] = {
 _ATOMIC_CONSTRUCTOR_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "parameters": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA},
-        "throws": {"type": "array", "items": {"type": "string", "minLength": 1}},
-        "body": {"type": "array", "items": {"type": "string"}},
+        "parameters": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA, "maxItems": 6},
+        "throws": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 160}, "maxItems": 3},
+        "body": {"type": "array", "items": {"type": "string", "maxLength": 800}, "maxItems": 10},
     },
     "required": [],
     "additionalProperties": True,
@@ -590,8 +596,8 @@ _ATOMIC_RECORD_SCHEMA: dict[str, Any] = {
             "uniqueItems": True,
         },
         "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
-        "components": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA},
-        "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA},
+        "components": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA, "maxItems": 8},
+        "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA, "maxItems": 2},
     },
     "required": ["name"],
     "additionalProperties": True,
@@ -624,9 +630,9 @@ _ATOMIC_CLASS_SCHEMA: dict[str, Any] = {
             "uniqueItems": True,
         },
         "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
-        "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA},
-        "constructors": {"type": "array", "items": _ATOMIC_CONSTRUCTOR_SCHEMA},
-        "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA},
+        "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA, "maxItems": 8},
+        "constructors": {"type": "array", "items": _ATOMIC_CONSTRUCTOR_SCHEMA, "maxItems": 2},
+        "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA, "maxItems": 4},
     },
     "required": ["name"],
     "additionalProperties": True,
@@ -634,17 +640,21 @@ _ATOMIC_CLASS_SCHEMA: dict[str, Any] = {
 _ATOMIC_MEMBERS_PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "records": {"type": "array", "items": _ATOMIC_RECORD_SCHEMA},
-        "enums": {"type": "array", "items": _ATOMIC_ENUM_SCHEMA},
-        "classes": {"type": "array", "items": _ATOMIC_CLASS_SCHEMA},
-        "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA},
-        "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA},
+        "records": {"type": "array", "items": _ATOMIC_RECORD_SCHEMA, "maxItems": 6},
+        "enums": {"type": "array", "items": _ATOMIC_ENUM_SCHEMA, "maxItems": 4},
+        "classes": {"type": "array", "items": _ATOMIC_CLASS_SCHEMA, "maxItems": 2},
+        "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA, "maxItems": 12},
+        "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA, "maxItems": 4},
         "static_initializers": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
-                    "body": {"type": "array", "items": {"type": "string"}}
+                    "body": {
+                        "type": "array",
+                        "items": {"type": "string", "maxLength": 800},
+                        "maxItems": 10,
+                    }
                 },
                 "required": [],
                 "additionalProperties": True,
@@ -657,11 +667,58 @@ _ATOMIC_MEMBERS_PARAMETERS: dict[str, Any] = {
 _ATOMIC_INITIALIZE_PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "statements": {"type": "array", "items": {"type": "string"}}
+        "statements": {
+            "type": "array",
+            "items": {"type": "string", "maxLength": 800},
+            "maxItems": 12,
+        }
     },
     "required": [],
     "additionalProperties": False,
 }
+
+
+_ATOMIC_FIELDS_AND_TYPES_PARAMETERS: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "records": {"type": "array", "items": _ATOMIC_RECORD_SCHEMA, "maxItems": 6},
+        "enums": {"type": "array", "items": _ATOMIC_ENUM_SCHEMA, "maxItems": 4},
+        "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA, "maxItems": 12},
+    },
+    "required": [],
+    "additionalProperties": False,
+}
+_ATOMIC_METHODS_AND_CONSTANTS_PARAMETERS: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA, "maxItems": 8},
+        "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA, "maxItems": 4},
+    },
+    "required": [],
+    "additionalProperties": False,
+}
+
+
+def _atomic_parameters_for_request(
+    payload: Mapping[str, Any],
+    *,
+    response_region: str,
+) -> tuple[dict[str, Any], str]:
+    if response_region == "initialize":
+        return _ATOMIC_INITIALIZE_PARAMETERS, "initialize_statements"
+
+    recipe = payload.get("generation_recipe")
+    preferred = (
+        str(recipe.get("preferred_shape") or "").strip()
+        if isinstance(recipe, Mapping)
+        else ""
+    )
+    if preferred == "fields_and_local_types":
+        return _ATOMIC_FIELDS_AND_TYPES_PARAMETERS, preferred
+    if preferred == "methods_and_constants":
+        return _ATOMIC_METHODS_AND_CONSTANTS_PARAMETERS, preferred
+    return _ATOMIC_MEMBERS_PARAMETERS, preferred or "smallest_components"
+
 
 _COMMON_JAVA_NAMES = {
     "ArrayDeque": "java.util.ArrayDeque",
@@ -973,10 +1030,9 @@ def _call_atomic_java_region(
         )
     payload = _atomic_request_payload(messages)
     response_region = str(payload.get("response_region") or "members").strip()
-    parameters = (
-        _ATOMIC_INITIALIZE_PARAMETERS
-        if response_region == "initialize"
-        else _ATOMIC_MEMBERS_PARAMETERS
+    parameters, schema_shape = _atomic_parameters_for_request(
+        payload,
+        response_region=response_region,
     )
     concern = payload.get("concern")
     concern_name = (
@@ -996,7 +1052,8 @@ def _call_atomic_java_region(
         "description": (
             f"Generate concern {concern_name or '<selected>'} correctly on the first pass "
             f"using structured Java components only. Preferred shape: "
-            f"{preferred_shape or 'smallest_components'}. "
+            f"{schema_shape}. Keep the call minimal; do not generate optional helper "
+            "components unless this concern directly requires them. "
             "Declare every concern-owned helper/domain type in this same call before "
             "referencing it. Omit categories you do not need; do not emit empty arrays just "
             "to satisfy the schema. The host renders Java syntax and qualifies common JDK "
@@ -1011,6 +1068,14 @@ def _call_atomic_java_region(
     try:
         decision = callback("coder", messages, **kwargs)
     except Exception as exc:
+        boundary = completion_boundary_error(exc)
+        if boundary is not None and boundary.kind == OUTPUT_EXHAUSTED:
+            raise CustomModuleGenerationError(
+                "ATOMIC_CONCERN_OUTPUT_EXHAUSTED: structured tool arguments exceeded "
+                f"the bounded output page (completion_tokens={boundary.completion_tokens}, "
+                f"max_tokens={boundary.max_tokens}). Emit fewer and smaller components."
+            ) from exc
+
         from .model_adapters.base import NativeToolDecisionRejected
 
         if isinstance(exc, NativeToolDecisionRejected):

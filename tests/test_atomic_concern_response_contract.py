@@ -1097,3 +1097,75 @@ def test_parameter_schema_tolerates_small_model_metadata_noise() -> None:
     }
 
     Draft202012Validator(_ATOMIC_MEMBERS_PARAMETERS).validate(decision)
+
+
+def test_invariants_use_small_methods_and_constants_schema() -> None:
+    from minecraft_mod_ai.custom_module_generator import (
+        _atomic_parameters_for_request,
+        _ATOMIC_METHODS_AND_CONSTANTS_PARAMETERS,
+    )
+
+    parameters, shape = _atomic_parameters_for_request(
+        {"generation_recipe": {"preferred_shape": "methods_and_constants"}},
+        response_region="members",
+    )
+
+    assert shape == "methods_and_constants"
+    assert parameters is _ATOMIC_METHODS_AND_CONSTANTS_PARAMETERS
+    assert set(parameters["properties"]) == {"fields", "methods"}
+    assert parameters["properties"]["methods"]["maxItems"] == 4
+    assert parameters["properties"]["fields"]["maxItems"] == 8
+
+
+def test_variables_use_small_fields_and_types_schema() -> None:
+    from minecraft_mod_ai.custom_module_generator import (
+        _atomic_parameters_for_request,
+        _ATOMIC_FIELDS_AND_TYPES_PARAMETERS,
+    )
+
+    parameters, shape = _atomic_parameters_for_request(
+        {"generation_recipe": {"preferred_shape": "fields_and_local_types"}},
+        response_region="members",
+    )
+
+    assert shape == "fields_and_local_types"
+    assert parameters is _ATOMIC_FIELDS_AND_TYPES_PARAMETERS
+    assert set(parameters["properties"]) == {"records", "enums", "fields"}
+
+
+def test_structured_output_exhaustion_becomes_bounded_concern_failure() -> None:
+    from minecraft_mod_ai.custom_module_generator import _call_atomic_java_region
+    from minecraft_mod_ai.model_adapters.base import ModelBackendError
+    from minecraft_mod_ai.llama_finish_reason_contract import LlamaCompletionBoundaryError
+
+    class _Router:
+        def generate_tool_decision(self, role, messages, **kwargs):
+            del role, messages, kwargs
+            raise ModelBackendError(
+                role="coder",
+                model_id="test",
+                cause=LlamaCompletionBoundaryError(
+                    "native llama-server exhausted the bounded output allowance before "
+                    "the assistant action completed; prompt_tokens=100 completion_tokens=2048 "
+                    "max_tokens=2048"
+                ),
+            )
+
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match="ATOMIC_CONCERN_OUTPUT_EXHAUSTED",
+    ):
+        _call_atomic_java_region(
+            _Router(),
+            (
+                {"role": "system", "content": "structured only"},
+                {
+                    "role": "user",
+                    "content": (
+                        '{"response_region":"members","generation_recipe":'
+                        '{"preferred_shape":"methods_and_constants"}}'
+                    ),
+                },
+            ),
+            output_token_ceiling=2048,
+        )

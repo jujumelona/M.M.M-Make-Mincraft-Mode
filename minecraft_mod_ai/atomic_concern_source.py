@@ -1089,7 +1089,10 @@ def _messages(
         ),
         "repair_failure": failure or None,
         "generation_recipe": {
-            "first_pass_goal": "produce compile-ready structured Java components in one call",
+            "first_pass_goal": (
+                "produce the smallest compile-ready structured Java components in one call "
+                "and finish the required tool call well inside the finite output page"
+            ),
             "declare_local_domain_types_first": True,
             "jdk_simple_names_host_qualified": [
                 "List",
@@ -1343,6 +1346,7 @@ class AtomicConcernExecutor:
                         "ATOMIC_CONCERN_RESPONSE_INVALID:",
                         "ATOMIC_CONCERN_SCOPE_ESCAPE:",
                         "ATOMIC_CONCERN_SYMBOL_COLLISION:",
+                        "ATOMIC_CONCERN_OUTPUT_EXHAUSTED:",
                     )
                 )
                 if not recoverable:
