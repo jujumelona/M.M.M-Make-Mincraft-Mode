@@ -495,7 +495,16 @@ _ATOMIC_MODIFIER_VALUES = [
 _ATOMIC_PARAMETER_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "type": {"type": "string", "minLength": 1},
+        "type": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Java type. Use a primitive/java.lang type, a type declared in this same "
+                "structured call, a supplied sibling/dependency type, or a fully-qualified "
+                "external type. Common JDK collection names may be simple names because the "
+                "host qualifies them."
+            ),
+        },
         "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
     },
     "required": ["type", "name"],
@@ -509,9 +518,22 @@ _ATOMIC_FIELD_SCHEMA: dict[str, Any] = {
             "items": {"type": "string", "enum": _ATOMIC_MODIFIER_VALUES},
             "uniqueItems": True,
         },
-        "type": {"type": "string", "minLength": 1},
+        "type": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Java field type. Do not invent a domain type without declaring it in "
+                "records/enums/classes in this same call."
+            ),
+        },
         "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
-        "initializer": {"type": "string"},
+        "initializer": {
+            "type": "string",
+            "description": (
+                "Initializer expression only, without trailing semicolon. Reference only "
+                "symbols declared in this call or supplied by the host."
+            ),
+        },
     },
     "required": ["modifiers", "type", "name", "initializer"],
     "additionalProperties": False,
@@ -524,11 +546,27 @@ _ATOMIC_METHOD_SCHEMA: dict[str, Any] = {
             "items": {"type": "string", "enum": _ATOMIC_MODIFIER_VALUES},
             "uniqueItems": True,
         },
-        "return_type": {"type": "string", "minLength": 1},
+        "return_type": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Java return type. Use void, primitive/java.lang, a locally declared type, "
+                "a supplied dependency type, or a fully-qualified external type."
+            ),
+        },
         "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
         "parameters": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA},
         "throws": {"type": "array", "items": {"type": "string", "minLength": 1}},
-        "body": {"type": "array", "items": {"type": "string"}},
+        "body": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "description": (
+                    "One Java statement or one complete control-flow block inside this method. "
+                    "Do not declare package/import/outer types. Reference only known symbols."
+                ),
+            },
+        },
     },
     "required": ["modifiers", "return_type", "name", "parameters", "throws", "body"],
     "additionalProperties": False,
@@ -946,12 +984,28 @@ def _call_atomic_java_region(
         if response_region == "initialize"
         else _ATOMIC_MEMBERS_PARAMETERS
     )
+    concern = payload.get("concern")
+    concern_name = (
+        str(concern.get("name") or "").strip()
+        if isinstance(concern, Mapping)
+        else ""
+    )
+    recipe = payload.get("generation_recipe")
+    preferred_shape = (
+        str(recipe.get("preferred_shape") or "").strip()
+        if isinstance(recipe, Mapping)
+        else ""
+    )
     kwargs: dict[str, Any] = {
         "tool_name": _ATOMIC_JAVA_REGION_TOOL,
         "parameters": parameters,
         "description": (
-            "Describe the selected Java region as structured components only. "
-            "The host renders Java syntax. Never return raw Java source, prose, Markdown, "
+            f"Generate concern {concern_name or '<selected>'} correctly on the first pass "
+            f"using structured Java components only. Preferred shape: "
+            f"{preferred_shape or 'smallest_components'}. "
+            "Declare every concern-owned helper/domain type in this same call before "
+            "referencing it. The host renders Java syntax and qualifies common JDK "
+            "collection/concurrency names. Never return raw Java source, prose, Markdown, "
             "imports, package declarations, or an outer class."
         ),
     }
