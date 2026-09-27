@@ -133,10 +133,10 @@ def _strict_ready(text: str) -> bool:
 
 
 _NESTED_SECTION_BULLET = re.compile(
-    r"^(?P<indent>[ \\t]*)[-*+]\\s+"
-    r"(?P<label>[0-9A-Za-z_가-힣-]+)\\s*:\\s*(?P<tail>.*?)\\s*(?:\\r?\\n)?$"
+    r"^(?P<indent>[ \t]*)[-*+]\s+"
+    r"(?P<label>[0-9A-Za-z_가-힣-]+)\s*:\s*(?P<tail>.*?)\s*(?:\r?\n)?$"
 )
-_ANY_BULLET = re.compile(r"^(?P<indent>[ \\t]*)[-*+]\\s+")
+_ANY_BULLET = re.compile(r"^(?P<indent>[ \t]*)[-*+]\s+")
 
 
 def _indent_width(value: str) -> int:
