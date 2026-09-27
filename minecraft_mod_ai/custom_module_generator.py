@@ -474,9 +474,22 @@ def _direct_host_grounding(
         "policy": merged_policy,
     }
 
+def _atomic_concern_output_token_ceiling() -> int:
+    raw = os.environ.get("MMM_ATOMIC_CONCERN_OUTPUT_TOKENS", "").strip()
+    if not raw:
+        return 2048
+    try:
+        value = int(raw)
+    except ValueError:
+        return 2048
+    return max(256, value)
+
+
 def _call_coder(
     router: Any,
     messages: Sequence[Mapping[str, str]],
+    *,
+    output_token_ceiling: int | None = None,
 ) -> str:
     callback = getattr(router, "generate_text", None)
     if not callable(callback):
@@ -491,6 +504,10 @@ def _call_coder(
     ):
         if _supports_kwarg(callback, key):
             kwargs[key] = value
+    if output_token_ceiling is not None and _supports_kwarg(
+        callback, "output_token_ceiling"
+    ):
+        kwargs["output_token_ceiling"] = max(1, int(output_token_ceiling))
     native_format_replays = 0
     while True:
         try:
@@ -663,6 +680,7 @@ def _run_atomic_ir_generation(
     from .atomic_concern_source import AtomicConcernExecutor
     from .implementation_graph_execution import public_api_errors
 
+    atomic_output_ceiling = _atomic_concern_output_token_ceiling()
     executor = AtomicConcernExecutor(
         root=context.root,
         target=context.target,
@@ -675,7 +693,11 @@ def _run_atomic_ir_generation(
         grounding=context.host_grounding,
         dependency_source=context.dependency_context,
         require_initialize=context.require_initialize,
-        call_coder=lambda messages: _call_coder(generator.router, messages),
+        call_coder=lambda messages: _call_coder(
+            generator.router,
+            messages,
+            output_token_ceiling=atomic_output_ceiling,
+        ),
         compile_java=context.compiler.compile_java,
         compile_log=_compile_log,
         write_source=lambda path, source: _atomic_write(path, source),
