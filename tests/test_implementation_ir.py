@@ -12,6 +12,7 @@ from minecraft_mod_ai.authored_production import _compile_new_authored_modules
 from minecraft_mod_ai.implementation_ir import (
     ImplementationGraphError,
     OutputBudgetExhausted,
+    compile_authored_graph,
     compile_graph,
     source_requirements,
 )
@@ -279,3 +280,74 @@ def test_unused_helper_cannot_disguise_same_whole_file_work():
 def test_graph_schema_version_tracks_admission_semantics():
     graph = compile_with(Decisions([{"nodes": [node()], "done": True}]))
     assert graph["schema_version"] == ir.IMPLEMENTATION_IR_SCHEMA_VERSION
+
+
+def test_malformed_saved_design_reaches_canonical_graph_and_leaf_contracts():
+    from minecraft_mod_ai.implementation_decisions import compile_contribution
+    from minecraft_mod_ai.implementation_graph_execution import _leaf_module
+
+    malformed = (
+        "## behavior_contract\nTrade ore for credits.\n"
+        "## state_model\nStore credits.\n"
+        "## algorithm\nCalculate price.\n"
+        "## integration\nWire systems.\n"
+        "## resources_and_ui\nRender UI.\n"
+        "## failure_and_limits\nReject invalid trades.\n"
+        "## reuse_assessment\nReference only.\n"
+        "## verification\nExercise trades.\n"
+    )
+
+    class HostLowering:
+        def generate_implementation_decision(
+            self, name, payload, *, state=None, checkpoint=None
+        ):
+            return compile_contribution(
+                self,
+                name,
+                payload,
+                state if state is not None else {},
+                checkpoint or (lambda: None),
+            )
+
+    graph = compile_authored_graph(
+        HostLowering(),
+        text=malformed,
+        package="example",
+        mod_id="test",
+        target=TARGET,
+    )
+
+    assert set(node["symbol"] for node in graph["nodes"]) == {
+        "AuthoredStateModel",
+        "AuthoredBehaviorContract",
+        "AuthoredAlgorithm",
+        "AuthoredAuthorityNetwork",
+        "AuthoredPersistence",
+        "AuthoredResourcesUi",
+        "AuthoredFailureLimits",
+        "AuthoredIntegration",
+    }
+    normalization = graph["authored_document_normalization"]
+    assert set(normalization["missing_execution_sections"]) == {
+        "authority_and_network", "persistence"
+    }
+
+    request = {
+        "target": TARGET,
+        "package": "example",
+        "mod_id": "test",
+    }
+    sections = {
+        _leaf_module(node, graph, request).config["implementation_section"]
+        for node in graph["nodes"]
+    }
+    assert sections == {
+        "state_model",
+        "behavior_contract",
+        "algorithm",
+        "authority_and_network",
+        "persistence",
+        "resources_and_ui",
+        "failure_and_limits",
+        "integration",
+    }

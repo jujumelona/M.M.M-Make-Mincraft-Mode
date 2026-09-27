@@ -8,6 +8,7 @@ from minecraft_mod_ai.complete_planner import (
     CompleteGameDesignPlanner,
     _design_writing_template,
 )
+from minecraft_mod_ai.authored_document_contract import normalize_authored_document
 from minecraft_mod_ai.implementation_ir import (
     ImplementationGraphError,
     decompose_authored_units,
@@ -119,3 +120,69 @@ def test_fresh_canonical_h2_layout_is_accepted_without_legacy_migration() -> Non
 
     assert {unit["unit_id"] for unit in units} == set(sections)
 
+
+
+def test_planner_canonicalizes_missing_execution_sections_before_saving() -> None:
+    class Router:
+        def generate_text(self, *_args, **_kwargs):
+            return (
+                "## behavior_contract\nTrade ore for credits.\n"
+                "## state_model\nStore credits and ship state.\n"
+                "## algorithm\nCalculate prices.\n"
+                "## integration\nWire gameplay.\n"
+                "## resources_and_ui\nRender the trade UI.\n"
+                "## failure_and_limits\nReject invalid trades.\n"
+                "## reuse_assessment\nReference only.\n"
+                "## verification\nExercise trades.\n"
+            )
+
+    plan = CompleteGameDesignPlanner(Router()).plan("space mod")
+
+    units = decompose_authored_units(plan.text)
+    assert {unit["unit_id"] for unit in units} == {
+        "state_model",
+        "behavior_contract",
+        "algorithm",
+        "authority_and_network",
+        "persistence",
+        "resources_and_ui",
+        "failure_and_limits",
+        "integration",
+    }
+    assert plan.text.index("## integration") < plan.text.index("## authority_and_network")
+    assert plan.text.index("## authority_and_network") < plan.text.index("## persistence")
+    assert plan.text.index("## persistence") < plan.text.index("## resources_and_ui")
+    assert "Trade ore for credits." in plan.text
+
+
+def test_canonicalizer_repairs_duplicate_order_and_unknown_peer_headings() -> None:
+    malformed = (
+        "## state_model\nState A.\n"
+        "## behavior_contract\nBehavior.\n"
+        "## behavior_contract\nBehavior B.\n"
+        "## custom_notes\nKeep this note.\n"
+        "## algorithm\nAlgorithm.\n"
+        "## integration\nIntegration.\n"
+        "## resources_and_ui\nResources.\n"
+        "## failure_and_limits\nFailures.\n"
+    )
+
+    normalized, report = normalize_authored_document(malformed)
+
+    assert report is not None
+    assert report["merged_duplicate_sections"] == ["behavior_contract"]
+    assert set(report["missing_execution_sections"]) == {
+        "authority_and_network", "persistence"
+    }
+    assert normalized.count("## behavior_contract\n") == 1
+    assert "### custom_notes\nKeep this note." in normalized
+    decompose_authored_units(normalized)
+
+
+def test_canonicalizer_preserves_already_valid_document_bytes() -> None:
+    text = _legacy_planner_design()
+
+    normalized, report = normalize_authored_document(text)
+
+    assert normalized == text
+    assert report is None

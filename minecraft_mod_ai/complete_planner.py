@@ -165,6 +165,18 @@ class CompleteGameDesignPlanner:
                 response_schema=None,
                 enable_tools=False,
             )
+        from .authored_document_contract import normalize_authored_document
+
+        text, normalization = normalize_authored_document(text)
+        if normalization is not None:
+            emit_root_cause(
+                "authored_design_canonicalized",
+                stage="planning",
+                operation="author_game_plan",
+                gate="authored_document_contract",
+                result="PASS",
+                details=normalization,
+            )
         return AuthoredPlan(
             requested_prompt=prompt,
             text=text,

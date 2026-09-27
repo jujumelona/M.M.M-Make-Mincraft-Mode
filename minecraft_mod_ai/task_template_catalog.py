@@ -6,6 +6,7 @@ from pathlib import Path, PurePosixPath
 import yaml
 from jsonschema import Draft202012Validator
 
+from .authored_section_ids import AUTHORING_SECTION_ORDER
 from .model_output_atomicity_contract import (
     MAX_MODEL_ARRAY_ITEMS,
     MAX_MODEL_STRING_CHARS,
@@ -15,11 +16,7 @@ from .model_output_atomicity_contract import (
 RUNTIME_TEMPLATE_ROOT = Path(__file__).with_name("templates").resolve()
 ROOT = RUNTIME_TEMPLATE_ROOT
 
-CRITERION_SECTIONS = (
-    "behavior_contract", "state_model", "algorithm", "integration",
-    "authority_and_network", "persistence", "resources_and_ui",
-    "failure_and_limits", "reuse_assessment", "verification",
-)
+CRITERION_SECTIONS = AUTHORING_SECTION_ORDER
 _CRITERION_ALIASES = {f"feature/{section}": f"criterion/{section}" for section in CRITERION_SECTIONS}
 _PROMPT_POLICY = "prompt/policy"
 

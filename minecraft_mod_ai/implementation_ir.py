@@ -962,10 +962,13 @@ def compile_authored_graph(router: Any, *, text: str, package: str, mod_id: str,
                            target: dict[str, Any], context: str = "",
                            resume: dict[str, Any] | None = None,
                            checkpoint: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
-    """Compile canonical authored production. No generic fallback is reachable."""
-    units = decompose_authored_units(text)
+    """Compile a canonical execution view; malformed saved Markdown is normalized once."""
+    from .authored_document_contract import normalize_authored_document
+
+    normalized_text, normalization = normalize_authored_document(text)
+    units = decompose_authored_units(normalized_text)
     graph = compile_graph(
-        router, text=text, package=package, mod_id=mod_id, target=target,
+        router, text=normalized_text, package=package, mod_id=mod_id, target=target,
         context=context, units=units, resume=resume, checkpoint=checkpoint,
     )
     execution_refs = set().union(*(set(unit["requirements"]) for unit in units))
@@ -973,6 +976,8 @@ def compile_authored_graph(router: Any, *, text: str, package: str, mod_id: str,
         ref: value for ref, value in graph["requirements"].items()
         if ref in execution_refs
     }
+    if normalization is not None:
+        graph["authored_document_normalization"] = normalization
     return graph
 
 def compile_graph(router: Any, *, text: str, package: str, mod_id: str,

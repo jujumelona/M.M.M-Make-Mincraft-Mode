@@ -116,7 +116,23 @@ def execute_implementation_graph(generator: Any, project_root: str | Path, *,
     root = Path(project_root).expanduser().resolve()
     if not root.is_dir() or root.is_symlink():
         raise ImplementationGraphError("IMPLEMENTATION_IR_PROJECT_REQUIRED")
-    request = module.config["implementation_graph_request"]
+    raw_request = module.config["implementation_graph_request"]
+    from .authored_document_contract import normalize_authored_document
+
+    normalized_text, document_normalization = normalize_authored_document(
+        str(raw_request["text"])
+    )
+    request = dict(raw_request)
+    request["text"] = normalized_text
+    if document_normalization is not None:
+        emit_root_cause(
+            "authored_execution_contract_normalized",
+            stage="production",
+            operation="execute_implementation_graph",
+            gate="authored_document_contract",
+            result="PASS",
+            details=document_normalization,
+        )
     target = request["target"]
     package, mod_id = request["package"], request["mod_id"]
     entry = direct._safe_target(root, direct._normalize_project_path(request["entrypoint_path"]))
