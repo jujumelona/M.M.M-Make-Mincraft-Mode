@@ -9,6 +9,8 @@ CRITICAL_RUNTIME_PATHS = (
     "minecraft_mod_ai/generation_output_budget.py",
     "minecraft_mod_ai/model_context_budget.py",
     "minecraft_mod_ai/model_output_atomicity_contract.py",
+    "tools/verify_integrity_minecraft.py",
+    "tests/test_implementation_ir.py",
 )
 PUSH_GATES = (
     ".github/workflows/main-ci.yml",

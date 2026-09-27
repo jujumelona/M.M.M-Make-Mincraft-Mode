@@ -14,6 +14,8 @@ on:
       - 'minecraft_mod_ai/small_model_atomic_coder_execution.py'
       - 'minecraft_mod_ai/model_adapters/**'
       - 'minecraft_mod_ai/model_router.py'
+      - 'tools/verify_integrity_minecraft.py'
+      - 'tests/test_implementation_ir.py'
       - 'tests/test_llama_*.py'
       - 'tests/test_qwen*.py'
       - '.github/workflows/main-ci.yml'

@@ -106,8 +106,8 @@ def _assert_debug_coder_contract(
     assert role == "coder"
     assert kwargs.get("tool_stage") == "generation"
     assert kwargs.get("enable_tools") is False
-    assert kwargs.get("response_format") == "json"
-    assert isinstance(kwargs.get("response_schema"), dict)
+    assert kwargs.get("response_format") == "text"
+    assert "response_schema" not in kwargs
     assert "output_token_ceiling" not in kwargs
     assert workspace is not None
 
@@ -125,7 +125,9 @@ class _DebugTokenRouter:
         self._calls = 0
 
     def bind_agent_workspace(self, workspace_root, *, require_fresh_evidence=True):
-        assert require_fresh_evidence is True
+        # Direct coder receives the complete host-owned grounding bundle before decode,
+        # so it deliberately bypasses model-driven evidence retrieval.
+        assert require_fresh_evidence is False
         self._workspace = Path(workspace_root).resolve()
 
     def generate_text(self, role, messages, **kwargs):
@@ -137,13 +139,7 @@ class _DebugTokenRouter:
             workspace=self._workspace,
             first_call=self._calls == 1,
         )
-        return json.dumps(
-            {
-                "content": self._source,
-                "summary": "Created the exact host-owned DebugToken source.",
-            },
-            ensure_ascii=False,
-        )
+        return self._source
 
 
 def _probe_spec() -> dict[str, object]:
