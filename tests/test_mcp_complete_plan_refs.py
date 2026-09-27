@@ -70,7 +70,7 @@ def test_complete_plan_uses_opaque_ref_and_paged_sections(tmp_path: Path, monkey
 
     result = service.plan_complete_game("Create the frost archive.")
 
-    assert result["schema_version"] == "mmm/complete-plan-result-v4"
+    assert result["schema_version"] == "mmm/complete-plan-result-v3"
     assert "complete_proposal" not in result
     assert "game_design" not in result
     assert result["proposal_ref"].startswith("plan_")
