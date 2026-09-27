@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .complete_spec import ProductionModule
+from .extended_record_cache import read_cached_directory_records
 from .project_edit import (
     ensure_main_initializer_call,
     inspect_fabric_project,
@@ -267,27 +268,11 @@ def iter_extended_module_records(
             raise ExtendedContentError(
                 "Extended module directory is missing or unsafe."
             )
-        yielded = 0
-        for path in sorted(directory.glob("*.json")):
-            if not path.is_file() or path.is_symlink():
-                raise ExtendedContentError(
-                    "Extended module record is unsafe."
-                )
-            item = json.loads(path.read_text(encoding="utf-8"))
-            if (
-                not isinstance(item, dict)
-                or not item.get("module_id")
-                or path.stem != str(item["module_id"])
-            ):
-                raise ExtendedContentError(
-                    "Extended module record is invalid."
-                )
-            yielded += 1
-            yield item
-        if yielded != expected:
-            raise ExtendedContentError(
-                "Extended module directory count does not match."
-            )
+        yield from read_cached_directory_records(
+            directory,
+            expected,
+            error_type=ExtendedContentError,
+        )
         return
     if raw.get("schema_version") != _CATALOG_SCHEMA:
         raise ExtendedContentError("Unsupported extended module catalog schema.")

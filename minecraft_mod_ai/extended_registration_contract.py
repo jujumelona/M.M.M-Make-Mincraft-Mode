@@ -1,22 +1,17 @@
 from __future__ import annotations
 
-import copy
 import json
 import threading
-from collections import OrderedDict
-from collections.abc import Iterator
 from functools import wraps
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .extended_record_cache import (
+    _RECORD_CACHE,
+    _RECORD_CACHE_LIMIT,
+    _RECORD_CACHE_LOCK,
+)
 from .project_write_lock import project_write_lock
-
-_RECORD_CACHE_LOCK = threading.RLock()
-_RECORD_CACHE: OrderedDict[
-    str,
-    dict[str, tuple[tuple[int, int, int], dict[str, Any]]],
-] = OrderedDict()
-_RECORD_CACHE_LIMIT = 16
 
 
 def _render_static_registration(root_name: str | None) -> str:
@@ -77,107 +72,6 @@ def _generated_unit_names(root: Path, package_name: str) -> list[str]:
             names.append(path.stem)
     names.sort()
     return names
-
-
-def _install_extended_record_cache(extended_module: Any) -> None:
-    """Reuse parsed directory-catalog records only while their exact file metadata is unchanged."""
-
-    original = extended_module.iter_extended_module_records
-    if getattr(original, "_mmm_validated_record_cache", False):
-        return
-
-    @wraps(original)
-    def iter_extended_module_records(project_root: str | Path) -> Iterator[dict[str, Any]]:
-        root = Path(project_root).expanduser().resolve()
-        catalog = root / ".minecraft_ai/extended-modules.json"
-        if not catalog.is_file() or catalog.is_symlink():
-            yield from original(project_root)
-            return
-        try:
-            header = json.loads(catalog.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            yield from original(project_root)
-            return
-        if (
-            not isinstance(header, dict)
-            or header.get("schema_version") != extended_module._DIRECTORY_CATALOG_SCHEMA
-        ):
-            yield from original(project_root)
-            return
-
-        relative = header.get("directory")
-        expected = header.get("module_count")
-        if not isinstance(relative, str) or type(expected) is not int:
-            raise extended_module.ExtendedContentError(
-                "Extended module directory catalog is invalid."
-            )
-        normalized = PurePosixPath(relative.replace("\\", "/"))
-        if (
-            normalized.is_absolute()
-            or any(part in {"", ".", ".."} for part in normalized.parts)
-        ):
-            raise extended_module.ExtendedContentError(
-                "Extended module directory path is unsafe."
-            )
-        directory = (root / Path(*normalized.parts)).resolve()
-        try:
-            directory.relative_to(root)
-        except ValueError as exc:
-            raise extended_module.ExtendedContentError(
-                "Extended module directory escaped the project."
-            ) from exc
-        if not directory.is_dir() or directory.is_symlink():
-            raise extended_module.ExtendedContentError(
-                "Extended module directory is missing or unsafe."
-            )
-
-        directory_key = str(directory)
-        with _RECORD_CACHE_LOCK:
-            cached_records = _RECORD_CACHE.get(directory_key, {})
-        refreshed: dict[str, tuple[tuple[int, int, int], dict[str, Any]]] = {}
-        records: list[dict[str, Any]] = []
-        for path in sorted(directory.glob("*.json")):
-            if not path.is_file() or path.is_symlink():
-                raise extended_module.ExtendedContentError(
-                    "Extended module record is unsafe."
-                )
-            stat = path.stat()
-            signature = (
-                int(stat.st_size),
-                int(stat.st_mtime_ns),
-                int(stat.st_ctime_ns),
-            )
-            path_key = str(path)
-            cached = cached_records.get(path_key)
-            if cached is not None and cached[0] == signature:
-                item = cached[1]
-            else:
-                item = json.loads(path.read_text(encoding="utf-8"))
-                if (
-                    not isinstance(item, dict)
-                    or not item.get("module_id")
-                    or path.stem != str(item["module_id"])
-                ):
-                    raise extended_module.ExtendedContentError(
-                        "Extended module record is invalid."
-                    )
-            refreshed[path_key] = (signature, item)
-            records.append(copy.deepcopy(item))
-
-        if len(records) != expected:
-            raise extended_module.ExtendedContentError(
-                "Extended module directory count does not match."
-            )
-        with _RECORD_CACHE_LOCK:
-            _RECORD_CACHE[directory_key] = refreshed
-            _RECORD_CACHE.move_to_end(directory_key)
-            while len(_RECORD_CACHE) > _RECORD_CACHE_LIMIT:
-                _RECORD_CACHE.popitem(last=False)
-        yield from records
-
-    iter_extended_module_records._mmm_validated_record_cache = True  # type: ignore[attr-defined]
-    iter_extended_module_records.__wrapped__ = original  # type: ignore[attr-defined]
-    extended_module.iter_extended_module_records = iter_extended_module_records
 
 
 def _install_static_registration(extended_module: Any) -> None:
@@ -281,5 +175,4 @@ def _install_static_registration(extended_module: Any) -> None:
 def install(extended_module: Any) -> None:
     """Install deterministic registration and bounded exact generation reuse."""
 
-    _install_extended_record_cache(extended_module)
     _install_static_registration(extended_module)
