@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -15,6 +16,53 @@ from .custom_module_errors import CustomModuleGenerationError
 MEMBERS_MARKER = "<<<MMM_CONCERN_MEMBERS>>>"
 INITIALIZE_MARKER = "<<<MMM_CONCERN_INITIALIZE>>>"
 END_MARKER = "<<<MMM_CONCERN_END>>>"
+_DEFAULT_REGION_ATTEMPT_LIMIT = 4
+_MAX_REGION_ATTEMPT_LIMIT = 32
+
+
+def _region_attempt_limit() -> int:
+    raw = os.environ.get("MMM_ATOMIC_CONCERN_REGION_ATTEMPTS", "").strip()
+    if not raw:
+        return _DEFAULT_REGION_ATTEMPT_LIMIT
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_REGION_ATTEMPT_LIMIT
+    return max(1, min(_MAX_REGION_ATTEMPT_LIMIT, value))
+
+
+def _trace_region_generation(
+    event: str,
+    *,
+    result: str,
+    concern: str,
+    region: str,
+    attempt: int,
+    attempt_limit: int,
+    reason: str = "",
+    output_sha256: str = "",
+    output_chars: int = 0,
+) -> None:
+    from .root_cause_trace import emit_root_cause
+
+    emit_root_cause(
+        event,
+        stage="production",
+        operation="atomic_concern_region",
+        gate="bounded_region_generation",
+        result=result,
+        reason=reason,
+        details={
+            "concern": concern,
+            "region": region,
+            "attempt": attempt,
+            "attempt_limit": attempt_limit,
+            **({"output_sha256": output_sha256} if output_sha256 else {}),
+            **({"output_chars": output_chars} if output_chars else {}),
+        },
+    )
+
+
 _HOST_PREFIX = "MMM_ATOMIC_CONCERN"
 _PACKAGE = re.compile(r"(?m)^\s*package\s+([A-Za-z_$][A-Za-z0-9_$.]*)\s*;\s*$")
 _FORBIDDEN = re.compile(
@@ -490,7 +538,17 @@ class AtomicConcernExecutor:
         name = _slug(concern["concern"])
         seen_violations: set[tuple[str, str]] = set()
         repair_failure = failure
-        while True:
+        attempt_limit = _region_attempt_limit()
+
+        for attempt in range(1, attempt_limit + 1):
+            _trace_region_generation(
+                "atomic_concern_region_attempt",
+                result="START",
+                concern=name,
+                region=response_region,
+                attempt=attempt,
+                attempt_limit=attempt_limit,
+            )
             output = self.call_coder(_messages(
                 section=self.section,
                 concern=concern,
@@ -501,25 +559,69 @@ class AtomicConcernExecutor:
                 response_region=response_region,
                 failure=repair_failure,
             ))
+            output_text = str(output or "")
+            output_sha = hashlib.sha256(output_text.encode("utf-8")).hexdigest()
             try:
-                return _parse_region_content(output, response_region=response_region)
+                parsed = _parse_region_content(
+                    output,
+                    response_region=response_region,
+                )
             except CustomModuleGenerationError as exc:
                 reason = str(exc).split("\n", 1)[0]
                 recoverable = reason.startswith(
                     ("ATOMIC_CONCERN_RESPONSE_INVALID:", "ATOMIC_CONCERN_SCOPE_ESCAPE:")
                 )
                 if not recoverable:
+                    _trace_region_generation(
+                        "atomic_concern_region_rejected",
+                        result="FAIL",
+                        concern=name,
+                        region=response_region,
+                        attempt=attempt,
+                        attempt_limit=attempt_limit,
+                        reason=reason,
+                        output_sha256=output_sha,
+                        output_chars=len(output_text),
+                    )
                     raise
-                fingerprint = hashlib.sha256(
-                    str(output or "").encode("utf-8")
-                ).hexdigest()
-                violation = (reason, fingerprint)
+
+                violation = (reason, output_sha)
                 if violation in seen_violations:
+                    _trace_region_generation(
+                        "atomic_concern_region_no_progress",
+                        result="FAIL",
+                        concern=name,
+                        region=response_region,
+                        attempt=attempt,
+                        attempt_limit=attempt_limit,
+                        reason=reason,
+                        output_sha256=output_sha,
+                        output_chars=len(output_text),
+                    )
                     raise CustomModuleGenerationError(
                         f"ATOMIC_CONCERN_RESPONSE_NO_PROGRESS: {name}:{response_region} "
                         f"repeated identical invalid output: {reason}"
                     ) from exc
+
                 seen_violations.add(violation)
+                _trace_region_generation(
+                    "atomic_concern_region_rejected",
+                    result="RETRY" if attempt < attempt_limit else "FAIL",
+                    concern=name,
+                    region=response_region,
+                    attempt=attempt,
+                    attempt_limit=attempt_limit,
+                    reason=reason,
+                    output_sha256=output_sha,
+                    output_chars=len(output_text),
+                )
+                if attempt >= attempt_limit:
+                    raise CustomModuleGenerationError(
+                        "ATOMIC_CONCERN_RESPONSE_RETRY_EXHAUSTED: "
+                        f"{name}:{response_region} remained invalid after "
+                        f"{attempt_limit} bounded attempts. Last failure: {reason}"
+                    ) from exc
+
                 validation_failure = (
                     "HOST REGION VALIDATION FAILED BEFORE COMPILATION:\n"
                     + reason
@@ -529,6 +631,21 @@ class AtomicConcernExecutor:
                 repair_failure = "\n\n".join(
                     item for item in (failure, validation_failure) if item
                 )
+                continue
+
+            _trace_region_generation(
+                "atomic_concern_region_accepted",
+                result="PASS",
+                concern=name,
+                region=response_region,
+                attempt=attempt,
+                attempt_limit=attempt_limit,
+                output_sha256=output_sha,
+                output_chars=len(output_text),
+            )
+            return parsed
+
+        raise AssertionError("atomic concern region attempt loop terminated unexpectedly")
 
     def _apply(self, concern: Mapping[str, Any], *, failure: str = "") -> None:
         name = _slug(concern["concern"])
