@@ -405,7 +405,23 @@ public final class AuthoredFeature001 {
                 )
             else:
                 assert "host:authored-side-only" in str(request.messages)
-                new = ""
+                parameters = request.tools[0]["function"]["parameters"]
+                properties = parameters["properties"]
+                old_span = properties["old"]["const"]
+                assert isinstance(old_span, str) and old_span
+                new = old_span.replace(
+                    "@Environment(EnvType.CLIENT)\n    ",
+                    "",
+                ).replace("@Environment(EnvType.CLIENT)", "")
+                return GenerationResponse(
+                    tool_calls=(
+                        ToolCall(
+                            id=str(len(requests)),
+                            name="apply_source_edit",
+                            arguments={"old": old_span, "new": new},
+                        ),
+                    )
+                )
             return GenerationResponse(
                 tool_calls=(
                     ToolCall(
