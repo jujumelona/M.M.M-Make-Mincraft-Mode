@@ -9,6 +9,8 @@ CRITICAL_RUNTIME_PATHS = (
     "minecraft_mod_ai/generation_output_budget.py",
     "minecraft_mod_ai/model_context_budget.py",
     "minecraft_mod_ai/model_output_atomicity_contract.py",
+)
+DEEP_SOFTWARE_GATE_PATHS = (
     "tools/verify_integrity_minecraft.py",
     "tests/test_implementation_ir.py",
 )
@@ -18,6 +20,7 @@ PUSH_GATES = (
     ".github/workflows/cumulative-regression-guard.yml",
     ".github/workflows/real-model-colab-e2e.yml",
 )
+SOFTWARE_GATES = PUSH_GATES[:3]
 
 
 def _text(path: str) -> str:
@@ -30,6 +33,13 @@ def test_critical_runtime_changes_reach_end_to_end_gates() -> None:
         assert "push:" in text, workflow
         assert "branches: [main]" in text, workflow
         for path in CRITICAL_RUNTIME_PATHS:
+            assert path in text, f"{workflow} missing {path}"
+
+
+def test_integrity_and_ir_changes_reenter_deep_software_gates() -> None:
+    for workflow in SOFTWARE_GATES:
+        text = _text(workflow)
+        for path in DEEP_SOFTWARE_GATE_PATHS:
             assert path in text, f"{workflow} missing {path}"
 
 
