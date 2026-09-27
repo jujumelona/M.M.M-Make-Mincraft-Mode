@@ -21,6 +21,8 @@ _MAX_REGION_ATTEMPT_LIMIT = 32
 
 
 def _region_attempt_limit() -> int:
+    """Return the host safety bound for one already-decomposed concern region."""
+
     raw = os.environ.get("MMM_ATOMIC_CONCERN_REGION_ATTEMPTS", "").strip()
     if not raw:
         return _DEFAULT_REGION_ATTEMPT_LIMIT

@@ -475,6 +475,8 @@ def _direct_host_grounding(
     }
 
 def _atomic_concern_output_token_ceiling() -> int:
+    """Keep small-model concern decodes bounded without shrinking planner budgets."""
+
     raw = os.environ.get("MMM_ATOMIC_CONCERN_OUTPUT_TOKENS", "").strip()
     if not raw:
         return 2048

@@ -204,3 +204,8 @@ def test_direct_coder_forwards_atomic_output_token_ceiling() -> None:
     assert captured["enable_tools"] is False
     assert captured["tool_stage"] == "generation"
     assert captured["output_token_ceiling"] == 1536
+
+
+def test_atomic_concern_output_budget_honors_explicit_override(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_ATOMIC_CONCERN_OUTPUT_TOKENS", "1536")
+    assert _atomic_concern_output_token_ceiling() == 1536
