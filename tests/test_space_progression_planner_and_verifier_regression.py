@@ -381,6 +381,12 @@ def _module():
     task = {
         "task_id": "task_ship_performance",
         "task_sha256": "sha256:" + "a" * 64,
+        "target_cell": {
+            "minecraft_version": "1.21.1",
+            "loader": "fabric",
+            "mappings": "1.21.1+build.3",
+            "java_version": "21",
+        },
         "requirement_refs": ["req_ship_performance"],
         "gap_refs": ["gap_ship_performance"],
         "owned_anchors": [main_anchor, test_anchor],

@@ -77,7 +77,7 @@ class _ContextRouter:
 
     def generate_text(self, role, messages, **kwargs):
         assert role == "coder"
-        assert kwargs["response_format"] == "json"
+        assert kwargs["response_format"] == "text"
         assert kwargs["tool_stage"] == "generation"
         assert kwargs["enable_tools"] is False
         assert self.workspace is not None
@@ -96,12 +96,7 @@ class _ContextRouter:
             '    static final String LAST = "HIGH_INDEX_SOURCE_SENTINEL";\n'
             "}\n"
         )
-        return json.dumps(
-            {
-                "content": source,
-                "summary": "Implemented from host-selected relevant source.",
-            }
-        )
+        return source
 
 
 def test_custom_generator_sends_only_relevant_existing_source_to_whole_file_coder(

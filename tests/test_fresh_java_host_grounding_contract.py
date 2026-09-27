@@ -253,7 +253,14 @@ def test_materialized_fresh_authored_slot_uses_compile_probe_after_evidence_exha
     anchor = {"kind": "symbol", "locator": path + "#AuthoredFeature001",
               "status": "existing", "ownership": "host_exact_authored_lowering"}
     module = SimpleNamespace(module_id="authored_feature_001", kind="custom_java", config={
-        "evidence_task": {"task_id": "authored_feature_001", "owned_anchors": [anchor],
+        "evidence_task": {"task_id": "authored_feature_001",
+                          "target_cell": {
+                              "minecraft_version": "1.21.1",
+                              "loader": "fabric",
+                              "mappings": "1.21.1+build.3",
+                              "java_version": "21",
+                          },
+                          "owned_anchors": [anchor],
                           "production_bindings": [{"task_ref": "authored_feature_001",
                                                    "reuse_action": "fresh", "owned_anchors": [anchor]}],
                           "required_gates": ["target_compile"]}})

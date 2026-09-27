@@ -44,6 +44,12 @@ def _exact_module():
         config={
             "evidence_task": {
                 "task_id": "direct-task",
+                "target_cell": {
+                    "minecraft_version": "26.2",
+                    "loader": "fabric",
+                    "mappings": "",
+                    "java_version": "25",
+                },
                 "owned_anchors": [anchor],
                 "production_bindings": [
                     {
@@ -75,6 +81,12 @@ def _existing_exact_module():
         config={
             "evidence_task": {
                 "task_id": "authored_feature_001",
+                "target_cell": {
+                    "minecraft_version": "26.2",
+                    "loader": "fabric",
+                    "mappings": "",
+                    "java_version": "25",
+                },
                 "semantic_outcome": "implement one authored feature",
                 "implementation_obligations": ["implement this exact feature only"],
                 "engineering_worksheet": {"objective": "one exact authored feature"},

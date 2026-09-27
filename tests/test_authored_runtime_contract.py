@@ -318,6 +318,12 @@ public final class AuthoredFeature001 {
         config={
             "evidence_task": {
                 "task_id": "authored_feature_001",
+                "target_cell": {
+                    "minecraft_version": "1.21.1",
+                    "loader": "fabric",
+                    "mappings": "1.21.1+build.3",
+                    "java_version": "21",
+                },
                 "owned_anchors": [anchor],
                 "production_bindings": [
                     {
