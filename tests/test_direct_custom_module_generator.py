@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-
-import pytest
 from pathlib import Path
 from types import SimpleNamespace
 
-from minecraft_mod_ai.complete_spec import ProductionModule
+import pytest
+
 from minecraft_mod_ai import custom_module_generator as direct
+from minecraft_mod_ai.complete_spec import ProductionModule
 
 
 def _module(path: str, symbol: str) -> ProductionModule:
@@ -354,26 +354,15 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
     calls: list[tuple[str, dict[str, object]]] = []
 
     class Router:
-        def generate_text(self, role, messages, **kwargs):
+        def generate_tool_decision(self, role, messages, **kwargs):
             del role
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
             calls.append((concern, dict(kwargs)))
             if concern == "variables":
-                content = (
-                    "<<<MMM_CONCERN_MEMBERS>>>\n"
-                    "private static int balance = 0;\n"
-                    "<<<MMM_CONCERN_INITIALIZE>>>\n"
-                    "<<<MMM_CONCERN_END>>>"
-                )
-            else:
-                content = (
-                    "<<<MMM_CONCERN_MEMBERS>>>\n"
-                    "public static boolean valid() { return balance >= 0; }\n"
-                    "<<<MMM_CONCERN_INITIALIZE>>>\n"
-                    "<<<MMM_CONCERN_END>>>"
-                )
-            return content
+                return {"fields": [{"modifiers": ["private"], "type": "int", "name": "balance", "initializer": "0"}]}
+            return {"methods": [{"modifiers": ["public"], "return_type": "boolean", "name": "valid",
+                                 "body": ["return balance >= 0"]}]}
 
     class Runner:
         def __init__(self, _cache):
@@ -390,9 +379,8 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
 
     source = (root / path).read_text(encoding="utf-8")
     assert [name for name, _kwargs in calls] == ["variables", "invariants"]
-    assert all(kwargs["enable_tools"] is False for _name, kwargs in calls)
-    assert all(kwargs["response_format"] == "text" for _name, kwargs in calls)
-    assert all("response_schema" not in kwargs for _name, kwargs in calls)
+    assert all(kwargs["tool_name"] == "emit_java_structure" for _name, kwargs in calls)
+    assert all(kwargs["parameters"]["type"] == "object" for _name, kwargs in calls)
     assert "private static int balance = 0;" in source
     assert "public static boolean valid()" in source
     assert "MMM_ATOMIC_CONCERN_VARIABLES_MEMBERS_START" in source
@@ -408,42 +396,33 @@ def test_atomic_concern_compile_repair_reopens_only_localized_concern(
     calls: list[str] = []
 
     class Router:
-        def generate_text(self, role, messages, **kwargs):
+        def generate_tool_decision(self, role, messages, **kwargs):
             del role, kwargs
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
             calls.append(concern)
             repairing = bool(payload.get("repair_failure"))
             if concern == "variables":
-                member = (
-                    "private static Object value = new MissingType();"
-                    if not repairing
-                    else "private static Object value = new Object();" 
-                )
-            else:
-                member = "public static boolean valid() { return value != null; }"
-            content = (
-                "<<<MMM_CONCERN_MEMBERS>>>\n" + member + "\n"
-                "<<<MMM_CONCERN_INITIALIZE>>>\n"
-                "<<<MMM_CONCERN_END>>>"
-            )
-            return content
+                return {"fields": [{"modifiers": ["private"], "type": "Object", "name": "value",
+                                    "initializer": "new Object()" if repairing else "new Object(1)"}]}
+            return {"methods": [{"modifiers": ["public"], "return_type": "boolean", "name": "valid",
+                                 "body": ["return value != null"]}]}
 
     class Runner:
         def __init__(self, _cache):
             pass
         def compile_java(self, project_root):
             source = (project_root / path).read_text(encoding="utf-8")
-            if "MissingType" not in source:
+            if "new Object(1)" not in source:
                 return SimpleNamespace(status="PASS", commands=(), error=None)
             line = next(
                 index for index, text in enumerate(source.splitlines(), start=1)
-                if "MissingType" in text
+                if "new Object(1)" in text
             )
             log = project_root / ".minecraft_ai/logs/atomic.log"
             log.parent.mkdir(parents=True, exist_ok=True)
             log.write_text(
-                f"{project_root / path}:{line}: error: cannot find symbol MissingType",
+                f"{project_root / path}:{line}: error: constructor Object cannot be applied to given types",
                 encoding="utf-8",
             )
             return SimpleNamespace(
@@ -459,9 +438,10 @@ def test_atomic_concern_compile_repair_reopens_only_localized_concern(
         minecraft_version="1.21.1", loader="fabric",
     )
 
-    assert calls == ["variables", "invariants", "variables"]
+    # Each concern compiles before the next one can depend on its declarations.
+    assert calls == ["variables", "variables", "invariants"]
     source = (root / path).read_text(encoding="utf-8")
-    assert "MissingType" not in source
+    assert "new Object(1)" not in source
     assert "new Object()" in source
     assert "public static boolean valid()" in source
     assert result["generation_verification"]["atomic_repair_count"] == 1

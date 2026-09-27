@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .custom_module_errors import CustomModuleGenerationError
+from .custom_module_errors import AtomicJavaDecisionError, CustomModuleGenerationError
 
 MEMBERS_MARKER = "<<<MMM_CONCERN_MEMBERS>>>"
 INITIALIZE_MARKER = "<<<MMM_CONCERN_INITIALIZE>>>"
@@ -59,6 +59,7 @@ def _trace_region_generation(
     reason: str = "",
     output_sha256: str = "",
     output_chars: int = 0,
+    rejected_response: str | None = None,
 ) -> None:
     from .root_cause_trace import emit_root_cause
 
@@ -76,6 +77,7 @@ def _trace_region_generation(
             "attempt_limit": attempt_limit,
             **({"output_sha256": output_sha256} if output_sha256 else {}),
             **({"output_chars": output_chars} if output_chars else {}),
+            **({"rejected_response": rejected_response} if rejected_response is not None else {}),
         },
     )
 
@@ -1573,7 +1575,7 @@ class AtomicConcernExecutor:
                 attempt_limit=attempt_limit,
             )
             output_text = ""
-            output_sha = hashlib.sha256(b"").hexdigest()
+            output_sha = ""
             try:
                 output = self.call_coder(_messages(
                     section=self.section,
@@ -1613,6 +1615,9 @@ class AtomicConcernExecutor:
                             + structure_error
                         )
             except CustomModuleGenerationError as exc:
+                if isinstance(exc, AtomicJavaDecisionError) and exc.response_text is not None:
+                    output_text = exc.response_text
+                    output_sha = exc.response_sha256 or ""
                 reason = str(exc).split("\n", 1)[0]
                 recoverable = reason.startswith(
                     (
@@ -1634,11 +1639,12 @@ class AtomicConcernExecutor:
                         reason=reason,
                         output_sha256=output_sha,
                         output_chars=len(output_text),
+                        rejected_response=(exc.response_text if isinstance(exc, AtomicJavaDecisionError) else None),
                     )
                     raise
 
                 violation = (reason, output_sha)
-                if violation in seen_violations:
+                if output_sha and violation in seen_violations:
                     _trace_region_generation(
                         "atomic_concern_region_no_progress",
                         result="FAIL",
@@ -1649,13 +1655,15 @@ class AtomicConcernExecutor:
                         reason=reason,
                         output_sha256=output_sha,
                         output_chars=len(output_text),
+                        rejected_response=(exc.response_text if isinstance(exc, AtomicJavaDecisionError) else None),
                     )
                     raise CustomModuleGenerationError(
                         f"ATOMIC_CONCERN_RESPONSE_NO_PROGRESS: {name}:{response_region} "
                         f"repeated identical invalid output: {reason}"
                     ) from exc
 
-                seen_violations.add(violation)
+                if output_sha:
+                    seen_violations.add(violation)
                 _trace_region_generation(
                     "atomic_concern_region_rejected",
                     result="RETRY" if attempt < attempt_limit else "FAIL",
@@ -1666,6 +1674,7 @@ class AtomicConcernExecutor:
                     reason=reason,
                     output_sha256=output_sha,
                     output_chars=len(output_text),
+                    rejected_response=(exc.response_text if isinstance(exc, AtomicJavaDecisionError) else None),
                 )
                 if attempt >= attempt_limit:
                     raise CustomModuleGenerationError(
@@ -1823,7 +1832,7 @@ __all__ = [
     "END_MARKER",
     "INITIALIZE_MARKER",
     "MEMBERS_MARKER",
-    "build_concern_scaffold",
     "AtomicConcernExecutor",
+    "build_concern_scaffold",
     "parse_concern_content",
 ]

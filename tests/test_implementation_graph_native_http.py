@@ -1,6 +1,6 @@
 """Exercise host-owned implementation lowering over real coder HTTP, then javac/java.
 
-The server replays one controlled source response; implementation planning itself must
+The server replays controlled native tool responses; implementation planning itself must
 perform zero model requests.
 """
 from __future__ import annotations
@@ -18,10 +18,13 @@ import pytest
 from test_implementation_ir import graph_project
 
 from minecraft_mod_ai import custom_module_generator as direct
-from minecraft_mod_ai.authored_execution_schema import EXECUTION_SECTION_ORDER, concern_contracts
 from minecraft_mod_ai import llama_exact_context, llama_lora_runtime
 from minecraft_mod_ai import llama_stream_efficiency_contract as streaming
-from minecraft_mod_ai.model_adapters.base import AdapterConfig, GenerationRequest
+from minecraft_mod_ai.authored_execution_schema import (
+    EXECUTION_SECTION_ORDER,
+    concern_contracts,
+)
+from minecraft_mod_ai.model_adapters.base import AdapterConfig
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
 from minecraft_mod_ai.model_router import ModelRouter
 
@@ -31,6 +34,8 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
     if not javac or not java:
         pytest.skip("Java compiler/runtime unavailable")
     module, main = graph_project(tmp_path)
+    # Keep compiler outputs separate from the generated source transaction.
+    class_output = tmp_path.parent / (tmp_path.name + "-compiled")
     module.config["implementation_graph_request"]["text"] = (
         "## 1. 행동 계약 (behavior_contract)\nBehavior.\n"
         "## 2. 상태 모델 (state_model)\nState.\n"
@@ -41,11 +46,6 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
         "## 7. 자원 및 UI (resources_and_ui)\nResources.\n"
         "## 8. 실패 및 제한 (failure_and_limits)\nFailures.\n"
     )
-    atomic_content = (
-        "<<<MMM_CONCERN_MEMBERS>>>\n"
-        "<<<MMM_CONCERN_INITIALIZE>>>\n"
-        "<<<MMM_CONCERN_END>>>"
-    )
     requests = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -55,14 +55,16 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
         def do_POST(self):
             payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             requests.append(payload)
-            delta = {"content": atomic_content}
+            name = payload["tools"][0]["function"]["name"]
+            delta = {"tool_calls": [{"index": 0, "id": f"call_{len(requests)}", "type": "function",
+                                     "function": {"name": name, "arguments": "{}"}}]}
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Connection", "close")
             self.end_headers()
             for event in (
                 {"choices": [{"delta": delta}]},
-                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+                {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
             ):
                 self.wfile.write(("data: " + json.dumps(event) + "\n\n").encode())
             self.wfile.write(b"data: [DONE]\n\n")
@@ -101,12 +103,9 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
         def _generation_scope(self, config):
             return nullcontext()
 
-        def generate_text(self, role, messages, **kwargs):
-            assert role == "coder"
-            return adapters[role].generate(GenerationRequest(messages=messages))
-
         def _generate_tool_decision_impl(self, role, messages, **kwargs):
-            raise AssertionError("host graph lowering must not call planner tool decisions")
+            assert role == "coder", "host graph lowering must not call planner tool decisions"
+            return super()._generate_tool_decision_impl(role, messages, **kwargs)
 
     compilations = []
 
@@ -117,7 +116,7 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
         def compile_java(self, root):
             files = list((Path(root) / "src/main/java").rglob("*.java"))
             result = subprocess.run(
-                [javac, "-d", str(tmp_path / "classes"), *map(str, files)],
+                [javac, "-d", str(class_output), *map(str, files)],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -147,7 +146,7 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
             len(concern_contracts(section)) for section in EXECUTION_SECTION_ORDER
         ) + len(concern_contracts("integration"))
         assert len(requests) == expected_requests
-        assert all(not request.get("tools") for request in requests)
+        assert all(request["tools"][0]["function"]["name"] == "emit_java_structure" for request in requests)
         graph = result["implementation_ir"]
         symbols = {node["symbol"] for node in graph["nodes"]}
         assert symbols == {
@@ -167,20 +166,23 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
             "public class Probe { public static void main(String[] args) { "
             "new example.TestMod().onInitialize(); } }"
         )
-        subprocess.run(
+        probe_compile = subprocess.run(
             [
                 javac,
                 "-cp",
-                str(tmp_path / "classes"),
+                str(class_output),
                 "-d",
-                str(tmp_path / "classes"),
+                str(class_output),
                 str(probe),
+                *map(str, (tmp_path / "src/main/java").rglob("*.java")),
             ],
-            check=True,
+            check=False,
             capture_output=True,
+            text=True,
         )
+        assert probe_compile.returncode == 0, probe_compile.stderr
         run = subprocess.run(
-            [java, "-cp", str(tmp_path / "classes"), "Probe"],
+            [java, "-cp", str(class_output), "Probe"],
             check=True,
             capture_output=True,
             text=True,

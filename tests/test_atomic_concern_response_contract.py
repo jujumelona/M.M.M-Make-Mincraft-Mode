@@ -6,10 +6,10 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai.atomic_concern_source import (
-    AtomicConcernExecutor,
     END_MARKER,
     INITIALIZE_MARKER,
     MEMBERS_MARKER,
+    AtomicConcernExecutor,
     parse_concern_content,
 )
 from minecraft_mod_ai.custom_module_errors import CustomModuleGenerationError
@@ -81,9 +81,9 @@ def _executor(
         "private static final int COST = 10;",
         "```java\nprivate static final int COST = 10;\n```",
         f"{MEMBERS_MARKER}\nprivate static final int COST = 10;\n{END_MARKER}",
-        "// MMM_ATOMIC_CONCERN_TRANSITIONS_MEMBERS_START\n"
-        "private static final int COST = 10;\n"
-        "// MMM_ATOMIC_CONCERN_TRANSITIONS_MEMBERS_END",
+        ("// MMM_ATOMIC_CONCERN_TRANSITIONS_MEMBERS_START\n"
+         "private static final int COST = 10;\n"
+         "// MMM_ATOMIC_CONCERN_TRANSITIONS_MEMBERS_END"),
     ],
 )
 def test_executor_members_region_does_not_require_response_markers(output: str) -> None:
@@ -1065,6 +1065,7 @@ def test_nested_type_visibility_is_host_owned() -> None:
 
 def test_parameter_schema_tolerates_small_model_metadata_noise() -> None:
     from jsonschema import Draft202012Validator
+
     from minecraft_mod_ai.custom_module_generator import _ATOMIC_MEMBERS_PARAMETERS
 
     decision = {
@@ -1130,8 +1131,10 @@ def test_preferred_shape_is_guidance_not_schema_restriction() -> None:
 
 def test_structured_output_exhaustion_becomes_bounded_concern_failure() -> None:
     from minecraft_mod_ai.custom_module_generator import _call_atomic_java_region
+    from minecraft_mod_ai.llama_finish_reason_contract import (
+        LlamaCompletionBoundaryError,
+    )
     from minecraft_mod_ai.model_adapters.base import ModelBackendError
-    from minecraft_mod_ai.llama_finish_reason_contract import LlamaCompletionBoundaryError
 
     class _Router:
         def generate_tool_decision(self, role, messages, **kwargs):
@@ -1142,7 +1145,11 @@ def test_structured_output_exhaustion_becomes_bounded_concern_failure() -> None:
                 cause=LlamaCompletionBoundaryError(
                     "native llama-server exhausted the bounded output allowance before "
                     "the assistant action completed; prompt_tokens=100 completion_tokens=2048 "
-                    "max_tokens=2048"
+                    "max_tokens=2048",
+                    kind="output_exhausted",
+                    prompt_tokens=100,
+                    completion_tokens=2048,
+                    max_tokens=2048,
                 ),
             )
 
@@ -1250,6 +1257,7 @@ def test_atomic_native_tool_call_does_not_force_legacy_2048_ceiling() -> None:
 
 def test_record_methods_are_not_arbitrarily_capped_by_tool_schema() -> None:
     from jsonschema import Draft202012Validator
+
     from minecraft_mod_ai.custom_module_generator import _ATOMIC_MEMBERS_PARAMETERS
 
     decision = {
@@ -1281,6 +1289,7 @@ def test_record_methods_are_not_arbitrarily_capped_by_tool_schema() -> None:
 
 def test_atomic_member_schema_accepts_model_modifier_noise_for_host_filtering() -> None:
     from jsonschema import Draft202012Validator
+
     from minecraft_mod_ai.custom_module_generator import _ATOMIC_MEMBERS_PARAMETERS
 
     Draft202012Validator(_ATOMIC_MEMBERS_PARAMETERS).validate(
@@ -1390,6 +1399,7 @@ def test_sibling_api_exposes_exact_type_and_mutability() -> None:
 
 def test_nested_init_method_is_normalized_to_record_constructor() -> None:
     from jsonschema import Draft202012Validator
+
     from minecraft_mod_ai.custom_module_generator import (
         _ATOMIC_MEMBERS_PARAMETERS,
         _render_atomic_java_structure,
@@ -1425,6 +1435,7 @@ def test_nested_init_method_is_normalized_to_record_constructor() -> None:
 
 def test_record_explicit_constructor_slot_is_supported() -> None:
     from jsonschema import Draft202012Validator
+
     from minecraft_mod_ai.custom_module_generator import (
         _ATOMIC_MEMBERS_PARAMETERS,
         _render_atomic_java_structure,
@@ -1637,7 +1648,8 @@ def test_atomic_prompt_hides_planning_record_schema_from_coder() -> None:
 
 
 def test_logic_concerns_cannot_emit_nested_types() -> None:
-    from jsonschema import Draft202012Validator
+    from jsonschema import Draft202012Validator, ValidationError
+
     from minecraft_mod_ai.custom_module_generator import (
         _ATOMIC_LOGIC_MEMBERS_PARAMETERS,
         _atomic_parameters_for_request,
@@ -1657,7 +1669,7 @@ def test_logic_concerns_cannot_emit_nested_types() -> None:
         "methods",
         "static_initializers",
     }
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         Draft202012Validator(parameters).validate(
             {"classes": [{"name": "Initializer"}]}
         )
@@ -1784,7 +1796,7 @@ def test_compiler_repair_cannot_expand_nested_type_structure() -> None:
         call_coder=call_coder,
         compile_java=compile_java,
         compile_log=lambda _report: (
-            "/tmp/Test.java:5: error: cannot find symbol\n"
+            f"/tmp/Test.java:{next(i for i, line in enumerate(executor.source.splitlines(), 1) if 'missing()' in line)}: error: cannot find symbol\n"
             "private static int value = missing();\n"
             "                           ^\n"
             "  symbol: method missing()\n"

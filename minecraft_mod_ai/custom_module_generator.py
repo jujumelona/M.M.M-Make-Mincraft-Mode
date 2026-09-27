@@ -14,12 +14,13 @@ import json
 import os
 import re
 from collections.abc import Iterable, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .complete_spec import ProductionModule
-from .custom_module_errors import CustomModuleGenerationError
+from .custom_module_errors import AtomicJavaDecisionError, CustomModuleGenerationError
 from .generation_implementation_grounding import (
     build_generation_implementation_grounding,
     render_generation_implementation_authority_prompt,
@@ -411,7 +412,7 @@ def _direct_host_grounding(
             "api_symbols": dict(snapshot["api_symbols"]),
             "dependency_coordinates": dict(snapshot["dependency_coordinates"]),
         }
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - optional grounding failures become explicit evidence
         version_facts = {
             "status": "UNAVAILABLE",
             "reason": f"{type(exc).__name__}: {exc}",
@@ -678,7 +679,18 @@ def _atomic_parameters_for_request(
             _ATOMIC_LOGIC_MEMBERS_PARAMETERS,
             preferred or "logic_fields_methods_only",
         )
-    return _ATOMIC_MEMBERS_PARAMETERS, preferred or "smallest_components"
+    parameters = _ATOMIC_MEMBERS_PARAMETERS
+    host_symbol = str(payload.get("host_selected_class") or "").strip()
+    if host_symbol:
+        parameters = deepcopy(parameters)
+        for category in ("records", "enums", "classes"):
+            name_schema = parameters["properties"][category]["items"]["properties"]["name"]
+            name_schema["not"] = {"enum": [host_symbol]}
+            name_schema["description"] = (
+                f"Name of a nested runtime helper. {host_symbol} is the existing outer class "
+                "and must not be declared again. Place outer fields in fields, not in a class wrapper."
+            )
+    return parameters, preferred or "smallest_components"
 
 
 _COMMON_JAVA_NAMES = {
@@ -1509,12 +1521,6 @@ def _call_atomic_java_region(
         if isinstance(concern, Mapping)
         else ""
     )
-    recipe = payload.get("generation_recipe")
-    preferred_shape = (
-        str(recipe.get("preferred_shape") or "").strip()
-        if isinstance(recipe, Mapping)
-        else ""
-    )
     kwargs: dict[str, Any] = {
         "tool_name": _ATOMIC_JAVA_REGION_TOOL,
         "parameters": parameters,
@@ -1538,6 +1544,8 @@ def _call_atomic_java_region(
         callback, "output_token_ceiling"
     ):
         kwargs["output_token_ceiling"] = max(1, int(output_token_ceiling))
+    from .atomic_java_admission import admit_components, rejected_decision
+
     try:
         decision = callback("coder", messages, **kwargs)
     except Exception as exc:
@@ -1552,19 +1560,62 @@ def _call_atomic_java_region(
         from .model_adapters.base import NativeToolDecisionRejected
 
         if isinstance(exc, NativeToolDecisionRejected):
-            raise CustomModuleGenerationError(
-                "ATOMIC_CONCERN_RESPONSE_INVALID: required emit_java_structure "
-                f"tool call was rejected: {exc}"
-            ) from exc
-        raise
-    if not isinstance(decision, Mapping):
-        raise CustomModuleGenerationError(
-            "ATOMIC_CONCERN_RESPONSE_INVALID: emit_java_structure returned a non-object."
-        )
-    return _render_atomic_java_structure(
-        decision,
-        response_region=response_region,
-        host_symbol=str(payload.get("host_selected_class") or "").strip(),
+            decision = rejected_decision(exc, _ATOMIC_JAVA_REGION_TOOL)
+            if decision is not None:
+                from jsonschema import Draft202012Validator
+
+                # Never reinterpret an unrelated adapter rejection as an accepted
+                # call merely because its arguments happen to parse as JSON.
+                if Draft202012Validator(parameters).is_valid(decision):
+                    decision = None
+            if decision is None:
+                raise AtomicJavaDecisionError(
+                    "ATOMIC_CONCERN_RESPONSE_INVALID: required emit_java_structure "
+                    f"tool call was rejected: {exc}", response=list(exc.rejections),
+                ) from exc
+        else:
+            raise
+
+    def repair_component(schema: Mapping[str, Any], correction: Mapping[str, Any]) -> Any:
+        repair_payload = {
+            key: payload[key]
+            for key in ("host_selected_class", "section", "concern", "task_authority",
+                        "host_grounding", "dependency_api", "available_sibling_api", "repair_failure")
+            if key in payload
+        }
+        repair_payload.update({
+            "phase": "repair_atomic_java_component",
+            "response_region": "component",
+            "component_repair": dict(correction),
+            "scope": {"required_output_tool": "repair_java_component", "other_components_immutable": True},
+        })
+        repair_kwargs = {
+            **kwargs, "tool_name": "repair_java_component", "parameters": dict(schema),
+            "description": "Correct the selected value in one Java component using the required native tool.",
+        }
+        return callback("coder", [
+            {"role": "system", "content": (
+                "Correct the host-selected Java component. Call repair_java_component once. "
+                "Return only the replacement value for component_repair.selected_path. "
+                "Preserve its runtime semantics. The host retains all other values and components; "
+                "never regenerate the region or outer class. "
+                "Use supplied task authority, grounding and sibling APIs only."
+            )},
+            {"role": "user", "content": json.dumps(repair_payload, ensure_ascii=False, sort_keys=True)},
+        ], **repair_kwargs)
+
+    from .atomic_concern_source import _region_attempt_limit
+
+    host_symbol = str(payload.get("host_selected_class") or "").strip()
+    return admit_components(
+        decision, parameters=parameters,
+        render=lambda value: _render_atomic_java_structure(
+            value, response_region=response_region, host_symbol=host_symbol,
+        ),
+        repair=repair_component, attempt_limit=_region_attempt_limit(),
+        canonical_name=_canonical_java_identifier,
+        rewrite_identifiers=_rewrite_java_identifiers,
+        reserved_names=(host_symbol,) if host_symbol else (),
     )
 
 def _call_coder(
@@ -2061,7 +2112,7 @@ class CustomModuleGenerator:
                     else:
                         target.unlink(missing_ok=True)
                     raise
-                except Exception as exc:  # noqa: BLE001 - typed boundaries handled explicitly
+                except Exception as exc:
                     boundary = completion_boundary_error(exc)
                     if boundary is not None:
                         if target_existed:
