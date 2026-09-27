@@ -182,7 +182,8 @@ def test_execution_manifest_reuse_stays_before_build_repair_mutation() -> None:
         if isinstance(node, ast.FunctionDef) and node.name == "execute"
     )
 
-    manifest_assignments: dict[str, int] = {}
+    generated_hash_line = None
+    validation_alias_line = None
     build_call_line = None
     for node in ast.walk(execute):
         if isinstance(node, ast.Assign):
@@ -191,15 +192,19 @@ def test_execution_manifest_reuse_stays_before_build_repair_mutation() -> None:
                 for target in node.targets
                 if isinstance(target, ast.Name)
             ]
-            if any(
+            if "generated_manifest_hash" in names and any(
                 isinstance(item, ast.Call)
                 and isinstance(item.func, ast.Attribute)
                 and item.func.attr == "_project_manifest_hash"
                 for item in ast.walk(node.value)
             ):
-                for name in names:
-                    if name in {"generated_manifest_hash", "validation_manifest"}:
-                        manifest_assignments[name] = node.lineno
+                generated_hash_line = node.lineno
+            if (
+                "validation_manifest" in names
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "generated_manifest_hash"
+            ):
+                validation_alias_line = node.lineno
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
@@ -207,10 +212,7 @@ def test_execution_manifest_reuse_stays_before_build_repair_mutation() -> None:
         ):
             build_call_line = node.lineno
 
-    assert set(manifest_assignments) == {
-        "generated_manifest_hash",
-        "validation_manifest",
-    }
+    assert generated_hash_line is not None
+    assert validation_alias_line is not None
     assert build_call_line is not None
-    assert all(line < build_call_line for line in manifest_assignments.values())
-
+    assert generated_hash_line < validation_alias_line < build_call_line

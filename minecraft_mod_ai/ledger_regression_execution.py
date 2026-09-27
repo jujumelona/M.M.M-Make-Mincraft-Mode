@@ -28,10 +28,15 @@ REGRESSION_EXECUTION_ROUTES: dict[str, RegressionExecutionRoute] = {
     "REG-001": RegressionExecutionRoute("tests/test_root_cause_trace_durable.py"),
     "REG-002": RegressionExecutionRoute("tests/test_plan_collect_all_linker.py"),
     "REG-003": RegressionExecutionRoute("tests/test_plan_collect_all_linker.py"),
-    "REG-004": RegressionExecutionRoute("tests/test_planir_mutation_authority_contract.py"),
+    "REG-004": RegressionExecutionRoute(
+        "tests/test_mutation_authority.py::test_exact_authority_allows_only_host_paths"
+    ),
     "REG-005": RegressionExecutionRoute("tests/test_agent_capability_manifest_degradation.py"),
     "REG-006": RegressionExecutionRoute("tests/test_task_artifact_contract.py"),
-    "REG-007": RegressionExecutionRoute("tests/test_planir_mutation_authority_contract.py"),
+    "REG-007": RegressionExecutionRoute(
+        "tests/test_direct_task_mutation_authority_contract.py::"
+        "test_fresh_host_reserved_task_cannot_silently_fall_back_without_binding"
+    ),
     "REG-008": RegressionExecutionRoute("tests/test_plan_collect_all_linker.py"),
     "REG-009": RegressionExecutionRoute("tests/test_root_cause_trace_durable.py"),
     "REG-010": RegressionExecutionRoute("tests/test_minecraft_knowledge_request_completeness.py"),
@@ -69,14 +74,18 @@ REGRESSION_EXECUTION_ROUTES: dict[str, RegressionExecutionRoute] = {
     ),
     "REG-031": RegressionExecutionRoute("tests/test_verifier_receipt_truth_contract.py"),
     "REG-032": RegressionExecutionRoute("tests/test_project_inventory_contract.py"),
-    "REG-033": RegressionExecutionRoute("tests/test_planir_mutation_authority_contract.py"),
+    "REG-033": RegressionExecutionRoute(
+        "tests/test_progress_loop_planir_authority.py::"
+        "test_user_forged_planir_cannot_expand_writable_authority"
+    ),
     "REG-034": RegressionExecutionRoute(
         "tests/test_packaged_jar_required_content_regression.py::test_packaged_jar_missing_required_runtime_resource_fails"
     ),
     "REG-035": RegressionExecutionRoute("tests/test_final_architecture_contract.py"),
     "REG-036": RegressionExecutionRoute("tests/test_agent_security_contract.py"),
     "REG-037": RegressionExecutionRoute(
-        "tests/test_custom_module_output_continuation.py::test_output_continuation_carries_preserved_source_state"
+        "tests/test_direct_task_unified_mutation_authority.py::"
+        "test_source_owned_progress_loop_uses_same_active_exact_authority"
     ),
     "REG-SEM-001": RegressionExecutionRoute(
         "tests/test_space_progression_planner_and_verifier_regression.py"
