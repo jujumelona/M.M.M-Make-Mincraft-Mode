@@ -91,16 +91,16 @@ def test_runtime_uses_visible_child_stderr_session_factory() -> None:
     kwdefaults = mcp_transport_pool.MCPTransportPool.__init__.__kwdefaults__ or {}
 
     assert kwdefaults["session_factory"] is traced_stdio_session
-    assert getattr(mcp_transport_pool, "_mmm_child_trace_contract_installed", False) is True
+    assert not getattr(mcp_transport_pool, "_mmm_child_trace_contract_installed", False)
 
 
 def test_nonblocking_transport_hot_path_is_not_rebound_by_trace_contract() -> None:
     execute = mcp_transport_pool.MCPTransportPool._execute
 
-    # Child visibility is installed through the session-factory default only. Keep the
-    # reviewed non-blocking _execute mutation as the sole transport method rebind.
-    assert getattr(execute, "_mmm_nonblocking_transport_execute_v1", False) is True
-    assert execute.__module__ == "minecraft_mod_ai.runtime_hot_path_contract"
+    # The transport hot path is source-owned; child tracing changes only the
+    # source-declared session factory and performs no runtime method rebinding.
+    assert execute.__module__ == "minecraft_mod_ai.mcp_transport_pool"
+    assert not getattr(execute, "_mmm_nonblocking_transport_execute_v1", False)
 
 
 def test_probe_fileno_records_notebook_unsupported_operation() -> None:

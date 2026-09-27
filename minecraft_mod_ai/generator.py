@@ -4,6 +4,8 @@ import json
 import math
 import struct
 import zlib
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -1203,8 +1205,24 @@ def _png_chunk(kind: bytes, payload: bytes) -> bytes:
     )
 
 
-def make_texture_png(color: str, seed: str, *, kind: str, size: int = 16) -> bytes:
-    """Create a deterministic, license-clean RGBA Minecraft texture."""
+_TEXTURE_CACHE_LOCK = threading.RLock()
+_TEXTURE_CACHE: OrderedDict[tuple[str, str, int, int], bytes] = OrderedDict()
+_TEXTURE_CACHE_LIMIT = 512
+
+
+def _texture_pattern_key(
+    color: str,
+    seed: str,
+    kind: str,
+    size: int,
+) -> tuple[str, str, int, int]:
+    seed_residue = (
+        sum((index + 1) * ord(char) for index, char in enumerate(seed)) % 14
+    )
+    return str(color), str(kind), int(size), seed_residue
+
+
+def _render_texture_png(color: str, seed: str, *, kind: str, size: int = 16) -> bytes:
     red, green, blue = _hex_to_rgb(color)
     seed_value = sum((index + 1) * ord(char) for index, char in enumerate(seed))
     rows: list[bytes] = []
@@ -1237,6 +1255,30 @@ def make_texture_png(color: str, seed: str, *, kind: str, size: int = 16) -> byt
         + _png_chunk(b"IDAT", zlib.compress(raw, level=9))
         + _png_chunk(b"IEND", b"")
     )
+
+
+def make_texture_png(color: str, seed: str, *, kind: str, size: int = 16) -> bytes:
+    """Create a deterministic texture and reuse byte-identical pattern outputs."""
+    key = _texture_pattern_key(color, seed, kind, size)
+    with _TEXTURE_CACHE_LOCK:
+        cached = _TEXTURE_CACHE.get(key)
+        if cached is not None:
+            _TEXTURE_CACHE.move_to_end(key)
+            return cached
+    rendered = _render_texture_png(color, seed, kind=kind, size=size)
+    with _TEXTURE_CACHE_LOCK:
+        cached = _TEXTURE_CACHE.get(key)
+        if cached is not None:
+            _TEXTURE_CACHE.move_to_end(key)
+            return cached
+        _TEXTURE_CACHE[key] = rendered
+        while len(_TEXTURE_CACHE) > _TEXTURE_CACHE_LIMIT:
+            _TEXTURE_CACHE.popitem(last=False)
+    return rendered
+
+
+make_texture_png.__wrapped__ = _render_texture_png  # type: ignore[attr-defined]
+make_texture_png._mmm_texture_equivalence_cache = True  # type: ignore[attr-defined]
 
 
 _GITIGNORE = """.gradle/

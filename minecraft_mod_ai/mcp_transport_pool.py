@@ -5,12 +5,9 @@ import concurrent.futures
 import hashlib
 import json
 import os
-import sys
-import tempfile
 import threading
 import weakref
 from collections.abc import Callable, Mapping
-from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, AsyncContextManager
 
@@ -97,44 +94,7 @@ class _TransportRequest:
     expected_schema_sha256: str = ""
 
 
-@asynccontextmanager
-async def _stdio_session(
-    stage: str,
-    env: Mapping[str, str],
-    timeout_seconds: float,
-):
-    """Open one reusable stdio transport with LIFO-safe AnyIO scope ownership."""
-    try:
-        from mcp import ClientSession, StdioServerParameters
-        from mcp.client.stdio import stdio_client
-    except Exception as exc:  # pragma: no cover - dependency failure
-        from .agent_tool_runtime import AgentToolRuntimeError
-
-        raise AgentToolRuntimeError(
-            "The pinned MCP Python client is unavailable"
-        ) from exc
-
-    stack = AsyncExitStack()
-    try:
-        errlog = stack.enter_context(
-            tempfile.TemporaryFile(mode="w+", encoding="utf-8")
-        )
-        params = StdioServerParameters(
-            command=sys.executable,
-            args=["-m", "minecraft_mod_ai.mcp_server"],
-            env=dict(env),
-        )
-        read_stream, write_stream = await stack.enter_async_context(
-            stdio_client(params, errlog=errlog)
-        )
-        session = await stack.enter_async_context(
-            ClientSession(read_stream, write_stream)
-        )
-        with anyio.fail_after(timeout_seconds):
-            await session.initialize()
-        yield session
-    finally:
-        await stack.aclose()
+from .mcp_child_trace_contract import traced_stdio_session as _stdio_session
 
 
 class _SessionWorker:

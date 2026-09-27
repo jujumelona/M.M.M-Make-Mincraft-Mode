@@ -473,6 +473,35 @@ def _ensure_semantic_lsh(connection: sqlite3.Connection) -> None:
 _ensure_semantic_lsh._mmm_no_blanket_delete_v1 = True  # type: ignore[attr-defined]
 
 
+def _semantic_lsh_ready(connection: sqlite3.Connection) -> bool:
+    table = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mmm_semantic_lsh'"
+    ).fetchone()
+    if table is None:
+        return False
+    missing = connection.execute(
+        """
+        SELECT 1
+        FROM chunks AS c
+        LEFT JOIN mmm_semantic_lsh AS l ON l.chunk_id = c.chunk_id
+        WHERE c.embedding != '[]' AND l.chunk_id IS NULL
+        LIMIT 1
+        """
+    ).fetchone()
+    if missing is not None:
+        return False
+    stale = connection.execute(
+        """
+        SELECT 1
+        FROM mmm_semantic_lsh AS l
+        LEFT JOIN chunks AS c ON c.chunk_id = l.chunk_id
+        WHERE c.chunk_id IS NULL
+        LIMIT 1
+        """
+    ).fetchone()
+    return stale is None
+
+
 def _hamming_neighborhood(signature: int, bits: int, radius: int) -> list[int]:
     values = {int(signature)}
     if radius >= 1:
@@ -491,7 +520,8 @@ def _lsh_candidate_rows(
     target: int,
     cap: int,
 ) -> list[sqlite3.Row]:
-    _ensure_semantic_lsh(connection)
+    if not _semantic_lsh_ready(connection):
+        raise RuntimeError("semantic LSH side index is not ready")
     signatures = _signatures([query_vector])
     if not signatures:
         return []
