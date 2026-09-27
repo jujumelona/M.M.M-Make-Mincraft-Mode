@@ -591,3 +591,37 @@ def test_state_model_later_concerns_rehome_variables_overreach() -> None:
     assert result["source"].count("FROM_STATE_LOCKED") == 1
     assert result["source"].count("INVARIANT_PLAYER_CREDITS_MIN_COST") == 1
     assert "playerCredits" in result["source"]
+
+
+
+def test_private_static_initializer_is_normalized_before_compile() -> None:
+    executor = _executor(
+        [
+            (
+                "private static {\n"
+                "    java.lang.System.setProperty(\"mmm.test\", \"1\");\n"
+                "}"
+            )
+        ]
+    )
+
+    result = executor.run()
+
+    assert "private static {" not in result["source"]
+    assert "static {" in result["source"]
+    assert 'java.lang.System.setProperty("mmm.test", "1");' in result["source"]
+    assert result["repair_count"] == 0
+
+
+def test_visibility_instance_initializer_is_rejected_before_compile() -> None:
+    executor = _executor(
+        [
+            "private { initializeSomething(); }",
+            "private static final int COST = 10;",
+        ]
+    )
+
+    result = executor.run()
+
+    assert "private {" not in result["source"]
+    assert "private static final int COST = 10;" in result["source"]

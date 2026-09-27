@@ -118,6 +118,13 @@ _REGION_LABEL_LINE = re.compile(
     re.IGNORECASE,
 )
 
+_VISIBILITY_STATIC_INITIALIZER = re.compile(
+    r"(?m)^(?P<indent>[ \t]*)(?:public|protected|private)\s+static\s*\{"
+)
+_INVALID_VISIBILITY_INITIALIZER = re.compile(
+    r"(?m)^\s*(?:public|protected|private)\s*\{"
+)
+
 
 def _split_response_regions(text: str) -> tuple[str, str]:
     raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
@@ -153,7 +160,14 @@ def _normalize_region_text(value: str) -> str:
         if _REGION_LABEL_LINE.fullmatch(line):
             continue
         rows.append(line)
-    return "\n".join(rows).strip()
+    normalized = "\n".join(rows).strip()
+    # Java class initializers cannot carry visibility. Small coders sometimes emit
+    # "private static { ... }" when they mean a static initializer. Removing only
+    # the impossible visibility modifier preserves the executable semantics.
+    return _VISIBILITY_STATIC_INITIALIZER.sub(
+        lambda match: f"{match.group('indent')}static {{",
+        normalized,
+    )
 
 
 def _structure_scan(value: str) -> str:
@@ -480,6 +494,7 @@ def _validate_region_text(value: str, *, initialize_region: bool) -> None:
     if (
         not _brace_balanced_region(scan)
         or _contains_non_java_narrative(scan)
+        or _INVALID_VISIBILITY_INITIALIZER.search(scan)
         or _FORBIDDEN.search(scan)
         or _INITIALIZE_DECL.search(scan)
         or _has_forbidden_type_declaration(scan, initialize_region=initialize_region)
@@ -765,7 +780,9 @@ def _messages(
             "in its java argument. If this concern needs no members, set java to the empty string. "
             "Do not place response markers, prose, Markdown, package/import declarations, another "
             "top-level type, or initialize() lifecycle code in java. Private nested helper "
-            "class/interface/enum/record declarations are allowed when this concern needs them."
+            "class/interface/enum/record declarations are allowed when this concern needs them. "
+            "A class initializer must be written only as static { ... }; never prefix it with "
+            "public, protected, or private."
         )
     elif response_region == "initialize":
         response_contract = (
