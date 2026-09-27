@@ -112,6 +112,18 @@ def _bounded_execution_feedback(value: Any) -> dict[str, Any] | None:
     return {"diagnostics": rows} if rows else None
 
 
+def _owned_main_java_candidate(anchor: Any) -> tuple[str, str] | None:
+    if not isinstance(anchor, Mapping):
+        return None
+    match = _LOCATOR.fullmatch(str(anchor.get("locator") or "").strip())
+    if match is None:
+        return None
+    path = _normalize_project_path(match.group("path"))
+    if not path.startswith("src/main/java/"):
+        return None
+    return path, match.group("symbol")
+
+
 def _exact_target(module: ProductionModule) -> tuple[str, str, dict[str, Any]]:
     task = _task_local_module_contract(module)
     anchors = task.get("owned_anchors")
@@ -120,13 +132,9 @@ def _exact_target(module: ProductionModule) -> tuple[str, str, dict[str, Any]]:
         anchors, (str, bytes, bytearray)
     ):
         for anchor in anchors:
-            if not isinstance(anchor, Mapping):
-                continue
-            match = _LOCATOR.fullmatch(str(anchor.get("locator") or "").strip())
-            if match:
-                path = _normalize_project_path(match.group("path"))
-                if path.startswith("src/main/java/"):
-                    candidates.append((path, match.group("symbol")))
+            candidate = _owned_main_java_candidate(anchor)
+            if candidate is not None:
+                candidates.append(candidate)
     unique = tuple(dict.fromkeys(candidates))
     if len(unique) != 1:
         raise CustomModuleGenerationError(

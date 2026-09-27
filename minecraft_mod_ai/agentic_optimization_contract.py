@@ -150,6 +150,10 @@ def _write_memory(root: Path, trace: Mapping[str, Any]) -> None:
     with path.open('a', encoding='utf-8', newline='\n') as handle:
         handle.write(json.dumps(body, ensure_ascii=False, sort_keys=True) + '\n')
 
+def _single_native_decode_slot() -> bool:
+    return _env_int('MMM_LLAMA_ACTIVE_PARALLEL', 1, maximum=8) <= 1
+
+
 def _repair_candidate_count(self: Any, evidence: Mapping[str, Any], memory: Sequence[Mapping[str, Any]]) -> int:
     mode = _mode()
     if mode == 'off':
@@ -157,7 +161,7 @@ def _repair_candidate_count(self: Any, evidence: Mapping[str, Any], memory: Sequ
     width = _env_int('MMM_REPAIR_SEARCH_WIDTH', 2, maximum=3)
     if mode == 'on':
         return width
-    if _env_int('MMM_LLAMA_ACTIVE_PARALLEL', 1, maximum=8) <= 1:
+    if _single_native_decode_slot():
         return 1
     errors = diagnostic_errors(_diagnostic_receipt(evidence.get('diagnostics')))
     signature = self._signature(dict(evidence))

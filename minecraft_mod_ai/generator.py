@@ -37,6 +37,16 @@ def _json_text(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2) + "\n"
 
 
+def _generated_files(root: Path) -> tuple[Path, ...]:
+    return tuple(
+        sorted(
+            path.resolve()
+            for path in root.rglob("*")
+            if path.is_file() and not path.is_symlink()
+        )
+    )
+
+
 class FabricProjectGenerator:
     """Compile a validated ModSpec into its approved Fabric platform target."""
 
@@ -75,13 +85,6 @@ class FabricProjectGenerator:
             self._contract_test_java(spec),
             raw=True,
         )
-        self._write_text(
-            root,
-            package_path / f"{main_class}GameTests.java",
-            self._gametest_java(spec, main_class),
-            source=True,
-        )
-
         resource_root = Path("src/main/resources")
         self._write_text(
             root,
@@ -117,16 +120,9 @@ class FabricProjectGenerator:
         self._write_tags(root, spec)
         self._write_contract(root, spec)
         _install_host_gametest_contract(root, spec, adapter)
-        files = tuple(
-            sorted(
-                path.resolve()
-                for path in root.rglob("*")
-                if path.is_file() and not path.is_symlink()
-            )
-        )
         return GeneratedProject(
             root=root,
-            files=files,
+            files=_generated_files(root),
             main_class=f"{spec.package_name}.{main_class}",
         )
 
@@ -478,81 +474,9 @@ final class GeneratedContractTest {{
 """
         return generated_content
 
-    def _gametest_java(self, spec: ModSpec, main_class: str) -> str:
-        registry_checks: list[str] = []
-        recipe_checks: list[str] = []
-        for content in spec.contents:
-            registry = "ITEM" if content.kind is ContentKind.ITEM else "BLOCK"
-            registry_checks.append(
-                f'        require(Registries.{registry}.containsId(new Identifier('
-                f'{main_class}.MOD_ID, "{content.content_id}")), '
-                f'"{content.content_id} registry entry missing");'
-            )
-            if content.recipe:
-                recipe_checks.append(
-                    f'        require(context.getWorld().getServer().getRecipeManager().get('
-                    f'new Identifier({main_class}.MOD_ID, "{content.content_id}")).isPresent(), '
-                    f'"{content.content_id} recipe was not loaded");'
-                )
-        if spec.boss is not None:
-            registry_checks.append(
-                f'        require(Registries.ENTITY_TYPE.containsId(new Identifier('
-                f'{main_class}.MOD_ID, "{spec.boss.entity_id}")), '
-                f'"{spec.boss.entity_id} entity entry missing");'
-            )
-            registry_checks.append(
-                f'        require(Registries.ITEM.containsId(new Identifier('
-                f'{main_class}.MOD_ID, "{spec.boss.entity_id}_spawn_egg")), '
-                f'"{spec.boss.entity_id} spawn egg entry missing");'
-            )
-            registry_checks.extend(
-                [
-                    f"        var boss = {main_class}.{spec.boss.entity_id.upper()}.create("
-                    "context.getWorld());",
-                    '        require(boss != null, "boss factory returned null");',
-                    f"        require(Math.abs(boss.getMaxHealth() - "
-                    f'{spec.boss.max_health:.1f}f) < 0.01f, '
-                    '"boss max-health attribute mismatch");',
-                    "        var bossPosition = context.getAbsolutePos("
-                    "new net.minecraft.util.math.BlockPos(0, 2, 0));",
-                    "        boss.refreshPositionAndAngles(bossPosition, 0.0f, 0.0f);",
-                    '        require(context.getWorld().spawnEntity(boss), '
-                    '"boss could not be spawned in the server world");',
-                    f"        require(boss.isAlive() && boss.getType() == "
-                    f"{main_class}.{spec.boss.entity_id.upper()}, "
-                    '"spawned boss has the wrong runtime type");',
-                    "        var probeBossUuid = boss.getUuid();",
-                    "        boss.discard();",
-                ]
-            )
-        checks = "\n".join((*registry_checks, *recipe_checks))
-        return f"""package {spec.package_name};
-
-import net.fabricmc.fabric.api.gametest.v1.FabricGameTest;
-import net.minecraft.registry.Registries;
-import net.minecraft.test.GameTest;
-import net.minecraft.test.TestContext;
-import net.minecraft.util.Identifier;
-
-public final class {main_class}GameTests {{
-    @GameTest(templateName = FabricGameTest.EMPTY_STRUCTURE)
-    public void generatedRegistriesAreLive(TestContext context) {{
-{checks}
-        context.complete();
-    }}
-
-    private static void require(boolean condition, String message) {{
-        if (!condition) {{
-            throw new AssertionError(message);
-        }}
-    }}
-}}
-"""
-
     def _fabric_mod_json(self, spec: ModSpec, main_class: str) -> dict[str, object]:
         entrypoints: dict[str, list[str]] = {
             "main": [f"{spec.package_name}.{main_class}"],
-            "fabric-gametest": [f"{spec.package_name}.{main_class}GameTests"],
         }
         if spec.boss is not None:
             entrypoints["client"] = [f"{spec.package_name}.client.{main_class}Client"]
