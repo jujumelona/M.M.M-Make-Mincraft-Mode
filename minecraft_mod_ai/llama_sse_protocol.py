@@ -16,6 +16,58 @@ class LlamaSseServerError(RuntimeError):
         super().__init__(str(self.error.get("message", "llama-server stream error")))
 
 
+class LlamaNativeResponseFormatError(RuntimeError):
+    """llama.cpp generated a turn but its native chat parser rejected that turn."""
+
+    def __init__(self, status_code: int, detail: str) -> None:
+        self.status_code = max(400, int(status_code))
+        self.detail = str(detail or "").strip()
+        super().__init__(
+            f"llama server returned HTTP {self.status_code}"
+            + (f": {self.detail}" if self.detail else "")
+        )
+
+
+_NATIVE_FORMAT_ERROR_MARKERS = (
+    "peg-native format",
+    "common_chat_peg_parse",
+)
+
+
+def is_recoverable_native_format_error(value: Any) -> bool:
+    """Recognize server-side native chat parsing failures through wrapper chains."""
+
+    pending: list[Any] = [value]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        marker = id(current)
+        if marker in seen:
+            continue
+        seen.add(marker)
+
+        if isinstance(current, BaseException):
+            text = str(current).casefold()
+            for nested in (
+                getattr(current, "cause", None),
+                current.__cause__,
+                current.__context__,
+            ):
+                if nested is not None and nested is not current:
+                    pending.append(nested)
+        elif isinstance(current, Mapping):
+            try:
+                text = json.dumps(dict(current), ensure_ascii=False).casefold()
+            except (TypeError, ValueError):
+                text = str(current).casefold()
+        else:
+            text = str(current or "").casefold()
+
+        if any(token in text for token in _NATIVE_FORMAT_ERROR_MARKERS):
+            return True
+    return False
+
+
 def _error_status(value: Any) -> int:
     try:
         status = int(value)
@@ -79,4 +131,9 @@ def sse_error_from_line(raw_line: Any) -> tuple[int, dict[str, Any]] | None:
     return status, error
 
 
-__all__ = ["LlamaSseServerError", "sse_error_from_line"]
+__all__ = [
+    "LlamaNativeResponseFormatError",
+    "LlamaSseServerError",
+    "is_recoverable_native_format_error",
+    "sse_error_from_line",
+]

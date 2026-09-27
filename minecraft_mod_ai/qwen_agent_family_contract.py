@@ -85,6 +85,13 @@ def _qwen_agent_request(request: Any) -> bool:
     return _assistant_has_agent_history(_request_messages(request))
 
 
+def _force_non_thinking_replay(request: Any) -> bool:
+    metadata = getattr(request, "metadata", {})
+    return isinstance(metadata, Mapping) and bool(
+        metadata.get("mmm_force_non_thinking", False)
+    )
+
+
 def _qwen_sampling_mode(role: object, request: Any) -> str | None:
     """Select sampling from task semantics, independently of template thinking mode.
 
@@ -127,13 +134,18 @@ def _apply_family_payload_policy(
     tools = getattr(request, "tools", ()) or ()
     json_page = getattr(request, "response_format", None) == "json" and not tools
     action_page = bool(tools) or json_page or _forced_tool_choice(getattr(request, "tool_choice", None))
-    if not action_page and not _agent_thinking_enabled(config):
+    force_non_thinking = _force_non_thinking_replay(request)
+    if (
+        not action_page
+        and not force_non_thinking
+        and not _agent_thinking_enabled(config)
+    ):
         return payload
-    if mode is None and not agent_request and not action_page:
+    if mode is None and not agent_request and not action_page and not force_non_thinking:
         return payload
 
     extra = _config_extra(config)
-    if action_page:
+    if action_page or force_non_thinking:
         payload.pop("reasoning_effort", None)
         # Production tool turns must use the same non-thinking Qwen template that
         # runtime calibration validates. In particular, a named/required tool call

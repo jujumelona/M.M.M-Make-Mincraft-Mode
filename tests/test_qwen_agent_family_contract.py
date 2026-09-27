@@ -327,3 +327,25 @@ def test_fresh_agent_request_does_not_leak_prior_reasoning() -> None:
         not str(message.get("reasoning_content") or "").strip()
         for message in fresh.messages
     )
+
+
+def test_native_format_replay_disables_thinking_but_keeps_precise_coding_sampling() -> None:
+    request = GenerationRequest(
+        messages=({"role": "user", "content": "Return one Java member region."},),
+        metadata={
+            "tool_stage": "generation",
+            "mmm_force_non_thinking": True,
+            "mmm_native_format_replay": True,
+        },
+    )
+
+    payload = hardware._server_payload(
+        _Adapter(role="coder", family="qwen3.5"),
+        request,
+    )
+
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "reasoning_effort" not in payload
+    assert payload["temperature"] == _SAMPLING["precise_coding"]["temperature"]
+    assert payload["top_p"] == _SAMPLING["precise_coding"]["top_p"]
+    assert payload["top_k"] == _SAMPLING["precise_coding"]["top_k"]

@@ -486,17 +486,32 @@ def _call_coder(
     ):
         if _supports_kwarg(callback, key):
             kwargs[key] = value
-    try:
-        text = callback("coder", messages, **kwargs)
-    except Exception as exc:
-        boundary = completion_boundary_error(exc)
-        if boundary is not None and boundary.kind == OUTPUT_EXHAUSTED:
-            raise OutputBudgetExhausted(
-                "OUTPUT_BUDGET_EXHAUSTED: return to implementation decomposition; "
-                f"completion_tokens={boundary.completion_tokens}, max_tokens={boundary.max_tokens}"
-            ) from exc
-        raise
-    return _plain_coder_output(text)
+    native_format_replays = 0
+    while True:
+        try:
+            text = callback("coder", messages, **kwargs)
+        except Exception as exc:
+            boundary = completion_boundary_error(exc)
+            if boundary is not None and boundary.kind == OUTPUT_EXHAUSTED:
+                raise OutputBudgetExhausted(
+                    "OUTPUT_BUDGET_EXHAUSTED: return to implementation decomposition; "
+                    f"completion_tokens={boundary.completion_tokens}, max_tokens={boundary.max_tokens}"
+                ) from exc
+
+            from .llama_sse_protocol import is_recoverable_native_format_error
+
+            if (
+                native_format_replays < 1
+                and is_recoverable_native_format_error(exc)
+            ):
+                native_format_replays += 1
+                print(
+                    "custom generation: native response format retry 1/1",
+                    flush=True,
+                )
+                continue
+            raise
+        return _plain_coder_output(text)
 
 def _compile_log(report: Any) -> str:
     """Extract compiler diagnostics by structure instead of truncating raw logs."""

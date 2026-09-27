@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from minecraft_mod_ai import llama_stream_efficiency_contract as stream
-from minecraft_mod_ai.llama_sse_protocol import sse_error_from_line
+from minecraft_mod_ai.llama_sse_protocol import (
+    is_recoverable_native_format_error,
+    sse_error_from_line,
+)
 
 
 def test_current_llama_sse_error_shape_is_normalized() -> None:
@@ -71,3 +74,16 @@ def test_stream_module_has_no_native_slot_reporter_fallback() -> None:
     assert not hasattr(stream, "_native_tool_liveness_reporter")
     assert not hasattr(stream, "_probe_native_tool_progress")
     assert not hasattr(stream, "_needs_native_tool_liveness_reporter")
+
+
+def test_peg_native_format_error_is_recoverable_through_wrappers() -> None:
+    inner = RuntimeError(
+        "The model produced output that does not match the expected peg-native format"
+    )
+    outer = RuntimeError("transport wrapper")
+    outer.__cause__ = inner
+
+    assert is_recoverable_native_format_error(outer)
+    assert not is_recoverable_native_format_error(
+        RuntimeError("llama server returned HTTP 500: unrelated backend failure")
+    )

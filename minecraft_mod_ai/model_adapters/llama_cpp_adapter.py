@@ -20,6 +20,10 @@ from typing import Any
 
 import httpx
 
+from ..llama_sse_protocol import (
+    LlamaNativeResponseFormatError,
+    is_recoverable_native_format_error,
+)
 from ..model_tool_aliases import resolve_exposed_model_tool
 from ..source_edit_scalar_protocol_contract import SOURCE_EDIT_PARAMETER_ALIASES
 from .base import (
@@ -75,6 +79,19 @@ def _transient_transport_failure(exc: BaseException) -> bool:
         next_exc = current.__cause__ or current.__context__
         current = next_exc if isinstance(next_exc, BaseException) else None
     return False
+
+
+def _native_format_replay_request(request: GenerationRequest) -> GenerationRequest:
+    """Mark one side-effect-free text replay to use Qwen's non-thinking template."""
+
+    metadata = (
+        dict(request.metadata)
+        if isinstance(request.metadata, Mapping)
+        else {}
+    )
+    metadata["mmm_force_non_thinking"] = True
+    metadata["mmm_native_format_replay"] = True
+    return replace(request, metadata=metadata)
 
 
 def _generate_one_turn(
@@ -140,21 +157,53 @@ class LlamaCppAdapter(ModelAdapter):
         return turn.content
 
     def generate_turn(self, request: GenerationRequest) -> GenerationResponse:
-        """Generate one assistant turn, recovering one dead MMM-owned server if needed."""
+        """Generate one assistant turn with bounded transport/format recovery."""
 
         server_url = self._server_url(request)
+        active_request = request
         try:
             return _generate_one_turn(self, server_url, request)
-        except ModelBackendError:
-            raise
+        except ModelBackendError as exc:
+            if request.tools or not is_recoverable_native_format_error(exc):
+                raise
+            active_request = _native_format_replay_request(request)
+            try:
+                print(
+                    "llama server: native response format rejected; "
+                    "replaying once with thinking disabled",
+                    flush=True,
+                )
+                return _generate_one_turn(self, server_url, active_request)
+            except ModelBackendError:
+                raise
+            except Exception as replay_exc:
+                raise ModelBackendError(
+                    role=self.config.role,
+                    model_id=self.config.model_id,
+                    cause=replay_exc,
+                ) from replay_exc
         except Exception as exc:
+            if not request.tools and is_recoverable_native_format_error(exc):
+                active_request = _native_format_replay_request(request)
+                try:
+                    print(
+                        "llama server: native response format rejected; "
+                        "replaying once with thinking disabled",
+                        flush=True,
+                    )
+                    return _generate_one_turn(self, server_url, active_request)
+                except ModelBackendError:
+                    raise
+                except Exception as replay_exc:
+                    exc = replay_exc
+
             if _transient_transport_failure(exc):
                 try:
                     from .. import llama_server_autotune
 
                     recovered_url = llama_server_autotune.recover_managed_server(
                         self.config,
-                        request,
+                        active_request,
                         failed_url=server_url,
                     )
                 except Exception as recovery_exc:
@@ -168,11 +217,14 @@ class LlamaCppAdapter(ModelAdapter):
                     ) from recovery_exc
                 if recovered_url:
                     try:
-                        # The first response never crossed the adapter boundary, so no
-                        # model-selected mutation or other workspace side effect exists
-                        # to duplicate. Regenerate this exact turn once on the recovered
-                        # endpoint; no further managed restart occurs in this method.
-                        return _generate_one_turn(self, recovered_url, request)
+                        # No usable assistant turn crossed the adapter boundary, so
+                        # replaying the active request cannot duplicate a model-selected
+                        # workspace mutation.
+                        return _generate_one_turn(
+                            self,
+                            recovered_url,
+                            active_request,
+                        )
                     except ModelBackendError:
                         raise
                     except Exception as retry_exc:
@@ -889,6 +941,8 @@ def _completion_message_impl(server_url: str, payload: Mapping[str, Any]) -> Map
             raise LlamaCompletionBoundaryError(
                 f"llama-server rejected prompt context: {body}", kind=CONTEXT_PRESSURE,
             )
+        if is_recoverable_native_format_error(body):
+            raise LlamaNativeResponseFormatError(response.status_code, body)
         raise RuntimeError(
             f"llama server returned HTTP {response.status_code}"
             + (f": {body}" if body else "")

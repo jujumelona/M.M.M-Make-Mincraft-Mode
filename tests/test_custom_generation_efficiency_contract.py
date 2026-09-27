@@ -8,6 +8,7 @@ from minecraft_mod_ai.custom_generation_search_contract import (
     _ResearchEvidenceRouter,
     _width,
 )
+from minecraft_mod_ai.custom_module_generator import _call_coder
 
 
 def _complex_module():
@@ -123,3 +124,27 @@ def test_post_generation_stage_snapshot_is_reused_for_checkpoint_and_diff(
     assert touched == ["src/main/java/example/Feature.java"]
     assert discarded == []
     assert operations[0]["operation"] == "replace"
+
+
+def test_atomic_coder_retries_one_exhausted_native_format_failure() -> None:
+    class Router:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate_text(self, _role, _messages, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError(
+                    "The model produced output that does not match the expected "
+                    "peg-native format"
+                )
+            return "private static final int COST = 10;"
+
+    router = Router()
+    result = _call_coder(
+        router,
+        ({"role": "user", "content": "Return one member region."},),
+    )
+
+    assert result == "private static final int COST = 10;"
+    assert router.calls == 2

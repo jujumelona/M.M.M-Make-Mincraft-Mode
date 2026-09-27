@@ -81,3 +81,70 @@ def test_adapter_replays_one_turn_after_managed_transport_recovery(monkeypatch) 
     assert result.content == "recovered"
     assert generated_urls == [old_url, new_url]
     assert recovery_calls == [(config, request, old_url)]
+
+
+def test_adapter_replays_plain_peg_failure_with_non_thinking_metadata(monkeypatch) -> None:
+    config = AdapterConfig(
+        role="coder",
+        adapter="llama_cpp",
+        model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
+        extra={"gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf"},
+    )
+    request = GenerationRequest(
+        messages=({"role": "user", "content": "Return one Java region."},),
+        metadata={"tool_stage": "generation"},
+    )
+    adapter = LlamaCppAdapter(config)
+    seen: list[GenerationRequest] = []
+
+    monkeypatch.setattr(adapter, "_server_url", lambda _request: "http://127.0.0.1:8910/v1")
+
+    def generate_once(_adapter, _server_url, seen_request):
+        seen.append(seen_request)
+        if len(seen) == 1:
+            raise RuntimeError(
+                "llama server returned HTTP 500: The model produced output that "
+                "does not match the expected peg-native format"
+            )
+        return GenerationResponse(content="private static final int COST = 10;")
+
+    monkeypatch.setattr(adapter_module, "_generate_one_turn", generate_once)
+
+    result = adapter.generate_turn(request)
+
+    assert result.content == "private static final int COST = 10;"
+    assert len(seen) == 2
+    assert seen[0] is request
+    assert seen[1].metadata["mmm_force_non_thinking"] is True
+    assert seen[1].metadata["mmm_native_format_replay"] is True
+    assert "mmm_force_non_thinking" not in request.metadata
+
+
+def test_adapter_does_not_replay_unrelated_http_500(monkeypatch) -> None:
+    config = AdapterConfig(
+        role="coder",
+        adapter="llama_cpp",
+        model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
+        extra={"gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf"},
+    )
+    request = GenerationRequest(
+        messages=({"role": "user", "content": "Return one Java region."},),
+    )
+    adapter = LlamaCppAdapter(config)
+    calls = 0
+
+    monkeypatch.setattr(adapter, "_server_url", lambda _request: "http://127.0.0.1:8910/v1")
+
+    def fail_once(_adapter, _server_url, _request):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("llama server returned HTTP 500: unrelated backend failure")
+
+    monkeypatch.setattr(adapter_module, "_generate_one_turn", fail_once)
+
+    try:
+        adapter.generate_turn(request)
+    except Exception:
+        pass
+
+    assert calls == 1
