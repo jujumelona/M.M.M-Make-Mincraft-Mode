@@ -418,7 +418,8 @@ def _multi_executor(
     return executor, compile_calls
 
 
-def test_sibling_symbol_collision_is_rejected_before_compile() -> None:
+
+def test_sibling_symbol_collision_is_rehomed_before_compile() -> None:
     concerns = (
         {"sequence": 0, "identifier": "a", "concern": "transactions", "task": "transaction state", "rules": []},
         {"sequence": 1, "identifier": "b", "concern": "concurrency", "task": "concurrency guard", "rules": []},
@@ -435,7 +436,6 @@ def test_sibling_symbol_collision_is_rejected_before_compile() -> None:
                 "private static void beginTransaction() {}\n"
                 "private static void endTransaction() {}"
             ),
-            "",
         ],
         concerns=concerns,
     )
@@ -449,19 +449,63 @@ def test_sibling_symbol_collision_is_rejected_before_compile() -> None:
     assert result["source"].count("endTransaction()") == 1
 
 
-def test_next_concern_receives_host_symbol_ownership_table() -> None:
+def test_concern_authority_slices_out_sibling_requirements() -> None:
+    import json
+
+    from minecraft_mod_ai.atomic_concern_source import _concern_authority
+
+    obligation = json.dumps(
+        {
+            "instruction": json.dumps(
+                {
+                    "concern": "variables",
+                    "section_instruction": (
+                        "Implement domain state containers, invariants, and transition helpers only."
+                    ),
+                }
+            ),
+            "source_requirements": {
+                "R18": "## state_model",
+                "R19": "- variables: name owner type unit default domain",
+                "R20": "    - player_credits: owner_player double default 0.0",
+                "R21": "    - ship_hull_integrity: owner_server float default 100.0",
+                "R25": "- transitions: from_state trigger guard mutation to_state",
+                "R26": "    - locked_to_unlocked resource_qualified level_threshold",
+                "R29": "- invariants: condition enforcement player_credits < min_cost",
+            },
+        }
+    )
+    authority = _concern_authority(
+        {
+            "task_id": "ir_authoredstatemodel",
+            "semantic_outcome": "broad state model responsibility",
+            "implementation_obligations": [obligation],
+        },
+        {"concern": "variables"},
+    )
+
+    assert authority == {
+        "task_id": "ir_authoredstatemodel",
+        "concern": "variables",
+        "source_requirements": {
+            "R18": "## state_model",
+            "R19": "- variables: name owner type unit default domain",
+            "R20": "    - player_credits: owner_player double default 0.0",
+            "R21": "    - ship_hull_integrity: owner_server float default 100.0",
+        },
+    }
+
+
+def test_atomic_prompt_does_not_delegate_symbol_bookkeeping_to_model() -> None:
     concerns = (
-        {"sequence": 0, "identifier": "a", "concern": "transactions", "task": "transaction state", "rules": []},
-        {"sequence": 1, "identifier": "b", "concern": "concurrency", "task": "concurrency guard", "rules": []},
+        {"sequence": 0, "identifier": "a", "concern": "variables", "task": "variables", "rules": []},
+        {"sequence": 1, "identifier": "b", "concern": "invariants", "task": "invariants", "rules": []},
     )
     captured: list[list[dict[str, str]]] = []
     executor, _compile_calls = _multi_executor(
         [
-            (
-                "private static boolean isTransactionInFlight;\n"
-                "private static void beginTransaction() {}"
-            ),
-            "",
+            "private static int playerCredits;",
+            "private static final int INVARIANT_PLAYER_CREDITS_MIN_COST = 0;",
         ],
         concerns=concerns,
         captured_messages=captured,
@@ -470,10 +514,9 @@ def test_next_concern_receives_host_symbol_ownership_table() -> None:
     executor.run()
 
     payload = __import__("json").loads(captured[1][-1]["content"])
-    owners = payload["scope"]["existing_symbol_owners"]
-    assert {"kind": "field", "symbol": "isTransactionInFlight", "owner_concern": "transactions"} in owners
-    assert {"kind": "method", "symbol": "beginTransaction()", "owner_concern": "transactions"} in owners
-
+    assert "existing_symbol_owners" not in payload["scope"]
+    assert payload["scope"]["sibling_concerns_out_of_scope"] == ["variables"]
+    assert "bookkeeping" in payload["scope"]["scope_rule"]
 
 def test_method_overloads_with_different_parameter_types_do_not_collide() -> None:
     concerns = (
@@ -502,7 +545,7 @@ def test_static_initializer_does_not_create_fake_symbol_owner() -> None:
     assert _member_declaration_symbols("static { initializeSomething(); }") == {}
 
 
-def test_generic_method_erasure_collision_is_rejected() -> None:
+def test_generic_method_erasure_collision_is_rehomed_by_host() -> None:
     concerns = (
         {"sequence": 0, "identifier": "a", "concern": "first", "task": "first generic method", "rules": []},
         {"sequence": 1, "identifier": "b", "concern": "second", "task": "second generic method", "rules": []},
@@ -520,3 +563,32 @@ def test_generic_method_erasure_collision_is_rejected() -> None:
 
     assert compile_calls["count"] == 1
     assert result["source"].count("private static void update(") == 1
+
+
+
+def test_state_model_later_concerns_rehome_variables_overreach() -> None:
+    concerns = (
+        {"sequence": 0, "identifier": "v", "concern": "variables", "task": "variables only", "rules": []},
+        {"sequence": 1, "identifier": "t", "concern": "transitions", "task": "transitions only", "rules": []},
+        {"sequence": 2, "identifier": "i", "concern": "invariants", "task": "invariants only", "rules": []},
+    )
+    executor, compile_calls = _multi_executor(
+        [
+            (
+                "private static double playerCredits;\n"
+                "private static final String FROM_STATE_LOCKED = \"locked\";\n"
+                "private static final int INVARIANT_PLAYER_CREDITS_MIN_COST = 0;"
+            ),
+            "private static final String FROM_STATE_LOCKED = \"locked\";",
+            "private static final int INVARIANT_PLAYER_CREDITS_MIN_COST = 0;",
+        ],
+        concerns=concerns,
+    )
+
+    result = executor.run()
+
+    assert compile_calls["count"] == 1
+    assert result["repair_count"] == 0
+    assert result["source"].count("FROM_STATE_LOCKED") == 1
+    assert result["source"].count("INVARIANT_PLAYER_CREDITS_MIN_COST") == 1
+    assert "playerCredits" in result["source"]

@@ -298,8 +298,10 @@ def _split_top_level(value: str, delimiter: str) -> list[str]:
     return parts
 
 
+
 def _top_level_member_chunks(value: str) -> tuple[str, ...]:
-    scan = _structure_scan(value)
+    source = str(value or "")
+    scan = _structure_scan(source)
     chunks: list[str] = []
     start = 0
     brace = paren = bracket = 0
@@ -318,20 +320,19 @@ def _top_level_member_chunks(value: str) -> tuple[str, ...]:
             if brace:
                 brace -= 1
                 if brace == 0 and paren == 0 and bracket == 0:
-                    chunk = scan[start:index + 1].strip()
+                    chunk = source[start:index + 1].strip()
                     if chunk:
                         chunks.append(chunk)
                     start = index + 1
         elif char == ";" and brace == 0 and paren == 0 and bracket == 0:
-            chunk = scan[start:index + 1].strip()
+            chunk = source[start:index + 1].strip()
             if chunk:
                 chunks.append(chunk)
             start = index + 1
-    tail = scan[start:].strip()
+    tail = source[start:].strip()
     if tail:
         chunks.append(tail)
     return tuple(chunks)
-
 
 def _top_level_assignment_index(value: str) -> int:
     paren = bracket = brace = angle = 0
@@ -403,7 +404,7 @@ def _member_declaration_symbols(value: str) -> dict[str, str]:
 
     symbols: dict[str, str] = {}
     for chunk in _top_level_member_chunks(value):
-        flat = re.sub(r"\s+", " ", chunk).strip()
+        flat = re.sub(r"\s+", " ", _structure_scan(chunk)).strip()
         if not flat:
             continue
 
@@ -645,6 +646,64 @@ def _failure_measure(log: str) -> int:
     return len(errors) or 1
 
 
+
+def _requirement_sort_key(item: tuple[str, Any]) -> tuple[int, str]:
+    key = str(item[0] or "")
+    match = re.fullmatch(r"R(\d+)", key)
+    return (int(match.group(1)) if match else 10**9, key)
+
+
+def _concern_source_requirements(
+    raw: Mapping[str, Any],
+    *,
+    concern: str,
+) -> dict[str, str]:
+    ordered = [
+        (str(key), str(value))
+        for key, value in sorted(dict(raw or {}).items(), key=_requirement_sort_key)
+    ]
+    if not ordered:
+        return {}
+
+    target = _slug(concern)
+    anchor = -1
+    for index, (_key, value) in enumerate(ordered):
+        stripped = value.strip()
+        if not stripped.startswith("- ") or ":" not in stripped:
+            continue
+        label = stripped[2:].split(":", 1)[0].strip()
+        try:
+            if _slug(label) == target:
+                anchor = index
+                break
+        except CustomModuleGenerationError:
+            continue
+
+    headings = [
+        (key, value)
+        for key, value in ordered[: anchor if anchor >= 0 else len(ordered)]
+        if value.lstrip().startswith("## ")
+    ]
+    selected: list[tuple[str, str]] = headings[-1:] if headings else []
+
+    if anchor < 0:
+        # Never leak the whole sibling section to a small coder when localization
+        # fails. The concern task/rules remain authoritative.
+        target_words = target.replace("_", " ")
+        for key, value in ordered:
+            lowered = value.casefold()
+            if target in lowered or target_words in lowered:
+                selected.append((key, value))
+        return dict(selected)
+
+    selected.append(ordered[anchor])
+    for key, value in ordered[anchor + 1:]:
+        if value.startswith("## ") or value.startswith("- "):
+            break
+        selected.append((key, value))
+    return dict(selected)
+
+
 def _concern_authority(
     task: Mapping[str, Any], concern: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -662,16 +721,17 @@ def _concern_authority(
                 continue
             if str(instruction.get("concern") or "").strip() == name:
                 requirement_payload = {
-                    "source_requirements": dict(outer.get("source_requirements") or {}),
-                    "section_instruction": str(instruction.get("section_instruction") or ""),
+                    "source_requirements": _concern_source_requirements(
+                        dict(outer.get("source_requirements") or {}),
+                        concern=name,
+                    ),
                 }
                 break
     return {
         "task_id": str(task.get("task_id") or ""),
-        "semantic_outcome": str(task.get("semantic_outcome") or ""),
+        "concern": name,
         **requirement_payload,
     }
-
 
 def _bounded_grounding(grounding: Mapping[str, Any]) -> dict[str, Any]:
     direct = grounding.get("direct_host_context")
@@ -696,7 +756,7 @@ def _messages(
     current_source: str,
     response_region: str,
     failure: str = "",
-    symbol_owners: Mapping[str, str] | None = None,
+    sibling_concerns: Sequence[str] = (),
 ) -> list[dict[str, str]]:
     name = _slug(concern.get("concern"))
     if response_region == "members":
@@ -722,6 +782,8 @@ def _messages(
         "Implement exactly one host-selected concern inside one already-selected Java class. "
         "You do not choose files, classes, dependencies, architecture, tools, search routes, APIs, or sibling work. "
         + response_contract + " "
+        "The task_authority source requirements are already host-sliced to this concern; "
+        "do not infer or implement sibling concerns from current source context. "
         "Use fully-qualified external API names when needed. "
         "Use only supplied host grounding and dependency source; never invent a Minecraft/Fabric API."
     )
@@ -751,11 +813,11 @@ def _messages(
             "sibling_regions_immutable": True,
             "required_output_tool": "emit_java_region",
             "model_tool_choice": False,
-            "existing_symbol_owners": _symbol_owner_payload(symbol_owners or {}),
-            "symbol_rule": (
-                "You may reference existing sibling symbols but must not redeclare them. "
-                "If the required behavior is already implemented by an existing symbol, "
-                "return an empty java region instead of duplicating it."
+            "sibling_concerns_out_of_scope": list(sibling_concerns),
+            "scope_rule": (
+                "Implement only the selected concern and only the lines in "
+                "task_authority.source_requirements. Do not pre-implement sibling concerns. "
+                "The host owns declaration deduplication and sibling bookkeeping."
             ),
         },
     }
@@ -815,15 +877,87 @@ class AtomicConcernExecutor:
                 owners.setdefault(key, concern_name)
         return owners
 
-    def _symbol_collisions(self, *, concern: str, members: str) -> tuple[str, ...]:
+
+    def _remove_owned_symbols(
+        self,
+        *,
+        members: str,
+        keys: set[str],
+    ) -> tuple[str, set[str], set[str]]:
+        kept: list[str] = []
+        removed: set[str] = set()
+        unresolved: set[str] = set()
+        for chunk in _top_level_member_chunks(members):
+            declared = set(_member_declaration_symbols(chunk))
+            overlap = declared & keys
+            if not overlap:
+                kept.append(chunk)
+                continue
+            if declared and declared <= keys:
+                removed.update(declared)
+                continue
+            kept.append(chunk)
+            unresolved.update(overlap)
+        return "\n".join(kept).strip(), removed, unresolved
+
+    def _rehome_symbol_collisions(self, *, concern: str, members: str) -> None:
+        current = set(_member_declaration_symbols(members))
+        if not current:
+            return
+
         owners = self._sibling_symbol_owners(exclude=concern)
-        collisions: list[str] = []
-        for key, display in _member_declaration_symbols(members).items():
+        by_owner: dict[str, set[str]] = {}
+        for key in current:
             owner = owners.get(key)
             if owner:
-                kind, _, _ = key.partition(":")
-                collisions.append(f"{kind} {display} is owned by concern {owner}")
-        return tuple(sorted(set(collisions)))
+                by_owner.setdefault(owner, set()).add(key)
+        if not by_owner:
+            return
+
+        plans: list[tuple[str, str, str, set[str]]] = []
+        for owner, keys in sorted(by_owner.items()):
+            owner_members, owner_initialize = self.state[owner]
+            rewritten, removed, unresolved = self._remove_owned_symbols(
+                members=owner_members,
+                keys=keys,
+            )
+            missing = keys - removed
+            if unresolved or missing:
+                details = []
+                for key in sorted(unresolved | missing):
+                    kind, _, display = key.partition(":")
+                    details.append(f"{kind} {display} is entangled in concern {owner}")
+                raise CustomModuleGenerationError(
+                    "ATOMIC_CONCERN_SYMBOL_COLLISION: " + "; ".join(details)
+                )
+            plans.append((owner, rewritten, owner_initialize, removed))
+
+        for owner, rewritten, owner_initialize, removed in plans:
+            self.source = _replace_region(
+                self.source,
+                concern=owner,
+                region="MEMBERS",
+                content=rewritten,
+            )
+            self.state[owner] = (rewritten, owner_initialize)
+
+            from .root_cause_trace import emit_root_cause
+
+            emit_root_cause(
+                "atomic_concern_symbols_rehomed",
+                stage="production",
+                operation="atomic_concern_region",
+                gate="host_symbol_ownership",
+                result="PASS",
+                details={
+                    "from_concern": owner,
+                    "to_concern": concern,
+                    "symbols": [
+                        key.partition(":")[2]
+                        for key in sorted(removed)
+                    ],
+                },
+            )
 
     def _generate_region(
         self,
@@ -858,7 +992,11 @@ class AtomicConcernExecutor:
                     current_source=self.source,
                     response_region=response_region,
                     failure=repair_failure,
-                    symbol_owners=self._sibling_symbol_owners(exclude=name),
+                    sibling_concerns=tuple(
+                        _slug(item["concern"])
+                        for item in self.ordered
+                        if _slug(item["concern"]) != name
+                    ),
                 ))
                 output_text = str(output or "")
                 output_sha = hashlib.sha256(output_text.encode("utf-8")).hexdigest()
@@ -866,16 +1004,6 @@ class AtomicConcernExecutor:
                     output,
                     response_region=response_region,
                 )
-                if response_region == "members":
-                    collisions = self._symbol_collisions(
-                        concern=name,
-                        members=parsed,
-                    )
-                    if collisions:
-                        raise CustomModuleGenerationError(
-                            "ATOMIC_CONCERN_SYMBOL_COLLISION: "
-                            + "; ".join(collisions)
-                        )
             except CustomModuleGenerationError as exc:
                 reason = str(exc).split("\n", 1)[0]
                 recoverable = reason.startswith(
@@ -942,8 +1070,8 @@ class AtomicConcernExecutor:
                     + f"\nRegenerate only the {response_region} region. "
                     "Do not emit response markers, prose, package/import/top-level/lifecycle declarations. "
                     "Private nested helper types are allowed in members regions. "
-                    "Never redeclare a field, method signature, or nested type owned by another concern; "
-                    "reuse it or return an empty region when it already implements this concern. "
+                    "Implement only this concern; do not add declarations for sibling concerns. "
+                    "The host will reconcile declarations emitted earlier by another concern. "
                     "Emit executable Java only; no analysis, reasoning, plans, or Markdown commentary."
                 )
                 repair_failure = "\n\n".join(
@@ -983,6 +1111,7 @@ class AtomicConcernExecutor:
             raise CustomModuleGenerationError(
                 f"ATOMIC_CONCERN_REPAIR_NO_PROGRESS: {name} repeated the same bounded source."
             )
+        self._rehome_symbol_collisions(concern=name, members=members)
         self.source = _replace_region(
             self.source, concern=name, region="MEMBERS", content=members
         )
