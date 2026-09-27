@@ -13,6 +13,7 @@ from minecraft_mod_ai.performance_final_contract import (
     _clone_source_snapshot,
     _clone_wave_workspace,
     _release_wave_source_snapshot,
+    _select_custom_patch_capture,
     _three_way_merge,
 )
 from minecraft_mod_ai.work_graph import _module_stage
@@ -97,3 +98,51 @@ def test_staged_json_merge_rejects_same_key_semantic_conflict() -> None:
     live = json.dumps({'loader': 'system'}) + '\n'
     with pytest.raises(StagedCommitConflict, match='Concurrent JSON merge conflict'):
         _three_way_merge('src/main/resources/fabric.mod.json', base_text=base, staged_text=staged, live_text=live)
+
+def test_direct_source_receipt_reconstructs_exact_staged_transaction(tmp_path: Path) -> None:
+    base = tmp_path / 'base'
+    stage = tmp_path / 'stage'
+    relative = Path('src/main/java/example/Example.java')
+    base_target = base / relative
+    stage_target = stage / relative
+    base_target.parent.mkdir(parents=True)
+    stage_target.parent.mkdir(parents=True)
+    original = 'package example;\npublic final class Example {}\n'
+    generated = 'package example;\npublic final class Example { static final int X = 1; }\n'
+    base_target.write_text(original, encoding='utf-8')
+    stage_target.write_text(generated, encoding='utf-8')
+
+    import hashlib
+
+    before_sha = 'sha256:' + hashlib.sha256(original.encode('utf-8')).hexdigest()
+    result = {
+        'patch_receipt': {
+            'schema_version': 'mmm/direct-source-write-v1',
+            'status': 'APPLIED',
+            'operations': [{
+                'operation': 'replace',
+                'path': relative.as_posix(),
+                'before_sha256': before_sha,
+                'after_sha256': 'sha256:' + hashlib.sha256(generated.encode('utf-8')).hexdigest(),
+            }],
+            'touched_paths': [relative.as_posix()],
+        },
+        'touched_paths': [relative.as_posix()],
+    }
+
+    capture = _select_custom_patch_capture(
+        [],
+        result,
+        base_snapshot=base,
+        staging_root=stage,
+    )
+
+    assert capture['capture_mode'] == 'direct-source-write-v1'
+    assert capture['operations'] == [{
+        'operation': 'replace',
+        'path': relative.as_posix(),
+        'content': generated,
+        'expected_sha256': before_sha,
+    }]
+    assert capture['before'][relative.as_posix()] == original.encode('utf-8')
+

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import shutil
@@ -9,7 +10,7 @@ import threading
 from collections.abc import Iterable
 from difflib import SequenceMatcher
 from functools import wraps
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .filesystem_copy import reflink_or_copy
@@ -121,7 +122,12 @@ def _install_staged_custom_generator(custom_module_generator_module: Any, source
             result = original(self, staging_root, *args, **kwargs)
             if not isinstance(result, dict):
                 raise StagedCommitConflict('Custom generator returned a non-object staged result.')
-            captured = _select_custom_patch_capture(records, result)
+            captured = _select_custom_patch_capture(
+                records,
+                result,
+                base_snapshot=base_snapshot,
+                staging_root=staging_root,
+            )
             commit_paths = tuple(
                 str(item.get('path', '')).strip()
                 for item in captured.get('operations', [])
@@ -236,7 +242,111 @@ def _release_wave_source_snapshot(live_root: Path, snapshot: Path) -> None:
     if cleanup is not None:
         shutil.rmtree(cleanup, ignore_errors=True)
 
-def _select_custom_patch_capture(records: list[dict[str, Any]], result: dict[str, Any]) -> dict[str, Any]:
+def _direct_source_capture(
+    *,
+    base_snapshot: Path,
+    staging_root: Path,
+    result: dict[str, Any],
+) -> dict[str, Any] | None:
+    receipt = result.get('patch_receipt')
+    if not isinstance(receipt, dict) or receipt.get('schema_version') != 'mmm/direct-source-write-v1':
+        return None
+    raw_operations = receipt.get('operations')
+    touched_paths = result.get('touched_paths')
+    if (
+        not isinstance(raw_operations, list)
+        or not raw_operations
+        or not isinstance(touched_paths, list)
+        or not touched_paths
+    ):
+        raise StagedCommitConflict('Direct source receipt is missing exact operations/touched_paths.')
+
+    normalized_touched = [str(path).replace('\\', '/').strip() for path in touched_paths]
+    receipt_paths = [
+        str(item.get('path', '')).replace('\\', '/').strip()
+        for item in raw_operations
+        if isinstance(item, dict)
+    ]
+    if receipt_paths != normalized_touched or len(receipt_paths) != len(raw_operations):
+        raise StagedCommitConflict('Direct source receipt path ownership does not match touched_paths.')
+    if len(set(receipt_paths)) != len(receipt_paths):
+        raise StagedCommitConflict('Direct source receipt contains duplicate target paths.')
+
+    operations: list[dict[str, Any]] = []
+    before: dict[str, bytes | None] = {}
+    for raw in raw_operations:
+        kind = str(raw.get('operation', '')).strip()
+        if kind not in {'create', 'replace'}:
+            raise StagedCommitConflict(f'Unsupported direct source operation: {kind or "<missing>"}')
+        candidate = PurePosixPath(str(raw.get('path', '')).replace('\\', '/').strip())
+        if candidate.is_absolute() or not candidate.parts or '..' in candidate.parts:
+            raise StagedCommitConflict(f'Direct source path escaped project root: {candidate}')
+        relative = candidate.as_posix()
+        if relative in {'', '.'}:
+            raise StagedCommitConflict('Direct source path is empty.')
+
+        staged_path = (staging_root / Path(*candidate.parts)).resolve()
+        base_path = (base_snapshot / Path(*candidate.parts)).resolve()
+        try:
+            staged_path.relative_to(staging_root.resolve())
+            base_path.relative_to(base_snapshot.resolve())
+        except ValueError as exc:
+            raise StagedCommitConflict(
+                f'Direct source path escaped staging snapshot: {relative}'
+            ) from exc
+        if not staged_path.is_file() or staged_path.is_symlink():
+            raise StagedCommitConflict(
+                f'Direct source receipt target is missing or unsafe: {relative}'
+            )
+        try:
+            content = staged_path.read_text(encoding='utf-8', errors='strict')
+        except (OSError, UnicodeError) as exc:
+            raise StagedCommitConflict(
+                f'Direct source receipt target is not valid UTF-8 text: {relative}'
+            ) from exc
+
+        operation: dict[str, Any] = {
+            'operation': kind,
+            'path': relative,
+            'content': content,
+        }
+        if kind == 'replace':
+            if not base_path.is_file() or base_path.is_symlink():
+                raise StagedCommitConflict(
+                    f'Direct replace base target is missing or unsafe: {relative}'
+                )
+            base_bytes = base_path.read_bytes()
+            expected = str(raw.get('before_sha256', '')).strip()
+            actual = 'sha256:' + hashlib.sha256(base_bytes).hexdigest()
+            if expected != actual:
+                raise StagedCommitConflict(
+                    f'Direct source receipt before_sha256 mismatch for {relative}'
+                )
+            operation['expected_sha256'] = expected
+            before[relative] = base_bytes
+        else:
+            if base_path.exists():
+                raise StagedCommitConflict(
+                    f'Direct create target already existed in base snapshot: {relative}'
+                )
+            before[relative] = None
+        operations.append(operation)
+
+    return {
+        'root': str(staging_root),
+        'operations': operations,
+        'before': before,
+        'capture_mode': 'direct-source-write-v1',
+    }
+
+
+def _select_custom_patch_capture(
+    records: list[dict[str, Any]],
+    result: dict[str, Any],
+    *,
+    base_snapshot: Path | None = None,
+    staging_root: Path | None = None,
+) -> dict[str, Any]:
     receipt = result.get('patch_receipt')
     receipt_ops = receipt.get('operations', []) if isinstance(receipt, dict) else []
     receipt_paths = [str(item.get('path', '')) for item in receipt_ops if isinstance(item, dict)]
@@ -246,6 +356,14 @@ def _select_custom_patch_capture(records: list[dict[str, Any]], result: dict[str
             return record
     if records:
         return records[-1]
+    if base_snapshot is not None and staging_root is not None:
+        direct = _direct_source_capture(
+            base_snapshot=base_snapshot,
+            staging_root=staging_root,
+            result=result,
+        )
+        if direct is not None:
+            return direct
     raise StagedCommitConflict('Custom staging could not capture the generated patch transaction.')
 
 def _commit_staged_operations(*, live_root: Path, staging_root: Path, capture: dict[str, Any], source_patch_module: Any) -> dict[str, Any]:
