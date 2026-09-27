@@ -1217,7 +1217,10 @@ def _messages(
     system = (
         "Implement exactly one host-selected concern inside one already-selected Java class. "
         "Planning record schemas, planning task labels, and concern cardinality are host-owned "
-        "metadata and are deliberately not exposed as Java source shapes. "
+        "metadata and are deliberately not exposed as Java source shapes. Source requirement labels "
+        "such as owner/type/unit/default/domain/from_state/trigger/guard describe semantics; they "
+        "are not a request to create a Java metadata record with those labels as components. "
+        "Create a record/class only when the runtime gameplay implementation itself needs that data object. "
         "You do not choose files, classes, dependencies, architecture, tools, search routes, APIs, or sibling work. "
         + response_contract + " "
         "The task_authority source requirements are already host-sliced to this concern; "
@@ -1284,7 +1287,11 @@ def _messages(
             "no_raw_top_level_java": True,
             "sibling_api_is_authoritative": True,
             "never_mutate_final_sibling_fields": True,
-            "declare_missing_concern_local_state": True,
+            "declare_missing_concern_local_state": (
+                "When this concern reads or writes state absent from available_sibling_api, "
+                "declare a private static non-final backing field with a compatible runtime "
+                "value type instead of referencing an undeclared symbol or inventing a metadata DTO."
+            ),
             "preferred_shape": (
                 "fields_and_local_types"
                 if name in {"variables", "inputs", "outputs", "stored_state", "payloads"}
