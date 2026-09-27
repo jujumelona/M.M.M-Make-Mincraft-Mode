@@ -484,19 +484,18 @@ def _messages(
     name = _slug(concern.get("concern"))
     if response_region == "members":
         response_contract = (
-            "Return only Java class-body members for this concern. "
-            "If this concern needs no members, return an empty response. "
-            "Do not emit response markers, JSON, prose, Markdown fences, package/import declarations, "
-            "another top-level type, or initialize() lifecycle code. "
-            "Private nested helper class/interface/enum/record declarations are allowed when this concern needs them. "
-            "Emit executable Java only; do not include analysis, reasoning, plans, or Markdown commentary."
+            "Call emit_java_region exactly once. Put only Java class-body members for this concern "
+            "in its java argument. If this concern needs no members, set java to the empty string. "
+            "Do not place response markers, prose, Markdown, package/import declarations, another "
+            "top-level type, or initialize() lifecycle code in java. Private nested helper "
+            "class/interface/enum/record declarations are allowed when this concern needs them."
         )
     elif response_region == "initialize":
         response_contract = (
-            "Return only Java statements that belong inside the host-owned initialize() body for this concern. "
-            "If no initialization is needed, return an empty response. "
-            "Do not emit response markers, JSON, prose, Markdown fences, declarations, package/import/type syntax, "
-            "or initialize() itself."
+            "Call emit_java_region exactly once. Put only Java statements that belong inside the "
+            "host-owned initialize() body in its java argument. If no initialization is needed, "
+            "set java to the empty string. Do not place response markers, prose, Markdown, "
+            "declarations, package/import/type syntax, or initialize() itself in java."
         )
     else:
         raise CustomModuleGenerationError(
@@ -533,6 +532,7 @@ def _messages(
                 "START",
             ),
             "sibling_regions_immutable": True,
+            "required_output_tool": "emit_java_region",
             "model_tool_choice": False,
         },
     }
