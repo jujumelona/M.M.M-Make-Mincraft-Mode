@@ -43,6 +43,7 @@ on:
       - 'minecraft_mod_ai/work_graph_receipt_read.py'
       - 'minecraft_mod_ai/work_graph.py'
       - 'minecraft_mod_ai/__init__.py'
+      - 'minecraft_mod_ai/runtime_bootstrap.py'
       - 'tools/verify_integrity_minecraft.py'
       - 'tests/test_implementation_ir.py'
       - 'tests/test_llama_*.py'
