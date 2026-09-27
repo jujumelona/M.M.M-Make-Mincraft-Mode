@@ -13,6 +13,12 @@ on:
     paths:
       - 'minecraft_mod_ai/model_adapters/**'
       - 'minecraft_mod_ai/model_router.py'
+      - 'minecraft_mod_ai/performance_final_contract.py'
+      - 'minecraft_mod_ai/model_registry.py'
+      - 'minecraft_mod_ai/resource_contracts.py'
+      - 'minecraft_mod_ai/production_contract.py'
+      - 'minecraft_mod_ai/work_graph_receipt_read.py'
+      - 'minecraft_mod_ai/work_graph.py'
       - 'minecraft_mod_ai/llama_*.py'
       - 'minecraft_mod_ai/qwen*.py'
       - 'minecraft_mod_ai/generation_output_budget.py'
