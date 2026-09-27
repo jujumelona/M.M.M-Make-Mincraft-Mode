@@ -7,6 +7,7 @@ import pytest
 
 from minecraft_mod_ai import llama_stream_efficiency_contract as stream_runtime
 from minecraft_mod_ai.llama_server_hardware_policy import _strict_server_generate
+from minecraft_mod_ai.llama_sse_protocol import LlamaNativeResponseFormatError
 
 
 class _Adapter:
@@ -106,4 +107,29 @@ def test_local_native_stream_requires_done_marker(monkeypatch) -> None:
     )
 
     with pytest.raises(RuntimeError, match=r"stream ended before the \[DONE\] marker"):
+        _strict_server_generate(adapter, request, "http://127.0.0.1:8910/v1")
+
+
+def test_detailed_stream_classifies_peg_native_sse_error(monkeypatch) -> None:
+    class _PegErrorResponse(_StreamingResponse):
+        def iter_lines(self):
+            yield (
+                'data: {"error":{"code":500,"type":"server_error","message":'
+                '"The model produced output that does not match the expected '
+                'peg-native format"}}'
+            )
+
+    monkeypatch.setattr(
+        stream_runtime,
+        "_client",
+        lambda _server_url: _Client(_PegErrorResponse(), {}),
+    )
+
+    adapter = _Adapter()
+    request = SimpleNamespace(
+        messages=({"role": "user", "content": "x"},),
+        response_format="text",
+    )
+
+    with pytest.raises(LlamaNativeResponseFormatError, match="peg-native format"):
         _strict_server_generate(adapter, request, "http://127.0.0.1:8910/v1")

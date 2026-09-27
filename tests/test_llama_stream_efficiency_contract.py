@@ -111,3 +111,11 @@ def test_detailed_telemetry_opt_in_preserves_original_path(monkeypatch) -> None:
         SimpleNamespace(),
         "http://127.0.0.1:8080/v1",
     ) == "detailed"
+
+
+def test_fast_path_native_format_exception_remains_recoverable() -> None:
+    error = LlamaNativeResponseFormatError(
+        500,
+        "The model produced output that does not match the expected peg-native format",
+    )
+    assert is_recoverable_native_format_error(error)

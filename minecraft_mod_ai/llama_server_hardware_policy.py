@@ -415,6 +415,12 @@ def _reject_tool_stream_request(adapter: Any, request: Any) -> None:
 def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
     """Stream one native text-only server turn with native token telemetry."""
 
+    from .llama_sse_protocol import (
+        LlamaNativeResponseFormatError,
+        LlamaSseServerError,
+        is_recoverable_native_format_error,
+        sse_error_from_line,
+    )
     from .llama_stream_efficiency_contract import _client, _stream_idle_timeout_seconds
     from .model_adapters import ModelBackendError
 
@@ -458,6 +464,11 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
                 body = response.text.strip().replace("\n", " ")
                 if len(body) > 1200:
                     body = body[:1200] + "..."
+                if is_recoverable_native_format_error(body):
+                    raise LlamaNativeResponseFormatError(
+                        response.status_code,
+                        body,
+                    )
                 raise RuntimeError(
                     f"llama server returned HTTP {response.status_code}"
                     + (f": {body}" if body else "")
@@ -478,6 +489,15 @@ def _strict_server_generate(adapter: Any, request: Any, server_url: str) -> str:
             )
 
             for raw_line in response.iter_lines():
+                parsed_error = sse_error_from_line(raw_line)
+                if parsed_error is not None:
+                    status, error = parsed_error
+                    if is_recoverable_native_format_error(error):
+                        raise LlamaNativeResponseFormatError(
+                            status,
+                            str(error.get("message", "")),
+                        )
+                    raise LlamaSseServerError(status, error)
                 line = raw_line.strip()
                 if not line or line.startswith(":") or not line.startswith("data:"):
                     continue
