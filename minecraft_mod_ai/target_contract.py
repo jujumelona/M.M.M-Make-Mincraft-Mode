@@ -319,6 +319,15 @@ class TargetContract:
     def mappings_applicable(self) -> bool:
         return mappings_applicable(self.minecraft_version)
 
+    @property
+    def gradle_distribution_url(self) -> str:
+        """Canonical official wrapper URL derived from the pinned Gradle coordinate."""
+
+        return (
+            "https://services.gradle.org/distributions/"
+            f"gradle-{self.gradle}-bin.zip"
+        )
+
     def validate(self) -> None:
         validate_complete_target(asdict(self))
         for field in ("adapter_id", "edition", "source_api_family"):
@@ -328,6 +337,7 @@ class TargetContract:
     def public_dict(self) -> dict[str, Any]:
         self.validate()
         value = asdict(self)
+        value["gradle_distribution_url"] = self.gradle_distribution_url
         value["deterministic_module_kinds"] = sorted(self.deterministic_module_kinds)
         if self.mappings_applicable:
             value["mappings"] = {

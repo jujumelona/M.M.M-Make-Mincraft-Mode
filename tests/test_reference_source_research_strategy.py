@@ -142,7 +142,7 @@ def test_reference_provider_deadline_returns_error_receipts(monkeypatch) -> None
             item=("wikipedia", object()),
             deadline_kind="stage",
             elapsed_seconds=1.0,
-            timeout_seconds=0.01,
+            work_unit_timeout_seconds=0.01,
         )
 
     monkeypatch.setattr(reference, "iter_completed_with_deadlines", timeout)
