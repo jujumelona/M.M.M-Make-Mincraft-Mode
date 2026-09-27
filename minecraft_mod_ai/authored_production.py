@@ -987,23 +987,31 @@ def _compile_coherent_authored_module(
     return (module,), manifest
 
 
+def _execution_plan_projection(
+    plan: AuthoredPlan,
+) -> tuple[AuthoredPlan, dict[str, Any]]:
+    from .authored_document_contract import normalize_authored_document
+
+    normalized_text, normalization = normalize_authored_document(plan.text)
+    if normalization is None:
+        return plan, {}
+    execution_plan = AuthoredPlan(
+        requested_prompt=plan.requested_prompt,
+        text=normalized_text,
+        existing_input_sha256=plan.existing_input_sha256,
+        media_paths=plan.media_paths,
+    )
+    return execution_plan, {
+        "_authored_document_normalization": normalization,
+        "_authored_execution_plan": execution_plan.to_dict(),
+    }
+
+
 def compile_authored_design(
     router: Any, plan: AuthoredPlan, *, existing_input_sha256: str = ""
 ) -> CompleteProposal:
     implementation_plan, source_projection = _implementation_authored_plan(plan)
-    from .authored_document_contract import normalize_authored_document
-
-    normalized_text, normalization = normalize_authored_document(implementation_plan.text)
-    execution_plan = (
-        implementation_plan
-        if normalization is None
-        else AuthoredPlan(
-            requested_prompt=implementation_plan.requested_prompt,
-            text=normalized_text,
-            existing_input_sha256=implementation_plan.existing_input_sha256,
-            media_paths=implementation_plan.media_paths,
-        )
-    )
+    execution_plan, execution_projection = _execution_plan_projection(implementation_plan)
     # These are host project coordinates, not inferred gameplay or placeholder content.
     mod_id = "authored_" + execution_plan.calculate_hash()[:12]
     acceptance = (
@@ -1027,11 +1035,9 @@ def compile_authored_design(
         acceptance_tests=acceptance, evidence_sources=(),
     )
     design = {"authored_plan": implementation_plan.to_dict()}
+    design.update(execution_projection)
     if source_projection is not None:
         design["_authored_source_projection"] = source_projection
-    if normalization is not None:
-        design["_authored_document_normalization"] = normalization
-        design["_authored_execution_plan"] = execution_plan.to_dict()
     # Bind the actual build toolchain and existing project only. Never enter prepare(),
     # requirement extraction, design validation, or the old PlanIR compiler.
     binding = PlanningPipeline(router)
