@@ -123,13 +123,7 @@ def _strict_ready(text: str) -> bool:
         decompose_canonical_authored_units(text, _source_requirements(text))
     except AuthoredDesignSchemaError:
         return False
-    _preamble, bodies, counts = _section_bodies(text)
-    if any(counts.get(section, 0) != 1 for section in EXECUTION_SECTION_ORDER):
-        return False
-    return all(
-        any(chunk.strip() for chunk in bodies.get(section, ()))
-        for section in EXECUTION_SECTION_ORDER
-    )
+    return True
 
 
 _NESTED_SECTION_BULLET = re.compile(
@@ -289,6 +283,8 @@ def normalize_authored_document(
     """Return a production-safe canonical view plus provenance when bytes changed."""
 
     source = str(text or "")
+    if not source.strip():
+        raise AuthoredDocumentContractError("AUTHORED_DOCUMENT_EMPTY")
     if _strict_ready(source):
         return source, None
 

@@ -232,3 +232,31 @@ def test_canonicalizer_promotes_nested_execution_contracts_without_losing_semant
         persistence_start:resources_start
     ]
     decompose_authored_units(normalized)
+
+
+def test_valid_nested_canonical_heading_does_not_rewrite_document() -> None:
+    text = (
+        "## behavior_contract\nTrade ore.\n"
+        "### persistence\nThis behavior note mentions persistence but stays nested.\n"
+        "## state_model\nCredits.\n"
+        "## algorithm\nCalculate prices.\n"
+        "## integration\nWire systems.\n"
+        "## authority_and_network\nServer validates trades.\n"
+        "## persistence\nPersist credits.\n"
+        "## resources_and_ui\nTrade screen.\n"
+        "## failure_and_limits\nReject bad requests.\n"
+    )
+
+    normalized, report = normalize_authored_document(text)
+
+    assert normalized == text
+    assert report is None
+
+
+def test_empty_authored_document_is_rejected_instead_of_becoming_placeholders() -> None:
+    from minecraft_mod_ai.authored_document_contract import (
+        AuthoredDocumentContractError,
+    )
+
+    with pytest.raises(AuthoredDocumentContractError, match="AUTHORED_DOCUMENT_EMPTY"):
+        normalize_authored_document("  \n\t")
