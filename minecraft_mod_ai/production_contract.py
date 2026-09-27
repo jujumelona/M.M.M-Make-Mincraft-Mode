@@ -409,6 +409,18 @@ def validate_production_contract(
                 )
     if assets is not None:
         normalized_external_assets = [_normalize_asset(value) for value in assets]
+        if normalized_external_modules is not None:
+            from .resource_contracts import derive_module_asset_specs
+
+            normalized_external_assets.extend(
+                _normalize_asset(value)
+                for value in derive_module_asset_specs(
+                    normalized_external_modules,
+                    existing_asset_ids=[
+                        item['asset_id'] for item in normalized_external_assets
+                    ],
+                )
+            )
         asset_ids = [item['asset_id'] for item in normalized_external_assets]
         _require_unique(asset_ids, 'external asset ID')
         catalog_asset_ids = [
