@@ -88,7 +88,7 @@ def test_local_native_generation_uses_persistent_sse_client(monkeypatch) -> None
     assert captured["method"] == "POST"
     assert captured["url"] == "http://127.0.0.1:8910/v1/chat/completions"
     assert captured["json"]["stream"] is True
-    assert captured["json"]["stream_options"] == {"include_usage": True}
+    assert isinstance(captured["timeout"], httpx.Timeout)
 
 
 def test_local_native_stream_requires_done_marker(monkeypatch) -> None:

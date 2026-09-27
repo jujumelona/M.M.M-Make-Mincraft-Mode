@@ -20,8 +20,6 @@ from minecraft_mod_ai.llama_server_autotune import (
     _candidate_variants,
     _choose_variant,
     _compact_benchmark_request,
-    _probe_server,
-    _server_binary,
     _variant_args,
 )
 from minecraft_mod_ai.llama_tuning_pipeline import install_native_llama_tuning_pipeline
