@@ -243,31 +243,50 @@ def newest_adapter(*, loader: str) -> TargetContract:
 
 
 def adapter_for_lock_values(value: Any) -> TargetContract:
-    adapter = adapter_for_target(
-        str(getattr(value, "minecraft_version", "")),
-        str(getattr(value, "loader", "")),
-    )
-    fields = [
-        "edition",
-        "loader",
-        "minecraft_version",
-        "java_version",
-        "fabric_loader",
-        "fabric_api",
-        "fabric_loom",
-        "gradle",
-    ]
-    if adapter.mappings_applicable:
-        fields.append("yarn_mappings")
-    mismatches = [
-        field for field in fields if getattr(value, field, None) != getattr(adapter, field)
-    ]
-    if mismatches:
-        raise ValueError(
-            "Platform lock disagrees with the executable provider receipt for fields "
-            f"{mismatches}."
+    """Reconstruct the approved target from its immutable execution receipt.
+
+    Generation happens after approval, so this boundary must never call the live
+    provider again. A partial/legacy lock fails closed instead of silently refreshing
+    coordinates underneath the approved proposal.
+    """
+
+    from collections.abc import Mapping
+
+    from .spec import PlatformLock, SpecValidationError
+    from .target_contract import target_contract_from_mapping
+
+    if isinstance(value, PlatformLock):
+        lock = value
+    else:
+        fields = PlatformLock.__dataclass_fields__
+        payload = {
+            name: (
+                value.get(name)
+                if isinstance(value, Mapping)
+                else getattr(value, name, None)
+            )
+            for name in fields
+        }
+        lock = PlatformLock(
+            **{
+                name: item
+                for name, item in payload.items()
+                if item is not None
+            }
         )
-    return adapter
+
+    if not lock.has_full_execution_receipt():
+        raise SpecValidationError(
+            "Execution platform lock is incomplete; live provider rediscovery is "
+            "forbidden after approval."
+        )
+    lock.validate()
+    return target_contract_from_mapping(
+        {
+            name: getattr(lock, name)
+            for name in PlatformLock.__dataclass_fields__
+        }
+    )
 
 
 def _project_platform_lock(root: Path) -> Path | None:
