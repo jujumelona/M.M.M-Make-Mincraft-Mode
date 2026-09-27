@@ -7,7 +7,11 @@ import pytest
 
 from minecraft_mod_ai import llama_completion_liveness_contract as contract
 from minecraft_mod_ai import llama_stream_efficiency_contract as stream_contract
-from minecraft_mod_ai.llama_sse_protocol import LlamaSseServerError
+from minecraft_mod_ai.llama_sse_protocol import (
+    LlamaNativeResponseFormatError,
+    LlamaSseServerError,
+    is_recoverable_native_format_error,
+)
 from minecraft_mod_ai.model_adapters import llama_cpp_adapter
 
 
@@ -81,6 +85,29 @@ def test_progress_response_raises_server_error_before_watchdog() -> None:
 
     with pytest.raises(LlamaSseServerError, match="context overflow"):
         list(wrapped.iter_lines())
+
+
+def test_progress_checked_response_classifies_native_peg_error() -> None:
+    response = _Response(
+        iter(
+            [
+                'data: {"error":{"code":500,"type":"server_error","message":'
+                '"The model produced output that does not match the expected '
+                'peg-native format"}}'
+            ]
+        )
+    )
+    wrapped = contract._ProgressCheckedResponse(
+        response,
+        0.001,
+        request_id="test-native-format-error",
+        started_at=contract.time.monotonic(),
+    )
+
+    with pytest.raises(LlamaNativeResponseFormatError, match="peg-native format") as caught:
+        list(wrapped.iter_lines())
+
+    assert is_recoverable_native_format_error(caught.value)
 
 
 def test_install_wraps_nonstream_chat_completion_without_changing_timeout() -> None:
