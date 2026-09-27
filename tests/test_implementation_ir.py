@@ -284,7 +284,10 @@ def test_graph_schema_version_tracks_admission_semantics():
 
 def test_malformed_saved_design_reaches_canonical_graph_and_leaf_contracts():
     from minecraft_mod_ai.implementation_decisions import compile_contribution
-    from minecraft_mod_ai.implementation_graph_execution import _leaf_module
+    from minecraft_mod_ai.implementation_graph_execution import (
+        _leaf_module,
+        _normalize_implementation_graph_request,
+    )
 
     malformed = (
         "## behavior_contract\nTrade ore for credits.\n"
@@ -309,12 +312,23 @@ def test_malformed_saved_design_reaches_canonical_graph_and_leaf_contracts():
                 checkpoint or (lambda: None),
             )
 
+    request = _normalize_implementation_graph_request(
+        {
+            "text": malformed,
+            "target": TARGET,
+            "package": "example",
+            "mod_id": "test",
+        }
+    )
+    assert "## authority_and_network" in request["text"]
+    assert "## persistence" in request["text"]
+
     graph = compile_authored_graph(
         HostLowering(),
-        text=malformed,
-        package="example",
-        mod_id="test",
-        target=TARGET,
+        text=request["text"],
+        package=request["package"],
+        mod_id=request["mod_id"],
+        target=request["target"],
     )
 
     assert set(node["symbol"] for node in graph["nodes"]) == {
@@ -326,16 +340,6 @@ def test_malformed_saved_design_reaches_canonical_graph_and_leaf_contracts():
         "AuthoredResourcesUi",
         "AuthoredFailureLimits",
         "AuthoredIntegration",
-    }
-    normalization = graph["authored_document_normalization"]
-    assert set(normalization["missing_execution_sections"]) == {
-        "authority_and_network", "persistence"
-    }
-
-    request = {
-        "target": TARGET,
-        "package": "example",
-        "mod_id": "test",
     }
     sections = {
         _leaf_module(node, graph, request).config["implementation_section"]

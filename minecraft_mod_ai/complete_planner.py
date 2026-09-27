@@ -51,6 +51,22 @@ def _design_writing_template(
     return "\n".join(sections)
 
 
+def _canonicalize_authored_plan_text(text: str) -> str:
+    from .authored_document_contract import normalize_authored_document
+
+    normalized, report = normalize_authored_document(text)
+    if report is not None:
+        emit_root_cause(
+            "authored_design_canonicalized",
+            stage="planning",
+            operation="author_game_plan",
+            gate="authored_document_contract",
+            result="PASS",
+            details=report,
+        )
+    return normalized
+
+
 @dataclass(frozen=True)
 class _ProductionBatch:
     batch_id: str
@@ -165,18 +181,7 @@ class CompleteGameDesignPlanner:
                 response_schema=None,
                 enable_tools=False,
             )
-        from .authored_document_contract import normalize_authored_document
-
-        text, normalization = normalize_authored_document(text)
-        if normalization is not None:
-            emit_root_cause(
-                "authored_design_canonicalized",
-                stage="planning",
-                operation="author_game_plan",
-                gate="authored_document_contract",
-                result="PASS",
-                details=normalization,
-            )
+        text = _canonicalize_authored_plan_text(text)
         return AuthoredPlan(
             requested_prompt=prompt,
             text=text,

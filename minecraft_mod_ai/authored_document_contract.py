@@ -140,6 +140,62 @@ def _missing_body(section: str) -> str:
     )
 
 
+def _missing_execution_sections(bodies: dict[str, list[str]]) -> list[str]:
+    return [
+        section
+        for section in EXECUTION_SECTION_ORDER
+        if not any(chunk.strip() for chunk in bodies.get(section, ()))
+    ]
+
+
+def _render_canonical_document(
+    preamble: str,
+    bodies: dict[str, list[str]],
+) -> str:
+    parts = [preamble.rstrip()] if preamble.strip() else []
+    for section in DOCUMENT_SECTION_ORDER:
+        chunks = [
+            chunk.strip("\r\n")
+            for chunk in bodies.get(section, ())
+            if chunk.strip()
+        ]
+        if not chunks and section not in EXECUTION_SECTION_SET:
+            continue
+        body = "\n\n".join(chunks).strip() or _missing_body(section)
+        parts.append(f"## {section}\n{body}".rstrip())
+    return "\n\n".join(parts).rstrip() + "\n"
+
+
+def _validate_normalized_document(text: str) -> None:
+    try:
+        decompose_canonical_authored_units(text, _source_requirements(text))
+    except AuthoredDesignSchemaError as exc:
+        raise AuthoredDocumentContractError(
+            "AUTHORED_DOCUMENT_CANONICALIZATION_FAILED: " + str(exc)
+        ) from exc
+
+
+def _normalization_report(
+    source: str,
+    normalized: str,
+    *,
+    missing: list[str],
+    duplicates: list[str],
+) -> dict[str, Any]:
+    source_bytes = source.encode("utf-8")
+    normalized_bytes = normalized.encode("utf-8")
+    return {
+        "schema_version": "mmm/authored-document-normalization-v1",
+        "policy": "host_canonical_execution_sections",
+        "source_sha256": "sha256:" + hashlib.sha256(source_bytes).hexdigest(),
+        "normalized_sha256": "sha256:" + hashlib.sha256(normalized_bytes).hexdigest(),
+        "source_bytes": len(source_bytes),
+        "normalized_bytes": len(normalized_bytes),
+        "missing_execution_sections": missing,
+        "merged_duplicate_sections": duplicates,
+    }
+
+
 def normalize_authored_document(
     text: str,
 ) -> tuple[str, dict[str, Any] | None]:
@@ -150,48 +206,16 @@ def normalize_authored_document(
         return source, None
 
     preamble, bodies, counts = _section_bodies(source)
-    missing = [
-        section
-        for section in EXECUTION_SECTION_ORDER
-        if not any(chunk.strip() for chunk in bodies.get(section, ()))
-    ]
+    missing = _missing_execution_sections(bodies)
     duplicates = sorted(section for section, count in counts.items() if count > 1)
-
-    parts: list[str] = []
-    if preamble.strip():
-        parts.append(preamble.rstrip())
-    for section in DOCUMENT_SECTION_ORDER:
-        chunks = [chunk.strip("\r\n") for chunk in bodies.get(section, ()) if chunk.strip()]
-        if not chunks and section not in EXECUTION_SECTION_SET:
-            continue
-        body = "\n\n".join(chunks).strip()
-        if not body:
-            body = _missing_body(section)
-        parts.append(f"## {section}\n{body}".rstrip())
-
-    normalized = "\n\n".join(parts).rstrip() + "\n"
-    try:
-        decompose_canonical_authored_units(
-            normalized, _source_requirements(normalized)
-        )
-    except AuthoredDesignSchemaError as exc:
-        raise AuthoredDocumentContractError(
-            "AUTHORED_DOCUMENT_CANONICALIZATION_FAILED: " + str(exc)
-        ) from exc
-
-    source_bytes = source.encode("utf-8")
-    normalized_bytes = normalized.encode("utf-8")
-    report: dict[str, Any] = {
-        "schema_version": "mmm/authored-document-normalization-v1",
-        "policy": "host_canonical_execution_sections",
-        "source_sha256": "sha256:" + hashlib.sha256(source_bytes).hexdigest(),
-        "normalized_sha256": "sha256:" + hashlib.sha256(normalized_bytes).hexdigest(),
-        "source_bytes": len(source_bytes),
-        "normalized_bytes": len(normalized_bytes),
-        "missing_execution_sections": missing,
-        "merged_duplicate_sections": duplicates,
-    }
-    return normalized, report
+    normalized = _render_canonical_document(preamble, bodies)
+    _validate_normalized_document(normalized)
+    return normalized, _normalization_report(
+        source,
+        normalized,
+        missing=missing,
+        duplicates=duplicates,
+    )
 
 
 def assert_authored_document_ready(text: str) -> None:

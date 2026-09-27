@@ -107,6 +107,29 @@ def _leaf_module(node: dict[str, Any], graph: dict[str, Any], request: dict[str,
     )
 
 
+
+def _trace_authored_document_normalization(report: Mapping[str, Any] | None) -> None:
+    if report is None:
+        return
+    emit_root_cause(
+        "authored_execution_contract_normalized",
+        stage="production",
+        operation="execute_implementation_graph",
+        gate="authored_document_contract",
+        result="PASS",
+        details=dict(report),
+    )
+
+
+def _normalize_implementation_graph_request(raw_request: Mapping[str, Any]) -> dict[str, Any]:
+    from .authored_document_contract import normalize_authored_document
+
+    request = dict(raw_request)
+    normalized_text, report = normalize_authored_document(str(request["text"]))
+    request["text"] = normalized_text
+    _trace_authored_document_normalization(report)
+    return request
+
 def execute_implementation_graph(generator: Any, project_root: str | Path, *,
                                  module: ProductionModule,
                                  execution_feedback: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -116,23 +139,9 @@ def execute_implementation_graph(generator: Any, project_root: str | Path, *,
     root = Path(project_root).expanduser().resolve()
     if not root.is_dir() or root.is_symlink():
         raise ImplementationGraphError("IMPLEMENTATION_IR_PROJECT_REQUIRED")
-    raw_request = module.config["implementation_graph_request"]
-    from .authored_document_contract import normalize_authored_document
-
-    normalized_text, document_normalization = normalize_authored_document(
-        str(raw_request["text"])
+    request = _normalize_implementation_graph_request(
+        module.config["implementation_graph_request"]
     )
-    request = dict(raw_request)
-    request["text"] = normalized_text
-    if document_normalization is not None:
-        emit_root_cause(
-            "authored_execution_contract_normalized",
-            stage="production",
-            operation="execute_implementation_graph",
-            gate="authored_document_contract",
-            result="PASS",
-            details=document_normalization,
-        )
     target = request["target"]
     package, mod_id = request["package"], request["mod_id"]
     entry = direct._safe_target(root, direct._normalize_project_path(request["entrypoint_path"]))
