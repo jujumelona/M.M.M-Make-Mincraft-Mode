@@ -508,7 +508,7 @@ _ATOMIC_PARAMETER_SCHEMA: dict[str, Any] = {
         "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
     },
     "required": ["type", "name"],
-    "additionalProperties": False,
+    "additionalProperties": True,
 }
 _ATOMIC_FIELD_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -535,8 +535,8 @@ _ATOMIC_FIELD_SCHEMA: dict[str, Any] = {
             ),
         },
     },
-    "required": ["modifiers", "type", "name", "initializer"],
-    "additionalProperties": False,
+    "required": ["type", "name"],
+    "additionalProperties": True,
 }
 _ATOMIC_METHOD_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -568,8 +568,8 @@ _ATOMIC_METHOD_SCHEMA: dict[str, Any] = {
             },
         },
     },
-    "required": ["modifiers", "return_type", "name", "parameters", "throws", "body"],
-    "additionalProperties": False,
+    "required": ["return_type", "name"],
+    "additionalProperties": True,
 }
 _ATOMIC_CONSTRUCTOR_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -578,8 +578,8 @@ _ATOMIC_CONSTRUCTOR_SCHEMA: dict[str, Any] = {
         "throws": {"type": "array", "items": {"type": "string", "minLength": 1}},
         "body": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["parameters", "throws", "body"],
-    "additionalProperties": False,
+    "required": [],
+    "additionalProperties": True,
 }
 _ATOMIC_RECORD_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -593,8 +593,8 @@ _ATOMIC_RECORD_SCHEMA: dict[str, Any] = {
         "components": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA},
         "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA},
     },
-    "required": ["modifiers", "name", "components", "methods"],
-    "additionalProperties": False,
+    "required": ["name"],
+    "additionalProperties": True,
 }
 _ATOMIC_ENUM_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -612,8 +612,8 @@ _ATOMIC_ENUM_SCHEMA: dict[str, Any] = {
             "uniqueItems": True,
         },
     },
-    "required": ["modifiers", "name", "constants"],
-    "additionalProperties": False,
+    "required": ["name", "constants"],
+    "additionalProperties": True,
 }
 _ATOMIC_CLASS_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -628,8 +628,8 @@ _ATOMIC_CLASS_SCHEMA: dict[str, Any] = {
         "constructors": {"type": "array", "items": _ATOMIC_CONSTRUCTOR_SCHEMA},
         "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA},
     },
-    "required": ["modifiers", "name", "fields", "constructors", "methods"],
-    "additionalProperties": False,
+    "required": ["name"],
+    "additionalProperties": True,
 }
 _ATOMIC_MEMBERS_PARAMETERS: dict[str, Any] = {
     "type": "object",
@@ -646,19 +646,12 @@ _ATOMIC_MEMBERS_PARAMETERS: dict[str, Any] = {
                 "properties": {
                     "body": {"type": "array", "items": {"type": "string"}}
                 },
-                "required": ["body"],
-                "additionalProperties": False,
+                "required": [],
+                "additionalProperties": True,
             },
         },
     },
-    "required": [
-        "records",
-        "enums",
-        "classes",
-        "fields",
-        "methods",
-        "static_initializers",
-    ],
+    "required": [],
     "additionalProperties": False,
 }
 _ATOMIC_INITIALIZE_PARAMETERS: dict[str, Any] = {
@@ -666,7 +659,7 @@ _ATOMIC_INITIALIZE_PARAMETERS: dict[str, Any] = {
     "properties": {
         "statements": {"type": "array", "items": {"type": "string"}}
     },
-    "required": ["statements"],
+    "required": [],
     "additionalProperties": False,
 }
 
@@ -845,8 +838,7 @@ def _render_field(item: Mapping[str, Any], *, indent: str = "") -> str:
 
 
 def _render_record(item: Mapping[str, Any]) -> str:
-    modifiers = _java_modifiers(item.get("modifiers") or [], kind="record")
-    prefix = (modifiers + " ") if modifiers else ""
+    prefix = "private "
     name = str(item.get("name") or "").strip()
     components = _java_parameters(item.get("components") or [])
     methods = [
@@ -860,16 +852,14 @@ def _render_record(item: Mapping[str, Any]) -> str:
 
 
 def _render_enum(item: Mapping[str, Any]) -> str:
-    modifiers = _java_modifiers(item.get("modifiers") or [], kind="enum")
-    prefix = (modifiers + " ") if modifiers else ""
+    prefix = "private "
     name = str(item.get("name") or "").strip()
     constants = ", ".join(str(value) for value in item.get("constants") or [])
     return f"{prefix}enum {name} {{ {constants} }}"
 
 
 def _render_nested_class(item: Mapping[str, Any]) -> str:
-    modifiers = _java_modifiers(item.get("modifiers") or [], kind="class")
-    prefix = (modifiers + " ") if modifiers else ""
+    prefix = "private static "
     name = str(item.get("name") or "").strip()
     rows = [f"{prefix}class {name} {{"]
     rows.extend(
@@ -907,9 +897,11 @@ def _render_atomic_java_structure(
     response_region: str,
 ) -> str:
     if response_region == "initialize":
-        if set(decision) != {"statements"}:
+        unknown = set(decision) - {"statements"}
+        if unknown:
             raise CustomModuleGenerationError(
-                "ATOMIC_CONCERN_RESPONSE_INVALID: initialize structure must contain only statements."
+                "ATOMIC_CONCERN_RESPONSE_INVALID: initialize structure has unexpected fields: "
+                + ", ".join(sorted(unknown))
             )
         return "\n".join(_java_body_lines(decision.get("statements") or [], indent="")).strip()
 
@@ -921,9 +913,11 @@ def _render_atomic_java_structure(
         "methods",
         "static_initializers",
     }
-    if set(decision) != expected:
+    unknown = set(decision) - expected
+    if unknown:
         raise CustomModuleGenerationError(
-            "ATOMIC_CONCERN_RESPONSE_INVALID: member structure has unexpected fields."
+            "ATOMIC_CONCERN_RESPONSE_INVALID: member structure has unexpected fields: "
+            + ", ".join(sorted(unknown))
         )
     rows: list[str] = []
     rows.extend(
@@ -1004,7 +998,8 @@ def _call_atomic_java_region(
             f"using structured Java components only. Preferred shape: "
             f"{preferred_shape or 'smallest_components'}. "
             "Declare every concern-owned helper/domain type in this same call before "
-            "referencing it. The host renders Java syntax and qualifies common JDK "
+            "referencing it. Omit categories you do not need; do not emit empty arrays just "
+            "to satisfy the schema. The host renders Java syntax and qualifies common JDK "
             "collection/concurrency names. Never return raw Java source, prose, Markdown, "
             "imports, package declarations, or an outer class."
         ),

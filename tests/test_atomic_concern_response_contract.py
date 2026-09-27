@@ -295,7 +295,6 @@ def test_atomic_coder_can_force_non_thinking_transport() -> None:
     assert captured["output_token_ceiling"] == 1536
 
 
-
 def test_atomic_region_uses_required_structured_tool_not_free_text() -> None:
     captured: dict[str, object] = {}
 
@@ -644,7 +643,6 @@ def test_visibility_instance_initializer_is_rejected_before_compile() -> None:
     assert "private static final int COST = 10;" in result["source"]
 
 
-
 def test_structured_tool_declares_domain_type_and_field_together() -> None:
     from minecraft_mod_ai.custom_module_generator import _render_atomic_java_structure
 
@@ -983,7 +981,6 @@ def test_dependency_context_exposes_api_without_source_body() -> None:
     assert _dependency_declared_identifiers(raw) == ("AuthoredBehaviorContract",)
 
 
-
 def test_structured_tool_cannot_emit_visibility_on_static_initializer() -> None:
     from minecraft_mod_ai.custom_module_generator import _render_atomic_java_structure
 
@@ -1013,3 +1010,90 @@ def test_structured_tool_renders_initialize_statements_without_lifecycle_declara
 
     assert rendered == "registerDefaults();"
     assert "initialize()" not in rendered
+
+
+def test_structured_members_accept_omitted_empty_categories() -> None:
+    from minecraft_mod_ai.custom_module_generator import _render_atomic_java_structure
+
+    rendered = _render_atomic_java_structure(
+        {
+            "fields": [
+                {
+                    "type": "int",
+                    "name": "techLevel",
+                    "initializer": "1",
+                }
+            ]
+        },
+        response_region="members",
+    )
+
+    assert rendered == "int techLevel = 1;"
+
+
+def test_nested_type_visibility_is_host_owned() -> None:
+    from minecraft_mod_ai.custom_module_generator import _render_atomic_java_structure
+
+    rendered = _render_atomic_java_structure(
+        {
+            "records": [
+                {
+                    "modifiers": ["public", "static"],
+                    "name": "StateVariable",
+                    "components": [],
+                    "methods": [],
+                }
+            ],
+            "classes": [
+                {
+                    "modifiers": ["public"],
+                    "name": "Holder",
+                    "fields": [],
+                    "constructors": [],
+                    "methods": [],
+                }
+            ],
+            "enums": [
+                {
+                    "modifiers": ["public"],
+                    "name": "Mode",
+                    "constants": ["GROUND"],
+                }
+            ],
+        },
+        response_region="members",
+    )
+
+    assert "public record" not in rendered
+    assert "public class" not in rendered
+    assert "public enum" not in rendered
+    assert "private record StateVariable()" in rendered
+    assert "private static class Holder" in rendered
+    assert "private enum Mode" in rendered
+
+
+def test_parameter_schema_tolerates_small_model_metadata_noise() -> None:
+    from jsonschema import Draft202012Validator
+    from minecraft_mod_ai.custom_module_generator import _ATOMIC_MEMBERS_PARAMETERS
+
+    decision = {
+        "classes": [
+            {
+                "name": "Holder",
+                "constructors": [
+                    {
+                        "parameters": [
+                            {
+                                "type": "int",
+                                "name": "value",
+                                "description": "constructor value",
+                                "modifiers": ["final"],
+                            }
+                        ]
+                    }
+                ],
+            }
+        ]
+    }
+
+    Draft202012Validator(_ATOMIC_MEMBERS_PARAMETERS).validate(decision)
