@@ -70,20 +70,12 @@ def _normalize_project_path(value: Any) -> str:
 def _task_local_module_contract(module: ProductionModule) -> dict[str, Any]:
     config = module.config if isinstance(module.config, dict) else {}
     task = config.get("evidence_task")
-    if isinstance(task, Mapping):
-        return dict(task)
-    obligations = config.get("implementation_obligations")
-    if not (
-        isinstance(obligations, Sequence)
-        and not isinstance(obligations, (str, bytes, bytearray))
-    ):
-        obligations = [f"Implement {module.module_id}"]
-    return {
-        "task_id": module.module_id,
-        "semantic_outcome": str(config.get("semantic_outcome") or module.module_id),
-        "implementation_obligations": list(obligations),
-        "required_gates": list(module.required_gates),
-    }
+    if not isinstance(task, Mapping):
+        raise CustomModuleGenerationError(
+            "TASK_LOCAL_CONTRACT_REQUIRED: "
+            f"module {module.module_id!r} is missing structured config.evidence_task"
+        )
+    return dict(task)
 
 
 def _bounded_execution_feedback(value: Any) -> dict[str, Any] | None:
