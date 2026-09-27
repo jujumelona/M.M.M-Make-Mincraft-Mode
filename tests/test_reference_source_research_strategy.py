@@ -97,26 +97,28 @@ def test_provider_transport_retries_transient_failure() -> None:
     assert error is None
 
 
-def test_reference_retrieval_uses_identity_first_query_rows_without_provider_fanout(monkeypatch) -> None:
-    def wikipedia(queries, anchors):
-        query = next((value for value in queries if value not in anchors), queries[0])
-        return (
-            [
-                {
-                    "source_id": f"wikipedia:{query}",
-                    "content_sha256": f"sha256:wikipedia:{query}",
-                    "content": f"wikipedia evidence body for {query}",
-                }
-            ],
-            {"provider": "wikipedia", "status": "available", "result_count": 1},
-        )
+def test_reference_retrieval_runs_independent_providers_after_identity_expansion(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
 
-    def forbidden_provider(*_args, **_kwargs):
-        raise AssertionError("fallback providers must not run after wikipedia evidence")
+    def provider(name: str):
+        def run(queries, anchors):
+            calls.append(name)
+            query = queries[0]
+            return (
+                [{
+                    "source_id": f"{name}:{query}",
+                    "content_sha256": f"sha256:{name}",
+                    "content": f"{name} evidence body for {query}",
+                }],
+                {"provider": name, "status": "available", "result_count": 1},
+            )
+        return run
 
-    monkeypatch.setattr(reference, "_wikipedia_sources", wikipedia)
-    monkeypatch.setattr(reference, "_wikidata_sources", forbidden_provider)
-    monkeypatch.setattr(reference, "_github_reference_sources", forbidden_provider)
+    monkeypatch.setattr(reference, "_wikipedia_sources", provider("wikipedia"))
+    monkeypatch.setattr(reference, "_wikidata_sources", provider("wikidata"))
+    monkeypatch.setattr(reference, "_github_reference_sources", provider("github_reference"))
 
     result = reference.retrieve_reference_grounded_evidence(
         [
@@ -125,53 +127,40 @@ def test_reference_retrieval_uses_identity_first_query_rows_without_provider_fan
         ]
     )
 
-    assert result["retrieval_strategy"] == "identity_first_bounded_query_rows"
+    assert result["retrieval_strategy"] == "identity_first_bounded_expansion"
     assert result["inferred_reference_names"] == ["maplestory"]
-    assert [row["query"] for row in result["queries"]] == [
-        "MapleStory gameplay rules",
-        "MapleStory documented systems behavior rules",
-    ]
-    for row in result["queries"]:
-        assert row["content_record_count"] == 1
-        assert row["provider_receipts"]["wikidata"]["status"] == (
-            "skipped_wikipedia_has_evidence"
+    assert set(calls) == {"wikipedia", "wikidata", "github_reference"}
+    row = result["queries"][0]
+    assert row["provider_policy"] == "independent_parallel_after_identity_first_expansion"
+    assert row["content_record_count"] == 3
+
+
+def test_reference_provider_deadline_returns_error_receipts(monkeypatch) -> None:
+    from minecraft_mod_ai.deadline_executor import ParallelExecutionTimeout
+
+    def timeout(*args, **kwargs):
+        del args, kwargs
+        raise ParallelExecutionTimeout(
+            stage="mmm-reference-provider",
+            item=("wikipedia", object()),
+            deadline_kind="stage",
+            elapsed_seconds=1.0,
+            timeout_seconds=0.01,
         )
-        assert row["provider_receipts"]["github_reference"]["status"] == (
-            "skipped_wikipedia_has_evidence"
-        )
 
+    monkeypatch.setattr(reference, "iter_completed_with_deadlines", timeout)
 
-def test_reference_query_deadline_returns_without_waiting_for_blocked_row(monkeypatch) -> None:
-    release = threading.Event()
-    slow_finished = threading.Event()
-
-    def blocked_wikipedia(queries, anchors):
-        del queries, anchors
-        try:
-            release.wait(timeout=1.0)
-            return (
-                [],
-                {"provider": "wikipedia", "status": "available", "result_count": 0},
-            )
-        finally:
-            slow_finished.set()
-
-    monkeypatch.setattr(reference, "_MAX_QUERY_WORKERS", 1)
-    monkeypatch.setattr(reference, "_wikipedia_sources", blocked_wikipedia)
-    monkeypatch.setattr(deadline_executor, "planning_work_unit_timeout_seconds", lambda: 0.02)
-    monkeypatch.setattr(
-        deadline_executor,
-        "planning_stage_deadline",
-        lambda *, work_units, workers, started_at=None: float(started_at) + 0.02,
+    result = reference.retrieve_reference_grounded_evidence(
+        ["MapleStory gameplay rules"]
     )
-
-    try:
-        result = reference.retrieve_reference_grounded_evidence(["MapleStory gameplay rules"])
-        assert slow_finished.is_set() is False
-    finally:
-        release.set()
 
     row = result["queries"][0]
     assert row["content_record_count"] == 0
-    assert row["provider_receipts"]["reference_query"]["status"] == "error"
-    assert "ParallelExecutionTimeout" in row["retrieval_errors"][0]["error"]
+    assert all(
+        receipt["status"] == "error"
+        for receipt in row["provider_receipts"].values()
+    )
+    assert all(
+        "ParallelExecutionTimeout" in item["error"]
+        for item in row["retrieval_errors"]
+    )

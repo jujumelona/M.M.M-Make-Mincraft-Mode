@@ -5,96 +5,73 @@ import threading
 from minecraft_mod_ai import reference_source_research as rsr
 
 
-def test_parallel_reference_queries_are_bounded_and_keep_input_order(monkeypatch) -> None:
-    queries = [f"reference-{index}" for index in range(6)]
-    workers = 3
-    barrier = threading.Barrier(workers, timeout=2.0)
+def _provider_result(name: str, query: str):
+    record = {
+        "source_id": f"{name}:{query}",
+        "content_sha256": f"sha256:{name}:{query}",
+        "content": f"{name} evidence for {query}",
+    }
+    return (
+        [record],
+        {"provider": name, "status": "available", "result_count": 1},
+    )
+
+
+def test_reference_providers_are_bounded_parallel_and_result_order_is_canonical(
+    monkeypatch,
+) -> None:
+    barrier = threading.Barrier(3, timeout=2.0)
     lock = threading.Lock()
     active = 0
     max_active = 0
 
-    monkeypatch.setattr(rsr, "_MAX_QUERY_WORKERS", workers)
-
-    def fake_retrieve(query: str) -> dict[str, object]:
-        nonlocal active, max_active
-        with lock:
-            active += 1
-            max_active = max(max_active, active)
-        try:
-            barrier.wait()
-            return {"query": query}
-        finally:
+    def provider(name: str):
+        def run(queries, anchors):
+            del anchors
+            nonlocal active, max_active
             with lock:
-                active -= 1
+                active += 1
+                max_active = max(max_active, active)
+            try:
+                barrier.wait()
+                return _provider_result(name, queries[0])
+            finally:
+                with lock:
+                    active -= 1
 
-    monkeypatch.setattr(rsr, "_retrieve_query_row", fake_retrieve)
+        return run
 
-    result = rsr.retrieve_reference_grounded_evidence(queries)
+    monkeypatch.setattr(rsr, "_wikipedia_sources", provider("wikipedia"))
+    monkeypatch.setattr(rsr, "_wikidata_sources", provider("wikidata"))
+    monkeypatch.setattr(rsr, "_github_reference_sources", provider("github_reference"))
 
-    assert [row["query"] for row in result["queries"]] == queries
-    assert max_active == workers
-
-
-def test_query_row_skips_github_when_wikipedia_has_evidence(monkeypatch) -> None:
-    wiki_record = {
-        "source_id": "wikipedia:en:1",
-        "content_sha256": "sha256:wikipedia",
-    }
-
-    monkeypatch.setattr(
-        rsr,
-        "_wikipedia_sources",
-        lambda query: (
-            [wiki_record],
-            {"provider": "wikipedia", "status": "available", "result_count": 1},
-        ),
+    result = rsr.retrieve_reference_grounded_evidence(
+        ["Maple Story gameplay rules", "Maple Story documented systems behavior rules"]
     )
 
-    def fail_if_called(query: str):
-        raise AssertionError(f"GitHub fallback must not run for {query!r}")
-
-    monkeypatch.setattr(rsr, "_github_reference_sources", fail_if_called)
-
-    row = rsr._retrieve_query_row("known reference")
-
-    assert row["evidence_records"] == [wiki_record]
-    assert row["provider_receipts"]["github_reference"]["status"] == (
-        "skipped_wikipedia_has_evidence"
-    )
+    assert max_active == 3
+    assert result["retrieval_strategy"] == "identity_first_bounded_expansion"
+    assert list(result["queries"][0]["provider_receipts"]) == [
+        "wikipedia",
+        "wikidata",
+        "github_reference",
+    ]
+    assert result["queries"][0]["content_record_count"] == 3
 
 
-def test_query_row_uses_github_only_when_wikipedia_is_empty(monkeypatch) -> None:
-    github_record = {
-        "source_id": "github-reference:owner/repo",
-        "content_sha256": "sha256:github",
-    }
-    github_queries: list[str] = []
+def test_provider_retry_remains_bounded() -> None:
+    attempts = 0
 
-    monkeypatch.setattr(
-        rsr,
-        "_wikipedia_sources",
-        lambda query: (
-            [],
-            {"provider": "wikipedia", "status": "available", "result_count": 0},
-        ),
-    )
+    def flaky_provider():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("transient")
+        return _provider_result("fixture", "known")
 
-    def github_fallback(query: str):
-        github_queries.append(query)
-        return (
-            [github_record],
-            {
-                "provider": "github_reference",
-                "status": "available",
-                "result_count": 1,
-                "policy": "wikipedia_empty_fallback_only",
-            },
-        )
+    found, receipt, error = rsr._retrieve_provider("fixture", flaky_provider)
 
-    monkeypatch.setattr(rsr, "_github_reference_sources", github_fallback)
-
-    row = rsr._retrieve_query_row("missing reference")
-
-    assert github_queries == ["missing reference"]
-    assert row["evidence_records"] == [github_record]
-    assert row["provider_receipts"]["github_reference"]["status"] == "available"
+    assert attempts == 2
+    assert found
+    assert receipt["attempts"] == 2
+    assert error is None
