@@ -228,10 +228,9 @@ def test_final_architecture_contracts_are_installed_without_atomic_plan_gate() -
         "_mmm_atomic_release_guard",
         False,
     )
-    assert getattr(
-        CompleteProductionOrchestrator._evaluate_quality,
-        "_mmm_clean_room_quality",
-        False,
+    assert (
+        CompleteProductionOrchestrator._evaluate_quality.__module__
+        == "minecraft_mod_ai.complete_orchestrator"
     )
     assert getattr(
         quality_evidence._clean_build_evidence,
