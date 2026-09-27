@@ -830,3 +830,73 @@ def test_compile_repairs_have_hard_per_concern_bound(monkeypatch) -> None:
         executor.run()
 
     assert compile_calls["count"] == 3
+
+
+def test_atomic_prompt_uses_selected_region_not_whole_host_source() -> None:
+    concerns = (
+        {"sequence": 0, "identifier": "a", "concern": "variables", "task": "variables", "rules": []},
+        {"sequence": 1, "identifier": "b", "concern": "invariants", "task": "invariants", "rules": []},
+    )
+    captured: list[list[dict[str, str]]] = []
+    executor, _compile_calls = _multi_executor(
+        [
+            "private static int playerCredits;",
+            "private static boolean creditsValid() { return playerCredits >= 0; }",
+        ],
+        concerns=concerns,
+        captured_messages=captured,
+    )
+
+    executor.run()
+
+    payload = __import__("json").loads(captured[1][-1]["content"])
+    assert "current_host_owned_source" not in payload
+    assert payload["current_selected_region_source"] == ""
+    assert payload["available_sibling_symbols"] == [
+        {
+            "kind": "field",
+            "owner_concern": "variables",
+            "symbol": "playerCredits",
+        }
+    ]
+
+
+def test_compiler_failure_sent_to_model_is_concern_local_and_bounded() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _compact_compiler_failure
+
+    source = (
+        "package example;\n"
+        "public final class Test {\n"
+        "// MMM_ATOMIC_CONCERN_VARIABLES_MEMBERS_START\n"
+        "private static int value = missing();\n"
+        "// MMM_ATOMIC_CONCERN_VARIABLES_MEMBERS_END\n"
+        "// MMM_ATOMIC_CONCERN_TRANSITIONS_MEMBERS_START\n"
+        "private static int other = missingOther();\n"
+        "// MMM_ATOMIC_CONCERN_TRANSITIONS_MEMBERS_END\n"
+        "}\n"
+    )
+    noisy = (
+        "/tmp/Test.java:4: error: cannot find symbol\n"
+        "private static int value = missing();\n"
+        "^\n"
+        "  symbol: method missing()\n"
+        "  location: class Test\n\n"
+        "/tmp/Test.java:7: error: cannot find symbol\n"
+        "private static int other = missingOther();\n"
+        "^\n"
+        "  symbol: method missingOther()\n"
+        "  location: class Test\n\n"
+        + ("gradle stack noise\n" * 1000)
+    )
+
+    compact = _compact_compiler_failure(
+        noisy,
+        source=source,
+        relative="/tmp/Test.java",
+        concern="variables",
+    )
+
+    assert "missing()" in compact
+    assert "missingOther" not in compact
+    assert "gradle stack noise" not in compact
+    assert len(compact) < 6000

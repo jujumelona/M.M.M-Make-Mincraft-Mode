@@ -748,6 +748,75 @@ def _failure_concern(source: str, *, log: str, relative: str) -> str:
     return ""
 
 
+def _compact_compiler_failure(
+    log: str,
+    *,
+    source: str,
+    relative: str,
+    concern: str,
+    max_blocks: int = 8,
+    max_chars: int = 6000,
+) -> str:
+    rows = str(log or "").splitlines()
+    filename = re.escape(PurePosixPath(relative).name)
+    blocks: list[str] = []
+    index = 0
+    while index < len(rows):
+        match = re.search(
+            rf"(?:^|[\\/]){filename}:(\d+)(?::\d+)?:\s*error:\s*(.*)$",
+            rows[index],
+        )
+        if match is None:
+            index += 1
+            continue
+        line_number = int(match.group(1))
+        owner = _concern_at_line(source, line_number)
+        start = index
+        index += 1
+        while index < len(rows):
+            if re.search(
+                rf"(?:^|[\\/]){filename}:\d+(?::\d+)?:\s*error:",
+                rows[index],
+            ):
+                break
+            if not rows[index].strip() and index > start + 1:
+                index += 1
+                break
+            if rows[index].startswith("FAILURE:") or rows[index].startswith("* What went wrong:"):
+                break
+            index += 1
+        if owner != concern:
+            continue
+        block = "\n".join(rows[start:index]).strip()
+        if block and block not in blocks:
+            blocks.append(block)
+        if len(blocks) >= max_blocks:
+            break
+
+    if blocks:
+        compact = (
+            f"Compiler diagnostics localized to concern {concern}:\n"
+            + "\n\n".join(blocks)
+        )
+    else:
+        diagnostic_rows = [
+            row
+            for row in rows
+            if (
+                " error:" in row
+                or row.strip().startswith(
+                    ("symbol:", "location:", "required:", "found:", "reason:")
+                )
+            )
+        ]
+        compact = "\n".join(diagnostic_rows[: max_blocks * 5]).strip()
+        if not compact:
+            compact = "\n".join(rows[:80]).strip()
+    if len(compact) > max_chars:
+        compact = compact[:max_chars].rstrip() + "\n... compiler diagnostics truncated by host ..."
+    return compact
+
+
 def _compiler_diagnostic_fingerprint(log: str) -> str:
     diagnostics: list[str] = []
     for raw in str(log or "").splitlines():
@@ -872,6 +941,38 @@ def _bounded_grounding(grounding: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _region_content(source: str, *, concern: str, region: str) -> str:
+    start = _marker(concern, region, "START")
+    end = _marker(concern, region, "END")
+    pattern = re.compile(
+        rf"(?ms)^\s*{re.escape(start)}[ \t]*$"
+        rf"(?P<body>.*?)"
+        rf"^\s*{re.escape(end)}[ \t]*$"
+    )
+    match = pattern.search(str(source or ""))
+    return str(match.group("body") if match else "").strip()
+
+
+def _sibling_symbol_inventory(
+    source: str,
+    *,
+    sibling_concerns: Sequence[str],
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for concern in sibling_concerns:
+        members = _region_content(source, concern=concern, region="MEMBERS")
+        for key, display in sorted(_member_declaration_symbols(members).items()):
+            kind, _, _ = key.partition(":")
+            rows.append(
+                {
+                    "owner_concern": concern,
+                    "kind": kind,
+                    "symbol": display,
+                }
+            )
+    return rows
+
+
 def _messages(
     *,
     section: str,
@@ -913,7 +1014,9 @@ def _messages(
         "You do not choose files, classes, dependencies, architecture, tools, search routes, APIs, or sibling work. "
         + response_contract + " "
         "The task_authority source requirements are already host-sliced to this concern; "
-        "do not infer or implement sibling concerns from current source context. "
+        "current_selected_region_source is the only region you may replace, and "
+        "available_sibling_symbols is reference-only context. Do not infer or implement "
+        "sibling concerns from symbol names. "
         "Use fully-qualified external API names when needed. "
         "Use only supplied host grounding and dependency source; never invent a Minecraft/Fabric API."
     )
@@ -932,7 +1035,15 @@ def _messages(
         "task_authority": _concern_authority(task, concern),
         "host_grounding": _bounded_grounding(grounding),
         "dependency_source": dependency_source,
-        "current_host_owned_source": current_source,
+        "current_selected_region_source": _region_content(
+            current_source,
+            concern=name,
+            region="INIT" if response_region == "initialize" else "MEMBERS",
+        ),
+        "available_sibling_symbols": _sibling_symbol_inventory(
+            current_source,
+            sibling_concerns=sibling_concerns,
+        ),
         "repair_failure": failure or None,
         "scope": {
             "selected_region": _marker(
@@ -1289,18 +1400,39 @@ class AtomicConcernExecutor:
         )
         fingerprint = _compiler_diagnostic_fingerprint(failure)
         if fingerprint in self.seen_failures:
+            repeated_name = _failure_concern(
+                self.source,
+                log=failure,
+                relative=self.relative,
+            )
             raise CustomModuleGenerationError(
                 "ATOMIC_CONCERN_COMPILE_NO_PROGRESS: compiler diagnostics repeated.\n"
-                + failure
+                + _compact_compiler_failure(
+                    failure,
+                    source=self.source,
+                    relative=self.relative,
+                    concern=repeated_name,
+                )
             )
         self.seen_failures.add(fingerprint)
         name = _failure_concern(self.source, log=failure, relative=self.relative)
         if not name:
             raise CustomModuleGenerationError(
                 "ATOMIC_CONCERN_COMPILE_UNLOCALIZED: failure is outside every active concern region.\n"
-                + failure
+                + _compact_compiler_failure(
+                    failure,
+                    source=self.source,
+                    relative=self.relative,
+                    concern="",
+                )
             )
-        self._apply(self._concern(name), failure=failure)
+        compact_failure = _compact_compiler_failure(
+            failure,
+            source=self.source,
+            relative=self.relative,
+            concern=name,
+        )
+        self._apply(self._concern(name), failure=compact_failure)
         self.repairs += 1
         return self._compile()
 
@@ -1325,7 +1457,13 @@ class AtomicConcernExecutor:
                     raise CustomModuleGenerationError(
                         "ATOMIC_CONCERN_COMPILE_RETRY_EXHAUSTED: "
                         f"{failing_name} remained uncompilable after {repair_limit} "
-                        "bounded compiler-driven repairs.\n" + failure
+                        "bounded compiler-driven repairs.\n"
+                        + _compact_compiler_failure(
+                            failure,
+                            source=self.source,
+                            relative=self.relative,
+                            concern=failing_name,
+                        )
                     )
                 report = self._repair_once(report)
                 concern_repairs += 1
