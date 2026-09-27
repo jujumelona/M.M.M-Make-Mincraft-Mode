@@ -267,7 +267,7 @@ def test_context_pressure_recovery_keeps_tool_transport_enabled(
     assert second_bytes < first_bytes
 
 
-def test_installed_llama_efficiency_bounds_negative_tool_decode(monkeypatch) -> None:
+def test_installed_llama_efficiency_preserves_generation_budget_owner(monkeypatch) -> None:
     monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)
     monkeypatch.delenv("MMM_LLAMA_TOOL_MAX_TOKENS", raising=False)
 
@@ -301,5 +301,5 @@ def test_installed_llama_efficiency_bounds_negative_tool_decode(monkeypatch) -> 
 
     payload = hardware._server_payload(SimpleNamespace(config=config), request)
 
-    assert payload["max_tokens"] == 8192
+    assert payload["max_tokens"] == -1
     assert payload["cache_prompt"] is True
