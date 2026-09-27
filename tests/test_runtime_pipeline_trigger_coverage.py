@@ -20,8 +20,23 @@ SOURCE_OWNED_RUNTIME_PATHS = (
     "minecraft_mod_ai/texture_equivalence_cache.py",
     "minecraft_mod_ai/extended_registration_contract.py",
 )
+AUTHORED_PIPELINE_GATE_PATHS = (
+    "minecraft_mod_ai/authored_document_contract.py",
+    "minecraft_mod_ai/authored_section_ids.py",
+    "minecraft_mod_ai/authored_ir_parser.py",
+    "minecraft_mod_ai/authored_execution_schema.py",
+    "minecraft_mod_ai/complete_planner.py",
+    "minecraft_mod_ai/authored_production.py",
+    "minecraft_mod_ai/planning_detail_template.py",
+    "minecraft_mod_ai/planning_detail_applicability.py",
+    "minecraft_mod_ai/implementation_ir.py",
+    "minecraft_mod_ai/implementation_decisions.py",
+    "minecraft_mod_ai/implementation_graph_execution.py",
+    "minecraft_mod_ai/task_template_catalog.py",
+)
 DEEP_SOFTWARE_GATE_PATHS = (
     *SOURCE_OWNED_RUNTIME_PATHS,
+    *AUTHORED_PIPELINE_GATE_PATHS,
     "tools/verify_integrity_minecraft.py",
     "tests/test_implementation_ir.py",
     "minecraft_mod_ai/performance_final_tuning.py",
