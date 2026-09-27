@@ -53,6 +53,19 @@ class ProductionContractCompilation:
     contract: dict[str, Any]
     acceptance_tests: tuple[str, ...]
 
+def _derived_assets(
+    modules: Sequence[Mapping[str, Any]], assets: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    from .resource_contracts import derive_module_asset_specs
+    return [_normalize_asset(value) for value in derive_module_asset_specs(
+        modules, existing_asset_ids=[item["asset_id"] for item in assets]
+    )]
+
+
+def _public_acceptance_values(contract: Mapping[str, Any]) -> list[str]:
+    return [item['statement'] for item in contract.get('acceptance_catalog', []) if isinstance(item, Mapping) and item.get('visibility') == 'public' and isinstance(item.get('statement'), str)]
+
+
 def compile_production_contract(requested_prompt: str, game_design: Mapping[str, Any], research_brief: Mapping[str, Any] | Sequence[Any] | None=None, modules: Sequence[ProductionModule | Mapping[str, Any]]=(), assets: Sequence[AssetRequest | Mapping[str, Any]]=(), acceptance_tests: Sequence[str]=(), evidence_plan: Mapping[str, Any] | None=None) -> ProductionContractCompilation:
     """Compile prompt-derived scope into a deterministic evidence contract."""
     if not isinstance(requested_prompt, str) or not requested_prompt.strip():
@@ -63,15 +76,7 @@ def compile_production_contract(requested_prompt: str, game_design: Mapping[str,
     research_snapshot = None if research_brief is None else _json_copy(research_brief, 'research_brief')
     raw_modules = [_normalize_module(value) for value in modules]
     explicit_assets = [_normalize_asset(value) for value in assets]
-    raw_assets = list(explicit_assets)
-    from .resource_contracts import derive_module_asset_specs
-    raw_assets.extend(
-        _normalize_asset(value)
-        for value in derive_module_asset_specs(
-            raw_modules,
-            existing_asset_ids=[item["asset_id"] for item in raw_assets],
-        )
-    )
+    raw_assets = [*explicit_assets, *_derived_assets(raw_modules, explicit_assets)]
     normalized_modules: list[dict[str, Any]] = []
     seen_mids: set[str] = set()
     for module in raw_modules:
@@ -210,21 +215,11 @@ def compile_production_contract(requested_prompt: str, game_design: Mapping[str,
         group_ref = 'coverage:' + requirement_ref
         requirement['coverage_group_ref'] = group_ref
         coverage_groups.append({'group_ref': group_ref, 'requirement_ref': requirement_ref, 'implementation_catalog_ref': 'catalog:implementations', 'implementation_refs': direct_implementations, 'acceptance_catalog_ref': 'catalog:acceptance', 'acceptance_refs': [requirement_acceptance[requirement_ref], *matched_input_tests], 'quality_dimension_refs': quality_refs, 'evidence_route_refs': ['evidence:' + value.removeprefix('quality:') for value in quality_refs]})
-    acceptance_tuple = tuple(
-        entry['statement']
-        for entry in acceptance_catalog
-        if entry['visibility'] == 'public'
-    )
+    acceptance_tuple = tuple(_public_acceptance_values({'acceptance_catalog': acceptance_catalog}))
     source_bindings = {'game_design_sha256': _canonical_sha256(design_snapshot), 'research_brief_sha256': '' if research_snapshot is None else _canonical_sha256(research_snapshot), 'module_input_sha256': _canonical_sha256(normalized_modules), 'asset_input_sha256': _canonical_sha256(normalized_assets), 'evidence_plan_sha256': '' if normalized_evidence_plan is None else str(normalized_evidence_plan['plan_sha256'])}
     contract: dict[str, Any] = {'schema_version': CONTRACT_SCHEMA, 'requested_prompt': requested_prompt, 'source_bindings': source_bindings, 'requirement_catalog': requirements, 'implementation_catalog': implementation_catalog, 'acceptance_catalog': acceptance_catalog, 'quality_dimension_catalog': quality_catalog, 'evidence_route_catalog': evidence_routes, 'coverage_groups': coverage_groups, 'completion_policy': _json_copy(_COMPLETION_POLICY, 'completion_policy'), 'catalog_stats': {'requirements': len(requirements), 'implementations': len(implementation_catalog), 'acceptance_tests': len(acceptance_catalog), 'quality_dimensions': len(quality_catalog), 'coverage_groups': len(coverage_groups), 'max_direct_implementation_refs_per_group': max((len(item['implementation_refs']) for item in coverage_groups), default=0)}, 'contract_sha256': ''}
     contract['contract_sha256'] = _hash_without_field(contract, 'contract_sha256')
-    validate_production_contract(
-        contract,
-        normalized_modules,
-        acceptance_tuple,
-        normalized_assets,
-        normalized_evidence_plan,
-    )
+    validate_production_contract(contract, normalized_modules, acceptance_tuple, normalized_assets, normalized_evidence_plan)
     return ProductionContractCompilation(contract=contract, acceptance_tests=acceptance_tuple)
 
 def validate_production_contract(
@@ -411,17 +406,7 @@ def validate_production_contract(
     if assets is not None:
         normalized_external_assets = [_normalize_asset(value) for value in assets]
         if normalized_external_modules is not None:
-            from .resource_contracts import derive_module_asset_specs
-
-            normalized_external_assets.extend(
-                _normalize_asset(value)
-                for value in derive_module_asset_specs(
-                    normalized_external_modules,
-                    existing_asset_ids=[
-                        item['asset_id'] for item in normalized_external_assets
-                    ],
-                )
-            )
+            normalized_external_assets.extend(_derived_assets(normalized_external_modules, normalized_external_assets))
         asset_ids = [item['asset_id'] for item in normalized_external_assets]
         _require_unique(asset_ids, 'external asset ID')
         catalog_asset_ids = [
@@ -595,15 +580,7 @@ def validate_production_contract(
 
 def quality_contract_summary(contract: Mapping[str, Any]) -> str:
     module_ids = [item['implementation_id'] for item in contract.get('implementation_catalog', []) if isinstance(item, Mapping) and item.get('source_kind') == 'module']
-    tests = [
-        item['statement']
-        for item in contract.get('acceptance_catalog', [])
-        if (
-            isinstance(item, Mapping)
-            and item.get('visibility') == 'public'
-            and isinstance(item.get('statement'), str)
-        )
-    ]
+    tests = _public_acceptance_values(contract)
     validate_production_contract(contract, module_ids, tests)
     stats = contract['catalog_stats']
     dimensions = ', '.join(item['title'] for item in contract['quality_dimension_catalog'])
@@ -611,15 +588,7 @@ def quality_contract_summary(contract: Mapping[str, Any]) -> str:
 
 def evaluate_quality_contract(contract: Mapping[str, Any], evidence: Mapping[str, Any] | Sequence[Mapping[str, Any]], proposal_hash: str, previous: Mapping[str, Any] | None=None) -> dict[str, Any]:
     module_ids = [item['implementation_id'] for item in contract.get('implementation_catalog', []) if isinstance(item, Mapping) and item.get('source_kind') == 'module']
-    acceptance = [
-        item['statement']
-        for item in contract.get('acceptance_catalog', [])
-        if (
-            isinstance(item, Mapping)
-            and item.get('visibility') == 'public'
-            and isinstance(item.get('statement'), str)
-        )
-    ]
+    acceptance = _public_acceptance_values(contract)
     validate_production_contract(contract, module_ids, acceptance)
     if not isinstance(proposal_hash, str) or not _SHA256.fullmatch(proposal_hash):
         raise ProductionContractError('proposal_hash must be a canonical SHA-256')
