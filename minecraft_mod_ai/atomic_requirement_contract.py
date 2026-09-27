@@ -16,6 +16,21 @@ _MAX_ACCEPTANCE_CANDIDATES = 24
 _TOKEN = re.compile('[A-Za-z0-9_]+|[가-힣]+|[\\u3040-\\u30ff\\u3400-\\u9fff]+', re.UNICODE)
 _SENTENCE = re.compile('[^.!?。！？;\\n]+(?:[.!?。！？;]+|$)', re.UNICODE)
 _STOP = frozenset({'a', 'an', 'the', 'and', 'or', 'to', 'of', 'for', 'with', 'in', 'on', 'is', 'are', 'be', 'make', 'create', 'minecraft', 'mod', '기능', '모드', '마인크래프트', '만들', '만들어', '추가', '사용', '그리고', '및', '으로', '에서', '하는', '되게', '해줘', '해주세요'})
+_EVIDENCE_DIMENSION_ORDER = (
+    'runtime', 'visual_3d', 'state_save_migration', 'multiplayer',
+    'performance', 'accessibility', 'research', 'build',
+)
+_MULTIPLAYER_KINDS = frozenset({'networking', 'party', 'guild'})
+_VISUAL_KINDS = frozenset({'entity_model', 'animation', 'model', 'texture'})
+_RESEARCH_TERMS = (
+    'license', 'licence', 'compatible', 'compatibility', 'fabric', 'yarn',
+    'dependency', 'version', '라이선스', '호환', '의존성', '버전',
+)
+_BUILD_TERMS = ('compile', 'build', 'gradle', 'java 17', '컴파일', '빌드')
+_PERFORMANCE_TERMS = (
+    'performance', 'latency', 'throughput', 'tps', 'fps', 'benchmark',
+    '성능', '지연', '처리량', '벤치마크',
+)
 
 class AtomicRequirementError(ValueError):
     pass
@@ -118,6 +133,46 @@ def _implementations(proposal: Any) -> dict[str, str]:
 def _acceptances(proposal: Any) -> dict[str, str]:
     return {f'acceptance:{index:08d}': str(text) for index, text in enumerate(getattr(proposal, 'acceptance_tests', ()))}
 
+def _evidence_dimensions(proposal: Any, atom: Mapping[str, Any]) -> list[str]:
+    """Derive objective verifier routes as part of the atomic IR itself."""
+
+    text = str(atom.get('text', ''))
+    lowered = ' ' + text.casefold() + ' '
+    refs = [str(value) for value in atom.get('implementation_refs', ())]
+    module_kinds = {
+        f'implementation:module:{item.module_id}': str(item.kind).casefold()
+        for item in getattr(proposal, 'modules', ())
+    }
+    routes: set[str] = set()
+    has_module = False
+    for ref in refs:
+        if ref.startswith('implementation:asset:'):
+            routes.add('visual_3d')
+            continue
+        if not ref.startswith('implementation:module:'):
+            continue
+        has_module = True
+        kind = module_kinds.get(ref, '')
+        if kind in _MULTIPLAYER_KINDS:
+            routes.add('multiplayer')
+        if kind in _VISUAL_KINDS:
+            routes.add('visual_3d')
+
+    if any(term in lowered for term in _PERFORMANCE_TERMS):
+        routes.add('performance')
+    if any(term in lowered for term in _RESEARCH_TERMS):
+        routes.add('research')
+    if any(term in lowered for term in _BUILD_TERMS):
+        routes.add('build')
+
+    infrastructure_only = bool(routes) and routes <= {'research', 'build'}
+    visual_asset_only = bool(routes) and routes <= {'visual_3d'} and not has_module
+    if (has_module and not infrastructure_only) or not routes:
+        routes.add('runtime')
+    elif visual_asset_only:
+        routes.discard('runtime')
+    return [value for value in _EVIDENCE_DIMENSION_ORDER if value in routes]
+
 def _rank(text: str, catalog: Mapping[str, str], limit: int) -> list[tuple[float, str]]:
     ranked = sorted(((_score(text, descriptor), ref) for ref, descriptor in catalog.items()), key=lambda item: (-item[0], item[1]))
     return [item for item in ranked[:limit] if item[0] > 0.0]
@@ -139,10 +194,14 @@ def compile_ir(proposal: Any) -> dict[str, Any]:
         status = 'COVERED' if impl and tests else 'REVIEW_REQUIRED'
         if status != 'COVERED':
             unresolved.append(atom_id)
-        atoms.append({'atom_id': atom_id, 'index': index, 'char_start': start, 'char_end': end, 'text': text, 'text_sha256': _sha(text), 'implementation_refs': impl, 'acceptance_refs': tests, 'coverage_origin': 'deterministic' if status == 'COVERED' else 'unresolved', 'status': status})
+        atom = {'atom_id': atom_id, 'index': index, 'char_start': start, 'char_end': end, 'text': text, 'text_sha256': _sha(text), 'implementation_refs': impl, 'acceptance_refs': tests, 'coverage_origin': 'deterministic' if status == 'COVERED' else 'unresolved', 'status': status}
+        atom['evidence_dimensions'] = _evidence_dimensions(proposal, atom)
+        atoms.append(atom)
     result = {'schema_version': SCHEMA, 'prompt_sha256': prompt_hash, 'prompt_char_length': len(prompt), 'atom_count': len(atoms), 'implementation_catalog_sha256': _sha(implementations), 'acceptance_catalog_sha256': _sha(acceptances), 'atoms': atoms, 'unresolved_atom_ids': unresolved, 'review_policy': {'deterministic_first': True, 'semantic_review_only_when_unresolved': True, 'reviewer_may_create_implementation': False, 'release_requires_zero_unresolved': True}, 'ir_sha256': ''}
     result['ir_sha256'] = _hash_without(result, 'ir_sha256')
     return result
+
+compile_ir._mmm_atomic_evidence_routes = True
 
 def _root_hints(proposal: Any, implementations: Mapping[str, str]) -> list[str]:
     contract = getattr(proposal, 'game_design', {}).get('_production_contract')
@@ -259,10 +318,14 @@ def semantic_review(router: Any, proposal: Any, ir: dict[str, Any]) -> dict[str,
             atom['status'] = 'UNSUPPORTED'
         atom['coverage_origin'] = 'semantic_reviewer_native_tool'
     ordered = [atoms[item['atom_id']] for item in ir['atoms']]
+    for atom in ordered:
+        atom['evidence_dimensions'] = _evidence_dimensions(proposal, atom)
     missing = [item['atom_id'] for item in ordered if item['status'] != 'COVERED']
     updated = {**ir, 'atoms': ordered, 'unresolved_atom_ids': missing, 'ir_sha256': ''}
     updated['ir_sha256'] = _hash_without(updated, 'ir_sha256')
     return updated
+
+semantic_review._mmm_atomic_evidence_routes = True
 
 def validate_ir(proposal: Any) -> dict[str, Any]:
     design = getattr(proposal, 'game_design', {})
@@ -296,6 +359,13 @@ def validate_ir(proposal: Any) -> dict[str, Any]:
             raise AtomicRequirementError('Atomic requirement uses an unknown implementation ref.')
         if not set(atom['acceptance_refs']) <= acceptance_refs:
             raise AtomicRequirementError('Atomic requirement uses an unknown acceptance ref.')
+        dimensions = atom.get('evidence_dimensions')
+        if (
+            not isinstance(dimensions, list)
+            or dimensions != _evidence_dimensions(proposal, atom)
+            or any(value not in _EVIDENCE_DIMENSION_ORDER for value in dimensions)
+        ):
+            raise AtomicRequirementError('Atomic requirement evidence routing drifted.')
     return ir
 
 def install(complete_planner_module: Any, orchestrator_module: Any) -> None:
