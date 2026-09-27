@@ -479,13 +479,85 @@ def _atomic_concern_output_token_ceiling() -> int:
     return max(256, value)
 
 
+_ATOMIC_JAVA_REGION_TOOL = "emit_java_region"
+_ATOMIC_JAVA_REGION_PARAMETERS: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "java": {
+            "type": "string",
+            "description": (
+                "Only the Java source text for the host-selected atomic region. "
+                "No prose, reasoning, Markdown, response markers, package/import lines, "
+                "or outer lifecycle/type declarations."
+            ),
+        }
+    },
+    "required": ["java"],
+    "additionalProperties": False,
+}
+
+
+def _call_atomic_java_region(
+    router: Any,
+    messages: Sequence[Mapping[str, str]],
+    *,
+    output_token_ceiling: int | None,
+) -> str:
+    callback = getattr(router, "generate_tool_decision", None)
+    if not callable(callback):
+        raise CustomModuleGenerationError(
+            "ATOMIC_STRUCTURED_CODER_REQUIRED: router has no generate_tool_decision()."
+        )
+    kwargs: dict[str, Any] = {
+        "tool_name": _ATOMIC_JAVA_REGION_TOOL,
+        "parameters": _ATOMIC_JAVA_REGION_PARAMETERS,
+        "description": (
+            "Emit exactly one host-selected Java region. Put executable Java only in "
+            "the java argument. An empty string is valid when the region needs no code."
+        ),
+    }
+    if output_token_ceiling is not None and _supports_kwarg(
+        callback, "output_token_ceiling"
+    ):
+        kwargs["output_token_ceiling"] = max(1, int(output_token_ceiling))
+    try:
+        decision = callback("coder", messages, **kwargs)
+    except Exception as exc:
+        from .model_adapters.base import NativeToolDecisionRejected
+
+        if isinstance(exc, NativeToolDecisionRejected):
+            raise CustomModuleGenerationError(
+                "ATOMIC_CONCERN_RESPONSE_INVALID: required emit_java_region "
+                f"tool call was rejected: {exc}"
+            ) from exc
+        raise
+    if not isinstance(decision, Mapping):
+        raise CustomModuleGenerationError(
+            "ATOMIC_CONCERN_RESPONSE_INVALID: emit_java_region returned a non-object."
+        )
+    if set(decision) != {"java"} or not isinstance(decision.get("java"), str):
+        raise CustomModuleGenerationError(
+            "ATOMIC_CONCERN_RESPONSE_INVALID: emit_java_region must return exactly "
+            "one string field named java."
+        )
+    return str(decision["java"]).replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
 def _call_coder(
     router: Any,
     messages: Sequence[Mapping[str, str]],
     *,
     output_token_ceiling: int | None = None,
     force_non_thinking: bool = False,
+    structured_java_region: bool = False,
 ) -> str:
+    if structured_java_region:
+        return _call_atomic_java_region(
+            router,
+            messages,
+            output_token_ceiling=output_token_ceiling,
+        )
+
     callback = getattr(router, "generate_text", None)
     if not callable(callback):
         raise CustomModuleGenerationError(
@@ -694,7 +766,7 @@ def _run_atomic_ir_generation(
             generator.router,
             messages,
             output_token_ceiling=atomic_output_ceiling,
-            force_non_thinking=True,
+            structured_java_region=True,
         ),
         compile_java=context.compiler.compile_java,
         compile_log=_compile_log,

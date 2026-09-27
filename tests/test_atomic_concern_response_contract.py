@@ -293,3 +293,85 @@ def test_atomic_coder_can_force_non_thinking_transport() -> None:
     assert result == "private static final int COST = 10;\n"
     assert captured["force_non_thinking"] is True
     assert captured["output_token_ceiling"] == 1536
+
+
+
+def test_atomic_region_uses_required_structured_tool_not_free_text() -> None:
+    captured: dict[str, object] = {}
+
+    class _Router:
+        def generate_text(self, *args, **kwargs):
+            raise AssertionError("atomic region must never use free-text generation")
+
+        def generate_tool_decision(
+            self,
+            role,
+            messages,
+            *,
+            tool_name,
+            parameters,
+            description="",
+            output_token_ceiling=None,
+        ):
+            captured["role"] = role
+            captured["messages"] = messages
+            captured["tool_name"] = tool_name
+            captured["parameters"] = parameters
+            captured["description"] = description
+            captured["output_token_ceiling"] = output_token_ceiling
+            return {"java": "private static final int COST = 10;"}
+
+    result = _call_coder(
+        _Router(),
+        ({"role": "user", "content": "one atomic region"},),
+        output_token_ceiling=1536,
+        structured_java_region=True,
+    )
+
+    assert result == "private static final int COST = 10;"
+    assert captured["role"] == "coder"
+    assert captured["tool_name"] == "emit_java_region"
+    assert captured["output_token_ceiling"] == 1536
+    assert captured["parameters"] == {
+        "type": "object",
+        "properties": {
+            "java": {
+                "type": "string",
+                "description": (
+                    "Only the Java source text for the host-selected atomic region. "
+                    "No prose, reasoning, Markdown, response markers, package/import lines, "
+                    "or outer lifecycle/type declarations."
+                ),
+            }
+        },
+        "required": ["java"],
+        "additionalProperties": False,
+    }
+
+
+def test_atomic_structured_tool_allows_intentional_empty_region() -> None:
+    class _Router:
+        def generate_tool_decision(self, role, messages, **kwargs):
+            return {"java": ""}
+
+    assert _call_coder(
+        _Router(),
+        ({"role": "user", "content": "no initialization required"},),
+        structured_java_region=True,
+    ) == ""
+
+
+def test_atomic_structured_tool_rejects_extra_fields() -> None:
+    class _Router:
+        def generate_tool_decision(self, role, messages, **kwargs):
+            return {"java": "private int x;", "reasoning": "I decided..."}
+
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match="emit_java_region must return exactly",
+    ):
+        _call_coder(
+            _Router(),
+            ({"role": "user", "content": "one region"},),
+            structured_java_region=True,
+        )

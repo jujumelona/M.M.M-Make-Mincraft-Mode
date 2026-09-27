@@ -604,19 +604,21 @@ class AtomicConcernExecutor:
                 attempt=attempt,
                 attempt_limit=attempt_limit,
             )
-            output = self.call_coder(_messages(
-                section=self.section,
-                concern=concern,
-                task=self.task,
-                grounding=self.grounding,
-                dependency_source=self.dependency_source,
-                current_source=self.source,
-                response_region=response_region,
-                failure=repair_failure,
-            ))
-            output_text = str(output or "")
-            output_sha = hashlib.sha256(output_text.encode("utf-8")).hexdigest()
+            output_text = ""
+            output_sha = hashlib.sha256(b"").hexdigest()
             try:
+                output = self.call_coder(_messages(
+                    section=self.section,
+                    concern=concern,
+                    task=self.task,
+                    grounding=self.grounding,
+                    dependency_source=self.dependency_source,
+                    current_source=self.source,
+                    response_region=response_region,
+                    failure=repair_failure,
+                ))
+                output_text = str(output or "")
+                output_sha = hashlib.sha256(output_text.encode("utf-8")).hexdigest()
                 parsed = _parse_region_content(
                     output,
                     response_region=response_region,

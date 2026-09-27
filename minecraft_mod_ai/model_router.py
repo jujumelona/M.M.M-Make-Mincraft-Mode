@@ -322,9 +322,11 @@ class ModelRouter:
         tool_name: str,
         parameters: Mapping[str, Any],
         description: str = "",
+        output_token_ceiling: int | None = None,
     ) -> dict[str, Any]:
         return self._generate_tool_decision_impl(
-            role, messages, tool_name=tool_name, parameters=parameters, description=description
+            role, messages, tool_name=tool_name, parameters=parameters, description=description,
+            output_token_ceiling=output_token_ceiling,
         )
 
     def generate_implementation_decision(self, name, payload, *, state, checkpoint):
@@ -341,6 +343,7 @@ class ModelRouter:
         tool_name: str,
         parameters: Mapping[str, Any],
         description: str = "",
+        output_token_ceiling: int | None = None,
     ) -> dict[str, Any]:
         """Return one host-validated native function call instead of free-form JSON."""
 
@@ -390,7 +393,15 @@ class ModelRouter:
             tools=(schema,),
             tool_choice={"type": "function", "function": {"name": name}},
             parallel_tool_calls=False,
-            metadata={"tool_stage": _ROLE_TOOL_STAGE.get(role, ""), "role": role},
+            metadata={
+                "tool_stage": _ROLE_TOOL_STAGE.get(role, ""),
+                "role": role,
+                **(
+                    {"mmm_output_token_ceiling": max(1, int(output_token_ceiling))}
+                    if output_token_ceiling is not None
+                    else {}
+                ),
+            },
         )
         with self._generation_scope(config):
             turn = adapter.generate_turn(request)
