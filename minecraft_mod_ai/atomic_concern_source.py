@@ -18,6 +18,8 @@ INITIALIZE_MARKER = "<<<MMM_CONCERN_INITIALIZE>>>"
 END_MARKER = "<<<MMM_CONCERN_END>>>"
 _DEFAULT_REGION_ATTEMPT_LIMIT = 4
 _MAX_REGION_ATTEMPT_LIMIT = 32
+_DEFAULT_COMPILE_REPAIR_LIMIT = 4
+_MAX_COMPILE_REPAIR_LIMIT = 16
 
 
 def _region_attempt_limit() -> int:
@@ -31,6 +33,19 @@ def _region_attempt_limit() -> int:
     except ValueError:
         return _DEFAULT_REGION_ATTEMPT_LIMIT
     return max(1, min(_MAX_REGION_ATTEMPT_LIMIT, value))
+
+
+def _compile_repair_limit() -> int:
+    """Bound compiler-driven repair rounds for one concern checkpoint."""
+
+    raw = os.environ.get("MMM_ATOMIC_CONCERN_COMPILE_REPAIRS", "").strip()
+    if not raw:
+        return _DEFAULT_COMPILE_REPAIR_LIMIT
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_COMPILE_REPAIR_LIMIT
+    return max(1, min(_MAX_COMPILE_REPAIR_LIMIT, value))
 
 
 def _trace_region_generation(
@@ -477,6 +492,50 @@ def _member_declaration_symbols(value: str) -> dict[str, str]:
     return symbols
 
 
+_JAVA_LANG_SIMPLE_TYPES = frozenset(
+    {
+        "Appendable", "AutoCloseable", "Boolean", "Byte", "Character", "CharSequence",
+        "Class", "ClassLoader", "Cloneable", "Comparable", "Deprecated", "Double",
+        "Enum", "Error", "Exception", "Float", "FunctionalInterface", "IllegalArgumentException",
+        "IllegalStateException", "Integer", "Iterable", "Long", "Math", "Number",
+        "Object", "Override", "Record", "Runnable", "RuntimeException", "Short",
+        "String", "StringBuffer", "StringBuilder", "SuppressWarnings", "System",
+        "Thread", "Throwable", "Void",
+    }
+)
+
+
+def _declared_type_names(value: str) -> set[str]:
+    return {
+        display
+        for key, display in _member_declaration_symbols(value).items()
+        if key.startswith("type:")
+    }
+
+
+def _unresolved_simple_type_names(
+    value: str,
+    *,
+    allowed: Sequence[str] = (),
+) -> tuple[str, ...]:
+    scan = _structure_scan(value)
+    allowed_names = set(allowed) | _JAVA_LANG_SIMPLE_TYPES | _declared_type_names(value)
+    unresolved: set[str] = set()
+    for match in re.finditer(r"\b[A-Z][A-Za-z0-9_$]*\b", scan):
+        name = match.group(0)
+        if name in allowed_names:
+            continue
+        if len(name) == 1 and name.isupper():
+            continue
+        if name.isupper() and "_" in name:
+            continue
+        before = scan[: match.start()].rstrip()
+        if before.endswith("."):
+            continue
+        unresolved.add(name)
+    return tuple(sorted(unresolved))
+
+
 def _symbol_owner_payload(owners: Mapping[str, str]) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for key, owner in sorted(owners.items()):
@@ -782,7 +841,9 @@ def _messages(
             "top-level type, or initialize() lifecycle code in java. Private nested helper "
             "class/interface/enum/record declarations are allowed when this concern needs them. "
             "A class initializer must be written only as static { ... }; never prefix it with "
-            "public, protected, or private."
+            "public, protected, or private. Every non-java.lang type introduced by this concern "
+            "must either be fully-qualified or declared as a private nested helper type in this "
+            "same region; for example use java.util.List, not bare List."
         )
     elif response_region == "initialize":
         response_contract = (
@@ -866,7 +927,6 @@ class AtomicConcernExecutor:
     summaries: list[str] = field(default_factory=list, init=False)
     seen_failures: set[str] = field(default_factory=set, init=False)
     repairs: int = field(default=0, init=False)
-    best_measure: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
         self.ordered = _validate_concerns(self.concerns)
@@ -976,6 +1036,15 @@ class AtomicConcernExecutor:
                 },
             )
 
+    def _known_simple_types(self, *, exclude: str) -> tuple[str, ...]:
+        names: set[str] = {self.symbol}
+        for concern_name, (members, _initialize) in self.state.items():
+            if concern_name == exclude:
+                continue
+            names.update(_declared_type_names(members))
+        names.update(_declared_type_names(self.dependency_source))
+        return tuple(sorted(names))
+
     def _generate_region(
         self,
         concern: Mapping[str, Any],
@@ -1021,6 +1090,17 @@ class AtomicConcernExecutor:
                     output,
                     response_region=response_region,
                 )
+                unresolved_types = _unresolved_simple_type_names(
+                    parsed,
+                    allowed=self._known_simple_types(exclude=name),
+                )
+                if unresolved_types:
+                    raise CustomModuleGenerationError(
+                        "ATOMIC_CONCERN_UNRESOLVED_TYPES: "
+                        + ", ".join(unresolved_types)
+                        + ". Use fully-qualified external/JDK types or declare a private "
+                        "nested helper type in this concern."
+                    )
             except CustomModuleGenerationError as exc:
                 reason = str(exc).split("\n", 1)[0]
                 recoverable = reason.startswith(
@@ -1028,6 +1108,7 @@ class AtomicConcernExecutor:
                         "ATOMIC_CONCERN_RESPONSE_INVALID:",
                         "ATOMIC_CONCERN_SCOPE_ESCAPE:",
                         "ATOMIC_CONCERN_SYMBOL_COLLISION:",
+                        "ATOMIC_CONCERN_UNRESOLVED_TYPES:",
                     )
                 )
                 if not recoverable:
@@ -1087,6 +1168,8 @@ class AtomicConcernExecutor:
                     + f"\nRegenerate only the {response_region} region. "
                     "Do not emit response markers, prose, package/import/top-level/lifecycle declarations. "
                     "Private nested helper types are allowed in members regions. "
+                    "Resolve every listed type locally: fully-qualify external/JDK types and declare "
+                    "private nested helper types for concern-owned domain types. "
                     "Implement only this concern; do not add declarations for sibling concerns. "
                     "The host will reconcile declarations emitted earlier by another concern. "
                     "Emit executable Java only; no analysis, reasoning, plans, or Markdown commentary."
@@ -1144,6 +1227,7 @@ class AtomicConcernExecutor:
         self.write_source(self.target, self.source)
         return self.compile_java(self.root)
 
+
     def _repair_once(self, report: Any) -> Any:
         failure = self.compile_log(report) or str(
             getattr(report, "error", "") or "Gradle compileJava failed."
@@ -1163,30 +1247,30 @@ class AtomicConcernExecutor:
             )
         self._apply(self._concern(name), failure=failure)
         self.repairs += 1
-        next_report = self._compile()
-        self._assert_improving(next_report)
-        return next_report
+        return self._compile()
 
-    def _assert_improving(self, report: Any) -> None:
-        if getattr(report, "status", "") == "PASS":
-            return
-        failure = self.compile_log(report) or str(getattr(report, "error", "") or "")
-        measure = _failure_measure(failure)
-        if measure >= self.best_measure:
-            raise CustomModuleGenerationError(
-                "ATOMIC_CONCERN_REPAIR_NO_PROGRESS: compiler error measure did not strictly decrease.\n"
-                + failure
-            )
-        self.best_measure = measure
 
     def run(self) -> dict[str, Any]:
+        repair_limit = _compile_repair_limit()
         for concern in self.ordered:
+            name = _slug(concern["concern"])
+            self.seen_failures.clear()
             self._apply(concern)
-        report = self._compile()
-        if getattr(report, "status", "") != "PASS":
-            self.best_measure = _failure_measure(self.compile_log(report))
-        while getattr(report, "status", "") != "PASS":
-            report = self._repair_once(report)
+            report = self._compile()
+            concern_repairs = 0
+            while getattr(report, "status", "") != "PASS":
+                if concern_repairs >= repair_limit:
+                    failure = self.compile_log(report) or str(
+                        getattr(report, "error", "") or "Gradle compileJava failed."
+                    )
+                    raise CustomModuleGenerationError(
+                        "ATOMIC_CONCERN_COMPILE_RETRY_EXHAUSTED: "
+                        f"{name} remained uncompilable after {repair_limit} bounded "
+                        "compiler-driven repairs.\n" + failure
+                    )
+                report = self._repair_once(report)
+                concern_repairs += 1
+            self.seen_failures.clear()
         return {
             "source": self.source,
             "summary": " | ".join(self.summaries),

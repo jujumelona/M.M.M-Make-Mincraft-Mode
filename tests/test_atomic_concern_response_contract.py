@@ -442,7 +442,7 @@ def test_sibling_symbol_collision_is_rehomed_before_compile() -> None:
 
     result = executor.run()
 
-    assert compile_calls["count"] == 1
+    assert compile_calls["count"] == len(concerns)
     assert result["repair_count"] == 0
     assert result["source"].count("isTransactionInFlight") == 1
     assert result["source"].count("beginTransaction()") == 1
@@ -533,7 +533,7 @@ def test_method_overloads_with_different_parameter_types_do_not_collide() -> Non
 
     result = executor.run()
 
-    assert compile_calls["count"] == 1
+    assert compile_calls["count"] == len(concerns)
     assert "update(int value)" in result["source"]
     assert "update(String value)" in result["source"]
 
@@ -560,7 +560,7 @@ def test_generic_method_erasure_collision_is_rehomed_by_host() -> None:
 
     result = executor.run()
 
-    assert compile_calls["count"] == 1
+    assert compile_calls["count"] == len(concerns)
     assert result["source"].count("private static void update(") == 1
 
 
@@ -586,7 +586,7 @@ def test_state_model_later_concerns_rehome_variables_overreach() -> None:
 
     result = executor.run()
 
-    assert compile_calls["count"] == 1
+    assert compile_calls["count"] == len(concerns)
     assert result["repair_count"] == 0
     assert result["source"].count("FROM_STATE_LOCKED") == 1
     assert result["source"].count("INVARIANT_PLAYER_CREDITS_MIN_COST") == 1
@@ -625,3 +625,128 @@ def test_visibility_instance_initializer_is_rejected_before_compile() -> None:
 
     assert "private {" not in result["source"]
     assert "private static final int COST = 10;" in result["source"]
+
+
+
+def test_unresolved_domain_type_is_rejected_before_compile() -> None:
+    executor = _executor(
+        [
+            "private static final StateVariable CREDITS = new StateVariable();",
+            (
+                "private record StateVariable() {}\n"
+                "private static final StateVariable CREDITS = new StateVariable();"
+            ),
+        ],
+        section="state_model",
+    )
+
+    result = executor.run()
+
+    assert "private record StateVariable()" in result["source"]
+    assert result["repair_count"] == 0
+
+
+def test_unqualified_java_util_type_is_rejected_before_compile() -> None:
+    executor = _executor(
+        [
+            "private static final List<String> VALUES = List.of();",
+            (
+                "private static final java.util.List<String> VALUES = "
+                "java.util.List.of();"
+            ),
+        ],
+        section="state_model",
+    )
+
+    result = executor.run()
+
+    assert "java.util.List<String>" in result["source"]
+    assert "private static final List<String>" not in result["source"]
+
+
+def test_previous_concern_nested_type_is_available_to_next_concern() -> None:
+    concerns = (
+        {"sequence": 0, "identifier": "a", "concern": "schema", "task": "schema", "rules": []},
+        {"sequence": 1, "identifier": "b", "concern": "values", "task": "values", "rules": []},
+    )
+    executor, compile_calls = _multi_executor(
+        [
+            "private record SharedValue(int value) {}",
+            "private static final SharedValue VALUE = new SharedValue(1);",
+        ],
+        concerns=concerns,
+    )
+
+    result = executor.run()
+
+    assert compile_calls["count"] == len(concerns)
+    assert "SharedValue VALUE" in result["source"]
+
+
+def test_equal_error_count_with_changed_diagnostics_can_keep_repairing() -> None:
+    remaining = [
+        "private static int VALUE = missingA();",
+        "private static int VALUE = missingB();",
+        "private static int VALUE = 1;",
+    ]
+    state: dict[str, str] = {"source": ""}
+    compile_calls = {"count": 0}
+
+    def call_coder(_messages):
+        if not remaining:
+            raise AssertionError("unexpected extra model call")
+        return remaining.pop(0)
+
+    def write_source(_path, source):
+        state["source"] = source
+
+    def compile_java(_root):
+        compile_calls["count"] += 1
+        if compile_calls["count"] >= 3:
+            return SimpleNamespace(status="PASS", log="")
+        rows = state["source"].splitlines()
+        marker = next(
+            index for index, row in enumerate(rows)
+            if "MMM_ATOMIC_CONCERN_TRANSITIONS_MEMBERS_START" in row
+        )
+        line_number = marker + 2
+        missing = "missingA" if compile_calls["count"] == 1 else "missingB"
+        return SimpleNamespace(
+            status="FAIL",
+            log=(
+                f"/tmp/Test.java:{line_number}: error: cannot find symbol\n"
+                f"  symbol: method {missing}()\n"
+            ),
+        )
+
+    executor = AtomicConcernExecutor(
+        root=Path("."),
+        target=Path("/tmp/Test.java"),
+        relative="/tmp/Test.java",
+        symbol="Test",
+        original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
+        task={"task_id": "t", "semantic_outcome": "x"},
+        section="state_model",
+        concerns=(
+            {
+                "sequence": 0,
+                "identifier": "id",
+                "concern": "transitions",
+                "task": "implement transitions",
+                "rules": [],
+            },
+        ),
+        grounding={},
+        dependency_source="",
+        require_initialize=False,
+        call_coder=call_coder,
+        compile_java=compile_java,
+        compile_log=lambda report: getattr(report, "log", ""),
+        write_source=write_source,
+    )
+
+    result = executor.run()
+
+    assert compile_calls["count"] == 3
+    assert result["repair_count"] == 2
+    assert "VALUE = 1" in result["source"]
