@@ -1,42 +1,24 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
-
 import pytest
 
 import minecraft_mod_ai.platform_catalog as catalog
+from minecraft_mod_ai.spec import PlatformLock
 
 
-def _adapter() -> SimpleNamespace:
-    return SimpleNamespace(
-        minecraft_version="1.21.4",
-        loader="fabric",
-        java_version=21,
-        fabric_loader="0.16.10",
-        fabric_api="0.119.2+1.21.4",
-        fabric_loom="1.9.2",
-        gradle="8.10.2",
-        mappings_applicable=False,
-        mappings_kind="native",
-        mappings_version="",
-    )
+def _adapter():
+    return catalog.adapter_for_target("1.21.4", "fabric")
 
 
-def _write_lock(path, adapter: SimpleNamespace) -> None:
+def _write_lock(path, adapter) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        name: getattr(adapter, name)
+        for name in PlatformLock.__dataclass_fields__
+    }
     path.write_text(
-        json.dumps(
-            {
-                "minecraft_version": adapter.minecraft_version,
-                "loader": adapter.loader,
-                "java_version": adapter.java_version,
-                "fabric_loader": adapter.fabric_loader,
-                "fabric_api": adapter.fabric_api,
-                "fabric_loom": adapter.fabric_loom,
-                "gradle": adapter.gradle,
-            }
-        ),
+        json.dumps(payload),
         encoding="utf-8",
     )
 
