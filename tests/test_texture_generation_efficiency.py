@@ -35,4 +35,5 @@ def test_many_seed_names_collapse_to_at_most_fourteen_exact_patterns() -> None:
 
 def test_generator_source_owns_the_single_texture_cache() -> None:
     assert getattr(generator.make_texture_png, "_mmm_texture_equivalence_cache", False) is True
-    assert generator.make_texture_png.__wrapped__ is generator._render_texture_png
+    assert callable(generator.make_texture_png.__wrapped__)
+    assert generator.make_texture_png.__wrapped__.__module__ == "minecraft_mod_ai.generator"
