@@ -91,6 +91,18 @@ class GradleRunner:
         self.download_timeout_seconds = download_timeout_seconds
         self.command_timeout_seconds = command_timeout_seconds
 
+    @staticmethod
+    def _trusted_project_root(project_root: Path) -> Path:
+        candidate = Path(project_root).expanduser()
+        if candidate.is_symlink():
+            raise BuildRunnerError(
+                f"Project root must not be a symbolic link: {candidate}"
+            )
+        resolved = candidate.resolve()
+        if not resolved.is_dir():
+            raise BuildRunnerError(f"Project root is not a directory: {resolved}")
+        return resolved
+
     def compile_java(self, project_root: Path) -> BuildReport:
         """Run only the Java compilation task for fast in-generation source feedback.
 
@@ -98,7 +110,7 @@ class GradleRunner:
         compiler oracle only, so it must not repeatedly package artifacts or run tests.
         """
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        prepared = self._prepare_build_context(project_root.resolve())
+        prepared = self._prepare_build_context(self._trusted_project_root(project_root))
         if isinstance(prepared, BuildReport):
             return prepared
         result = self._run(
@@ -133,7 +145,10 @@ class GradleRunner:
         unnecessarily serialize unrelated validation work.
         """
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        return self._build_locked(project_root.resolve(), run_gametest=run_gametest)
+        return self._build_locked(
+            self._trusted_project_root(project_root),
+            run_gametest=run_gametest,
+        )
 
     def _build_locked(
         self,
