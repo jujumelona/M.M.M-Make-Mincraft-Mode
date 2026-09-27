@@ -1293,3 +1293,228 @@ def test_atomic_member_schema_accepts_model_modifier_noise_for_host_filtering() 
             ]
         }
     )
+
+
+def test_state_model_variables_are_host_lowered_to_runtime_fields() -> None:
+    import json
+
+    obligation = json.dumps(
+        {
+            "instruction": json.dumps(
+                {
+                    "concern": "variables",
+                    "section": "state_model",
+                }
+            ),
+            "source_requirements": {
+                "R12": (
+                    "- variables: name(player_credits), owner(Player) type(double) "
+                    "unit(currency) default(0.0) domain(Unbounded Positive)"
+                )
+            },
+        }
+    )
+    model_calls = {"count": 0}
+
+    def call_coder(_messages):
+        model_calls["count"] += 1
+        raise AssertionError("explicit state variables must be host-lowered")
+
+    executor = AtomicConcernExecutor(
+        root=Path("."),
+        target=Path("src/main/java/example/Test.java"),
+        relative="src/main/java/example/Test.java",
+        symbol="Test",
+        original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
+        task={
+            "task_id": "state",
+            "semantic_outcome": "state",
+            "implementation_obligations": [obligation],
+        },
+        section="state_model",
+        concerns=(
+            {
+                "sequence": 0,
+                "identifier": "v",
+                "concern": "variables",
+                "task": "variables",
+                "rules": [],
+            },
+        ),
+        grounding={},
+        dependency_source="",
+        require_initialize=False,
+        call_coder=call_coder,
+        compile_java=lambda _root: SimpleNamespace(status="PASS"),
+        compile_log=lambda _report: "",
+        write_source=lambda _path, _source: None,
+    )
+
+    result = executor.run()
+
+    assert model_calls["count"] == 0
+    assert "private static double player_credits = 0.0;" in result["source"]
+    assert "record Variables" not in result["source"]
+
+
+def test_sibling_api_exposes_exact_type_and_mutability() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _sibling_symbol_inventory
+
+    source = (
+        "package example;\n"
+        "public final class Test {\n"
+        "// MMM_ATOMIC_CONCERN_VARIABLES_MEMBERS_START\n"
+        "private static double player_credits = 0.0;\n"
+        "private static final String MODE = \"ground\";\n"
+        "private record Snapshot(double credits) {}\n"
+        "// MMM_ATOMIC_CONCERN_VARIABLES_MEMBERS_END\n"
+        "}\n"
+    )
+
+    api = _sibling_symbol_inventory(
+        source,
+        sibling_concerns=("variables",),
+    )
+
+    credits = next(row for row in api if row["symbol"] == "player_credits")
+    mode = next(row for row in api if row["symbol"] == "MODE")
+    snapshot = next(row for row in api if row["symbol"] == "Snapshot")
+    assert credits["mutable"] is True
+    assert "double player_credits" in credits["declaration"]
+    assert mode["mutable"] is False
+    assert "final String MODE" in mode["declaration"]
+    assert "record Snapshot(double credits)" in snapshot["declaration"]
+
+
+def test_nested_init_method_is_normalized_to_record_constructor() -> None:
+    from jsonschema import Draft202012Validator
+    from minecraft_mod_ai.custom_module_generator import (
+        _ATOMIC_MEMBERS_PARAMETERS,
+        _render_atomic_java_structure,
+    )
+
+    decision = {
+        "records": [
+            {
+                "name": "Snapshot",
+                "components": [{"type": "double", "name": "credits"}],
+                "methods": [
+                    {
+                        "return_type": "void",
+                        "name": "<init>",
+                        "parameters": [{"type": "double", "name": "credits"}],
+                        "body": ["this.credits = credits"],
+                    }
+                ],
+            }
+        ]
+    }
+
+    Draft202012Validator(_ATOMIC_MEMBERS_PARAMETERS).validate(decision)
+    rendered = _render_atomic_java_structure(
+        decision,
+        response_region="members",
+    )
+
+    assert "<init>" not in rendered
+    assert "private Snapshot {" in rendered
+    assert "credits = credits;" in rendered
+
+
+def test_record_explicit_constructor_slot_is_supported() -> None:
+    from jsonschema import Draft202012Validator
+    from minecraft_mod_ai.custom_module_generator import (
+        _ATOMIC_MEMBERS_PARAMETERS,
+        _render_atomic_java_structure,
+    )
+
+    decision = {
+        "records": [
+            {
+                "name": "Snapshot",
+                "components": [{"type": "double", "name": "credits"}],
+                "constructors": [
+                    {
+                        "parameters": [{"type": "double", "name": "credits"}],
+                        "body": ["if (credits < 0) credits = 0"],
+                    }
+                ],
+            }
+        ]
+    }
+
+    Draft202012Validator(_ATOMIC_MEMBERS_PARAMETERS).validate(decision)
+    rendered = _render_atomic_java_structure(
+        decision,
+        response_region="members",
+    )
+
+    assert "private Snapshot {" in rendered
+    assert "if (credits < 0) credits = 0;" in rendered
+
+
+def test_state_model_followup_receives_exact_host_lowered_variable_api() -> None:
+    import json
+
+    obligation_variables = json.dumps(
+        {
+            "instruction": json.dumps({"concern": "variables"}),
+            "source_requirements": {
+                "R12": "- variables: name(player_credits) type(double) default(0.0)"
+            },
+        }
+    )
+    obligation_invariants = json.dumps(
+        {
+            "instruction": json.dumps({"concern": "invariants"}),
+            "source_requirements": {
+                "R14": "- invariants: player_credits cannot be negative"
+            },
+        }
+    )
+    captured = []
+
+    def call_coder(messages):
+        captured.append(messages)
+        return "private static boolean creditsValid() { return player_credits >= 0.0; }"
+
+    executor = AtomicConcernExecutor(
+        root=Path("."),
+        target=Path("src/main/java/example/Test.java"),
+        relative="src/main/java/example/Test.java",
+        symbol="Test",
+        original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
+        task={
+            "task_id": "state",
+            "semantic_outcome": "state",
+            "implementation_obligations": [
+                obligation_variables,
+                obligation_invariants,
+            ],
+        },
+        section="state_model",
+        concerns=(
+            {"sequence": 0, "identifier": "v", "concern": "variables", "task": "variables", "rules": []},
+            {"sequence": 1, "identifier": "i", "concern": "invariants", "task": "invariants", "rules": []},
+        ),
+        grounding={},
+        dependency_source="",
+        require_initialize=False,
+        call_coder=call_coder,
+        compile_java=lambda _root: SimpleNamespace(status="PASS"),
+        compile_log=lambda _report: "",
+        write_source=lambda _path, _source: None,
+    )
+
+    result = executor.run()
+
+    assert len(captured) == 1
+    payload = __import__("json").loads(captured[0][-1]["content"])
+    credits = next(
+        row
+        for row in payload["available_sibling_api"]
+        if row["symbol"] == "player_credits"
+    )
+    assert credits["mutable"] is True
+    assert "double player_credits" in credits["declaration"]
+    assert "player_credits >= 0.0" in result["source"]

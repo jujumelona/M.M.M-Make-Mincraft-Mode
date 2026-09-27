@@ -468,6 +468,7 @@ def _direct_host_grounding(
 
 _ATOMIC_JAVA_REGION_TOOL = "emit_java_structure"
 _JAVA_IDENTIFIER_PATTERN = r"^[A-Za-z_$][A-Za-z0-9_$]*$"
+_ATOMIC_METHOD_NAME_PATTERN = r"^(?:<init>|[A-Za-z_$][A-Za-z0-9_$]*)$"
 _ATOMIC_MODIFIER_VALUES = [
     "public",
     "protected",
@@ -538,7 +539,7 @@ _ATOMIC_METHOD_SCHEMA: dict[str, Any] = {
             "uniqueItems": True,
         },
         "return_type": {"type": "string", "minLength": 1},
-        "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
+        "name": {"type": "string", "pattern": _ATOMIC_METHOD_NAME_PATTERN},
         "parameters": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA},
         "throws": {"type": "array", "items": {"type": "string", "minLength": 1}},
         "body": {
@@ -570,6 +571,7 @@ _ATOMIC_RECORD_SCHEMA: dict[str, Any] = {
         "modifiers": {"type": "array", "items": {"type": "string"}, "uniqueItems": True},
         "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
         "components": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA},
+        "constructors": {"type": "array", "items": _ATOMIC_CONSTRUCTOR_SCHEMA},
         "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA},
     },
     "required": ["name"],
@@ -1079,6 +1081,142 @@ def _render_field(
     return f"{indent}{prefix}{java_type} {name}{suffix};"
 
 
+def _constructor_entries(item: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    result = [
+        value
+        for value in item.get("constructors") or []
+        if isinstance(value, Mapping)
+    ]
+    result.extend(
+        value
+        for value in item.get("methods") or []
+        if isinstance(value, Mapping)
+        and str(value.get("name") or "").strip() == "<init>"
+    )
+    return result
+
+
+def _ordinary_method_entries(item: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    return [
+        value
+        for value in item.get("methods") or []
+        if isinstance(value, Mapping)
+        and str(value.get("name") or "").strip() != "<init>"
+    ]
+
+
+def _parameter_pairs(raw: Any) -> tuple[tuple[str, str], ...]:
+    pairs: list[tuple[str, str]] = []
+    for value in raw if isinstance(raw, Sequence) else ():
+        if not isinstance(value, Mapping):
+            continue
+        pairs.append(
+            (
+                str(value.get("type") or "").strip(),
+                str(value.get("name") or "").strip(),
+            )
+        )
+    return tuple(pairs)
+
+
+def _compact_record_body_lines(
+    raw: Any,
+    *,
+    component_names: set[str],
+    indent: str,
+    renames: Mapping[str, str],
+) -> list[str]:
+    normalized: list[str] = []
+    assignment = re.compile(
+        r"^this\.([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(.+?);?$"
+    )
+    for value in raw if isinstance(raw, Sequence) else ():
+        text = str(value or "").strip()
+        match = assignment.fullmatch(text)
+        if match and match.group(1) in component_names:
+            text = f"{match.group(1)} = {match.group(2)}"
+        normalized.append(text)
+    return _java_body_lines(normalized, indent=indent, renames=renames)
+
+
+def _render_record_constructor(
+    constructor: Mapping[str, Any],
+    *,
+    record_name: str,
+    components: Any,
+    renames: Mapping[str, str],
+    indent: str = "    ",
+) -> str:
+    component_pairs = _parameter_pairs(components)
+    parameter_pairs = _parameter_pairs(constructor.get("parameters") or [])
+    canonical = not parameter_pairs or parameter_pairs == component_pairs
+    if canonical:
+        component_names = {
+            str(name)
+            for _java_type, name in component_pairs
+            if str(name).strip()
+        }
+        body = _compact_record_body_lines(
+            constructor.get("body") or [],
+            component_names=component_names,
+            indent=indent + "    ",
+            renames=renames,
+        )
+        return "\n".join(
+            [f"{indent}private {record_name} {{", *body, indent + "}"]
+        )
+
+    params = _java_parameters(
+        constructor.get("parameters") or [],
+        renames=renames,
+    )
+    throws = [
+        _qualify_common_java_names(
+            _rewrite_java_identifiers(str(value).strip(), renames)
+        )
+        for value in constructor.get("throws") or []
+        if str(value).strip()
+    ]
+    header = f"{indent}private {record_name}({params})"
+    if throws:
+        header += " throws " + ", ".join(throws)
+    body = _java_body_lines(
+        constructor.get("body") or [],
+        indent=indent + "    ",
+        renames=renames,
+    )
+    return "\n".join([header + " {", *body, indent + "}"])
+
+
+def _render_class_constructor(
+    constructor: Mapping[str, Any],
+    *,
+    class_name: str,
+    renames: Mapping[str, str],
+    indent: str = "    ",
+) -> str:
+    params = _java_parameters(
+        constructor.get("parameters") or [],
+        renames=renames,
+    )
+    throws = [
+        _qualify_common_java_names(
+            _rewrite_java_identifiers(str(value).strip(), renames)
+        )
+        for value in constructor.get("throws") or []
+        if str(value).strip()
+    ]
+    header = f"{indent}{class_name}({params})"
+    if throws:
+        header += " throws " + ", ".join(throws)
+    body = _java_body_lines(
+        constructor.get("body") or [],
+        indent=indent + "    ",
+        renames=renames,
+    )
+    return "\n".join([header + " {", *body, indent + "}"])
+
+
 def _render_record(
     item: Mapping[str, Any],
     *,
@@ -1089,15 +1227,23 @@ def _render_record(
     raw_name = str(item.get("name") or "").strip()
     name = active.get(raw_name, _canonical_java_identifier(raw_name))
     components = _java_parameters(item.get("components") or [], renames=active)
+    constructors = [
+        _render_record_constructor(
+            constructor,
+            record_name=name,
+            components=item.get("components") or [],
+            renames=active,
+        )
+        for constructor in _constructor_entries(item)
+    ]
     methods = [
         _render_method(method, indent="    ", renames=active)
-        for method in item.get("methods") or []
-        if isinstance(method, Mapping)
+        for method in _ordinary_method_entries(item)
     ]
-    if not methods:
+    body = [*constructors, *methods]
+    if not body:
         return f"{prefix}record {name}({components}) {{}}"
-    return "\n".join([f"{prefix}record {name}({components}) {{", *methods, "}"])
-
+    return "\n".join([f"{prefix}record {name}({components}) {{", *body, "}"])
 
 def _render_enum(
     item: Mapping[str, Any],
@@ -1130,37 +1276,20 @@ def _render_nested_class(
         for field in item.get("fields") or []
         if isinstance(field, Mapping)
     )
-    for constructor in item.get("constructors") or []:
-        if not isinstance(constructor, Mapping):
-            continue
-        params = _java_parameters(constructor.get("parameters") or [], renames=active)
-        throws = [
-            _qualify_common_java_names(
-                _rewrite_java_identifiers(str(value).strip(), active)
-            )
-            for value in constructor.get("throws") or []
-            if str(value).strip()
-        ]
-        header = f"    {name}({params})"
-        if throws:
-            header += " throws " + ", ".join(throws)
-        rows.append(header + " {")
-        rows.extend(
-            _java_body_lines(
-                constructor.get("body") or [],
-                indent="        ",
-                renames=active,
-            )
+    rows.extend(
+        _render_class_constructor(
+            constructor,
+            class_name=name,
+            renames=active,
         )
-        rows.append("    }")
+        for constructor in _constructor_entries(item)
+    )
     rows.extend(
         _render_method(method, indent="    ", renames=active)
-        for method in item.get("methods") or []
-        if isinstance(method, Mapping)
+        for method in _ordinary_method_entries(item)
     )
     rows.append("}")
     return "\n".join(rows)
-
 
 def _render_atomic_java_structure(
     decision: Mapping[str, Any],
@@ -1194,6 +1323,17 @@ def _render_atomic_java_structure(
         for item in decision.get("fields") or []
         if isinstance(item, Mapping)
     )
+    outer_constructors = [
+        item
+        for item in decision.get("methods") or []
+        if isinstance(item, Mapping)
+        and str(item.get("name") or "").strip() == "<init>"
+    ]
+    if outer_constructors:
+        raise CustomModuleGenerationError(
+            "ATOMIC_CONCERN_RESPONSE_INVALID: <init> is valid only inside a "
+            "structured record/class; outer-class construction is host-owned."
+        )
     rows.extend(
         _render_method(item, renames=renames)
         for item in decision.get("methods") or []
@@ -1256,7 +1396,11 @@ def _call_atomic_java_region(
             "any concern-local helper records/enums/classes/fields/methods that are actually "
             "needed for correct Java. "
             "Declare every concern-owned helper/domain type in this same call before "
-            "referencing it. Omit categories you do not need; do not emit empty arrays just "
+            "referencing it. For record/class construction, use constructors when available; "
+            "a nested method named <init> is also accepted and normalized by the host. "
+            "Treat available_sibling_api declarations in the user payload as authoritative: "
+            "use exact sibling types/symbols and never mutate final sibling fields. "
+            "Omit categories you do not need; do not emit empty arrays just "
             "to satisfy the schema. The host renders Java syntax and qualifies common JDK "
             "collection/concurrency names. Never return raw Java source, prose, Markdown, "
             "imports, package declarations, or an outer class."

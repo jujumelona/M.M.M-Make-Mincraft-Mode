@@ -928,6 +928,139 @@ def _concern_authority(
         **requirement_payload,
     }
 
+
+_STATE_VARIABLE_ATTRIBUTE = re.compile(
+    r"\b(?P<key>[A-Za-z_][A-Za-z0-9_]*)\((?P<value>[^()]*)\)"
+)
+_STATE_JAVA_TYPES = {
+    "bool": "boolean",
+    "boolean": "boolean",
+    "byte": "byte",
+    "char": "char",
+    "double": "double",
+    "float": "float",
+    "int": "int",
+    "integer": "int",
+    "long": "long",
+    "short": "short",
+    "string": "String",
+}
+_JAVA_RESERVED_WORDS = frozenset(
+    {
+        "_", "abstract", "assert", "boolean", "break", "byte", "case", "catch",
+        "char", "class", "const", "continue", "default", "do", "double", "else",
+        "enum", "exports", "extends", "false", "final", "finally", "float", "for",
+        "goto", "if", "implements", "import", "instanceof", "int", "interface",
+        "long", "module", "native", "new", "non-sealed", "null", "open", "opens",
+        "package", "permits", "private", "protected", "provides", "public", "record",
+        "requires", "return", "sealed", "short", "static", "strictfp", "super",
+        "switch", "synchronized", "this", "throw", "throws", "to", "transient",
+        "transitive", "true", "try", "uses", "var", "void", "volatile", "when",
+        "while", "with", "yield",
+    }
+)
+
+
+def _host_java_identifier(raw: Any) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    value = re.sub(r"[^A-Za-z0-9_$]", "_", text)
+    if not value or value[0].isdigit():
+        value = "$mmm$" + value
+    if value in _JAVA_RESERVED_WORDS:
+        value = "$mmm$" + value.replace("-", "_")
+    return value
+
+
+def _state_default_literal(java_type: str, raw: str) -> str:
+    value = str(raw or "").strip()
+    if not value:
+        return ""
+    lowered = value.casefold()
+    if java_type == "String":
+        if lowered in {"empty", "blank"}:
+            return '""'
+        if len(value) >= 2 and value[0] == value[-1] == '"':
+            return value
+        return json.dumps(value, ensure_ascii=False)
+    if java_type == "boolean":
+        return lowered if lowered in {"true", "false"} else ""
+    if java_type == "char":
+        if len(value) == 3 and value.startswith("'") and value.endswith("'"):
+            return value
+        return ""
+    if java_type in {"byte", "short", "int", "long"}:
+        if re.fullmatch(r"[-+]?\d+[lL]?", value):
+            return value
+        return ""
+    if java_type in {"float", "double"}:
+        if re.fullmatch(
+            r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?[fFdD]?",
+            value,
+        ):
+            return value
+        return ""
+    return "null" if lowered == "null" else ""
+
+
+def _state_variable_contract(
+    task: Mapping[str, Any],
+    concern: Mapping[str, Any],
+) -> tuple[dict[str, str], ...]:
+    authority = _concern_authority(task, concern)
+    source_requirements = authority.get("source_requirements")
+    if not isinstance(source_requirements, Mapping):
+        return ()
+
+    contracts: list[dict[str, str]] = []
+    seen_names: set[str] = set()
+    for value in source_requirements.values():
+        text = str(value or "")
+        attributes = {
+            match.group("key").casefold(): match.group("value").strip()
+            for match in _STATE_VARIABLE_ATTRIBUTE.finditer(text)
+        }
+        if "name" not in attributes or "type" not in attributes:
+            continue
+        java_type = _STATE_JAVA_TYPES.get(attributes["type"].casefold())
+        name = _host_java_identifier(attributes["name"])
+        if not java_type or not name or name in seen_names:
+            continue
+        seen_names.add(name)
+        contracts.append(
+            {
+                "name": name,
+                "java_type": java_type,
+                "default_literal": _state_default_literal(
+                    java_type,
+                    attributes.get("default", ""),
+                ),
+                "owner": attributes.get("owner", ""),
+                "unit": attributes.get("unit", ""),
+                "domain": attributes.get("domain", ""),
+            }
+        )
+    return tuple(contracts)
+
+
+def _deterministic_state_variable_members(
+    task: Mapping[str, Any],
+    concern: Mapping[str, Any],
+) -> str:
+    contracts = _state_variable_contract(task, concern)
+    if not contracts:
+        return ""
+    rows: list[str] = []
+    for item in contracts:
+        initializer = (
+            f" = {item['default_literal']}" if item["default_literal"] else ""
+        )
+        rows.append(
+            f"private static {item['java_type']} {item['name']}{initializer};"
+        )
+    return "\n".join(rows)
+
 def _bounded_grounding(grounding: Mapping[str, Any]) -> dict[str, Any]:
     direct = grounding.get("direct_host_context")
     direct_payload = dict(direct) if isinstance(direct, Mapping) else {}
@@ -998,25 +1131,43 @@ def _region_content(source: str, *, concern: str, region: str) -> str:
     return str(match.group("body") if match else "").strip()
 
 
+def _member_declaration_summary(chunk: str) -> str:
+    source = str(chunk or "").strip()
+    if not source:
+        return ""
+    scan = _structure_scan(source)
+    brace = scan.find("{")
+    if brace >= 0:
+        header = re.sub(r"\s+", " ", source[:brace]).strip()
+        return (header + " { ... }").strip()
+    return re.sub(r"\s+", " ", source).strip()
+
+
 def _sibling_symbol_inventory(
     source: str,
     *,
     sibling_concerns: Sequence[str],
-) -> list[dict[str, str]]:
-    rows: list[dict[str, str]] = []
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
     for concern in sibling_concerns:
         members = _region_content(source, concern=concern, region="MEMBERS")
-        for key, display in sorted(_member_declaration_symbols(members).items()):
-            kind, _, _ = key.partition(":")
-            rows.append(
-                {
+        for chunk in _top_level_member_chunks(members):
+            declaration = _member_declaration_summary(chunk)
+            symbols = _member_declaration_symbols(chunk)
+            for key, display in sorted(symbols.items()):
+                kind, _, _ = key.partition(":")
+                row: dict[str, Any] = {
                     "owner_concern": concern,
                     "kind": kind,
                     "symbol": display,
+                    "declaration": declaration,
                 }
-            )
+                if kind == "field":
+                    row["mutable"] = not bool(
+                        re.search(r"\bfinal\b", declaration)
+                    )
+                rows.append(row)
     return rows
-
 
 def _messages(
     *,
@@ -1037,7 +1188,9 @@ def _messages(
             "Describe this concern using the tool's records, enums, classes, fields, methods, "
             "and static_initializers arrays. The host owns Java syntax and renders those parts. "
             "Every concern-owned domain type you reference must be declared in records/enums/classes "
-            "in the same tool call unless it already exists in available_sibling_symbols or dependency_api. "
+            "in the same tool call unless it already exists in available_sibling_api or dependency_api. "
+            "If this concern needs state not present in available_sibling_api, declare the minimal "
+            "concern-local backing field instead of referencing an undeclared symbol. "
             "For JDK collection/concurrency types you may use simple names such as List/Map/Set; "
             "the host qualifies them. Keep each method body short and concern-local."
         )
@@ -1057,9 +1210,12 @@ def _messages(
         "You do not choose files, classes, dependencies, architecture, tools, search routes, APIs, or sibling work. "
         + response_contract + " "
         "The task_authority source requirements are already host-sliced to this concern; "
-        "current_selected_region_source is the only region you may replace, and "
-        "available_sibling_symbols is reference-only context. Do not infer or implement "
-        "sibling concerns from symbol names. "
+        "current_selected_region_source is the only region you may replace. "
+        "available_sibling_api contains authoritative compiled Java declarations from "
+        "earlier concerns: use their exact symbol spelling, declared type, signature, "
+        "and mutability. Never treat an object/record field as a primitive, never assign "
+        "to a field declared final, and never invent a sibling symbol that is not listed. "
+        "Do not implement sibling concerns. "
         "Use fully-qualified external API names when needed. "
         "Use only supplied host grounding and dependency_api; never invent a Minecraft/Fabric API."
     )
@@ -1076,6 +1232,11 @@ def _messages(
             "record_schema": concern.get("record_schema") or {},
         },
         "task_authority": _concern_authority(task, concern),
+        "state_variable_contract": (
+            list(_state_variable_contract(task, concern))
+            if section == "state_model" and name == "variables"
+            else []
+        ),
         "host_grounding": _bounded_grounding(grounding),
         "dependency_api": _dependency_api_context(dependency_source),
         "current_selected_region_source": _region_content(
@@ -1083,7 +1244,7 @@ def _messages(
             concern=name,
             region="INIT" if response_region == "initialize" else "MEMBERS",
         ),
-        "available_sibling_symbols": _sibling_symbol_inventory(
+        "available_sibling_api": _sibling_symbol_inventory(
             current_source,
             sibling_concerns=sibling_concerns,
         ),
@@ -1109,6 +1270,9 @@ def _messages(
                 "AtomicLong",
             ],
             "no_raw_top_level_java": True,
+            "sibling_api_is_authoritative": True,
+            "never_mutate_final_sibling_fields": True,
+            "declare_missing_concern_local_state": True,
             "preferred_shape": (
                 "fields_and_local_types"
                 if name in {"variables", "inputs", "outputs", "stored_state", "payloads"}
@@ -1305,6 +1469,32 @@ class AtomicConcernExecutor:
         seen_violations: set[tuple[str, str]] = set()
         repair_failure = failure
         attempt_limit = _region_attempt_limit()
+
+        if (
+            not failure
+            and response_region == "members"
+            and str(self.section or "").strip() == "state_model"
+            and name == "variables"
+        ):
+            host_members = _deterministic_state_variable_members(
+                self.task,
+                concern,
+            )
+            if host_members:
+                output_sha = hashlib.sha256(
+                    host_members.encode("utf-8")
+                ).hexdigest()
+                _trace_region_generation(
+                    "atomic_concern_region_host_lowered",
+                    result="PASS",
+                    concern=name,
+                    region=response_region,
+                    attempt=1,
+                    attempt_limit=1,
+                    output_sha256=output_sha,
+                    output_chars=len(host_members),
+                )
+                return host_members
 
         for attempt in range(1, attempt_limit + 1):
             _trace_region_generation(
