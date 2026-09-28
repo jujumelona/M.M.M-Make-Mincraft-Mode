@@ -123,18 +123,53 @@ class CompleteGameDesignPlanner:
         media_paths: Sequence[str | Path] = (),
         existing_input_sha256: str = "",
     ) -> AuthoredPlan:
-        """Author canonical structured design records, then render their Markdown projection."""
-        from .authored_structured_design import render_structured_sections
-        from .planning_state_implementation import compile_authored_worksheet
+        """Write the design itself; no schema, critic, evidence or production gate."""
+        from .planner_operation import planner_operation
+        from .planning_detail_slots import DETAIL_RECORDS
 
-        structured = compile_authored_worksheet(self.router, prompt)
-        text = render_structured_sections(structured)
+        template = _design_writing_template(DETAIL_RECORDS)
+
+        with planner_operation("author_game_plan"):
+            text = self.router.generate_text(
+                "planner",
+                (
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are the game designer. Write a complete, concrete Minecraft "
+                            "mod design in the user's language as readable prose and Markdown. "
+                            "Develop every requested feature into a coherent playable experience: "
+                            "the main gameplay loop, progression, interacting systems, resources "
+                            "and content, player actions, UI and multiplayer behavior. Choose "
+                            "missing mechanics, quantities, names and balance values yourself. "
+                            "Explain how the systems connect using concrete examples. "
+                            "Your choices are authored design and need no proof or approval. "
+                            "Describe desired platform behavior without claiming unresearched "
+                            "API symbols are verified. Fill this writing template in one response. "
+                            "Use every canonical template section heading exactly once and keep the "
+                            "sections in the shown order. Keep canonical section headings at Markdown "
+                            "level 2 (`##`); you may add one document title at level 1 (`#`) and use "
+                            "deeper headings only inside a canonical section. For an inapplicable "
+                            "section, say so concretely instead of removing the section:\n"
+                            + template
+                            + "\nThe concern fields inside each canonical section are writing guidance, "
+                            "not required output keys. Verification sections describe future tests "
+                            "of the implementation; they do not judge your plan. "
+                            "Finish the design in this response."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ),
+                media_paths=media_paths,
+                response_format="text",
+                response_schema=None,
+                enable_tools=False,
+            )
         return AuthoredPlan(
             requested_prompt=prompt,
             text=text,
             existing_input_sha256=existing_input_sha256,
             media_paths=tuple(str(path) for path in media_paths),
-            structured_sections=structured,
         )
 
     def compile_for_production(
@@ -144,97 +179,44 @@ class CompleteGameDesignPlanner:
         media_paths: Sequence[str | Path] = (),
         existing_input_sha256: str = "",
     ) -> CompleteProposal:
-        from .authored_production import (
-            _implementation_authored_plan,
-            compile_authored_design,
-        )
-        from .authored_structured_design import render_structured_sections
-        from .planning_state_implementation import compile_authored_worksheet
+        """Compile the approved plan; planning itself remains untouched."""
+
+        from .authored_production import compile_authored_design
+        from .production_state_compiler import bind_production_state_contract
 
         plan = prompt if isinstance(prompt, AuthoredPlan) else AuthoredPlan(
-            requested_prompt=prompt, text=prompt,
+            requested_prompt=prompt,
+            text=prompt,
             media_paths=tuple(str(path) for path in media_paths),
         )
         effective_existing = str(
             existing_input_sha256 or plan.existing_input_sha256 or ""
         ).strip()
-        source_projection = None
-        if not plan.structured_sections and not effective_existing:
-            plan, source_projection = _implementation_authored_plan(plan)
-        if not plan.structured_sections and not effective_existing:
-            migration_prompt = (
-                plan.requested_prompt
-                + "\n\nApproved authored design to normalize into the canonical "
-                "engineering worksheet without changing its requested capabilities:\n"
-                + plan.text
-            )
-            structured = compile_authored_worksheet(self.router, migration_prompt)
-            plan = AuthoredPlan(
-                requested_prompt=plan.requested_prompt,
-                text=render_structured_sections(structured),
-                existing_input_sha256=plan.existing_input_sha256,
-                media_paths=plan.media_paths,
-                schema_version="mmm/authored-plan-v2",
-                structured_sections=structured,
-            )
-        state_section = plan.structured_sections.get("state_model")
-        if isinstance(state_section, Mapping):
-            from .structured_state_runtime import validate_structured_state_section
 
-            validate_structured_state_section(state_section)
-
-        if plan.structured_sections and not effective_existing:
-            canonical_prompt = (
-                plan.requested_prompt
-                if plan.text.strip() == plan.requested_prompt.strip()
-                else plan.production_prompt()
-            )
-            with trace_scope("production_preparation", trace_id=uuid.uuid4().hex):
-                emit_root_cause(
-                    "production_preparation_start",
-                    stage="production",
-                    result="START",
-                    details={
-                        **repository_revision(),
-                        "input": "structured_authored_design",
-                        "backend": "canonical_atomic_artifact",
-                        "free_form_custom_java": False,
-                    },
-                )
-                proposal = self._plan_canonical_artifacts(
-                    canonical_prompt,
-                    media_paths=plan.media_paths or tuple(str(path) for path in media_paths),
-                )
-                game_design = {
-                    **proposal.game_design,
-                    "authored_plan": plan.to_dict(),
-                    "_authored_execution_backend": {
-                        "mode": "canonical_atomic_artifact",
-                        "structured_authority": True,
-                        "free_form_custom_java": False,
-                    },
-                }
-                if source_projection is not None:
-                    game_design["_authored_source_projection"] = source_projection
-                proposal = replace(
-                    proposal,
-                    game_design=game_design,
-                    approval_hash="",
-                ).with_hash()
-                proposal.validate()
-                return proposal
+        production_plan = plan
+        if not effective_existing:
+            production_plan = bind_production_state_contract(self.router, plan)
 
         with trace_scope("production_preparation", trace_id=uuid.uuid4().hex):
             emit_root_cause(
-                "production_preparation_start", stage="production", result="START",
+                "production_preparation_start",
+                stage="production",
+                result="START",
                 details={
                     **repository_revision(),
                     "input": "saved_authored_design",
-                    "backend": "localized_authored_custom",
+                    "planning_rewrite": False,
+                    "state_backend": (
+                        "host_compiled_structured_state"
+                        if production_plan.structured_sections.get("state_model")
+                        else "legacy_state_path"
+                    ),
                 },
             )
             return compile_authored_design(
-                self.router, plan, existing_input_sha256=existing_input_sha256,
+                self.router,
+                production_plan,
+                existing_input_sha256=existing_input_sha256,
             )
 
     def _plan_canonical_artifacts(
