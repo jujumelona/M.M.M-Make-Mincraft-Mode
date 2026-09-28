@@ -516,16 +516,20 @@ def emit_root_cause(
         if details:
             safe_details = _trace_safe(details)
             payload["details"] = safe_details
-            from .planner_trace_artifacts import save_trace_artifact
+            artifact_mode = os.environ.get(
+                "MMM_ROOT_CAUSE_TRACE_ARTIFACTS", "failures"
+            ).strip().casefold()
+            if failure or artifact_mode in {"all", "full"}:
+                from .planner_trace_artifacts import save_trace_artifact
 
-            try:
-                payload["details_artifact"] = save_trace_artifact(
-                    details,
-                    durable_trace_path().parent / "artifacts",
-                    sync=failure_sync,
-                )
-            except Exception as artifact_error:
-                payload["details_artifact_error"] = type(artifact_error).__name__
+                try:
+                    payload["details_artifact"] = save_trace_artifact(
+                        details,
+                        durable_trace_path().parent / "artifacts",
+                        sync=failure_sync,
+                    )
+                except Exception as artifact_error:
+                    payload["details_artifact_error"] = type(artifact_error).__name__
 
         first_failure_seq = _FIRST_FAILURE_SEQ.get()
         is_first_failure = False
@@ -557,27 +561,27 @@ def emit_root_cause(
             (serialized + "\n").encode("utf-8", "backslashreplace"),
             sync=failure_sync,
         )
-        _stderr_line(
-            serialized,
-            flush=failure
-            or event
-            in {
-                "mcp_verifier_transport_retry",
-                "mcp_verifier_transport_recovered",
-                "jdt_stderr",
-                "jdt_server_progress",
-                "gradle_command_start",
-                "gradle_command_output",
-                "gradle_command_result",
-                "gradle_distribution_start",
-                "gradle_cache_lock_wait",
-                "gradle_cache_lock_acquired",
-                "planning_semantic_research_summary",
-                "planner_requirement_page",
-                "planner_requirement_page_received",
-                "planner_requirement_coverage",
-            },
-        )
+        console_events = {
+            "mcp_verifier_transport_retry",
+            "mcp_verifier_transport_recovered",
+            "jdt_stderr",
+            "jdt_server_progress",
+            "gradle_command_start",
+            "gradle_command_output",
+            "gradle_command_result",
+            "gradle_distribution_start",
+            "gradle_cache_lock_wait",
+            "gradle_cache_lock_acquired",
+            "planning_semantic_research_summary",
+            "planner_requirement_page",
+            "planner_requirement_page_received",
+            "planner_requirement_coverage",
+        }
+        stderr_mode = os.environ.get(
+            "MMM_ROOT_CAUSE_TRACE_STDERR", "important"
+        ).strip().casefold()
+        if failure or event in console_events or stderr_mode in {"all", "full"}:
+            _stderr_line(serialized, flush=failure or event in console_events)
     except BaseException as logger_exc:
         _emergency_trace(
             event=event,
