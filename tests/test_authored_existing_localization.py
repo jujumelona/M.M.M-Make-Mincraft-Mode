@@ -7,6 +7,7 @@ import pytest
 
 from minecraft_mod_ai.authored_existing_localization import (
     AuthoredExistingLocalizationError,
+    _scope,
     localize_existing_authored_module,
 )
 from minecraft_mod_ai.authored_plan import AuthoredPlan
@@ -69,6 +70,43 @@ def test_localizer_requests_cross_production_router_boundary(monkeypatch, stage)
             "snippet": "class SpaceMod {}",
         }]) == ("src/main/java/example/SpaceMod.java", ())
     assert len(requests) == 1
+
+
+def test_existing_localization_scope_carries_structured_semantic_contract() -> None:
+    from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
+
+    state_spec = {
+        **{name: [] for name in DETAIL_RECORDS["state_model"]},
+        "variables": [{
+            "name": "credits",
+            "owner": "Player",
+            "type": "Int",
+            "unit": "credits",
+            "default": "0",
+            "domain": "economy",
+        }],
+        "inapplicable_concerns": [
+            {"concern": name, "reason": "not required"}
+            for name in DETAIL_RECORDS["state_model"]
+            if name != "variables"
+        ],
+    }
+    structured = {
+        "state_model": {
+            "specification": state_spec,
+            "constraint_evidence_refs": [],
+        }
+    }
+    plan = AuthoredPlan(
+        "Modify economy",
+        "## state_model\n- variables: name owner type unit default domain\n",
+        structured_sections=structured,
+    )
+
+    scope = _scope(plan.to_dict())
+
+    assert scope["structured_sections"] == structured
+    assert scope["structured_sections_sha256"].startswith("sha256:")
 
 
 def test_coherent_generation_preserves_bounded_creation_authority(tmp_path):

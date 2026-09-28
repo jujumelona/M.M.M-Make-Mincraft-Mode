@@ -476,6 +476,8 @@ def _implementation_authored_plan(plan: AuthoredPlan) -> tuple[AuthoredPlan, dic
         text=implementation_text,
         existing_input_sha256=plan.existing_input_sha256,
         media_paths=plan.media_paths,
+        schema_version=plan.schema_version,
+        structured_sections=deepcopy(plan.structured_sections),
     )
     provenance = {
         "schema_version": "mmm/authored-source-projection-v1",
@@ -664,11 +666,24 @@ def _compile_existing_authored_modules(
         index = int(unit["index"])
         task_id = f"authored_existing_{index:03d}"
         depends_on = (previous_id,) if previous_id else ()
+        unit_section = str(unit.get("section") or "").strip()
+        structured_sections = deepcopy(plan.structured_sections)
+        if structured_sections:
+            from .authored_ir_parser import authored_section_id
+
+            section_id = authored_section_id(unit_section)
+            structured_sections = (
+                {section_id: deepcopy(structured_sections[section_id])}
+                if section_id and section_id in structured_sections
+                else structured_sections
+            )
         unit_plan = AuthoredPlan(
             requested_prompt=plan.requested_prompt,
             text=str(unit["text"]),
             existing_input_sha256=plan.existing_input_sha256,
             media_paths=plan.media_paths,
+            schema_version=plan.schema_version,
+            structured_sections=structured_sections,
         )
         modules.append(
             ProductionModule(

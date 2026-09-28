@@ -340,6 +340,68 @@ def test_real_orchestrator_accepts_authored_handoff(monkeypatch, tmp_path):
         )
 
 
+def _structured_state_plan(existing_sha: str = "") -> AuthoredPlan:
+    from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
+
+    state_spec = {
+        **{name: [] for name in DETAIL_RECORDS["state_model"]},
+        "variables": [{
+            "name": "credits",
+            "owner": "Player",
+            "type": "Int",
+            "unit": "credits",
+            "default": "0",
+            "domain": "economy",
+        }],
+        "inapplicable_concerns": [
+            {"concern": name, "reason": "not required"}
+            for name in DETAIL_RECORDS["state_model"]
+            if name != "variables"
+        ],
+    }
+    structured = {
+        "state_model": {
+            "specification": state_spec,
+            "constraint_evidence_refs": [],
+        }
+    }
+    return AuthoredPlan(
+        "Modify existing economy",
+        "## state_model\n- variables: name owner type unit default domain\n",
+        existing_input_sha256=existing_sha,
+        structured_sections=structured,
+    )
+
+
+def test_existing_authored_units_preserve_structured_semantic_authority() -> None:
+    plan = _structured_state_plan("sha256:" + "c" * 64)
+    proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(plan)
+
+    assert len(proposal.modules) == 1
+    saved = proposal.modules[0].config["authored_plan"]
+    assert saved["schema_version"] == "mmm/authored-plan-v2"
+    assert saved["structured_sections"] == plan.structured_sections
+
+
+def test_reasoning_projection_preserves_structured_semantic_authority() -> None:
+    base = _structured_state_plan()
+    plan = AuthoredPlan(
+        base.requested_prompt,
+        (
+            "Thinking Process:\n"
+            "1. **Analyze the Request:** economy\n\n"
+            + base.text
+        ),
+        structured_sections=base.structured_sections,
+    )
+
+    projected, provenance = _implementation_authored_plan(plan)
+
+    assert provenance is not None
+    assert projected.structured_sections == base.structured_sections
+    assert projected.schema_version == plan.schema_version
+
+
 def test_existing_authored_plan_requires_localize_freeze_before_coder():
     plan = AuthoredPlan(
         "Modify the existing space mod",
