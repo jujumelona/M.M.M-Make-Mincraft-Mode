@@ -31,7 +31,7 @@ class _Registry:
 
     def role(self, profile: str, role: str):
         assert profile == "local"
-        assert role == "coder"
+        assert role in {"coder", "planner"}
         return SimpleNamespace(adapter=self.adapter)
 
 
@@ -87,6 +87,36 @@ def _generate(router, *, enable_tools: bool = False):
         enable_tools=enable_tools,
         tool_name="submit_one_feature_algorithm_steps_part_1_of_2",
     )
+
+
+class _PlannerToolCapableRouter(_TextOnlyRouter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.tool_calls = 0
+
+    def generate_tool_decision(self, *args, **kwargs):
+        self.tool_calls += 1
+        raise AssertionError("planner fixed templates must never require native tool calls")
+
+
+def test_planner_fixed_template_never_depends_on_native_tool_envelope() -> None:
+    router = _PlannerToolCapableRouter()
+    result = generate_fixed_template_value(
+        router,
+        "planner",
+        [{"role": "user", "content": "Fill the worksheet chunk."}],
+        response_schema=_SCHEMA,
+        enable_tools=False,
+        tool_name="submit_behavior_contract_1_chunk",
+    )
+
+    assert result == _RESULT
+    assert router.tool_calls == 0
+    assert len(router.text_calls) == 1
+    call = router.text_calls[0]
+    assert call["response_format"] == "json"
+    assert call["response_schema"] == _SCHEMA
+    assert call["enable_tools"] is False
 
 
 def test_tools_disabled_real_router_still_uses_fixed_template_tool_transport() -> None:

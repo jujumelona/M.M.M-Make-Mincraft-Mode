@@ -369,28 +369,11 @@ def _generate_chunk(
     concerns: Sequence[str],
     chunk_schema: Mapping[str, Any],
 ) -> dict[str, Any]:
-    tool_name = f"submit_{section}_{index}_chunk"
-    description = f"Submit worksheet specifications for {section}: {', '.join(concerns)}."
-
-    if hasattr(router, "generate_tool_decision"):
-        try:
-            raw_decision = router.generate_tool_decision(
-                "planner",
-                messages,
-                tool_name=tool_name,
-                parameters=chunk_schema,
-                description=description,
-            )
-            if isinstance(raw_decision, Mapping):
-                return dict(raw_decision)
-        except Exception as exc:
-            from .model_adapters import ModelConfigurationError
-
-            if isinstance(exc, ModelConfigurationError):
-                raise
-            # Fall back to text generation if native tool call fails or is not enabled for role
-
-    raw = generate_fixed_template_text(router,
+    # Worksheet chunks are pure structured data, not actions. Never route them through
+    # native function calling: local models can produce schema-valid JSON while omitting
+    # a tool envelope, and that transport detail must not make planning fail.
+    raw = generate_fixed_template_text(
+        router,
         "planner",
         messages,
         response_schema=chunk_schema,
