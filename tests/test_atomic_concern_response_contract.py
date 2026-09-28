@@ -856,11 +856,11 @@ def test_logged_java_failure_families_repair_through_real_compiler_feedback(monk
             "return readState(); }"
         ),
         (
-            "private static final java.util.concurrent.ReentrantLock shipConfigLock = "
+            "private static final java.util.concurrent.Lock shipConfigLock = "
             "new java.util.concurrent.ReentrantLock();"
         ),
         (
-            "private static final java.util.concurrent.locks.ReentrantLock shipConfigLock = "
+            "private static final java.util.concurrent.locks.Lock shipConfigLock = "
             "new java.util.concurrent.locks.ReentrantLock();"
         ),
     ]
@@ -910,12 +910,17 @@ def test_logged_java_failure_families_repair_through_real_compiler_feedback(monk
                 "incompatible types: Object cannot be converted to Map<String,Object>",
                 "",
             )
-        if "java.util.concurrent.ReentrantLock" in source:
-            line, row = at("java.util.concurrent.ReentrantLock")
+        if "java.util.concurrent.Lock" in source:
+            line, row = at("java.util.concurrent.Lock")
             return (
                 line,
                 row,
                 "cannot find symbol",
+                "  symbol:   class Lock\n"
+                "  location: package java.util.concurrent\n"
+                f"/tmp/Test.java:{line}: error: cannot find symbol\n"
+                f"{row}\n"
+                "^\n"
                 "  symbol:   class ReentrantLock\n"
                 "  location: package java.util.concurrent\n",
             )
@@ -967,6 +972,7 @@ def test_logged_java_failure_families_repair_through_real_compiler_feedback(monk
 
     assert compile_calls["count"] == 5
     assert result["repair_count"] == 4
+    assert "java.util.concurrent.locks.Lock" in result["source"]
     assert "java.util.concurrent.locks.ReentrantLock" in result["source"]
 
     repair_payloads = [
@@ -977,6 +983,7 @@ def test_logged_java_failure_families_repair_through_real_compiler_feedback(monk
     assert "might not have been initialized" in failures[0]
     assert "cannot assign a value to static final variable TRANSFER_CACHE" in failures[1]
     assert "Object cannot be converted to Map<String,Object>" in failures[2]
+    assert "class Lock" in failures[3]
     assert "class ReentrantLock" in failures[3]
     assert all("CURRENT COMPILED SOURCE AROUND THE REPORTED LINES" in item for item in failures)
     assert all(">>" in item for item in failures)
