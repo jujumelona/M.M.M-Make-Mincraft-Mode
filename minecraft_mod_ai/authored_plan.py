@@ -15,8 +15,8 @@ class AuthoredPlan:
     text: str
     existing_input_sha256: str = ""
     media_paths: tuple[str, ...] = ()
-    structured_sections: dict[str, Any] = field(default_factory=dict)
     schema_version: str = "mmm/authored-plan-v2"
+    structured_sections: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         from .authored_structured_design import normalize_structured_sections
