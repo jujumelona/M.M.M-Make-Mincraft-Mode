@@ -1438,11 +1438,9 @@ class CompleteProductionOrchestrator:
         asset_lookup = {item.asset_id: item for item in approved.assets}
         raw_artifact_jobs = approved.game_design.get("_artifact_jobs") or []
         artifact_jobs_by_owner: dict[str, list[ArtifactJob]] = {}
-        all_artifact_jobs: list[ArtifactJob] = []
         artifact_producers: dict[str, ArtifactJob] = {}
         for raw_job in raw_artifact_jobs:
             job = ArtifactJob.from_dict(raw_job) if isinstance(raw_job, dict) else raw_job
-            all_artifact_jobs.append(job)
             owner = str(getattr(job, "owner_module", "") or "")
             if owner:
                 artifact_jobs_by_owner.setdefault(owner, []).append(job)
