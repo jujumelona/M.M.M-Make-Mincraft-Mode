@@ -316,6 +316,7 @@ def test_host_reserved_missing_target_is_materialized_and_does_not_require_initi
 
 
 def _atomic_module(path: str, symbol: str) -> ProductionModule:
+    """Generic semantic-Java atomic fixture; state_model is host-compiled elsewhere."""
     base = _module(path, symbol)
     config = dict(base.config)
     config["implementation_ir_node"] = {
@@ -323,22 +324,22 @@ def _atomic_module(path: str, symbol: str) -> ProductionModule:
         "public_api": ["public static void initialize()"],
         "activation": True,
     }
-    config["implementation_section"] = "state_model"
+    config["implementation_section"] = "algorithm"
     config["implementation_dependency_context"] = "[]"
     config["implementation_atomic_concerns"] = [
         {
             "sequence": 0,
-            "identifier": "feature/state_model/variables",
-            "concern": "variables",
-            "task": "Resolve variables.",
+            "identifier": "feature/algorithm/steps",
+            "concern": "steps",
+            "task": "Resolve deterministic algorithm steps.",
             "rules": [],
             "record_schema": {"type": "object", "properties": {}, "additionalProperties": False},
         },
         {
             "sequence": 1,
-            "identifier": "feature/state_model/invariants",
-            "concern": "invariants",
-            "task": "Resolve invariants.",
+            "identifier": "feature/algorithm/branches",
+            "concern": "branches",
+            "task": "Resolve algorithm branches.",
             "rules": [],
             "record_schema": {"type": "object", "properties": {}, "additionalProperties": False},
         },
@@ -349,7 +350,6 @@ def _atomic_module(path: str, symbol: str) -> ProductionModule:
         config=config,
         required_gates=base.required_gates,
     )
-
 
 def _native_field_parts(kind, name, initializer):
     return [
@@ -375,19 +375,19 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
     calls: list[tuple[str, dict[str, object]]] = []
 
     class Router:
-        def generate_tool_decision(self, role, messages, **kwargs):
-            del role
+        def generate_text(self, role, messages, **kwargs):
+            assert role == "coder"
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
             calls.append((concern, dict(kwargs)))
-            if not payload["assembly"]["path"] and not payload["assembly"]["accepted_structure"]:
-                self.responses = iter(_native_field_parts("int", "balance", "0") if concern == "variables"
-                                      else _native_method_parts("valid", "return balance >= 0"))
-            return next(self.responses)
+            if concern == "steps":
+                return "private static int balance = 0;"
+            return "public static boolean valid() { return balance >= 0; }"
 
     class Runner:
         def __init__(self, _cache):
             pass
+
         def compile_java(self, _root):
             return SimpleNamespace(status="PASS", commands=(), error=None)
 
@@ -399,14 +399,15 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
     )
 
     source = (root / path).read_text(encoding="utf-8")
-    assert list(dict.fromkeys(name for name, _kwargs in calls)) == ["variables", "invariants"]
-    assert all(kwargs["tool_name"] == "emit_java_part" for _name, kwargs in calls)
-    assert all(kwargs["parameters"]["type"] == "object" for _name, kwargs in calls)
+    assert [name for name, _kwargs in calls] == ["steps", "branches"]
+    assert all(kwargs["enable_tools"] is False for _name, kwargs in calls)
+    assert all(kwargs["response_format"] == "text" for _name, kwargs in calls)
+    assert all(kwargs["force_non_thinking"] is True for _name, kwargs in calls)
     assert "private static int balance = 0;" in source
     assert "public static boolean valid()" in source
-    assert "MMM_ATOMIC_CONCERN_VARIABLES_MEMBERS_START" in source
-    assert "MMM_ATOMIC_CONCERN_INVARIANTS_MEMBERS_START" in source
-    assert result["generation_verification"]["mode"] == "gradle_compile_java_atomic_concerns"
+    assert "MMM_ATOMIC_CONCERN_STEPS_MEMBERS_START" in source
+    assert "MMM_ATOMIC_CONCERN_BRANCHES_MEMBERS_START" in source
+    assert result["generation_verification"]["mode"] == "gradle_compile_java_semantic_concerns"
     assert result["generation_verification"]["atomic_concern_count"] == 2
 
 
@@ -417,20 +418,24 @@ def test_atomic_concern_compile_repair_reopens_only_localized_concern(
     calls: list[str] = []
 
     class Router:
-        def generate_tool_decision(self, role, messages, **kwargs):
+        def generate_text(self, role, messages, **kwargs):
             del role, kwargs
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
-            if not payload["assembly"]["path"] and not payload["assembly"]["accepted_structure"]:
-                calls.append(concern)
-                repairing = bool(payload.get("repair_failure"))
-                self.responses = iter(_native_field_parts("Object", "value", "new Object()" if repairing else "new Object(1)")
-                                      if concern == "variables" else _native_method_parts("valid", "return value != null"))
-            return next(self.responses)
+            calls.append(concern)
+            repairing = bool(payload.get("repair_failure"))
+            if concern == "steps":
+                return (
+                    "private static Object value = new Object();"
+                    if repairing
+                    else "private static Object value = new Object(1);"
+                )
+            return "public static boolean valid() { return value != null; }"
 
     class Runner:
         def __init__(self, _cache):
             pass
+
         def compile_java(self, project_root):
             source = (project_root / path).read_text(encoding="utf-8")
             if "new Object(1)" not in source:
@@ -458,8 +463,7 @@ def test_atomic_concern_compile_repair_reopens_only_localized_concern(
         minecraft_version="1.21.1", loader="fabric",
     )
 
-    # Each concern compiles before the next one can depend on its declarations.
-    assert calls == ["variables", "variables", "invariants"]
+    assert calls == ["steps", "steps", "branches"]
     source = (root / path).read_text(encoding="utf-8")
     assert "new Object(1)" not in source
     assert "new Object()" in source
