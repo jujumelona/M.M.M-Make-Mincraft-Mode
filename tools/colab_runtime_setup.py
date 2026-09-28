@@ -42,6 +42,10 @@ _LOCAL_PROFILE_ENV_NAMES = (
 )
 REMOTE_PROJECT_INSTALL_TARGET = ".[ui,rag,image,speech,production-audio]"
 LOCAL_PROJECT_INSTALL_TARGET = ".[ui,local-model,rag,image,speech,production-audio]"
+_PROJECT_PIP_NETWORK_ATTEMPTS = (
+    (60, 8),
+    (180, 12),
+)
 
 # Pinned official ggml-org/llama.cpp release commit. Local GGUF execution uses the
 # native llama-server binary from the verified prebuilt bundle. Source compilation is
@@ -701,18 +705,44 @@ def _install_project(*, local_profile: bool) -> None:
         return
 
     print("project dependencies: installing", target, flush=True)
-    _run_logged(
-        [
+    last_error: subprocess.CalledProcessError | None = None
+    for attempt, (timeout_seconds, retries) in enumerate(
+        _PROJECT_PIP_NETWORK_ATTEMPTS,
+        start=1,
+    ):
+        command = [
             sys.executable,
             "-m",
             "pip",
             "install",
             "--prefer-binary",
             "--no-build-isolation",
+            "--disable-pip-version-check",
+            "--timeout",
+            str(timeout_seconds),
+            "--retries",
+            str(retries),
             "-e",
             target,
         ]
-    )
+        try:
+            _run_logged(command)
+        except subprocess.CalledProcessError as exc:
+            last_error = exc
+            if attempt >= len(_PROJECT_PIP_NETWORK_ATTEMPTS):
+                raise
+            print(
+                "project dependencies: pip attempt failed; retrying whole install",
+                f"attempt={attempt}/{len(_PROJECT_PIP_NETWORK_ATTEMPTS)}",
+                f"next_timeout={_PROJECT_PIP_NETWORK_ATTEMPTS[attempt][0]}s",
+                f"next_retries={_PROJECT_PIP_NETWORK_ATTEMPTS[attempt][1]}",
+                flush=True,
+            )
+        else:
+            last_error = None
+            break
+    if last_error is not None:
+        raise last_error
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = receipt_path.with_suffix(receipt_path.suffix + ".tmp")
     temporary.write_text(
