@@ -1575,7 +1575,7 @@ def _messages(
             "Return only compile-ready Java statements or balanced control-flow blocks that belong "
             "inside the host-owned initialize() body. Do not return JSON, tool calls, Markdown, "
             "prose, package/import declarations, an initialize() wrapper, or the outer class. "
-            "Return an empty response when no initialization is required."
+            "When no initialization is required, return exactly '// no initialization required'."
         )
     else:
         raise CustomModuleGenerationError(
