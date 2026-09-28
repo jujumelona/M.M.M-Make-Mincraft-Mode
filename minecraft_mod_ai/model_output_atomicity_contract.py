@@ -136,7 +136,30 @@ def assert_strict_atomicity_bounds(
                     f"MAX_MODEL_ARRAY_ITEMS={MAX_MODEL_ARRAY_ITEMS} at {path} for {surface}"
                 )
             if "items" in value and isinstance(value["items"], Mapping):
-                assert_strict_atomicity_bounds(value["items"], surface=surface, path=f"{path}[]", depth=depth + 1)
+                item_schema = value["items"]
+                item_type = item_schema.get("type")
+                item_is_structural = (
+                    item_type == "object"
+                    or item_type == "array"
+                    or "properties" in item_schema
+                )
+                assert_strict_atomicity_bounds(
+                    item_schema,
+                    surface=surface,
+                    path=f"{path}[]",
+                    depth=depth + (1 if item_is_structural else 0),
+                )
+        for keyword in ("allOf", "anyOf", "oneOf"):
+            branches = value.get(keyword)
+            if isinstance(branches, Sequence) and not isinstance(branches, (str, bytes, bytearray)):
+                for index, branch in enumerate(branches):
+                    if isinstance(branch, Mapping):
+                        assert_strict_atomicity_bounds(
+                            branch,
+                            surface=surface,
+                            path=f"{path}.{keyword}[{index}]",
+                            depth=depth,
+                        )
         if value.get("type") == "string":
             if "enum" not in value:
                 max_len = value.get("maxLength")
