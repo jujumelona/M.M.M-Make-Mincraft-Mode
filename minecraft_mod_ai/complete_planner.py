@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -218,138 +218,6 @@ class CompleteGameDesignPlanner:
                 production_plan,
                 existing_input_sha256=existing_input_sha256,
             )
-
-    def _plan_canonical_artifacts(
-        self,
-        prompt: str,
-        *,
-        media_paths: Sequence[str | Path] = (),
-    ) -> CompleteProposal:
-        """Compile fresh structured designs without any free-form Java generation.
-
-        Small-model work ends at bounded semantic records. Production is admitted only
-        when every module is backed by a canonical ArtifactJob/leaf template; otherwise
-        planning fails before source generation instead of falling back to custom Java.
-        """
-
-        artifacts = PlanningPipeline(self.router).prepare(
-            prompt,
-            media_paths=media_paths,
-        )
-        internal_design = {
-            **artifacts.game_design,
-            "_research_brief": artifacts.research_brief,
-            "_technical_evidence": artifacts.technical_evidence,
-        }
-
-        modules = _merge_atomic_modules(
-            (),
-            internal_design.get("_atomic_modules")
-            or internal_design.get("modules")
-            or (),
-        )
-        assets = _merge_atomic_assets(
-            (),
-            internal_design.get("_atomic_assets")
-            or internal_design.get("assets")
-            or (),
-        )
-        if not modules:
-            raise PlanningStageError(
-                PlanningStage.DESIGN,
-                "canonical small-model backend produced no implementation modules",
-            )
-
-        raw_acceptance = [
-            str(item).strip()
-            for item in internal_design.get("acceptance_tests", ())
-            if str(item).strip()
-        ]
-        if not raw_acceptance:
-            raw_acceptance = [
-                "Build the generated project successfully.",
-                "Exercise every generated canonical gameplay/content artifact.",
-            ]
-        acceptance = canonical_public_acceptance(raw_acceptance)
-
-        contract_design = {
-            key: value
-            for key, value in internal_design.items()
-            if not str(key).startswith("_")
-        }
-        compiled = production_contract.compile_production_contract(
-            requested_prompt=prompt,
-            game_design=contract_design,
-            research_brief=artifacts.research_brief,
-            modules=modules,
-            assets=assets,
-            acceptance_tests=acceptance,
-            evidence_plan=None,
-        )
-
-        existing_facts = internal_design.get(
-            "_atomic_facts",
-            internal_design.get("_implementation_facts"),
-        )
-        facts_data, jobs_data = _lower_implementation_facts_and_jobs(
-            modules,
-            artifacts.base_proposal.spec,
-            existing_facts=existing_facts,
-        )
-        owners = {
-            str(job.get("owner_module") or "").strip()
-            for job in jobs_data
-            if isinstance(job, Mapping)
-        }
-        uncovered = [
-            module.module_id
-            for module in modules
-            if module.module_id not in owners
-        ]
-        noncanonical_jobs = [
-            str(job.get("job_id") or "")
-            for job in jobs_data
-            if isinstance(job, Mapping)
-            and not str(job.get("canonical_leaf") or "").strip()
-        ]
-        if uncovered or noncanonical_jobs:
-            raise PlanningStageError(
-                PlanningStage.DESIGN,
-                "canonical implementation coverage is incomplete; "
-                f"uncovered_modules={uncovered[:12]}, "
-                f"noncanonical_jobs={noncanonical_jobs[:12]}. "
-                "Free-form Java fallback is disabled for fresh structured designs.",
-            )
-
-        internal_design = {
-            **internal_design,
-            "_production_contract": compiled.contract,
-            "_implementation_facts": facts_data,
-            "_artifact_jobs": jobs_data,
-            "_small_model_backend": {
-                "mode": "bounded_semantic_ir_to_canonical_artifacts",
-                "free_form_java": False,
-                "canonical_job_count": len(jobs_data),
-                "module_count": len(modules),
-            },
-        }
-        proposal = complete_proposal_from_parts(
-            requested_prompt=prompt,
-            base_proposal=artifacts.base_proposal,
-            game_design=internal_design,
-            modules=modules,
-            assets=assets,
-            acceptance_tests=tuple(compiled.acceptance_tests),
-            existing_input_sha256="",
-        )
-
-        from .resource_asset_production import attach_generation_plan, bind_reuse_plan
-
-        proposal = bind_reuse_plan(proposal)
-        proposal = attach_generation_plan(self.router, proposal)
-        proposal.validate()
-        return proposal
-
 
     def _plan_in_session(
         self,
