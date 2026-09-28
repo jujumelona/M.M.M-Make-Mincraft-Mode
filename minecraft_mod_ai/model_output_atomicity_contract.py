@@ -149,6 +149,17 @@ def assert_strict_atomicity_bounds(
                     path=f"{path}[]",
                     depth=depth + (1 if item_is_structural else 0),
                 )
+        for keyword in ("allOf", "anyOf", "oneOf"):
+            branches = value.get(keyword)
+            if isinstance(branches, Sequence) and not isinstance(branches, (str, bytes, bytearray)):
+                for index, branch in enumerate(branches):
+                    if isinstance(branch, Mapping):
+                        assert_strict_atomicity_bounds(
+                            branch,
+                            surface=surface,
+                            path=f"{path}.{keyword}[{index}]",
+                            depth=depth,
+                        )
         if value.get("type") == "string":
             if "enum" not in value:
                 max_len = value.get("maxLength")
