@@ -1,6 +1,5 @@
 id: feature/state_model/invariants
-task: Resolve exactly one invariants record for the supplied feature and acceptance
-  criterion.
+task: Resolve exactly one invariants record for the supplied feature and acceptance criterion.
 input_fields:
 - requirement
 - criterion
@@ -12,22 +11,9 @@ record_schema:
     condition:
       type: string
       minLength: 1
-      pattern: '^[A-Za-z0-9_$ 	"''().!<>=+*/%|&-]+    enforcement:
-      type: string
-      minLength: 1
-  required:
-  - condition
-  - enforcement
-  additionalProperties: false
-rules:
-- Return only the next record for this concern; do not plan neighboring concerns.
-- Preserve supplied evidence identifiers. Never invent external APIs, paths or facts.
-- Return done only after all records for this concern are supplied.
-- Return not_applicable with a concrete reason only when this concern does not apply.
-- Return blocked with the missing information when it cannot be resolved.
-- Do not turn missing information into an inapplicability claim.
-
-      description: Host expression DSL only; no prose, member access, or method calls.
+      pattern: >-
+        ^(?:![ \t]*)?(?:[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?|"(?:\\.|[^"\\])*"|true|false|null|[A-Za-z_][A-Za-z0-9_]*)(?:[ \t]*[+\-*/%][ \t]*(?:[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?|"(?:\\.|[^"\\])*"|true|false|null|[A-Za-z_][A-Za-z0-9_]*))*(?:[ \t]*(?:==|!=|>=|<=|>|<)[ \t]*(?:[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?|"(?:\\.|[^"\\])*"|true|false|null|[A-Za-z_][A-Za-z0-9_]*)(?:[ \t]*[+\-*/%][ \t]*(?:[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?|"(?:\\.|[^"\\])*"|true|false|null|[A-Za-z_][A-Za-z0-9_]*))*)?(?:[ \t]*(?:&&|\|\|)[ \t]*(?:![ \t]*)?(?:[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?|"(?:\\.|[^"\\])*"|true|false|null|[A-Za-z_][A-Za-z0-9_]*)(?:[ \t]*[+\-*/%][ \t]*(?:[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?|"(?:\\.|[^"\\])*"|true|false|null|[A-Za-z_][A-Za-z0-9_]*))*(?:[ \t]*(?:==|!=|>=|<=|>|<)[ \t]*(?:[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?|"(?:\\.|[^"\\])*"|true|false|null|[A-Za-z_][A-Za-z0-9_]*)(?:[ \t]*[+\-*/%][ \t]*(?:[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?|"(?:\\.|[^"\\])*"|true|false|null|[A-Za-z_][A-Za-z0-9_]*))*)?)*$
+      description: Host expression DSL. Use identifiers, literals, comparisons, boolean operators, and arithmetic; do not use prose or method calls.
     enforcement:
       type: string
       minLength: 1
@@ -42,3 +28,4 @@ rules:
 - Return not_applicable with a concrete reason only when this concern does not apply.
 - Return blocked with the missing information when it cannot be resolved.
 - Do not turn missing information into an inapplicability claim.
+- Executable state fields must use the host DSL described by their schema; never write natural-language pseudocode into those fields.
