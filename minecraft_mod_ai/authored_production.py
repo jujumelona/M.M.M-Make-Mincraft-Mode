@@ -1017,6 +1017,8 @@ def _execution_plan_projection(
         text=normalized_text,
         existing_input_sha256=plan.existing_input_sha256,
         media_paths=plan.media_paths,
+        schema_version=plan.schema_version,
+        structured_sections=deepcopy(plan.structured_sections),
     )
     return execution_plan, {
         "_authored_document_normalization": normalization,
