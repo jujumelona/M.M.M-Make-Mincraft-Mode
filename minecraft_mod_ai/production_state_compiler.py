@@ -318,7 +318,7 @@ def _normalize_logic_tokens(text: str) -> str:
         return result
 
     result = _transform_unquoted(str(text or "").strip(), normalize_piece)
-    return " ".join(result.rstrip(";").split())
+    return result.rstrip(";").strip()
 
 
 def _string_like(record: Mapping[str, str]) -> bool:
@@ -550,6 +550,33 @@ def _resolve_declared_state_name(
     return None
 
 
+def _normalize_mutation_syntax(text: str) -> str:
+    def normalize_piece(piece: str) -> str:
+        result = re.sub(
+            r"\b(?:increase|increment)\s+([A-Za-z_][A-Za-z0-9_]*)\s+by\s+(.+)$",
+            r"\1 += \2",
+            piece,
+            flags=re.IGNORECASE,
+        )
+        result = re.sub(
+            r"\b(?:decrease|decrement)\s+([A-Za-z_][A-Za-z0-9_]*)\s+by\s+(.+)$",
+            r"\1 -= \2",
+            result,
+            flags=re.IGNORECASE,
+        )
+        result = re.sub(
+            r"\bset\s+([A-Za-z_][A-Za-z0-9_]*)\s+to\s+(.+)$",
+            r"\1 = \2",
+            result,
+            flags=re.IGNORECASE,
+        )
+        result = re.sub(r"\b([A-Za-z_][A-Za-z0-9_]*)\+\+\b", r"\1 += 1", result)
+        result = re.sub(r"\b([A-Za-z_][A-Za-z0-9_]*)--\b", r"\1 -= 1", result)
+        return result
+
+    return _transform_unquoted(text, normalize_piece)
+
+
 def _normalize_mutation(
     value: str,
     *,
@@ -568,26 +595,7 @@ def _normalize_mutation(
     if not text or lowered in {"none", "n/a", "na", "no change"}:
         return ""
 
-    text = re.sub(
-        r"\b(?:increase|increment)\s+([A-Za-z_][A-Za-z0-9_]*)\s+by\s+(.+)$",
-        r"\1 += \2",
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"\b(?:decrease|decrement)\s+([A-Za-z_][A-Za-z0-9_]*)\s+by\s+(.+)$",
-        r"\1 -= \2",
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"\bset\s+([A-Za-z_][A-Za-z0-9_]*)\s+to\s+(.+)$",
-        r"\1 = \2",
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(r"\b([A-Za-z_][A-Za-z0-9_]*)\+\+\b", r"\1 += 1", text)
-    text = re.sub(r"\b([A-Za-z_][A-Za-z0-9_]*)--\b", r"\1 -= 1", text)
+    text = _normalize_mutation_syntax(text)
 
     normalized_rows: list[str] = []
     saw_out_of_scope = False
@@ -612,8 +620,11 @@ def _normalize_mutation(
             rhs,
             aliases=aliases,
             variables=variables,
-            fallback=declared,
+            fallback="",
         )
+        if not rhs:
+            saw_out_of_scope = True
+            continue
         normalized_rows.append(f"{declared} {operator} {rhs}")
 
     if normalized_rows:
