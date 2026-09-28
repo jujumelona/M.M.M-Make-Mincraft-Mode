@@ -119,6 +119,32 @@ def test_repeated_concern_field_pages_freeze_host_owned_record_count():
     assert "emit exactly that many records" in prompt
 
 
+def test_root_integration_prerequisite_accepts_null_and_canonicalizes():
+    chunks = pack_section_concerns("integration")
+    target = next(chunk for chunk in chunks if "initialization_order" in chunk)
+    schema = worksheet_chunk_schema("integration", target)
+    prerequisite = schema["properties"]["initialization_order"]["items"]["properties"]["prerequisite"]
+    assert prerequisite["type"] == ["string", "null"]
+
+    canonical = row("integration")
+    payloads = []
+    for index, chunk in enumerate(chunks):
+        payload = {"inapplicable_concerns": []}
+        for concern in chunk:
+            payload[concern] = canonical["specification"][concern]
+        if "initialization_order" in chunk:
+            payload["initialization_order"] = [
+                {"component": "EconomySystem", "prerequisite": None, "order": "1"}
+            ]
+        if index == 0:
+            payload["constraint_evidence_refs"] = canonical["constraint_evidence_refs"]
+        payloads.append(payload)
+
+    merged = merge_worksheet_section_chunks("integration", payloads, set())
+    first = merged["specification"]["initialization_order"][0]
+    assert first["prerequisite"] == "no prerequisite"
+
+
 def test_merge_rejects_missing_chunk_page():
     expected_chunks = pack_section_concerns("behavior_contract")
     assert len(expected_chunks) > 1
