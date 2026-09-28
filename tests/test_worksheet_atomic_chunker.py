@@ -186,6 +186,45 @@ def test_synchronization_recipients_survive_merge_as_list():
     assert merged["specification"]["synchronization"][0]["recipients"] == expected
 
 
+def test_persistence_missing_default_accepts_and_preserves_empty_list():
+    chunks = pack_section_concerns("persistence")
+    target = next(chunk for chunk in chunks if "missing_defaults" in chunk)
+    schema = worksheet_chunk_schema("persistence", target)
+    default_schema = schema["properties"]["missing_defaults"]["items"]["properties"]["default"]
+
+    validate_structured_output(
+        json.dumps({
+            "missing_defaults": [
+                {"field": "unlockable_blueprint_ids", "default": []}
+            ]
+        }),
+        response_format="json",
+        response_schema=schema,
+    )
+    assert_atomic_model_schema(schema, surface="persistence missing_defaults")
+
+    canonical = row("persistence")
+    payloads = []
+    for index, chunk in enumerate(chunks):
+        payload = {"inapplicable_concerns": []}
+        for concern in chunk:
+            payload[concern] = canonical["specification"][concern]
+        if "missing_defaults" in chunk:
+            payload["missing_defaults"] = [
+                {"field": "unlockable_blueprint_ids", "default": []}
+            ]
+        if index == 0:
+            payload["constraint_evidence_refs"] = canonical["constraint_evidence_refs"]
+        payloads.append(payload)
+
+    merged = merge_worksheet_section_chunks(
+        "persistence",
+        payloads,
+        set(canonical["constraint_evidence_refs"]),
+    )
+    assert merged["specification"]["missing_defaults"][0]["default"] == []
+
+
 def test_merge_rejects_missing_chunk_page():
     expected_chunks = pack_section_concerns("behavior_contract")
     assert len(expected_chunks) > 1
