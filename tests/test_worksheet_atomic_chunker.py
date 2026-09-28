@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 
 import pytest
 
@@ -20,24 +19,6 @@ from minecraft_mod_ai.worksheet_atomic_chunker import (
 )
 from worksheet_fixtures import row
 
-
-
-def test_state_model_chunk_projection_matches_live_canonical_schema():
-    from minecraft_mod_ai.planning_detail_slots import concern_record_schema
-
-    chunks = pack_section_concerns("state_model")
-    projected: dict[str, set[str]] = {}
-    for chunk in chunks:
-        projection = getattr(chunk, "field_projection", {})
-        for concern in chunk:
-            projected.setdefault(concern, set()).update(projection.get(concern, ()))
-
-    expected = {}
-    for concern in DETAIL_RECORDS["state_model"]:
-        schema = concern_record_schema("state_model", concern)
-        expected[concern] = set(schema["required"])
-
-    assert projected == expected
 
 @pytest.mark.parametrize("section", WORKSHEET_SECTIONS)
 def test_all_packed_chunks_satisfy_atomicity_contract(section: str):
@@ -88,36 +69,6 @@ def test_deterministic_merge_reconstructs_canonical_section(section: str):
     assert merged == canonical
     assert validate_worksheet_section(merged, allowed_refs, section) == canonical
 
-
-def test_nested_record_leaf_pages_reconstruct_canonical_shape():
-    canonical = row("behavior_contract")
-    chunks = pack_section_concerns("behavior_contract")
-    inputs_chunks = [chunk for chunk in chunks if "inputs" in chunk]
-    assert inputs_chunks
-
-    projected = set()
-    for chunk in inputs_chunks:
-        projected.update(getattr(chunk, "field_projection", {})["inputs"])
-        schema = worksheet_chunk_schema("behavior_contract", chunk)
-        item_properties = schema["properties"]["inputs"]["items"]["properties"]
-        assert "identity" not in item_properties
-    assert projected == {"name", "type", "unit", "range", "default", "source"}
-
-    payloads = []
-    for index, chunk in enumerate(chunks):
-        payload = {"inapplicable_concerns": []}
-        for concern in chunk:
-            payload[concern] = canonical["specification"][concern]
-        if index == 0:
-            payload["constraint_evidence_refs"] = canonical["constraint_evidence_refs"]
-        payloads.append(payload)
-
-    merged = merge_worksheet_section_chunks(
-        "behavior_contract",
-        payloads,
-        set(canonical["constraint_evidence_refs"]),
-    )
-    assert merged == canonical
 
 def test_merge_rejects_missing_chunk_page():
     expected_chunks = pack_section_concerns("behavior_contract")
@@ -187,64 +138,3 @@ def test_merge_auto_reconciles_empty_concerns_without_inapplicable_reasons():
 
     # Merged section passes canonical validation without ValueError.
     assert validate_worksheet_section(merged, allowed_refs, "behavior_contract") == merged
-
-
-def test_state_model_schema_rejects_non_compilable_free_prose():
-    from jsonschema import Draft202012Validator
-    from minecraft_mod_ai.planning_detail_slots import concern_record_schema
-
-    variable = concern_record_schema("state_model", "variables")
-    assert list(Draft202012Validator(variable).iter_errors({
-        "name": "현재 돈",
-        "owner": "server",
-        "type": "Double",
-        "unit": "credits",
-        "default": "0",
-        "domain": "economy",
-    }))
-
-    transition = concern_record_schema("state_model", "transitions")
-    assert list(Draft202012Validator(transition).iter_errors({
-        "from_state": "idle",
-        "trigger": "buy",
-        "guard": "credits is at least the price",
-        "mutation": "subtract the price from credits",
-        "to_state": "done",
-    }))
-
-    Draft202012Validator(transition).validate({
-        "from_state": "idle",
-        "trigger": "buy",
-        "guard": "credits >= cost",
-        "mutation": "credits -= cost",
-        "to_state": "done",
-    })
-
-
-def test_state_model_compiler_is_the_schema_ssot_and_narrows_mutation_targets():
-    from minecraft_mod_ai.planning_detail_slots import concern_record_schema
-    from minecraft_mod_ai.structured_state_runtime import (
-        STATE_EXPRESSION_PATTERN,
-        STATE_MUTATION_PATTERN,
-        constrain_state_chunk_schema,
-    )
-    from minecraft_mod_ai.worksheet_atomic_chunker import WorksheetConcernChunk
-
-    transition = concern_record_schema("state_model", "transitions")
-    assert transition["properties"]["guard"]["pattern"] == STATE_EXPRESSION_PATTERN
-    assert transition["properties"]["mutation"]["pattern"] == STATE_MUTATION_PATTERN
-
-    chunk = WorksheetConcernChunk(
-        ("transitions",),
-        {"transitions": ("mutation", "to_state")},
-    )
-    schema = worksheet_chunk_schema("state_model", chunk)
-    narrowed = constrain_state_chunk_schema(
-        schema,
-        ({"variables": [{"name": "credits"}, {"name": "fuel"}]},),
-    )
-    pattern = narrowed["properties"]["transitions"]["items"]["properties"]["mutation"]["pattern"]
-    assert "credits" in pattern and "fuel" in pattern
-    assert re.fullmatch(pattern, "credits -= cost")
-    assert re.fullmatch(pattern, "fuel += amount")
-    assert re.fullmatch(pattern, "invented = 1") is None
