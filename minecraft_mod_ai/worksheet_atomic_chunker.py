@@ -211,10 +211,6 @@ def worksheet_chunk_schema(
             "minProperties": 1,
             "additionalProperties": False,
         }
-        if key == "state_model":
-            from .structured_state_runtime import constrain_state_record_schema
-
-            item_schema = constrain_state_record_schema(concern, item_schema)
         count = (
             int(record_counts[concern])
             if isinstance(record_counts, Mapping) and concern in record_counts
