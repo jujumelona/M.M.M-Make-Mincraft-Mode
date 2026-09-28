@@ -6,7 +6,6 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai.fixed_template_generation import generate_fixed_template_value
-from minecraft_mod_ai.planner_structured_router import structured_planner_router
 
 
 _SCHEMA = {
@@ -90,20 +89,10 @@ def _generate(router, *, enable_tools: bool = False):
     )
 
 
-class _PlannerToolCapableRouter(_TextOnlyRouter):
-    def __init__(self) -> None:
-        super().__init__()
-        self.tool_calls = 0
-
-    def generate_tool_decision(self, *args, **kwargs):
-        self.tool_calls += 1
-        raise AssertionError("planner fixed templates must never require native tool calls")
-
-
-def test_structured_planner_fixed_template_never_depends_on_native_tool_envelope() -> None:
-    router = _PlannerToolCapableRouter()
+def test_planner_fixed_template_uses_native_structured_decision() -> None:
+    router = _ToolCapableRouter()
     result = generate_fixed_template_value(
-        structured_planner_router(router),
+        router,
         "planner",
         [{"role": "user", "content": "Fill the worksheet chunk."}],
         response_schema=_SCHEMA,
@@ -112,12 +101,11 @@ def test_structured_planner_fixed_template_never_depends_on_native_tool_envelope
     )
 
     assert result == _RESULT
-    assert router.tool_calls == 0
-    assert len(router.text_calls) == 1
-    call = router.text_calls[0]
-    assert call["response_format"] == "json"
-    assert call["response_schema"] == _SCHEMA
-    assert call["enable_tools"] is False
+    assert router.text_calls == 0
+    assert len(router.tool_calls) == 1
+    assert router.tool_calls[0]["role"] == "planner"
+    assert router.tool_calls[0]["tool_name"] == "submit_behavior_contract_1_chunk"
+    assert router.tool_calls[0]["parameters"] == _SCHEMA
 
 
 def test_tools_disabled_real_router_still_uses_fixed_template_tool_transport() -> None:
