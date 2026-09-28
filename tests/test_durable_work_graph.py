@@ -105,6 +105,27 @@ def test_only_conflicting_semantic_anchors_are_serialized(monkeypatch) -> None:
     assert by_member["custom_b"].node_id not in by_member["custom_c"].dependencies
 
 
+def test_small_model_backend_cannot_fall_back_to_unowned_custom_generation() -> None:
+    legacy = _proposal(1)
+    strict = complete_proposal_from_parts(
+        requested_prompt=legacy.requested_prompt,
+        base_proposal=legacy.base_proposal,
+        game_design={
+            **legacy.game_design,
+            "_small_model_backend": {
+                "mode": "bounded_semantic_ir_to_canonical_artifacts",
+                "free_form_java": False,
+            },
+            "_artifact_jobs": [],
+        },
+        modules=legacy.modules,
+        acceptance_tests=legacy.acceptance_tests,
+    )
+
+    with pytest.raises(WorkGraphError, match="SMALL_MODEL_CANONICAL_COVERAGE"):
+        build_production_work_plan(strict)
+
+
 def test_large_proposal_becomes_more_bounded_shards_without_global_cap() -> None:
     proposal = _proposal(20_000)
     policy = ScalePolicy(java_shard_size=37)
