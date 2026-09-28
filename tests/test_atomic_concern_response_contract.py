@@ -839,6 +839,52 @@ def test_same_compiler_diagnostic_retries_when_concern_source_changed() -> None:
     assert second_repair["current_selected_region_source"] == "private static int VALUE = missingB();"
 
 
+def test_long_compiler_log_keeps_repair_checklist_and_contract() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _compiler_repair_context
+
+    source = (
+        "package example;\n"
+        "public final class Test {\n"
+        "// MMM_ATOMIC_CONCERN_CONCURRENCY_HAZARDS_MEMBERS_START\n"
+        "private static final java.util.concurrent.Lock shipConfigLock = "
+        "new java.util.concurrent.ReentrantLock();\n"
+        "// MMM_ATOMIC_CONCERN_CONCURRENCY_HAZARDS_MEMBERS_END\n"
+        "}\n"
+    )
+    block = (
+        "/tmp/Test.java:4: error: cannot find symbol\n"
+        "private static final java.util.concurrent.Lock shipConfigLock = "
+        "new java.util.concurrent.ReentrantLock();\n"
+        "^\n"
+        "  symbol:   class Lock\n"
+        "  location: package java.util.concurrent\n"
+        "/tmp/Test.java:4: error: cannot find symbol\n"
+        "private static final java.util.concurrent.Lock shipConfigLock = "
+        "new java.util.concurrent.ReentrantLock();\n"
+        "^\n"
+        "  symbol:   class ReentrantLock\n"
+        "  location: package java.util.concurrent\n"
+        "Note: Test.java uses unchecked or unsafe operations.\n"
+    )
+    log = block * 80
+
+    repair = _compiler_repair_context(
+        log,
+        source=source,
+        relative="Test.java",
+        concern="concurrency_hazards",
+    )
+
+    assert len(repair) <= 12064
+    assert "ACTUAL COMPILER FAILURE FROM THE JUST-COMPILED CANDIDATE" in repair
+    assert "CURRENT COMPILED SOURCE AROUND THE REPORTED LINES" in repair
+    assert "COMPILER-DERIVED REPAIR CHECKLIST" in repair
+    assert "JDK_LOCK_PACKAGE" in repair
+    assert "UNCHECKED_TYPES" in repair
+    assert "REPAIR CONTRACT:" in repair
+    assert "Return only the complete corrected selected Java region" in repair
+
+
 def test_logged_java_failure_families_repair_through_real_compiler_feedback(monkeypatch) -> None:
     monkeypatch.setenv("MMM_ATOMIC_CONCERN_COMPILE_REPAIRS", "4")
     captured: list[list[dict[str, str]]] = []
