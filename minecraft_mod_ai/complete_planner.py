@@ -144,7 +144,10 @@ class CompleteGameDesignPlanner:
         media_paths: Sequence[str | Path] = (),
         existing_input_sha256: str = "",
     ) -> CompleteProposal:
-        from .authored_production import compile_authored_design
+        from .authored_production import (
+            _implementation_authored_plan,
+            compile_authored_design,
+        )
         from .authored_structured_design import render_structured_sections
         from .planning_state_implementation import compile_authored_worksheet
 
@@ -155,6 +158,9 @@ class CompleteGameDesignPlanner:
         effective_existing = str(
             existing_input_sha256 or plan.existing_input_sha256 or ""
         ).strip()
+        source_projection = None
+        if not plan.structured_sections and not effective_existing:
+            plan, source_projection = _implementation_authored_plan(plan)
         if not plan.structured_sections and not effective_existing:
             migration_prompt = (
                 plan.requested_prompt
@@ -208,6 +214,8 @@ class CompleteGameDesignPlanner:
                         "free_form_custom_java": False,
                     },
                 }
+                if source_projection is not None:
+                    game_design["_authored_source_projection"] = source_projection
                 proposal = replace(
                     proposal,
                     game_design=game_design,
