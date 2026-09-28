@@ -75,6 +75,14 @@ def test_direct_semantic_java_coder_disables_tools():
     assert kwargs["force_non_thinking"] is True
 
 
+def test_semantic_initialize_comment_normalizes_to_empty_region():
+    source = _parse_region_content(
+        "// no initialization required",
+        response_region="initialize",
+    )
+    assert source == ""
+
+
 def test_semantic_region_parser_accepts_complete_java_declarations():
     source = _parse_region_content(
         (
