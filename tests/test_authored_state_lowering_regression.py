@@ -21,7 +21,6 @@ from minecraft_mod_ai.custom_module_generator import (
 from minecraft_mod_ai.implementation_graph_execution import _bind_atomic_leaf_contract
 from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
 
-
 STATE_REQUIREMENTS = {
     "R29": "## state_model",
     "R30": "- variables: name owner type unit default domain",
@@ -145,8 +144,9 @@ def test_structured_records_are_semantic_authority_over_markdown() -> None:
 
 
 def test_structured_renderer_projects_nested_records_to_leaf_fields() -> None:
-    from minecraft_mod_ai.authored_structured_design import render_structured_sections
     from worksheet_fixtures import row
+
+    from minecraft_mod_ai.authored_structured_design import render_structured_sections
 
     text = render_structured_sections({"behavior_contract": row("behavior_contract")})
     assert "- inputs: name type unit range default source" in text
@@ -575,35 +575,21 @@ class _Router:
         return deepcopy(next(self.responses))
 
 
-def test_semantic_repair_changes_only_bad_initializer_component() -> None:
-    messages = [{
-        "role": "user",
-        "content": json.dumps({
-            "response_region": "members",
-            "host_selected_class": "AuthoredStateModel",
-            "concern": {"name": "variables"},
-        }),
-    }]
-    router = _Router([
-        {
-            "fields": [{
-                "modifiers": ["private"],
-                "type": "java.util.List",
-                "name": "items",
-                "initializer": "new java.util.List<>()",
-            }]
-        },
-        {"value": "new java.util.ArrayList<>()"},
-    ])
+def test_invalid_collection_initializer_is_terminal_without_repair() -> None:
+    import pytest
 
-    source = _call_atomic_java_region(
-        router, messages, output_token_ceiling=None
-    )
-    assert [kwargs["tool_name"] for _messages, kwargs in router.calls] == [
-        "emit_java_structure",
-        "repair_java_component",
-    ]
-    repair = json.loads(router.calls[1][0][-1]["content"])["component_repair"]
-    assert repair["selected_path"] == ["initializer"]
-    assert "new java.util.ArrayList<>()" in source
-    assert "new java.util.List<>()" not in source
+    from minecraft_mod_ai.custom_module_errors import AtomicJavaDecisionError
+
+    messages = [{"role": "user", "content": json.dumps({
+        "response_region": "members", "host_selected_class": "AuthoredStateModel",
+        "concern": {"name": "variables"},
+    })}]
+    router = _Router([
+        {"part": "fields"},
+        {"type": "java.util.List", "name": "items", "initializer": "new java.util.List<>()"},
+        {"part": "done"},
+    ])
+    with pytest.raises(AtomicJavaDecisionError, match="cannot be instantiated directly"):
+        _call_atomic_java_region(router, messages, output_token_ceiling=None)
+    assert len(router.calls) == 3
+    assert all(kwargs["tool_name"] == "emit_java_part" for _, kwargs in router.calls)

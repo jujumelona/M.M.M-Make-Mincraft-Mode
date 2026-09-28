@@ -1135,6 +1135,10 @@ def _render_field(
     initializer = _qualify_common_java_names(
         _rewrite_java_identifiers(str(item.get("initializer") or "").strip(), active)
     )
+    if java_type in {"float", "long"} and initializer:
+        from .atomic_concern_source import _state_default_literal
+
+        initializer = _state_default_literal(java_type, initializer) or initializer
     suffix = f" = {initializer}" if initializer else ""
     return f"{indent}{prefix}{java_type} {name}{suffix};"
 
@@ -1524,116 +1528,30 @@ def _call_atomic_java_region(
         raise CustomModuleGenerationError(
             "ATOMIC_STRUCTURED_CODER_REQUIRED: router has no generate_tool_decision()."
         )
+    from .atomic_java_assembly import JavaStructureAssembly
+
     payload = _atomic_request_payload(messages)
     response_region = str(payload.get("response_region") or "members").strip()
-    parameters, schema_shape = _atomic_parameters_for_request(
-        payload,
-        response_region=response_region,
-    )
-    concern = payload.get("concern")
-    concern_name = (
-        str(concern.get("name") or "").strip()
-        if isinstance(concern, Mapping)
-        else ""
-    )
-    kwargs: dict[str, Any] = {
-        "tool_name": _ATOMIC_JAVA_REGION_TOOL,
-        "parameters": parameters,
-        "description": (
-            f"Generate concern {concern_name or '<selected>'} correctly on the first pass "
-            f"using the model's native required tool call with structured Java components. "
-            f"Allowed shape: {schema_shape}. The supplied native tool schema is authoritative; "
-            "never invent categories that the schema does not expose. "
-            "When nested types are allowed, declare every concern-owned helper/domain type in "
-            "this same call before referencing it. For nested record/class construction, use the "
-            "constructors array when available; a nested method named <init> remains accepted only "
-            "inside that record/class object for compatibility. Never emit <init> in the top-level "
-            "methods array because construction of the host-selected outer class is host-owned. "
-            "Treat available_sibling_api declarations in the user payload as authoritative: "
-            "use exact sibling types/symbols and never mutate final sibling fields. "
-            "Omit categories you do not need; do not emit empty arrays just "
-            "to satisfy the schema. The host renders Java syntax and qualifies common JDK "
-            "collection/concurrency names. Never return raw Java source, prose, Markdown, "
-            "imports, package declarations, or an outer class."
-        ),
-    }
-    if output_token_ceiling is not None and _supports_kwarg(
-        callback, "output_token_ceiling"
-    ):
-        kwargs["output_token_ceiling"] = max(1, int(output_token_ceiling))
-    from .atomic_java_admission import admit_components, rejected_decision
+    parameters, _ = _atomic_parameters_for_request(payload, response_region=response_region)
+    registry = getattr(router, "registry", None)
+    config = registry.role(router.profile, "coder") if registry is not None else None
+    decision = JavaStructureAssembly(
+        callback, payload, output_token_ceiling=output_token_ceiling, config=config,
+    ).run(parameters)
+    from .atomic_concern_source import _validate_region_text
 
     try:
-        decision = callback("coder", messages, **kwargs)
-    except Exception as exc:
-        boundary = completion_boundary_error(exc)
-        if boundary is not None and boundary.kind == OUTPUT_EXHAUSTED:
-            raise CustomModuleGenerationError(
-                "ATOMIC_CONCERN_OUTPUT_EXHAUSTED: structured tool arguments exceeded "
-                f"the bounded output page (completion_tokens={boundary.completion_tokens}, "
-                f"max_tokens={boundary.max_tokens}). Emit fewer and smaller components."
-            ) from exc
+        source = _render_atomic_java_structure(
+            decision, response_region=response_region,
+            host_symbol=str(payload.get("host_selected_class") or "").strip(),
+        )
+        _validate_region_text(source, initialize_region=response_region == "initialize")
+    except CustomModuleGenerationError as exc:
+        raise AtomicJavaDecisionError(
+            f"ATOMIC_JAVA_ASSEMBLY_INVALID: {exc}", response=decision,
+        ) from exc
+    return source
 
-        from .model_adapters.base import NativeToolDecisionRejected
-
-        if isinstance(exc, NativeToolDecisionRejected):
-            decision = rejected_decision(exc, _ATOMIC_JAVA_REGION_TOOL)
-            if decision is not None:
-                from jsonschema import Draft202012Validator
-
-                # Never reinterpret an unrelated adapter rejection as an accepted
-                # call merely because its arguments happen to parse as JSON.
-                if Draft202012Validator(parameters).is_valid(decision):
-                    decision = None
-            if decision is None:
-                raise AtomicJavaDecisionError(
-                    "ATOMIC_CONCERN_RESPONSE_INVALID: required emit_java_structure "
-                    f"tool call was rejected: {exc}", response=list(exc.rejections),
-                ) from exc
-        else:
-            raise
-
-    def repair_component(schema: Mapping[str, Any], correction: Mapping[str, Any]) -> Any:
-        repair_payload = {
-            key: payload[key]
-            for key in ("host_selected_class", "section", "concern", "task_authority",
-                        "host_grounding", "dependency_api", "available_sibling_api", "repair_failure")
-            if key in payload
-        }
-        repair_payload.update({
-            "phase": "repair_atomic_java_component",
-            "response_region": "component",
-            "component_repair": dict(correction),
-            "scope": {"required_output_tool": "repair_java_component", "other_components_immutable": True},
-        })
-        repair_kwargs = {
-            **kwargs, "tool_name": "repair_java_component", "parameters": dict(schema),
-            "description": "Correct the selected value in one Java component using the required native tool.",
-        }
-        return callback("coder", [
-            {"role": "system", "content": (
-                "Correct the host-selected Java component. Call repair_java_component once. "
-                "Return only the replacement value for component_repair.selected_path. "
-                "Preserve its runtime semantics. The host retains all other values and components; "
-                "never regenerate the region or outer class. "
-                "Use supplied task authority, grounding and sibling APIs only."
-            )},
-            {"role": "user", "content": json.dumps(repair_payload, ensure_ascii=False, sort_keys=True)},
-        ], **repair_kwargs)
-
-    from .atomic_concern_source import _region_attempt_limit
-
-    host_symbol = str(payload.get("host_selected_class") or "").strip()
-    return admit_components(
-        decision, parameters=parameters,
-        render=lambda value: _render_atomic_java_structure(
-            value, response_region=response_region, host_symbol=host_symbol,
-        ),
-        repair=repair_component, attempt_limit=_region_attempt_limit(),
-        canonical_name=_canonical_java_identifier,
-        rewrite_identifiers=_rewrite_java_identifiers,
-        reserved_names=(host_symbol,) if host_symbol else (),
-    )
 
 def _call_coder(
     router: Any,
@@ -2075,7 +1993,10 @@ class CustomModuleGenerator:
                 )
             )
 
-        before_sha = _sha256_text(original)
+        before_sha = (
+            "sha256:" + hashlib.sha256(original_bytes).hexdigest()
+            if original_bytes is not None else _sha256_text(original)
+        )
         current = original
         summary = ""
         last_failure = ""

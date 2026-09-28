@@ -307,21 +307,14 @@ def test_atomic_region_uses_required_structured_tool_not_free_text() -> None:
             captured["parameters"] = parameters
             captured["description"] = description
             captured["output_token_ceiling"] = output_token_ceiling
-            return {
-                "records": [],
-                "enums": [],
-                "classes": [],
-                "fields": [
-                    {
-                        "modifiers": ["private", "static", "final"],
-                        "type": "int",
-                        "name": "COST",
-                        "initializer": "10",
-                    }
-                ],
-                "methods": [],
-                "static_initializers": [],
-            }
+            return next(responses)
+
+    responses = iter([
+        {"part": "fields"}, {"type": "int", "name": "COST", "initializer": "10"},
+        {"part": "modifiers"}, {"value": "private"},
+        {"part": "modifiers"}, {"value": "final"},
+        {"part": "done"}, {"part": "done"},
+    ])
 
     result = _call_coder(
         _Router(),
@@ -335,21 +328,14 @@ def test_atomic_region_uses_required_structured_tool_not_free_text() -> None:
 
     assert result == "private static final int COST = 10;"
     assert captured["role"] == "coder"
-    assert captured["tool_name"] == "emit_java_structure"
+    assert captured["tool_name"] == "emit_java_part"
     assert captured["output_token_ceiling"] == 1536
 
 
 def test_atomic_structured_tool_allows_intentional_empty_region() -> None:
     class _Router:
         def generate_tool_decision(self, role, messages, **kwargs):
-            return {
-                "records": [],
-                "enums": [],
-                "classes": [],
-                "fields": [],
-                "methods": [],
-                "static_initializers": [],
-            }
+            return {"part": "done"}
 
     assert _call_coder(
         _Router(),
@@ -364,19 +350,11 @@ def test_atomic_structured_tool_allows_intentional_empty_region() -> None:
 def test_atomic_structured_tool_rejects_extra_fields() -> None:
     class _Router:
         def generate_tool_decision(self, role, messages, **kwargs):
-            return {
-                "records": [],
-                "enums": [],
-                "classes": [],
-                "fields": [],
-                "methods": [],
-                "static_initializers": [],
-                "reasoning": "I decided...",
-            }
+            return {"part": "done", "reasoning": "I decided..."}
 
     with pytest.raises(
         CustomModuleGenerationError,
-        match="member structure has unexpected fields",
+        match="ATOMIC_JAVA_ASSEMBLY_INVALID",
     ):
         _call_coder(
             _Router(),
@@ -427,7 +405,7 @@ def _multi_executor(
     return executor, compile_calls
 
 
-def test_sibling_symbol_collision_is_rehomed_before_compile() -> None:
+def test_sibling_symbol_collision_cannot_replace_accepted_sibling() -> None:
     concerns = (
         {"sequence": 0, "identifier": "a", "concern": "transactions", "task": "transaction state", "rules": []},
         {"sequence": 1, "identifier": "b", "concern": "concurrency", "task": "concurrency guard", "rules": []},
@@ -448,13 +426,12 @@ def test_sibling_symbol_collision_is_rehomed_before_compile() -> None:
         concerns=concerns,
     )
 
-    result = executor.run()
-
-    assert compile_calls["count"] == len(concerns)
-    assert result["repair_count"] == 0
-    assert result["source"].count("isTransactionInFlight") == 1
-    assert result["source"].count("beginTransaction()") == 1
-    assert result["source"].count("endTransaction()") == 1
+    before = executor.source
+    with pytest.raises(CustomModuleGenerationError, match="ATOMIC_CONCERN_OWNERSHIP_VIOLATION"):
+        executor.run()
+    assert compile_calls["count"] == 1
+    assert all(line.strip() in executor.source for line in executor.state[concerns[0]["concern"]][0].splitlines())
+    assert executor.source != before
 
 
 def test_concern_authority_slices_out_sibling_requirements() -> None:
@@ -493,6 +470,7 @@ def test_concern_authority_slices_out_sibling_requirements() -> None:
     )
 
     assert authority == {
+        "structured_records": [],
         "task_id": "ir_authoredstatemodel",
         "concern": "variables",
         "source_requirements": {
@@ -552,7 +530,7 @@ def test_static_initializer_does_not_create_fake_symbol_owner() -> None:
     assert _member_declaration_symbols("static { initializeSomething(); }") == {}
 
 
-def test_generic_method_erasure_collision_is_rehomed_by_host() -> None:
+def test_generic_method_erasure_collision_preserves_original_owner() -> None:
     concerns = (
         {"sequence": 0, "identifier": "a", "concern": "first", "task": "first generic method", "rules": []},
         {"sequence": 1, "identifier": "b", "concern": "second", "task": "second generic method", "rules": []},
@@ -565,13 +543,15 @@ def test_generic_method_erasure_collision_is_rehomed_by_host() -> None:
         concerns=concerns,
     )
 
-    result = executor.run()
+    before = executor.source
+    with pytest.raises(CustomModuleGenerationError, match="ATOMIC_CONCERN_OWNERSHIP_VIOLATION"):
+        executor.run()
+    assert compile_calls["count"] == 1
+    assert all(line.strip() in executor.source for line in executor.state[concerns[0]["concern"]][0].splitlines())
+    assert executor.source != before
 
-    assert compile_calls["count"] == len(concerns)
-    assert result["source"].count("private static void update(") == 1
 
-
-def test_state_model_later_concerns_rehome_variables_overreach() -> None:
+def test_state_model_later_concerns_cannot_rehome_variables() -> None:
     concerns = (
         {"sequence": 0, "identifier": "v", "concern": "variables", "task": "variables only", "rules": []},
         {"sequence": 1, "identifier": "t", "concern": "transitions", "task": "transitions only", "rules": []},
@@ -590,13 +570,12 @@ def test_state_model_later_concerns_rehome_variables_overreach() -> None:
         concerns=concerns,
     )
 
-    result = executor.run()
-
-    assert compile_calls["count"] == len(concerns)
-    assert result["repair_count"] == 0
-    assert result["source"].count("FROM_STATE_LOCKED") == 1
-    assert result["source"].count("INVARIANT_PLAYER_CREDITS_MIN_COST") == 1
-    assert "playerCredits" in result["source"]
+    before = executor.source
+    with pytest.raises(CustomModuleGenerationError, match="ATOMIC_CONCERN_OWNERSHIP_VIOLATION"):
+        executor.run()
+    assert compile_calls["count"] == 1
+    assert all(line.strip() in executor.source for line in executor.state[concerns[0]["concern"]][0].splitlines())
+    assert executor.source != before
 
 
 def test_private_static_initializer_is_normalized_before_compile() -> None:
@@ -1155,7 +1134,7 @@ def test_structured_output_exhaustion_becomes_bounded_concern_failure() -> None:
 
     with pytest.raises(
         CustomModuleGenerationError,
-        match="ATOMIC_CONCERN_OUTPUT_EXHAUSTED",
+        match="OUTPUT_BUDGET_EXHAUSTED",
     ):
         _call_atomic_java_region(
             _Router(),
@@ -1235,12 +1214,13 @@ def test_atomic_native_tool_call_does_not_force_legacy_2048_ceiling() -> None:
     from minecraft_mod_ai.custom_module_generator import _call_atomic_java_region
 
     captured = {}
+    responses = iter([{ "part": "fields"}, {"type": "int", "name": "value"}, {"part": "done"}, {"part": "done"}])
 
     class _Router:
         def generate_tool_decision(self, role, messages, **kwargs):
             del role, messages
             captured.update(kwargs)
-            return {"fields": [{"type": "int", "name": "value"}]}
+            return next(responses)
 
     rendered = _call_atomic_java_region(
         _Router(),

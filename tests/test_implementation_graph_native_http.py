@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 from test_implementation_ir import graph_project
+from worksheet_fixtures import row
 
 from minecraft_mod_ai import custom_module_generator as direct
 from minecraft_mod_ai import llama_exact_context, llama_lora_runtime
@@ -24,9 +25,11 @@ from minecraft_mod_ai.authored_execution_schema import (
     EXECUTION_SECTION_ORDER,
     concern_contracts,
 )
+from minecraft_mod_ai.authored_structured_design import render_structured_sections
 from minecraft_mod_ai.model_adapters.base import AdapterConfig
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
 from minecraft_mod_ai.model_router import ModelRouter
+from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
 
 
 def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkeypatch):
@@ -36,16 +39,21 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
     module, main = graph_project(tmp_path)
     # Keep compiler outputs separate from the generated source transaction.
     class_output = tmp_path.parent / (tmp_path.name + "-compiled")
-    module.config["implementation_graph_request"]["text"] = (
-        "## 1. 행동 계약 (behavior_contract)\nBehavior.\n"
-        "## 2. 상태 모델 (state_model)\nState.\n"
-        "## 3. 알고리즘 (algorithm)\nAlgorithm.\n"
-        "## 4. 통합 (integration)\nIntegration.\n"
-        "## 5. 권한 및 네트워크 (authority_and_network)\nAuthority.\n"
-        "## 6. 지속성 (persistence)\nPersistence.\n"
-        "## 7. 자원 및 UI (resources_and_ui)\nResources.\n"
-        "## 8. 실패 및 제한 (failure_and_limits)\nFailures.\n"
-    )
+    structured = {section: row(section) for section in EXECUTION_SECTION_ORDER}
+    # The state runtime advertises getState/setState; empty model answers cannot
+    # implement that contract. Exercise real host state lowering in this smoke test.
+    structured["state_model"]["specification"] = {
+        **{name: [] for name in DETAIL_RECORDS["state_model"]},
+        "variables": [{"name": "credits", "owner": "Player", "type": "Int",
+                       "unit": "credits", "default": "7", "domain": "non-negative"}],
+        "inapplicable_concerns": [
+            {"concern": name, "reason": "This transport smoke test only stores credits."}
+            for name in DETAIL_RECORDS["state_model"] if name != "variables"
+        ],
+    }
+    module.config["implementation_graph_request"].update({
+        "text": render_structured_sections(structured), "structured_sections": structured,
+    })
     requests = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -57,7 +65,7 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
             requests.append(payload)
             name = payload["tools"][0]["function"]["name"]
             delta = {"tool_calls": [{"index": 0, "id": f"call_{len(requests)}", "type": "function",
-                                     "function": {"name": name, "arguments": "{}"}}]}
+                                     "function": {"name": name, "arguments": '{"part":"done"}'}}]}
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Connection", "close")
@@ -143,10 +151,10 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
         generator = direct.CustomModuleGenerator(Router())
         result = generator.generate(tmp_path, module=module)
         expected_requests = sum(
-            len(concern_contracts(section)) for section in EXECUTION_SECTION_ORDER
+            len(concern_contracts(section)) for section in EXECUTION_SECTION_ORDER if section != "state_model"
         ) + len(concern_contracts("integration"))
         assert len(requests) == expected_requests
-        assert all(request["tools"][0]["function"]["name"] == "emit_java_structure" for request in requests)
+        assert all(request["tools"][0]["function"]["name"] == "emit_java_part" for request in requests)
         graph = result["implementation_ir"]
         symbols = {node["symbol"] for node in graph["nodes"]}
         assert symbols == {
@@ -164,7 +172,10 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
         probe = tmp_path / "Probe.java"
         probe.write_text(
             "public class Probe { public static void main(String[] args) { "
-            "new example.TestMod().onInitialize(); } }"
+            "new example.TestMod().onInitialize(); "
+            "if (((Number)example.AuthoredStateModel.getState(\"credits\")).intValue() != 7) throw new AssertionError(); "
+            "example.AuthoredStateModel.setState(\"credits\", 12); "
+            "if (((Number)example.AuthoredStateModel.getState(\"credits\")).intValue() != 12) throw new AssertionError(); } }"
         )
         probe_compile = subprocess.run(
             [

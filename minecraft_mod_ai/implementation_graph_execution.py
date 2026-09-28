@@ -3,15 +3,15 @@ from __future__ import annotations
 
 import json
 import re
-from copy import deepcopy
 from collections.abc import Mapping
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 from .complete_spec import ProductionModule
 from .implementation_ir import (
-    ImplementationGraphError,
     IMPLEMENTATION_IR_SCHEMA_VERSION,
+    ImplementationGraphError,
     OutputBudgetExhausted,
     admissible_tokens,
     compile_authored_graph,
@@ -27,12 +27,16 @@ from .root_cause_trace import emit_root_cause
 
 
 def public_api_errors(source: str, node: Mapping[str, Any]) -> tuple[str, ...]:
+    def normalize_declaration(text: str) -> str:
+        compact = re.sub(r"\s+", " ", text)
+        return re.sub(r"\s*([(),<>\[\]])\s*", r"\1", compact)
+
     # Strip comments so a declaration in an explanation cannot satisfy the contract.
     code = re.sub(r"/\*.*?\*/|//[^\n]*", "", source, flags=re.DOTALL)
-    normalized = re.sub(r"\s+", " ", code)
+    normalized = normalize_declaration(code)
     errors = []
     for api in node["public_api"]:
-        declaration = re.sub(r"\s+", " ", api.strip().rstrip(";"))
+        declaration = normalize_declaration(api.strip().rstrip(";"))
         if not re.search(re.escape(declaration) + r"\s*(?:\{|;|=|throws\b)", normalized):
             errors.append(f"Frozen implementation API missing or changed: {api}")
     return tuple(errors)
@@ -134,7 +138,7 @@ def _canonical_atomic_obligations(
         host_sources = exact_sources.get(name)
         if not host_sources:
             continue
-        active.append(concern)
+        active.append({**concern, "sequence": len(active)})
         if name in existing:
             payload, instruction = deepcopy(existing[name])
             if payload.get("source_requirements") != host_sources:

@@ -3,7 +3,7 @@ from typing import Any
 
 from minecraft_mod_ai.planning_detail_slots import (
     DETAIL_RECORDS,
-    concern_leaf_schemas,
+    specification_schema,
 )
 
 
@@ -35,7 +35,7 @@ def _fixture_value(schema: dict[str, Any], text: str) -> Any:
 def specification(section):
     result = {}
     for concern, columns in DETAIL_RECORDS[section].items():
-        schemas = concern_leaf_schemas(section, concern)
+        schemas = specification_schema(section)["properties"][concern]["items"]["properties"]
         record = {}
         for field in columns.split():
             text = f"{section} {concern} {field}: server owns the observable outcome."

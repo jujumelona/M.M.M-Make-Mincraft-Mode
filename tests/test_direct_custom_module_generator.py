@@ -351,6 +351,23 @@ def _atomic_module(path: str, symbol: str) -> ProductionModule:
     )
 
 
+def _native_field_parts(kind, name, initializer):
+    return [
+        {"part": "fields"}, {"type": kind, "name": name, "initializer": initializer},
+        {"part": "modifiers"}, {"value": "private"},
+        {"part": "done"}, {"part": "done"},
+    ]
+
+
+def _native_method_parts(name, body):
+    return [
+        {"part": "methods"}, {"return_type": "boolean", "name": name},
+        {"part": "modifiers"}, {"value": "public"},
+        {"part": "body"}, {"value": body},
+        {"part": "done"}, {"part": "done"},
+    ]
+
+
 def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -363,10 +380,10 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
             calls.append((concern, dict(kwargs)))
-            if concern == "variables":
-                return {"fields": [{"modifiers": ["private"], "type": "int", "name": "balance", "initializer": "0"}]}
-            return {"methods": [{"modifiers": ["public"], "return_type": "boolean", "name": "valid",
-                                 "body": ["return balance >= 0"]}]}
+            if not payload["assembly"]["path"] and not payload["assembly"]["accepted_structure"]:
+                self.responses = iter(_native_field_parts("int", "balance", "0") if concern == "variables"
+                                      else _native_method_parts("valid", "return balance >= 0"))
+            return next(self.responses)
 
     class Runner:
         def __init__(self, _cache):
@@ -382,8 +399,8 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
     )
 
     source = (root / path).read_text(encoding="utf-8")
-    assert [name for name, _kwargs in calls] == ["variables", "invariants"]
-    assert all(kwargs["tool_name"] == "emit_java_structure" for _name, kwargs in calls)
+    assert list(dict.fromkeys(name for name, _kwargs in calls)) == ["variables", "invariants"]
+    assert all(kwargs["tool_name"] == "emit_java_part" for _name, kwargs in calls)
     assert all(kwargs["parameters"]["type"] == "object" for _name, kwargs in calls)
     assert "private static int balance = 0;" in source
     assert "public static boolean valid()" in source
@@ -404,13 +421,12 @@ def test_atomic_concern_compile_repair_reopens_only_localized_concern(
             del role, kwargs
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
-            calls.append(concern)
-            repairing = bool(payload.get("repair_failure"))
-            if concern == "variables":
-                return {"fields": [{"modifiers": ["private"], "type": "Object", "name": "value",
-                                    "initializer": "new Object()" if repairing else "new Object(1)"}]}
-            return {"methods": [{"modifiers": ["public"], "return_type": "boolean", "name": "valid",
-                                 "body": ["return value != null"]}]}
+            if not payload["assembly"]["path"] and not payload["assembly"]["accepted_structure"]:
+                calls.append(concern)
+                repairing = bool(payload.get("repair_failure"))
+                self.responses = iter(_native_field_parts("Object", "value", "new Object()" if repairing else "new Object(1)")
+                                      if concern == "variables" else _native_method_parts("valid", "return value != null"))
+            return next(self.responses)
 
     class Runner:
         def __init__(self, _cache):

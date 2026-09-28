@@ -14,12 +14,12 @@ from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
 from minecraft_mod_ai.model_router import ModelRouter
 
 
-def test_native_http_schema_rejection_preserves_siblings_and_repairs_one_component(monkeypatch):
+def test_native_http_assembles_java_without_nested_json_or_repair(monkeypatch):
     requests = []
     responses = [
-        {"fields": [{"type": "int", "name": "credits", "initializer": "7"}],
-         "classes": [{"name": "AuthoredStateModel"}]},
-        {"value": "ShipData"},
+        {"part": "fields"}, {"type": "int", "name": "credits", "initializer": "7"},
+        {"part": "done"}, {"part": "classes"}, {"name": "ShipData"},
+        {"part": "done"}, {"part": "done"},
     ]
 
     class Handler(BaseHTTPRequestHandler):
@@ -76,11 +76,11 @@ def test_native_http_schema_rejection_preserves_siblings_and_repairs_one_compone
         thread.join(timeout=5)
     assert "static int credits = 7;" in source
     assert "class ShipData" in source
-    assert [r["tools"][0]["function"]["name"] for r in requests] == [
-        "emit_java_structure", "repair_java_component",
-    ]
+    assert len(requests) == len(responses)
+    assert all(r["tools"][0]["function"]["name"] == "emit_java_part" for r in requests)
     assert all(r["parallel_tool_calls"] is False for r in requests)
     assert all(r["tool_choice"] == "required" for r in requests)
     assert all("response_format" not in r for r in requests)
-    repair_schema = requests[1]["tools"][0]["function"]["parameters"]
-    assert set(repair_schema["properties"]) == {"value"}
+    for request in requests:
+        schema = request["tools"][0]["function"]["parameters"]
+        assert all(value["type"] not in {"array", "object"} for value in schema["properties"].values())

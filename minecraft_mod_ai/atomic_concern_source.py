@@ -6,8 +6,8 @@ import hashlib
 import json
 import os
 import re
-from copy import deepcopy
 from collections.abc import Callable, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -1011,14 +1011,14 @@ def _state_default_literal(java_type: str, raw: str) -> str:
         return ""
     if java_type in {"byte", "short", "int", "long"}:
         if re.fullmatch(r"[-+]?\d+[lL]?", value):
-            return value
+            return value.rstrip("lL") + ("L" if java_type == "long" else "")
         return ""
     if java_type in {"float", "double"}:
         if re.fullmatch(
             r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?[fFdD]?",
             value,
         ):
-            return value
+            return value.rstrip("fFdD") + "f" if java_type == "float" else value
         return ""
     return "null" if lowered == "null" else ""
 
@@ -1301,6 +1301,10 @@ def _inline_state_variable_records(
         return ()
     payload = anchor.split(":", 1)[1].strip()
     if not payload:
+        return ()
+    if re.match(r"name\s*\(", payload, re.IGNORECASE):
+        # name(...), type(...), default(...) is the labeled record syntax,
+        # not a compact variable literally named 'name' with a custom type.
         return ()
 
     records: list[dict[str, str]] = []
@@ -1693,7 +1697,7 @@ def _messages(
             "scope_rule": (
                 "Implement only the selected concern and only the lines in "
                 "task_authority.source_requirements. Do not pre-implement sibling concerns. "
-                "The host owns declaration deduplication and sibling bookkeeping."
+                "The host owns declaration ownership and sibling bookkeeping; earlier declarations are immutable."
             ),
             "repair_structure_rule": (
                 "Compiler repair may remove or edit existing nested types but must not add, "
@@ -1730,6 +1734,7 @@ class AtomicConcernExecutor:
     state: dict[str, tuple[str, str]] = field(default_factory=dict, init=False)
     summaries: list[str] = field(default_factory=list, init=False)
     seen_failures: set[str] = field(default_factory=set, init=False)
+    host_owned_concerns: set[str] = field(default_factory=set, init=False)
     repairs: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
@@ -1759,85 +1764,13 @@ class AtomicConcernExecutor:
         return owners
 
 
-    def _remove_owned_symbols(
-        self,
-        *,
-        members: str,
-        keys: set[str],
-    ) -> tuple[str, set[str], set[str]]:
-        kept: list[str] = []
-        removed: set[str] = set()
-        unresolved: set[str] = set()
-        for chunk in _top_level_member_chunks(members):
-            declared = set(_member_declaration_symbols(chunk))
-            overlap = declared & keys
-            if not overlap:
-                kept.append(chunk)
-                continue
-            if declared and declared <= keys:
-                removed.update(declared)
-                continue
-            kept.append(chunk)
-            unresolved.update(overlap)
-        return "\n".join(kept).strip(), removed, unresolved
-
-    def _rehome_symbol_collisions(self, *, concern: str, members: str) -> None:
-        current = set(_member_declaration_symbols(members))
-        if not current:
-            return
-
+    def _assert_symbol_ownership(self, *, concern: str, members: str) -> None:
         owners = self._sibling_symbol_owners(exclude=concern)
-        by_owner: dict[str, set[str]] = {}
-        for key in current:
-            owner = owners.get(key)
-            if owner:
-                by_owner.setdefault(owner, set()).add(key)
-        if not by_owner:
-            return
-
-        plans: list[tuple[str, str, str, set[str]]] = []
-        for owner, keys in sorted(by_owner.items()):
-            owner_members, owner_initialize = self.state[owner]
-            rewritten, removed, unresolved = self._remove_owned_symbols(
-                members=owner_members,
-                keys=keys,
-            )
-            missing = keys - removed
-            if unresolved or missing:
-                details = []
-                for key in sorted(unresolved | missing):
-                    kind, _, display = key.partition(":")
-                    details.append(f"{kind} {display} is entangled in concern {owner}")
-                raise CustomModuleGenerationError(
-                    "ATOMIC_CONCERN_SYMBOL_COLLISION: " + "; ".join(details)
-                )
-            plans.append((owner, rewritten, owner_initialize, removed))
-
-        for owner, rewritten, owner_initialize, removed in plans:
-            self.source = _replace_region(
-                self.source,
-                concern=owner,
-                region="MEMBERS",
-                content=rewritten,
-            )
-            self.state[owner] = (rewritten, owner_initialize)
-
-            from .root_cause_trace import emit_root_cause
-
-            emit_root_cause(
-                "atomic_concern_symbols_rehomed",
-                stage="production",
-                operation="atomic_concern_region",
-                gate="host_symbol_ownership",
-                result="PASS",
-                details={
-                    "from_concern": owner,
-                    "to_concern": concern,
-                    "symbols": [
-                        key.partition(":")[2]
-                        for key in sorted(removed)
-                    ],
-                },
+        collisions = sorted(set(_member_declaration_symbols(members)) & set(owners))
+        if collisions:
+            raise CustomModuleGenerationError(
+                "ATOMIC_CONCERN_OWNERSHIP_VIOLATION: accepted sibling declarations are immutable: "
+                + "; ".join(f"{key} belongs to {owners[key]}" for key in collisions)
             )
 
     def _known_simple_types(self, *, exclude: str) -> tuple[str, ...]:
@@ -1890,6 +1823,7 @@ class AtomicConcernExecutor:
                     output_sha256=output_sha,
                     output_chars=len(host_members),
                 )
+                self.host_owned_concerns.add(name)
                 return host_members
 
         if (
@@ -1916,6 +1850,7 @@ class AtomicConcernExecutor:
                     output_sha256=output_sha,
                     output_chars=len(host_members),
                 )
+                self.host_owned_concerns.add(name)
                 return host_members
 
         for attempt in range(1, attempt_limit + 1):
@@ -2044,7 +1979,7 @@ class AtomicConcernExecutor:
                     "Do not introduce, rename, or change the kind of nested types during compiler repair. "
                     "Fix fields, method signatures, modifiers, expressions, and method bodies in place. "
                     "Implement only this concern; do not add declarations for sibling concerns. "
-                    "The host will reconcile declarations emitted earlier by another concern. "
+                    "Earlier sibling declarations are immutable and cannot be redeclared. "
                     "Emit executable Java only; no analysis, reasoning, plans, or Markdown commentary."
                 )
                 repair_failure = "\n\n".join(
@@ -2084,7 +2019,7 @@ class AtomicConcernExecutor:
             raise CustomModuleGenerationError(
                 f"ATOMIC_CONCERN_REPAIR_NO_PROGRESS: {name} repeated the same bounded source."
             )
-        self._rehome_symbol_collisions(concern=name, members=members)
+        self._assert_symbol_ownership(concern=name, members=members)
         self.source = _replace_region(
             self.source, concern=name, region="MEMBERS", content=members
         )
@@ -2122,6 +2057,13 @@ class AtomicConcernExecutor:
             )
         self.seen_failures.add(fingerprint)
         name = _failure_concern(self.source, log=failure, relative=self.relative)
+        if name in self.host_owned_concerns:
+            raise CustomModuleGenerationError(
+                "STRUCTURED_STATE_HOST_COMPILER_INVALID: host-generated declarations "
+                "cannot be replaced by model repair.\n"
+                + _compact_compiler_failure(failure, source=self.source,
+                                            relative=self.relative, concern=name)
+            )
         if not name:
             raise CustomModuleGenerationError(
                 "ATOMIC_CONCERN_COMPILE_UNLOCALIZED: failure is outside every active concern region.\n"
