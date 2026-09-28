@@ -6,7 +6,6 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai.fixed_template_generation import generate_fixed_template_value
-from minecraft_mod_ai.planner_structured_router import structured_planner_router
 
 
 _SCHEMA = {
@@ -100,10 +99,10 @@ class _PlannerToolCapableRouter(_TextOnlyRouter):
         raise AssertionError("planner fixed templates must never require native tool calls")
 
 
-def test_structured_planner_fixed_template_never_depends_on_native_tool_envelope() -> None:
+def test_planner_fixed_template_never_depends_on_native_tool_envelope() -> None:
     router = _PlannerToolCapableRouter()
     result = generate_fixed_template_value(
-        structured_planner_router(router),
+        router,
         "planner",
         [{"role": "user", "content": "Fill the worksheet chunk."}],
         response_schema=_SCHEMA,
