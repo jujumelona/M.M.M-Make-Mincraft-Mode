@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+
+import pytest
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
