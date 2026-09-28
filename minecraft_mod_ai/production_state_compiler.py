@@ -273,6 +273,7 @@ def _replace_aliases(text: str, aliases: Mapping[str, str]) -> str:
                 rf"(?<![A-Za-z0-9_]){re.escape(old)}(?![A-Za-z0-9_])",
                 new,
                 result,
+                flags=re.IGNORECASE,
             )
         return result
 
@@ -387,6 +388,10 @@ def _simple_expression_atom(value: str) -> bool:
     return atom.casefold() in {"true", "false", "null"}
 
 
+def _identifier_signature(value: str) -> str:
+    return re.sub(r"[^0-9a-z]+", "", str(value or "").casefold())
+
+
 def _canonicalize_expression_operands(
     expression: str,
     *,
@@ -399,6 +404,11 @@ def _canonicalize_expression_operands(
     )
     segments = _split_expression_segments(text)
     comparison_ops = {"==", "!=", ">=", "<=", ">", "<"}
+    variable_by_signature = {
+        _identifier_signature(name): name
+        for name in variables
+        if _identifier_signature(name)
+    }
 
     def neighbor_atom(index: int, direction: int) -> str:
         pos = index + direction
@@ -415,6 +425,11 @@ def _canonicalize_expression_operands(
             continue
         if _simple_expression_atom(atom):
             segments[index] = atom
+            continue
+
+        declared_name = variable_by_signature.get(_identifier_signature(atom))
+        if declared_name:
+            segments[index] = declared_name
             continue
 
         previous = neighbor_atom(index, -1)
