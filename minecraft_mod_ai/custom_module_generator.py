@@ -1528,6 +1528,9 @@ def _call_atomic_java_region(
         raise CustomModuleGenerationError(
             "ATOMIC_STRUCTURED_CODER_REQUIRED: router has no generate_tool_decision()."
         )
+    multi_callback = getattr(router, "generate_tool_decisions", None)
+    if not callable(multi_callback):
+        multi_callback = None
     from .atomic_java_assembly import JavaStructureAssembly
 
     payload = _atomic_request_payload(messages)
@@ -1536,7 +1539,11 @@ def _call_atomic_java_region(
     registry = getattr(router, "registry", None)
     config = registry.role(router.profile, "coder") if registry is not None else None
     decision = JavaStructureAssembly(
-        callback, payload, output_token_ceiling=output_token_ceiling, config=config,
+        callback,
+        payload,
+        output_token_ceiling=output_token_ceiling,
+        config=config,
+        multi_callback=multi_callback,
     ).run(parameters)
     from .atomic_concern_source import _validate_region_text
 
