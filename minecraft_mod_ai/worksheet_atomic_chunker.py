@@ -25,6 +25,27 @@ from .planning_detail_template import (
     validate_worksheet_section,
 )
 
+def _canonical_record_fields(section: str, concern: str) -> tuple[str, ...]:
+    """Derive chunk field order from the live canonical record schema."""
+    schema = concern_record_schema(section, concern)
+    properties = schema.get("properties")
+    required = schema.get("required")
+    if not isinstance(properties, Mapping) or not isinstance(required, list):
+        raise ValueError(
+            f"DETAILED_PLAN_WORKSHEET_SCHEMA: {section}.{concern} lacks canonical fields"
+        )
+    missing = [str(field) for field in required if field not in properties]
+    if missing:
+        raise ValueError(
+            f"DETAILED_PLAN_WORKSHEET_SCHEMA: {section}.{concern} missing {missing}"
+        )
+    fields = tuple(str(field) for field in required)
+    if not fields:
+        raise ValueError(
+            f"DETAILED_PLAN_WORKSHEET_SCHEMA: {section}.{concern} has no required fields"
+        )
+    return fields
+
 _CANONICAL_FIELD_DEFAULTS: dict[str, str] = {
     "authority": "server",
     "unit": "count",
@@ -83,7 +104,7 @@ def _chunk_projection(
     for concern in concerns:
         if concern not in records:
             raise ValueError(f"Unknown concern {concern!r} for section {section!r}")
-        all_fields = tuple(records[concern].split())
+        all_fields = _canonical_record_fields(section, concern)
         selected = tuple(explicit.get(concern, all_fields)) if isinstance(explicit, Mapping) else all_fields
         if not selected or any(field not in all_fields for field in selected):
             raise ValueError(
@@ -117,8 +138,8 @@ def pack_section_concerns(
         raise ValueError("max_chunk_size must be positive when supplied")
 
     pages: list[tuple[str, tuple[str, ...]]] = []
-    for concern, columns in records.items():
-        for fields in _field_pages(tuple(columns.split())):
+    for concern in records:
+        for fields in _field_pages(_canonical_record_fields(key, concern)):
             pages.append((concern, fields))
 
     chunks: list[tuple[str, ...]] = []

@@ -21,6 +21,24 @@ from minecraft_mod_ai.worksheet_atomic_chunker import (
 from worksheet_fixtures import row
 
 
+
+def test_state_model_chunk_projection_matches_live_canonical_schema():
+    from minecraft_mod_ai.planning_detail_slots import concern_record_schema
+
+    chunks = pack_section_concerns("state_model")
+    projected: dict[str, set[str]] = {}
+    for chunk in chunks:
+        projection = getattr(chunk, "field_projection", {})
+        for concern in chunk:
+            projected.setdefault(concern, set()).update(projection.get(concern, ()))
+
+    expected = {}
+    for concern in DETAIL_RECORDS["state_model"]:
+        schema = concern_record_schema("state_model", concern)
+        expected[concern] = set(schema["required"])
+
+    assert projected == expected
+
 @pytest.mark.parametrize("section", WORKSHEET_SECTIONS)
 def test_all_packed_chunks_satisfy_atomicity_contract(section: str):
     chunks = pack_section_concerns(section)
