@@ -74,6 +74,7 @@ def _canonical_atomic_obligations(
     requirements: Mapping[str, str],
     raw_obligations: list[str],
     structured_sections: Mapping[str, Any] | None = None,
+    production_state_section: Mapping[str, Any] | None = None,
 ) -> tuple[list[str], list[str], list[dict[str, Any]]]:
     """Materialize only authored concerns that own source in the final node."""
     from .authored_execution_schema import section_spec
@@ -101,6 +102,20 @@ def _canonical_atomic_obligations(
         isinstance(structured_sections, Mapping)
         and section in structured_sections
     )
+    if section == "state_model" and isinstance(production_state_section, Mapping):
+        raw_specification = production_state_section.get("specification")
+        if isinstance(raw_specification, Mapping):
+            structured_records = {
+                str(name): [
+                    deepcopy(dict(row))
+                    for row in rows
+                    if isinstance(row, Mapping)
+                ]
+                for name, rows in raw_specification.items()
+                if isinstance(rows, list) and rows
+            }
+            structured_records.pop("inapplicable_concerns", None)
+            section_is_structured = True
     exact_sources: dict[str, dict[str, str]] = {}
     for concern in concerns:
         name = str(concern["concern"])
@@ -176,6 +191,7 @@ def _bind_atomic_leaf_contract(
     node: Mapping[str, Any],
     requirements: Mapping[str, str],
     structured_sections: Mapping[str, Any] | None = None,
+    production_state_section: Mapping[str, Any] | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     from .authored_production import _task_sha
 
@@ -188,6 +204,7 @@ def _bind_atomic_leaf_contract(
         requirements=requirements,
         raw_obligations=list(node["obligations"]),
         structured_sections=structured_sections,
+        production_state_section=production_state_section,
     )
     task["implementation_obligations"] = obligations
     task["task_sha256"] = _task_sha(task)
@@ -241,6 +258,7 @@ def _leaf_module(node: dict[str, Any], graph: dict[str, Any], request: dict[str,
         node,
         requirements,
         structured_sections=request.get("structured_sections"),
+        production_state_section=request.get("production_state_section"),
     )
     return ProductionModule(
         module_id="ir_" + node["symbol"].lower(), kind="custom_java",
