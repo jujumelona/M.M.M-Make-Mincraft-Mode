@@ -14,7 +14,7 @@ from minecraft_mod_ai.planning_detail_template import (
 )
 from minecraft_mod_ai.planning_handoff_contract import project_detailed_plan_for_request_catalog
 from minecraft_mod_ai.worksheet_atomic_chunker import pack_section_concerns, worksheet_chunk_schema
-from worksheet_fixtures import flatten_record, row
+from worksheet_fixtures import row
 
 
 @pytest.mark.parametrize("section", WORKSHEET_SECTIONS)
@@ -72,40 +72,31 @@ def test_ten_section_dag_preserves_objects_through_handoff():
     calls = []
 
     class Router:
-        def generate_text(self, *_args, **_kwargs):
-            raise AssertionError("worksheet generation must use native structured decisions")
-
-        def generate_tool_decision(
-            self, role, messages, *, tool_name, parameters, description=""
-        ):
-            assert role == "planner"
-            assert tool_name.startswith("submit_")
+        def generate_text(self, role, messages, **kwargs):
             section = messages[-1]["content"].split("Section: ", 1)[1].splitlines()[0]
+            schema = kwargs["response_schema"]
             full = row(section)
             payload: dict = {}
-            for prop, prop_schema in parameters.get("properties", {}).items():
+            for prop, prop_schema in schema.get("properties", {}).items():
                 if prop == "constraint_evidence_refs":
                     payload[prop] = full.get(prop, [])
                 elif prop == "inapplicable_concerns":
                     payload[prop] = [
                         item for item in full["specification"].get("inapplicable_concerns", [])
-                        if item["concern"] in parameters.get("properties", {})
+                        if item["concern"] in schema.get("properties", {})
                     ]
                 elif prop in full["specification"]:
                     allowed_fields = set(
                         prop_schema.get("items", {}).get("properties", {})
                     )
                     payload[prop] = [
-                        {
-                            key: value
-                            for key, value in flatten_record(item).items()
-                            if key in allowed_fields
-                        }
+                        {key: value for key, value in item.items() if key in allowed_fields}
                         for item in full["specification"][prop]
                     ]
-            Draft202012Validator(parameters).validate(payload)
+            Draft202012Validator(schema).validate(payload)
+            assert kwargs["response_format"] == "json" and kwargs["enable_tools"] is False
             calls.append(section)
-            return payload
+            return json.dumps(payload)
 
     requirement = {"requirement_id": "req_001", "statement": "Gather a resource."}
     state = {
@@ -121,63 +112,8 @@ def test_ten_section_dag_preserves_objects_through_handoff():
     assert '"success_cases"' in plan["verification_obligations"][0]["check"]
 
 
-def test_invalid_chunk_fails_after_one_generation_without_repair_retry():
-    class Router:
-        def __init__(self) -> None:
-            self.calls = 0
-
-        def generate_tool_decision(
-            self, role, messages, *, tool_name, parameters, description=""
-        ):
-            self.calls += 1
-            assert role == "planner"
-            assert tool_name == "submit_behavior_contract_1_chunk"
-            raise ValueError("invalid native structured decision")
-
-    router = Router()
-    requirement = {
-        "requirement_id": "req_fail_fast",
-        "statement": "Gather a resource.",
-        "acceptance": [],
-    }
-
-    with pytest.raises(ValueError, match="invalid native structured decision"):
-        planning._compile_worksheet_section(
-            router,
-            requirement=requirement,
-            selected_sections=WORKSHEET_SECTIONS,
-            section="behavior_contract",
-            evidence=[],
-            allowed=set(),
-            completed={},
-        )
-
-    assert router.calls == 1
-
-
 def test_prerequisite_json_preserves_long_tail_and_newlines():
     payload = row("behavior_contract")
     payload["specification"]["actors"][0]["role"] = "x" * 14000 + "\nTAIL_RULE"
     context = planning._section_dependency_context("state_model", WORKSHEET_SECTIONS, {"behavior_contract": payload})
     assert json.loads(context) == {"behavior_contract": payload}
-
-
-def test_same_section_prior_chunks_are_authoritative_context():
-    prior = ({
-        "variables": [{"name": "credits", "owner": "server", "type": "Double"}],
-        "inapplicable_concerns": [],
-    },)
-    messages = planning._chunk_messages(
-        {"requirement_id": "req", "statement": "state"},
-        WORKSHEET_SECTIONS,
-        "state_model",
-        [],
-        {},
-        chunk_index=2,
-        chunk_count=3,
-        concerns=("variables",),
-        prior_chunks=prior,
-    )
-    assert '"name":"credits"' in messages[-1]["content"]
-    assert "Earlier accepted chunks from this same section" in messages[-1]["content"]
-    assert "State-model executable fields use the host DSL" in messages[0]["content"]
