@@ -387,6 +387,130 @@ def test_inline_compact_state_variables_are_host_lowered_without_coder(tmp_path)
         assert compiled.returncode == 0, compiled.stderr
 
 
+def test_structured_state_model_is_host_compiled_in_one_pass_without_coder(tmp_path) -> None:
+    specification = {
+        **{name: [] for name in DETAIL_RECORDS["state_model"]},
+        "variables": [{
+            "name": "credits",
+            "owner": "Player",
+            "type": "Int",
+            "unit": "credits",
+            "default": "100",
+            "domain": "non-negative",
+        }],
+        "transitions": [{
+            "from_state": "idle",
+            "trigger": "buy",
+            "guard": "credits >= cost",
+            "mutation": "credits -= cost",
+            "to_state": "done",
+        }],
+        "invariants": [{
+            "condition": "credits >= 0",
+            "enforcement": "reject negative balance",
+        }],
+        "initialization": [{
+            "owner": "Player",
+            "trigger": "server_start",
+            "initial_state": "credits = 100",
+        }],
+        "updates": [{
+            "trigger": "reward",
+            "mutation": "credits += amount",
+            "owner": "Player",
+        }],
+        "cleanup": [{
+            "event": "reset",
+            "action": "credits = 0",
+            "retained_state": "none",
+        }],
+        "concurrency": [{
+            "entry_path": "state_runtime",
+            "ownership": "server",
+            "reentrancy_rule": "serialized",
+        }],
+        "inapplicable_concerns": [],
+    }
+    structured = {
+        "state_model": {
+            "specification": specification,
+            "constraint_evidence_refs": [],
+        }
+    }
+    requirements = {
+        "R1": "## state_model",
+        "R2": "- variables: name owner type unit default domain",
+        "R3": "- transitions: from_state trigger guard mutation to_state",
+        "R4": "- invariants: condition enforcement",
+        "R5": "- initialization: owner trigger initial_state",
+        "R6": "- updates: trigger mutation owner",
+        "R7": "- cleanup: event action retained_state",
+        "R8": "- concurrency: entry_path ownership reentrancy_rule",
+    }
+    task = {"task_id": "structured-state-runtime"}
+    node = {
+        "symbol": "AuthoredStateModel",
+        "obligations": [
+            _model_obligation(name)
+            for name in DETAIL_RECORDS["state_model"]
+        ],
+    }
+    section, active = _bind_atomic_leaf_contract(
+        task,
+        node,
+        requirements,
+        structured_sections=structured,
+    )
+    assert section == "state_model"
+    assert [row["concern"] for row in active] == list(
+        DETAIL_RECORDS["state_model"]
+    )
+
+    def forbidden_model_call(_messages):
+        raise AssertionError("structured state_model must never call the coder")
+
+    writes = {}
+    executor = AtomicConcernExecutor(
+        root=tmp_path,
+        target=tmp_path / "AuthoredStateModel.java",
+        relative="AuthoredStateModel.java",
+        symbol="AuthoredStateModel",
+        original=(
+            "public final class AuthoredStateModel {\n"
+            "    // MMM_AUTHORED_FEATURE_BODY\n"
+            "}\n"
+        ),
+        task=task,
+        section="state_model",
+        concerns=tuple(active),
+        grounding={},
+        dependency_source="",
+        require_initialize=False,
+        call_coder=forbidden_model_call,
+        compile_java=lambda _root: SimpleNamespace(status="PASS"),
+        compile_log=lambda _report: "",
+        write_source=lambda path, source: writes.__setitem__(str(path), source),
+    )
+    result = executor.run()
+    assert result["repair_count"] == 0
+    source = result["source"]
+    assert "$mmmTransitions" in source
+    assert "context ->" in source
+    assert "public static synchronized String transition" in source
+
+    javac = shutil.which("javac")
+    if javac:
+        target = tmp_path / "AuthoredStateModel.java"
+        target.write_text(source, encoding="utf-8")
+        compiled = subprocess.run(
+            [javac, str(target)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert compiled.returncode == 0, compiled.stderr
+
+
 def test_top_level_method_schema_structurally_forbids_outer_constructor() -> None:
     parameters, _shape = _atomic_parameters_for_request(
         {"host_selected_class": "AuthoredStateModel", "concern": {"name": "variables"}},

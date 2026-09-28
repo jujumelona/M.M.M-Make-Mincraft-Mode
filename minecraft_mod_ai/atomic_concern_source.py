@@ -1867,6 +1867,35 @@ class AtomicConcernExecutor:
             not failure
             and response_region == "members"
             and str(self.section or "").strip() == "state_model"
+        ):
+            from .structured_state_runtime import render_state_model_concern
+
+            first = _slug(self.ordered[0]["concern"]) if self.ordered else name
+            host_members = render_state_model_concern(
+                self.task,
+                name,
+                include_runtime=name == first,
+            )
+            if host_members is not None:
+                output_sha = hashlib.sha256(
+                    host_members.encode("utf-8")
+                ).hexdigest()
+                _trace_region_generation(
+                    "atomic_concern_region_host_lowered",
+                    result="PASS",
+                    concern=name,
+                    region=response_region,
+                    attempt=1,
+                    attempt_limit=1,
+                    output_sha256=output_sha,
+                    output_chars=len(host_members),
+                )
+                return host_members
+
+        if (
+            not failure
+            and response_region == "members"
+            and str(self.section or "").strip() == "state_model"
             and name == "variables"
         ):
             host_members = _deterministic_state_variable_members(
@@ -2114,6 +2143,36 @@ class AtomicConcernExecutor:
         return self._compile()
 
     def run(self) -> dict[str, Any]:
+        from .structured_state_runtime import has_complete_structured_state
+
+        if (
+            str(self.section or "").strip() == "state_model"
+            and has_complete_structured_state(self.task, self.ordered)
+        ):
+            for concern in self.ordered:
+                self._apply(concern)
+            report = self._compile()
+            if getattr(report, "status", "") != "PASS":
+                failure = self.compile_log(report) or str(
+                    getattr(report, "error", "")
+                    or "Host-compiled structured state model did not compile."
+                )
+                raise CustomModuleGenerationError(
+                    "STRUCTURED_STATE_HOST_COMPILER_INVALID:\n"
+                    + _compact_compiler_failure(
+                        failure,
+                        source=self.source,
+                        relative=self.relative,
+                        concern="",
+                    )
+                )
+            return {
+                "source": self.source,
+                "summary": " | ".join(self.summaries),
+                "concern_count": len(self.ordered),
+                "repair_count": 0,
+            }
+
         repair_limit = _compile_repair_limit()
         for concern in self.ordered:
             name = _slug(concern["concern"])

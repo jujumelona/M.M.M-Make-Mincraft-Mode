@@ -132,6 +132,16 @@ def _host_instruction(payload: Mapping[str, Any]) -> str:
     _, contract = _required_section_contract(payload)
     return str(contract["instruction"])
 
+
+def _host_public_api(payload: Mapping[str, Any]) -> list[str]:
+    _, contract = _required_section_contract(payload)
+    return [
+        str(value)
+        for value in contract.get("public_api", ())
+        if str(value).strip()
+    ]
+
+
 def _host_obligation(requirements: Mapping[str, str], *, instruction: str) -> str:
     return json.dumps(
         {"source_requirements": dict(requirements), "instruction": instruction},
@@ -265,7 +275,7 @@ def compile_contribution(router: Any, name: str, payload: dict[str, Any],
         "responsibility": responsibility,
         "requirements": list(packet["requirements"]),
         "obligations": obligations,
-        "public_api": [],
+        "public_api": _host_public_api(payload),
         "depends_on": _role_dependencies(payload),
         "activation": True,
         "estimated_tokens": estimated_tokens,
