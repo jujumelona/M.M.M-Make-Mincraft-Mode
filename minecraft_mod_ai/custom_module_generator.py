@@ -1742,7 +1742,7 @@ def _atomic_result_receipt(
         "agent_summary": str(atomic["summary"]).strip(),
         "generation_verification": {
             "status": "PASS",
-            "mode": "gradle_compile_java_atomic_concerns",
+            "mode": "gradle_compile_java_semantic_concerns",
             "target_path": context.relative,
             "atomic_concern_count": int(atomic["concern_count"]),
             "atomic_repair_count": int(atomic["repair_count"]),
@@ -1781,7 +1781,8 @@ def _run_atomic_ir_generation(
         call_coder=lambda messages: _call_coder(
             generator.router,
             messages,
-            structured_java_region=True,
+            force_non_thinking=True,
+            structured_java_region=False,
         ),
         compile_java=context.compiler.compile_java,
         compile_log=_compile_log,
