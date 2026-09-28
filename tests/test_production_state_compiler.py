@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 
 from minecraft_mod_ai.authored_plan import AuthoredPlan
+from minecraft_mod_ai.authored_production import _compile_new_authored_modules
 from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
 from minecraft_mod_ai.production_state_compiler import (
     _normalize_expression,
     _parse_semantic_page,
-    bind_production_state_contract,
     compile_production_state_section,
 )
 from minecraft_mod_ai.structured_state_runtime import render_state_model_concern
@@ -495,13 +495,21 @@ def test_transition_without_state_assignment_uses_empty_program_not_magic_token(
     assert "noop" not in json.dumps(section)
 
 
-def test_production_binding_preserves_approved_plan_text():
+def test_production_state_is_sidecar_and_does_not_mutate_authored_plan():
     router = ProductionStateRouter()
     original = AuthoredPlan("make a space mod", _plan_text())
+    section = compile_production_state_section(router, original)
 
-    bound = bind_production_state_contract(router, original)
+    modules, _manifest = _compile_new_authored_modules(
+        original,
+        mod_id="authored_test",
+        package_name="ai.minecraft.generated.authored_test",
+        target={},
+        production_state_section=section,
+    )
 
-    assert bound.text == original.text
-    assert bound.requested_prompt == original.requested_prompt
-    assert "state_model" in bound.structured_sections
+    request = modules[0].config["implementation_graph_request"]
+    assert request["production_state_section"] == section
+    assert request["structured_sections"] == {}
+    assert original.text == _plan_text()
     assert original.structured_sections == {}
