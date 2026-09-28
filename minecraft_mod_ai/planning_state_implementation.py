@@ -287,6 +287,7 @@ def _chunk_messages(
     chunk_count: int,
     concerns: tuple[str, ...],
     include_evidence: bool = False,
+    record_counts: Mapping[str, int] | None = None,
 ) -> list[dict[str, str]]:
     statement = _text(requirement.get("statement"))
     acceptance = requirement.get("acceptance")
@@ -322,7 +323,7 @@ def _chunk_messages(
                 f"{_evidence_context(evidence)}\n\n"
                 "Direct prerequisite worksheet sections:\n"
                 f"{prerequisite_context}\n\n"
-                f"{worksheet_chunk_prompt(section, chunk_index, chunk_count, concerns, include_evidence=include_evidence)}"
+                f"{worksheet_chunk_prompt(section, chunk_index, chunk_count, concerns, include_evidence=include_evidence, record_counts=record_counts)}"
             ),
         },
     ]
@@ -369,13 +370,17 @@ def _compile_worksheet_section(
     chunks_def = pack_section_concerns(section)
     chunk_count = len(chunks_def)
     chunk_results: list[dict[str, Any]] = []
+    record_counts: dict[str, int] = {}
 
     try:
         with planner_operation(operation):
             for index, concerns in enumerate(chunks_def, start=1):
                 is_first = index == 1
                 chunk_schema = worksheet_chunk_schema(
-                    section, concerns, include_evidence=is_first
+                    section,
+                    concerns,
+                    include_evidence=is_first,
+                    record_counts=record_counts,
                 )
                 messages = _chunk_messages(
                     requirement,
@@ -387,6 +392,7 @@ def _compile_worksheet_section(
                     chunk_count=chunk_count,
                     concerns=concerns,
                     include_evidence=is_first,
+                    record_counts=record_counts,
                 )
                 decoded = _generate_chunk(
                     router,
@@ -397,6 +403,28 @@ def _compile_worksheet_section(
                     chunk_schema=chunk_schema,
                 )
                 chunk_results.append(decoded)
+
+                data = decoded
+                nested = decoded.get("specification")
+                if isinstance(nested, Mapping):
+                    data = dict(nested)
+                inapplicable = {
+                    str(item.get("concern") or "").strip()
+                    for item in data.get("inapplicable_concerns", [])
+                    if isinstance(item, Mapping)
+                } if isinstance(data.get("inapplicable_concerns"), list) else set()
+                for concern in concerns:
+                    if concern in record_counts:
+                        continue
+                    value = data.get(concern)
+                    if isinstance(value, Mapping):
+                        record_counts[concern] = 1
+                    elif isinstance(value, list):
+                        record_counts[concern] = len(
+                            [item for item in value if isinstance(item, Mapping)]
+                        )
+                    elif concern in inapplicable:
+                        record_counts[concern] = 0
 
             return merge_worksheet_section_chunks(section, chunk_results, allowed)
     except (ValueError, RuntimeError, json.JSONDecodeError) as exc:
