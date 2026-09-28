@@ -189,19 +189,29 @@ def _host_concern_work(
 
     section_instruction = _host_instruction(payload)
     exact: list[tuple[Mapping[str, Any], dict[str, str]]] = []
+    page_requirements = packet["requirements"]
     for concern in concerns:
-        source = slice_concern_requirements(
-            unit_requirements,
-            concern=str(concern["concern"]),
+        name = str(concern["concern"])
+        # Ownership is decided only from the current page. The full unit context is
+        # used after ownership is known so one page cannot recreate sibling work.
+        page_source = slice_concern_requirements(
+            page_requirements,
+            concern=name,
             require_anchor=True,
         )
-        if source:
-            exact.append((concern, source))
+        if not page_source:
+            continue
+        source = slice_concern_requirements(
+            unit_requirements,
+            concern=name,
+            require_anchor=True,
+        )
+        exact.append((concern, source or page_source))
 
     # A canonical page must never be sprayed across sibling concerns. Legacy/free-form
     # section prose without any concern anchor is owned exactly once by the section's
     # primary concern so production remains deterministic without multiplying work.
-    owned = exact or [(concerns[0], dict(packet["requirements"]))]
+    owned = exact or [(concerns[0], dict(page_requirements))]
 
     obligations: list[str] = []
     for concern, source_requirements in owned:

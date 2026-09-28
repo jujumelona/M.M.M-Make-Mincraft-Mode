@@ -147,6 +147,48 @@ def test_graph_frontend_assigns_each_state_page_to_only_its_actual_concern() -> 
     assert list(transition_payload["source_requirements"]) == ["R12", "R14"]
 
 
+def test_full_state_unit_context_does_not_duplicate_sibling_concerns_per_page() -> None:
+    from minecraft_mod_ai.implementation_decisions import compile_contribution
+
+    full_state = {
+        "R12": "## state_model",
+        "R13": "- variables: credits (Int, owner=Player)",
+        "R14": "- transitions: from_state(idle) -> trigger(buy) -> to_state(done)",
+        "R15": "- invariants: credits >= 0",
+        "R16": "- initialization: server start resets temporary state",
+        "R17": "- updates: trade completion increments credits",
+        "R18": "- cleanup: player death releases temporary ownership",
+        "R19": "- concurrency: one owner controls each ship",
+    }
+    common = {
+        "unit_context": full_state,
+        "accepted_nodes": [],
+        "planned_units": ["state_model"],
+        "current_units": ["state_model"],
+        "unit_ids": ["state_model"],
+        "unresolved_dependencies": [],
+        "platform": {},
+        "project_context": "",
+        "package": "example",
+        "mod_id": "test",
+        "page": 1,
+    }
+
+    page = compile_contribution(
+        object(),
+        "compile_implementation_graph",
+        {"requirements": {"R14": full_state["R14"]}, **common},
+        {},
+        lambda: None,
+    )["nodes"][0]
+
+    assert len(page["obligations"]) == 1
+    payload = json.loads(page["obligations"][0])
+    instruction = json.loads(payload["instruction"])
+    assert instruction["concern"] == "transitions"
+    assert list(payload["source_requirements"]) == ["R12", "R14"]
+
+
 def test_leaf_contract_materializes_only_concerns_present_in_authored_source() -> None:
     requirements = {
         "R12": "## state_model",
