@@ -179,44 +179,19 @@ class CompleteGameDesignPlanner:
         media_paths: Sequence[str | Path] = (),
         existing_input_sha256: str = "",
     ) -> CompleteProposal:
-        """Compile the approved plan; planning itself remains untouched."""
-
         from .authored_production import compile_authored_design
-        from .production_state_compiler import bind_production_state_contract
 
         plan = prompt if isinstance(prompt, AuthoredPlan) else AuthoredPlan(
-            requested_prompt=prompt,
-            text=prompt,
+            requested_prompt=prompt, text=prompt,
             media_paths=tuple(str(path) for path in media_paths),
         )
-        effective_existing = str(
-            existing_input_sha256 or plan.existing_input_sha256 or ""
-        ).strip()
-
-        production_plan = plan
-        if not effective_existing:
-            production_plan = bind_production_state_contract(self.router, plan)
-
         with trace_scope("production_preparation", trace_id=uuid.uuid4().hex):
             emit_root_cause(
-                "production_preparation_start",
-                stage="production",
-                result="START",
-                details={
-                    **repository_revision(),
-                    "input": "saved_authored_design",
-                    "planning_rewrite": False,
-                    "state_backend": (
-                        "host_compiled_structured_state"
-                        if production_plan.structured_sections.get("state_model")
-                        else "legacy_state_path"
-                    ),
-                },
+                "production_preparation_start", stage="production", result="START",
+                details={**repository_revision(), "input": "saved_authored_design"},
             )
             return compile_authored_design(
-                self.router,
-                production_plan,
-                existing_input_sha256=existing_input_sha256,
+                self.router, plan, existing_input_sha256=existing_input_sha256,
             )
 
     def _plan_in_session(
