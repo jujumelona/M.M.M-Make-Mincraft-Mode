@@ -20,6 +20,7 @@ on:
       - "minecraft_mod_ai/custom_module_generator.py"
       - "minecraft_mod_ai/custom_module_errors.py"
       - "minecraft_mod_ai/structured_state_runtime.py"
+      - "minecraft_mod_ai/production_state_compiler.py"
       - "minecraft_mod_ai/planning_state_implementation.py"
       - "minecraft_mod_ai/planning_detail_slots.py"
       - "minecraft_mod_ai/worksheet_atomic_chunker.py"
@@ -28,6 +29,7 @@ on:
       - "tests/test_atomic_java_native_http.py"
       - "tests/test_atomic_concern_response_contract.py"
       - "tests/test_authored_state_lowering_regression.py"
+      - "tests/test_production_state_compiler.py"
       - "tests/test_planning_structured_worksheet_execution.py"
       - "tests/test_worksheet_atomic_chunker.py"
       - "tests/worksheet_fixtures.py"
@@ -73,6 +75,7 @@ jobs:
           tests/test_worksheet_atomic_chunker.py
           tests/test_planning_structured_worksheet_execution.py
           tests/test_authored_state_lowering_regression.py
+          tests/test_production_state_compiler.py
       - name: Run implementation IR regressions
         run: >-
           python -m pytest -q --tb=short
