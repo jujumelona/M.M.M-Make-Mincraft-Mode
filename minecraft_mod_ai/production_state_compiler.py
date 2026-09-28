@@ -179,7 +179,7 @@ def _generate_concern_records(
         output_token_ceiling=2048,
         force_non_thinking=True,
     )
-    rows, _status = _parse_semantic_page(raw, fields=fields)
+    rows, terminal = _parse_semantic_page(raw, fields=fields)
     accepted: list[dict[str, str]] = []
     seen: set[str] = set()
     for row in rows[:_MAX_CONCERN_RECORDS]:
@@ -199,6 +199,8 @@ def _generate_concern_records(
 
     if accepted:
         return accepted
+    if terminal:
+        return []
     if re.search(r"(?im)^\s*STATUS\s*[:=]?\s*(?:EMPTY|DONE|COMPLETE)\s*$", raw):
         return []
     if not str(raw or "").strip():
