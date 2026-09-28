@@ -70,6 +70,55 @@ def test_deterministic_merge_reconstructs_canonical_section(section: str):
     assert validate_worksheet_section(merged, allowed_refs, section) == canonical
 
 
+def test_repeated_concern_field_pages_freeze_host_owned_record_count():
+    chunks = pack_section_concerns("behavior_contract")
+    repeated = None
+    repeated_pages = []
+    for chunk in chunks:
+        for concern in chunk:
+            pages = [
+                candidate
+                for candidate in chunks
+                if concern in candidate
+            ]
+            if len(pages) > 1:
+                repeated = concern
+                repeated_pages = pages
+                break
+        if repeated is not None:
+            break
+
+    assert repeated is not None
+    assert len(repeated_pages) >= 2
+
+    unconstrained = worksheet_chunk_schema(
+        "behavior_contract",
+        repeated_pages[0],
+    )
+    first_array = unconstrained["properties"][repeated]
+    assert first_array["maxItems"] == 4
+    assert "minItems" not in first_array
+
+    constrained = worksheet_chunk_schema(
+        "behavior_contract",
+        repeated_pages[1],
+        record_counts={repeated: 3},
+    )
+    next_array = constrained["properties"][repeated]
+    assert next_array["minItems"] == 3
+    assert next_array["maxItems"] == 3
+
+    prompt = worksheet_chunk_prompt(
+        "behavior_contract",
+        2,
+        len(chunks),
+        repeated_pages[1],
+        record_counts={repeated: 3},
+    )
+    assert f"Host-fixed Record Counts: {repeated}=3" in prompt
+    assert "emit exactly that many records" in prompt
+
+
 def test_merge_rejects_missing_chunk_page():
     expected_chunks = pack_section_concerns("behavior_contract")
     assert len(expected_chunks) > 1
