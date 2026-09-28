@@ -56,10 +56,6 @@ def specification_schema(section):
             "required": fields,
             "additionalProperties": False,
         }
-        if section == "state_model":
-            from .structured_state_runtime import constrain_state_record_schema
-
-            item_schema = constrain_state_record_schema(concern, item_schema)
         properties[concern] = {
             "type": "array",
             "items": item_schema,
