@@ -2182,7 +2182,6 @@ class CompleteProductionOrchestrator:
                     touched = _receipt_touched_paths(receipt)
                     if touched:
                         shared_index.update_files(touched)
-                        shared_index.write_manifest()
             committed = True
             if on_commit is not None:
                 on_commit(receipt)
