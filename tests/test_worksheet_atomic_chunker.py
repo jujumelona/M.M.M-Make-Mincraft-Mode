@@ -190,8 +190,6 @@ def test_persistence_missing_default_accepts_and_preserves_empty_list():
     chunks = pack_section_concerns("persistence")
     target = next(chunk for chunk in chunks if "missing_defaults" in chunk)
     schema = worksheet_chunk_schema("persistence", target)
-    default_schema = schema["properties"]["missing_defaults"]["items"]["properties"]["default"]
-
     validate_structured_output(
         json.dumps({
             "missing_defaults": [
