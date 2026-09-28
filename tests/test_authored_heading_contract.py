@@ -57,45 +57,26 @@ def test_design_writing_template_emits_canonical_sections_at_h2() -> None:
     assert re.search(r"(?m)^# (?:behavior_contract|state_model)$", template) is None
 
 
-def test_planner_uses_structured_authored_compiler_not_free_markdown(monkeypatch) -> None:
-    import minecraft_mod_ai.planning_state_implementation as implementation
+def test_planner_remains_free_markdown_and_does_not_compile_structured_state() -> None:
+    class Router:
+        def __init__(self) -> None:
+            self.calls = []
 
-    state_spec = {
-        **{name: [] for name in DETAIL_RECORDS["state_model"]},
-        "variables": [{
-            "name": "credits",
-            "owner": "Player",
-            "type": "Int",
-            "unit": "credits",
-            "default": "0",
-            "domain": "non-negative",
-        }],
-        "inapplicable_concerns": [
-            {"concern": name, "reason": "not required"}
-            for name in DETAIL_RECORDS["state_model"]
-            if name != "variables"
-        ],
-    }
-    structured = {
-        "state_model": {
-            "specification": state_spec,
-            "constraint_evidence_refs": [],
-        }
-    }
-    monkeypatch.setattr(
-        implementation,
-        "compile_authored_worksheet",
-        lambda _router, _prompt: structured,
-    )
+        def generate_text(self, role, messages, **kwargs):
+            self.calls.append((role, messages, kwargs))
+            return _legacy_planner_design()
 
-    plan = CompleteGameDesignPlanner(object()).plan("space mod")
+    router = Router()
+    plan = CompleteGameDesignPlanner(router).plan("space mod")
 
-    assert plan.structured_sections == structured
-    assert plan.schema_version == "mmm/authored-plan-v2"
-    assert plan.text.startswith("## state_model\n")
-    assert "- variables:" in plan.text
-    assert "credits" in plan.text
-
+    assert plan.text == _legacy_planner_design()
+    assert plan.structured_sections == {}
+    assert len(router.calls) == 1
+    role, _messages, kwargs = router.calls[0]
+    assert role == "planner"
+    assert kwargs["response_format"] == "text"
+    assert kwargs["response_schema"] is None
+    assert kwargs["enable_tools"] is False
 
 def test_legacy_planner_heading_layout_is_migrated_without_mutating_requirements() -> None:
     units = decompose_authored_units(_legacy_planner_design())
