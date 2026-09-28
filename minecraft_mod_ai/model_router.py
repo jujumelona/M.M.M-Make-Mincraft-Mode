@@ -341,6 +341,40 @@ class ModelRouter:
             output_token_ceiling=output_token_ceiling,
         )
 
+    def generate_tool_decisions(
+        self,
+        role: str,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        tool_name: str,
+        parameters: Mapping[str, Any],
+        description: str = "",
+        output_token_ceiling: int | None = None,
+    ) -> tuple[dict[str, Any], ...]:
+        """Return one or more calls from one native function-calling turn."""
+        if role == "planner":
+            return (
+                json.loads(
+                    self.generate_text(
+                        role,
+                        messages,
+                        response_format="json",
+                        response_schema=parameters,
+                        enable_tools=False,
+                        output_token_ceiling=output_token_ceiling,
+                    )
+                ),
+            )
+        return self._generate_tool_decisions_impl(
+            role,
+            messages,
+            tool_name=tool_name,
+            parameters=parameters,
+            description=description,
+            output_token_ceiling=output_token_ceiling,
+            allow_multiple=True,
+        )
+
     def generate_implementation_decision(self, name, payload, *, state, checkpoint):
         """Use host-owned lowering; the text model is reserved for bounded source generation."""
         from .implementation_decisions import compile_contribution
@@ -357,7 +391,29 @@ class ModelRouter:
         description: str = "",
         output_token_ceiling: int | None = None,
     ) -> dict[str, Any]:
-        """Return one host-validated native function call instead of free-form JSON."""
+        values = self._generate_tool_decisions_impl(
+            role,
+            messages,
+            tool_name=tool_name,
+            parameters=parameters,
+            description=description,
+            output_token_ceiling=output_token_ceiling,
+            allow_multiple=False,
+        )
+        return values[0]
+
+    def _generate_tool_decisions_impl(
+        self,
+        role: str,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        tool_name: str,
+        parameters: Mapping[str, Any],
+        description: str = "",
+        output_token_ceiling: int | None = None,
+        allow_multiple: bool,
+    ) -> tuple[dict[str, Any], ...]:
+        """Return host-validated native function calls from one assistant turn."""
 
         name = str(tool_name or "").strip()
         if not name:
@@ -384,12 +440,17 @@ class ModelRouter:
             if role in _REPOSITORY_POLICY_ROLES
             else tuple(dict(message) for message in messages)
         )
+        cardinality = (
+            "one or more times, once for each independent sibling item"
+            if allow_multiple
+            else "exactly once"
+        )
         request_messages = (
             *request_messages,
             {
                 "role": "system",
                 "content": (
-                    f"Call the required function {name} exactly once. "
+                    f"Call the required function {name} {cardinality}. "
                     "Do not answer in prose."
                 ),
             },
@@ -408,7 +469,7 @@ class ModelRouter:
             response_schema=None,
             tools=(schema,),
             tool_choice={"type": "function", "function": {"name": name}},
-            parallel_tool_calls=False,
+            parallel_tool_calls=allow_multiple,
             metadata={
                 "tool_stage": _ROLE_TOOL_STAGE.get(role, ""),
                 "role": role,
@@ -421,17 +482,24 @@ class ModelRouter:
         )
         with self._generation_scope(config):
             turn = adapter.generate_turn(request)
-        matches = tuple(call for call in turn.tool_calls if call.name == name)
-        if len(matches) == 1 and len(turn.tool_calls) == 1:
-            return dict(matches[0].arguments)
-        rejections = tuple(dict(call.arguments) for call in turn.tool_calls
-                           if call.name == "__mmm_rejected_tool_call__")
+        rejections = tuple(
+            dict(call.arguments)
+            for call in turn.tool_calls
+            if call.name == "__mmm_rejected_tool_call__"
+        )
         if rejections:
             raise NativeToolDecisionRejected(name, rejections)
-        raise ModelConfigurationError(
-            "Native structured decision did not return exactly one "
-            f"{name!r} tool call."
-        )
+        matches = tuple(call for call in turn.tool_calls if call.name == name)
+        if not matches or len(matches) != len(turn.tool_calls):
+            expected = "one or more" if allow_multiple else "exactly one"
+            raise ModelConfigurationError(
+                f"Native structured decision did not return {expected} {name!r} tool call(s)."
+            )
+        if not allow_multiple and len(matches) != 1:
+            raise ModelConfigurationError(
+                f"Native structured decision did not return exactly one {name!r} tool call."
+            )
+        return tuple(dict(call.arguments) for call in matches)
 
     def _prepare_generation_request(
         self,
