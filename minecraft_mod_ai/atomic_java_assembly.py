@@ -77,76 +77,117 @@ def _assembly_context(value: Any, selected_path: list, path: tuple = ()) -> Any:
 
 
 class JavaStructureAssembly:
-    def __init__(self, callback: Callable, payload: Mapping[str, Any], *, output_token_ceiling: int | None,
-                 config: Any = None):
+    def __init__(
+        self,
+        callback: Callable,
+        payload: Mapping[str, Any],
+        *,
+        output_token_ceiling: int | None,
+        config: Any = None,
+        multi_callback: Callable | None = None,
+    ):
         self.callback = callback
+        self.multi_callback = multi_callback if callable(multi_callback) else None
         self.payload = dict(payload)
         self.root: dict[str, Any] = {}
         self.calls = 0
         self.output_token_ceiling = output_token_ceiling
         self.config = config
 
-    def _ask(self, schema: Mapping[str, Any], path: list, purpose: str) -> dict[str, Any]:
+    def _request(
+        self,
+        schema: Mapping[str, Any],
+        path: list,
+        purpose: str,
+        *,
+        multiple: bool,
+        limit: int = 1,
+    ) -> tuple[dict[str, Any], ...]:
         if self.calls >= MAX_ASSEMBLY_CALLS:
             raise OutputBudgetExhausted(
                 "OUTPUT_BUDGET_EXHAUSTED: Java assembly call limit requires further decomposition."
             )
         assert_atomic_model_schema(schema, surface="native Java assembly")
         self.calls += 1
-        # Replace the old one-shot output instructions, retaining semantic authority.
         payload = {key: value for key, value in self.payload.items()
                    if key not in {"generation_recipe", "scope"}}
         payload["assembly"] = {
-            "path": path, "purpose": purpose, "accepted_structure": _assembly_context(self.root, path),
+            "path": path,
+            "purpose": purpose,
+            "accepted_structure": _assembly_context(self.root, path),
             "remaining_calls": MAX_ASSEMBLY_CALLS - self.calls,
         }
+        use_multi = bool(multiple and self.multi_callback is not None)
+        callback = self.multi_callback if use_multi else self.callback
         kwargs = {
-            "tool_name": "emit_java_part", "parameters": dict(schema),
-            "description": "Fill the selected Java declaration or statement using native scalar arguments.",
+            "tool_name": "emit_java_part",
+            "parameters": dict(schema),
+            "description": (
+                "Emit one Java sibling item per native function call."
+                if use_multi
+                else "Fill the selected Java declaration or statement using native scalar arguments."
+            ),
         }
-        signature = inspect.signature(self.callback)
+        signature = inspect.signature(callback)
         if self.output_token_ceiling is not None and (
             "output_token_ceiling" in signature.parameters
             or any(p.kind == p.VAR_KEYWORD for p in signature.parameters.values())
         ):
             kwargs["output_token_ceiling"] = self.output_token_ceiling
         messages = [
-                {"role": "system", "content": (
-                    "Implement the host-selected concern through native emit_java_part calls. "
-                    "Fill only the current assembly.path using the supplied scalar schema. "
-                    "The host constructs objects/arrays; never serialize them into strings. "
-                    "Keep the authored requirements, dependency_api and available_sibling_api authoritative. "
-                    "Reuse exact sibling declarations; do not redeclare them or change their types/defaults. "
-                    "Accepted structure and enclosing declarations remain fixed. "
-                    "For part selection choose a needed part or done when this enclosing object is complete. "
-                    "A body value is one complete Java statement or balanced control-flow block, "
-                    "not a fragment of JSON or a partial brace. Split long logic into named helper methods. "
-                    "For a declaration, type/return_type contains only a Java type, never modifiers. "
-                    "The host adds static to outer fields/methods. Omit unnecessary optional scalar values. "
-                    "Do not invent Minecraft/Fabric APIs or metadata-only gameplay implementations."
-                )},
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True)},
-            ]
+            {"role": "system", "content": (
+                "Implement the host-selected concern through native emit_java_part calls. "
+                "Fill only the current assembly.path using the supplied scalar schema. "
+                "The host constructs objects/arrays; never serialize them into strings. "
+                "When the current path is a sibling batch, emit one function call per sibling item. "
+                "Keep the authored requirements, dependency_api and available_sibling_api authoritative. "
+                "Reuse exact sibling declarations; do not redeclare them or change their types/defaults. "
+                "Accepted structure and enclosing declarations remain fixed. "
+                "For part selection choose a needed part or done when this enclosing object is complete. "
+                "A body value is one complete Java statement or balanced control-flow block, "
+                "not a fragment of JSON or a partial brace. Split long logic into named helper methods. "
+                "For a declaration, type/return_type contains only a Java type, never modifiers. "
+                "The host adds static to outer fields/methods. Omit unnecessary optional scalar values. "
+                "Do not invent Minecraft/Fabric APIs or metadata-only gameplay implementations."
+            )},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True)},
+        ]
         from .model_context_budget import request_message_budget
 
         tools = [{"type": "function", "function": {
             "name": kwargs["tool_name"], "description": kwargs["description"], "parameters": schema,
         }}]
         budget = request_message_budget(self.config, tools)
-        # Preserve complete requirements/cursor instead of truncating authoritative JSON.
         size = len(json.dumps(messages, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
         if size + 2048 > budget:
             raise OutputBudgetExhausted(
                 f"OUTPUT_BUDGET_EXHAUSTED: Java assembly context needs decomposition ({size + 2048}>{budget})."
             )
         try:
-            value = self.callback("coder", messages, **kwargs)
-            Draft202012Validator(schema).validate(value)
+            raw = callback("coder", messages, **kwargs)
+            values = tuple(raw) if use_multi else (raw,)
+            if not values:
+                raise AtomicJavaDecisionError(
+                    f"ATOMIC_JAVA_ASSEMBLY_INVALID: {path}: native tool turn returned no items."
+                )
+            if len(values) > max(1, int(limit)):
+                raise AtomicJavaDecisionError(
+                    f"ATOMIC_JAVA_ASSEMBLY_INVALID: {path}: native tool turn returned "
+                    f"{len(values)} items, limit is {limit}.",
+                    response=values,
+                )
+            validated: list[dict[str, Any]] = []
+            for value in values:
+                Draft202012Validator(schema).validate(value)
+                validated.append(dict(value))
+            return tuple(validated)
         except (NativeToolDecisionRejected, ValidationError) as exc:
             raise AtomicJavaDecisionError(
                 f"ATOMIC_JAVA_ASSEMBLY_INVALID: {path}: {exc}",
                 response=getattr(exc, "rejections", getattr(exc, "instance", None)),
             ) from exc
+        except AtomicJavaDecisionError:
+            raise
         except Exception as exc:
             from .llama_context_safety_contract import ContextPackingError
             from .llama_exact_context import ExactContextOverflow
@@ -161,14 +202,35 @@ class JavaStructureAssembly:
                     context_overflow = True
                     break
                 current = getattr(current, "cause", None) or current.__cause__ or current.__context__
-            if context_overflow or (boundary is not None and boundary.kind in {OUTPUT_EXHAUSTED, CONTEXT_PRESSURE}):
+            if context_overflow or (
+                boundary is not None and boundary.kind in {OUTPUT_EXHAUSTED, CONTEXT_PRESSURE}
+            ):
                 raise OutputBudgetExhausted(
                     f"OUTPUT_BUDGET_EXHAUSTED: Java component {path} requires decomposition."
                 ) from exc
             raise
-        return dict(value)
 
-    def _object(self, schema: Mapping[str, Any], target: dict, path: list) -> None:
+    def _ask(self, schema: Mapping[str, Any], path: list, purpose: str) -> dict[str, Any]:
+        return self._request(schema, path, purpose, multiple=False, limit=1)[0]
+
+    def _ask_many(
+        self,
+        schema: Mapping[str, Any],
+        path: list,
+        purpose: str,
+        *,
+        limit: int,
+    ) -> tuple[dict[str, Any], ...]:
+        return self._request(schema, path, purpose, multiple=True, limit=limit)
+
+    def _object(
+        self,
+        schema: Mapping[str, Any],
+        target: dict,
+        path: list,
+        *,
+        scalars_seeded: bool = False,
+    ) -> None:
         properties = schema["properties"]
         scalars = {key: _scalar_schema(value, key) for key, value in properties.items()
                    if value.get("type") not in {"array", "object"}}
@@ -192,12 +254,13 @@ class JavaStructureAssembly:
                 scalars["name"]["not"] = {"enum": sorted(reserved)}
         required = set(schema.get("required", ()))
         names = list(scalars)
-        for start in range(0, len(names), MAX_MODEL_FIELDS):
-            keys = names[start:start + MAX_MODEL_FIELDS]
-            target.update(self._ask(
-                _closed({key: scalars[key] for key in keys}, [key for key in keys if key in required]),
-                path, "Declare this component's identity, type and initial value.",
-            ))
+        if not scalars_seeded:
+            for start in range(0, len(names), MAX_MODEL_FIELDS):
+                keys = names[start:start + MAX_MODEL_FIELDS]
+                target.update(self._ask(
+                    _closed({key: scalars[key] for key in keys}, [key for key in keys if key in required]),
+                    path, "Declare this component's identity, type and initial value.",
+                ))
         arrays = {key: value for key, value in properties.items() if value.get("type") == "array"}
         while arrays:
             selected = self._ask(
@@ -213,21 +276,59 @@ class JavaStructureAssembly:
                 )
             item_schema = arrays[selected]["items"]
             item_path = [*path, selected, len(values)]
+            remaining = MAX_PART_ITEMS - len(values)
             if item_schema.get("type") == "object":
-                item: dict[str, Any] = {}
-                values.append(item)
-                self._object(item_schema, item, item_path)
+                item_properties = item_schema.get("properties", {})
+                item_scalars = {
+                    key: _scalar_schema(value, key)
+                    for key, value in item_properties.items()
+                    if value.get("type") not in {"array", "object"}
+                }
+                item_required = set(item_schema.get("required", ()))
+                scalar_names = list(item_scalars)
+                if item_scalars and len(scalar_names) <= MAX_MODEL_FIELDS:
+                    seed_schema = _closed(
+                        item_scalars,
+                        [key for key in scalar_names if key in item_required],
+                    )
+                    seeds = self._ask_many(
+                        seed_schema,
+                        [*path, selected],
+                        "Declare one or more sibling components; one native call per sibling.",
+                        limit=remaining,
+                    )
+                    for seed in seeds:
+                        index = len(values)
+                        item = dict(seed)
+                        values.append(item)
+                        self._object(
+                            item_schema,
+                            item,
+                            [*path, selected, index],
+                            scalars_seeded=True,
+                        )
+                else:
+                    item: dict[str, Any] = {}
+                    values.append(item)
+                    self._object(item_schema, item, item_path)
             else:
                 scalar = _scalar_schema(item_schema, selected)
                 if selected == "modifiers":
                     scalar["enum"] = _MODIFIERS.get(str(path[-2]) if len(path) >= 2 else "", [])
-                value = self._ask(_closed({"value": scalar}, ["value"]), item_path,
-                                  "Append one complete value to the selected part.")["value"]
-                if arrays[selected].get("uniqueItems") and value in values:
-                    raise AtomicJavaDecisionError(
-                        f"ATOMIC_JAVA_ASSEMBLY_INVALID: duplicate {selected} value.", response=value,
-                    )
-                values.append(value)
+                emitted = self._ask_many(
+                    _closed({"value": scalar}, ["value"]),
+                    [*path, selected],
+                    "Append one or more complete values; one native call per value.",
+                    limit=remaining,
+                )
+                for row in emitted:
+                    value = row["value"]
+                    if arrays[selected].get("uniqueItems") and value in values:
+                        raise AtomicJavaDecisionError(
+                            f"ATOMIC_JAVA_ASSEMBLY_INVALID: duplicate {selected} value.",
+                            response=value,
+                        )
+                    values.append(value)
         # These are host-created containers. Validate their required shape too.
         try:
             Draft202012Validator(schema).validate(target)
