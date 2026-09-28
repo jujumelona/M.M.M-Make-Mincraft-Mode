@@ -117,3 +117,24 @@ def test_prerequisite_json_preserves_long_tail_and_newlines():
     payload["specification"]["actors"][0]["role"] = "x" * 14000 + "\nTAIL_RULE"
     context = planning._section_dependency_context("state_model", WORKSHEET_SECTIONS, {"behavior_contract": payload})
     assert json.loads(context) == {"behavior_contract": payload}
+
+
+def test_same_section_prior_chunks_are_authoritative_context():
+    prior = ({
+        "variables": [{"name": "credits", "owner": "server", "type": "Double"}],
+        "inapplicable_concerns": [],
+    },)
+    messages = planning._chunk_messages(
+        {"requirement_id": "req", "statement": "state"},
+        WORKSHEET_SECTIONS,
+        "state_model",
+        [],
+        {},
+        chunk_index=2,
+        chunk_count=3,
+        concerns=("variables",),
+        prior_chunks=prior,
+    )
+    assert '"name":"credits"' in messages[-1]["content"]
+    assert "Earlier accepted chunks from this same section" in messages[-1]["content"]
+    assert "State-model executable fields use the host DSL" in messages[0]["content"]

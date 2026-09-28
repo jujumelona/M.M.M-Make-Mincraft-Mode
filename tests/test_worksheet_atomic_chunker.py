@@ -138,3 +138,35 @@ def test_merge_auto_reconciles_empty_concerns_without_inapplicable_reasons():
 
     # Merged section passes canonical validation without ValueError.
     assert validate_worksheet_section(merged, allowed_refs, "behavior_contract") == merged
+
+
+def test_state_model_schema_rejects_non_compilable_free_prose():
+    from jsonschema import Draft202012Validator
+    from minecraft_mod_ai.planning_detail_slots import concern_record_schema
+
+    variable = concern_record_schema("state_model", "variables")
+    assert list(Draft202012Validator(variable).iter_errors({
+        "name": "현재 돈",
+        "owner": "server",
+        "type": "Double",
+        "unit": "credits",
+        "default": "0",
+        "domain": "economy",
+    }))
+
+    transition = concern_record_schema("state_model", "transitions")
+    assert list(Draft202012Validator(transition).iter_errors({
+        "from_state": "idle",
+        "trigger": "buy",
+        "guard": "credits is at least the price",
+        "mutation": "subtract the price from credits",
+        "to_state": "done",
+    }))
+
+    Draft202012Validator(transition).validate({
+        "from_state": "idle",
+        "trigger": "buy",
+        "guard": "credits >= cost",
+        "mutation": "credits -= cost",
+        "to_state": "done",
+    })
