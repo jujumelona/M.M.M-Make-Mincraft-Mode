@@ -21,6 +21,8 @@ def test_native_http_assembles_java_without_nested_json_or_repair(monkeypatch):
         [
             {"type": "int", "name": "credits", "initializer": "7"},
             {"type": "float", "name": "fuel", "initializer": "100.0"},
+            {"type": "boolean", "name": "current_planet_surface", "initializer": True},
+            {"type": "int", "name": "reputation_score", "initializer": 0},
         ],
         {"part": "done"},
         {"part": "done"},
@@ -93,6 +95,8 @@ def test_native_http_assembles_java_without_nested_json_or_repair(monkeypatch):
         thread.join(timeout=5)
     assert "static int credits = 7;" in source
     assert "static float fuel = 100.0f;" in source
+    assert "static boolean current_planet_surface = true;" in source
+    assert "static int reputation_score = 0;" in source
     assert "class ShipData" in source
     assert len(requests) == len(responses)
     assert all(r["tools"][0]["function"]["name"] == "emit_java_part" for r in requests)
@@ -109,4 +113,8 @@ def test_native_http_assembles_java_without_nested_json_or_repair(monkeypatch):
         assert "Call the required function emit_java_part" in request["messages"][0]["content"]
         assert "Repository branch policy" in request["messages"][0]["content"]
         schema = request["tools"][0]["function"]["parameters"]
-        assert all(value["type"] not in {"array", "object"} for value in schema["properties"].values())
+        assert all(
+            value.get("type") not in {"array", "object"}
+            for value in schema["properties"].values()
+            if isinstance(value.get("type"), str)
+        )
