@@ -185,6 +185,8 @@ class _Expression:
         cursor = 0
         source = str(text or "")
         while cursor < len(source):
+            if not source[cursor:].strip():
+                break
             match = _TOKEN.match(source, cursor)
             if match is None:
                 raise ValueError(
@@ -404,6 +406,10 @@ def _compile_mutation(
                 + repr(statement)
             )
         name, operator, expression = match.groups()
+        if not str(expression or "").strip():
+            raise ValueError(
+                f"STRUCTURED_STATE_MUTATION: empty assignment expression for {name!r}"
+            )
         if name not in declared:
             raise ValueError(
                 f"STRUCTURED_STATE_MUTATION: undeclared state variable {name!r}"
