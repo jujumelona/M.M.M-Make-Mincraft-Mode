@@ -8,6 +8,7 @@ reassembles field fragments and validates the canonical worksheet section afterw
 """
 
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 import json
 from typing import Any
 
@@ -16,7 +17,7 @@ from .model_output_atomicity_contract import (
     _assert_closed_object_schemas,
     is_atomic_model_schema,
 )
-from .planning_detail_slots import DETAIL_RECORDS
+from .planning_detail_slots import DETAIL_RECORDS, record_field_schema
 from .planning_detail_template import (
     _PLACEHOLDERS,
     _normalize_section_name,
@@ -173,6 +174,7 @@ def worksheet_chunk_schema(
     concerns: Sequence[str],
     *,
     include_evidence: bool = False,
+    record_counts: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
     """Return one bounded partial-record schema for a host-selected field page."""
     key = _normalize_section_name(section)
@@ -185,20 +187,51 @@ def worksheet_chunk_schema(
     authored_signal: list[dict[str, Any]] = []
     for concern in active:
         fields = projection[concern]
-        properties[concern] = {
-            "type": "array",
-            "maxItems": 4,
-            "items": {
-                "type": "object",
-                "properties": {
-                    field: {"type": "string", "minLength": 1, "maxLength": 256}
-                    for field in fields
-                },
-                "required": [],
-                "minProperties": 1,
-                "additionalProperties": False,
-            },
+        field_schemas: dict[str, Any] = {}
+        for field in fields:
+            field_schema = dict(record_field_schema(key, concern, field))
+            raw_type = field_schema.get("type")
+            string_capable = raw_type == "string" or (
+                isinstance(raw_type, list) and "string" in raw_type
+            )
+            if string_capable:
+                field_schema.setdefault("maxLength", 256)
+            if raw_type == "array" or (
+                isinstance(raw_type, list) and "array" in raw_type
+            ):
+                field_schema.setdefault("maxItems", 4)
+                items = field_schema.get("items")
+                if isinstance(items, dict) and items.get("type") == "string":
+                    items.setdefault("maxLength", 256)
+            field_schemas[field] = field_schema
+        item_schema: dict[str, Any] = {
+            "type": "object",
+            "properties": field_schemas,
+            "required": [],
+            "minProperties": 1,
+            "additionalProperties": False,
         }
+        if key == "state_model":
+            from .structured_state_runtime import constrain_state_record_schema
+
+            item_schema = constrain_state_record_schema(concern, item_schema)
+        count = (
+            int(record_counts[concern])
+            if isinstance(record_counts, Mapping) and concern in record_counts
+            else None
+        )
+        array_schema: dict[str, Any] = {
+            "type": "array",
+            "maxItems": 4 if count is None else count,
+            "items": item_schema,
+        }
+        if count is not None:
+            if count < 0 or count > 4:
+                raise ValueError(
+                    f"Invalid host-fixed record count for {key}.{concern}: {count}"
+                )
+            array_schema["minItems"] = count
+        properties[concern] = array_schema
         authored_signal.append(
             {"required": [concern], "properties": {concern: {"minItems": 1}}}
         )
@@ -303,11 +336,17 @@ def worksheet_chunk_prompt(
     concerns: Sequence[str],
     *,
     include_evidence: bool = False,
+    record_counts: Mapping[str, int] | None = None,
 ) -> str:
     from .planning_contract_ssot import schema_skeleton_template
 
     key = _normalize_section_name(section)
-    schema = worksheet_chunk_schema(key, concerns, include_evidence=include_evidence)
+    schema = worksheet_chunk_schema(
+        key,
+        concerns,
+        include_evidence=include_evidence,
+        record_counts=record_counts,
+    )
     skeleton = schema_skeleton_template(schema)
     projection = _chunk_projection(key, concerns)
     field_text = "; ".join(
@@ -316,6 +355,18 @@ def worksheet_chunk_prompt(
     evidence_instruction = (
         " Also supply constraint_evidence_refs as an array of host-supplied evidence IDs (or empty array)."
         if include_evidence
+        else ""
+    )
+    fixed_counts = {
+        concern: int(record_counts[concern])
+        for concern in concerns
+        if isinstance(record_counts, Mapping) and concern in record_counts
+    }
+    fixed_count_text = (
+        "Host-fixed Record Counts: "
+        + ", ".join(f"{concern}={count}" for concern, count in fixed_counts.items())
+        + ". For repeated field pages, emit exactly that many records in the same order."
+        if fixed_counts
         else ""
     )
     return "\n".join(
@@ -331,6 +382,7 @@ def worksheet_chunk_prompt(
             "The chunk must contain at least one concrete concern record or one concrete inapplicable reason; evidence refs alone are not an answer.",
             "Never use N/A, none, TODO, TBD, unknown, same-as-above, or another placeholder as the authored content.",
             "DO NOT output JSON Schema keywords (never output 'type', 'properties', 'required', or 'additionalProperties').",
+            fixed_count_text,
             "Return only a JSON object following this data template skeleton:",
             json.dumps(skeleton, ensure_ascii=False, indent=2),
         )
@@ -439,7 +491,7 @@ def merge_worksheet_section_chunks(
 
     for concern, columns in records.items():
         expected_fields = tuple(columns.split())
-        cleaned_records: list[dict[str, str]] = []
+        cleaned_records: list[dict[str, Any]] = []
         for item in merged_specification[concern]:
             if not isinstance(item, Mapping):
                 continue
@@ -449,14 +501,44 @@ def merge_worksheet_section_chunks(
             )
             if not has_meaningful:
                 continue
-            clean_item: dict[str, str] = {}
+            clean_item: dict[str, Any] = {}
             for field_name in expected_fields:
-                val = str(item.get(field_name) or "").strip()
+                raw_value = item.get(field_name)
+                if (
+                    key == "integration"
+                    and concern == "initialization_order"
+                    and field_name == "prerequisite"
+                    and raw_value is None
+                ):
+                    clean_item[field_name] = "no prerequisite"
+                    continue
+                field_schema = record_field_schema(key, concern, field_name)
+                raw_type = field_schema.get("type")
+                array_capable = raw_type == "array" or (
+                    isinstance(raw_type, list) and "array" in raw_type
+                )
+                if array_capable and isinstance(raw_value, list):
+                    clean_item[field_name] = deepcopy(raw_value)
+                    continue
+                if raw_value is None and isinstance(raw_type, list) and "null" in raw_type:
+                    clean_item[field_name] = None
+                    continue
+                val = str(raw_value or "").strip()
                 if not val or val.casefold() in _PLACEHOLDERS:
-                    val = _CANONICAL_FIELD_DEFAULTS.get(
-                        field_name,
-                        f"standard {field_name}",
-                    )
+                    if array_capable:
+                        clean_item[field_name] = []
+                    elif (
+                        key == "integration"
+                        and concern == "initialization_order"
+                        and field_name == "prerequisite"
+                    ):
+                        clean_item[field_name] = "no prerequisite"
+                    else:
+                        clean_item[field_name] = _CANONICAL_FIELD_DEFAULTS.get(
+                            field_name,
+                            f"standard {field_name}",
+                        )
+                    continue
                 clean_item[field_name] = val
             cleaned_records.append(clean_item)
         merged_specification[concern] = cleaned_records
