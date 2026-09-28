@@ -8,6 +8,7 @@ from minecraft_mod_ai.authored_plan import AuthoredPlan
 from minecraft_mod_ai.authored_production import (
     _authored_execution_units,
     _compile_new_authored_modules,
+    _execution_plan_projection,
     _implementation_authored_plan,
     materialize_authored_execution_scaffold,
 )
@@ -373,6 +374,20 @@ def _structured_state_plan(existing_sha: str = "") -> AuthoredPlan:
     )
 
 
+def test_execution_document_normalization_preserves_structured_semantic_authority() -> None:
+    base = _structured_state_plan()
+    plan = AuthoredPlan(
+        base.requested_prompt,
+        "# Wrapper\n# state_model\n- variables: name owner type unit default domain\n",
+        structured_sections=base.structured_sections,
+    )
+
+    projected, _report = _execution_plan_projection(plan)
+
+    assert projected.structured_sections == base.structured_sections
+    assert projected.schema_version == plan.schema_version
+
+
 def test_existing_authored_units_preserve_structured_semantic_authority() -> None:
     plan = _structured_state_plan("sha256:" + "c" * 64)
     proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(plan)
@@ -400,6 +415,34 @@ def test_reasoning_projection_preserves_structured_semantic_authority() -> None:
     assert provenance is not None
     assert projected.structured_sections == base.structured_sections
     assert projected.schema_version == plan.schema_version
+
+
+def test_contract_shaped_legacy_plan_is_migrated_to_structured_authority(monkeypatch) -> None:
+    import minecraft_mod_ai.planning_state_implementation as implementation
+
+    structured = _structured_state_plan().structured_sections
+    monkeypatch.setattr(
+        implementation,
+        "compile_authored_worksheet",
+        lambda _router, _prompt: structured,
+    )
+    legacy = AuthoredPlan(
+        "space mod",
+        (
+            "## behavior_contract\n- actors: player ship\n"
+            "## state_model\n- variables: credits\n"
+            "## integration\n- lifecycle: initialize\n"
+            "## verification\n- tests: compile and runtime\n"
+        ),
+    )
+
+    proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(legacy)
+
+    saved = proposal.game_design["authored_plan"]
+    assert saved["structured_sections"] == structured
+    request = proposal.modules[0].config["implementation_graph_request"]
+    assert request["structured_sections"] == structured
+    assert request["text"].startswith("## state_model\n")
 
 
 def test_existing_authored_plan_requires_localize_freeze_before_coder():
