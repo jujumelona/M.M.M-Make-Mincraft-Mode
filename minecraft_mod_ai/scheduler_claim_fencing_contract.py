@@ -97,8 +97,10 @@ def _commit_success(
             if touched:
                 try:
                     with _INDEX_COMMIT_LOCK:
+                        # Keep the execution snapshot current in memory. The orchestrator
+                        # persists the canonical manifest once at the generation phase
+                        # boundary, avoiding one manifest transaction per work node.
                         shared_index.update_files(touched)
-                        shared_index.write_manifest()
                 except Exception as exc:
                     connection.rollback()
                     raise index_error_type(
