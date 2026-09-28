@@ -1,5 +1,6 @@
 id: feature/state_model/transitions
-task: Resolve exactly one transitions record for the supplied feature and acceptance criterion.
+task: Resolve exactly one transitions record for the supplied feature and acceptance
+  criterion.
 input_fields:
 - requirement
 - criterion
