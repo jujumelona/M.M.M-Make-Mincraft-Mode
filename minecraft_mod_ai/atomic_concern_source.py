@@ -903,6 +903,117 @@ def _compiler_diagnostic_fingerprint(log: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _compiler_failure_line_numbers(log: str, *, relative: str) -> tuple[int, ...]:
+    filename = re.escape(PurePosixPath(relative).name)
+    numbers: list[int] = []
+    for match in re.finditer(
+        rf"(?:^|[\\/]){filename}:(\\d+)(?::\\d+)?(?::|\\s)",
+        str(log or ""),
+        re.MULTILINE,
+    ):
+        number = int(match.group(1))
+        if number not in numbers:
+            numbers.append(number)
+    return tuple(numbers)
+
+
+def _compiler_failure_source_excerpt(
+    log: str,
+    *,
+    source: str,
+    relative: str,
+    concern: str,
+    context_lines: int = 2,
+    max_chars: int = 5000,
+) -> str:
+    source_rows = str(source or "").splitlines()
+    selected: set[int] = set()
+    failing = set(_compiler_failure_line_numbers(log, relative=relative))
+    for number in failing:
+        if concern and _concern_at_line(source, number) != concern:
+            continue
+        for current in range(
+            max(1, number - context_lines),
+            min(len(source_rows), number + context_lines) + 1,
+        ):
+            selected.add(current)
+    if not selected:
+        return ""
+
+    rows: list[str] = []
+    previous = 0
+    for number in sorted(selected):
+        if previous and number > previous + 1:
+            rows.append("    ...")
+        marker = ">>" if number in failing else "  "
+        rows.append(f"{marker} {number:5d} | {source_rows[number - 1]}")
+        previous = number
+    excerpt = "\n".join(rows)
+    if len(excerpt) > max_chars:
+        excerpt = excerpt[:max_chars].rstrip() + "\n... failing source excerpt truncated by host ..."
+    return excerpt
+
+
+def _compiler_repair_context(
+    log: str,
+    *,
+    source: str,
+    relative: str,
+    concern: str,
+    max_chars: int = 12000,
+) -> str:
+    diagnostics = _compact_compiler_failure(
+        log,
+        source=source,
+        relative=relative,
+        concern=concern,
+        max_chars=7000,
+    )
+    excerpt = _compiler_failure_source_excerpt(
+        log,
+        source=source,
+        relative=relative,
+        concern=concern,
+    )
+    parts = [
+        "ACTUAL COMPILER FAILURE FROM THE JUST-COMPILED CANDIDATE "
+        "(authoritative; preserve diagnostic text exactly):\n" + diagnostics,
+    ]
+    if excerpt:
+        parts.append(
+            "CURRENT COMPILED SOURCE AROUND THE REPORTED LINES "
+            "(>> marks a compiler-reported line):\n" + excerpt
+        )
+    parts.append(
+        "REPAIR CONTRACT:\n"
+        "- Fix every compiler error above that belongs to this selected concern.\n"
+        "- Use current_selected_region_source as the complete replacement scope.\n"
+        "- Preserve already-correct behavior and sibling APIs; do not rewrite unrelated code.\n"
+        "- Re-check JDK/package names, declared types, generics, final/mutability, method signatures, and initialization.\n"
+        "- Return only the complete corrected selected Java region; the host will compile it again."
+    )
+    payload = "\n\n".join(parts)
+    if len(payload) > max_chars:
+        payload = payload[:max_chars].rstrip() + "\n... repair context truncated by host ..."
+    return payload
+
+
+def _compiler_repair_fingerprint(
+    log: str,
+    *,
+    source: str,
+    relative: str,
+    concern: str,
+) -> str:
+    diagnostic = _compiler_diagnostic_fingerprint(log)
+    members = _region_content(source, concern=concern, region="MEMBERS")
+    initialize = _region_content(source, concern=concern, region="INIT")
+    payload = "\n".join((diagnostic, concern, members, initialize))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+
+
 def _failure_measure(log: str) -> int:
     errors = {
         line.strip()
@@ -1641,6 +1752,9 @@ def _messages(
         "earlier concerns: use their exact symbol spelling, declared type, signature, "
         "and mutability. Never treat an object/record field as a primitive, never assign "
         "to a field declared final, and never invent a sibling symbol that is not listed. "
+        "When repair_failure is present it comes from the real compiler and is authoritative: "
+        "read every diagnostic and the cited current source lines, then correct those exact "
+        "compile failures in current_selected_region_source before making any unrelated change. "
         "Do not implement sibling concerns. "
         + (
             "This section is pure Java domain logic. Do not reference net.minecraft.*, "
@@ -1699,6 +1813,20 @@ def _messages(
                 "declare a private static non-final backing field with a compatible runtime "
                 "value type instead of referencing an undeclared symbol or inventing a metadata DTO."
             ),
+            "compiler_first_rules": [
+                "The first answer must compile as Java for the selected host JDK; do not rely on a later repair pass.",
+                "Never guess a package or fully-qualified class name. Use only a JDK/external type whose canonical package and API are known from the supplied authority.",
+                "For non-java.lang JDK types, prefer canonical fully-qualified names because imports are not allowed in an atomic region.",
+                "Respect available_sibling_api types and mutability exactly; final fields are read-only after declaration.",
+                "Keep generic types exact. Do not use Object where a typed sibling/dependency API requires a concrete generic type.",
+            ],
+            "jdk_package_anchors": {
+                "collections_and_core_util": "java.util",
+                "concurrency_executors_and_concurrent_collections": "java.util.concurrent",
+                "locks": "java.util.concurrent.locks",
+                "atomics": "java.util.concurrent.atomic",
+                "time": "java.time",
+            },
             "preferred_shape": (
                 "fields_and_local_types"
                 if name in {"variables", "inputs", "outputs", "stored_state", "payloads"}
@@ -2109,23 +2237,6 @@ class AtomicConcernExecutor:
         failure = self.compile_log(report) or str(
             getattr(report, "error", "") or "Gradle compileJava failed."
         )
-        fingerprint = _compiler_diagnostic_fingerprint(failure)
-        if fingerprint in self.seen_failures:
-            repeated_name = _failure_concern(
-                self.source,
-                log=failure,
-                relative=self.relative,
-            )
-            raise CustomModuleGenerationError(
-                "ATOMIC_CONCERN_COMPILE_NO_PROGRESS: compiler diagnostics repeated.\n"
-                + _compact_compiler_failure(
-                    failure,
-                    source=self.source,
-                    relative=self.relative,
-                    concern=repeated_name,
-                )
-            )
-        self.seen_failures.add(fingerprint)
         name = _failure_concern(self.source, log=failure, relative=self.relative)
         if name in self.host_owned_concerns:
             raise CustomModuleGenerationError(
@@ -2144,13 +2255,33 @@ class AtomicConcernExecutor:
                     concern="",
                 )
             )
-        compact_failure = _compact_compiler_failure(
+
+        fingerprint = _compiler_repair_fingerprint(
             failure,
             source=self.source,
             relative=self.relative,
             concern=name,
         )
-        self._apply(self._concern(name), failure=compact_failure)
+        if fingerprint in self.seen_failures:
+            raise CustomModuleGenerationError(
+                "ATOMIC_CONCERN_COMPILE_NO_PROGRESS: identical compiler diagnostics "
+                "recurred against the identical concern source.\n"
+                + _compact_compiler_failure(
+                    failure,
+                    source=self.source,
+                    relative=self.relative,
+                    concern=name,
+                )
+            )
+        self.seen_failures.add(fingerprint)
+
+        repair_context = _compiler_repair_context(
+            failure,
+            source=self.source,
+            relative=self.relative,
+            concern=name,
+        )
+        self._apply(self._concern(name), failure=repair_context)
         self.repairs += 1
         return self._compile()
 
