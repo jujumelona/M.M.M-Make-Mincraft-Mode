@@ -1030,6 +1030,19 @@ def compile_authored_design(
     router: Any, plan: AuthoredPlan, *, existing_input_sha256: str = ""
 ) -> CompleteProposal:
     implementation_plan, source_projection = _implementation_authored_plan(plan)
+    effective_existing = str(
+        existing_input_sha256 or implementation_plan.existing_input_sha256 or ""
+    ).strip()
+    if (
+        not effective_existing
+        and callable(getattr(router, "generate_text", None))
+    ):
+        from .production_state_compiler import bind_production_state_contract
+
+        implementation_plan = bind_production_state_contract(
+            router,
+            implementation_plan,
+        )
     execution_plan, execution_projection = _execution_plan_projection(implementation_plan)
     # These are host project coordinates, not inferred gameplay or placeholder content.
     mod_id = "authored_" + execution_plan.calculate_hash()[:12]
