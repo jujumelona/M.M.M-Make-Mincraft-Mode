@@ -9,6 +9,7 @@ from minecraft_mod_ai.complete_planner import (
     _design_writing_template,
 )
 from minecraft_mod_ai.authored_document_contract import normalize_authored_document
+from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
 from minecraft_mod_ai.implementation_ir import (
     ImplementationGraphError,
     decompose_authored_units,
@@ -56,21 +57,44 @@ def test_design_writing_template_emits_canonical_sections_at_h2() -> None:
     assert re.search(r"(?m)^# (?:behavior_contract|state_model)$", template) is None
 
 
-def test_planner_prompt_requires_canonical_sections_instead_of_allowing_omission() -> None:
-    class Router:
-        messages = ()
+def test_planner_uses_structured_authored_compiler_not_free_markdown(monkeypatch) -> None:
+    import minecraft_mod_ai.planning_state_implementation as implementation
 
-        def generate_text(self, _role, messages, **_kwargs):
-            self.messages = messages
-            return "## behavior_contract\nplaceholder\n"
+    state_spec = {
+        **{name: [] for name in DETAIL_RECORDS["state_model"]},
+        "variables": [{
+            "name": "credits",
+            "owner": "Player",
+            "type": "Int",
+            "unit": "credits",
+            "default": "0",
+            "domain": "non-negative",
+        }],
+        "inapplicable_concerns": [
+            {"concern": name, "reason": "not required"}
+            for name in DETAIL_RECORDS["state_model"]
+            if name != "variables"
+        ],
+    }
+    structured = {
+        "state_model": {
+            "specification": state_spec,
+            "constraint_evidence_refs": [],
+        }
+    }
+    monkeypatch.setattr(
+        implementation,
+        "compile_authored_worksheet",
+        lambda _router, _prompt: structured,
+    )
 
-    router = Router()
-    CompleteGameDesignPlanner(router).plan("space mod")
-    system_prompt = router.messages[0]["content"]
+    plan = CompleteGameDesignPlanner(object()).plan("space mod")
 
-    assert "Use every canonical template section heading exactly once" in system_prompt
-    assert "level 2 (`##`)" in system_prompt
-    assert "leaving irrelevant parts aside" not in system_prompt
+    assert plan.structured_sections == structured
+    assert plan.schema_version == "mmm/authored-plan-v2"
+    assert plan.text.startswith("## state_model\n")
+    assert "- variables:" in plan.text
+    assert "credits" in plan.text
 
 
 def test_legacy_planner_heading_layout_is_migrated_without_mutating_requirements() -> None:
@@ -122,40 +146,36 @@ def test_fresh_canonical_h2_layout_is_accepted_without_legacy_migration() -> Non
 
 
 
-def test_planner_preserves_raw_text_and_omits_absent_optional_execution_work() -> None:
-    raw = (
-        "## behavior_contract\nTrade ore for credits.\n"
-        "## state_model\nStore credits and ship state.\n"
-        "## algorithm\nCalculate prices.\n"
-        "## integration\nWire gameplay.\n"
-        "## resources_and_ui\nRender the trade UI.\n"
-        "## failure_and_limits\nReject invalid trades.\n"
-        "## reuse_assessment\nReference only.\n"
-        "## verification\nExercise trades.\n"
-    )
+def test_structured_renderer_omits_inapplicable_execution_sections() -> None:
+    from minecraft_mod_ai.authored_structured_design import render_structured_sections
 
-    class Router:
-        def generate_text(self, *_args, **_kwargs):
-            return raw
-
-    plan = CompleteGameDesignPlanner(Router()).plan("space mod")
-    assert plan.text == raw
-
-    normalized, report = normalize_authored_document(plan.text)
-    assert normalized == raw
-    assert report is None
-    units = decompose_authored_units(normalized)
-    unit_ids = {unit["unit_id"] for unit in units}
-    assert unit_ids == {
-        "state_model",
-        "behavior_contract",
-        "algorithm",
-        "resources_and_ui",
-        "failure_and_limits",
-        "integration",
+    state_spec = {
+        **{name: [] for name in DETAIL_RECORDS["state_model"]},
+        "variables": [{
+            "name": "credits",
+            "owner": "Player",
+            "type": "Int",
+            "unit": "credits",
+            "default": "0",
+            "domain": "non-negative",
+        }],
+        "inapplicable_concerns": [
+            {"concern": name, "reason": "not required"}
+            for name in DETAIL_RECORDS["state_model"]
+            if name != "variables"
+        ],
     }
-    assert "authority_and_network" not in unit_ids
-    assert "persistence" not in unit_ids
+    text = render_structured_sections({
+        "state_model": {
+            "specification": state_spec,
+            "constraint_evidence_refs": [],
+        }
+    })
+
+    assert text.startswith("## state_model\n")
+    assert "- variables:" in text
+    assert "## authority_and_network" not in text
+    assert "## persistence" not in text
 
 
 def test_canonicalizer_repairs_duplicate_order_and_unknown_peer_headings() -> None:

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+from copy import deepcopy
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -927,6 +928,9 @@ def _concern_authority(
                         dict(outer.get("source_requirements") or {}),
                         concern=name,
                     ),
+                    "structured_records": deepcopy(
+                        outer.get("structured_records") or []
+                    ),
                 }
                 break
     return {
@@ -1333,8 +1337,11 @@ def _state_variable_contract(
     if not isinstance(source_requirements, Mapping):
         return ()
 
+    structured = authority.get("structured_records")
     records = (
-        _structured_requirement_records(source_requirements, concern)
+        tuple(dict(item) for item in structured if isinstance(item, Mapping))
+        if isinstance(structured, list) and structured
+        else _structured_requirement_records(source_requirements, concern)
         or _inline_state_variable_records(source_requirements, concern)
     )
     if records:

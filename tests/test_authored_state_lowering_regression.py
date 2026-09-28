@@ -19,6 +19,7 @@ from minecraft_mod_ai.custom_module_generator import (
     _call_atomic_java_region,
 )
 from minecraft_mod_ai.implementation_graph_execution import _bind_atomic_leaf_contract
+from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
 
 
 STATE_REQUIREMENTS = {
@@ -93,6 +94,54 @@ def test_concern_provenance_is_host_sliced_before_source_generation() -> None:
     transitions = _obligation_payload(task, "transitions")["source_requirements"]
     assert list(variables) == ["R29", "R30", "R31", "R32", "R33"]
     assert list(transitions) == ["R29", "R34", "R35", "R36"]
+
+
+def test_structured_records_are_semantic_authority_over_markdown() -> None:
+    state_spec = {
+        **{name: [] for name in DETAIL_RECORDS["state_model"]},
+        "variables": [{
+            "name": "credits",
+            "owner": "Player",
+            "type": "Int",
+            "unit": "credits",
+            "default": "0",
+            "domain": "non-negative",
+        }],
+        "inapplicable_concerns": [
+            {"concern": name, "reason": "not required"}
+            for name in DETAIL_RECORDS["state_model"]
+            if name != "variables"
+        ],
+    }
+    structured = {
+        "state_model": {
+            "specification": state_spec,
+            "constraint_evidence_refs": [],
+        }
+    }
+    task = {"task_id": "structured-authority"}
+    node = {
+        "symbol": "AuthoredStateModel",
+        "obligations": [_model_obligation("variables")],
+    }
+    section, concerns = _bind_atomic_leaf_contract(
+        task,
+        node,
+        {
+            "R12": "## state_model",
+            "R13": "- variables: deliberately ambiguous human projection",
+        },
+        structured_sections=structured,
+    )
+
+    assert section == "state_model"
+    assert [item["concern"] for item in concerns] == ["variables"]
+    payload = json.loads(task["implementation_obligations"][0])
+    assert payload["structured_records"] == state_spec["variables"]
+
+    contract = _state_variable_contract(task, concerns[0])
+    assert contract[0]["java_type"] == "int"
+    assert contract[0]["default_literal"] == "0"
 
 
 def test_graph_frontend_assigns_each_state_page_to_only_its_actual_concern() -> None:
