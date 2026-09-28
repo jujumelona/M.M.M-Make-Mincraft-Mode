@@ -98,6 +98,19 @@ def test_ten_section_dag_preserves_objects_through_handoff():
             calls.append(section)
             return json.dumps(payload)
 
+        def generate_tool_decision(
+            self, role, messages, *, tool_name, parameters, description=""
+        ):
+            return json.loads(
+                self.generate_text(
+                    role,
+                    messages,
+                    response_schema=parameters,
+                    response_format="json",
+                    enable_tools=False,
+                )
+            )
+
     requirement = {"requirement_id": "req_001", "statement": "Gather a resource."}
     state = {
         "research_queue": [{"research_id": "r", "requirement_ref": "req_001", "status": "complete"}],
