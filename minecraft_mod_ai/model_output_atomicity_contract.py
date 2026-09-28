@@ -59,7 +59,6 @@ def _assert_closed_object_schemas(
     """
 
     if isinstance(value, Mapping):
-        schema_type = value.get("type")
         has_properties = "properties" in value
         is_object = _schema_has_type(value, "object") or (
             has_properties and not scoped_object_constraint
