@@ -14,7 +14,7 @@ from minecraft_mod_ai.planning_detail_template import (
 )
 from minecraft_mod_ai.planning_handoff_contract import project_detailed_plan_for_request_catalog
 from minecraft_mod_ai.worksheet_atomic_chunker import pack_section_concerns, worksheet_chunk_schema
-from worksheet_fixtures import row
+from worksheet_fixtures import flatten_record, row
 
 
 @pytest.mark.parametrize("section", WORKSHEET_SECTIONS)
@@ -90,7 +90,11 @@ def test_ten_section_dag_preserves_objects_through_handoff():
                         prop_schema.get("items", {}).get("properties", {})
                     )
                     payload[prop] = [
-                        {key: value for key, value in item.items() if key in allowed_fields}
+                        {
+                            key: value
+                            for key, value in flatten_record(item).items()
+                            if key in allowed_fields
+                        }
                         for item in full["specification"][prop]
                     ]
             Draft202012Validator(schema).validate(payload)

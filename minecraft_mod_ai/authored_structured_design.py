@@ -83,6 +83,25 @@ def _projection_text(value: Any) -> str:
     )
 
 
+def _projection_record(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Flatten canonical nested records only for the human Markdown projection."""
+    result: dict[str, Any] = {}
+
+    def visit(value: Mapping[str, Any]) -> None:
+        for key, item in value.items():
+            if isinstance(item, Mapping):
+                visit(item)
+                continue
+            if key in result:
+                raise ValueError(
+                    f"AUTHORED_STRUCTURED_DESIGN: duplicate leaf field {key!r}"
+                )
+            result[str(key)] = item
+
+    visit(record)
+    return result
+
+
 def render_structured_sections(sections: Mapping[str, Any]) -> str:
     normalized = normalize_structured_sections(sections)
     lines: list[str] = []
@@ -98,8 +117,9 @@ def render_structured_sections(sections: Mapping[str, Any]) -> str:
             fields = tuple(columns.split())
             lines.append(f"- {concern}: {' '.join(fields)}")
             for index, record in enumerate(records, start=1):
+                projected = _projection_record(record)
                 parts = [
-                    f"{field}={_projection_text(record.get(field, ''))}"
+                    f"{field}={_projection_text(projected.get(field, ''))}"
                     for field in fields
                 ]
                 lines.append(f"  - record_{index}: " + "; ".join(parts))

@@ -217,11 +217,20 @@ def _section_dependency_context(
     if not dependencies:
         return "- none; this section has no worksheet prerequisites"
 
-    # Preserve JSON field boundaries and every prerequisite rule. Prompt transport
-    # owns context budgeting; slicing a serialized contract silently loses semantics.
+    # The DAG scheduler owns readiness and passes all prerequisites during normal
+    # execution. Keep message construction pure so isolated bounded callers can omit
+    # scheduler-owned context without turning formatting into a KeyError surface.
+    available = {
+        dependency: completed[dependency]
+        for dependency in dependencies
+        if dependency in completed
+    }
+    if not available:
+        return "- none supplied in this bounded message scope"
     return json.dumps(
-        {dependency: completed[dependency] for dependency in dependencies},
-        ensure_ascii=False, separators=(",", ":"),
+        available,
+        ensure_ascii=False,
+        separators=(",", ":"),
     )
 
 

@@ -144,6 +144,18 @@ def test_structured_records_are_semantic_authority_over_markdown() -> None:
     assert contract[0]["default_literal"] == "0"
 
 
+def test_structured_renderer_projects_nested_records_to_leaf_fields() -> None:
+    from minecraft_mod_ai.authored_structured_design import render_structured_sections
+    from worksheet_fixtures import row
+
+    text = render_structured_sections({"behavior_contract": row("behavior_contract")})
+    assert "- inputs: name type unit range default source" in text
+    assert "name=behavior_contract inputs name:" in text
+    assert "source=behavior_contract inputs source:" in text
+    assert "identity=" not in text
+    assert "constraints=" not in text
+
+
 def test_graph_frontend_assigns_each_state_page_to_only_its_actual_concern() -> None:
     from minecraft_mod_ai.implementation_decisions import compile_contribution
 
