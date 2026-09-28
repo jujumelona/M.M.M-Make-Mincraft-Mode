@@ -86,7 +86,7 @@ def specification(section):
             "cleanup": [{
                 "event": "reset",
                 "action": "credits = 0",
-                "retained_state": "none",
+                "retained_state": "no state retained after reset",
             }],
             "concurrency": [{
                 "entry_path": "state_runtime",
