@@ -1,16 +1,48 @@
 """Structured design fixtures shared by planning integration tests."""
-from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
+from typing import Any
+
+from minecraft_mod_ai.planning_detail_slots import (
+    DETAIL_RECORDS,
+    concern_leaf_schemas,
+)
+
+
+def _fixture_value(schema: dict[str, Any], text: str) -> Any:
+    schema_type = schema.get("type")
+    if isinstance(schema_type, list):
+        schema_type = next((item for item in schema_type if item != "null"), "null")
+
+    if schema_type == "array":
+        item_schema = schema.get("items")
+        count = max(1, int(schema.get("minItems", 1) or 1))
+        if isinstance(item_schema, dict):
+            return [
+                _fixture_value(item_schema, f"{text} item {index + 1}")
+                for index in range(count)
+            ]
+        return [text]
+    if schema_type == "boolean":
+        return True
+    if schema_type == "integer":
+        return max(1, int(schema.get("minimum", 1) or 1))
+    if schema_type == "number":
+        return float(schema.get("minimum", 1) or 1)
+    if schema_type == "null":
+        return None
+    return text
 
 
 def specification(section):
-    return {
-        **{
-            concern: [{field: f"{section} {concern} {field}: server owns the observable outcome."
-                       for field in columns.split()}]
-            for concern, columns in DETAIL_RECORDS[section].items()
-        },
-        "inapplicable_concerns": [],
-    }
+    result = {}
+    for concern, columns in DETAIL_RECORDS[section].items():
+        schemas = concern_leaf_schemas(section, concern)
+        record = {}
+        for field in columns.split():
+            text = f"{section} {concern} {field}: server owns the observable outcome."
+            record[field] = _fixture_value(schemas[field], text)
+        result[concern] = [record]
+    result["inapplicable_concerns"] = []
+    return result
 
 
 def row(section, refs=()):
