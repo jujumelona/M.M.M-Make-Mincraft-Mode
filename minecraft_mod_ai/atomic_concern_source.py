@@ -1466,16 +1466,31 @@ def _deterministic_state_variable_members(
     return "\n".join(rows)
 
 
-def _bounded_grounding(grounding: Mapping[str, Any]) -> dict[str, Any]:
+_PURE_JAVA_DOMAIN_SECTIONS = frozenset(
+    {"behavior_contract", "state_model", "algorithm", "failure_and_limits"}
+)
+
+
+def _bounded_grounding(
+    grounding: Mapping[str, Any],
+    *,
+    section: str = "",
+) -> dict[str, Any]:
     direct = grounding.get("direct_host_context")
     direct_payload = dict(direct) if isinstance(direct, Mapping) else {}
+    host_version_facts = dict(direct_payload.get("host_version_facts") or {})
+    if str(section or "").strip() in _PURE_JAVA_DOMAIN_SECTIONS:
+        # Domain concerns do not own Fabric/Minecraft registration or lifecycle.
+        # Hiding unrelated API symbols prevents a coder from "helpfully" adding
+        # registry/Identifier plumbing that the authored concern never requested.
+        host_version_facts.pop("api_symbols", None)
     return {
         "schema_version": grounding.get("schema_version"),
         "artifact_kind": grounding.get("artifact_kind"),
         "facts": grounding.get("facts") or [],
         "policy": dict(grounding.get("policy") or {}),
         "platform": dict(direct_payload.get("platform") or {}),
-        "host_version_facts": dict(direct_payload.get("host_version_facts") or {}),
+        "host_version_facts": host_version_facts,
     }
 
 
@@ -1627,8 +1642,14 @@ def _messages(
         "and mutability. Never treat an object/record field as a primitive, never assign "
         "to a field declared final, and never invent a sibling symbol that is not listed. "
         "Do not implement sibling concerns. "
-        "Use fully-qualified external API names when needed. "
-        "Use only supplied host grounding and dependency_api; never invent a Minecraft/Fabric API."
+        + (
+            "This section is pure Java domain logic. Do not reference net.minecraft.*, "
+            "net.fabricmc.*, registries, resource identifiers, packets, lifecycle hooks, or "
+            "game registration APIs. "
+            if section in _PURE_JAVA_DOMAIN_SECTIONS
+            else "Use fully-qualified external API names when needed. "
+        )
+        + "Use only supplied host grounding and dependency_api; never invent a Minecraft/Fabric API."
     )
     payload = {
         "phase": "implement_atomic_concern_region",
@@ -1650,7 +1671,7 @@ def _messages(
             if section == "state_model" and name == "variables"
             else []
         ),
-        "host_grounding": _bounded_grounding(grounding),
+        "host_grounding": _bounded_grounding(grounding, section=section),
         "dependency_api": _dependency_api_context(dependency_source),
         "current_selected_region_source": _region_content(
             current_source,
@@ -1902,6 +1923,17 @@ class AtomicConcernExecutor:
                     output,
                     response_region=response_region,
                 )
+                if (
+                    self.section in _PURE_JAVA_DOMAIN_SECTIONS
+                    and re.search(
+                        r"\b(?:net\.minecraft|net\.fabricmc)\.",
+                        _structure_scan(parsed),
+                    )
+                ):
+                    raise CustomModuleGenerationError(
+                        "ATOMIC_CONCERN_SCOPE_ESCAPE: pure Java domain concern "
+                        "referenced Minecraft/Fabric implementation APIs."
+                    )
                 if failure and response_region == "members":
                     previous_region = _region_content(
                         self.source,
