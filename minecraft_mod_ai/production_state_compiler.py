@@ -56,38 +56,69 @@ def _section_text(text: str, section: str) -> str:
     return "\n".join(lines[start:end]).strip()
 
 
-def _record_schema(concern: str) -> dict[str, Any]:
-    fields = tuple(DETAIL_RECORDS["state_model"][concern].split())
-    return {
-        "type": "object",
-        "properties": {
-            field: {"type": "string", "maxLength": 512}
-            for field in fields
-        },
-        "required": list(fields),
-        "additionalProperties": False,
-    }
-
-
-def _page_schema(concern: str) -> dict[str, Any]:
-    return {
-        "type": "object",
-        "properties": {
-            "records": {
-                "type": "array",
-                "maxItems": _MAX_PAGE_RECORDS,
-                "items": _record_schema(concern),
-            },
-            "complete": {"type": "boolean"},
-        },
-        "required": ["records", "complete"],
-        "additionalProperties": False,
-    }
-
-
 def _json_key(value: Mapping[str, Any]) -> str:
     return json.dumps(dict(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
+
+def _decode_scalar_text(value: str) -> str:
+    text = str(value or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] == '"':
+        try:
+            return str(json.loads(text))
+        except Exception:
+            return text[1:-1]
+    if len(text) >= 2 and text[0] == text[-1] == "'":
+        return text[1:-1]
+    return text
+
+
+def _extract_known_field(record_text: str, field: str) -> str:
+    pattern = (
+        r'(?is)(?:^|[,;\\n{])\\s*["\\\']?'
+        + re.escape(field)
+        + r'["\\\']?\\s*[:=]\\s*'
+        + r'("(?:\\\\.|[^"\\\\])*"|\\\'(?:\\\\.|[^\\\'\\\\])*\\\'|[^,;\\n}]+)'
+    )
+    match = re.search(pattern, record_text)
+    return _decode_scalar_text(match.group(1)) if match is not None else ""
+
+
+def _parse_semantic_page(raw: str, *, fields: Sequence[str]) -> tuple[list[dict[str, str]], bool]:
+    """Parse meaning without requiring the small model to produce valid JSON."""
+    text = str(raw or "").strip()
+    text = re.sub(r'^```(?:text|json)?\\s*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\\s*```$', '', text)
+    status = re.search(
+        r'(?im)(?:complete["\\\']?\\s*[:=]\\s*(true|false|yes|no|1|0)|^\\s*STATUS\\s*[:=]?\\s*(COMPLETE|MORE)\\s*$)',
+        text,
+    )
+    token = next((part for part in status.groups() if part), '') if status else ''
+    complete = token.casefold() in {'true', 'yes', '1', 'complete'}
+
+    blocks = re.findall(
+        r'(?is)(?:^|\\n)\\s*RECORD\\s*(.*?)(?=(?:\\n\\s*(?:END|RECORD|STATUS)\\b)|\\Z)',
+        text,
+    )
+    if not blocks:
+        blocks = [
+            match.group(1)
+            for match in re.finditer(r'\\{([^{}]*)\\}', text, flags=re.DOTALL)
+            if any(re.search(r'["\\\']?' + re.escape(field) + r'["\\\']?\\s*[:=]', match.group(1), re.I) for field in fields)
+        ]
+    if not blocks:
+        blocks = [text]
+
+    records: list[dict[str, str]] = []
+    for block in blocks:
+        record = {field: _extract_known_field(block, field) for field in fields}
+        if not any(record.values()):
+            for line in block.splitlines():
+                match = re.match(r'^\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(?:\\t|[:=])\\s*(.*?)\\s*$', line)
+                if match is not None and match.group(1) in fields:
+                    record[match.group(1)] = _decode_scalar_text(match.group(2))
+        if any(record.values()):
+            records.append(record)
+    return records, complete
 
 def _generate_concern_records(
     router: Any,
@@ -128,22 +159,27 @@ def _generate_concern_records(
             "record for this concern in the approved design has been emitted. An empty "
             "records array with complete=true is valid when the concern is not applicable."
         )
+        plain_protocol = (
+            system
+            + " Output plain text only. Preferred format:\\n"
+            + "STATUS=COMPLETE or STATUS=MORE\\nRECORD\\n"
+            + "\\n".join(field + "=<value>" for field in fields)
+            + "\\nEND\\nRepeat RECORD/END for additional records. "
+            + "Do not output JSON or JSON Schema."
+        )
         raw = router.generate_text(
             "planner",
             (
-                {"role": "system", "content": system},
+                {"role": "system", "content": plain_protocol},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ),
-            response_format="json",
-            response_schema=_page_schema(concern),
+            response_format="text",
+            response_schema=None,
             enable_tools=False,
             output_token_ceiling=2048,
             force_non_thinking=True,
         )
-        decoded = json.loads(raw)
-        rows = decoded.get("records")
-        if not isinstance(rows, list):
-            rows = []
+        rows, complete = _parse_semantic_page(raw, fields=fields)
         added = 0
         for row in rows:
             if not isinstance(row, Mapping):
@@ -155,7 +191,7 @@ def _generate_concern_records(
             seen.add(key)
             accepted.append(normalized)
             added += 1
-        if bool(decoded.get("complete")):
+        if complete:
             return accepted
         if added == 0:
             raise ValueError(
