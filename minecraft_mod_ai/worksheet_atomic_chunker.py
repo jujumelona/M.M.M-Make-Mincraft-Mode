@@ -8,6 +8,7 @@ reassembles field fragments and validates the canonical worksheet section afterw
 """
 
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 import json
 from typing import Any
 
@@ -16,7 +17,7 @@ from .model_output_atomicity_contract import (
     _assert_closed_object_schemas,
     is_atomic_model_schema,
 )
-from .planning_detail_slots import DETAIL_RECORDS
+from .planning_detail_slots import DETAIL_RECORDS, concern_leaf_schemas
 from .planning_detail_template import (
     _PLACEHOLDERS,
     _normalize_section_name,
@@ -184,7 +185,14 @@ def _model_field_schema(section: str, concern: str, field: str) -> dict[str, Any
                 "with no prerequisite."
             ),
         }
-    return {"type": "string", "minLength": 1, "maxLength": 256}
+
+    leaf_schemas = concern_leaf_schemas(section, concern)
+    try:
+        return deepcopy(leaf_schemas[field])
+    except KeyError as exc:
+        raise ValueError(
+            f"DETAILED_PLAN_SCHEMA: {section}.{concern} has no leaf field {field!r}"
+        ) from exc
 
 
 def worksheet_chunk_schema(
@@ -385,6 +393,56 @@ def worksheet_chunk_prompt(
     )
 
 
+def _default_typed_value(
+    section: str,
+    concern: str,
+    field: str,
+) -> Any:
+    schema = concern_leaf_schemas(section, concern)[field]
+    schema_type = schema.get("type")
+    if isinstance(schema_type, list):
+        if "string" in schema_type:
+            schema_type = "string"
+        elif "null" in schema_type:
+            return None
+        elif schema_type:
+            schema_type = schema_type[0]
+
+    if schema_type == "array":
+        min_items = max(0, int(schema.get("minItems", 0) or 0))
+        item_schema = schema.get("items")
+        if min_items <= 0:
+            return []
+        if isinstance(item_schema, Mapping) and item_schema.get("type") == "string":
+            return [f"standard {field}" for _ in range(min_items)]
+        return []
+    if schema_type == "boolean":
+        return False
+    if schema_type == "integer":
+        return int(schema.get("minimum", 0) or 0)
+    if schema_type == "number":
+        return float(schema.get("minimum", 0) or 0)
+    if schema_type == "null":
+        return None
+    return _CANONICAL_FIELD_DEFAULTS.get(field, f"standard {field}")
+
+
+def _normalize_typed_value(
+    section: str,
+    concern: str,
+    field: str,
+    value: Any,
+) -> Any:
+    if value is None:
+        return _default_typed_value(section, concern, field)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or text.casefold() in _PLACEHOLDERS:
+            return _default_typed_value(section, concern, field)
+        return text
+    return deepcopy(value)
+
+
 def merge_worksheet_section_chunks(
     section: str,
     chunks: Sequence[Mapping[str, Any]],
@@ -487,7 +545,7 @@ def merge_worksheet_section_chunks(
 
     for concern, columns in records.items():
         expected_fields = tuple(columns.split())
-        cleaned_records: list[dict[str, str]] = []
+        cleaned_records: list[dict[str, Any]] = []
         for item in merged_specification[concern]:
             if not isinstance(item, Mapping):
                 continue
@@ -497,15 +555,14 @@ def merge_worksheet_section_chunks(
             )
             if not has_meaningful:
                 continue
-            clean_item: dict[str, str] = {}
+            clean_item: dict[str, Any] = {}
             for field_name in expected_fields:
-                val = str(item.get(field_name) or "").strip()
-                if not val or val.casefold() in _PLACEHOLDERS:
-                    val = _CANONICAL_FIELD_DEFAULTS.get(
-                        field_name,
-                        f"standard {field_name}",
-                    )
-                clean_item[field_name] = val
+                clean_item[field_name] = _normalize_typed_value(
+                    key,
+                    concern,
+                    field_name,
+                    item.get(field_name),
+                )
             cleaned_records.append(clean_item)
         merged_specification[concern] = cleaned_records
 
