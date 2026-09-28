@@ -8,7 +8,6 @@ reassembles field fragments and validates the canonical worksheet section afterw
 """
 
 from collections.abc import Mapping, Sequence
-from copy import deepcopy
 import json
 from typing import Any
 
@@ -17,121 +16,13 @@ from .model_output_atomicity_contract import (
     _assert_closed_object_schemas,
     is_atomic_model_schema,
 )
-from .planning_detail_slots import DETAIL_RECORDS, concern_record_schema
+from .planning_detail_slots import DETAIL_RECORDS
 from .planning_detail_template import (
     _PLACEHOLDERS,
     _normalize_section_name,
     _section_description,
     validate_worksheet_section,
 )
-
-def _canonical_leaf_specs(
-    section: str,
-    concern: str,
-) -> tuple[tuple[str, ...], dict[str, tuple[tuple[str, ...], dict[str, Any]]]]:
-    """Flatten canonical required object leaves while preserving their nested paths."""
-    schema = concern_record_schema(section, concern)
-    ordered: list[str] = []
-    specs: dict[str, tuple[tuple[str, ...], dict[str, Any]]] = {}
-
-    def visit(node: Mapping[str, Any], path: tuple[str, ...]) -> None:
-        properties = node.get("properties")
-        required = node.get("required")
-        if not isinstance(properties, Mapping) or not isinstance(required, list):
-            raise ValueError(
-                f"DETAILED_PLAN_WORKSHEET_SCHEMA: {section}.{concern} "
-                f"has invalid canonical object at {'.'.join(path) or '<root>'}"
-            )
-        for raw_field in required:
-            field = str(raw_field)
-            child = properties.get(field)
-            if not isinstance(child, Mapping):
-                raise ValueError(
-                    f"DETAILED_PLAN_WORKSHEET_SCHEMA: {section}.{concern} "
-                    f"required field {field!r} is missing"
-                )
-            child_path = (*path, field)
-            if child.get("type") == "object":
-                visit(child, child_path)
-                continue
-            if field in specs:
-                raise ValueError(
-                    f"DETAILED_PLAN_WORKSHEET_SCHEMA: {section}.{concern} "
-                    f"has duplicate leaf field {field!r}"
-                )
-            ordered.append(field)
-            specs[field] = (child_path, deepcopy(dict(child)))
-
-    visit(schema, ())
-    if not ordered:
-        raise ValueError(
-            f"DETAILED_PLAN_WORKSHEET_SCHEMA: {section}.{concern} has no required leaves"
-        )
-    return tuple(ordered), specs
-
-
-def _canonical_record_fields(section: str, concern: str) -> tuple[str, ...]:
-    return _canonical_leaf_specs(section, concern)[0]
-
-
-def _canonical_leaf_schema(section: str, concern: str, field: str) -> dict[str, Any]:
-    _ordered, specs = _canonical_leaf_specs(section, concern)
-    try:
-        return deepcopy(specs[field][1])
-    except KeyError as exc:
-        raise ValueError(
-            f"DETAILED_PLAN_WORKSHEET_SCHEMA: {section}.{concern} "
-            f"has no canonical leaf {field!r}"
-        ) from exc
-
-
-def _flatten_record(
-    section: str,
-    concern: str,
-    record: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Accept canonical nested records or flat model pages and return flat leaf values."""
-    _ordered, specs = _canonical_leaf_specs(section, concern)
-    result: dict[str, Any] = {}
-    for field, (path, _schema) in specs.items():
-        if field in record:
-            result[field] = record[field]
-            continue
-        current: Any = record
-        found = True
-        for part in path:
-            if not isinstance(current, Mapping) or part not in current:
-                found = False
-                break
-            current = current[part]
-        if found:
-            result[field] = current
-    return result
-
-
-def _inflate_record(
-    section: str,
-    concern: str,
-    record: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Rebuild the canonical nested record shape from flat leaf values."""
-    _ordered, specs = _canonical_leaf_specs(section, concern)
-    result: dict[str, Any] = {}
-    for field, value in record.items():
-        spec = specs.get(str(field))
-        if spec is None:
-            continue
-        path = spec[0]
-        destination = result
-        for part in path[:-1]:
-            child = destination.get(part)
-            if not isinstance(child, dict):
-                child = {}
-                destination[part] = child
-            destination = child
-        destination[path[-1]] = value
-    return result
-
 
 _CANONICAL_FIELD_DEFAULTS: dict[str, str] = {
     "authority": "server",
@@ -191,7 +82,7 @@ def _chunk_projection(
     for concern in concerns:
         if concern not in records:
             raise ValueError(f"Unknown concern {concern!r} for section {section!r}")
-        all_fields = _canonical_record_fields(section, concern)
+        all_fields = tuple(records[concern].split())
         selected = tuple(explicit.get(concern, all_fields)) if isinstance(explicit, Mapping) else all_fields
         if not selected or any(field not in all_fields for field in selected):
             raise ValueError(
@@ -225,8 +116,8 @@ def pack_section_concerns(
         raise ValueError("max_chunk_size must be positive when supplied")
 
     pages: list[tuple[str, tuple[str, ...]]] = []
-    for concern in records:
-        for fields in _field_pages(_canonical_record_fields(key, concern)):
+    for concern, columns in records.items():
+        for fields in _field_pages(tuple(columns.split())):
             pages.append((concern, fields))
 
     chunks: list[tuple[str, ...]] = []
@@ -300,7 +191,7 @@ def worksheet_chunk_schema(
             "items": {
                 "type": "object",
                 "properties": {
-                    field: _canonical_leaf_schema(key, concern, field)
+                    field: {"type": "string", "minLength": 1, "maxLength": 256}
                     for field in fields
                 },
                 "required": [],
@@ -379,12 +270,8 @@ def validate_worksheet_chunk_signal(
         else:
             candidates = []
         for item in candidates:
-            if not isinstance(item, Mapping):
-                continue
-            flattened = _flatten_record(key, concern, item)
-            if any(
-                _meaningful_text(flattened.get(field))
-                for field in projection[concern]
+            if isinstance(item, Mapping) and any(
+                _meaningful_text(item.get(field)) for field in projection[concern]
             ):
                 return dict(chunk)
 
@@ -517,13 +404,9 @@ def merge_worksheet_section_chunks(
                 continue
 
             if isinstance(value, Mapping):
-                candidate_items = [_flatten_record(key, field, value)]
+                candidate_items = [dict(value)]
             elif isinstance(value, list):
-                candidate_items = [
-                    _flatten_record(key, field, item)
-                    for item in value
-                    if isinstance(item, Mapping)
-                ]
+                candidate_items = [dict(item) for item in value if isinstance(item, Mapping)]
             else:
                 candidate_items = []
 
@@ -554,9 +437,9 @@ def merge_worksheet_section_chunks(
                         )
                     destination[field_name] = value_text
 
-    for concern in records:
-        expected_fields = _canonical_record_fields(key, concern)
-        cleaned_records: list[dict[str, Any]] = []
+    for concern, columns in records.items():
+        expected_fields = tuple(columns.split())
+        cleaned_records: list[dict[str, str]] = []
         for item in merged_specification[concern]:
             if not isinstance(item, Mapping):
                 continue
@@ -575,9 +458,7 @@ def merge_worksheet_section_chunks(
                         f"standard {field_name}",
                     )
                 clean_item[field_name] = val
-            cleaned_records.append(
-                _inflate_record(key, concern, clean_item)
-            )
+            cleaned_records.append(clean_item)
         merged_specification[concern] = cleaned_records
 
     empty_concerns = {
