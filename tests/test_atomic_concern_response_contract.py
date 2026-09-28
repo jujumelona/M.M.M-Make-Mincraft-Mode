@@ -989,6 +989,107 @@ def test_logged_java_failure_families_repair_through_real_compiler_feedback(monk
     assert all(">>" in item for item in failures)
 
 
+def test_logged_java_failure_families_repair_with_actual_javac(tmp_path, monkeypatch) -> None:
+    import shutil
+    import subprocess
+
+    if shutil.which("javac") is None:
+        pytest.skip("javac is required for the compiler-feedback integration regression")
+
+    monkeypatch.setenv("MMM_ATOMIC_CONCERN_COMPILE_REPAIRS", "4")
+    captured: list[list[dict[str, str]]] = []
+    remaining = [
+        "private static final boolean NO_FLUID_STORAGE_IN_ZERO_G;",
+        (
+            "private static final java.util.Map<String, Object> TRANSFER_CACHE = "
+            "new java.util.HashMap<>();\n"
+            "private static void resetTransferCache() { "
+            "TRANSFER_CACHE = java.util.Collections.emptyMap(); }"
+        ),
+        (
+            "private static Object readState() { return null; }\n"
+            "private static java.util.Map<String, Object> shipConfig() { "
+            "return readState(); }"
+        ),
+        (
+            "private static final java.util.concurrent.Lock shipConfigLock = "
+            "new java.util.concurrent.ReentrantLock();"
+        ),
+        (
+            "private static final java.util.concurrent.locks.Lock shipConfigLock = "
+            "new java.util.concurrent.locks.ReentrantLock();"
+        ),
+    ]
+    target = tmp_path / "Test.java"
+    classes = tmp_path / "classes"
+    classes.mkdir()
+
+    def call_coder(messages):
+        captured.append(list(messages))
+        if not remaining:
+            raise AssertionError("unexpected extra model call")
+        return remaining.pop(0)
+
+    def write_source(path, source):
+        path.write_text(source, encoding="utf-8")
+
+    def compile_java(_root):
+        completed = subprocess.run(
+            ["javac", "-d", str(classes), str(target)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        return SimpleNamespace(
+            status="PASS" if completed.returncode == 0 else "FAIL",
+            log=(completed.stdout + completed.stderr),
+        )
+
+    executor = AtomicConcernExecutor(
+        root=tmp_path,
+        target=target,
+        relative="Test.java",
+        symbol="Test",
+        original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
+        task={"task_id": "t", "semantic_outcome": "x"},
+        section="behavior_contract",
+        concerns=(
+            {
+                "sequence": 0,
+                "identifier": "id",
+                "concern": "concurrency_hazards",
+                "task": "implement compiler-safe concurrency state",
+                "rules": [],
+            },
+        ),
+        grounding={},
+        dependency_source="",
+        require_initialize=False,
+        call_coder=call_coder,
+        compile_java=compile_java,
+        compile_log=lambda report: getattr(report, "log", ""),
+        write_source=write_source,
+    )
+
+    result = executor.run()
+
+    assert result["repair_count"] == 4
+    assert (classes / "example" / "Test.class").is_file()
+    assert "java.util.concurrent.locks.Lock" in result["source"]
+    assert "java.util.concurrent.locks.ReentrantLock" in result["source"]
+
+    repair_failures = [
+        __import__("json").loads(messages[-1]["content"])["repair_failure"]
+        for messages in captured[1:]
+    ]
+    assert "might not have been initialized" in repair_failures[0]
+    assert "cannot assign a value to static final variable TRANSFER_CACHE" in repair_failures[1]
+    assert "Object cannot be converted to Map<String,Object>" in repair_failures[2]
+    assert "class Lock" in repair_failures[3]
+    assert "class ReentrantLock" in repair_failures[3]
+    assert all("CURRENT COMPILED SOURCE AROUND THE REPORTED LINES" in item for item in repair_failures)
+
+
 def test_atomic_prompt_prevents_logged_java_failure_families_on_first_pass() -> None:
     concerns = (
         {
