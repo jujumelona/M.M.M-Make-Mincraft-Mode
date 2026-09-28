@@ -18,7 +18,6 @@ class StructuredPlannerRouter:
 
     def __init__(self, router: Any) -> None:
         self._router = router
-        self._mmm_force_structured_text = True
         self._accepts_enable_tools = self._supports_keyword(
             getattr(router, "generate_text", None),
             "enable_tools",
