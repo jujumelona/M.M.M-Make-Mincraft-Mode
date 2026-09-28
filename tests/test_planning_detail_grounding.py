@@ -51,42 +51,35 @@ class _StructuredRouter:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
-    def generate_text(self, *_args, **_kwargs):
-        raise AssertionError("grounded worksheet generation must not use raw structured text")
-
-    def generate_tool_decision(
-        self,
-        role,
-        messages,
-        *,
-        tool_name,
-        parameters,
-        description="",
-    ):
+    def generate_text(self, role, messages, **kwargs):
         self.calls.append(
             {
                 "role": role,
                 "messages": messages,
-                "tool_name": tool_name,
-                "parameters": parameters,
-                "description": description,
+                **dict(kwargs),
             }
         )
         section = messages[-1]["content"].split("Section: ", 1)[1].splitlines()[0]
+        schema = kwargs["response_schema"]
         full = _authored_worksheet()[section]
         payload: dict = {}
-        for prop in parameters.get("properties", {}):
+        for prop in schema.get("properties", {}):
             if prop == "constraint_evidence_refs":
                 payload[prop] = full.get(prop, [])
             elif prop == "inapplicable_concerns":
                 payload[prop] = [
                     item
                     for item in full["specification"].get("inapplicable_concerns", [])
-                    if item["concern"] in parameters.get("properties", {})
+                    if item["concern"] in schema.get("properties", {})
                 ]
             elif prop in full["specification"]:
                 payload[prop] = full["specification"][prop]
-        return payload
+        import json
+
+        return json.dumps(payload)
+
+    def generate_tool_decision(self, *_args, **_kwargs):
+        raise AssertionError("worksheet serialization must not require a native tool call")
 
 
 def _grounded_state() -> dict[str, object]:
@@ -124,8 +117,10 @@ def test_detailed_plan_is_host_assembled_from_one_structured_worksheet() -> None
     )[0]
 
     assert len(router.calls) >= len(WORKSHEET_SECTIONS)
-    assert all(str(call["tool_name"]).startswith("submit_") for call in router.calls)
-    assert all(call["parameters"].get("type") == "object" for call in router.calls)
+    assert all(call["role"] == "planner" for call in router.calls)
+    assert all(call["response_format"] == "json" for call in router.calls)
+    assert all(call["enable_tools"] is False for call in router.calls)
+    assert all(call["response_schema"].get("type") == "object" for call in router.calls)
     assert tuple(plan["engineering_worksheet"]) == WORKSHEET_SECTIONS
     assert plan["grounded_bindings"] == []
     assert plan["reuse_candidates"] == []
