@@ -17,7 +17,10 @@ from typing import Any
 from .authored_ir_parser import authored_section_id, parse_markdown_heading
 from .authored_plan import AuthoredPlan
 from .planning_detail_slots import DETAIL_RECORDS
-from .structured_state_runtime import validate_structured_state_section
+from .structured_state_runtime import (
+    validate_state_expression,
+    validate_structured_state_section,
+)
 
 _STATE_CONCERNS = tuple(DETAIL_RECORDS["state_model"])
 _MAX_CONCERN_RECORDS = 12
@@ -242,6 +245,12 @@ def _normalize_logic_tokens(text: str) -> str:
     result = re.sub(r"\bAND\b", "&&", result, flags=re.IGNORECASE)
     result = re.sub(r"\bOR\b", "||", result, flags=re.IGNORECASE)
     result = re.sub(r"\bNOT\b\s+", "!", result, flags=re.IGNORECASE)
+    result = re.sub(r"\b(?:greater\s+than\s+or\s+equal\s+to|at\s+least)\b", ">=", result, flags=re.IGNORECASE)
+    result = re.sub(r"\b(?:less\s+than\s+or\s+equal\s+to|at\s+most)\b", "<=", result, flags=re.IGNORECASE)
+    result = re.sub(r"\bgreater\s+than\b", ">", result, flags=re.IGNORECASE)
+    result = re.sub(r"\bless\s+than\b", "<", result, flags=re.IGNORECASE)
+    result = re.sub(r"\bnot\s+equal\s+to\b", "!=", result, flags=re.IGNORECASE)
+    result = re.sub(r"\bequal\s+to\b", "==", result, flags=re.IGNORECASE)
     result = re.sub(r"\bis\s+not\b", "!=", result, flags=re.IGNORECASE)
     result = re.sub(r"\bis\b", "==", result, flags=re.IGNORECASE)
     result = result.replace("<>", "!=")
@@ -293,6 +302,160 @@ def _quote_bare_string_literals(
     return result
 
 
+def _split_expression_segments(text: str) -> list[str]:
+    operators = ("||", "&&", "==", "!=", ">=", "<=", "(", ")", "!", "+", "-", "*", "/", "%", ">", "<")
+    source = str(text or "")
+    segments: list[str] = []
+    buffer: list[str] = []
+    quote = ""
+
+    def flush() -> None:
+        if buffer:
+            segments.append("".join(buffer))
+            buffer.clear()
+
+    index = 0
+    while index < len(source):
+        char = source[index]
+        if quote:
+            buffer.append(char)
+            if char == "\\" and index + 1 < len(source):
+                index += 1
+                buffer.append(source[index])
+            elif char == quote:
+                quote = ""
+            index += 1
+            continue
+        if char in {'"', "'"}:
+            quote = char
+            buffer.append(char)
+            index += 1
+            continue
+
+        matched = next(
+            (operator for operator in operators if source.startswith(operator, index)),
+            "",
+        )
+        if matched:
+            flush()
+            segments.append(matched)
+            index += len(matched)
+            continue
+        buffer.append(char)
+        index += 1
+    flush()
+    return segments
+
+
+def _simple_expression_atom(value: str) -> bool:
+    atom = str(value or "").strip()
+    if not atom:
+        return True
+    if atom[0:1] in {'"', "'"} and atom[-1:] == atom[0]:
+        return True
+    if re.fullmatch(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?", atom):
+        return True
+    return atom.casefold() in {"true", "false", "null"}
+
+
+def _canonicalize_expression_operands(
+    expression: str,
+    *,
+    variables: Mapping[str, Mapping[str, str]],
+) -> str:
+    text = re.sub(
+        r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)",
+        r"\1",
+        str(expression or ""),
+    )
+    segments = _split_expression_segments(text)
+    comparison_ops = {"==", "!=", ">=", "<=", ">", "<"}
+
+    def neighbor_atom(index: int, direction: int) -> str:
+        pos = index + direction
+        while 0 <= pos < len(segments):
+            value = segments[pos].strip()
+            if value:
+                return value
+            pos += direction
+        return ""
+
+    for index, raw in enumerate(list(segments)):
+        atom = raw.strip()
+        if not atom or atom in {"||", "&&", "==", "!=", ">=", "<=", "(", ")", "!", "+", "-", "*", "/", "%", ">", "<"}:
+            continue
+        if _simple_expression_atom(atom):
+            segments[index] = atom
+            continue
+
+        previous = neighbor_atom(index, -1)
+        following = neighbor_atom(index, 1)
+        previous_op = previous if previous in comparison_ops else ""
+        following_op = following if following in comparison_ops else ""
+
+        if previous_op in {"==", "!="}:
+            other = neighbor_atom(index - 1, -1)
+            if other in variables and _string_like(variables[other]) and atom not in variables:
+                segments[index] = json.dumps(atom)
+                continue
+        if following_op in {"==", "!="}:
+            other = neighbor_atom(index + 1, 1)
+            if other in variables and _string_like(variables[other]) and atom not in variables:
+                segments[index] = json.dumps(atom)
+                continue
+
+        if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", atom):
+            segments[index] = atom
+            continue
+        segments[index] = _stable_identifier(atom, fallback="state_value")
+
+    rebuilt = " ".join(part.strip() for part in segments if part.strip())
+
+    balanced: list[str] = []
+    depth = 0
+    for part in _split_expression_segments(rebuilt):
+        token = part.strip()
+        if token == "(":
+            depth += 1
+            balanced.append(token)
+        elif token == ")":
+            if depth:
+                depth -= 1
+                balanced.append(token)
+        elif token:
+            balanced.append(token)
+    if depth:
+        balanced.extend(")" for _ in range(depth))
+    return " ".join(balanced)
+
+
+def _validated_expression_or_fallback(
+    text: str,
+    *,
+    fallback: str,
+    original: str,
+) -> str:
+    try:
+        validate_state_expression(text)
+        return text
+    except ValueError:
+        from .root_cause_trace import emit_root_cause
+
+        emit_root_cause(
+            "production_state_expression_degraded",
+            stage="production",
+            operation="state_expression_canonicalization",
+            gate="host_expression_parser",
+            result="PASS",
+            details={
+                "original": str(original or "")[:512],
+                "canonical": str(text or "")[:512],
+                "fallback": fallback,
+            },
+        )
+        return fallback
+
+
 def _normalize_expression(
     value: str,
     *,
@@ -300,13 +463,19 @@ def _normalize_expression(
     variables: Mapping[str, Mapping[str, str]],
     fallback: str = "true",
 ) -> str:
-    text = _replace_aliases(value, aliases)
+    original = str(value or "")
+    text = _replace_aliases(original, aliases)
     text = _normalize_logic_tokens(text)
     text = _quote_bare_string_literals(text, variables)
+    text = _canonicalize_expression_operands(text, variables=variables)
     lowered = text.casefold()
     if not text or lowered in {"none", "n/a", "na", "always", "no guard", "no condition"}:
         return fallback
-    return text
+    return _validated_expression_or_fallback(
+        text,
+        fallback=fallback,
+        original=original,
+    )
 
 
 def _infer_variable(name: str, rhs: str) -> dict[str, str]:
