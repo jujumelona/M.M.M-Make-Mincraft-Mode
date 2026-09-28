@@ -97,10 +97,14 @@ def _canonical_atomic_obligations(
     from .authored_structured_design import active_concern_records
 
     structured_records = active_concern_records(structured_sections, section)
+    section_is_structured = bool(
+        isinstance(structured_sections, Mapping)
+        and section in structured_sections
+    )
     exact_sources: dict[str, dict[str, str]] = {}
     for concern in concerns:
         name = str(concern["concern"])
-        if structured_sections and name not in structured_records:
+        if section_is_structured and name not in structured_records:
             continue
         source = slice_concern_requirements(
             requirements,
