@@ -413,7 +413,7 @@ def test_structured_state_model_is_host_compiled_in_one_pass_without_coder(tmp_p
         "transitions": [{
             "from_state": "idle",
             "trigger": "buy",
-            "guard": "credits >= cost",
+            "guard": "shipStatus == \"Complete\" && credits >= cost",
             "mutation": "credits -= cost",
             "to_state": "done",
         }],
@@ -508,6 +508,8 @@ def test_structured_state_model_is_host_compiled_in_one_pass_without_coder(tmp_p
     source = result["source"]
     assert "$mmmTransitions" in source
     assert "context ->" in source
+    assert '$mmmRead("shipStatus", context)' in source
+    assert "ShipStatus.COMPLETE" not in source
     assert "public static synchronized String transition" in source
 
     javac = shutil.which("javac")
