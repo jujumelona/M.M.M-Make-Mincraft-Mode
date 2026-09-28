@@ -343,7 +343,6 @@ def test_fresh_authored_work_graph_never_schedules_custom_generation(monkeypatch
 
 
 def test_authored_scaffold_defers_source_materialization_until_ir(tmp_path):
-def test_authored_scaffold_defers_source_materialization_until_ir(tmp_path):
     modules, manifest = _compile_new_authored_modules(AuthoredPlan("space mod", "Economy, ships, planets"),
         mod_id="authored_test", package_name="example", target={})
     proposal = SimpleNamespace(game_design={"_authored_execution_manifest": manifest})
@@ -358,15 +357,18 @@ def test_authored_scaffold_defers_source_materialization_until_ir(tmp_path):
     assert modules[0].config["implementation_graph_request"]["entrypoint_path"] == manifest["entrypoint"]["path"]
 
 
-def test_real_orchestrator_accepts_authored_handoff(monkeypatch, tmp_path):
+def test_real_orchestrator_accepts_existing_authored_localization_handoff(monkeypatch, tmp_path):
     from minecraft_mod_ai.complete_orchestrator import (
         CompleteExecutionOptions,
         CompleteProductionOrchestrator,
     )
 
-    plan = AuthoredPlan("Space mod for Fabric 1.21.11", "행성과 광물 거래")
+    plan = AuthoredPlan(
+        "Modify the existing Fabric 1.21.11 space mod",
+        "행성과 광물 거래",
+        existing_input_sha256="sha256:" + "d" * 64,
+    )
     proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(plan)
-    assert proposal.external_runtime_required is False
     orchestrator = CompleteProductionOrchestrator(workspace_root=tmp_path)
 
     class ReachedProjectCreation(Exception):
@@ -375,7 +377,10 @@ def test_real_orchestrator_accepts_authored_handoff(monkeypatch, tmp_path):
     def prepare(approved, **kwargs):
         assert approved.game_design["authored_plan"] == plan.to_dict()
         assert "_authored_execution_manifest" in approved.game_design
-        assert all("evidence_task" in module.config for module in approved.modules)
+        assert all(
+            module.config.get("authored_localization_required") is True
+            for module in approved.modules
+        )
         raise ReachedProjectCreation
 
     monkeypatch.setattr(orchestrator, "_prepare_project", prepare)
@@ -383,7 +388,7 @@ def test_real_orchestrator_accepts_authored_handoff(monkeypatch, tmp_path):
         orchestrator.execute(
             proposal,
             approval_hash=proposal.calculate_hash(),
-            run_name="authored",
+            run_name="authored-existing",
             options=CompleteExecutionOptions(
                 run_blockbench=False,
                 run_runtime=False,
