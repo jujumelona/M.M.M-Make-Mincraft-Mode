@@ -365,13 +365,10 @@ def _generate_chunk(
     concerns: Sequence[str],
     chunk_schema: Mapping[str, Any],
 ) -> dict[str, Any]:
-    # Worksheet chunks are pure structured data, not actions. Never route them through
-    # native function calling: local models can produce schema-valid JSON while omitting
-    # a tool envelope, and that transport detail must not make planning fail.
-    from .planner_structured_router import structured_planner_router
-
+    # Worksheet chunks are pure structured data, not actions. Planner fixed templates
+    # use the planner's structured-text boundary directly.
     raw = generate_fixed_template_text(
-        structured_planner_router(router),
+        router,
         "planner",
         messages,
         response_schema=chunk_schema,
