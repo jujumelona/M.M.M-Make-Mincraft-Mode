@@ -5,6 +5,7 @@ import json
 from minecraft_mod_ai.authored_plan import AuthoredPlan
 from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
 from minecraft_mod_ai.production_state_compiler import (
+    _parse_semantic_page,
     bind_production_state_contract,
     compile_production_state_section,
 )
@@ -91,6 +92,42 @@ def test_plan_remains_free_markdown_generation_without_structured_compiler():
     assert kwargs["enable_tools"] is False
 
 
+def test_malformed_json_like_state_output_is_parsed_without_json_validation():
+    raw = (
+        '{"type": "object", "properties": {"records": ['
+        '{"name": "credits";"owner": "player";"type": "double";'
+        '"unit": "currency";"default": "0.0";"domain": "financial"}, '
+        '{"name": "ship_state";"owner": "player";"type": "string";'
+        '"unit": "status";"default": "\\\"Docked\\\"";"domain": "navigation"}'
+        '], "complete": true}'
+    )
+
+    records, complete = _parse_semantic_page(
+        raw,
+        fields=("name", "owner", "type", "unit", "default", "domain"),
+    )
+
+    assert complete is True
+    assert records == [
+        {
+            "name": "credits",
+            "owner": "player",
+            "type": "double",
+            "unit": "currency",
+            "default": "0.0",
+            "domain": "financial",
+        },
+        {
+            "name": "ship_state",
+            "owner": "player",
+            "type": "string",
+            "unit": "status",
+            "default": '"Docked"',
+            "domain": "navigation",
+        },
+    ]
+
+
 def test_production_state_lowering_normalizes_small_model_dsl_and_java_symbols():
     router = ProductionStateRouter()
     plan = AuthoredPlan("make a space mod", _plan_text())
@@ -100,6 +137,12 @@ def test_production_state_lowering_normalizes_small_model_dsl_and_java_symbols()
     transitions = section["specification"]["transitions"]
     assert transitions[0]["guard"] == 'shipStatus == "COMPLETE" && credits >= cost'
     assert transitions[0]["mutation"] == "credits -= cost"
+    assert all(
+        kwargs["response_format"] == "text"
+        and kwargs["response_schema"] is None
+        and kwargs["enable_tools"] is False
+        for _role, _concern, kwargs in router.calls
+    )
     assert [concern for _role, concern, _kwargs in router.calls] == [
         "variables",
         "transitions",
