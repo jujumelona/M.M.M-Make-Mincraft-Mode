@@ -226,45 +226,99 @@ def _stable_identifier(value: str, *, fallback: str) -> str:
     return text
 
 
-def _replace_aliases(text: str, aliases: Mapping[str, str]) -> str:
-    result = str(text or "")
-    for old, new in sorted(aliases.items(), key=lambda item: len(item[0]), reverse=True):
-        if not old or old == new:
+def _transform_unquoted(text: str, transform) -> str:
+    """Apply lexical normalization only outside quoted string literals."""
+
+    source = str(text or "")
+    output: list[str] = []
+    buffer: list[str] = []
+    quote = ""
+
+    def flush_unquoted() -> None:
+        if buffer:
+            output.append(transform("".join(buffer)))
+            buffer.clear()
+
+    index = 0
+    while index < len(source):
+        char = source[index]
+        if quote:
+            output.append(char)
+            if char == "\\" and index + 1 < len(source):
+                index += 1
+                output.append(source[index])
+            elif char == quote:
+                quote = ""
+            index += 1
             continue
-        result = re.sub(
-            rf"(?<![A-Za-z0-9_]){re.escape(old)}(?![A-Za-z0-9_])",
-            new,
-            result,
-        )
-    return result
+        if char in {'"', "'"}:
+            flush_unquoted()
+            quote = char
+            output.append(char)
+            index += 1
+            continue
+        buffer.append(char)
+        index += 1
+    flush_unquoted()
+    return "".join(output)
+
+
+def _replace_aliases(text: str, aliases: Mapping[str, str]) -> str:
+    def replace_piece(piece: str) -> str:
+        result = piece
+        for old, new in sorted(aliases.items(), key=lambda item: len(item[0]), reverse=True):
+            if not old or old == new:
+                continue
+            result = re.sub(
+                rf"(?<![A-Za-z0-9_]){re.escape(old)}(?![A-Za-z0-9_])",
+                new,
+                result,
+            )
+        return result
+
+    return _transform_unquoted(text, replace_piece)
 
 
 def _normalize_logic_tokens(text: str) -> str:
-    result = str(text or "").strip().rstrip(";")
-    result = result.replace("&&&", "&&").replace("|||", "||")
-    result = re.sub(r"\bAND\b", "&&", result, flags=re.IGNORECASE)
-    result = re.sub(r"\bOR\b", "||", result, flags=re.IGNORECASE)
-    result = re.sub(r"\bNOT\b\s+", "!", result, flags=re.IGNORECASE)
-    result = re.sub(r"\b(?:greater\s+than\s+or\s+equal\s+to|at\s+least)\b", ">=", result, flags=re.IGNORECASE)
-    result = re.sub(r"\b(?:less\s+than\s+or\s+equal\s+to|at\s+most)\b", "<=", result, flags=re.IGNORECASE)
-    result = re.sub(r"\bgreater\s+than\b", ">", result, flags=re.IGNORECASE)
-    result = re.sub(r"\bless\s+than\b", "<", result, flags=re.IGNORECASE)
-    result = re.sub(r"\bnot\s+equal\s+to\b", "!=", result, flags=re.IGNORECASE)
-    result = re.sub(r"\bequal\s+to\b", "==", result, flags=re.IGNORECASE)
-    result = re.sub(r"\bis\s+not\b", "!=", result, flags=re.IGNORECASE)
-    result = re.sub(r"\bis\b", "==", result, flags=re.IGNORECASE)
-    result = result.replace("<>", "!=")
-    result = re.sub(r"(?<![!<>=])=(?!=)", "==", result)
-    result = re.sub(
-        r"\b[A-Za-z_][A-Za-z0-9_]*\.([A-Z][A-Z0-9_]*)\b",
-        lambda match: json.dumps(match.group(1)),
-        result,
-    )
-    result = re.sub(r"\b(?:this|context)\.([A-Za-z_][A-Za-z0-9_]*)\b", r"\1", result)
-    result = re.sub(r"\bTRUE\b", "true", result, flags=re.IGNORECASE)
-    result = re.sub(r"\bFALSE\b", "false", result, flags=re.IGNORECASE)
-    result = re.sub(r"\bNULL\b", "null", result, flags=re.IGNORECASE)
-    return " ".join(result.split())
+    def normalize_piece(piece: str) -> str:
+        result = piece
+        result = result.replace("&&&", "&&").replace("|||", "||")
+        result = re.sub(r"\bAND\b", "&&", result, flags=re.IGNORECASE)
+        result = re.sub(r"\bOR\b", "||", result, flags=re.IGNORECASE)
+        result = re.sub(r"\bNOT\b\s+", "!", result, flags=re.IGNORECASE)
+        result = re.sub(
+            r"\b(?:greater\s+than\s+or\s+equal\s+to|at\s+least)\b",
+            ">=",
+            result,
+            flags=re.IGNORECASE,
+        )
+        result = re.sub(
+            r"\b(?:less\s+than\s+or\s+equal\s+to|at\s+most)\b",
+            "<=",
+            result,
+            flags=re.IGNORECASE,
+        )
+        result = re.sub(r"\bgreater\s+than\b", ">", result, flags=re.IGNORECASE)
+        result = re.sub(r"\bless\s+than\b", "<", result, flags=re.IGNORECASE)
+        result = re.sub(r"\bnot\s+equal\s+to\b", "!=", result, flags=re.IGNORECASE)
+        result = re.sub(r"\bequal\s+to\b", "==", result, flags=re.IGNORECASE)
+        result = re.sub(r"\bis\s+not\b", "!=", result, flags=re.IGNORECASE)
+        result = re.sub(r"\bis\b", "==", result, flags=re.IGNORECASE)
+        result = result.replace("<>", "!=")
+        result = re.sub(r"(?<![!<>=])=(?!=)", "==", result)
+        result = re.sub(
+            r"\b[A-Za-z_][A-Za-z0-9_]*\.([A-Z][A-Z0-9_]*)\b",
+            lambda match: json.dumps(match.group(1)),
+            result,
+        )
+        result = re.sub(r"\b(?:this|context)\.([A-Za-z_][A-Za-z0-9_]*)\b", r"\1", result)
+        result = re.sub(r"\bTRUE\b", "true", result, flags=re.IGNORECASE)
+        result = re.sub(r"\bFALSE\b", "false", result, flags=re.IGNORECASE)
+        result = re.sub(r"\bNULL\b", "null", result, flags=re.IGNORECASE)
+        return result
+
+    result = _transform_unquoted(str(text or "").strip(), normalize_piece)
+    return " ".join(result.rstrip(";").split())
 
 
 def _string_like(record: Mapping[str, str]) -> bool:
@@ -473,6 +527,36 @@ def _infer_variable(name: str, rhs: str) -> dict[str, str]:
     }
 
 
+def _split_unquoted_statements(text: str) -> list[str]:
+    source = str(text or "")
+    rows: list[str] = []
+    buffer: list[str] = []
+    quote = ""
+    index = 0
+    while index < len(source):
+        char = source[index]
+        if quote:
+            buffer.append(char)
+            if char == "\\" and index + 1 < len(source):
+                index += 1
+                buffer.append(source[index])
+            elif char == quote:
+                quote = ""
+            index += 1
+            continue
+        if char in {'"', "'"}:
+            quote = char
+            buffer.append(char)
+        elif char == ";":
+            rows.append("".join(buffer))
+            buffer.clear()
+        else:
+            buffer.append(char)
+        index += 1
+    rows.append("".join(buffer))
+    return rows
+
+
 def _normalize_mutation(
     value: str,
     *,
@@ -508,7 +592,7 @@ def _normalize_mutation(
 
     normalized_rows: list[str] = []
     opaque_rows: list[str] = []
-    for raw in text.split(";"):
+    for raw in _split_unquoted_statements(text):
         row = raw.strip()
         if not row:
             continue
