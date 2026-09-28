@@ -14,6 +14,7 @@ from minecraft_mod_ai.atomic_concern_source import (
 )
 from minecraft_mod_ai.atomic_java_admission import _semantic_component_issue
 from minecraft_mod_ai.authored_ir_parser import slice_concern_requirements
+from minecraft_mod_ai.custom_module_errors import CustomModuleGenerationError
 from minecraft_mod_ai.custom_module_generator import (
     _atomic_parameters_for_request,
     _call_atomic_java_region,
@@ -303,6 +304,58 @@ def test_leaf_contract_materializes_only_concerns_present_in_authored_source() -
     ]
     assert list(payloads[0]["source_requirements"]) == ["R12", "R13"]
     assert list(payloads[1]["source_requirements"]) == ["R12", "R14"]
+
+
+def test_state_model_without_structured_records_never_falls_back_to_coder(tmp_path) -> None:
+    requirements = {
+        "R12": "## state_model",
+        "R13": "- variables: credits (Int, owner=Player)",
+        "R14": "- transitions: from_state(idle) -> trigger(buy) -> to_state(done)",
+    }
+    task = {"task_id": "state-must-be-structured"}
+    node = {
+        "symbol": "AuthoredStateModel",
+        "obligations": [
+            _model_obligation("variables"),
+            _model_obligation("transitions"),
+        ],
+    }
+    section, active = _bind_atomic_leaf_contract(task, node, requirements)
+    called = False
+
+    def forbidden_model_call(_messages):
+        nonlocal called
+        called = True
+        raise AssertionError("state_model must not enter free-form coder fallback")
+
+    executor = AtomicConcernExecutor(
+        root=tmp_path,
+        target=tmp_path / "AuthoredStateModel.java",
+        relative="AuthoredStateModel.java",
+        symbol="AuthoredStateModel",
+        original=(
+            "public final class AuthoredStateModel {\n"
+            "    // MMM_AUTHORED_FEATURE_BODY\n"
+            "}\n"
+        ),
+        task=task,
+        section=section,
+        concerns=tuple(active),
+        grounding={},
+        dependency_source="",
+        require_initialize=False,
+        call_coder=forbidden_model_call,
+        compile_java=lambda _root: SimpleNamespace(status="PASS"),
+        compile_log=lambda _report: "",
+        write_source=lambda _path, _source: None,
+    )
+
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match="STRUCTURED_STATE_CONTRACT_REQUIRED",
+    ):
+        executor.run()
+    assert called is False
 
 
 def test_markdown_variables_lower_without_model_and_never_construct_bare_enumset() -> None:
