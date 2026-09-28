@@ -196,6 +196,35 @@ def test_schema_violating_bounds_is_rejected(kind: str) -> None:
     assert not is_atomic_model_schema(schema)
 
 
+def test_union_string_scalar_keeps_string_bound_enforcement() -> None:
+    bounded = {
+        "type": "object",
+        "properties": {
+            "initializer": {
+                "type": ["string", "number", "boolean", "null"],
+                "maxLength": 64,
+            }
+        },
+        "required": ["initializer"],
+        "additionalProperties": False,
+    }
+    assert_atomic_model_schema(bounded, surface="union scalar")
+    assert is_atomic_model_schema(bounded)
+
+    unbounded = {
+        "type": "object",
+        "properties": {
+            "initializer": {
+                "type": ["string", "number", "boolean", "null"],
+            }
+        },
+        "required": ["initializer"],
+        "additionalProperties": False,
+    }
+    with pytest.raises(ModelConfigurationError, match="MODEL_ATOMICITY_STRING_UNBOUNDED"):
+        assert_atomic_model_schema(unbounded, surface="union scalar")
+
+
 def test_open_object_template_still_rejected() -> None:
     schema = {"type": "object", "properties": {"value": {"type": "string"}}}
 
