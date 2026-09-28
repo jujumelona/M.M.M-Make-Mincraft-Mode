@@ -48,6 +48,7 @@ _CANONICAL_FIELD_DEFAULTS: dict[str, str] = {
     "reentrancy_rule": "thread-safe / non-reentrant",
     "trust_boundary": "client-server boundary validation",
     "dirty_rule": "mark dirty on mutation",
+    "prerequisite": "no prerequisite",
 }
 
 
@@ -168,6 +169,24 @@ def pack_section_concerns(
     return chunks
 
 
+def _model_field_schema(section: str, concern: str, field: str) -> dict[str, Any]:
+    if (
+        section == "integration"
+        and concern == "initialization_order"
+        and field == "prerequisite"
+    ):
+        return {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "maxLength": 256,
+            "description": (
+                "Prerequisite component name, or null when this component is a root "
+                "with no prerequisite."
+            ),
+        }
+    return {"type": "string", "minLength": 1, "maxLength": 256}
+
+
 def worksheet_chunk_schema(
     section: str,
     concerns: Sequence[str],
@@ -199,7 +218,7 @@ def worksheet_chunk_schema(
             "items": {
                 "type": "object",
                 "properties": {
-                    field: {"type": "string", "minLength": 1, "maxLength": 256}
+                    field: _model_field_schema(key, concern, field)
                     for field in fields
                 },
                 "required": [],
