@@ -141,7 +141,7 @@ def test_invalid_chunk_fails_after_one_generation_without_repair_retry():
         "acceptance": [],
     }
 
-    with pytest.raises(RuntimeError, match="invalid native structured decision"):
+    with pytest.raises(ValueError, match="invalid native structured decision"):
         planning._compile_worksheet_section(
             router,
             requirement=requirement,
