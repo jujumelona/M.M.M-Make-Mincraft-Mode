@@ -54,6 +54,8 @@ def test_concern_prompt_requests_plain_java_not_custom_ast():
     assert payload["scope"]["required_output_format"] == "plain_java_source"
     assert payload["scope"]["model_tools_enabled"] is False
     assert payload["generation_recipe"]["no_json_ast_protocol"] is True
+    assert payload["generation_recipe"]["require_fully_qualified_external_types"] is True
+    assert "jdk_simple_names_host_qualified" not in payload["generation_recipe"]
 
 
 def test_direct_semantic_java_coder_disables_tools():
