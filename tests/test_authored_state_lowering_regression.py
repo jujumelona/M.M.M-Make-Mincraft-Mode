@@ -20,6 +20,29 @@ from minecraft_mod_ai.custom_module_generator import (
 )
 from minecraft_mod_ai.implementation_graph_execution import _bind_atomic_leaf_contract
 from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
+from minecraft_mod_ai.structured_state_runtime import constrain_state_chunk_schema
+from minecraft_mod_ai.worksheet_atomic_chunker import worksheet_chunk_schema
+
+def test_state_planning_schema_closes_mutations_over_declared_variables() -> None:
+    schema = worksheet_chunk_schema(
+        "state_model",
+        ("transitions",),
+        include_evidence=False,
+    )
+    constrained = constrain_state_chunk_schema(
+        schema,
+        [{"variables": [{"name": "credits"}, {"name": "fuel"}]}],
+    )
+    item = constrained["properties"]["transitions"]["items"]
+    guard = item["properties"]["guard"]
+    mutation = item["properties"]["mutation"]
+
+    assert "pattern" in guard
+    assert "pattern" in mutation
+    assert "credits" in mutation["pattern"]
+    assert "fuel" in mutation["pattern"]
+    assert "shipStatus" not in mutation["pattern"]
+
 
 STATE_REQUIREMENTS = {
     "R29": "## state_model",
