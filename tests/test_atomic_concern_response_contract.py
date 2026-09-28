@@ -839,6 +839,186 @@ def test_same_compiler_diagnostic_retries_when_concern_source_changed() -> None:
     assert second_repair["current_selected_region_source"] == "private static int VALUE = missingB();"
 
 
+def test_logged_java_failure_families_repair_through_real_compiler_feedback(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_ATOMIC_CONCERN_COMPILE_REPAIRS", "4")
+    captured: list[list[dict[str, str]]] = []
+    remaining = [
+        "private static final boolean NO_FLUID_STORAGE_IN_ZERO_G;",
+        (
+            "private static final java.util.Map<String, Object> TRANSFER_CACHE = "
+            "new java.util.HashMap<>();\n"
+            "private static void resetTransferCache() { "
+            "TRANSFER_CACHE = java.util.Collections.emptyMap(); }"
+        ),
+        (
+            "private static Object readState() { return null; }\n"
+            "private static java.util.Map<String, Object> shipConfig() { "
+            "return readState(); }"
+        ),
+        (
+            "private static final java.util.concurrent.ReentrantLock shipConfigLock = "
+            "new java.util.concurrent.ReentrantLock();"
+        ),
+        (
+            "private static final java.util.concurrent.locks.ReentrantLock shipConfigLock = "
+            "new java.util.concurrent.locks.ReentrantLock();"
+        ),
+    ]
+    state: dict[str, str] = {"source": ""}
+    compile_calls = {"count": 0}
+
+    def call_coder(messages):
+        captured.append(list(messages))
+        if not remaining:
+            raise AssertionError("unexpected extra model call")
+        return remaining.pop(0)
+
+    def write_source(_path, source):
+        state["source"] = source
+
+    def error_for(source: str):
+        rows = source.splitlines()
+
+        def at(fragment: str) -> tuple[int, str]:
+            number = next(
+                index for index, row in enumerate(rows, start=1)
+                if fragment in row
+            )
+            return number, rows[number - 1]
+
+        if "private static final boolean NO_FLUID_STORAGE_IN_ZERO_G;" in source:
+            line, row = at("NO_FLUID_STORAGE_IN_ZERO_G")
+            return (
+                line,
+                row,
+                "variable NO_FLUID_STORAGE_IN_ZERO_G might not have been initialized",
+                "",
+            )
+        if "TRANSFER_CACHE = java.util.Collections.emptyMap();" in source:
+            line, row = at("TRANSFER_CACHE = java.util.Collections.emptyMap()")
+            return (
+                line,
+                row,
+                "cannot assign a value to static final variable TRANSFER_CACHE",
+                "",
+            )
+        if "return readState();" in source:
+            line, row = at("return readState();")
+            return (
+                line,
+                row,
+                "incompatible types: Object cannot be converted to Map<String,Object>",
+                "",
+            )
+        if "java.util.concurrent.ReentrantLock" in source:
+            line, row = at("java.util.concurrent.ReentrantLock")
+            return (
+                line,
+                row,
+                "cannot find symbol",
+                "  symbol:   class ReentrantLock\n"
+                "  location: package java.util.concurrent\n",
+            )
+        return None
+
+    def compile_java(_root):
+        compile_calls["count"] += 1
+        error = error_for(state["source"])
+        if error is None:
+            return SimpleNamespace(status="PASS", log="")
+        line, row, message, tail = error
+        return SimpleNamespace(
+            status="FAIL",
+            log=(
+                f"/tmp/Test.java:{line}: error: {message}\n"
+                f"{row}\n"
+                "^\n"
+                f"{tail}"
+            ),
+        )
+
+    executor = AtomicConcernExecutor(
+        root=Path("."),
+        target=Path("/tmp/Test.java"),
+        relative="/tmp/Test.java",
+        symbol="Test",
+        original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
+        task={"task_id": "t", "semantic_outcome": "x"},
+        section="behavior_contract",
+        concerns=(
+            {
+                "sequence": 0,
+                "identifier": "id",
+                "concern": "concurrency_hazards",
+                "task": "implement compiler-safe concurrency state",
+                "rules": [],
+            },
+        ),
+        grounding={},
+        dependency_source="",
+        require_initialize=False,
+        call_coder=call_coder,
+        compile_java=compile_java,
+        compile_log=lambda report: getattr(report, "log", ""),
+        write_source=write_source,
+    )
+
+    result = executor.run()
+
+    assert compile_calls["count"] == 5
+    assert result["repair_count"] == 4
+    assert "java.util.concurrent.locks.ReentrantLock" in result["source"]
+
+    repair_payloads = [
+        __import__("json").loads(messages[-1]["content"])
+        for messages in captured[1:]
+    ]
+    failures = [payload["repair_failure"] for payload in repair_payloads]
+    assert "might not have been initialized" in failures[0]
+    assert "cannot assign a value to static final variable TRANSFER_CACHE" in failures[1]
+    assert "Object cannot be converted to Map<String,Object>" in failures[2]
+    assert "class ReentrantLock" in failures[3]
+    assert all("CURRENT COMPILED SOURCE AROUND THE REPORTED LINES" in item for item in failures)
+    assert all(">>" in item for item in failures)
+
+
+def test_atomic_prompt_prevents_logged_java_failure_families_on_first_pass() -> None:
+    concerns = (
+        {
+            "sequence": 0,
+            "identifier": "id",
+            "concern": "concurrency_hazards",
+            "task": "concurrency",
+            "rules": [],
+        },
+    )
+    captured: list[list[dict[str, str]]] = []
+    executor, _compile_calls = _multi_executor(
+        [
+            (
+                "private static final java.util.concurrent.locks.ReentrantLock LOCK = "
+                "new java.util.concurrent.locks.ReentrantLock();"
+            )
+        ],
+        concerns=concerns,
+        captured_messages=captured,
+    )
+
+    executor.run()
+
+    payload = __import__("json").loads(captured[0][-1]["content"])
+    rules = "\n".join(payload["generation_recipe"]["compiler_first_rules"])
+    anchors = payload["generation_recipe"]["jdk_package_anchors"]
+
+    assert "definitely assigned before any read" in rules
+    assert "Never reassign a final field" in rules
+    assert "When an API returns Object" in rules
+    assert "raw collections and unchecked operations" in rules
+    assert "Lock and ReentrantLock are in java.util.concurrent.locks" in rules
+    assert anchors["lock_interface"] == "java.util.concurrent.locks.Lock"
+    assert anchors["reentrant_lock"] == "java.util.concurrent.locks.ReentrantLock"
+
+
 def test_repeated_compiler_diagnostics_ignore_line_number_churn() -> None:
     from minecraft_mod_ai.atomic_concern_source import _compiler_diagnostic_fingerprint
 
