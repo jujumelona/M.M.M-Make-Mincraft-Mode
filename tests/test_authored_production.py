@@ -285,7 +285,6 @@ def test_nested_existing_authored_behavior_reaches_localization_without_loss():
 
 
 @pytest.mark.parametrize("text", [
-@pytest.mark.parametrize("text", [
     "# Trading\n## Trigger\nExchange ore for credits.\n## State\nPersist credits.\n",
     "# Overview\n# Trading\nExchange ore for credits.\n# Appendix\n",
     "# Trading\nExchange ore for credits.\n```markdown\n# Not a feature\n```\n",
