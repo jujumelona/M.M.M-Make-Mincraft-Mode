@@ -1436,6 +1436,21 @@ class CompleteProductionOrchestrator:
             return tuple(sorted(affected))
         research_modules = tuple(module for module in ordered if is_research_shard(module))
         asset_lookup = {item.asset_id: item for item in approved.assets}
+        raw_artifact_jobs = approved.game_design.get("_artifact_jobs") or []
+        artifact_jobs_by_owner: dict[str, list[ArtifactJob]] = {}
+        all_artifact_jobs: list[ArtifactJob] = []
+        artifact_producers: dict[str, ArtifactJob] = {}
+        for raw_job in raw_artifact_jobs:
+            job = ArtifactJob.from_dict(raw_job) if isinstance(raw_job, dict) else raw_job
+            all_artifact_jobs.append(job)
+            owner = str(getattr(job, "owner_module", "") or "")
+            if owner:
+                artifact_jobs_by_owner.setdefault(owner, []).append(job)
+            for port in job.produces:
+                prior = artifact_producers.get(port)
+                if prior is not None and prior.job_id != job.job_id:
+                    raise CompleteProductionError(f"ARTIFACT_DUPLICATE_PRODUCER: {port}")
+                artifact_producers[port] = job
         generation_nodes = tuple(node for node in work_plan.nodes if node.stage.startswith('generate:'))
         node_by_id = {node.node_id: node for node in generation_nodes}
         generation_stages = tuple(sorted({node.stage for node in generation_nodes}))
@@ -1602,43 +1617,27 @@ class CompleteProductionOrchestrator:
                 research_shards = [module for module in members if is_research_shard(module)]
                 receipts.extend(write_research_shard(project_root, module=module) for module in research_shards)
 
-                raw_jobs = approved.game_design.get("_artifact_jobs") or []
-                jobs_by_owner: dict[str, list[Any]] = {}
-                for rj in raw_jobs:
-                    owner = (
-                        rj.get("owner_module")
-                        if isinstance(rj, dict)
-                        else getattr(rj, "owner_module", "")
-                    )
-                    if owner:
-                        jobs_by_owner.setdefault(owner, []).append(rj)
-
                 artifact_handled_members: list[ProductionModule] = []
                 artifact_jobs_to_run: list[ArtifactJob] = []
                 seen_job_ids: set[str] = set()
                 for module in members:
-                    if module.module_id in jobs_by_owner:
+                    owned_jobs = artifact_jobs_by_owner.get(module.module_id, ())
+                    if owned_jobs:
                         artifact_handled_members.append(module)
-                        for j in jobs_by_owner[module.module_id]:
-                            job_obj = ArtifactJob.from_dict(j) if isinstance(j, dict) else j
-                            if job_obj.job_id not in seen_job_ids:
-                                artifact_jobs_to_run.append(job_obj)
-                                seen_job_ids.add(job_obj.job_id)
+                        for job in owned_jobs:
+                            if job.job_id not in seen_job_ids:
+                                artifact_jobs_to_run.append(job)
+                                seen_job_ids.add(job.job_id)
 
                 # Include only the exact transitive prerequisites of these owners.
-                all_jobs = [ArtifactJob.from_dict(j) if isinstance(j, dict) else j for j in raw_jobs]
-                producers = {}
-                for candidate in all_jobs:
-                    for port in candidate.produces:
-                        if port in producers and producers[port].job_id != candidate.job_id:
-                            raise CompleteProductionError(f"ARTIFACT_DUPLICATE_PRODUCER: {port}")
-                        producers[port] = candidate
+                # The immutable producer index is built once per generation execution,
+                # rather than reparsing the complete artifact DAG in every content shard.
                 cursor = 0
                 while cursor < len(artifact_jobs_to_run):
                     current_job = artifact_jobs_to_run[cursor]
                     cursor += 1
                     for dependency in current_job.requires:
-                        prerequisite = producers.get(dependency)
+                        prerequisite = artifact_producers.get(dependency)
                         if prerequisite is not None and prerequisite.job_id not in seen_job_ids:
                             artifact_jobs_to_run.append(prerequisite)
                             seen_job_ids.add(prerequisite.job_id)
