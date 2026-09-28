@@ -277,31 +277,6 @@ def _string_like(record: Mapping[str, str]) -> bool:
     )
 
 
-def _quote_bare_string_literals(
-    expression: str,
-    variables: Mapping[str, Mapping[str, str]],
-) -> str:
-    result = expression
-    declared = set(variables)
-    for name, record in variables.items():
-        if not _string_like(record):
-            continue
-
-        def repl(match: re.Match[str]) -> str:
-            op, token = match.group(1), match.group(2)
-            lowered = token.casefold()
-            if token in declared or lowered in {"true", "false", "null"}:
-                return f"{name} {op} {token}"
-            return f"{name} {op} {json.dumps(token)}"
-
-        result = re.sub(
-            rf"\b{re.escape(name)}\b\s*(==|!=)\s*([A-Za-z_][A-Za-z0-9_]*)\b",
-            repl,
-            result,
-        )
-    return result
-
-
 def _split_expression_segments(text: str) -> list[str]:
     operators = ("||", "&&", "==", "!=", ">=", "<=", "(", ")", "!", "+", "-", "*", "/", "%", ">", "<")
     source = str(text or "")
@@ -466,7 +441,6 @@ def _normalize_expression(
     original = str(value or "")
     text = _replace_aliases(original, aliases)
     text = _normalize_logic_tokens(text)
-    text = _quote_bare_string_literals(text, variables)
     text = _canonicalize_expression_operands(text, variables=variables)
     lowered = text.casefold()
     if not text or lowered in {"none", "n/a", "na", "always", "no guard", "no condition"}:
