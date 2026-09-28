@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -179,10 +179,58 @@ class CompleteGameDesignPlanner:
             from .structured_state_runtime import validate_structured_state_section
 
             validate_structured_state_section(state_section)
+
+        effective_existing = str(
+            existing_input_sha256 or plan.existing_input_sha256 or ""
+        ).strip()
+        if plan.structured_sections and not effective_existing:
+            canonical_prompt = (
+                plan.requested_prompt
+                if plan.text.strip() == plan.requested_prompt.strip()
+                else plan.production_prompt()
+            )
+            with trace_scope("production_preparation", trace_id=uuid.uuid4().hex):
+                emit_root_cause(
+                    "production_preparation_start",
+                    stage="production",
+                    result="START",
+                    details={
+                        **repository_revision(),
+                        "input": "structured_authored_design",
+                        "backend": "canonical_atomic_artifact",
+                        "free_form_custom_java": False,
+                    },
+                )
+                proposal = self._plan_in_session(
+                    canonical_prompt,
+                    media_paths=plan.media_paths or tuple(str(path) for path in media_paths),
+                    existing_input_sha256="",
+                )
+                game_design = {
+                    **proposal.game_design,
+                    "authored_plan": plan.to_dict(),
+                    "_authored_execution_backend": {
+                        "mode": "canonical_atomic_artifact",
+                        "structured_authority": True,
+                        "free_form_custom_java": False,
+                    },
+                }
+                proposal = replace(
+                    proposal,
+                    game_design=game_design,
+                    approval_hash="",
+                ).with_hash()
+                proposal.validate()
+                return proposal
+
         with trace_scope("production_preparation", trace_id=uuid.uuid4().hex):
             emit_root_cause(
                 "production_preparation_start", stage="production", result="START",
-                details={**repository_revision(), "input": "saved_authored_design"},
+                details={
+                    **repository_revision(),
+                    "input": "saved_authored_design",
+                    "backend": "localized_authored_custom",
+                },
             )
             return compile_authored_design(
                 self.router, plan, existing_input_sha256=existing_input_sha256,
