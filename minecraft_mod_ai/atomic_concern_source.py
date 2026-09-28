@@ -954,6 +954,47 @@ def _compiler_failure_source_excerpt(
     return excerpt
 
 
+def _compiler_repair_hints(log: str) -> tuple[str, ...]:
+    text = str(log or "")
+    lowered = text.casefold()
+    hints: list[str] = []
+
+    if "might not have been initialized" in lowered:
+        hints.append(
+            "DEFINITE_ASSIGNMENT: initialize each reported final field at its declaration "
+            "or assign a blank final exactly once on every static-initialization path before any read."
+        )
+    if "cannot assign a value to static final variable" in lowered:
+        hints.append(
+            "FINAL_REBINDING: do not assign a new reference/value to the reported final field; "
+            "mutate the referenced mutable object when that preserves the contract, otherwise make "
+            "the concern-owned binding non-final only when rebinding is semantically required."
+        )
+    if (
+        "incompatible types:" in lowered
+        and "object cannot be converted to map" in lowered
+    ):
+        hints.append(
+            "OBJECT_TO_MAP: the producer returns Object. Narrow with instanceof Map<?, ?>, "
+            "copy/validate entries into the declared parameterized Map<String, Object>, and return "
+            "a type-compatible fallback when the runtime value is not a map; do not use a raw or unchecked cast."
+        )
+    if (
+        "location: package java.util.concurrent" in lowered
+        and ("class lock" in lowered or "class reentrantlock" in lowered)
+    ):
+        hints.append(
+            "JDK_LOCK_PACKAGE: use java.util.concurrent.locks.Lock and "
+            "java.util.concurrent.locks.ReentrantLock; neither type is in java.util.concurrent."
+        )
+    if "uses unchecked or unsafe operations" in lowered:
+        hints.append(
+            "UNCHECKED_TYPES: remove raw collection use and unchecked casts in the selected region; "
+            "preserve concrete generic types and validate runtime values before narrowing."
+        )
+    return tuple(hints)
+
+
 def _compiler_repair_context(
     log: str,
     *,
@@ -983,6 +1024,12 @@ def _compiler_repair_context(
         parts.append(
             "CURRENT COMPILED SOURCE AROUND THE REPORTED LINES "
             "(>> marks a compiler-reported line):\n" + excerpt
+        )
+    hints = _compiler_repair_hints(log)
+    if hints:
+        parts.append(
+            "COMPILER-DERIVED REPAIR CHECKLIST:\n"
+            + "\n".join(f"- {hint}" for hint in hints)
         )
     parts.append(
         "REPAIR CONTRACT:\n"
