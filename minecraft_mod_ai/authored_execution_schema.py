@@ -21,17 +21,6 @@ SECTION_SPECS: dict[str, dict[str, Any]] = {
     "state_model": {
         "symbol": "AuthoredStateModel",
         "depends_on": (),
-        "public_api": (
-            "public static synchronized Object getState(String name)",
-            "public static synchronized void setState(String name, Object value)",
-            "public static synchronized String transition(String fromState, String trigger, java.util.Map<String, Object> context)",
-            "public static synchronized boolean invariantsHold(java.util.Map<String, Object> context)",
-            "public static synchronized java.util.List<String> invariantFailures(java.util.Map<String, Object> context)",
-            "public static synchronized void initializeState(String trigger, java.util.Map<String, Object> context)",
-            "public static synchronized void applyUpdate(String trigger, java.util.Map<String, Object> context)",
-            "public static synchronized void cleanupState(String event, java.util.Map<String, Object> context)",
-            "public static synchronized java.util.List<String[]> concurrencyRules()",
-        ),
         "responsibility": "Own the authored domain state, invariants, and state transitions.",
         "instruction": (
             "Implement domain state containers, invariants, and transition helpers only. "
