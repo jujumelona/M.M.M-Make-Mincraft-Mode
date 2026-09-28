@@ -28,6 +28,15 @@ MAX_SCHEMA_DEPTH = 3
 MAX_COMPLETION_TOKENS = 128
 
 
+def _schema_has_type(schema: Mapping[str, Any], expected: str) -> bool:
+    raw = schema.get("type")
+    if raw == expected:
+        return True
+    if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
+        return expected in raw
+    return False
+
+
 def _configuration_error(message: str) -> Exception:
     from .model_adapters import ModelConfigurationError
 
@@ -52,7 +61,7 @@ def _assert_closed_object_schemas(
     if isinstance(value, Mapping):
         schema_type = value.get("type")
         has_properties = "properties" in value
-        is_object = schema_type == "object" or (
+        is_object = _schema_has_type(value, "object") or (
             has_properties and not scoped_object_constraint
         )
 
@@ -123,7 +132,7 @@ def assert_strict_atomicity_bounds(
                 )
             for k, child in props.items():
                 assert_strict_atomicity_bounds(child, surface=surface, path=f"{path}.{k}", depth=depth + 1)
-        if value.get("type") == "array":
+        if _schema_has_type(value, "array"):
             max_items = value.get("maxItems")
             if max_items is None:
                 raise _configuration_error(
@@ -160,7 +169,7 @@ def assert_strict_atomicity_bounds(
                             path=f"{path}.{keyword}[{index}]",
                             depth=depth,
                         )
-        if value.get("type") == "string":
+        if _schema_has_type(value, "string"):
             if "enum" not in value:
                 max_len = value.get("maxLength")
                 if max_len is None:
