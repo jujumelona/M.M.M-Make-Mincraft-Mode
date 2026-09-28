@@ -370,6 +370,7 @@ def _multi_executor(
     *,
     concerns: tuple[dict[str, object], ...],
     captured_messages: list[list[dict[str, str]]] | None = None,
+    section: str = "behavior_contract",
 ) -> tuple[AtomicConcernExecutor, dict[str, int]]:
     remaining = list(outputs)
     compile_calls = {"count": 0}
@@ -392,7 +393,7 @@ def _multi_executor(
         symbol="Test",
         original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
         task={"task_id": "t", "semantic_outcome": "x"},
-        section="state_model",
+        section=section,
         concerns=concerns,
         grounding={},
         dependency_source="",
@@ -731,7 +732,7 @@ def test_equal_error_count_with_changed_diagnostics_can_keep_repairing() -> None
         symbol="Test",
         original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
         task={"task_id": "t", "semantic_outcome": "x"},
-        section="state_model",
+        section="behavior_contract",
         concerns=(
             {
                 "sequence": 0,
@@ -755,6 +756,86 @@ def test_equal_error_count_with_changed_diagnostics_can_keep_repairing() -> None
     assert compile_calls["count"] == 3
     assert result["repair_count"] == 2
     assert "VALUE = 1" in result["source"]
+
+
+def test_same_compiler_diagnostic_retries_when_concern_source_changed() -> None:
+    captured: list[list[dict[str, str]]] = []
+    remaining = [
+        "private static int VALUE = missingA();",
+        "private static int VALUE = missingB();",
+        "private static int VALUE = 1;",
+    ]
+    state: dict[str, str] = {"source": ""}
+    compile_calls = {"count": 0}
+
+    def call_coder(messages):
+        captured.append(list(messages))
+        if not remaining:
+            raise AssertionError("unexpected extra model call")
+        return remaining.pop(0)
+
+    def write_source(_path, source):
+        state["source"] = source
+
+    def compile_java(_root):
+        compile_calls["count"] += 1
+        if compile_calls["count"] >= 3:
+            return SimpleNamespace(status="PASS", log="")
+        rows = state["source"].splitlines()
+        line_number = next(
+            index for index, row in enumerate(rows, start=1)
+            if "private static int VALUE" in row
+        )
+        failing_source = rows[line_number - 1]
+        return SimpleNamespace(
+            status="FAIL",
+            log=(
+                f"/tmp/Test.java:{line_number}: error: cannot find symbol\n"
+                f"{failing_source}\n"
+                "                           ^\n"
+                "  symbol: method missing()\n"
+                "  location: class Test\n"
+            ),
+        )
+
+    executor = AtomicConcernExecutor(
+        root=Path("."),
+        target=Path("/tmp/Test.java"),
+        relative="/tmp/Test.java",
+        symbol="Test",
+        original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
+        task={"task_id": "t", "semantic_outcome": "x"},
+        section="behavior_contract",
+        concerns=(
+            {
+                "sequence": 0,
+                "identifier": "id",
+                "concern": "transitions",
+                "task": "implement transitions",
+                "rules": [],
+            },
+        ),
+        grounding={},
+        dependency_source="",
+        require_initialize=False,
+        call_coder=call_coder,
+        compile_java=compile_java,
+        compile_log=lambda report: getattr(report, "log", ""),
+        write_source=write_source,
+    )
+
+    result = executor.run()
+
+    assert result["repair_count"] == 2
+    assert compile_calls["count"] == 3
+    first_repair = __import__("json").loads(captured[1][-1]["content"])
+    second_repair = __import__("json").loads(captured[2][-1]["content"])
+    assert "ACTUAL COMPILER FAILURE FROM THE JUST-COMPILED CANDIDATE" in first_repair["repair_failure"]
+    assert ">>" in first_repair["repair_failure"]
+    assert "private static int VALUE = missingA();" in first_repair["repair_failure"]
+    assert "private static int VALUE = missingB();" in second_repair["repair_failure"]
+    assert first_repair["current_selected_region_source"] == "private static int VALUE = missingA();"
+    assert second_repair["current_selected_region_source"] == "private static int VALUE = missingB();"
 
 
 def test_repeated_compiler_diagnostics_ignore_line_number_churn() -> None:
@@ -816,7 +897,7 @@ def test_compile_repairs_have_hard_per_concern_bound(monkeypatch) -> None:
         symbol="Test",
         original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
         task={"task_id": "t", "semantic_outcome": "x"},
-        section="state_model",
+        section="behavior_contract",
         concerns=(
             {
                 "sequence": 0,
@@ -1446,7 +1527,7 @@ def test_record_explicit_constructor_slot_is_supported() -> None:
     assert "if (credits < 0) credits = 0;" in rendered
 
 
-def test_state_model_followup_receives_exact_host_lowered_variable_api() -> None:
+def test_state_model_followup_is_fully_host_compiled_from_structured_records() -> None:
     import json
 
     obligation_variables = json.dumps(
@@ -1455,6 +1536,9 @@ def test_state_model_followup_receives_exact_host_lowered_variable_api() -> None
             "source_requirements": {
                 "R12": "- variables: name(player_credits) type(double) default(0.0)"
             },
+            "structured_records": [
+                {"name": "player_credits", "type": "double", "default": "0.0"}
+            ],
         }
     )
     obligation_invariants = json.dumps(
@@ -1463,13 +1547,14 @@ def test_state_model_followup_receives_exact_host_lowered_variable_api() -> None
             "source_requirements": {
                 "R14": "- invariants: player_credits cannot be negative"
             },
+            "structured_records": [
+                {"condition": "player_credits >= 0.0", "enforcement": "reject"}
+            ],
         }
     )
-    captured = []
 
-    def call_coder(messages):
-        captured.append(messages)
-        return "private static boolean creditsValid() { return player_credits >= 0.0; }"
+    def call_coder(_messages):
+        raise AssertionError("complete structured state must never enter model Java generation")
 
     executor = AtomicConcernExecutor(
         root=Path("."),
@@ -1501,17 +1586,10 @@ def test_state_model_followup_receives_exact_host_lowered_variable_api() -> None
 
     result = executor.run()
 
-    assert len(captured) == 1
-    payload = __import__("json").loads(captured[0][-1]["content"])
-    credits = next(
-        row
-        for row in payload["available_sibling_api"]
-        if row["symbol"] == "player_credits"
-    )
-    assert credits["mutable"] is True
-    assert "double player_credits" in credits["declaration"]
-    assert "player_credits >= 0.0" in result["source"]
-
+    assert result["repair_count"] == 0
+    assert '"player_credits"' in result["source"]
+    assert "$mmmState.put" in result["source"]
+    assert "$mmmInvariants.add" in result["source"]
 
 def test_concern_authority_keeps_repeated_same_concern_rows() -> None:
     import json
@@ -1760,7 +1838,7 @@ def test_compiler_repair_cannot_expand_nested_type_structure() -> None:
         symbol="Test",
         original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
         task={"task_id": "t", "semantic_outcome": "x"},
-        section="state_model",
+        section="behavior_contract",
         concerns=(
             {
                 "sequence": 0,
