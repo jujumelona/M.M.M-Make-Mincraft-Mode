@@ -7,10 +7,151 @@ or compiler-repair loop is used on this path.
 """
 
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 import json
 import re
 from typing import Any
 
+
+
+_STATE_IDENTIFIER_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*$"
+_STATE_OPERAND_PATTERN = (
+    r'(?:[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?'
+    r'|"(?:\\.|[^"\\])*"|true|false|null|[A-Za-z_][A-Za-z0-9_]*)'
+)
+_STATE_ARITHMETIC_PATTERN = (
+    _STATE_OPERAND_PATTERN
+    + r"(?:[ \t]*[+\-*/%][ \t]*"
+    + _STATE_OPERAND_PATTERN
+    + r")*"
+)
+_STATE_COMPARISON_PATTERN = (
+    _STATE_ARITHMETIC_PATTERN
+    + r"(?:[ \t]*(?:==|!=|>=|<=|>|<)[ \t]*"
+    + _STATE_ARITHMETIC_PATTERN
+    + r")?"
+)
+_STATE_TERM_PATTERN = r"(?:![ \t]*)?" + _STATE_COMPARISON_PATTERN
+STATE_EXPRESSION_PATTERN = (
+    r"^"
+    + _STATE_TERM_PATTERN
+    + r"(?:[ \t]*(?:&&|\|\|)[ \t]*"
+    + _STATE_TERM_PATTERN
+    + r")*$"
+)
+
+
+def _state_mutation_pattern(target_pattern: str = r"[A-Za-z_][A-Za-z0-9_]*") -> str:
+    expression = (
+        _STATE_TERM_PATTERN
+        + r"(?:[ \t]*(?:&&|\|\|)[ \t]*"
+        + _STATE_TERM_PATTERN
+        + r")*"
+    )
+    assignment = (
+        target_pattern
+        + r"[ \t]*(?:\+=|-=|\*=|/=|=)[ \t]*"
+        + expression
+    )
+    return r"^" + assignment + r"(?:[ \t]*;[ \t]*" + assignment + r")*$"
+
+
+STATE_MUTATION_PATTERN = _state_mutation_pattern()
+
+_STATE_EXECUTABLE_FIELDS = {
+    "transitions": {
+        "guard": STATE_EXPRESSION_PATTERN,
+        "mutation": STATE_MUTATION_PATTERN,
+    },
+    "invariants": {"condition": STATE_EXPRESSION_PATTERN},
+    "initialization": {"initial_state": STATE_MUTATION_PATTERN},
+    "updates": {"mutation": STATE_MUTATION_PATTERN},
+    "cleanup": {"action": STATE_MUTATION_PATTERN},
+}
+
+
+def constrain_state_record_schema(
+    concern: str,
+    schema: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Project the compiler grammar into the planner schema from one SSOT."""
+    result = deepcopy(dict(schema))
+    properties = result.get("properties")
+    if not isinstance(properties, dict):
+        return result
+    if concern == "variables" and isinstance(properties.get("name"), dict):
+        properties["name"]["pattern"] = _STATE_IDENTIFIER_PATTERN
+        properties["name"]["description"] = (
+            "Stable ASCII internal state identifier consumed by the host state compiler."
+        )
+    for field, pattern in _STATE_EXECUTABLE_FIELDS.get(concern, {}).items():
+        target = properties.get(field)
+        if not isinstance(target, dict):
+            continue
+        target["pattern"] = pattern
+        target["description"] = (
+            "Host state-compiler DSL. Use identifiers/literals/operators only; "
+            "never natural-language pseudocode or Java method/member syntax."
+        )
+    return result
+
+
+def _prior_state_variable_names(
+    prior_chunks: Sequence[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    names: list[str] = []
+    for chunk in prior_chunks:
+        rows = chunk.get("variables")
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            name = str(row.get("name") or "").strip()
+            if (
+                re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
+                and name not in names
+            ):
+                names.append(name)
+    return tuple(names)
+
+
+def constrain_state_chunk_schema(
+    schema: Mapping[str, Any],
+    prior_chunks: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Narrow mutation targets to variables already authored in earlier chunks."""
+    result = deepcopy(dict(schema))
+    names = _prior_state_variable_names(prior_chunks)
+    if not names:
+        return result
+    properties = result.get("properties")
+    if not isinstance(properties, dict):
+        return result
+    target_pattern = "(?:" + "|".join(re.escape(name) for name in names) + ")"
+    mutation_pattern = _state_mutation_pattern(target_pattern)
+    for concern in ("transitions", "initialization", "updates", "cleanup"):
+        concern_schema = properties.get(concern)
+        if not isinstance(concern_schema, dict):
+            continue
+        items = concern_schema.get("items")
+        item_properties = items.get("properties") if isinstance(items, dict) else None
+        if not isinstance(item_properties, dict):
+            continue
+        field = {
+            "transitions": "mutation",
+            "initialization": "initial_state",
+            "updates": "mutation",
+            "cleanup": "action",
+        }[concern]
+        field_schema = item_properties.get(field)
+        if isinstance(field_schema, dict):
+            field_schema["pattern"] = mutation_pattern
+            field_schema["description"] = (
+                "Host mutation DSL. Assignment targets are restricted to already-authored "
+                "state variables: " + ", ".join(names) + "."
+            )
+    return result
 
 _TOKEN = re.compile(
     r"""\s*(?:
@@ -646,6 +787,10 @@ PUBLIC_API = (
 
 __all__ = [
     "PUBLIC_API",
+    "STATE_EXPRESSION_PATTERN",
+    "STATE_MUTATION_PATTERN",
+    "constrain_state_chunk_schema",
+    "constrain_state_record_schema",
     "has_complete_structured_state",
     "render_state_model_concern",
 ]

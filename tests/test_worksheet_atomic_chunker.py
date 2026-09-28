@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -170,3 +171,32 @@ def test_state_model_schema_rejects_non_compilable_free_prose():
         "mutation": "credits -= cost",
         "to_state": "done",
     })
+
+
+def test_state_model_compiler_is_the_schema_ssot_and_narrows_mutation_targets():
+    from minecraft_mod_ai.planning_detail_slots import concern_record_schema
+    from minecraft_mod_ai.structured_state_runtime import (
+        STATE_EXPRESSION_PATTERN,
+        STATE_MUTATION_PATTERN,
+        constrain_state_chunk_schema,
+    )
+    from minecraft_mod_ai.worksheet_atomic_chunker import WorksheetConcernChunk
+
+    transition = concern_record_schema("state_model", "transitions")
+    assert transition["properties"]["guard"]["pattern"] == STATE_EXPRESSION_PATTERN
+    assert transition["properties"]["mutation"]["pattern"] == STATE_MUTATION_PATTERN
+
+    chunk = WorksheetConcernChunk(
+        ("transitions",),
+        {"transitions": ("mutation", "to_state")},
+    )
+    schema = worksheet_chunk_schema("state_model", chunk)
+    narrowed = constrain_state_chunk_schema(
+        schema,
+        ({"variables": [{"name": "credits"}, {"name": "fuel"}]},),
+    )
+    pattern = narrowed["properties"]["transitions"]["items"]["properties"]["mutation"]["pattern"]
+    assert "credits" in pattern and "fuel" in pattern
+    assert re.fullmatch(pattern, "credits -= cost")
+    assert re.fullmatch(pattern, "fuel += amount")
+    assert re.fullmatch(pattern, "invented = 1") is None

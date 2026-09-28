@@ -425,6 +425,13 @@ def _compile_worksheet_section(
                 chunk_schema = worksheet_chunk_schema(
                     section, concerns, include_evidence=is_first
                 )
+                if section == "state_model":
+                    from .structured_state_runtime import constrain_state_chunk_schema
+
+                    chunk_schema = constrain_state_chunk_schema(
+                        chunk_schema,
+                        tuple(chunk_results),
+                    )
                 messages = _chunk_messages(
                     requirement,
                     selected_sections,

@@ -14,7 +14,12 @@ def concern_record_schema(section: str, concern: str) -> dict:
             f"DETAILED_PLAN_SCHEMA: unknown concern {section}.{concern}"
         )
     identifier = f"feature/{section}/{concern}"
-    return deepcopy(load_record_template(identifier)["record_schema"])
+    schema = deepcopy(load_record_template(identifier)["record_schema"])
+    if section == "state_model":
+        from .structured_state_runtime import constrain_state_record_schema
+
+        schema = constrain_state_record_schema(concern, schema)
+    return schema
 
 
 def specification_schema(section):
