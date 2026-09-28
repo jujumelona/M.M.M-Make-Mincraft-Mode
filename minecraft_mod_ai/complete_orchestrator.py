@@ -1424,7 +1424,12 @@ class CompleteProductionOrchestrator:
             for dependency in module.depends_on:
                 direct_dependents.setdefault(dependency, set()).add(module.module_id)
 
+        downstream_cache: dict[str, tuple[str, ...]] = {}
+
         def downstream_ids(module_id: str) -> tuple[str, ...]:
+            cached = downstream_cache.get(module_id)
+            if cached is not None:
+                return cached
             pending = list(direct_dependents.get(module_id, ()))
             affected: set[str] = set()
             while pending:
@@ -1433,7 +1438,9 @@ class CompleteProductionOrchestrator:
                     continue
                 affected.add(candidate)
                 pending.extend(direct_dependents.get(candidate, ()))
-            return tuple(sorted(affected))
+            resolved = tuple(sorted(affected))
+            downstream_cache[module_id] = resolved
+            return resolved
         research_modules = tuple(module for module in ordered if is_research_shard(module))
         asset_lookup = {item.asset_id: item for item in approved.assets}
         raw_artifact_jobs = approved.game_design.get("_artifact_jobs") or []
