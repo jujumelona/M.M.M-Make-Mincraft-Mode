@@ -297,7 +297,6 @@ def _chunk_messages(
     concerns: tuple[str, ...],
     include_evidence: bool = False,
     prior_chunks: Sequence[Mapping[str, Any]] = (),
-    repair_error: str = "",
 ) -> list[dict[str, str]]:
     statement = _text(requirement.get("statement"))
     acceptance = requirement.get("acceptance")
@@ -334,9 +333,6 @@ def _chunk_messages(
             "assignments using =, +=, -=, *= or /=. Assignment targets must exactly match variable "
             "names already declared by the variables concern; do not invent target names."
         )
-    if repair_error:
-        instruction += f" Previous output failed validation: {repair_error[:800]}. Please repair."
-
     return [
         {
             "role": "system",
@@ -436,38 +432,14 @@ def _compile_worksheet_section(
                     include_evidence=is_first,
                     prior_chunks=tuple(chunk_results),
                 )
-                try:
-                    decoded = _generate_chunk(
-                        router,
-                        messages,
-                        section=section,
-                        index=index,
-                        concerns=concerns,
-                        chunk_schema=chunk_schema,
-                    )
-                except (json.JSONDecodeError, ValueError) as parse_err:
-                    repair_messages = _chunk_messages(
-                        requirement,
-                        selected_sections,
-                        section,
-                        evidence,
-                        completed,
-                        chunk_index=index,
-                        chunk_count=chunk_count,
-                        concerns=concerns,
-                        include_evidence=is_first,
-                        prior_chunks=tuple(chunk_results),
-                        repair_error=str(parse_err),
-                    )
-                    decoded = _generate_chunk(
-                        router,
-                        repair_messages,
-                        section=section,
-                        index=index,
-                        concerns=concerns,
-                        chunk_schema=chunk_schema,
-                    )
-
+                decoded = _generate_chunk(
+                    router,
+                    messages,
+                    section=section,
+                    index=index,
+                    concerns=concerns,
+                    chunk_schema=chunk_schema,
+                )
                 chunk_results.append(decoded)
 
             return merge_worksheet_section_chunks(section, chunk_results, allowed)
