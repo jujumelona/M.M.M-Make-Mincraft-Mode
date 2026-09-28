@@ -173,6 +173,7 @@ def worksheet_chunk_schema(
     concerns: Sequence[str],
     *,
     include_evidence: bool = False,
+    record_counts: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
     """Return one bounded partial-record schema for a host-selected field page."""
     key = _normalize_section_name(section)
@@ -185,9 +186,16 @@ def worksheet_chunk_schema(
     authored_signal: list[dict[str, Any]] = []
     for concern in active:
         fields = projection[concern]
+        count = None
+        if isinstance(record_counts, Mapping) and concern in record_counts:
+            count = max(0, int(record_counts[concern]))
         properties[concern] = {
             "type": "array",
-            "maxItems": 4,
+            **(
+                {"minItems": count, "maxItems": count}
+                if count is not None
+                else {"maxItems": 4}
+            ),
             "items": {
                 "type": "object",
                 "properties": {
@@ -303,15 +311,26 @@ def worksheet_chunk_prompt(
     concerns: Sequence[str],
     *,
     include_evidence: bool = False,
+    record_counts: Mapping[str, int] | None = None,
 ) -> str:
     from .planning_contract_ssot import schema_skeleton_template
 
     key = _normalize_section_name(section)
-    schema = worksheet_chunk_schema(key, concerns, include_evidence=include_evidence)
+    schema = worksheet_chunk_schema(
+        key,
+        concerns,
+        include_evidence=include_evidence,
+        record_counts=record_counts,
+    )
     skeleton = schema_skeleton_template(schema)
     projection = _chunk_projection(key, concerns)
     field_text = "; ".join(
         f"{concern}=[{', '.join(fields)}]" for concern, fields in projection.items()
+    )
+    cardinality_text = "; ".join(
+        f"{concern}={int(record_counts[concern])}"
+        for concern in concerns
+        if isinstance(record_counts, Mapping) and concern in record_counts
     )
     evidence_instruction = (
         " Also supply constraint_evidence_refs as an array of host-supplied evidence IDs (or empty array)."
@@ -324,9 +343,19 @@ def worksheet_chunk_prompt(
             f"Section: {key}",
             f"Active Concerns: {', '.join(concerns)}",
             f"Active Record Fields: {field_text}",
+            *(
+                (f"Host-fixed Record Counts: {cardinality_text}",)
+                if cardinality_text
+                else ()
+            ),
             f"Purpose: {_section_description(key)}",
             f"Fill only the shown fields for these concern arrays.{evidence_instruction}",
-            "If a concern appears in another chunk, preserve record count and record order so the host can merge field pages deterministically.",
+            (
+                "For concerns with a Host-fixed Record Count, emit exactly that many records "
+                "in the same ordinal order; the host owns cardinality."
+                if cardinality_text
+                else "Choose the record count for each concern in this first field page; the host will freeze that count for later pages."
+            ),
             "Prefer complete values for the shown fields, but do not invent external facts; the host normalizes harmless omissions.",
             "The chunk must contain at least one concrete concern record or one concrete inapplicable reason; evidence refs alone are not an answer.",
             "Never use N/A, none, TODO, TBD, unknown, same-as-above, or another placeholder as the authored content.",
