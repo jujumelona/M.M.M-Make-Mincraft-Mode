@@ -860,7 +860,7 @@ def compile_authored_worksheet(router: Any, prompt: str) -> dict[str, Any]:
                 dependencies = _section_dependencies(section, selected_sections)
                 if any(dependency not in completed for dependency in dependencies):
                     continue
-                completed[section] = _compile_worksheet_section(
+                compiled_section = _compile_worksheet_section(
                     router,
                     requirement=requirement,
                     selected_sections=selected_sections,
@@ -872,6 +872,13 @@ def compile_authored_worksheet(router: Any, prompt: str) -> dict[str, Any]:
                         for dependency in dependencies
                     },
                 )
+                if section == "state_model":
+                    from .structured_state_runtime import (
+                        validate_structured_state_section,
+                    )
+
+                    validate_structured_state_section(compiled_section)
+                completed[section] = compiled_section
                 pending.remove(section)
                 progressed = True
             if not progressed:
