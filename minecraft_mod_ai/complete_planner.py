@@ -174,6 +174,11 @@ class CompleteGameDesignPlanner:
                 schema_version="mmm/authored-plan-v2",
                 structured_sections=structured,
             )
+        state_section = plan.structured_sections.get("state_model")
+        if isinstance(state_section, Mapping):
+            from .structured_state_runtime import validate_structured_state_section
+
+            validate_structured_state_section(state_section)
         with trace_scope("production_preparation", trace_id=uuid.uuid4().hex):
             emit_root_cause(
                 "production_preparation_start", stage="production", result="START",
