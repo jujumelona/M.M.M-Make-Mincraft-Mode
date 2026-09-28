@@ -69,6 +69,7 @@ def _canonical_atomic_obligations(
     concerns: list[dict[str, Any]],
     requirements: Mapping[str, str],
     raw_obligations: list[str],
+    structured_sections: Mapping[str, Any] | None = None,
 ) -> tuple[list[str], list[str], list[dict[str, Any]]]:
     """Materialize only authored concerns that own source in the final node."""
     from .authored_execution_schema import section_spec
@@ -89,9 +90,14 @@ def _canonical_atomic_obligations(
             continue
         extras.append(raw)
 
+    from .authored_structured_design import active_concern_records
+
+    structured_records = active_concern_records(structured_sections, section)
     exact_sources: dict[str, dict[str, str]] = {}
     for concern in concerns:
         name = str(concern["concern"])
+        if structured_sections and name not in structured_records:
+            continue
         source = slice_concern_requirements(
             requirements,
             concern=name,
@@ -99,6 +105,8 @@ def _canonical_atomic_obligations(
         )
         if source:
             exact_sources[name] = source
+        elif name in structured_records:
+            exact_sources[name] = {}
 
     # Legacy/free-form sections have no canonical concern anchors. Preserve one
     # already-admitted owner rather than manufacturing every schema concern.
@@ -146,6 +154,10 @@ def _canonical_atomic_obligations(
             instruction, ensure_ascii=False, sort_keys=True
         )
         payload["source_requirements"] = host_sources
+        if name in structured_records:
+            payload["structured_records"] = deepcopy(structured_records[name])
+        else:
+            payload.pop("structured_records", None)
         rebound.append(json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
     return rebound + extras, drifted, active
@@ -155,6 +167,7 @@ def _bind_atomic_leaf_contract(
     task: dict[str, Any],
     node: Mapping[str, Any],
     requirements: Mapping[str, str],
+    structured_sections: Mapping[str, Any] | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     from .authored_production import _task_sha
 
@@ -166,6 +179,7 @@ def _bind_atomic_leaf_contract(
         concerns=concerns,
         requirements=requirements,
         raw_obligations=list(node["obligations"]),
+        structured_sections=structured_sections,
     )
     task["implementation_obligations"] = obligations
     task["task_sha256"] = _task_sha(task)
@@ -214,7 +228,12 @@ def _leaf_module(node: dict[str, Any], graph: dict[str, Any], request: dict[str,
         worksheet={"implementation_ir_node": node}, required_gates=("target_compile",),
         target_status="host_reserved",
     )
-    section, atomic_concerns = _bind_atomic_leaf_contract(task, node, requirements)
+    section, atomic_concerns = _bind_atomic_leaf_contract(
+        task,
+        node,
+        requirements,
+        structured_sections=request.get("structured_sections"),
+    )
     return ProductionModule(
         module_id="ir_" + node["symbol"].lower(), kind="custom_java",
         config={"implementation": "custom", "evidence_task": task,

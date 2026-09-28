@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from copy import deepcopy
 import json
 import re
 from collections.abc import Mapping
@@ -616,6 +617,7 @@ def _compile_new_authored_modules(
         "text": plan.text, "package": package_name, "mod_id": mod_id,
         "target": dict(target), "entrypoint_path": main_path,
         "entrypoint_symbol": main_symbol,
+        "structured_sections": deepcopy(plan.structured_sections),
     }
     task = _exact_authored_task(
         task_id=task_id, path=main_path, symbol=main_symbol, target=target,
