@@ -1560,25 +1560,22 @@ def _messages(
     name = _slug(concern.get("concern"))
     if response_region == "members":
         response_contract = (
-            "Call emit_java_structure exactly once. Do not write a Java region string. "
-            "Use only the structured categories exposed by the required tool schema for this "
-            "concern. The host owns Java syntax and renders those parts. Logic concerns are "
-            "intentionally denied nested-type categories; do not work around that restriction. "
-            "If the tool schema exposes nested-type categories, concern-owned runtime helper types "
-            "may be declared there; otherwise reuse available_sibling_api/dependency_api and do not "
-            "invent wrapper DTOs or helper classes. If this concern needs state not present in "
-            "available_sibling_api, declare the minimal "
-            "concern-local backing field instead of referencing an undeclared symbol. "
-            "For JDK collection/concurrency types you may use simple names such as List/Map/Set; "
-            "the host qualifies them. Never emit <init> in the top-level methods array; the existing "
-            "outer class is never model-constructed. Keep each method body short and concern-local."
+            "Return only compile-ready Java class-body source for this selected concern region. "
+            "Do not return JSON, tool calls, Markdown, prose, package/import declarations, or the "
+            "outer class wrapper. Emit complete semantic Java declarations: fields, methods, and "
+            "only concern-owned private nested runtime types when genuinely required. "
+            "Reuse available_sibling_api/dependency_api exactly; do not redeclare sibling state. "
+            "If this concern needs state not present in available_sibling_api, declare the minimal "
+            "private static concern-local backing field. Use fully-qualified JDK/external types "
+            "when imports would otherwise be required. The existing outer class constructor and "
+            "lifecycle are host-owned. Keep methods bounded and concern-local."
         )
     elif response_region == "initialize":
         response_contract = (
-            "Call emit_java_structure exactly once with only its statements array. "
-            "Each entry is one statement or one complete block that belongs inside the host-owned "
-            "initialize() body. The host owns initialize() syntax. Use an empty statements array "
-            "when no initialization is required."
+            "Return only compile-ready Java statements or balanced control-flow blocks that belong "
+            "inside the host-owned initialize() body. Do not return JSON, tool calls, Markdown, "
+            "prose, package/import declarations, an initialize() wrapper, or the outer class. "
+            "Return an empty response when no initialization is required."
         )
     else:
         raise CustomModuleGenerationError(
@@ -1637,8 +1634,8 @@ def _messages(
         "repair_failure": failure or None,
         "generation_recipe": {
             "first_pass_goal": (
-                "produce the smallest compile-ready structured Java components in one call "
-                "and finish the required tool call well inside the finite output page"
+                "produce the smallest compile-ready semantic Java source region in one response "
+                "and finish well inside the finite output page"
             ),
             "declare_local_domain_types_first": True,
             "jdk_simple_names_host_qualified": [
@@ -1655,7 +1652,8 @@ def _messages(
                 "AtomicInteger",
                 "AtomicLong",
             ],
-            "no_raw_top_level_java": True,
+            "output_language": "java_source_region",
+            "no_json_ast_protocol": True,
             "sibling_api_is_authoritative": True,
             "never_mutate_final_sibling_fields": True,
             "declare_missing_concern_local_state": (
@@ -1691,8 +1689,8 @@ def _messages(
                 "START",
             ),
             "sibling_regions_immutable": True,
-            "required_output_tool": "emit_java_structure",
-            "model_tool_choice": False,
+            "required_output_format": "plain_java_source",
+            "model_tools_enabled": False,
             "sibling_concerns_out_of_scope": list(sibling_concerns),
             "scope_rule": (
                 "Implement only the selected concern and only the lines in "
