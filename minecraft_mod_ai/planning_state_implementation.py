@@ -411,13 +411,6 @@ def _compile_worksheet_section(
                     include_evidence=is_first,
                     record_counts=record_counts,
                 )
-                if section == "state_model":
-                    from .structured_state_runtime import constrain_state_chunk_schema
-
-                    chunk_schema = constrain_state_chunk_schema(
-                        chunk_schema,
-                        chunk_results,
-                    )
                 messages = _chunk_messages(
                     requirement,
                     selected_sections,
@@ -872,12 +865,6 @@ def compile_authored_worksheet(router: Any, prompt: str) -> dict[str, Any]:
                         for dependency in dependencies
                     },
                 )
-                if section == "state_model":
-                    from .structured_state_runtime import (
-                        validate_structured_state_section,
-                    )
-
-                    validate_structured_state_section(compiled_section)
                 completed[section] = compiled_section
                 pending.remove(section)
                 progressed = True
