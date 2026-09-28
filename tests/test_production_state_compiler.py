@@ -302,6 +302,80 @@ def test_irreducible_state_condition_fails_closed_instead_of_crashing():
     assert normalized == "false"
 
 
+def test_quoted_text_is_not_rewritten_as_state_dsl_syntax():
+    variables = {
+        "ship_state": {
+            "name": "ship_state",
+            "owner": "player",
+            "type": "string",
+            "unit": "status",
+            "default": "Docked",
+            "domain": "status",
+        }
+    }
+
+    normalized = _normalize_expression(
+        'ship_state == "READY AND WAIT = SAFE"',
+        aliases={},
+        variables=variables,
+        fallback="false",
+    )
+
+    assert normalized == 'ship_state == "READY AND WAIT = SAFE"'
+
+
+def test_semicolon_inside_state_string_literal_is_not_split_as_mutation():
+    variables = {
+        "ship_state": {
+            "name": "ship_state",
+            "owner": "player",
+            "type": "string",
+            "unit": "status",
+            "default": "Docked",
+            "domain": "status",
+        }
+    }
+
+    from minecraft_mod_ai.production_state_compiler import _normalize_mutation
+
+    mutation = _normalize_mutation(
+        'ship_state = "READY;WAIT"',
+        aliases={},
+        variables=variables,
+    )
+
+    assert mutation == 'ship_state = "READY;WAIT"'
+
+    obligations = [
+        json.dumps({
+            "instruction": json.dumps(
+                {"section": "state_model", "concern": "variables"}
+            ),
+            "structured_records": list(variables.values()),
+        }),
+        json.dumps({
+            "instruction": json.dumps(
+                {"section": "state_model", "concern": "updates"}
+            ),
+            "structured_records": [
+                {
+                    "trigger": "tick",
+                    "mutation": mutation,
+                    "owner": "server",
+                }
+            ],
+        }),
+    ]
+    java = render_state_model_concern(
+        {"implementation_obligations": obligations},
+        "updates",
+        include_runtime=True,
+    )
+
+    assert java is not None
+    assert '"READY;WAIT"' in java
+
+
 def test_cleanup_subsystem_action_does_not_crash_state_mutation_compiler():
     class Router:
         def generate_text(self, role, messages, **kwargs):
