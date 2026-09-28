@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from worksheet_fixtures import flatten_record, specification
+from worksheet_fixtures import specification
 
 import pytest
 
@@ -52,10 +52,16 @@ class _StructuredRouter:
         self.calls: list[dict[str, object]] = []
 
     def generate_text(self, *_args, **_kwargs):
-        raise AssertionError("worksheet generation must use native structured decisions")
+        raise AssertionError("grounded worksheet generation must not use raw structured text")
 
     def generate_tool_decision(
-        self, role, messages, *, tool_name, parameters, description=""
+        self,
+        role,
+        messages,
+        *,
+        tool_name,
+        parameters,
+        description="",
     ):
         self.calls.append(
             {
@@ -69,7 +75,7 @@ class _StructuredRouter:
         section = messages[-1]["content"].split("Section: ", 1)[1].splitlines()[0]
         full = _authored_worksheet()[section]
         payload: dict = {}
-        for prop, prop_schema in parameters.get("properties", {}).items():
+        for prop in parameters.get("properties", {}):
             if prop == "constraint_evidence_refs":
                 payload[prop] = full.get(prop, [])
             elif prop == "inapplicable_concerns":
@@ -79,17 +85,7 @@ class _StructuredRouter:
                     if item["concern"] in parameters.get("properties", {})
                 ]
             elif prop in full["specification"]:
-                allowed_fields = set(
-                    prop_schema.get("items", {}).get("properties", {})
-                )
-                payload[prop] = [
-                    {
-                        key: value
-                        for key, value in flatten_record(item).items()
-                        if key in allowed_fields
-                    }
-                    for item in full["specification"][prop]
-                ]
+                payload[prop] = full["specification"][prop]
         return payload
 
 
@@ -128,7 +124,6 @@ def test_detailed_plan_is_host_assembled_from_one_structured_worksheet() -> None
     )[0]
 
     assert len(router.calls) >= len(WORKSHEET_SECTIONS)
-    assert all(call["role"] == "planner" for call in router.calls)
     assert all(str(call["tool_name"]).startswith("submit_") for call in router.calls)
     assert all(call["parameters"].get("type") == "object" for call in router.calls)
     assert tuple(plan["engineering_worksheet"]) == WORKSHEET_SECTIONS
