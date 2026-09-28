@@ -417,7 +417,8 @@ def test_reasoning_projection_preserves_structured_semantic_authority() -> None:
     assert projected.schema_version == plan.schema_version
 
 
-def test_contract_shaped_legacy_plan_is_migrated_to_structured_authority(monkeypatch) -> None:
+def test_contract_shaped_legacy_plan_is_migrated_to_canonical_backend(monkeypatch) -> None:
+    import minecraft_mod_ai.authored_production as authored_production
     import minecraft_mod_ai.planning_state_implementation as implementation
 
     structured = _structured_state_plan().structured_sections
@@ -425,6 +426,26 @@ def test_contract_shaped_legacy_plan_is_migrated_to_structured_authority(monkeyp
         implementation,
         "compile_authored_worksheet",
         lambda _router, _prompt: structured,
+    )
+
+    class CanonicalRouteReached(RuntimeError):
+        pass
+
+    captured = {}
+    planner = CompleteGameDesignPlanner(SimpleNamespace())
+
+    def canonical_route(prompt, **kwargs):
+        captured["prompt"] = prompt
+        captured["kwargs"] = kwargs
+        raise CanonicalRouteReached
+
+    monkeypatch.setattr(planner, "_plan_in_session", canonical_route)
+    monkeypatch.setattr(
+        authored_production,
+        "compile_authored_design",
+        lambda *_args, **_kwargs: pytest.fail(
+            "structured fresh design must not enter authored custom_java"
+        ),
     )
     legacy = AuthoredPlan(
         "space mod",
@@ -436,13 +457,38 @@ def test_contract_shaped_legacy_plan_is_migrated_to_structured_authority(monkeyp
         ),
     )
 
-    proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(legacy)
+    with pytest.raises(CanonicalRouteReached):
+        planner.compile_for_production(legacy)
 
-    saved = proposal.game_design["authored_plan"]
-    assert saved["structured_sections"] == structured
-    request = proposal.modules[0].config["implementation_graph_request"]
-    assert request["structured_sections"] == structured
-    assert request["text"].startswith("## state_model\n")
+    assert "Authored game design to implement" in captured["prompt"]
+    assert "## state_model" in captured["prompt"]
+    assert captured["kwargs"]["existing_input_sha256"] == ""
+
+
+def test_structured_fresh_plan_never_enters_custom_java_backend(monkeypatch) -> None:
+    import minecraft_mod_ai.authored_production as authored_production
+
+    plan = _structured_state_plan()
+
+    class CanonicalRouteReached(RuntimeError):
+        pass
+
+    planner = CompleteGameDesignPlanner(SimpleNamespace())
+    monkeypatch.setattr(
+        planner,
+        "_plan_in_session",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(CanonicalRouteReached()),
+    )
+    monkeypatch.setattr(
+        authored_production,
+        "compile_authored_design",
+        lambda *_args, **_kwargs: pytest.fail(
+            "structured fresh design entered legacy authored custom_java backend"
+        ),
+    )
+
+    with pytest.raises(CanonicalRouteReached):
+        planner.compile_for_production(plan)
 
 
 def test_existing_authored_plan_requires_localize_freeze_before_coder():
