@@ -154,9 +154,9 @@ def _canonical_atomic_obligations(
     active: list[dict[str, Any]] = []
     for concern in concerns:
         name = str(concern["concern"])
-        host_sources = exact_sources.get(name)
-        if not host_sources:
+        if name not in exact_sources:
             continue
+        host_sources = exact_sources[name]
         active.append({**concern, "sequence": len(active)})
         if name in existing:
             payload, instruction = deepcopy(existing[name])
