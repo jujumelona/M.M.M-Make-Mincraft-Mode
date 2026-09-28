@@ -31,7 +31,7 @@ class _Registry:
 
     def role(self, profile: str, role: str):
         assert profile == "local"
-        assert role in {"coder", "planner"}
+        assert role == "coder"
         return SimpleNamespace(adapter=self.adapter)
 
 
@@ -87,25 +87,6 @@ def _generate(router, *, enable_tools: bool = False):
         enable_tools=enable_tools,
         tool_name="submit_one_feature_algorithm_steps_part_1_of_2",
     )
-
-
-def test_planner_fixed_template_uses_native_structured_decision() -> None:
-    router = _ToolCapableRouter()
-    result = generate_fixed_template_value(
-        router,
-        "planner",
-        [{"role": "user", "content": "Fill the worksheet chunk."}],
-        response_schema=_SCHEMA,
-        enable_tools=False,
-        tool_name="submit_behavior_contract_1_chunk",
-    )
-
-    assert result == _RESULT
-    assert router.text_calls == 0
-    assert len(router.tool_calls) == 1
-    assert router.tool_calls[0]["role"] == "planner"
-    assert router.tool_calls[0]["tool_name"] == "submit_behavior_contract_1_chunk"
-    assert router.tool_calls[0]["parameters"] == _SCHEMA
 
 
 def test_tools_disabled_real_router_still_uses_fixed_template_tool_transport() -> None:
