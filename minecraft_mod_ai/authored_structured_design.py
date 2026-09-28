@@ -53,7 +53,7 @@ def normalize_structured_sections(raw: Mapping[str, Any] | None) -> dict[str, An
 def active_concern_records(
     sections: Mapping[str, Any] | None,
     section: str,
-) -> dict[str, list[dict[str, Any]]]:
+) -> dict[str, list[dict[str, str]]]:
     normalized = normalize_structured_sections(sections)
     row = normalized.get(section)
     if not isinstance(row, Mapping):
@@ -62,13 +62,13 @@ def active_concern_records(
     if not isinstance(specification, Mapping):
         return {}
 
-    result: dict[str, list[dict[str, Any]]] = {}
+    result: dict[str, list[dict[str, str]]] = {}
     for concern in DETAIL_RECORDS.get(section, {}):
         value = specification.get(concern)
         if not isinstance(value, list) or not value:
             continue
         records = [
-            deepcopy(dict(item))
+            {str(key): str(val) for key, val in item.items()}
             for item in value
             if isinstance(item, Mapping)
         ]
@@ -81,25 +81,6 @@ def _projection_text(value: Any) -> str:
     return " ".join(
         str(value or "").replace("\r", " ").replace("\n", " ").split()
     )
-
-
-def _projection_record(record: Mapping[str, Any]) -> dict[str, Any]:
-    """Flatten canonical nested records only for the human Markdown projection."""
-    result: dict[str, Any] = {}
-
-    def visit(value: Mapping[str, Any]) -> None:
-        for key, item in value.items():
-            if isinstance(item, Mapping):
-                visit(item)
-                continue
-            if key in result:
-                raise ValueError(
-                    f"AUTHORED_STRUCTURED_DESIGN: duplicate leaf field {key!r}"
-                )
-            result[str(key)] = item
-
-    visit(record)
-    return result
 
 
 def render_structured_sections(sections: Mapping[str, Any]) -> str:
@@ -117,9 +98,8 @@ def render_structured_sections(sections: Mapping[str, Any]) -> str:
             fields = tuple(columns.split())
             lines.append(f"- {concern}: {' '.join(fields)}")
             for index, record in enumerate(records, start=1):
-                projected = _projection_record(record)
                 parts = [
-                    f"{field}={_projection_text(projected.get(field, ''))}"
+                    f"{field}={_projection_text(record.get(field, ''))}"
                     for field in fields
                 ]
                 lines.append(f"  - record_{index}: " + "; ".join(parts))
