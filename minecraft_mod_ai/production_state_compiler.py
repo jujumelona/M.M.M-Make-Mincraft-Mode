@@ -453,24 +453,7 @@ def _canonicalize_expression_operands(
             continue
         segments[index] = _stable_identifier(atom, fallback="state_value")
 
-    rebuilt = " ".join(part.strip() for part in segments if part.strip())
-
-    balanced: list[str] = []
-    depth = 0
-    for part in _split_expression_segments(rebuilt):
-        token = part.strip()
-        if token == "(":
-            depth += 1
-            balanced.append(token)
-        elif token == ")":
-            if depth:
-                depth -= 1
-                balanced.append(token)
-        elif token:
-            balanced.append(token)
-    if depth:
-        balanced.extend(")" for _ in range(depth))
-    return " ".join(balanced)
+    return " ".join(part.strip() for part in segments if part.strip())
 
 
 def _validated_expression_or_fallback(
@@ -521,27 +504,6 @@ def _normalize_expression(
     )
 
 
-def _infer_variable(name: str, rhs: str) -> dict[str, str]:
-    value = str(rhs or "").strip()
-    lowered = value.casefold()
-    if value.startswith(('"', "'")):
-        type_name, default, domain = "string", value.strip("'\"") or "unset", "text"
-    elif lowered in {"true", "false"}:
-        type_name, default, domain = "boolean", "false", "boolean"
-    elif re.fullmatch(r"[-+]?\d+(?:\.\d+)?", value):
-        type_name, default, domain = "double", "0", "number"
-    else:
-        type_name, default, domain = "object", "null", "any"
-    return {
-        "name": name,
-        "owner": "system",
-        "type": type_name,
-        "unit": "value",
-        "default": default,
-        "domain": domain,
-    }
-
-
 def _split_unquoted_statements(text: str) -> list[str]:
     source = str(text or "")
     rows: list[str] = []
@@ -572,17 +534,40 @@ def _split_unquoted_statements(text: str) -> list[str]:
     return rows
 
 
+def _resolve_declared_state_name(
+    name: str,
+    *,
+    aliases: Mapping[str, str],
+    variables: Mapping[str, Mapping[str, str]],
+) -> str | None:
+    raw = str(name or "").strip()
+    direct = aliases.get(raw)
+    if direct in variables:
+        return direct
+    signature = _identifier_signature(raw)
+    for declared in variables:
+        if _identifier_signature(declared) == signature:
+            return declared
+    return None
+
+
 def _normalize_mutation(
     value: str,
     *,
-    aliases: dict[str, str],
-    variables: dict[str, dict[str, str]],
-    allow_opaque_noop: bool = False,
-) -> str:
+    aliases: Mapping[str, str],
+    variables: Mapping[str, Mapping[str, str]],
+) -> str | None:
+    """Return canonical state assignments, empty program, or None for out-of-scope action.
+
+    Only assignments whose targets already exist in the authoritative variable table are
+    state mutations. Opaque lifecycle/persistence/network/UI actions are not translated
+    into fake state code and are excluded from state_model records.
+    """
+
     text = _replace_aliases(value, aliases).strip()
     lowered = text.casefold()
-    if not text or lowered in {"none", "n/a", "na", "noop", "no-op", "no change"}:
-        return "noop"
+    if not text or lowered in {"none", "n/a", "na", "no change"}:
+        return ""
 
     text = re.sub(
         r"\b(?:increase|increment)\s+([A-Za-z_][A-Za-z0-9_]*)\s+by\s+(.+)$",
@@ -606,38 +591,37 @@ def _normalize_mutation(
     text = re.sub(r"\b([A-Za-z_][A-Za-z0-9_]*)--\b", r"\1 -= 1", text)
 
     normalized_rows: list[str] = []
-    opaque_rows: list[str] = []
+    saw_out_of_scope = False
     for raw in _split_unquoted_statements(text):
         row = raw.strip()
         if not row:
             continue
         match = _ASSIGNMENT.fullmatch(row)
         if match is None:
-            if allow_opaque_noop:
-                opaque_rows.append(row)
-                continue
-            raise ValueError(
-                "PRODUCTION_STATE_MUTATION_UNSUPPORTED: " + repr(row)
-            )
+            saw_out_of_scope = True
+            continue
         name, operator, rhs = match.groups()
-        stable = aliases.get(name, _stable_identifier(name, fallback="state_value"))
-        aliases.setdefault(name, stable)
-        if stable not in variables:
-            variables[stable] = _infer_variable(stable, rhs)
+        declared = _resolve_declared_state_name(
+            name,
+            aliases=aliases,
+            variables=variables,
+        )
+        if declared is None:
+            saw_out_of_scope = True
+            continue
         rhs = _normalize_expression(
             rhs,
             aliases=aliases,
             variables=variables,
-            fallback=stable,
+            fallback=declared,
         )
-        normalized_rows.append(f"{stable} {operator} {rhs}")
+        normalized_rows.append(f"{declared} {operator} {rhs}")
+
     if normalized_rows:
         return "; ".join(normalized_rows)
-    if opaque_rows or allow_opaque_noop:
-        return "noop"
-    return "noop"
-
-
+    if saw_out_of_scope:
+        return None
+    return ""
 def _normalize_records(
     records: Mapping[str, Sequence[Mapping[str, str]]],
 ) -> dict[str, list[dict[str, str]]]:
@@ -675,8 +659,9 @@ def _normalize_records(
             str(raw.get("mutation") or ""),
             aliases=aliases,
             variables=variables,
-            allow_opaque_noop=True,
         )
+        if mutation is None:
+            mutation = ""
         result["transitions"].append({
             "from_state": str(raw.get("from_state") or "any").strip() or "any",
             "trigger": str(raw.get("trigger") or "event").strip() or "event",
@@ -707,8 +692,9 @@ def _normalize_records(
                 str(raw.get(field) or ""),
                 aliases=aliases,
                 variables=variables,
-                allow_opaque_noop=True,
             )
+            if mutation is None or mutation == "":
+                continue
             if concern == "initialization":
                 result[concern].append({
                     "owner": str(raw.get("owner") or defaults[0]).strip() or defaults[0],
