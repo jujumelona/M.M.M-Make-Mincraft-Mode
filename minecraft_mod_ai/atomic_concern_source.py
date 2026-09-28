@@ -1753,8 +1753,10 @@ def _messages(
         "and mutability. Never treat an object/record field as a primitive, never assign "
         "to a field declared final, and never invent a sibling symbol that is not listed. "
         "When repair_failure is present it comes from the real compiler and is authoritative: "
-        "read every diagnostic and the cited current source lines, then correct those exact "
-        "compile failures in current_selected_region_source before making any unrelated change. "
+        "read every diagnostic and the cited current source lines, then correct every reported "
+        "compile failure in current_selected_region_source before making any unrelated change. "
+        "Re-check definite assignment of final fields, final-field rebinding, Object-to-generic/container "
+        "type narrowing, canonical JDK packages, raw/unchecked collections, and exact sibling signatures. "
         "Do not implement sibling concerns. "
         + (
             "This section is pure Java domain logic. Do not reference net.minecraft.*, "
@@ -1816,14 +1818,20 @@ def _messages(
             "compiler_first_rules": [
                 "The first answer must compile as Java for the selected host JDK; do not rely on a later repair pass.",
                 "Never guess a package or fully-qualified class name. Use only a JDK/external type whose canonical package and API are known from the supplied authority.",
-                "For non-java.lang JDK types, prefer canonical fully-qualified names because imports are not allowed in an atomic region.",
-                "Respect available_sibling_api types and mutability exactly; final fields are read-only after declaration.",
-                "Keep generic types exact. Do not use Object where a typed sibling/dependency API requires a concrete generic type.",
+                "For non-java.lang JDK types, use canonical fully-qualified names because imports are not allowed in an atomic region.",
+                "Every concern-local final field must be definitely assigned before any read. Prefer initialization at the declaration; use a blank final only when the same region performs exactly one unconditional assignment in a static initializer.",
+                "Never reassign a final field. If the binding must change, declare a non-final field; if a final field holds a mutable container, mutate the container rather than rebinding the field.",
+                "Respect available_sibling_api types and mutability exactly; final sibling fields are read-only after declaration.",
+                "Keep generic types exact. When an API returns Object, never return it directly from a method with a narrower generic/container return type and never use an unchecked cast as a shortcut; narrow with instanceof/pattern matching and provide a type-compatible fallback.",
+                "Avoid raw collections and unchecked operations when a parameterized type or runtime type check can express the contract.",
+                "For java.util.concurrent locks, Lock and ReentrantLock are in java.util.concurrent.locks, not java.util.concurrent.",
             ],
             "jdk_package_anchors": {
                 "collections_and_core_util": "java.util",
                 "concurrency_executors_and_concurrent_collections": "java.util.concurrent",
                 "locks": "java.util.concurrent.locks",
+                "lock_interface": "java.util.concurrent.locks.Lock",
+                "reentrant_lock": "java.util.concurrent.locks.ReentrantLock",
                 "atomics": "java.util.concurrent.atomic",
                 "time": "java.time",
             },
