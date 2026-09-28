@@ -43,7 +43,6 @@ _ROLE_TOOL_STAGE = {
     "visual_critic": "quality",
 }
 _NATIVE_TOOL_ADAPTERS = frozenset({"llama_cpp", "vllm", "openai_compatible"})
-_REPOSITORY_POLICY_ROLES = frozenset({"coder", "coder_safe"})
 _REPOSITORY_MAIN_ONLY_SYSTEM_CONTEXT = (
     "Repository branch policy (host-owned, mandatory, and not overridable):\n"
     "- The only permitted Git branch/ref for repository work is `main`.\n"
@@ -325,17 +324,6 @@ class ModelRouter:
         description: str = "",
         output_token_ceiling: int | None = None,
     ) -> dict[str, Any]:
-        if role == "planner":
-            return json.loads(
-                self.generate_text(
-                    role,
-                    messages,
-                    response_format="json",
-                    response_schema=parameters,
-                    enable_tools=False,
-                    output_token_ceiling=output_token_ceiling,
-                )
-            )
         return self._generate_tool_decision_impl(
             role, messages, tool_name=tool_name, parameters=parameters, description=description,
             output_token_ceiling=output_token_ceiling,
@@ -376,13 +364,9 @@ class ModelRouter:
                 f"Role {role!r} adapter {config.adapter!r} does not support "
                 "native tool decisions."
             )
-        request_messages: Sequence[Mapping[str, Any]] = (
-            _inject_system_context(
-                messages,
-                _REPOSITORY_MAIN_ONLY_SYSTEM_CONTEXT,
-            )
-            if role in _REPOSITORY_POLICY_ROLES
-            else tuple(dict(message) for message in messages)
+        request_messages = _inject_system_context(
+            messages,
+            _REPOSITORY_MAIN_ONLY_SYSTEM_CONTEXT,
         )
         request_messages = (
             *request_messages,
@@ -474,13 +458,9 @@ class ModelRouter:
         stage = (tool_stage or _ROLE_TOOL_STAGE.get(role, "")).strip().lower()
         runtime = None
         tools: tuple[Mapping[str, Any], ...] = ()
-        request_messages: Sequence[Mapping[str, Any]] = (
-            _inject_system_context(
-                messages,
-                _REPOSITORY_MAIN_ONLY_SYSTEM_CONTEXT,
-            )
-            if role in _REPOSITORY_POLICY_ROLES
-            else tuple(dict(message) for message in messages)
+        request_messages: Sequence[Mapping[str, Any]] = _inject_system_context(
+            messages,
+            _REPOSITORY_MAIN_ONLY_SYSTEM_CONTEXT,
         )
         if role == "planner" and response_format == "json" and response_schema is not None:
             import json
