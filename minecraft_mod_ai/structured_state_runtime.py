@@ -347,8 +347,12 @@ def _compile_mutation(
     declared: set[str],
     context: str = "context",
 ) -> str:
+    text = str(script or "").strip()
+    if text.casefold() in {"noop", "no-op", "no_op"}:
+        return ""
+
     rows: list[str] = []
-    for raw in str(script or "").split(";"):
+    for raw in text.split(";"):
         statement = raw.strip()
         if not statement:
             continue
