@@ -1013,31 +1013,70 @@ def _state_default_literal(java_type: str, raw: str) -> str:
 
 def _state_java_contract(raw_type: str, raw_default: str) -> tuple[str, str]:
     source_type = str(raw_type or "").strip()
-    base = re.sub(r"<.*>$", "", source_type).strip().rsplit(".", 1)[-1].casefold()
+    generic = re.fullmatch(
+        r"(?P<base>(?:java\.util\.)?[A-Za-z_$][A-Za-z0-9_$]*)"
+        r"\s*<\s*(?P<args>.+)\s*>",
+        source_type,
+    )
+    base_type = generic.group("base") if generic else source_type
+    base = base_type.rsplit(".", 1)[-1].casefold()
     primitive = _STATE_JAVA_TYPES.get(base)
     if primitive:
         return primitive, _state_default_literal(primitive, raw_default)
 
+    default = str(raw_default or "").strip().casefold()
+    empty = default in {"[]", "{}", "empty", "empty_list", "empty_set", "empty_map"}
+
+    if base == "enumset":
+        if generic:
+            element_type = generic.group("args").strip()
+            if (
+                not element_type
+                or "," in element_type
+                or "?" in element_type
+                or re.fullmatch(
+                    r"[A-Za-z_$][A-Za-z0-9_$.]*", element_type
+                ) is None
+            ):
+                return "", ""
+            java_type = f"java.util.EnumSet<{element_type}>"
+            if default == "null":
+                return java_type, "null"
+            if empty:
+                return java_type, f"java.util.EnumSet.noneOf({element_type}.class)"
+            return java_type, ""
+        # The authored record omitted the element enum, so constructing EnumSet
+        # would require inventing a type. Preserve the set-of-enum contract with
+        # a concrete representation until the design supplies that type.
+        java_type = "java.util.Set<java.lang.Enum<?>>"
+        if default == "null":
+            return java_type, "null"
+        return (
+            (java_type, "new java.util.HashSet<>()")
+            if empty
+            else (java_type, "")
+        )
+
     collection_types = {
-        "list": ("java.util.List<Object>", "java.util.ArrayList"),
-        "collection": ("java.util.Collection<Object>", "java.util.ArrayList"),
-        "set": ("java.util.Set<Object>", "java.util.HashSet"),
-        "map": ("java.util.Map<Object, Object>", "java.util.HashMap"),
-        "queue": ("java.util.Queue<Object>", "java.util.ArrayDeque"),
-        "deque": ("java.util.Deque<Object>", "java.util.ArrayDeque"),
-        # A bare EnumSet cannot represent an empty value without a concrete enum
-        # class. Preserve "set of enum values" without inventing an enum type.
-        "enumset": ("java.util.Set<java.lang.Enum<?>>", "java.util.HashSet"),
+        "list": ("java.util.List", "java.util.ArrayList", "Object"),
+        "collection": ("java.util.Collection", "java.util.ArrayList", "Object"),
+        "set": ("java.util.Set", "java.util.HashSet", "Object"),
+        "map": ("java.util.Map", "java.util.HashMap", "Object, Object"),
+        "queue": ("java.util.Queue", "java.util.ArrayDeque", "Object"),
+        "deque": ("java.util.Deque", "java.util.ArrayDeque", "Object"),
     }
     resolved = collection_types.get(base)
     if resolved is None:
         return "", ""
 
-    java_type, implementation = resolved
-    default = str(raw_default or "").strip().casefold()
+    interface, implementation, fallback_args = resolved
+    args = generic.group("args").strip() if generic else fallback_args
+    if not args:
+        return "", ""
+    java_type = f"{interface}<{args}>"
     if default == "null":
         return java_type, "null"
-    if default in {"[]", "{}", "empty", "empty_list", "empty_set", "empty_map"}:
+    if empty:
         return java_type, f"new {implementation}<>()"
     return java_type, ""
 
