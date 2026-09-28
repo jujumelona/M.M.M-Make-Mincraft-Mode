@@ -596,6 +596,7 @@ def _normalize_records(
             str(raw.get("guard") or ""),
             aliases=aliases,
             variables=variables,
+            fallback="false",
         )
         mutation = _normalize_mutation(
             str(raw.get("mutation") or ""),
@@ -617,6 +618,7 @@ def _normalize_records(
                 str(raw.get("condition") or ""),
                 aliases=aliases,
                 variables=variables,
+                fallback="false",
             ),
             "enforcement": str(raw.get("enforcement") or "host runtime check").strip()
             or "host runtime check",
