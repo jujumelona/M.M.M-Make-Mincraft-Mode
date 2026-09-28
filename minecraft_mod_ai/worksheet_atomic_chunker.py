@@ -104,7 +104,11 @@ def _chunk_projection(
     for concern in concerns:
         if concern not in records:
             raise ValueError(f"Unknown concern {concern!r} for section {section!r}")
-        all_fields = _canonical_record_fields(section, concern)
+        all_fields = (
+            _canonical_record_fields(section, concern)
+            if section == "state_model"
+            else tuple(records[concern].split())
+        )
         selected = tuple(explicit.get(concern, all_fields)) if isinstance(explicit, Mapping) else all_fields
         if not selected or any(field not in all_fields for field in selected):
             raise ValueError(
@@ -138,8 +142,13 @@ def pack_section_concerns(
         raise ValueError("max_chunk_size must be positive when supplied")
 
     pages: list[tuple[str, tuple[str, ...]]] = []
-    for concern in records:
-        for fields in _field_pages(_canonical_record_fields(key, concern)):
+    for concern, columns in records.items():
+        source_fields = (
+            _canonical_record_fields(key, concern)
+            if key == "state_model"
+            else tuple(columns.split())
+        )
+        for fields in _field_pages(source_fields):
             pages.append((concern, fields))
 
     chunks: list[tuple[str, ...]] = []
