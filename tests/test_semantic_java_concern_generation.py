@@ -63,6 +63,48 @@ def test_concern_prompt_requests_plain_java_not_custom_ast():
     assert "jdk_simple_names_host_qualified" not in payload["generation_recipe"]
 
 
+def test_pure_domain_prompt_hides_unrelated_minecraft_api_symbols():
+    grounding = {
+        "direct_host_context": {
+            "platform": {"minecraft_version": "26.2", "loader": "fabric"},
+            "host_version_facts": {
+                "api_symbols": {
+                    "register_item": {"owner": "net.minecraft.core.Registry"},
+                },
+                "capabilities": {"REGISTER_ITEM": True},
+            },
+        }
+    }
+    messages = _messages(
+        section="state_model",
+        concern={
+            "sequence": 0,
+            "identifier": "state_model.transitions",
+            "concern": "transitions",
+            "task": "implement transitions",
+        },
+        task={"task_id": "probe", "implementation_obligations": []},
+        grounding=grounding,
+        dependency_source="",
+        current_source=(
+            "public final class Probe {\n"
+            "// MMM_ATOMIC_CONCERN_TRANSITIONS_MEMBERS_START\n"
+            "// MMM_ATOMIC_CONCERN_TRANSITIONS_MEMBERS_END\n"
+            "}\n"
+        ),
+        response_region="members",
+        sibling_concerns=(),
+        host_symbol="Probe",
+    )
+
+    payload = json.loads(messages[1]["content"])
+    facts = payload["host_grounding"]["host_version_facts"]
+    assert "api_symbols" not in facts
+    assert facts["capabilities"]["REGISTER_ITEM"] is True
+    assert "pure Java domain logic" in messages[0]["content"]
+    assert "Do not reference net.minecraft.*" in messages[0]["content"]
+
+
 def test_direct_semantic_java_coder_disables_tools():
     router = DirectTextRouter("private static int credits = 0;")
 
