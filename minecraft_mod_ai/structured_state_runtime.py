@@ -334,6 +334,12 @@ def _condition(node: tuple, context: str = "context") -> str:
     return f"$mmmTruthy({_value(node, context)})"
 
 
+def validate_state_expression(text: str) -> None:
+    """Validate the canonical host expression DSL without generating Java."""
+
+    _Expression(str(text or "")).parse()
+
+
 def _compile_condition(text: str, context: str = "context") -> str:
     raw = str(text or "").strip()
     if not raw:
@@ -848,4 +854,5 @@ __all__ = [
     "constrain_state_record_schema",
     "has_complete_structured_state",
     "render_state_model_concern",
+    "validate_state_expression",
 ]
