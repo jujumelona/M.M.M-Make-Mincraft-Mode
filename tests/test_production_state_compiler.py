@@ -128,6 +128,48 @@ def test_malformed_json_like_state_output_is_parsed_without_json_validation():
     ]
 
 
+def test_state_concern_extraction_never_paginates_on_missing_completion_signal():
+    class Router:
+        def __init__(self):
+            self.calls = []
+
+        def generate_text(self, role, messages, **kwargs):
+            payload = json.loads(messages[-1]["content"])
+            self.calls.append(payload)
+            concern = payload["concern"]
+            if concern == "variables":
+                return (
+                    "RECORD\n"
+                    "name=credits\nowner=player\ntype=integer\nunit=credits\n"
+                    "default=0\ndomain=integer >= 0\nEND"
+                )
+            if concern == "invariants":
+                # Deliberately omit STATUS/DONE. Older code kept asking for another page.
+                return (
+                    "RECORD\n"
+                    "condition=credits >= 0\n"
+                    "enforcement=reject negative balances\nEND"
+                )
+            return "STATUS=EMPTY"
+
+    router = Router()
+    section = compile_production_state_section(
+        router,
+        AuthoredPlan("make a space mod", _plan_text()),
+    )
+
+    assert len(router.calls) == 7
+    assert [call["concern"] for call in router.calls].count("invariants") == 1
+    assert all("page" not in call for call in router.calls)
+    assert all("already_accepted_records" not in call for call in router.calls)
+    assert section["specification"]["invariants"] == [
+        {
+            "condition": "credits >= 0",
+            "enforcement": "reject negative balances",
+        }
+    ]
+
+
 def test_production_state_lowering_normalizes_small_model_dsl_and_java_symbols():
     router = ProductionStateRouter()
     plan = AuthoredPlan("make a space mod", _plan_text())
