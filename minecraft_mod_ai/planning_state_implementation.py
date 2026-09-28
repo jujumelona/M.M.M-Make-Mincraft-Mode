@@ -287,7 +287,6 @@ def _chunk_messages(
     chunk_count: int,
     concerns: tuple[str, ...],
     include_evidence: bool = False,
-    record_counts: Mapping[str, int] | None = None,
     repair_error: str = "",
 ) -> list[dict[str, str]]:
     statement = _text(requirement.get("statement"))
@@ -327,7 +326,7 @@ def _chunk_messages(
                 f"{_evidence_context(evidence)}\n\n"
                 "Direct prerequisite worksheet sections:\n"
                 f"{prerequisite_context}\n\n"
-                f"{worksheet_chunk_prompt(section, chunk_index, chunk_count, concerns, include_evidence=include_evidence, record_counts=record_counts)}"
+                f"{worksheet_chunk_prompt(section, chunk_index, chunk_count, concerns, include_evidence=include_evidence)}"
             ),
         },
     ]
@@ -399,25 +398,14 @@ def _compile_worksheet_section(
     chunks_def = pack_section_concerns(section)
     chunk_count = len(chunks_def)
     chunk_results: list[dict[str, Any]] = []
-    record_counts: dict[str, int] = {}
 
     try:
         with planner_operation(operation):
             for index, concerns in enumerate(chunks_def, start=1):
                 is_first = index == 1
                 chunk_schema = worksheet_chunk_schema(
-                    section,
-                    concerns,
-                    include_evidence=is_first,
-                    record_counts=record_counts,
+                    section, concerns, include_evidence=is_first
                 )
-                if section == "state_model":
-                    from .structured_state_runtime import constrain_state_chunk_schema
-
-                    chunk_schema = constrain_state_chunk_schema(
-                        chunk_schema,
-                        chunk_results,
-                    )
                 messages = _chunk_messages(
                     requirement,
                     selected_sections,
@@ -428,7 +416,6 @@ def _compile_worksheet_section(
                     chunk_count=chunk_count,
                     concerns=concerns,
                     include_evidence=is_first,
-                    record_counts=record_counts,
                 )
                 try:
                     decoded = _generate_chunk(
@@ -450,7 +437,6 @@ def _compile_worksheet_section(
                         chunk_count=chunk_count,
                         concerns=concerns,
                         include_evidence=is_first,
-                        record_counts=record_counts,
                         repair_error=str(parse_err),
                     )
                     decoded = _generate_chunk(
@@ -462,17 +448,6 @@ def _compile_worksheet_section(
                         chunk_schema=chunk_schema,
                     )
 
-                inapplicable = {
-                    str(item.get("concern") or "")
-                    for item in decoded.get("inapplicable_concerns", [])
-                    if isinstance(item, Mapping)
-                }
-                for concern in concerns:
-                    value = decoded.get(concern)
-                    if isinstance(value, list):
-                        record_counts.setdefault(concern, len(value))
-                    elif concern in inapplicable:
-                        record_counts.setdefault(concern, 0)
                 chunk_results.append(decoded)
 
             return merge_worksheet_section_chunks(section, chunk_results, allowed)
@@ -826,76 +801,4 @@ def compile_detailed_implementation_plans(
     return result
 
 
-def compile_authored_worksheet(router: Any, prompt: str) -> dict[str, Any]:
-    """Compile one authored request into the canonical structured worksheet.
-
-    Fresh design authoring and legacy prose migration both converge here. Production
-    consumes these records; Markdown is only their human-readable projection.
-    """
-
-    statement = _text(prompt)
-    if not statement:
-        raise ValueError("AUTHORED_WORKSHEET_PROMPT_EMPTY")
-
-    selected_sections = tuple(WORKSHEET_SECTIONS)
-    requirement = {
-        "requirement_id": "authored_design",
-        "statement": statement,
-        "acceptance": [
-            "Preserve every requested gameplay capability and connect the systems coherently.",
-            "Choose missing gameplay mechanics, quantities, names, and balance values as authored design decisions.",
-            "Do not invent external Minecraft/Fabric API facts.",
-        ],
-        "authored_design": True,
-    }
-    completed: dict[str, dict[str, Any]] = {}
-    pending = set(selected_sections)
-
-    with planner_operation("compile_authored_worksheet"):
-        while pending:
-            progressed = False
-            for section in selected_sections:
-                if section not in pending:
-                    continue
-                dependencies = _section_dependencies(section, selected_sections)
-                if any(dependency not in completed for dependency in dependencies):
-                    continue
-                compiled_section = _compile_worksheet_section(
-                    router,
-                    requirement=requirement,
-                    selected_sections=selected_sections,
-                    section=section,
-                    evidence=[],
-                    allowed=set(),
-                    completed={
-                        dependency: deepcopy(completed[dependency])
-                        for dependency in dependencies
-                    },
-                )
-                if section == "state_model":
-                    from .structured_state_runtime import (
-                        validate_structured_state_section,
-                    )
-
-                    validate_structured_state_section(compiled_section)
-                completed[section] = compiled_section
-                pending.remove(section)
-                progressed = True
-            if not progressed:
-                raise RuntimeError(
-                    "AUTHORED_WORKSHEET_DAG_DEADLOCK: "
-                    + ", ".join(sorted(pending))
-                )
-
-    return validate_worksheet(
-        completed,
-        set(),
-        required_sections=selected_sections,
-    )
-
-
-__all__ = [
-    "SECTION_DEPENDENCIES",
-    "compile_authored_worksheet",
-    "compile_detailed_implementation_plans",
-]
+__all__ = ["SECTION_DEPENDENCIES", "compile_detailed_implementation_plans"]
