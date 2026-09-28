@@ -20,23 +20,26 @@ from minecraft_mod_ai.work_graph import build_production_work_plan
 
 
 @pytest.mark.parametrize("version", ["1.21.11", "26.2"])
-
-def test_saved_design_compiler_preserves_target_through_coder_handoff(version):
+def test_existing_design_localization_preserves_target_contract(version):
     from minecraft_mod_ai.custom_generation_research import _target_values
     from minecraft_mod_ai.platform_catalog import adapter_for_target
-    plan = AuthoredPlan(f"Create a token item for Fabric {version}", "Add one token item.")
+
+    plan = AuthoredPlan(
+        f"Modify a token item for Fabric {version}",
+        "Preserve the token item and update its behavior.",
+        existing_input_sha256="sha256:" + "a" * 64,
+    )
     proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(plan)
     adapter = adapter_for_target(version, "fabric")
     expected = (version, "fabric", adapter.yarn_mappings)
+
     assert _target_values(proposal.game_design) == expected
     assert proposal.game_design["authored_plan"] == plan.to_dict()
-    manifest = proposal.game_design["_authored_execution_manifest"]
-    assert manifest["policy"] == "host_implementation_graph_before_source"
-    assert manifest["unit_count"] == 0
-    request = proposal.modules[0].config["implementation_graph_request"]
-    assert request["text"] == plan.text
-    assert _target_values(request["target"]) == expected
     assert proposal.game_design["_platform_selection"]["target"] == adapter.public_dict()
+    assert all(
+        module.config.get("authored_localization_required") is True
+        for module in proposal.modules
+    )
 
 @pytest.mark.parametrize("text", [
     "우주선을 만들고 행성마다 다른 광물을 거래한다.",
@@ -45,23 +48,32 @@ def test_saved_design_compiler_preserves_target_through_coder_handoff(version):
     "# 설계\n" + "선원, 무기, 연료, 수리, 거래를 구현한다.\n" * 1000,
 ], ids=["plain", "fenced", "zero", "long"])
 
-def test_real_compiler_hands_saved_text_to_coder_without_replanning(monkeypatch, text):
+def test_existing_saved_text_uses_localization_without_replanning(monkeypatch, text):
     def forbidden(*args, **kwargs):
-        pytest.fail("saved design entered gameplay planning again")
+        pytest.fail("existing saved design entered gameplay planning again")
+
     monkeypatch.setattr(PlanningPipeline, "prepare", forbidden)
     monkeypatch.setattr(PlanningPipeline, "_semantic_design", forbidden)
     router = SimpleNamespace(generate_text=forbidden, generate_tool_decision=forbidden)
-    plan = AuthoredPlan("Make a space trading mod for Fabric 1.21.11", text)
+    plan = AuthoredPlan(
+        "Modify the existing space trading mod for Fabric 1.21.11",
+        text,
+        existing_input_sha256="sha256:" + "b" * 64,
+    )
     proposal = CompleteGameDesignPlanner(router).compile_for_production(plan)
+
     assert proposal.game_design["authored_plan"] == plan.to_dict()
-    assert proposal.base_proposal.spec.contents == ()
-    assert proposal.base_proposal.spec.boss is None
-    assert len(proposal.modules) == 1
-    request = proposal.modules[0].config["implementation_graph_request"]
-    assert request["text"].encode() == text.encode()
+    assert "".join(
+        module.config["authored_plan"]["text"] for module in proposal.modules
+    ).encode() == text.encode()
     graph = build_production_work_plan(proposal)
     generation = [n for n in graph.nodes if n.stage == "generate:custom"]
-    assert len(generation) == 1
+    assert generation
+    assert all(
+        member["config"].get("authored_localization_required") is True
+        for node in generation
+        for member in node.payload["members"]
+    )
 
 def test_fresh_authored_execution_defers_source_ownership_until_ir():
     plan = AuthoredPlan("space mod", "# Design\n## Wallet\nPersist credits.\n## Purchase\nSpend credits.")
