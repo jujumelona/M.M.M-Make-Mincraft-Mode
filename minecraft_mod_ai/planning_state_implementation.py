@@ -217,20 +217,11 @@ def _section_dependency_context(
     if not dependencies:
         return "- none; this section has no worksheet prerequisites"
 
-    # The DAG scheduler owns readiness and passes all prerequisites during normal
-    # execution. Keep message construction pure so isolated bounded callers can omit
-    # scheduler-owned context without turning formatting into a KeyError surface.
-    available = {
-        dependency: completed[dependency]
-        for dependency in dependencies
-        if dependency in completed
-    }
-    if not available:
-        return "- none supplied in this bounded message scope"
+    # Preserve JSON field boundaries and every prerequisite rule. Prompt transport
+    # owns context budgeting; slicing a serialized contract silently loses semantics.
     return json.dumps(
-        available,
-        ensure_ascii=False,
-        separators=(",", ":"),
+        {dependency: completed[dependency] for dependency in dependencies},
+        ensure_ascii=False, separators=(",", ":"),
     )
 
 
@@ -296,7 +287,7 @@ def _chunk_messages(
     chunk_count: int,
     concerns: tuple[str, ...],
     include_evidence: bool = False,
-    prior_chunks: Sequence[Mapping[str, Any]] = (),
+    repair_error: str = "",
 ) -> list[dict[str, str]]:
     statement = _text(requirement.get("statement"))
     acceptance = requirement.get("acceptance")
@@ -309,30 +300,17 @@ def _chunk_messages(
     prerequisite_context = _section_dependency_context(
         section, selected_sections, completed
     )
-    prior_chunk_context = (
-        json.dumps(list(prior_chunks), ensure_ascii=False, separators=(",", ":"))
-        if prior_chunks
-        else "[]"
-    )
     instruction = (
         f"Complete atomic concern chunk {chunk_index}/{chunk_count} of engineering worksheet section {section!r}. "
         "Return only the JSON object matching the supplied template skeleton. "
         "Do not output JSON Schema definitions (no 'type', 'properties', 'required', 'additionalProperties'). "
         "Do not emit analysis, reasoning, commentary, markdown, code fences, or undeclared keys. "
         "Do not invent target API names, symbols, versions, repository paths, "
-        "external facts, or evidence identifiers. Use only evidence_refs shown in the grounded context. "
-        "Earlier chunks from this same section are authoritative: preserve their record count, "
-        "record order, identifiers, and already-selected field values exactly."
+        "external facts, or evidence identifiers. Use only evidence_refs shown in the grounded context."
     )
-    if section == "state_model":
-        instruction += (
-            " State-model executable fields use the host DSL, not prose. "
-            "Variable names are ASCII Java identifiers. Guards and conditions use only identifiers, "
-            "numbers, quoted strings, true/false/null, parentheses, !, comparisons, &&/|| and "
-            "basic + - * / % arithmetic. mutation, initial_state, and action are semicolon-separated "
-            "assignments using =, +=, -=, *= or /=. Assignment targets must exactly match variable "
-            "names already declared by the variables concern; do not invent target names."
-        )
+    if repair_error:
+        instruction += f" Previous output failed validation: {repair_error[:800]}. Please repair."
+
     return [
         {
             "role": "system",
@@ -348,8 +326,6 @@ def _chunk_messages(
                 f"{_evidence_context(evidence)}\n\n"
                 "Direct prerequisite worksheet sections:\n"
                 f"{prerequisite_context}\n\n"
-                "Earlier accepted chunks from this same section (authoritative JSON):\n"
-                f"{prior_chunk_context}\n\n"
                 f"{worksheet_chunk_prompt(section, chunk_index, chunk_count, concerns, include_evidence=include_evidence)}"
             ),
         },
@@ -368,16 +344,41 @@ def _generate_chunk(
     tool_name = f"submit_{section}_{index}_chunk"
     description = f"Submit worksheet specifications for {section}: {', '.join(concerns)}."
 
-    raw_decision = router.generate_tool_decision(
+    if hasattr(router, "generate_tool_decision"):
+        try:
+            raw_decision = router.generate_tool_decision(
+                "planner",
+                messages,
+                tool_name=tool_name,
+                parameters=chunk_schema,
+                description=description,
+            )
+            if isinstance(raw_decision, Mapping):
+                return dict(raw_decision)
+        except Exception as exc:
+            from .model_adapters import ModelConfigurationError
+
+            if isinstance(exc, ModelConfigurationError):
+                raise
+            # Fall back to text generation if native tool call fails or is not enabled for role
+
+    raw = generate_fixed_template_text(router,
         "planner",
         messages,
-        tool_name=tool_name,
-        parameters=chunk_schema,
-        description=description,
+        response_schema=chunk_schema,
+        enable_tools=False,
     )
-    if not isinstance(raw_decision, Mapping):
-        raise ValueError("chunk decision must be an object")
-    return dict(raw_decision)
+    from .planning_contract_ssot import is_schema_definition_echo
+
+    decoded = json.loads(raw)
+    if not isinstance(decoded, Mapping):
+        raise ValueError("chunk output must be a JSON object")
+    if is_schema_definition_echo(decoded):
+        raise ValueError(
+            "Model returned JSON Schema definition instead of concrete data records. "
+            "Please output records matching the template skeleton."
+        )
+    return dict(decoded)
 
 
 def _compile_worksheet_section(
@@ -405,13 +406,6 @@ def _compile_worksheet_section(
                 chunk_schema = worksheet_chunk_schema(
                     section, concerns, include_evidence=is_first
                 )
-                if section == "state_model":
-                    from .structured_state_runtime import constrain_state_chunk_schema
-
-                    chunk_schema = constrain_state_chunk_schema(
-                        chunk_schema,
-                        tuple(chunk_results),
-                    )
                 messages = _chunk_messages(
                     requirement,
                     selected_sections,
@@ -422,16 +416,38 @@ def _compile_worksheet_section(
                     chunk_count=chunk_count,
                     concerns=concerns,
                     include_evidence=is_first,
-                    prior_chunks=tuple(chunk_results),
                 )
-                decoded = _generate_chunk(
-                    router,
-                    messages,
-                    section=section,
-                    index=index,
-                    concerns=concerns,
-                    chunk_schema=chunk_schema,
-                )
+                try:
+                    decoded = _generate_chunk(
+                        router,
+                        messages,
+                        section=section,
+                        index=index,
+                        concerns=concerns,
+                        chunk_schema=chunk_schema,
+                    )
+                except (json.JSONDecodeError, ValueError) as parse_err:
+                    repair_messages = _chunk_messages(
+                        requirement,
+                        selected_sections,
+                        section,
+                        evidence,
+                        completed,
+                        chunk_index=index,
+                        chunk_count=chunk_count,
+                        concerns=concerns,
+                        include_evidence=is_first,
+                        repair_error=str(parse_err),
+                    )
+                    decoded = _generate_chunk(
+                        router,
+                        repair_messages,
+                        section=section,
+                        index=index,
+                        concerns=concerns,
+                        chunk_schema=chunk_schema,
+                    )
+
                 chunk_results.append(decoded)
 
             return merge_worksheet_section_chunks(section, chunk_results, allowed)
