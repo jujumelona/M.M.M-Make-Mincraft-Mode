@@ -123,53 +123,18 @@ class CompleteGameDesignPlanner:
         media_paths: Sequence[str | Path] = (),
         existing_input_sha256: str = "",
     ) -> AuthoredPlan:
-        """Write the design itself; no schema, critic, evidence or production gate."""
-        from .planner_operation import planner_operation
-        from .planning_detail_slots import DETAIL_RECORDS
+        """Author canonical structured design records, then render their Markdown projection."""
+        from .authored_structured_design import render_structured_sections
+        from .planning_state_implementation import compile_authored_worksheet
 
-        template = _design_writing_template(DETAIL_RECORDS)
-
-        with planner_operation("author_game_plan"):
-            text = self.router.generate_text(
-                "planner",
-                (
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are the game designer. Write a complete, concrete Minecraft "
-                            "mod design in the user's language as readable prose and Markdown. "
-                            "Develop every requested feature into a coherent playable experience: "
-                            "the main gameplay loop, progression, interacting systems, resources "
-                            "and content, player actions, UI and multiplayer behavior. Choose "
-                            "missing mechanics, quantities, names and balance values yourself. "
-                            "Explain how the systems connect using concrete examples. "
-                            "Your choices are authored design and need no proof or approval. "
-                            "Describe desired platform behavior without claiming unresearched "
-                            "API symbols are verified. Fill this writing template in one response. "
-                            "Use every canonical template section heading exactly once and keep the "
-                            "sections in the shown order. Keep canonical section headings at Markdown "
-                            "level 2 (`##`); you may add one document title at level 1 (`#`) and use "
-                            "deeper headings only inside a canonical section. For an inapplicable "
-                            "section, say so concretely instead of removing the section:\n"
-                            + template
-                            + "\nThe concern fields inside each canonical section are writing guidance, "
-                            "not required output keys. Verification sections describe future tests "
-                            "of the implementation; they do not judge your plan. "
-                            "Finish the design in this response."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ),
-                media_paths=media_paths,
-                response_format="text",
-                response_schema=None,
-                enable_tools=False,
-            )
+        structured = compile_authored_worksheet(self.router, prompt)
+        text = render_structured_sections(structured)
         return AuthoredPlan(
             requested_prompt=prompt,
             text=text,
             existing_input_sha256=existing_input_sha256,
             media_paths=tuple(str(path) for path in media_paths),
+            structured_sections=structured,
         )
 
     def compile_for_production(
@@ -179,12 +144,36 @@ class CompleteGameDesignPlanner:
         media_paths: Sequence[str | Path] = (),
         existing_input_sha256: str = "",
     ) -> CompleteProposal:
-        from .authored_production import compile_authored_design
+        from .authored_production import (
+            _contract_shaped_authored_design,
+            compile_authored_design,
+        )
+        from .authored_structured_design import render_structured_sections
+        from .planning_state_implementation import compile_authored_worksheet
 
         plan = prompt if isinstance(prompt, AuthoredPlan) else AuthoredPlan(
             requested_prompt=prompt, text=prompt,
             media_paths=tuple(str(path) for path in media_paths),
         )
+        if (
+            not plan.structured_sections
+            and _contract_shaped_authored_design(plan.text)
+        ):
+            migration_prompt = (
+                plan.requested_prompt
+                + "\n\nApproved authored design to normalize into the canonical "
+                "engineering worksheet without changing its requested capabilities:\n"
+                + plan.text
+            )
+            structured = compile_authored_worksheet(self.router, migration_prompt)
+            plan = AuthoredPlan(
+                requested_prompt=plan.requested_prompt,
+                text=render_structured_sections(structured),
+                existing_input_sha256=plan.existing_input_sha256,
+                media_paths=plan.media_paths,
+                schema_version="mmm/authored-plan-v2",
+                structured_sections=structured,
+            )
         with trace_scope("production_preparation", trace_id=uuid.uuid4().hex):
             emit_root_cause(
                 "production_preparation_start", stage="production", result="START",
