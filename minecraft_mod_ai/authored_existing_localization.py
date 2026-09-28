@@ -105,20 +105,10 @@ def _scope(authored: Mapping[str, Any]) -> dict[str, Any]:
         if line.lstrip().startswith("#") and line.lstrip("#").strip()
     ][:16]
     outline = headings or [text[:1200], text[-600:] if len(text) > 1200 else ""]
-
-    structured = authored.get("structured_sections")
-    structured_scope: dict[str, Any] = {}
-    if isinstance(structured, Mapping) and structured:
-        from .authored_structured_design import normalize_structured_sections
-
-        structured_scope = normalize_structured_sections(structured)
-
     return {
         "requested_prompt": str(authored.get("requested_prompt") or "").strip(),
         "source_text_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
         "source_bytes": len(raw),
-        "structured_sections": structured_scope,
-        "structured_sections_sha256": _sha(structured_scope) if structured_scope else "",
         "outline": [
             *[value for value in outline if value],
             _bounded_semantic_excerpt(text),
