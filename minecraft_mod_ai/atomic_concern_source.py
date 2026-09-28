@@ -1008,13 +1008,14 @@ def _compiler_repair_context(
         source=source,
         relative=relative,
         concern=concern,
-        max_chars=7000,
+        max_chars=5200,
     )
     excerpt = _compiler_failure_source_excerpt(
         log,
         source=source,
         relative=relative,
         concern=concern,
+        max_chars=2800,
     )
     parts = [
         "ACTUAL COMPILER FAILURE FROM THE JUST-COMPILED CANDIDATE "
@@ -1041,7 +1042,19 @@ def _compiler_repair_context(
     )
     payload = "\n\n".join(parts)
     if len(payload) > max_chars:
-        payload = payload[:max_chars].rstrip() + "\n... repair context truncated by host ..."
+        # Diagnostics/excerpts are already independently bounded so the compiler-derived
+        # checklist and repair contract stay present. This final guard is defensive only.
+        overflow = len(payload) - max_chars
+        if overflow > 0 and diagnostics:
+            keep = max(1200, len(diagnostics) - overflow - 64)
+            diagnostics = diagnostics[:keep].rstrip() + "\n... compiler diagnostics truncated by host ..."
+            parts[0] = (
+                "ACTUAL COMPILER FAILURE FROM THE JUST-COMPILED CANDIDATE "
+                "(authoritative; preserve diagnostic text exactly):\n" + diagnostics
+            )
+            payload = "\n\n".join(parts)
+        if len(payload) > max_chars:
+            payload = payload[:max_chars].rstrip() + "\n... repair context truncated by host ..."
     return payload
 
 
