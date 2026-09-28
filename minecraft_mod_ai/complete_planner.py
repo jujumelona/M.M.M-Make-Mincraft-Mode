@@ -155,8 +155,12 @@ class CompleteGameDesignPlanner:
             requested_prompt=prompt, text=prompt,
             media_paths=tuple(str(path) for path in media_paths),
         )
+        effective_existing = str(
+            existing_input_sha256 or plan.existing_input_sha256 or ""
+        ).strip()
         if (
             not plan.structured_sections
+            and not effective_existing
             and _contract_shaped_authored_design(plan.text)
         ):
             migration_prompt = (
@@ -180,9 +184,6 @@ class CompleteGameDesignPlanner:
 
             validate_structured_state_section(state_section)
 
-        effective_existing = str(
-            existing_input_sha256 or plan.existing_input_sha256 or ""
-        ).strip()
         if plan.structured_sections and not effective_existing:
             canonical_prompt = (
                 plan.requested_prompt
