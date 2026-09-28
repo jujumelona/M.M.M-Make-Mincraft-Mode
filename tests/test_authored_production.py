@@ -304,42 +304,20 @@ def test_oversized_semantic_authored_section_is_not_split_by_bytes():
     assert units[0]["text"] == text
     assert units[0]["end_byte"] == len(text.encode("utf-8"))
 
-def test_fresh_authored_work_graph_never_schedules_custom_generation(monkeypatch):
-    import minecraft_mod_ai.authored_production as authored_production
-    import minecraft_mod_ai.planning_state_implementation as implementation
-
-    structured = _structured_state_plan().structured_sections
-
-    class CanonicalRouteReached(RuntimeError):
-        pass
-
-    planner = CompleteGameDesignPlanner(SimpleNamespace())
-    monkeypatch.setattr(
-        implementation,
-        "compile_authored_worksheet",
-        lambda _router, _prompt: structured,
+def test_fresh_authored_work_graph_schedules_ir_execution_after_project_preparation(monkeypatch):
+    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
+    proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(
+        AuthoredPlan("space mod", "# Economy\nCredits.\n# Ships\nParts.\n# Planets\nMining.")
     )
-    monkeypatch.setattr(
-        planner,
-        "_plan_canonical_artifacts",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(CanonicalRouteReached()),
+    graph = build_production_work_plan(
+        proposal,
+        policy=ScalePolicy(java_shard_size=48),
     )
-    monkeypatch.setattr(
-        authored_production,
-        "compile_authored_design",
-        lambda *_args, **_kwargs: pytest.fail(
-            "fresh authored input reached custom Java generation"
-        ),
-    )
-
-    with pytest.raises(CanonicalRouteReached):
-        planner.compile_for_production(
-            AuthoredPlan(
-                "space mod",
-                "# Economy\nCredits.\n# Ships\nParts.\n# Planets\nMining.",
-            )
-        )
-
+    custom = [node for node in graph.nodes if node.stage == "generate:custom"]
+    assert len(custom) == 1
+    assert custom[0].resource_class == "llm"
+    assert custom[0].dependencies == ("prepare-project",)
+    assert custom[0].payload["members"][0]["module_id"] == "authored_implementation_graph"
 
 def test_authored_scaffold_defers_source_materialization_until_ir(tmp_path):
     modules, manifest = _compile_new_authored_modules(AuthoredPlan("space mod", "Economy, ships, planets"),
@@ -472,80 +450,6 @@ def test_reasoning_projection_preserves_structured_semantic_authority() -> None:
     assert provenance is not None
     assert projected.structured_sections == base.structured_sections
     assert projected.schema_version == plan.schema_version
-
-
-def test_contract_shaped_legacy_plan_is_migrated_to_canonical_backend(monkeypatch) -> None:
-    import minecraft_mod_ai.authored_production as authored_production
-    import minecraft_mod_ai.planning_state_implementation as implementation
-
-    structured = _structured_state_plan().structured_sections
-    monkeypatch.setattr(
-        implementation,
-        "compile_authored_worksheet",
-        lambda _router, _prompt: structured,
-    )
-
-    class CanonicalRouteReached(RuntimeError):
-        pass
-
-    captured = {}
-    planner = CompleteGameDesignPlanner(SimpleNamespace())
-
-    def canonical_route(prompt, **kwargs):
-        captured["prompt"] = prompt
-        captured["kwargs"] = kwargs
-        raise CanonicalRouteReached
-
-    monkeypatch.setattr(planner, "_plan_canonical_artifacts", canonical_route)
-    monkeypatch.setattr(
-        authored_production,
-        "compile_authored_design",
-        lambda *_args, **_kwargs: pytest.fail(
-            "structured fresh design must not enter authored custom_java"
-        ),
-    )
-    legacy = AuthoredPlan(
-        "space mod",
-        (
-            "## behavior_contract\n- actors: player ship\n"
-            "## state_model\n- variables: credits\n"
-            "## integration\n- lifecycle: initialize\n"
-            "## verification\n- tests: compile and runtime\n"
-        ),
-    )
-
-    with pytest.raises(CanonicalRouteReached):
-        planner.compile_for_production(legacy)
-
-    assert "Authored game design to implement" in captured["prompt"]
-    assert "## state_model" in captured["prompt"]
-    assert captured["kwargs"]["existing_input_sha256"] == ""
-
-
-def test_structured_fresh_plan_never_enters_custom_java_backend(monkeypatch) -> None:
-    import minecraft_mod_ai.authored_production as authored_production
-
-    plan = _structured_state_plan()
-
-    class CanonicalRouteReached(RuntimeError):
-        pass
-
-    planner = CompleteGameDesignPlanner(SimpleNamespace())
-    monkeypatch.setattr(
-        planner,
-        "_plan_canonical_artifacts",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(CanonicalRouteReached()),
-    )
-    monkeypatch.setattr(
-        authored_production,
-        "compile_authored_design",
-        lambda *_args, **_kwargs: pytest.fail(
-            "structured fresh design entered legacy authored custom_java backend"
-        ),
-    )
-
-    with pytest.raises(CanonicalRouteReached):
-        planner.compile_for_production(plan)
 
 
 def test_existing_authored_plan_requires_localize_freeze_before_coder():
@@ -755,48 +659,6 @@ def test_compiler_preserves_ambiguous_or_quoted_reasoning_text(text):
     assert proposal.game_design["authored_plan"] == plan.to_dict()
     assert "_authored_source_projection" not in proposal.game_design
 
-
-@pytest.mark.parametrize("wrapper", ["", "## 개요 (Overview)\nStarForge space trading.\n\n"])
-
-def test_contract_shaped_authored_design_migrates_before_canonical_backend(monkeypatch, wrapper):
-    import minecraft_mod_ai.planning_state_implementation as implementation
-
-    structured = _structured_state_plan().structured_sections
-    captured = {}
-
-    def migrate(_router, prompt):
-        captured["migration_prompt"] = prompt
-        return structured
-
-    class CanonicalRouteReached(RuntimeError):
-        pass
-
-    planner = CompleteGameDesignPlanner(SimpleNamespace())
-    monkeypatch.setattr(implementation, "compile_authored_worksheet", migrate)
-    monkeypatch.setattr(
-        planner,
-        "_plan_canonical_artifacts",
-        lambda prompt, **_kwargs: (
-            captured.__setitem__("canonical_prompt", prompt),
-            (_ for _ in ()).throw(CanonicalRouteReached()),
-        )[-1],
-    )
-
-    sections = ("behavior_contract", "state_model", "algorithm", "integration", "authority_and_network", "persistence", "resources_and_ui", "failure_and_limits", "reuse_assessment", "verification")
-    text = wrapper + "\n".join(
-        f"# {section}\n" + "Preserve behavior, state and constraints. " * 12
-        for section in sections
-    )
-
-    with pytest.raises(CanonicalRouteReached):
-        planner.compile_for_production(
-            AuthoredPlan("Fabric 1.21.11 space mod", text)
-        )
-
-    assert text in captured["migration_prompt"]
-    assert "Approved authored design to normalize" in captured["migration_prompt"]
-    assert "Authored game design to implement" in captured["canonical_prompt"]
-    assert "## state_model" in captured["canonical_prompt"]
 
 def test_worksheet_with_supplementary_section_is_not_split_into_feature_classes():
     from minecraft_mod_ai.authored_production import _contract_shaped_authored_design
