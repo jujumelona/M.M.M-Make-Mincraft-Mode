@@ -217,6 +217,64 @@ def test_production_state_lowering_normalizes_small_model_dsl_and_java_symbols()
     assert '$mmmRead("cost", context)' in java
 
 
+def test_cleanup_subsystem_action_does_not_crash_state_mutation_compiler():
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            payload = json.loads(messages[-1]["content"])
+            concern = payload["concern"]
+            if concern == "variables":
+                return (
+                    "STATUS=DONE\nRECORD\n"
+                    "name=credits\nowner=player\ntype=integer\nunit=credits\n"
+                    "default=0\ndomain=integer >= 0\nEND"
+                )
+            if concern == "cleanup":
+                return (
+                    "STATUS=DONE\nRECORD\n"
+                    "event=shutdown\n"
+                    "action=SaveStateToFile\n"
+                    "retained_state=player progress\nEND"
+                )
+            return "STATUS=EMPTY"
+
+    section = compile_production_state_section(
+        Router(),
+        AuthoredPlan("make a space mod", _plan_text()),
+    )
+
+    assert section["specification"]["cleanup"] == [
+        {
+            "event": "shutdown",
+            "action": "noop",
+            "retained_state": "player progress",
+        }
+    ]
+
+    obligations = [
+        json.dumps({
+            "instruction": json.dumps(
+                {"section": "state_model", "concern": "variables"}
+            ),
+            "structured_records": section["specification"]["variables"],
+        }),
+        json.dumps({
+            "instruction": json.dumps(
+                {"section": "state_model", "concern": "cleanup"}
+            ),
+            "structured_records": section["specification"]["cleanup"],
+        }),
+    ]
+    java = render_state_model_concern(
+        {"implementation_obligations": obligations},
+        "cleanup",
+        include_runtime=True,
+    )
+
+    assert java is not None
+    assert "SaveStateToFile" not in java
+    assert "$mmmCleanup.add" in java
+
+
 def test_production_binding_preserves_approved_plan_text():
     router = ProductionStateRouter()
     original = AuthoredPlan("make a space mod", _plan_text())
