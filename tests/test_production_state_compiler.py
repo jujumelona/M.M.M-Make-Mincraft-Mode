@@ -430,37 +430,69 @@ def test_cleanup_subsystem_action_does_not_crash_state_mutation_compiler():
         AuthoredPlan("make a space mod", _plan_text()),
     )
 
-    assert section["specification"]["cleanup"] == [
-        {
-            "event": "shutdown",
-            "action": "noop",
-            "retained_state": "player progress",
-        }
-    ]
+    assert section["specification"]["cleanup"] == []
+    assert {
+        row["concern"]
+        for row in section["specification"]["inapplicable_concerns"]
+    } >= {"cleanup"}
 
-    obligations = [
-        json.dumps({
-            "instruction": json.dumps(
-                {"section": "state_model", "concern": "variables"}
-            ),
-            "structured_records": section["specification"]["variables"],
-        }),
-        json.dumps({
-            "instruction": json.dumps(
-                {"section": "state_model", "concern": "cleanup"}
-            ),
-            "structured_records": section["specification"]["cleanup"],
-        }),
-    ]
-    java = render_state_model_concern(
-        {"implementation_obligations": obligations},
-        "cleanup",
-        include_runtime=True,
+
+def test_undeclared_mutation_target_is_not_promoted_to_state_variable():
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            payload = json.loads(messages[-1]["content"])
+            concern = payload["concern"]
+            if concern == "variables":
+                return (
+                    "STATUS=DONE\nRECORD\n"
+                    "name=credits\nowner=player\ntype=integer\nunit=credits\n"
+                    "default=0\ndomain=integer >= 0\nEND"
+                )
+            if concern == "updates":
+                return (
+                    "STATUS=DONE\nRECORD\n"
+                    "trigger=tick\nmutation=ghost_counter += 1\nowner=server\nEND"
+                )
+            return "STATUS=EMPTY"
+
+    section = compile_production_state_section(
+        Router(),
+        AuthoredPlan("make a space mod", _plan_text()),
     )
 
-    assert java is not None
-    assert "SaveStateToFile" not in java
-    assert "$mmmCleanup.add" in java
+    assert [row["name"] for row in section["specification"]["variables"]] == ["credits"]
+    assert section["specification"]["updates"] == []
+
+
+def test_transition_without_state_assignment_uses_empty_program_not_magic_token():
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            payload = json.loads(messages[-1]["content"])
+            concern = payload["concern"]
+            if concern == "variables":
+                return (
+                    "STATUS=DONE\nRECORD\n"
+                    "name=ship_state\nowner=player\ntype=string\nunit=status\n"
+                    "default=Docked\ndomain=status\nEND"
+                )
+            if concern == "transitions":
+                return (
+                    "STATUS=DONE\nRECORD\n"
+                    "from_state=dock\ntrigger=launch\n"
+                    "guard=ship_state == Ready\n"
+                    "mutation=SendPacket\n"
+                    "to_state=space\nEND"
+                )
+            return "STATUS=EMPTY"
+
+    section = compile_production_state_section(
+        Router(),
+        AuthoredPlan("make a space mod", _plan_text()),
+    )
+
+    transition = section["specification"]["transitions"][0]
+    assert transition["mutation"] == ""
+    assert "noop" not in json.dumps(section)
 
 
 def test_production_binding_preserves_approved_plan_text():
