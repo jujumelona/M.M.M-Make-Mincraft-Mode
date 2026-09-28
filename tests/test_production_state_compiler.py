@@ -5,6 +5,7 @@ import json
 from minecraft_mod_ai.authored_plan import AuthoredPlan
 from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
 from minecraft_mod_ai.production_state_compiler import (
+    _normalize_expression,
     _parse_semantic_page,
     bind_production_state_contract,
     compile_production_state_section,
@@ -215,6 +216,90 @@ def test_production_state_lowering_normalizes_small_model_dsl_and_java_symbols()
     assert '$mmmRead("shipStatus", context)' in java
     assert '$mmmRead("credits", context)' in java
     assert '$mmmRead("cost", context)' in java
+
+
+def test_multiword_state_expression_is_canonicalized_before_host_parser():
+    variables = {
+        "fuel_amount": {
+            "name": "fuel_amount",
+            "owner": "player",
+            "type": "double",
+            "unit": "fuel",
+            "default": "100",
+            "domain": "number",
+        },
+        "ship_state": {
+            "name": "ship_state",
+            "owner": "player",
+            "type": "string",
+            "unit": "status",
+            "default": "Docked",
+            "domain": "navigation status",
+        },
+    }
+
+    normalized = _normalize_expression(
+        "(fuel_amount >= Required Fuel) AND ship_state == Ready To Launch",
+        aliases={},
+        variables=variables,
+        fallback="false",
+    )
+
+    assert "Required Fuel" not in normalized
+    assert "Required_Fuel" in normalized
+    assert '"Ready To Launch"' in normalized
+
+    obligations = [
+        json.dumps({
+            "instruction": json.dumps(
+                {"section": "state_model", "concern": "variables"}
+            ),
+            "structured_records": list(variables.values()),
+        }),
+        json.dumps({
+            "instruction": json.dumps(
+                {"section": "state_model", "concern": "invariants"}
+            ),
+            "structured_records": [
+                {
+                    "condition": normalized,
+                    "enforcement": "block invalid launch",
+                }
+            ],
+        }),
+    ]
+    java = render_state_model_concern(
+        {"implementation_obligations": obligations},
+        "invariants",
+        include_runtime=True,
+    )
+
+    assert java is not None
+    assert '$mmmRead("fuel_amount", context)' in java
+    assert '$mmmRead("Required_Fuel", context)' in java
+    assert '"Ready To Launch"' in java
+
+
+def test_irreducible_state_condition_fails_closed_instead_of_crashing():
+    variables = {
+        "fuel_amount": {
+            "name": "fuel_amount",
+            "owner": "player",
+            "type": "double",
+            "unit": "fuel",
+            "default": "100",
+            "domain": "number",
+        }
+    }
+
+    normalized = _normalize_expression(
+        "fuel_amount >= )",
+        aliases={},
+        variables=variables,
+        fallback="false",
+    )
+
+    assert normalized == "false"
 
 
 def test_cleanup_subsystem_action_does_not_crash_state_mutation_compiler():
