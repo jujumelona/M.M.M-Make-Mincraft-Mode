@@ -432,29 +432,36 @@ class ModelRouter:
                 f"Role {role!r} adapter {config.adapter!r} does not support "
                 "native tool decisions."
             )
-        request_messages: Sequence[Mapping[str, Any]] = (
-            _inject_system_context(
-                messages,
-                _REPOSITORY_MAIN_ONLY_SYSTEM_CONTEXT,
-            )
-            if role in _REPOSITORY_POLICY_ROLES
-            else tuple(dict(message) for message in messages)
-        )
         cardinality = (
             "one or more times, once for each independent sibling item"
             if allow_multiple
             else "exactly once"
         )
-        request_messages = (
-            *request_messages,
-            {
-                "role": "system",
-                "content": (
-                    f"Call the required function {name} {cardinality}. "
-                    "Do not answer in prose."
-                ),
-            },
+        decision_context = (
+            (
+                _REPOSITORY_MAIN_ONLY_SYSTEM_CONTEXT + "\n\n"
+                if role in _REPOSITORY_POLICY_ROLES
+                else ""
+            )
+            + f"Call the required function {name} {cardinality}. "
+            + "Do not answer in prose."
         )
+        copied_messages = [dict(message) for message in messages]
+        if copied_messages and copied_messages[0].get("role") in {"system", "developer"}:
+            first = dict(copied_messages[0])
+            existing = str(first.get("content") or "").strip()
+            first["content"] = (
+                existing + "\n\n" + decision_context if existing else decision_context
+            )
+            request_messages: Sequence[Mapping[str, Any]] = (
+                first,
+                *copied_messages[1:],
+            )
+        else:
+            request_messages = (
+                {"role": "system", "content": decision_context},
+                *copied_messages,
+            )
         from .model_context_budget import fit_messages_to_context
 
         request_messages = fit_messages_to_context(
