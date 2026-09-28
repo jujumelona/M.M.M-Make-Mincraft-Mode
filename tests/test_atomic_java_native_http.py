@@ -17,9 +17,17 @@ from minecraft_mod_ai.model_router import ModelRouter
 def test_native_http_assembles_java_without_nested_json_or_repair(monkeypatch):
     requests = []
     responses = [
-        {"part": "fields"}, {"type": "int", "name": "credits", "initializer": "7"},
-        {"part": "done"}, {"part": "classes"}, {"name": "ShipData"},
-        {"part": "done"}, {"part": "done"},
+        {"part": "fields"},
+        [
+            {"type": "int", "name": "credits", "initializer": "7"},
+            {"type": "float", "name": "fuel", "initializer": "100.0"},
+        ],
+        {"part": "done"},
+        {"part": "done"},
+        {"part": "classes"},
+        {"name": "ShipData"},
+        {"part": "done"},
+        {"part": "done"},
     ]
 
     class Handler(BaseHTTPRequestHandler):
@@ -35,11 +43,20 @@ def test_native_http_assembles_java_without_nested_json_or_repair(monkeypatch):
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Connection", "close")
             self.end_headers()
+            rows = responses[index]
+            if isinstance(rows, dict):
+                rows = [rows]
+            tool_calls = [
+                {
+                    "index": call_index,
+                    "id": f"call_{index}_{call_index}",
+                    "type": "function",
+                    "function": {"name": name, "arguments": json.dumps(row)},
+                }
+                for call_index, row in enumerate(rows)
+            ]
             events = [
-                {"choices": [{"delta": {"role": "assistant", "tool_calls": [{
-                    "index": 0, "id": f"call_{index}", "type": "function",
-                    "function": {"name": name, "arguments": json.dumps(responses[index])},
-                }]}}]},
+                {"choices": [{"delta": {"role": "assistant", "tool_calls": tool_calls}}]},
                 {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
             ]
             for event in events:
@@ -75,10 +92,13 @@ def test_native_http_assembles_java_without_nested_json_or_repair(monkeypatch):
         server.server_close()
         thread.join(timeout=5)
     assert "static int credits = 7;" in source
+    assert "static float fuel = 100.0f;" in source
     assert "class ShipData" in source
     assert len(requests) == len(responses)
     assert all(r["tools"][0]["function"]["name"] == "emit_java_part" for r in requests)
-    assert all(r["parallel_tool_calls"] is False for r in requests)
+    assert [r["parallel_tool_calls"] for r in requests] == [
+        False, True, False, False, False, True, False, False,
+    ]
     assert all(r["tool_choice"] == "required" for r in requests)
     assert all("response_format" not in r for r in requests)
     for request in requests:
