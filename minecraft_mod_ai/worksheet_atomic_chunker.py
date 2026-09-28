@@ -185,19 +185,24 @@ def worksheet_chunk_schema(
     authored_signal: list[dict[str, Any]] = []
     for concern in active:
         fields = projection[concern]
+        item_schema: dict[str, Any] = {
+            "type": "object",
+            "properties": {
+                field: {"type": "string", "minLength": 1, "maxLength": 256}
+                for field in fields
+            },
+            "required": [],
+            "minProperties": 1,
+            "additionalProperties": False,
+        }
+        if key == "state_model":
+            from .structured_state_runtime import constrain_state_record_schema
+
+            item_schema = constrain_state_record_schema(concern, item_schema)
         properties[concern] = {
             "type": "array",
             "maxItems": 4,
-            "items": {
-                "type": "object",
-                "properties": {
-                    field: {"type": "string", "minLength": 1, "maxLength": 256}
-                    for field in fields
-                },
-                "required": [],
-                "minProperties": 1,
-                "additionalProperties": False,
-            },
+            "items": item_schema,
         }
         authored_signal.append(
             {"required": [concern], "properties": {concern: {"minItems": 1}}}
