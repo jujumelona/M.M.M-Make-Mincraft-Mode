@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import math
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 from typing import Any
@@ -52,10 +53,54 @@ def _closed(properties: Mapping[str, Any], required=()) -> dict[str, Any]:
 def _scalar_schema(schema: Mapping[str, Any], key: str) -> dict[str, Any]:
     result = deepcopy(dict(schema))
     if result.get("type") == "string":
-        result["maxLength"] = min(result.get("maxLength", MAX_MODEL_STRING_CHARS), MAX_MODEL_STRING_CHARS)
+        result["maxLength"] = min(
+            result.get("maxLength", MAX_MODEL_STRING_CHARS),
+            MAX_MODEL_STRING_CHARS,
+        )
         if key in {"type", "return_type"}:
             result["pattern"] = _TYPE_PATTERN
             result["description"] = "Java type only; modifiers belong exclusively in modifiers."
+        elif key == "initializer":
+            # Qwen native tool calls naturally encode literal booleans/numbers/null as
+            # JSON scalars. Accept those transport forms and canonicalize them to Java
+            # source text before the host-owned structure is validated/rendered.
+            result["type"] = ["string", "number", "boolean", "null"]
+            result["description"] = (
+                str(result.get("description") or "").strip()
+                + " Native JSON string/number/boolean/null literals are accepted; "
+                "the host canonicalizes them to Java initializer source."
+            ).strip()
+    return result
+
+
+def _normalize_java_scalar_arguments(value: Mapping[str, Any]) -> dict[str, Any]:
+    result = dict(value)
+    if "initializer" not in result:
+        return result
+    initializer = result["initializer"]
+    if isinstance(initializer, str):
+        return result
+    if initializer is None:
+        result["initializer"] = "null"
+        return result
+    if isinstance(initializer, bool):
+        result["initializer"] = "true" if initializer else "false"
+        return result
+    if isinstance(initializer, int):
+        result["initializer"] = str(initializer)
+        return result
+    if isinstance(initializer, float):
+        if not math.isfinite(initializer):
+            raise AtomicJavaDecisionError(
+                "ATOMIC_JAVA_ASSEMBLY_INVALID: Java initializer must be a finite JSON number.",
+                response=initializer,
+            )
+        result["initializer"] = json.dumps(
+            initializer,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        )
     return result
 
 
@@ -178,8 +223,9 @@ class JavaStructureAssembly:
                 )
             validated: list[dict[str, Any]] = []
             for value in values:
-                Draft202012Validator(schema).validate(value)
-                validated.append(dict(value))
+                normalized = _normalize_java_scalar_arguments(value)
+                Draft202012Validator(schema).validate(normalized)
+                validated.append(normalized)
             return tuple(validated)
         except (NativeToolDecisionRejected, ValidationError) as exc:
             raise AtomicJavaDecisionError(
