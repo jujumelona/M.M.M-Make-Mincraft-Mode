@@ -347,6 +347,36 @@ def _compile_condition(text: str, context: str = "context") -> str:
     return _condition(_Expression(raw).parse(), context)
 
 
+def _split_mutation_statements(script: str) -> list[str]:
+    source = str(script or "")
+    rows: list[str] = []
+    buffer: list[str] = []
+    quote = ""
+    index = 0
+    while index < len(source):
+        char = source[index]
+        if quote:
+            buffer.append(char)
+            if char == "\\" and index + 1 < len(source):
+                index += 1
+                buffer.append(source[index])
+            elif char == quote:
+                quote = ""
+            index += 1
+            continue
+        if char in {'"', "'"}:
+            quote = char
+            buffer.append(char)
+        elif char == ";":
+            rows.append("".join(buffer))
+            buffer.clear()
+        else:
+            buffer.append(char)
+        index += 1
+    rows.append("".join(buffer))
+    return rows
+
+
 def _compile_mutation(
     script: str,
     *,
@@ -358,7 +388,7 @@ def _compile_mutation(
         return ""
 
     rows: list[str] = []
-    for raw in text.split(";"):
+    for raw in _split_mutation_statements(text):
         statement = raw.strip()
         if not statement:
             continue
