@@ -9,7 +9,6 @@ APIs, or host-private AST objects on this path.
 """
 
 from collections.abc import Mapping, Sequence
-from copy import deepcopy
 import json
 import re
 from typing import Any
@@ -770,27 +769,4 @@ def compile_production_state_section(router: Any, plan: AuthoredPlan) -> dict[st
     return section
 
 
-def bind_production_state_contract(router: Any, plan: AuthoredPlan) -> AuthoredPlan:
-    """Attach deterministic state records after planning, immediately before production."""
-
-    if plan.structured_sections.get("state_model"):
-        return plan
-    section = compile_production_state_section(router, plan)
-    if not section:
-        return plan
-    structured = deepcopy(plan.structured_sections)
-    structured["state_model"] = section
-    return AuthoredPlan(
-        requested_prompt=plan.requested_prompt,
-        text=plan.text,
-        existing_input_sha256=plan.existing_input_sha256,
-        media_paths=plan.media_paths,
-        schema_version=plan.schema_version,
-        structured_sections=structured,
-    )
-
-
-__all__ = [
-    "bind_production_state_contract",
-    "compile_production_state_section",
-]
+__all__ = ["compile_production_state_section"]
