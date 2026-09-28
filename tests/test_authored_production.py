@@ -439,7 +439,7 @@ def test_contract_shaped_legacy_plan_is_migrated_to_canonical_backend(monkeypatc
         captured["kwargs"] = kwargs
         raise CanonicalRouteReached
 
-    monkeypatch.setattr(planner, "_plan_in_session", canonical_route)
+    monkeypatch.setattr(planner, "_plan_canonical_artifacts", canonical_route)
     monkeypatch.setattr(
         authored_production,
         "compile_authored_design",
@@ -476,7 +476,7 @@ def test_structured_fresh_plan_never_enters_custom_java_backend(monkeypatch) -> 
     planner = CompleteGameDesignPlanner(SimpleNamespace())
     monkeypatch.setattr(
         planner,
-        "_plan_in_session",
+        "_plan_canonical_artifacts",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(CanonicalRouteReached()),
     )
     monkeypatch.setattr(
