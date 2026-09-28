@@ -444,8 +444,10 @@ __all__ = ["generate_fixed_template_text", "generate_fixed_template_value"]
 
 def _architecture_impl__structured_text_transport_required(_ctx):
     (router, role) = _ctx
-    # Only explicitly wrapped planner serialization is tool-free. Planner research and
-    # action decisions keep their native function-call contract.
+    # Planning authors structured design data directly. It is not a repository/action
+    # decision and must not depend on a native tool envelope.
+    if role == "planner" and callable(getattr(router, "generate_text", None)):
+        return True
     if bool(getattr(router, "_mmm_force_structured_text", False)):
         return True
     return (
