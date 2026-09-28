@@ -25,26 +25,113 @@ from .planning_detail_template import (
     validate_worksheet_section,
 )
 
-def _canonical_record_fields(section: str, concern: str) -> tuple[str, ...]:
-    """Derive chunk field order from the live canonical record schema."""
+def _canonical_leaf_specs(
+    section: str,
+    concern: str,
+) -> tuple[tuple[str, ...], dict[str, tuple[tuple[str, ...], dict[str, Any]]]]:
+    """Flatten canonical required object leaves while preserving their nested paths."""
     schema = concern_record_schema(section, concern)
-    properties = schema.get("properties")
-    required = schema.get("required")
-    if not isinstance(properties, Mapping) or not isinstance(required, list):
+    ordered: list[str] = []
+    specs: dict[str, tuple[tuple[str, ...], dict[str, Any]]] = {}
+
+    def visit(node: Mapping[str, Any], path: tuple[str, ...]) -> None:
+        properties = node.get("properties")
+        required = node.get("required")
+        if not isinstance(properties, Mapping) or not isinstance(required, list):
+            raise ValueError(
+                f"DETAILED_PLAN_WORKSHEET_SCHEMA: {section}.{concern} "
+                f"has invalid canonical object at {'.'.join(path) or '<root>'}"
+            )
+        for raw_field in required:
+            field = str(raw_field)
+            child = properties.get(field)
+            if not isinstance(child, Mapping):
+                raise ValueError(
+                    f"DETAILED_PLAN_WORKSHEET_SCHEMA: {section}.{concern} "
+                    f"required field {field!r} is missing"
+                )
+            child_path = (*path, field)
+            if child.get("type") == "object":
+                visit(child, child_path)
+                continue
+            if field in specs:
+                raise ValueError(
+                    f"DETAILED_PLAN_WORKSHEET_SCHEMA: {section}.{concern} "
+                    f"has duplicate leaf field {field!r}"
+                )
+            ordered.append(field)
+            specs[field] = (child_path, deepcopy(dict(child)))
+
+    visit(schema, ())
+    if not ordered:
         raise ValueError(
-            f"DETAILED_PLAN_WORKSHEET_SCHEMA: {section}.{concern} lacks canonical fields"
+            f"DETAILED_PLAN_WORKSHEET_SCHEMA: {section}.{concern} has no required leaves"
         )
-    missing = [str(field) for field in required if field not in properties]
-    if missing:
+    return tuple(ordered), specs
+
+
+def _canonical_record_fields(section: str, concern: str) -> tuple[str, ...]:
+    return _canonical_leaf_specs(section, concern)[0]
+
+
+def _canonical_leaf_schema(section: str, concern: str, field: str) -> dict[str, Any]:
+    _ordered, specs = _canonical_leaf_specs(section, concern)
+    try:
+        return deepcopy(specs[field][1])
+    except KeyError as exc:
         raise ValueError(
-            f"DETAILED_PLAN_WORKSHEET_SCHEMA: {section}.{concern} missing {missing}"
-        )
-    fields = tuple(str(field) for field in required)
-    if not fields:
-        raise ValueError(
-            f"DETAILED_PLAN_WORKSHEET_SCHEMA: {section}.{concern} has no required fields"
-        )
-    return fields
+            f"DETAILED_PLAN_WORKSHEET_SCHEMA: {section}.{concern} "
+            f"has no canonical leaf {field!r}"
+        ) from exc
+
+
+def _flatten_record(
+    section: str,
+    concern: str,
+    record: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Accept canonical nested records or flat model pages and return flat leaf values."""
+    _ordered, specs = _canonical_leaf_specs(section, concern)
+    result: dict[str, Any] = {}
+    for field, (path, _schema) in specs.items():
+        if field in record:
+            result[field] = record[field]
+            continue
+        current: Any = record
+        found = True
+        for part in path:
+            if not isinstance(current, Mapping) or part not in current:
+                found = False
+                break
+            current = current[part]
+        if found:
+            result[field] = current
+    return result
+
+
+def _inflate_record(
+    section: str,
+    concern: str,
+    record: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Rebuild the canonical nested record shape from flat leaf values."""
+    _ordered, specs = _canonical_leaf_specs(section, concern)
+    result: dict[str, Any] = {}
+    for field, value in record.items():
+        spec = specs.get(str(field))
+        if spec is None:
+            continue
+        path = spec[0]
+        destination = result
+        for part in path[:-1]:
+            child = destination.get(part)
+            if not isinstance(child, dict):
+                child = {}
+                destination[part] = child
+            destination = child
+        destination[path[-1]] = value
+    return result
+
 
 _CANONICAL_FIELD_DEFAULTS: dict[str, str] = {
     "authority": "server",
@@ -104,11 +191,7 @@ def _chunk_projection(
     for concern in concerns:
         if concern not in records:
             raise ValueError(f"Unknown concern {concern!r} for section {section!r}")
-        all_fields = (
-            _canonical_record_fields(section, concern)
-            if section == "state_model"
-            else tuple(records[concern].split())
-        )
+        all_fields = _canonical_record_fields(section, concern)
         selected = tuple(explicit.get(concern, all_fields)) if isinstance(explicit, Mapping) else all_fields
         if not selected or any(field not in all_fields for field in selected):
             raise ValueError(
@@ -142,13 +225,8 @@ def pack_section_concerns(
         raise ValueError("max_chunk_size must be positive when supplied")
 
     pages: list[tuple[str, tuple[str, ...]]] = []
-    for concern, columns in records.items():
-        source_fields = (
-            _canonical_record_fields(key, concern)
-            if key == "state_model"
-            else tuple(columns.split())
-        )
-        for fields in _field_pages(source_fields):
+    for concern in records:
+        for fields in _field_pages(_canonical_record_fields(key, concern)):
             pages.append((concern, fields))
 
     chunks: list[tuple[str, ...]] = []
@@ -216,19 +294,13 @@ def worksheet_chunk_schema(
     authored_signal: list[dict[str, Any]] = []
     for concern in active:
         fields = projection[concern]
-        canonical = concern_record_schema(key, concern)
-        canonical_properties = canonical.get("properties")
-        if not isinstance(canonical_properties, Mapping):
-            raise ValueError(
-                f"DETAILED_PLAN_WORKSHEET_SCHEMA: {key}.{concern} has no properties"
-            )
         properties[concern] = {
             "type": "array",
             "maxItems": 4,
             "items": {
                 "type": "object",
                 "properties": {
-                    field: deepcopy(canonical_properties[field])
+                    field: _canonical_leaf_schema(key, concern, field)
                     for field in fields
                 },
                 "required": [],
@@ -307,8 +379,12 @@ def validate_worksheet_chunk_signal(
         else:
             candidates = []
         for item in candidates:
-            if isinstance(item, Mapping) and any(
-                _meaningful_text(item.get(field)) for field in projection[concern]
+            if not isinstance(item, Mapping):
+                continue
+            flattened = _flatten_record(key, concern, item)
+            if any(
+                _meaningful_text(flattened.get(field))
+                for field in projection[concern]
             ):
                 return dict(chunk)
 
@@ -441,9 +517,13 @@ def merge_worksheet_section_chunks(
                 continue
 
             if isinstance(value, Mapping):
-                candidate_items = [dict(value)]
+                candidate_items = [_flatten_record(key, field, value)]
             elif isinstance(value, list):
-                candidate_items = [dict(item) for item in value if isinstance(item, Mapping)]
+                candidate_items = [
+                    _flatten_record(key, field, item)
+                    for item in value
+                    if isinstance(item, Mapping)
+                ]
             else:
                 candidate_items = []
 
@@ -474,9 +554,9 @@ def merge_worksheet_section_chunks(
                         )
                     destination[field_name] = value_text
 
-    for concern, columns in records.items():
-        expected_fields = tuple(columns.split())
-        cleaned_records: list[dict[str, str]] = []
+    for concern in records:
+        expected_fields = _canonical_record_fields(key, concern)
+        cleaned_records: list[dict[str, Any]] = []
         for item in merged_specification[concern]:
             if not isinstance(item, Mapping):
                 continue
@@ -495,7 +575,9 @@ def merge_worksheet_section_chunks(
                         f"standard {field_name}",
                     )
                 clean_item[field_name] = val
-            cleaned_records.append(clean_item)
+            cleaned_records.append(
+                _inflate_record(key, concern, clean_item)
+            )
         merged_specification[concern] = cleaned_records
 
     empty_concerns = {

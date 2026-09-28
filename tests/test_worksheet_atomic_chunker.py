@@ -89,6 +89,36 @@ def test_deterministic_merge_reconstructs_canonical_section(section: str):
     assert validate_worksheet_section(merged, allowed_refs, section) == canonical
 
 
+def test_nested_record_leaf_pages_reconstruct_canonical_shape():
+    canonical = row("behavior_contract")
+    chunks = pack_section_concerns("behavior_contract")
+    inputs_chunks = [chunk for chunk in chunks if "inputs" in chunk]
+    assert inputs_chunks
+
+    projected = set()
+    for chunk in inputs_chunks:
+        projected.update(getattr(chunk, "field_projection", {})["inputs"])
+        schema = worksheet_chunk_schema("behavior_contract", chunk)
+        item_properties = schema["properties"]["inputs"]["items"]["properties"]
+        assert "identity" not in item_properties
+    assert projected == {"name", "type", "unit", "range", "default", "source"}
+
+    payloads = []
+    for index, chunk in enumerate(chunks):
+        payload = {"inapplicable_concerns": []}
+        for concern in chunk:
+            payload[concern] = canonical["specification"][concern]
+        if index == 0:
+            payload["constraint_evidence_refs"] = canonical["constraint_evidence_refs"]
+        payloads.append(payload)
+
+    merged = merge_worksheet_section_chunks(
+        "behavior_contract",
+        payloads,
+        set(canonical["constraint_evidence_refs"]),
+    )
+    assert merged == canonical
+
 def test_merge_rejects_missing_chunk_page():
     expected_chunks = pack_section_concerns("behavior_contract")
     assert len(expected_chunks) > 1
