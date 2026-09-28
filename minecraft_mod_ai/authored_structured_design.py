@@ -53,7 +53,7 @@ def normalize_structured_sections(raw: Mapping[str, Any] | None) -> dict[str, An
 def active_concern_records(
     sections: Mapping[str, Any] | None,
     section: str,
-) -> dict[str, list[dict[str, str]]]:
+) -> dict[str, list[dict[str, Any]]]:
     normalized = normalize_structured_sections(sections)
     row = normalized.get(section)
     if not isinstance(row, Mapping):
@@ -62,13 +62,13 @@ def active_concern_records(
     if not isinstance(specification, Mapping):
         return {}
 
-    result: dict[str, list[dict[str, str]]] = {}
+    result: dict[str, list[dict[str, Any]]] = {}
     for concern in DETAIL_RECORDS.get(section, {}):
         value = specification.get(concern)
         if not isinstance(value, list) or not value:
             continue
         records = [
-            {str(key): str(val) for key, val in item.items()}
+            deepcopy(dict(item))
             for item in value
             if isinstance(item, Mapping)
         ]
