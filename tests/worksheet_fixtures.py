@@ -8,6 +8,15 @@ from minecraft_mod_ai.planning_detail_slots import (
 
 
 def _fixture_value(schema: dict[str, Any], text: str) -> Any:
+    description = str(schema.get("description") or "")
+    pattern = str(schema.get("pattern") or "")
+    if "Stable ASCII internal state identifier" in description:
+        return "stateValue"
+    if "Host state-compiler DSL" in description:
+        if "\\+=" in pattern or "\\-=" in pattern or "\\*=" in pattern or "/=" in pattern:
+            return "stateValue = 1"
+        return "true"
+
     schema_type = schema.get("type")
     if isinstance(schema_type, list):
         schema_type = next((item for item in schema_type if item != "null"), "null")
