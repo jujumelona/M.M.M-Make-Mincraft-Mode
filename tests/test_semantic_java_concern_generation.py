@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from minecraft_mod_ai.atomic_concern_source import _messages, _parse_region_content
+from minecraft_mod_ai.atomic_concern_source import (
+    _drop_authoritative_sibling_redeclarations,
+    _member_declaration_symbols,
+    _messages,
+    _parse_region_content,
+)
 from minecraft_mod_ai.custom_module_generator import (
     _call_coder,
     _run_atomic_ir_generation,
@@ -100,6 +105,53 @@ def test_semantic_region_parser_accepts_complete_java_declarations():
     assert "playerCredits = 0;" in source
     assert "currentPlanetSurface = true;" in source
     assert "addCredits(int amount)" in source
+
+
+def test_authoritative_sibling_redeclarations_are_dropped_but_logic_is_kept():
+    candidate = (
+        "private static final String PLAYER_CREDITS_IDENTIFIER = \"credits\";\n"
+        "private static final String SHIP_CONFIG_IDENTIFIER = \"ship\";\n"
+        "private static boolean transitionReady() {\n"
+        "    return PLAYER_CREDITS_IDENTIFIER != null "
+        "&& SHIP_CONFIG_IDENTIFIER != null;\n"
+        "}\n"
+    )
+    owners = {
+        "field:PLAYER_CREDITS_IDENTIFIER": "variables",
+        "field:SHIP_CONFIG_IDENTIFIER": "variables",
+    }
+
+    normalized, dropped = _drop_authoritative_sibling_redeclarations(
+        candidate,
+        owners=owners,
+    )
+
+    assert dropped == (
+        "field:PLAYER_CREDITS_IDENTIFIER",
+        "field:SHIP_CONFIG_IDENTIFIER",
+    )
+    assert "private static final String PLAYER_CREDITS_IDENTIFIER" not in normalized
+    assert "private static final String SHIP_CONFIG_IDENTIFIER" not in normalized
+    assert "transitionReady()" in normalized
+    assert "PLAYER_CREDITS_IDENTIFIER != null" in normalized
+    assert not (set(_member_declaration_symbols(normalized)) & set(owners))
+
+
+def test_mixed_member_collision_is_not_silently_rewritten():
+    candidate = (
+        "private static int PLAYER_CREDITS_IDENTIFIER = 0, localCounter = 1;"
+    )
+    owners = {"field:PLAYER_CREDITS_IDENTIFIER": "variables"}
+
+    normalized, dropped = _drop_authoritative_sibling_redeclarations(
+        candidate,
+        owners=owners,
+    )
+
+    assert dropped == ()
+    assert normalized == candidate
+    assert "field:PLAYER_CREDITS_IDENTIFIER" in _member_declaration_symbols(normalized)
+    assert "field:localCounter" in _member_declaration_symbols(normalized)
 
 
 def test_production_atomic_route_calls_plain_text_coder(monkeypatch, tmp_path):
