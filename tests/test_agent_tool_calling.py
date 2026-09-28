@@ -325,6 +325,35 @@ def test_main_only_policy_is_injected_even_when_tools_are_disabled(monkeypatch) 
     assert any("`main`" in content for content in system_messages)
 
 
+def test_main_only_policy_is_not_injected_into_planner_generation(monkeypatch) -> None:
+    class CapturingAdapter:
+        def __init__(self) -> None:
+            self.requests = []
+
+        def generate(self, request):
+            self.requests.append(request)
+            return "done"
+
+    adapter = CapturingAdapter()
+    monkeypatch.setattr(ModelRouter, "_new_text_adapter", staticmethod(lambda config, *, role: adapter))
+    router = ModelRouter(profile="test", registry=_Registry())
+
+    assert router.generate_text(
+        "planner",
+        [{"role": "user", "content": "design the requested gameplay behavior"}],
+        enable_tools=False,
+    ) == "done"
+
+    assert len(adapter.requests) == 1
+    system_messages = [
+        str(message.get("content", ""))
+        for message in adapter.requests[0].messages
+        if message.get("role") == "system"
+    ]
+    assert not any("The only permitted Git branch/ref" in content for content in system_messages)
+    assert not any("Never call any branch-creation action" in content for content in system_messages)
+
+
 def test_main_only_policy_is_injected_into_native_tool_decisions(monkeypatch) -> None:
     class DecisionAdapter:
         def __init__(self) -> None:
