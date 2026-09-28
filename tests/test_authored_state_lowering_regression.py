@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+
+import pytest
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,8 +23,6 @@ from minecraft_mod_ai.custom_module_generator import (
 )
 from minecraft_mod_ai.implementation_graph_execution import _bind_atomic_leaf_contract
 from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
-from minecraft_mod_ai.structured_state_runtime import constrain_state_chunk_schema
-from minecraft_mod_ai.worksheet_atomic_chunker import worksheet_chunk_schema
 
 def test_concern_provenance_is_host_sliced_before_source_generation() -> None:
     assert slice_concern_requirements(
