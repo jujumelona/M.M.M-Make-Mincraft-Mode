@@ -76,20 +76,11 @@ def _fragment(requirement_ref: str, criterion_index: int) -> dict[str, object]:
 
 
 def _real_fragment(*, evidence_ref=None):
-    from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
+    from worksheet_fixtures import specification as fixture_specification
 
     rows = []
     for section in WORKSHEET_SECTIONS:
-        specification = {
-            concern: [
-                {
-                    field: f"{section}.{concern}.{field}"
-                    for field in columns.split()
-                }
-            ]
-            for concern, columns in DETAIL_RECORDS[section].items()
-        }
-        specification["inapplicable_concerns"] = []
+        specification = fixture_specification(section)
         rows.append(
             {
                 "section": section,
