@@ -2157,10 +2157,28 @@ class AtomicConcernExecutor:
     def run(self) -> dict[str, Any]:
         from .structured_state_runtime import has_complete_structured_state
 
-        if (
-            str(self.section or "").strip() == "state_model"
+        state_model = str(self.section or "").strip() == "state_model"
+        structured_state = (
+            state_model
             and has_complete_structured_state(self.task, self.ordered)
-        ):
+        )
+        variable_only_host_lowering = (
+            state_model
+            and bool(self.ordered)
+            and all(_slug(item["concern"]) == "variables" for item in self.ordered)
+            and all(
+                bool(_deterministic_state_variable_members(self.task, item))
+                for item in self.ordered
+            )
+        )
+        if state_model and not (structured_state or variable_only_host_lowering):
+            raise CustomModuleGenerationError(
+                "STRUCTURED_STATE_CONTRACT_REQUIRED: state_model execution is "
+                "host-compiled only. Canonical structured state records must be "
+                "present before production; free-form coder Java fallback is disabled."
+            )
+
+        if state_model:
             for concern in self.ordered:
                 self._apply(concern)
             report = self._compile()
