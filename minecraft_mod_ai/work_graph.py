@@ -86,6 +86,27 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
         if missing:
             raise WorkGraphError(f'Production work module {module.module_id} references missing dependencies: {sorted(missing)}')
     ordered = _topological_modules(selected_modules)
+    artifact_owners = frozenset(
+        str(job.get("owner_module") or "").strip()
+        for job in proposal.game_design.get("_artifact_jobs", ())
+        if isinstance(job, dict) and str(job.get("owner_module") or "").strip()
+    )
+    small_backend = proposal.game_design.get("_small_model_backend")
+    if (
+        isinstance(small_backend, dict)
+        and small_backend.get("free_form_java") is False
+    ):
+        uncovered = [
+            module.module_id
+            for module in ordered
+            if module.module_id not in artifact_owners
+        ]
+        if uncovered:
+            raise WorkGraphError(
+                "SMALL_MODEL_CANONICAL_COVERAGE: free-form Java is disabled but "
+                f"module(s) have no canonical artifact owner: {uncovered[:20]}"
+            )
+
     from .platform_catalog import adapter_for_lock_values
     adapter = adapter_for_lock_values(proposal.base_proposal.spec.platform)
     deterministic_module_kinds = frozenset(
@@ -101,9 +122,7 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
         ordered,
         policy=policy,
         deterministic_module_kinds=deterministic_module_kinds,
-        artifact_owners=frozenset(
-            job["owner_module"] for job in proposal.game_design.get("_artifact_jobs", ())
-        ),
+        artifact_owners=artifact_owners,
     ):
         node_id = f'generate-{stage}-{len(generated_nodes):08d}'
         member_ids = {module.module_id for module in members}
