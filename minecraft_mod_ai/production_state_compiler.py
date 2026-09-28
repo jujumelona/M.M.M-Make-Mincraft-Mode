@@ -335,21 +335,12 @@ def _normalize_mutation(
     *,
     aliases: dict[str, str],
     variables: dict[str, dict[str, str]],
+    allow_opaque_noop: bool = False,
 ) -> str:
     text = _replace_aliases(value, aliases).strip()
     lowered = text.casefold()
     if not text or lowered in {"none", "n/a", "na", "noop", "no-op", "no change"}:
-        if not variables:
-            variables["state_marker"] = {
-                "name": "state_marker",
-                "owner": "system",
-                "type": "boolean",
-                "unit": "flag",
-                "default": "false",
-                "domain": "boolean",
-            }
-        first = next(iter(variables))
-        return f"{first} = {first}"
+        return "noop"
 
     text = re.sub(
         r"\b(?:increase|increment)\s+([A-Za-z_][A-Za-z0-9_]*)\s+by\s+(.+)$",
@@ -373,12 +364,16 @@ def _normalize_mutation(
     text = re.sub(r"\b([A-Za-z_][A-Za-z0-9_]*)--\b", r"\1 -= 1", text)
 
     normalized_rows: list[str] = []
+    opaque_rows: list[str] = []
     for raw in text.split(";"):
         row = raw.strip()
         if not row:
             continue
         match = _ASSIGNMENT.fullmatch(row)
         if match is None:
+            if allow_opaque_noop:
+                opaque_rows.append(row)
+                continue
             raise ValueError(
                 "PRODUCTION_STATE_MUTATION_UNSUPPORTED: " + repr(row)
             )
@@ -394,10 +389,11 @@ def _normalize_mutation(
             fallback=stable,
         )
         normalized_rows.append(f"{stable} {operator} {rhs}")
-    if not normalized_rows:
-        first = next(iter(variables))
-        return f"{first} = {first}"
-    return "; ".join(normalized_rows)
+    if normalized_rows:
+        return "; ".join(normalized_rows)
+    if opaque_rows or allow_opaque_noop:
+        return "noop"
+    return "noop"
 
 
 def _normalize_records(
@@ -436,6 +432,7 @@ def _normalize_records(
             str(raw.get("mutation") or ""),
             aliases=aliases,
             variables=variables,
+            allow_opaque_noop=True,
         )
         result["transitions"].append({
             "from_state": str(raw.get("from_state") or "any").strip() or "any",
@@ -466,6 +463,7 @@ def _normalize_records(
                 str(raw.get(field) or ""),
                 aliases=aliases,
                 variables=variables,
+                allow_opaque_noop=True,
             )
             if concern == "initialization":
                 result[concern].append({
