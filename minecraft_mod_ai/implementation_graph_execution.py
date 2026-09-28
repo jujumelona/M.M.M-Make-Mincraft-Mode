@@ -69,8 +69,8 @@ def _canonical_atomic_obligations(
     concerns: list[dict[str, Any]],
     requirements: Mapping[str, str],
     raw_obligations: list[str],
-) -> tuple[list[str], list[str]]:
-    """Bind every canonical concern to its exact host-owned source provenance."""
+) -> tuple[list[str], list[str], list[dict[str, Any]]]:
+    """Materialize only authored concerns that own source in the final node."""
     from .authored_execution_schema import section_spec
     from .authored_ir_parser import slice_concern_requirements
 
@@ -89,12 +89,44 @@ def _canonical_atomic_obligations(
             continue
         extras.append(raw)
 
+    exact_sources: dict[str, dict[str, str]] = {}
+    for concern in concerns:
+        name = str(concern["concern"])
+        source = slice_concern_requirements(
+            requirements,
+            concern=name,
+            require_anchor=True,
+        )
+        if source:
+            exact_sources[name] = source
+
+    # Legacy/free-form sections have no canonical concern anchors. Preserve one
+    # already-admitted owner rather than manufacturing every schema concern.
+    if not exact_sources and existing:
+        first_name = next(
+            (str(item["concern"]) for item in concerns if str(item["concern"]) in existing),
+            "",
+        )
+        if first_name:
+            payload, _instruction = existing[first_name]
+            raw_sources = payload.get("source_requirements")
+            if isinstance(raw_sources, Mapping):
+                exact_sources[first_name] = {
+                    str(key): str(value)
+                    for key, value in raw_sources.items()
+                    if str(key) in requirements
+                }
+
     spec = section_spec(section) or {}
     rebound: list[str] = []
     drifted: list[str] = []
+    active: list[dict[str, Any]] = []
     for concern in concerns:
         name = str(concern["concern"])
-        host_sources = slice_concern_requirements(requirements, concern=name)
+        host_sources = exact_sources.get(name)
+        if not host_sources:
+            continue
+        active.append(concern)
         if name in existing:
             payload, instruction = deepcopy(existing[name])
             if payload.get("source_requirements") != host_sources:
@@ -116,7 +148,7 @@ def _canonical_atomic_obligations(
         payload["source_requirements"] = host_sources
         rebound.append(json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
-    return rebound + extras, drifted
+    return rebound + extras, drifted, active
 
 
 def _bind_atomic_leaf_contract(
@@ -129,7 +161,7 @@ def _bind_atomic_leaf_contract(
     section, concerns = _required_atomic_leaf_contract(
         str(node.get("symbol") or "")
     )
-    obligations, drifted = _canonical_atomic_obligations(
+    obligations, drifted, active = _canonical_atomic_obligations(
         section=section,
         concerns=concerns,
         requirements=requirements,
@@ -146,7 +178,7 @@ def _bind_atomic_leaf_contract(
             result="PASS",
             details={"symbol": node.get("symbol"), "concerns": drifted},
         )
-    return section, concerns
+    return section, active
 
 def _leaf_module(node: dict[str, Any], graph: dict[str, Any], request: dict[str, Any]) -> ProductionModule:
     from .authored_production import _exact_authored_task

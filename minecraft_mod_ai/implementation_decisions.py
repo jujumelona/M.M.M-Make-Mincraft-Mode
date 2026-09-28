@@ -176,6 +176,8 @@ def _host_concern_work(
     packet: Mapping[str, Any],
     unit_requirements: Mapping[str, str],
 ) -> tuple[list[str], int]:
+    from .authored_ir_parser import slice_concern_requirements
+
     role, _contract = _required_section_contract(payload)
     concerns = concern_contracts(role)
     if not concerns:
@@ -184,9 +186,25 @@ def _host_concern_work(
         raise ImplementationGraphError(
             f"IMPLEMENTATION_IR_CONCERN_CONTRACT_MISSING: {role}"
         )
+
     section_instruction = _host_instruction(payload)
-    obligations: list[str] = []
+    exact: list[tuple[Mapping[str, Any], dict[str, str]]] = []
     for concern in concerns:
+        source = slice_concern_requirements(
+            unit_requirements,
+            concern=str(concern["concern"]),
+            require_anchor=True,
+        )
+        if source:
+            exact.append((concern, source))
+
+    # A canonical page must never be sprayed across sibling concerns. Legacy/free-form
+    # section prose without any concern anchor is owned exactly once by the section's
+    # primary concern so production remains deterministic without multiplying work.
+    owned = exact or [(concerns[0], dict(packet["requirements"]))]
+
+    obligations: list[str] = []
+    for concern, source_requirements in owned:
         instruction = json.dumps(
             {
                 "section": role,
@@ -200,10 +218,11 @@ def _host_concern_work(
             sort_keys=True,
         )
         obligations.append(
-            _host_obligation(packet["requirements"], instruction=instruction)
+            _host_obligation(source_requirements, instruction=instruction)
         )
+
     raw_budget = _host_estimated_tokens(unit_requirements)
-    concern_budget = max(768, (raw_budget + len(concerns) - 1) // len(concerns))
+    concern_budget = max(768, (raw_budget + len(owned) - 1) // len(owned))
     return obligations, concern_budget
 
 

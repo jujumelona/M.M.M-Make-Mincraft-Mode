@@ -338,10 +338,8 @@ def test_partial_saved_design_reaches_only_present_canonical_leaf_contracts():
         "AuthoredFailureLimits",
         "AuthoredIntegration",
     }
-    sections = {
-        _leaf_module(node, graph, request).config["implementation_section"]
-        for node in graph["nodes"]
-    }
+    leaves = [_leaf_module(node, graph, request) for node in graph["nodes"]]
+    sections = {leaf.config["implementation_section"] for leaf in leaves}
     assert sections == {
         "state_model",
         "behavior_contract",
@@ -350,3 +348,8 @@ def test_partial_saved_design_reaches_only_present_canonical_leaf_contracts():
         "failure_and_limits",
         "integration",
     }
+    # Free-form legacy sections are owned once, never duplicated across every
+    # canonical concern contract.
+    for leaf in leaves:
+        concerns = leaf.config["implementation_atomic_concerns"]
+        assert len(concerns) <= 1

@@ -84,8 +84,14 @@ def slice_concern_requirements(
     raw: Mapping[str, Any],
     *,
     concern: str,
+    require_anchor: bool = False,
 ) -> dict[str, str]:
-    """Return the exact canonical source slice owned by one authored concern."""
+    """Return the canonical source slice owned by one authored concern.
+
+    With require_anchor=True, ownership is exact: a concern receives no source
+    unless its own '- <concern>:' anchor is present. This is the production IR
+    mode and prevents one page/row from being copied into sibling concerns.
+    """
     ordered = [
         (str(key), str(value))
         for key, value in sorted(dict(raw or {}).items(), key=_requirement_sort_key)
@@ -111,6 +117,8 @@ def slice_concern_requirements(
     selected: list[tuple[str, str]] = headings[-1:] if headings else []
 
     if anchor < 0:
+        if require_anchor:
+            return {}
         target_words = target.replace("_", " ")
         for key, value in ordered:
             lowered = value.casefold()

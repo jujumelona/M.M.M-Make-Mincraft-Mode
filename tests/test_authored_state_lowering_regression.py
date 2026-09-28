@@ -80,14 +80,103 @@ def _bound_task() -> tuple[dict, list[dict]]:
 
 def test_concern_provenance_is_host_sliced_before_source_generation() -> None:
     assert slice_concern_requirements(
-        STATE_REQUIREMENTS, concern="variables"
+        STATE_REQUIREMENTS, concern="variables", require_anchor=True
     ) == {key: STATE_REQUIREMENTS[key] for key in ("R29", "R30", "R31", "R32", "R33")}
+    assert slice_concern_requirements(
+        {"R29": "## state_model", "R34": STATE_REQUIREMENTS["R34"]},
+        concern="variables",
+        require_anchor=True,
+    ) == {}
 
     task, _concerns = _bound_task()
     variables = _obligation_payload(task, "variables")["source_requirements"]
     transitions = _obligation_payload(task, "transitions")["source_requirements"]
     assert list(variables) == ["R29", "R30", "R31", "R32", "R33"]
     assert list(transitions) == ["R29", "R34", "R35", "R36"]
+
+
+def test_graph_frontend_assigns_each_state_page_to_only_its_actual_concern() -> None:
+    from minecraft_mod_ai.implementation_decisions import compile_contribution
+
+    def compile_page(requirements):
+        return compile_contribution(
+            object(),
+            "compile_implementation_graph",
+            {
+                "requirements": requirements,
+                "unit_context": {"R12": "## state_model", **requirements},
+                "accepted_nodes": [],
+                "planned_units": ["state_model"],
+                "current_units": ["state_model"],
+                "unit_ids": ["state_model"],
+                "unresolved_dependencies": [],
+                "platform": {},
+                "project_context": "",
+                "package": "example",
+                "mod_id": "test",
+                "page": 1,
+            },
+            {},
+            lambda: None,
+        )["nodes"][0]
+
+    variables = compile_page({
+        "R13": (
+            "- variables: 현재 돈 (Int, owner=Player), "
+            "보유 재료 (Map<String, Int>, owner=Inventory)"
+        )
+    })
+    transitions = compile_page({
+        "R14": (
+            "- transitions: from_state(준비됨) -> trigger(재료 구매/제작) "
+            "-> to_state(조립중)"
+        )
+    })
+
+    assert len(variables["obligations"]) == 1
+    assert len(transitions["obligations"]) == 1
+
+    variable_payload = json.loads(variables["obligations"][0])
+    transition_payload = json.loads(transitions["obligations"][0])
+    variable_instruction = json.loads(variable_payload["instruction"])
+    transition_instruction = json.loads(transition_payload["instruction"])
+
+    assert variable_instruction["concern"] == "variables"
+    assert list(variable_payload["source_requirements"]) == ["R12", "R13"]
+    assert transition_instruction["concern"] == "transitions"
+    assert list(transition_payload["source_requirements"]) == ["R12", "R14"]
+
+
+def test_leaf_contract_materializes_only_concerns_present_in_authored_source() -> None:
+    requirements = {
+        "R12": "## state_model",
+        "R13": "- variables: credits (Int, owner=Player)",
+        "R14": "- transitions: from_state(idle) -> trigger(buy) -> to_state(done)",
+    }
+    task = {"task_id": "exact-active-concerns"}
+    node = {
+        "symbol": "AuthoredStateModel",
+        "obligations": [
+            _model_obligation("variables"),
+            _model_obligation("transitions"),
+            _model_obligation("invariants"),
+            _model_obligation("initialization"),
+            _model_obligation("updates"),
+            _model_obligation("cleanup"),
+            _model_obligation("concurrency"),
+        ],
+    }
+    section, active = _bind_atomic_leaf_contract(task, node, requirements)
+    assert section == "state_model"
+    assert [item["concern"] for item in active] == ["variables", "transitions"]
+    assert len(task["implementation_obligations"]) == 2
+    payloads = [json.loads(raw) for raw in task["implementation_obligations"]]
+    assert [json.loads(p["instruction"])["concern"] for p in payloads] == [
+        "variables",
+        "transitions",
+    ]
+    assert list(payloads[0]["source_requirements"]) == ["R12", "R13"]
+    assert list(payloads[1]["source_requirements"]) == ["R12", "R14"]
 
 
 def test_markdown_variables_lower_without_model_and_never_construct_bare_enumset() -> None:
