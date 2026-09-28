@@ -325,6 +325,17 @@ class ModelRouter:
         description: str = "",
         output_token_ceiling: int | None = None,
     ) -> dict[str, Any]:
+        if role == "planner":
+            return json.loads(
+                self.generate_text(
+                    role,
+                    messages,
+                    response_format="json",
+                    response_schema=parameters,
+                    enable_tools=False,
+                    output_token_ceiling=output_token_ceiling,
+                )
+            )
         return self._generate_tool_decision_impl(
             role, messages, tool_name=tool_name, parameters=parameters, description=description,
             output_token_ceiling=output_token_ceiling,
