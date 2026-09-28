@@ -8,6 +8,7 @@ reassembles field fragments and validates the canonical worksheet section afterw
 """
 
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 import json
 from typing import Any
 
