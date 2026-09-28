@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 
 from minecraft_mod_ai.authored_plan import AuthoredPlan
+from minecraft_mod_ai.authored_execution_schema import concern_contracts
 from minecraft_mod_ai.authored_production import _compile_new_authored_modules
 from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
+from minecraft_mod_ai.implementation_graph_execution import _canonical_atomic_obligations
 from minecraft_mod_ai.production_state_compiler import (
     _normalize_expression,
     _parse_semantic_page,
@@ -493,6 +495,46 @@ def test_transition_without_state_assignment_uses_empty_program_not_magic_token(
     transition = section["specification"]["transitions"][0]
     assert transition["mutation"] == ""
     assert "noop" not in json.dumps(section)
+
+
+def test_production_state_sidecar_activates_state_leaf_without_text_anchor():
+    section = {
+        "specification": {
+            "variables": [
+                {
+                    "name": "credits",
+                    "owner": "player",
+                    "type": "integer",
+                    "unit": "credits",
+                    "default": "0",
+                    "domain": "integer >= 0",
+                }
+            ],
+            "transitions": [],
+            "invariants": [],
+            "initialization": [],
+            "updates": [],
+            "cleanup": [],
+            "concurrency": [],
+            "inapplicable_concerns": [],
+        },
+        "constraint_evidence_refs": [],
+    }
+
+    obligations, drifted, active = _canonical_atomic_obligations(
+        section="state_model",
+        concerns=list(concern_contracts("state_model")),
+        requirements={},
+        raw_obligations=[],
+        structured_sections={},
+        production_state_section=section,
+    )
+
+    assert drifted == []
+    assert [row["concern"] for row in active] == ["variables"]
+    payload = json.loads(obligations[0])
+    assert payload["source_requirements"] == {}
+    assert payload["structured_records"] == section["specification"]["variables"]
 
 
 def test_production_state_is_sidecar_and_does_not_mutate_authored_plan():
