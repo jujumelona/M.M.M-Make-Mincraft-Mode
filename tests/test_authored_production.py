@@ -701,21 +701,45 @@ def test_compiler_preserves_ambiguous_or_quoted_reasoning_text(text):
 
 @pytest.mark.parametrize("wrapper", ["", "## 개요 (Overview)\nStarForge space trading.\n\n"])
 
-def test_contract_shaped_authored_design_preserves_full_graph_input(monkeypatch, tmp_path, wrapper):
-    def forbidden(*args, **kwargs):
-        pytest.fail("saved design re-entered gameplay planning")
-    monkeypatch.setattr(PlanningPipeline, "prepare", forbidden)
-    monkeypatch.setattr(PlanningPipeline, "_semantic_design", forbidden)
+def test_contract_shaped_authored_design_migrates_before_canonical_backend(monkeypatch, wrapper):
+    import minecraft_mod_ai.planning_state_implementation as implementation
+
+    structured = _structured_state_plan().structured_sections
+    captured = {}
+
+    def migrate(_router, prompt):
+        captured["migration_prompt"] = prompt
+        return structured
+
+    class CanonicalRouteReached(RuntimeError):
+        pass
+
+    planner = CompleteGameDesignPlanner(SimpleNamespace())
+    monkeypatch.setattr(implementation, "compile_authored_worksheet", migrate)
+    monkeypatch.setattr(
+        planner,
+        "_plan_canonical_artifacts",
+        lambda prompt, **_kwargs: (
+            captured.__setitem__("canonical_prompt", prompt),
+            (_ for _ in ()).throw(CanonicalRouteReached()),
+        )[-1],
+    )
+
     sections = ("behavior_contract", "state_model", "algorithm", "integration", "authority_and_network", "persistence", "resources_and_ui", "failure_and_limits", "reuse_assessment", "verification")
-    text = wrapper + "\n".join(f"# {section}\n" + "Preserve behavior, state and constraints. " * 12 for section in sections)
-    router = SimpleNamespace(generate_text=forbidden, generate_tool_decision=forbidden)
-    proposal = CompleteGameDesignPlanner(router).compile_for_production(AuthoredPlan("Fabric 1.21.11 space mod", text))
-    manifest = proposal.game_design["_authored_execution_manifest"]
-    assert manifest["unit_count"] == 0
-    assert manifest["units"] == []
-    assert len(proposal.modules) == 1
-    assert proposal.modules[0].config["implementation_graph_request"]["text"] == text
-    assert not list(tmp_path.rglob("AuthoredFeature*.java"))
+    text = wrapper + "\n".join(
+        f"# {section}\n" + "Preserve behavior, state and constraints. " * 12
+        for section in sections
+    )
+
+    with pytest.raises(CanonicalRouteReached):
+        planner.compile_for_production(
+            AuthoredPlan("Fabric 1.21.11 space mod", text)
+        )
+
+    assert text in captured["migration_prompt"]
+    assert "Approved authored design to normalize" in captured["migration_prompt"]
+    assert "Authored game design to implement" in captured["canonical_prompt"]
+    assert "## state_model" in captured["canonical_prompt"]
 
 def test_worksheet_with_supplementary_section_is_not_split_into_feature_classes():
     from minecraft_mod_ai.authored_production import _contract_shaped_authored_design
