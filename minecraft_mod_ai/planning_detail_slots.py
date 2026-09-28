@@ -1,36 +1,26 @@
 """Fixed record layouts for every engineering concern (no model-selected keys)."""
 
-from copy import deepcopy
-
-from .task_template_catalog import detail_records, load_record_template
+# Each concern is a required array of records with exactly these string fields.
+# Empty arrays are allowed only with a concrete reason in inapplicable_concerns.
+from .task_template_catalog import detail_records
 
 DETAIL_RECORDS = detail_records()
 
 
-def concern_record_schema(section: str, concern: str) -> dict:
-    """Return the canonical record schema without weakening field constraints."""
-    if section not in DETAIL_RECORDS or concern not in DETAIL_RECORDS[section]:
-        raise ValueError(
-            f"DETAILED_PLAN_SCHEMA: unknown concern {section}.{concern}"
-        )
-    identifier = f"feature/{section}/{concern}"
-    schema = deepcopy(load_record_template(identifier)["record_schema"])
-    if section == "state_model":
-        from .structured_state_runtime import constrain_state_record_schema
-
-        schema = constrain_state_record_schema(concern, schema)
-    return schema
-
-
 def specification_schema(section):
     records = DETAIL_RECORDS[section]
-    properties = {
-        concern: {
+    properties = {}
+    for concern, columns in records.items():
+        fields = columns.split()
+        properties[concern] = {
             "type": "array",
-            "items": concern_record_schema(section, concern),
+            "items": {
+                "type": "object",
+                "properties": {field: {"type": "string", "minLength": 1} for field in fields},
+                "required": fields,
+                "additionalProperties": False,
+            },
         }
-        for concern in records
-    }
     properties["inapplicable_concerns"] = {
         "type": "array",
         "items": {
@@ -49,10 +39,3 @@ def specification_schema(section):
         "required": list(properties),
         "additionalProperties": False,
     }
-
-
-__all__ = [
-    "DETAIL_RECORDS",
-    "concern_record_schema",
-    "specification_schema",
-]
