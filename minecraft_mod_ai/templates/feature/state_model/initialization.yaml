@@ -1,5 +1,6 @@
 id: feature/state_model/initialization
-task: Resolve exactly one initialization record for the supplied feature and acceptance criterion.
+task: Resolve exactly one initialization record for the supplied feature and acceptance
+  criterion.
 input_fields:
 - requirement
 - criterion
