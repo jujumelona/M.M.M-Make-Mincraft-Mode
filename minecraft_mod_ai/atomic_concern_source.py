@@ -497,6 +497,36 @@ def _member_declaration_symbols(value: str) -> dict[str, str]:
 
 
 
+def _drop_authoritative_sibling_redeclarations(
+    value: str,
+    *,
+    owners: Mapping[str, str],
+) -> tuple[str, tuple[str, ...]]:
+    """Drop whole redundant declarations already owned by accepted sibling concerns.
+
+    Earlier concern declarations are authoritative. A later concern may reference
+    them, but a small coder can still copy those declarations into its own region.
+    When an entire top-level member chunk declares only already-owned symbols, the
+    host can deterministically discard that redundant chunk without changing the
+    accepted sibling source. Mixed chunks remain untouched so the ownership gate
+    can reject ambiguous partial collisions.
+    """
+
+    if not owners:
+        return str(value or "").strip(), ()
+    kept: list[str] = []
+    dropped: set[str] = set()
+    owner_keys = set(owners)
+    for chunk in _top_level_member_chunks(value):
+        symbols = set(_member_declaration_symbols(chunk))
+        collisions = symbols & owner_keys
+        if symbols and collisions == symbols:
+            dropped.update(collisions)
+            continue
+        kept.append(chunk.strip())
+    return "\n\n".join(chunk for chunk in kept if chunk).strip(), tuple(sorted(dropped))
+
+
 def _member_type_kinds(value: str) -> dict[str, str]:
     result: dict[str, str] = {}
     for chunk in _top_level_member_chunks(value):
@@ -2003,6 +2033,29 @@ class AtomicConcernExecutor:
         if failure and self.state.get(name) == (members, initialize):
             raise CustomModuleGenerationError(
                 f"ATOMIC_CONCERN_REPAIR_NO_PROGRESS: {name} repeated the same bounded source."
+            )
+        owners = self._sibling_symbol_owners(exclude=name)
+        members, dropped_redeclarations = _drop_authoritative_sibling_redeclarations(
+            members,
+            owners=owners,
+        )
+        if dropped_redeclarations:
+            from .root_cause_trace import emit_root_cause
+
+            emit_root_cause(
+                "atomic_concern_sibling_redeclaration_dropped",
+                stage="production",
+                operation="atomic_concern_region",
+                gate="host_symbol_ownership",
+                result="PASS",
+                details={
+                    "concern": name,
+                    "symbols": list(dropped_redeclarations),
+                    "owners": {
+                        key: owners[key]
+                        for key in dropped_redeclarations
+                    },
+                },
             )
         self._assert_symbol_ownership(concern=name, members=members)
         self.source = _replace_region(
