@@ -481,28 +481,6 @@ def _compile_worksheet_section(
         raise
 
 
-def compile_authored_worksheet(router: Any, prompt: str) -> dict[str, Any]:
-    """Author the design through the same fixed concern records production consumes."""
-    requirement = {
-        "requirement_id": "authored_design",
-        "statement": _text(prompt),
-        "acceptance": [],
-    }
-    selected = tuple(WORKSHEET_SECTIONS)
-    completed: dict[str, dict[str, Any]] = {}
-    for section in selected:
-        completed[section] = _compile_worksheet_section(
-            router,
-            requirement=requirement,
-            selected_sections=selected,
-            section=section,
-            evidence=[],
-            allowed=set(),
-            completed=completed,
-        )
-    return deepcopy(completed)
-
-
 def _host_derived_capabilities(
     worksheet: Mapping[str, Mapping[str, Any]]
 ) -> list[dict[str, Any]]:
