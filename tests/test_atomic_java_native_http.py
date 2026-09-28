@@ -102,5 +102,11 @@ def test_native_http_assembles_java_without_nested_json_or_repair(monkeypatch):
     assert all(r["tool_choice"] == "required" for r in requests)
     assert all("response_format" not in r for r in requests)
     for request in requests:
+        roles = [message["role"] for message in request["messages"]]
+        first_user = roles.index("user")
+        assert all(role in {"system", "developer"} for role in roles[:first_user])
+        assert not any(role in {"system", "developer"} for role in roles[first_user + 1:])
+        assert "Call the required function emit_java_part" in request["messages"][0]["content"]
+        assert "Repository branch policy" in request["messages"][0]["content"]
         schema = request["tools"][0]["function"]["parameters"]
         assert all(value["type"] not in {"array", "object"} for value in schema["properties"].values())
