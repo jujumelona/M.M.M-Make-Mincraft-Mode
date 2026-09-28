@@ -12,7 +12,10 @@ from minecraft_mod_ai.production_state_compiler import (
     _parse_semantic_page,
     compile_production_state_section,
 )
-from minecraft_mod_ai.structured_state_runtime import render_state_model_concern
+from minecraft_mod_ai.structured_state_runtime import (
+    render_state_model_concern,
+    validate_state_expression,
+)
 
 
 class PlanRouter:
@@ -346,13 +349,13 @@ def test_quoted_text_is_not_rewritten_as_state_dsl_syntax():
     }
 
     normalized = _normalize_expression(
-        'ship_state == "READY AND WAIT = SAFE"',
+        'ship_state == "READY   AND WAIT = SAFE"',
         aliases={},
         variables=variables,
         fallback="false",
     )
 
-    assert normalized == 'ship_state == "READY AND WAIT = SAFE"'
+    assert normalized == 'ship_state == "READY   AND WAIT = SAFE"'
 
 
 def test_semicolon_inside_state_string_literal_is_not_split_as_mutation():
@@ -405,6 +408,33 @@ def test_semicolon_inside_state_string_literal_is_not_split_as_mutation():
 
     assert java is not None
     assert '"READY;WAIT"' in java
+
+
+def test_invalid_assignment_rhs_is_excluded_not_rewritten_to_self_assignment():
+    from minecraft_mod_ai.production_state_compiler import _normalize_mutation
+
+    variables = {
+        "credits": {
+            "name": "credits",
+            "owner": "player",
+            "type": "integer",
+            "unit": "credits",
+            "default": "0",
+            "domain": "integer >= 0",
+        }
+    }
+
+    mutation = _normalize_mutation(
+        "credits = )",
+        aliases={},
+        variables=variables,
+    )
+
+    assert mutation is None
+
+
+def test_host_expression_parser_accepts_trailing_whitespace_only():
+    validate_state_expression("credits >= 0   ")
 
 
 def test_cleanup_subsystem_action_does_not_crash_state_mutation_compiler():
