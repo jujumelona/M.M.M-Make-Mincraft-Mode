@@ -145,6 +145,47 @@ def test_root_integration_prerequisite_accepts_null_and_canonicalizes():
     assert first["prerequisite"] == "no prerequisite"
 
 
+def test_synchronization_recipients_preserve_bounded_array_type():
+    chunks = pack_section_concerns("authority_and_network")
+    target = next(chunk for chunk in chunks if "synchronization" in chunk)
+    schema = worksheet_chunk_schema("authority_and_network", target)
+    recipients = schema["properties"]["synchronization"]["items"]["properties"]["recipients"]
+    assert recipients["type"] == "array"
+    assert recipients["maxItems"] == 4
+    assert recipients["items"]["type"] == "string"
+    assert_atomic_model_schema(schema, surface="authority_and_network synchronization")
+
+
+def test_synchronization_recipients_survive_merge_as_list():
+    canonical = row("authority_and_network")
+    chunks = pack_section_concerns("authority_and_network")
+    payloads = []
+    expected = ["server_authoritative_state", "client_ui_panel_ship_design"]
+
+    for index, chunk in enumerate(chunks):
+        payload = {"inapplicable_concerns": []}
+        for concern in chunk:
+            payload[concern] = canonical["specification"][concern]
+        if "synchronization" in chunk:
+            payload["synchronization"] = [
+                {
+                    "state": "ship_component_slot_inventory_state_delta",
+                    "recipients": expected,
+                    "trigger": "player_action_module_purchase_confirmed",
+                }
+            ]
+        if index == 0:
+            payload["constraint_evidence_refs"] = canonical["constraint_evidence_refs"]
+        payloads.append(payload)
+
+    merged = merge_worksheet_section_chunks(
+        "authority_and_network",
+        payloads,
+        set(canonical["constraint_evidence_refs"]),
+    )
+    assert merged["specification"]["synchronization"][0]["recipients"] == expected
+
+
 def test_merge_rejects_missing_chunk_page():
     expected_chunks = pack_section_concerns("behavior_contract")
     assert len(expected_chunks) > 1
